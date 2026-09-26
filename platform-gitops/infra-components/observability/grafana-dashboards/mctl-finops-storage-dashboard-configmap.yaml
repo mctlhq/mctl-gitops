@@ -1,0 +1,437 @@
+# Grafana dashboard for mctl platform Storage & FinOps.
+#
+# Observability for:
+# - LocalDir scratch storage quota (argo-workdir-local) to monitor saturation and prevent workflow stalls.
+# - Hetzner CSI volume operations & churn (detecting regression to paid ephemeral volumes).
+# - Node btrfs root filesystem utilization & remaining headroom across cluster nodes.
+# - Disk I/O throughput and network egress bandwidth (20 TB included quota).
+# - Persistent Volume Claims breakdown by namespace.
+#
+# Follows the declarative modular pattern: ConfigMap in
+# platform-gitops/infra-components/observability/grafana-dashboards/
+# discovered by Grafana sidecar via label `grafana_dashboard: "1"`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-finops-storage-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  mctl-finops-storage.json: |
+    {
+      "title": "mctl — Storage & FinOps",
+      "description": "Platform storage capacity, LocalDir scratch quota, Hetzner CSI churn, node filesystems, and egress traffic.",
+      "uid": "mctl-finops-storage",
+      "tags": ["mctl", "storage", "finops", "capacity"],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "graphTooltip": 1,
+      "timezone": "browser",
+      "time": { "from": "now-24h", "to": "now" },
+      "refresh": "1m",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": { "text": "VictoriaMetrics", "value": "VictoriaMetrics" }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "id": 100,
+          "title": "Headline Indicators",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "collapsed": false
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 1,
+          "title": "LocalDir Quota Saturation",
+          "description": "Used storage vs 48 GiB quota in argo-workflows (ArgoLocalWorkdirQuotaHigh >80%, Critical >95%)",
+          "type": "gauge",
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 80 },
+                  { "color": "red", "value": 95 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "orientation": "auto",
+            "showThresholdLabels": false,
+            "showThresholdMarkers": true
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "(kube_resourcequota{resourcequota=\"argo-workdir-local\", type=\"used\"} / ignoring(type) kube_resourcequota{resourcequota=\"argo-workdir-local\", type=\"hard\"}) * 100",
+              "legendFormat": "Quota %"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 2,
+          "title": "Hetzner CSI Active Volumes",
+          "description": "Total persistent volumes managed by Hetzner CSI (hcloud-volumes)",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "blue", "value": null }
+                ]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "count(kube_persistentvolume_info{storageclass=\"hcloud-volumes\"})",
+              "legendFormat": "Active Volumes"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 3,
+          "title": "Peak Node Disk Used %",
+          "description": "Highest root filesystem usage across all nodes (NodeDiskSpaceHigh >80%, Critical >90%)",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 80 },
+                  { "color": "red", "value": 90 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max((1 - (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})) * 100)",
+              "legendFormat": "Peak Node Disk %"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 4,
+          "title": "Hetzner CSI Churn (24h)",
+          "description": "Total volume create / publish operations via Hetzner CSI in last 24h (detects unwanted ephemeral CSI allocations)",
+          "type": "stat",
+          "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 10 },
+                  { "color": "red", "value": 50 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum(increase(csi_operations_seconds_count{driver_name=\"csi.hetzner.cloud\", method_name=~\".*Publish.*|.*Create.*\"}[24h]))",
+              "legendFormat": "Ops / 24h"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 200,
+          "title": "LocalDir Scratch Storage & Workflows",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+          "collapsed": false
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 5,
+          "title": "LocalDir Quota Usage vs Limit (argo-workflows)",
+          "description": "Monitors scratch storage consumption against 48 GiB limit to detect leaks or workflow bursts",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": { "lineWidth": 2, "fillOpacity": 15 }
+            }
+          },
+          "options": {
+            "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "kube_resourcequota{resourcequota=\"argo-workdir-local\", resource=\"argo-workdir-local.storageclass.storage.k8s.io/requests.storage\", type=\"used\"}",
+              "legendFormat": "Used Storage"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "kube_resourcequota{resourcequota=\"argo-workdir-local\", resource=\"argo-workdir-local.storageclass.storage.k8s.io/requests.storage\", type=\"hard\"}",
+              "legendFormat": "Hard Limit (48 GiB)"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 6,
+          "title": "Hetzner CSI Operation Rates",
+          "description": "Rate of CSI calls to Hetzner Cloud (Publish, Unpublish, VolumeStats). Should remain low when LocalDir is adopted.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": { "lineWidth": 2 }
+            }
+          },
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum by (method_name) (rate(csi_operations_seconds_count{driver_name=\"csi.hetzner.cloud\"}[5m]))",
+              "legendFormat": "{{method_name}}"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 300,
+          "title": "Node Filesystem Capacity & Headroom",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+          "collapsed": false
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 7,
+          "title": "Node Root Filesystem Used %",
+          "description": "Root filesystem utilization per node (OpenSUSE MicroOS btrfs)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "custom": { "lineWidth": 2 },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 80 },
+                  { "color": "red", "value": 90 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "(1 - (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})) * 100",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 8,
+          "title": "Node Available Headroom (Bytes)",
+          "description": "Remaining usable disk space on root filesystem",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": { "lineWidth": 2 }
+            }
+          },
+          "options": {
+            "legend": { "calcs": ["lastNotNull", "min"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "node_filesystem_avail_bytes{mountpoint=\"/\"}",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 400,
+          "title": "Disk Throughput & Network Egress",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+          "collapsed": false
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 9,
+          "title": "Disk I/O Write Throughput",
+          "description": "Disk write throughput per node",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 25 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps",
+              "custom": { "lineWidth": 2 }
+            }
+          },
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum by (instance) (rate(node_disk_written_bytes_total[5m]))",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 10,
+          "title": "Network Egress Rate (eth0)",
+          "description": "Outbound network traffic (monitors 20 TB monthly Hetzner allocation)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 25 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps",
+              "custom": { "lineWidth": 2 }
+            }
+          },
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum by (instance) (rate(node_network_transmit_bytes_total{device=\"eth0\"}[5m]))",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 500,
+          "title": "Persistent Volume Inventory",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
+          "collapsed": false
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 11,
+          "title": "Persistent Volume Claims by Namespace",
+          "description": "Count of bound PVCs per namespace",
+          "type": "bargauge",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 34 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "palette-classic" }
+            }
+          },
+          "options": {
+            "displayMode": "gradient",
+            "orientation": "horizontal",
+            "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "count by (namespace) (kube_persistentvolumeclaim_info)",
+              "legendFormat": "{{namespace}}"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "id": 12,
+          "title": "Persistent Volumes Total Capacity by StorageClass",
+          "description": "Total storage allocated by StorageClass",
+          "type": "bargauge",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 34 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "color": { "mode": "palette-classic" }
+            }
+          },
+          "options": {
+            "displayMode": "gradient",
+            "orientation": "horizontal",
+            "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum by (storageclass) (kube_persistentvolume_capacity_bytes)",
+              "legendFormat": "{{storageclass}}"
+            }
+          ]
+        }
+      ]
+    }
