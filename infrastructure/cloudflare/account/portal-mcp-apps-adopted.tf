@@ -13,9 +13,15 @@
 #   - session_duration is the dashboard default 24h, not the siblings' 8760h.
 #     Raising it is a behaviour change with its own plan, not part of an
 #     adoption.
-#   - The cookie flags are not written: the provider refuses them on
-#     `type = "mcp"` (unlike mcp_portal in portal-app.tf), and the managed
-#     siblings, which omit them too, read zero-diff in drift.
+#   - The dashboard stored `enable_binding_cookie = false` and
+#     `options_preflight_bypass = false` on these objects, but the provider
+#     refuses both on `type = "mcp"` (unlike mcp_portal in portal-app.tf), so
+#     they cannot be written here, and leaving them out plans `false -> null`
+#     on import. `ignore_changes` keeps the adoption a pure import; both are
+#     meaningless on an mcp application, and the siblings created by
+#     OpenTofu hold null for them.
+#   - `allowed_idps` is left out: the live `[]` reads back as null, and
+#     writing `[]` plans `+ allowed_idps = []`.
 #
 # `oauth_configuration` is unset, as it is live.
 #
@@ -66,7 +72,6 @@ resource "cloudflare_zero_trust_access_application" "portal_member_tg" {
     },
   ]
 
-  allowed_idps              = []
   auto_redirect_to_identity = false
 
   session_duration = "24h"
@@ -77,6 +82,10 @@ resource "cloudflare_zero_trust_access_application" "portal_member_tg" {
       precedence = 1
     },
   ]
+
+  lifecycle {
+    ignore_changes = [enable_binding_cookie, options_preflight_bypass]
+  }
 }
 
 import {
@@ -96,7 +105,6 @@ resource "cloudflare_zero_trust_access_application" "portal_member_seerrsense" {
     },
   ]
 
-  allowed_idps              = []
   auto_redirect_to_identity = false
 
   session_duration = "24h"
@@ -107,6 +115,10 @@ resource "cloudflare_zero_trust_access_application" "portal_member_seerrsense" {
       precedence = 1
     },
   ]
+
+  lifecycle {
+    ignore_changes = [enable_binding_cookie, options_preflight_bypass]
+  }
 }
 
 import {
@@ -126,7 +138,6 @@ resource "cloudflare_zero_trust_access_application" "portal_member_api" {
     },
   ]
 
-  allowed_idps              = []
   auto_redirect_to_identity = false
 
   session_duration = "24h"
@@ -137,4 +148,8 @@ resource "cloudflare_zero_trust_access_application" "portal_member_api" {
       precedence = 1
     },
   ]
+
+  lifecycle {
+    ignore_changes = [enable_binding_cookie, options_preflight_bypass]
+  }
 }
