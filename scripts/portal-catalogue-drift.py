@@ -478,6 +478,31 @@ KNOWN_STALE = {
         "why": "seerrsense publishes closed output schemas in code (zod); the fix "
                "waits on its review freeze -- mctlhq/seerrsense#70, mctlhq/.github#64",
     },
+    ("projects", "closed-output-schemas"): {
+        "until": "2026-10-15",
+        # All eight projects tools, as the portal synced them on 2026-09-26
+        # (projects is DCR, so this is the live catalogue, not a stale
+        # snapshot). A re-snapshot cannot help: the schemas are closed at
+        # the source.
+        "tools": ["projects_admin_change", "projects_admin_grants",
+                  "projects_contacts", "projects_list", "projects_outline",
+                  "projects_read", "projects_search", "projects_status"],
+        "why": "projects-mcp publishes closed output schemas; the fix belongs in "
+               "mctlhq/projects-mcp -- mctlhq/.github#64, mctlhq/mctl-gitops#1363",
+    },
+    ("tg", "missing-tool"): {
+        "until": "2026-12-31",
+        # Not stale and never will be while the flag is off: mctl-telegram
+        # registers prepare_send_message only with MCP_APPS_ENABLED=true (the
+        # MCP Apps prototype, mctlhq/mctl-telegram#569), which production does
+        # not set. Its allowlist entry is `enabled: false` for that reason.
+        # Confirmed after tg moved to DCR: the catalogue synced on 2026-09-26
+        # 07:19 and the tool is still absent, so re-snapshotting (what this
+        # finding tells the on-call to do) would change nothing.
+        "tools": ["prepare_send_message"],
+        "why": "flag-gated (MCP_APPS_ENABLED) and disabled in the allowlist; "
+               "never registered in production -- mctlhq/mctl-telegram#569",
+    },
 }
 
 
