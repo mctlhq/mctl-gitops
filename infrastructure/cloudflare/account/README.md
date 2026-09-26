@@ -4,10 +4,15 @@ Holds resources that are not attached to a single zone: R2 buckets, Access
 applications/policies/IdPs and organization settings, Zero Trust gateway and
 device settings, and eventually the MCP Portal and its servers.
 
-**Holds one application.** The root was empty until `projects.mctl.ai` landed
-in `projects-mcp.tf`: an Access application created here rather than
-imported, which is the one thing this root could take before `#1088` without
-colliding with it. Everything else is still to be imported.
+**What it holds.** The root was empty until `projects.mctl.ai` landed in
+`projects-mcp.tf`, an Access application created here rather than imported.
+It now also holds the MCP portal's own application (`portal-app.tf`, adopted)
+and all six portal member applications: `projects`, `alice` and `coolify`
+created in `portal-mcp-apps.tf`, and `tg`, `seerrsense` and `api` adopted in
+`portal-mcp-apps-adopted.tf` (#1416). Every policy on these applications is
+app-scoped, so none has a standalone resource; each is either written inline
+or referenced by id from its application. Everything else in `#1088` is still
+to be imported.
 
 A second application bypassing Access for the bare `/` path existed
 2026-09-19 – 2026-09-20, so a public HTML landing page there (explaining how
@@ -78,9 +83,9 @@ Imports arrive with:
   root's credential to `MCP Portals`. The portal object itself was imported
   into `../portal/` in #1370 (plan `1 to import, 0 to change`, apply run
   36117508212), and its tool allowlists are vendored into that root rather
-  than applied from three other repositories. What remains unimported here is
-  the three sibling `mcp` Access applications (`api`, `tg`, `seerrsense`), a
-  separate child of `#1092`.
+  than applied from three other repositories. The three sibling `mcp` Access
+  applications (`api`, `tg`, `seerrsense`) are adopted here, in
+  `portal-mcp-apps-adopted.tf`, under `#1416`.
 
 Access user sessions for every application in this root — including the
 `mcp_portal` door and its `mcp` members — are deliberately not in Git; see
