@@ -28,7 +28,9 @@ Nothing reads the proposal's own `status:`. A proposal that parks in
 `review-stuck` (written by `run_shepherd` once `MAX_REVIEW_ATTEMPTS = 5`
 address-review attempts are spent — see the `review-stuck` arms at
 `run_shepherd.py:2790-3152`) leaves the PR OPEN, so exits 1-3 never fire and the
-loop runs to exit 4. A proposal parked in `needs-triage` by
+loop runs to exit 4 — which is correct: with an open PR, `review-stuck` is a
+human-wait state that reconcile repairs (see below), not a dead end. A proposal
+parked in `needs-triage` by
 `run_implementer._mark_needs_triage` (`code="no-commits"`, `run_implementer.py:4224-4231`)
 usually has no `pr:` link, so it converges via exit 3 — but only after eight
 polls, and with a stale or recovered `pr:` field (the `branch-collision` shape at
@@ -38,10 +40,15 @@ polls, and with a stale or recovered `pr:` field (the `branch-collision` shape a
 
 - `_shepherd_tick` (3714) submits `cwft-mctl-agents-shepherd` scoped to
   `service`+`slug`, on every poll (`SHEPHERD_TICK_EVERY_POLLS = 1`) up to
-  `SHEPHERD_TICKS_MAX = 96` (~24 h). `review-stuck` and `needs-triage` are not
-  in `run_shepherd.SHEPHERD_INPUT_STATUSES` (`{"implemented", "review-fixing",
-  "in-progress"}`, `run_shepherd.py:421`), so every one of those Argo runs is a
-  clone plus a few `gh` reads that decide nothing.
+  `SHEPHERD_TICKS_MAX = 96` (~24 h). With an OPEN PR these ticks are NOT
+  no-ops: `review-stuck`, `needs-triage`, `rejected` and `error` are in
+  `run_shepherd.RECONCILE_INPUT_STATUSES` (`run_shepherd.py:422-432`), and the
+  reconcile repair (~3678-3695) moves them back to `implemented` — open-PR
+  `needs-triage`/`error`/`rejected` unconditionally, `review-stuck` once the PR
+  is APPROVED or its head moves; reconcile also writes and later clears the
+  `merge-conflict` `needs-triage`. Because `_dev_loop_owns` makes the cron
+  sweeper stand down, the in-loop tick is the only actor doing that repair.
+  With NO pull request the tick has nothing to repair.
 - `get_pr_state` every 15 minutes, ~1340 activities over a full watch.
 - `continue_as_new` hops: `_merge_watch_hop_suggested` (4696) fires at
   `MERGE_WATCH_HISTORY_FLOOR = 4096` history events, up to
@@ -112,7 +119,8 @@ with no PR link end on the FIRST poll instead of after eight.
   `_finish_after_watch` (deploy observation, incident watch), so ending on the
   *status* would skip them. `proposed`, `accepted`, `in-progress`,
   `implemented` and `review-fixing` are the live set and must keep the watch
-  running.
+  running. Membership in this set is necessary but NOT sufficient: the watch
+  ends only when the same poll found no pull request (see the check below).
 
 - **Patch marker** `PROPOSAL_TERMINAL_PATCH = "proposal-terminal-end"`, beside
   `LAUNCH_CORRELATION_PATCH` (line 334), evaluated ONCE in `_watch_pr` next to
@@ -128,9 +136,10 @@ with no PR link end on the FIRST poll instead of after eight.
   must not adopt different behaviour than the run it replaces just because a
   marker was re-evaluated on a fresh history.
 
-- **The check**, one site, right after the `get_pr_state` read so it covers both
-  the `found` and the not-found branch, and positioned so the merged/closed arm
-  still wins:
+- **The check**, one site, in the not-found branch only. The `found` branch is
+  deliberately untouched: an OPEN PR with a terminal-set status is a human-wait
+  state that the in-loop tick's reconcile repair resolves, and a
+  `MERGED`/`CLOSED` PR already ends the watch through the existing arm:
 
   ```python
   terminal_status = (
@@ -142,21 +151,24 @@ with no PR link end on the FIRST poll instead of after eight.
       if track_ownership and ...: await self._track_ownership(state)
       if state.state in ("MERGED", "CLOSED"):
           ...                                   # unchanged
-      if terminal_status:
-          watch_ended = f"proposal {terminal_status}"
-          break
+      # no terminal-status check here: OPEN PR = human wait
       poll_index += 1
       ...                                       # shepherd tick, unchanged
   else:
       polls_without_pr += 1
       if last is None and state.number is not None:
           last = state
-      if terminal_status:
+      if terminal_status and not saw_open_pr:
           watch_ended = f"proposal {terminal_status}"
           break
       if polls_without_pr >= cadence.pr_lookup_grace_polls:
           ...                                   # unchanged
   ```
+
+  `saw_open_pr` is set in the `found` branch whenever the read resolves an
+  OPEN PR, and is carried across a hop in `MergeWatchResume` beside
+  `proposal_terminal_end`. It stops a transient 404 on a PR that was OPEN from
+  ending the loop: that case keeps today's `pr_lookup_grace_polls` rule.
 
   `_loop_terminal_status` is a module-level pure helper that strips and
   case-folds (the normalisation `ProposalCandidate.ignorable` already applies)
@@ -193,8 +205,11 @@ catches it there, at the cost of one already-scheduled activity.
 
 ### What the operator sees afterwards
 
-The execution COMPLETES, with `DevLoopResult.ended == "proposal review-stuck"`
-(or `needs-triage`). `GET /api/v1/agents/dev-loop/{id}` then derives
+For a terminal status with no pull request, the execution COMPLETES, with
+`DevLoopResult.ended == "proposal needs-triage"` (or whichever terminal-set
+status was observed). With an OPEN PR nothing changes: the loop keeps watching
+and ticking until reconcile repairs the proposal, the PR merges or closes, or
+the 14-day deadline passes. `GET /api/v1/agents/dev-loop/{id}` then derives
 `shepherd_in_loop = False` from the closed status with no query change here, so
 `run_shepherd._dev_loop_owns` (`run_shepherd.py:203`) stops standing down and
 the cron sweeper is free again. A later `/dev-loop/start` reports
@@ -246,15 +261,16 @@ the cron sweeper is free again. A later `/dev-loop/start` reports
   histories must be preserved (restored from git, never re-recorded) and a
   guard test added in the family of
   `test_dev_loop_full_prepatch_history_predates_the_launch_correlation_marker`.
-- **Resource impact**: strictly negative cost. Per parked loop it removes up to
-  ~1340 `get_pr_state` activities, up to 96 shepherd Argo submits (each a repo
-  clone), up to 16 `continue_as_new` hops, and a worker slot held for 14 days.
-  No new activity, no new HTTP request.
+- **Resource impact**: never higher than today. For a no-PR terminal proposal
+  it removes the remaining `get_pr_state` polls (up to the
+  `pr_lookup_grace_polls` give-up, or up to the 14-day deadline when a stale
+  `pr:` link keeps the read in the not-found branch). Open-PR loops are
+  unchanged by design. No new activity, no new HTTP request.
 - **Lifecycle ownership (ADR-010)**: the terminal end goes through the existing
   `finally`, so the claim is relinquished with the `op` derivation at 5131
-  unchanged — a `release` for a still-open PR ("work remains, somebody must
-  take it"), which is what makes the entity claimable instead of showing a
-  healthy owner heartbeating for a fortnight.
+  unchanged, which makes the entity claimable instead of showing a healthy
+  owner for work nobody will do. Open-PR loops keep their claim, because they
+  are still the actor that performs the reconcile repair.
 - **Risk: a momentarily unreadable or half-written `.status.yaml`.**
   Mitigation: `proposal_status=None` and any unknown status are never terminal
   (fail-open), the same rule `proposal_identity.py` states for an unreadable
@@ -267,10 +283,14 @@ the cron sweeper is free again. A later `/dev-loop/start` reports
   `IMPLEMENT_SWEEP_GRACE_MINUTES`; explicit restart is mctl-api#404. This is a
   behaviour change operators must be told about, not a regression: today the
   parked loop would not have implemented it either.
-- **Risk: ending early on a hand-edited `rejected` status whose PR is still
-  open.** Blast radius is bounded — the watch is observational, and the PR falls
-  back to the cron sweeper, which is where `pr_adoption.TERMINAL_STATUSES`
-  already classifies `rejected`.
+- **Risk: ending a loop whose PR is still recoverable.** Prevented by
+  construction: the check is only in the not-found branch, so an OPEN PR in
+  `needs-triage` (e.g. `merge-conflict`, the mctl-agents#511 case),
+  `review-stuck`, `rejected` or `error` keeps its loop, its ticks and its
+  stages 6.2-6.4.
+- **Risk: a stale or colliding `pr:` link that resolves to some OPEN PR.** The
+  loop then keeps watching as it does today (no regression). Accepted: the PR
+  state, not the status, is the evidence the watch trusts.
 - **Risk: the terminal break skipping `_settle_tick`.** Prevented by
   construction: `break` keeps the `try`/`finally` intact, and T4 below asserts
   no tick is scheduled at or after the terminal poll.
