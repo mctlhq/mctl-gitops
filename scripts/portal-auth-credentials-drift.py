@@ -38,8 +38,11 @@ API = "https://api.cloudflare.com/client/v4"
 
 # Servers registered by Dynamic Client Registration. They carry no
 # `auth_credentials` at all -- supplying one is what opts a server into manual
-# mode -- so there is no applied blob for this script to compare, and the
-# check for them is the absence itself.
+# mode -- so there is no applied blob for this script to compare. The check
+# for them is the absence itself, on both sides: none in state, and no
+# manual registration in the live auth_config_summary (a dashboard switch
+# back to "Manual credentials" would otherwise be invisible to plan and to
+# this script alike, since every server is now DCR).
 #
 # They are named here rather than detected, because in state "registered by
 # DCR" and "applied by something that did not record it" are the same empty
@@ -52,9 +55,12 @@ API = "https://api.cloudflare.com/client/v4"
 # (mctlhq/mctl-gitops#1363). `coolify` is added the same way it is created --
 # DCR, no blob, no client_secret. `seerrsense` joined on 2026-09-25, in the
 # same change that adopted it into mcp-servers.tf after its move to DCR:
-# without it here, its empty blob would abort the scan. `api` is not here: it
-# is still live in manual mode with no Terraform resource at all.
-DCR_SERVERS = {"projects", "alice", "coolify", "seerrsense"}
+# without it here, its empty blob would abort the scan. `api` and `tg`, the
+# last two manual servers, joined on 2026-09-26 in the change that moved them
+# (mctlhq/mctl-gitops#1363). With them there is no manual registration left,
+# so a scan now compares nothing but the DCR absence -- which is still a check,
+# and is reported as one rather than as "no resources".
+DCR_SERVERS = {"projects", "alice", "coolify", "seerrsense", "api", "tg"}
 
 
 class Undetermined(Exception):
@@ -67,7 +73,8 @@ class Undetermined(Exception):
 
 
 def desired_from_state(state: dict) -> dict[str, dict]:
-    """server id -> {"blob", "summary", "account_id"} as state records them.
+    """server id -> {"blob", "summary", "account_id"} as state records them,
+    or {"dcr": True, "account_id"} for a server on DCR_SERVERS.
 
     "blob" is the auth_credentials that was applied -- the desired value.
     "summary" is the auth_config_summary the API returned at that moment: it
@@ -101,6 +108,7 @@ def desired_from_state(state: dict) -> dict[str, dict]:
                         "auth_credentials; it is no longer the server this "
                         "check was told it is"
                     )
+                out[sid] = {"dcr": True, "account_id": values.get("account_id")}
                 continue
             if not raw:
                 # Applied by something that did not record it, or never
@@ -196,6 +204,19 @@ def compare(server: str, want: dict, live: dict, applied_summary: dict | None = 
                     f"applied={json.dumps(wv)}"
                 )
     return diffs
+
+
+def compare_dcr(server: str, live: dict) -> list[str]:
+    """A DCR server has no registration of ours to compare; what can drift is
+    that one appears. An empty projection is the DCR state (measured on api
+    and tg on 2026-09-26: auth_config_summary is absent after the move)."""
+    if not live:
+        return []
+    return [
+        f"{server}: registered by DCR, but live holds a registration "
+        f"(auth_mode={live.get('auth_mode')!r}, "
+        f"client_id={(live.get('registration_info') or {}).get('client_id')!r})"
+    ]
 
 
 def selftest() -> int:
@@ -311,17 +332,31 @@ def selftest() -> int:
             {"type": RESOURCE_TYPE, "values": v} for v in resources
         ]}}}
 
-    manual = {"id": "tg", "auth_credentials": json.dumps(base), "account_id": "a"}
+    # Server ids here are made up on purpose: every real server is on
+    # DCR_SERVERS now, and a selftest that borrowed a real id would break the
+    # day that server's mode changed (it did, twice).
+    manual = {"id": "legacy", "auth_credentials": json.dumps(base), "account_id": "a"}
     dcr_res = {"id": "projects", "account_id": "a"}
 
     want = desired_from_state(state_with(manual, dcr_res))
-    ok = set(want) == {"tg"}
-    print(f"{'ok  ' if ok else 'FAIL'} a DCR server is skipped and the rest still compared")
+    ok = (set(want) == {"legacy", "projects"} and want["projects"].get("dcr") is True
+          and "blob" in want["legacy"])
+    print(f"{'ok  ' if ok else 'FAIL'} a DCR server is marked DCR and the rest still compared")
     if not ok:
-        failures.append("dcr skipped")
+        failures.append("dcr marked")
+
+    ok = not compare_dcr("projects", {})
+    print(f"{'ok  ' if ok else 'FAIL'} a DCR server with no live registration is quiet")
+    if not ok:
+        failures.append("dcr quiet")
+
+    ok = bool(compare_dcr("projects", base))
+    print(f"{'ok  ' if ok else 'FAIL'} a DCR server that went back to manual fires")
+    if not ok:
+        failures.append("dcr to manual")
 
     try:
-        desired_from_state(state_with({"id": "api", "account_id": "a"}))
+        desired_from_state(state_with({"id": "unapplied", "account_id": "a"}))
         ok = False
     except Undetermined:
         ok = True
@@ -387,7 +422,10 @@ def main() -> int:
         except Undetermined as e:
             print(f"[2] {e}", file=sys.stderr)
             return 2
-        drifted += compare(server, rec["blob"], live, rec.get("summary"))
+        if rec.get("dcr"):
+            drifted += compare_dcr(server, live)
+        else:
+            drifted += compare(server, rec["blob"], live, rec.get("summary"))
 
     if drifted:
         print("auth_credentials has drifted from what was applied:", file=sys.stderr)
