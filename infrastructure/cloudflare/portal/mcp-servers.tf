@@ -19,30 +19,40 @@
 # Applying never widens or narrows a live session: the grant is fixed at the
 # upstream login done from the dashboard ("Authenticate server").
 
-# `tg` is out of state for one apply, on purpose (mctlhq/mctl-gitops#1363).
+# `tg` was forgotten from state and is imported back here
+# (mctlhq/mctl-gitops#1363). It moved to DCR on 2026-09-26, and dropping the
+# manual `auth_credentials` it carried could not be applied as an edit:
+# provider 5.24 sends a removed write-only attribute as an explicit null and
+# the API refuses the PUT (400 7001 "Expected string, received null"; the
+# apply of #1402). #1403 forgot it with a `removed { destroy = false }` block,
+# and this import reads it from the API, which returns no auth_credentials --
+# so `tg` is in state as DCR, the same as `seerrsense` and `api`.
 #
-# It moved to DCR on 2026-09-26, and #1402 dropped the manual
-# `auth_credentials` it carried. The apply of that failed: with the attribute
-# removed from config, provider 5.24 sends it as an explicit null, and the API
-# refuses the whole PUT --
-#
-#   400 {"code":7001,"message":"Expected string, received null",
-#        "path":["body","auth_credentials"]}
-#
-# (nothing was written; the live server stayed ready/connected). A PUT that
-# OMITS the field is accepted -- that is how the move itself was done -- but
-# the provider cannot be made to omit a value it holds in state. So the old
-# blob is not edited away, it is forgotten: this block drops `tg` from state
-# without touching Cloudflare (`destroy = false`), and the next change imports
-# it again. An import reads the server from the API, which returns no
-# `auth_credentials`, so `tg` comes back exactly as `seerrsense` and `api`
-# did: DCR, nothing write-only in state. The `updated_tools` mapping lives on
-# the portal object in mcp-portal.tf and is unaffected.
-removed {
-  from = cloudflare_zero_trust_access_ai_controls_mcp_server.tg
+# The lesson for the next server that changes mode: moving a resource from
+# manual to DCR is forget + import, not an edit.
+import {
+  to = cloudflare_zero_trust_access_ai_controls_mcp_server.tg
+  id = "${var.account_id}/tg"
+}
+
+resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "tg" {
+  account_id = var.account_id
+  id         = "tg"
+  name       = "mctl Telegram (tg.mctl.ai)"
+  hostname   = "https://tg.mctl.ai/mcp"
+  auth_type  = "oauth"
+
+  # The first upstream: the Phase 0 pilot the portal started with
+  # (mctlhq/.github#44).
+  description = "First upstream of the private aggregate portal, the Phase 0 pilot. Registered by DCR (pinned client, mctlhq/mctl-telegram#691). Refs mctlhq/.github#35, #44, #137, mctlhq/mctl-gitops#1363."
+
+  secure_web_gateway               = false
+  is_shared_oauth_callback_enabled = false
 
   lifecycle {
-    destroy = false
+    # Same reasoning as projects below: mcp-portal.tf writes the mapping, from
+    # allowlists/tg.json (vendored from mctlhq/mctl-telegram).
+    ignore_changes = [updated_tools, updated_prompts]
   }
 }
 

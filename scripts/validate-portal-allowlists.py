@@ -172,10 +172,7 @@ MAPPING_KEYS = {*MAPPING_SWITCHES, "updated_prompts"}
 # deletion from this one list rather than a rediscovery. Empty since
 # 2026-09-26: `seerrsense` and then `api` were adopted into mcp-servers.tf.
 # Kept as a named empty set so a future portal-first server has a place to go.
-# `tg` is here for the one apply between forgetting it and importing it back
-# (see the `removed` block in mcp-servers.tf); the change that re-imports it
-# empties this again.
-UNMANAGED: set[str] = {"tg"}
+UNMANAGED: set[str] = set()
 
 
 class Unreadable(Exception):
