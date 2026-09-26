@@ -29,7 +29,7 @@ metadata:
   name: issue-investigator-default
   owner: platform
 spec:
-  version: "1.3.0"
+  version: "1.4.0"
   modelPolicyRef:
     # The task key config/model-policy.yaml in mctl-agents actually defines.
     # This said `issue_investigator` until 2026-09-03, which is not a task
@@ -105,3 +105,23 @@ spec:
   evidence:
     required:
       - proposal
+  # mctl-agents#242 slice 4: the catalog PERMITS capability discovery, the
+  # ISSUE_INVESTIGATOR_CAPABILITY_MODE env var ACTIVATES it, and it runs only
+  # when both agree. `enabled: false` forbids it for this profile whatever the
+  # env var says -- a CWFT asking for `discovery` then fails closed with a
+  # named SystemExit rather than falling back to eager. Turning it on is the
+  # benchmark step (part C): a reviewed PR flipping this to `true` with a
+  # version bump and a re-pinned shadow binding.
+  #
+  # `endpoint` is a symbolic name mctl-agents resolves in code
+  # (mctl-api-mcp -> MCTL_MCP_URL), never a URL, so this file cannot point the
+  # gateway or its bearer token at another host. mctl-api keeps alias `mctl`
+  # so the gateway's SDK-visible names stay mcp__mctl__<tool> and still match
+  # the `mcp__mctl__*` entry in spec.tools above.
+  capabilityDiscovery:
+    enabled: false
+    providers:
+      - type: mcp-remote
+        id: mctl-api
+        alias: mctl
+        endpoint: mctl-api-mcp

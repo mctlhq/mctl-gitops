@@ -189,6 +189,41 @@ the investigator CWFT does not set `ISSUE_INVESTIGATOR_RESOLVER_MODE`, so it
 runs in the `legacy` mode, which builds no plan at all; and on mctl-agents
 `main` nothing calls `plan_grants_human_input` yet.
 
+## Capability discovery: `capabilityDiscovery`
+
+`issue-investigator-default` carries an optional `spec.capabilityDiscovery`
+block (mctl-agents#242 slice 4). It states whether the profile **permits** the
+investigator's capability-discovery mode, where the model sees three gateway
+tools instead of every `mcp__mctl__*` schema, and which providers discovery
+may reach. The field is optional, and leaving it out means `enabled: false`.
+
+Discovery runs only when two things agree: the profile says `enabled: true`,
+and the CWFT sets `ISSUE_INVESTIGATOR_CAPABILITY_MODE=discovery`. If the env
+var asks for discovery but the profile does not permit it, the run fails
+closed with a named `SystemExit`. It never falls back silently.
+
+- **Rollback:** unset the env var. No gitops change or redeploy is needed.
+- **Forbidding discovery permanently:** set `enabled: false` in one reviewed
+  PR here. This takes the same three steps as the `human.request_input`
+  kill switch above: edit the field, bump `spec.version`, and re-pin
+  `releases/shadow/issue-investigator.yaml`.
+
+Rules, in the schema and in `validate-agent-platform.py`:
+
+- `endpoint` is a symbolic name that mctl-agents resolves in code
+  (`mctl-api-mcp` → `MCTL_MCP_URL`), never a URL. A catalog edit cannot
+  point the gateway, or the bearer token it sends, at another host.
+- `providers` is ordered. Aliases and `(type, id)` pairs are unique.
+- Provider `mctl-api` keeps alias `mctl`, so the gateway's names stay
+  `mcp__mctl__<tool>` and still match `spec.tools`.
+- `enabled: true` needs at least one provider and `mcp__mctl__*` in
+  `spec.tools`.
+
+mctl-agents' resolver (`_parse_capability_discovery`) enforces the same rules
+and is authoritative. Its `validate_manifest.py` also checks that a profile
+with `enabled: true` gets no wider tool surface in discovery mode than in
+eager mode.
+
 ## Rollback
 
 This catalog is additive and not runtime-load-bearing -- nothing resolves
