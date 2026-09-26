@@ -149,6 +149,19 @@ jobs:
             if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
           done
 
+      # issue-1409: the usage pricing ConfigMap renders unconditionally (no
+      # flag, unlike the two overlays above) since it is inert until a
+      # companion mctl-api chart change (cross-repo, tracked separately)
+      # wires a mount to it. This validates the committed rate card itself
+      # (mirroring usage.NewCatalog's own checks, mctlhq/mctl-api) and that
+      # the rendered ConfigMap's catalog.json is byte-identical to it.
+      - name: Validate the usage pricing catalog (issue-1409)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/validate-usage-pricing-catalog.py --selftest
+          python3 scripts/validate-usage-pricing-catalog.py
+
       - name: Validate platform skill registry
         run: |
           python3 -m pip install --quiet pyyaml

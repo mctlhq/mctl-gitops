@@ -1,0 +1,22 @@
+# Versioned usage price catalog for the FinOps usage ledger (mctlhq/.github#50).
+#
+# A raw manifest rendered by root-app, not the mctl-api chart: the mctl-api
+# Application's only source is the external mctl-api repository's `helm/`
+# chart, which has no `configMaps`/`extraObjects` hook to render this itself
+# -- the same limitation already documented in mctl-api-netpol.yaml,
+# mctl-api-rbac.yaml and mctl-api-monitor.yaml.
+#
+# The single key below is filled from the committed catalog document with
+# .Files.Get, never duplicated here, so the committed JSON stays the one
+# source of truth (see files/usage-pricing/README.md for the rates and their
+# sources). Consumed by mctl-api once the companion mctl-api chart change
+# (mctlhq/mctl-api, usagePricingCatalog value) lands and mctl-api.yaml is
+# wired to configMapName: mctl-api-usage-pricing.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-api-usage-pricing
+  namespace: mctl-api
+data:
+  catalog.json: |
+    {{- .Files.Get "files/usage-pricing/claude-firstparty.json" | nindent 4 }}

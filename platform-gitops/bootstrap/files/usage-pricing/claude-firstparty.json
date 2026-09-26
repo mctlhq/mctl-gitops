@@ -1,0 +1,35 @@
+[
+  {
+    "version": "2026-09-01-firstparty-1",
+    "canonical_model": "claude-opus-5",
+    "provider": "firstParty",
+    "effective_from": "2026-09-01T00:00:00Z",
+    "input_per_mtok": 5.00,
+    "output_per_mtok": 25.00,
+    "cache_read_per_mtok": 0.50,
+    "cache_write_per_mtok": 6.25,
+    "web_search_per_call": 0.01
+  },
+  {
+    "version": "2026-09-01-firstparty-1",
+    "canonical_model": "claude-sonnet-5",
+    "provider": "firstParty",
+    "effective_from": "2026-09-01T00:00:00Z",
+    "input_per_mtok": 2.00,
+    "output_per_mtok": 10.00,
+    "cache_read_per_mtok": 0.20,
+    "cache_write_per_mtok": 2.50,
+    "web_search_per_call": 0.01
+  },
+  {
+    "version": "2026-09-01-firstparty-1",
+    "canonical_model": "claude-haiku-4-5",
+    "provider": "firstParty",
+    "effective_from": "2026-09-01T00:00:00Z",
+    "input_per_mtok": 1.00,
+    "output_per_mtok": 5.00,
+    "cache_read_per_mtok": 0.10,
+    "cache_write_per_mtok": 1.25,
+    "web_search_per_call": 0.01
+  }
+]
