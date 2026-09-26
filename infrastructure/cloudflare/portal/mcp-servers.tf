@@ -19,32 +19,30 @@
 # Applying never widens or narrows a live session: the grant is fixed at the
 # upstream login done from the dashboard ("Authenticate server").
 
-# Adopting what is already live rather than creating it: the server was made
-# through the dashboard on 2026-09-10.
-import {
-  to = cloudflare_zero_trust_access_ai_controls_mcp_server.tg
-  id = "${var.account_id}/tg"
-}
-
-resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "tg" {
-  account_id = var.account_id
-  id         = "tg"
-  name       = "mctl Telegram (tg.mctl.ai)"
-  hostname   = "https://tg.mctl.ai/mcp"
-  auth_type  = "oauth"
-
-  description = "Fourth upstream of the private aggregate portal. Registered by DCR (pinned client, mctlhq/mctl-telegram#691). Refs mctlhq/.github#35, #137, mctlhq/mctl-gitops#1363."
-
-  secure_web_gateway               = false
-  is_shared_oauth_callback_enabled = false
+# `tg` is out of state for one apply, on purpose (mctlhq/mctl-gitops#1363).
+#
+# It moved to DCR on 2026-09-26, and #1402 dropped the manual
+# `auth_credentials` it carried. The apply of that failed: with the attribute
+# removed from config, provider 5.24 sends it as an explicit null, and the API
+# refuses the whole PUT --
+#
+#   400 {"code":7001,"message":"Expected string, received null",
+#        "path":["body","auth_credentials"]}
+#
+# (nothing was written; the live server stayed ready/connected). A PUT that
+# OMITS the field is accepted -- that is how the move itself was done -- but
+# the provider cannot be made to omit a value it holds in state. So the old
+# blob is not edited away, it is forgotten: this block drops `tg` from state
+# without touching Cloudflare (`destroy = false`), and the next change imports
+# it again. An import reads the server from the API, which returns no
+# `auth_credentials`, so `tg` comes back exactly as `seerrsense` and `api`
+# did: DCR, nothing write-only in state. The `updated_tools` mapping lives on
+# the portal object in mcp-portal.tf and is unaffected.
+removed {
+  from = cloudflare_zero_trust_access_ai_controls_mcp_server.tg
 
   lifecycle {
-    # `tools` and `prompts` are the capability catalogue Cloudflare syncs from
-    # the upstream. `updated_tools` / `updated_prompts` are written by the
-    # portal resource in mcp-portal.tf, built from the owning repo's
-    # allowlist vendored under allowlists/ (#1370). Declaring them here too
-    # would give this root two writers of one mapping, so they stay ignored.
-    ignore_changes = [updated_tools, updated_prompts]
+    destroy = false
   }
 }
 
@@ -98,8 +96,11 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "projects" {
   is_shared_oauth_callback_enabled = false
 
   lifecycle {
-    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
-    # allowlists/projects.json (vendored from mctlhq/projects-mcp).
+    # `tools` and `prompts` are the capability catalogue Cloudflare syncs from
+    # the upstream. `updated_tools` / `updated_prompts` are written by the
+    # portal resource in mcp-portal.tf, from allowlists/projects.json
+    # (vendored from mctlhq/projects-mcp, #1370). Declaring them here too
+    # would give this root two writers of one mapping, so they stay ignored.
     ignore_changes = [updated_tools, updated_prompts]
   }
 }
@@ -142,7 +143,7 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "alice" {
   is_shared_oauth_callback_enabled = false
 
   lifecycle {
-    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
+    # Same reasoning as projects above: mcp-portal.tf writes the mapping, from
     # allowlists/alice.json (vendored from mctlhq/mctl-alice).
     ignore_changes = [updated_tools, updated_prompts]
   }
@@ -178,7 +179,7 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "coolify" {
   is_shared_oauth_callback_enabled = false
 
   lifecycle {
-    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
+    # Same reasoning as projects above: mcp-portal.tf writes the mapping, from
     # allowlists/coolify.json (vendored from mctlhq/mctl-coolify-mcp).
     ignore_changes = [updated_tools, updated_prompts]
   }
@@ -228,7 +229,7 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "seerrsense" {
   is_shared_oauth_callback_enabled = false
 
   lifecycle {
-    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
+    # Same reasoning as projects above: mcp-portal.tf writes the mapping, from
     # allowlists/seerrsense.json (vendored from mctlhq/seerrsense).
     ignore_changes = [updated_tools, updated_prompts]
   }
@@ -270,7 +271,7 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "api" {
   is_shared_oauth_callback_enabled = false
 
   lifecycle {
-    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
+    # Same reasoning as projects above: mcp-portal.tf writes the mapping, from
     # allowlists/api.json (vendored from mctlhq/mctl-api).
     ignore_changes = [updated_tools, updated_prompts]
   }
