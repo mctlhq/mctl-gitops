@@ -75,9 +75,17 @@ Imports arrive with:
 - ~~`#1092` — MCP Portal and MCP servers~~ — the MCP servers landed in
   `../portal/` instead, which is its own root with its own write token: the
   one-token-per-root rule means putting them here would have widened this
-  root's credential to `MCP Portals`. The portal object itself is still
-  unimported; it carries the tool allowlists owned by three other
-  repositories, so adopting it is a separate decision.
+  root's credential to `MCP Portals`. The portal object itself was imported
+  into `../portal/` in #1370 (plan `1 to import, 0 to change`, apply run
+  36117508212), and its tool allowlists are vendored into that root rather
+  than applied from three other repositories. What remains unimported here is
+  the three sibling `mcp` Access applications (`api`, `tg`, `seerrsense`), a
+  separate child of `#1092`.
+
+Access user sessions for every application in this root — including the
+`mcp_portal` door and its `mcp` members — are deliberately not in Git; see
+`../portal/README.md`'s "Deliberately not in Git" section and the
+per-resource table for the full list and the reason.
 
 Not to be added here: the tunnel and cache ruleset owned by `mac-mini-infra`
 (see the boundary table one directory up) — those move under `#1090`, into

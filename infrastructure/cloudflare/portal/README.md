@@ -10,6 +10,65 @@ root. Before the import, the switches were applied by a script from a
 committed JSON file, and the tool mappings by a script in each service repo.
 Both have been retired.
 
+## Provider support
+
+**Supported.** `cloudflare_zero_trust_access_application.type` accepts
+`mcp_portal` in `cloudflare/cloudflare` 5.x (measured 2026-09-12; both roots'
+lock files resolve `5.24.0`). The proof is a round trip, not a documentation
+claim: `../account/portal-app.tf:32` declares `type = "mcp_portal"`, it was
+imported in apply run 35798537646, and every nightly `cloudflare-drift.yml`
+run since has been zero-diff for that root.
+
+The two portal resource types themselves —
+`cloudflare_zero_trust_access_ai_controls_mcp_portal` and
+`cloudflare_zero_trust_access_ai_controls_mcp_server` — are likewise
+supported and in state: the portal import, #1370, apply run 36117508212.
+
+Two limits, so "supported" is not read as "complete": `auth_credentials` is
+write-only (the provider cannot read it back, so it detects no drift on it —
+see "The field OpenTofu cannot see" below), and the catalogue attribute
+`tools` is typed `list(map(string))` in provider 5.24 while the API's tool
+objects are nested, so it is empty in state — `allowlists/catalogue.json`
+exists to stand in for it (#1382).
+
+## What each resource manages, and what it deliberately does not
+
+| Resource | Managed fields | `ignore_changes` | Write-only / `interactive-secret-bootstrap` | Runtime state excluded |
+| --- | --- | --- | --- | --- |
+| `cloudflare_zero_trust_access_ai_controls_mcp_portal.mcp` (`mcp-portal.tf`) | `hostname`, `name`, `description`, `secure_web_gateway`, `code_mode`, `allow_code_mode`, `servers[]` (`server_id`, `default_disabled`, `on_behalf`, `updated_prompts`, `updated_tools` built from `allowlists/`) | none | none | the synced catalogue `tools`, unreadable in provider 5.24 |
+| `cloudflare_zero_trust_access_ai_controls_mcp_server.tg` (`mcp-servers.tf`) | `account_id`, `id`, `name`, `hostname`, `auth_type = "oauth"`, `description`, `secure_web_gateway`, `is_shared_oauth_callback_enabled` | `updated_tools`, `updated_prompts` (single-writer rule, `mcp-portal.tf` writes the mapping) | `interactive-secret-bootstrap` — the first upstream OAuth login completed once from the dashboard ("Authenticate server"), which mints the admin credential used for every later sync and is never committed (see note below) | `status`, `last_synced`, `last_successful_sync`, `authentication_status`, `tools` |
+| `cloudflare_zero_trust_access_ai_controls_mcp_server.api` (`mcp-servers.tf`) | `account_id`, `id`, `name`, `hostname`, `auth_type = "oauth"`, `description`, `secure_web_gateway`, `is_shared_oauth_callback_enabled` | `updated_tools`, `updated_prompts` (single-writer rule, `mcp-portal.tf` writes the mapping) | `interactive-secret-bootstrap` — the first upstream OAuth login completed once from the dashboard ("Authenticate server"), which mints the admin credential used for every later sync and is never committed (see note below) | `status`, `last_synced`, `last_successful_sync`, `authentication_status`, `tools` |
+| `cloudflare_zero_trust_access_ai_controls_mcp_server.seerrsense` (`mcp-servers.tf`) | `account_id`, `id`, `name`, `hostname`, `auth_type = "oauth"`, `description`, `secure_web_gateway`, `is_shared_oauth_callback_enabled` | `updated_tools`, `updated_prompts` (single-writer rule, `mcp-portal.tf` writes the mapping) | `interactive-secret-bootstrap` — the first upstream OAuth login completed once from the dashboard ("Authenticate server"), which mints the admin credential used for every later sync and is never committed (see note below) | `status`, `last_synced`, `last_successful_sync`, `authentication_status`, `tools` |
+| `cloudflare_zero_trust_access_ai_controls_mcp_server.projects` (`mcp-servers.tf`) | `account_id`, `id`, `name`, `hostname`, `auth_type = "oauth"`, `description`, `secure_web_gateway`, `is_shared_oauth_callback_enabled` | `updated_tools`, `updated_prompts` (single-writer rule, `mcp-portal.tf` writes the mapping) | `interactive-secret-bootstrap` — the first upstream OAuth login completed once from the dashboard ("Authenticate server"), which mints the admin credential used for every later sync and is never committed (see note below) | `status`, `last_synced`, `last_successful_sync`, `authentication_status`, `tools` |
+| `cloudflare_zero_trust_access_ai_controls_mcp_server.alice` (`mcp-servers.tf`) | `account_id`, `id`, `name`, `hostname`, `auth_type = "oauth"`, `description`, `secure_web_gateway`, `is_shared_oauth_callback_enabled` | `updated_tools`, `updated_prompts` (single-writer rule, `mcp-portal.tf` writes the mapping) | `interactive-secret-bootstrap` — the first upstream OAuth login completed once from the dashboard ("Authenticate server"), which mints the admin credential used for every later sync and is never committed (see note below) | `status`, `last_synced`, `last_successful_sync`, `authentication_status`, `tools` |
+| `cloudflare_zero_trust_access_ai_controls_mcp_server.coolify` (`mcp-servers.tf`) | `account_id`, `id`, `name`, `hostname`, `auth_type = "oauth"`, `description`, `secure_web_gateway`, `is_shared_oauth_callback_enabled` | `updated_tools`, `updated_prompts` (single-writer rule, `mcp-portal.tf` writes the mapping) | `interactive-secret-bootstrap` — the first upstream OAuth login completed once from the dashboard ("Authenticate server"), which mints the admin credential used for every later sync and is never committed (see note below) | `status`, `last_synced`, `last_successful_sync`, `authentication_status`, `tools` |
+| `cloudflare_zero_trust_access_application.mcp_portal` (`../account/portal-app.tf`) | `name`, `type = "mcp_portal"`, `domain`, `destinations`, `allowed_idps`, `auto_redirect_to_identity`, `cors_headers`, `session_duration = "8760h"`, `enable_binding_cookie`, `http_only_cookie_attribute`, `options_preflight_bypass`; deliberately **not** managing `oauth_configuration` (turning on Access managed OAuth here would replace the portal's own authorization server under every connected client) or the policy body (`policies` references an existing policy by id only) | none | none | Access user sessions |
+| `cloudflare_zero_trust_access_application.portal_member_{projects,alice,coolify}` (`../account/portal-mcp-apps.tf`) | `name`, `type = "mcp"`, `destinations` (`via_mcp_server_portal` + `mcp_server_id`), `session_duration`, inline `policies` | none | none | Access user sessions |
+| The three pre-existing `mcp` Access applications for `api`, `tg`, `seerrsense` (not in this repo — live in Cloudflare only) | none — **unmanaged in full**, deliberately, pending the separate import child of #1092 | n/a | n/a | n/a |
+
+Note on the write-only manual-mode fields: `auth_credentials` and
+`client_secret` are write-only historical manual-mode fields — no server
+carries them today — and `client_secret_version` is what
+`scripts/portal-auth-credentials-drift.py` compares.
+
+## Deliberately not in Git
+
+Three things are intentionally never reconciled here:
+
+- **Per-user upstream OAuth grants** — the grant a person's dashboard login
+  creates against an upstream.
+- **Access user sessions.**
+- **Server runtime sync status** — `status`, `last_synced`,
+  `authentication_status`.
+
+Reason: this is `runtime-user-state` under `mctlhq/.github#47`. It is
+per-person, time-varying, and not a desired state anything could reconcile
+towards — declaring it here would make every plan red on a normal login.
+
+What watches it instead: `.github/workflows/cloudflare-portal-health.yml`
+(hourly per-server health), `scripts/portal-auth-credentials-drift.py` and
+`scripts/portal-catalogue-drift.py` (nightly, from `cloudflare-drift.yml`).
+
 ## What is pinned, and why each field
 
 - `secure_web_gateway`: whether the portal routes its traffic through
@@ -101,10 +160,13 @@ only when the plan came back clean.
   `client_secret` (`7001: client_secret must be a non-empty string`); updating
   one does not. Adopting `tg` therefore needs no secret in state; a future
   server added from scratch will.
-- `updated_tools` / `updated_prompts` are in `ignore_changes`. They are the
-  allowlists owned by `mctl-telegram`, `mctl-api` and `seerrsense`, applied
-  from those repositories. Nothing here sets them, so nothing here can revert
-  them.
+- `updated_tools` / `updated_prompts` are in `ignore_changes` on each server
+  resource because `mcp-portal.tf` is the single writer of the portal mapping
+  since #1370 — not because the allowlists are applied from the service
+  repositories. The decision about a tool still belongs to the owning repo's
+  `docs/portal-allowlist.json`, vendored byte-identical into
+  `allowlists/<id>.json` by `.github/workflows/portal-allowlist-vendor.yml`;
+  the write happens here.
 
 ## After an apply
 
@@ -235,6 +297,9 @@ that list is `mcp-portal.tf`. To add a seventh server, in this order:
    `catalogue.json` (catalogue in portal order). Then merge and apply.
    `scripts/validate-portal-allowlists.py` refuses a catalogue tool with no
    decision, and a server whose `baseline.json` entry is missing.
+4. Add the new server's row to the per-resource table above ("What each
+   resource manages, and what it deliberately does not"), so the table stays
+   the current picture rather than the next stale passage.
 
 Adding the mapping and deciding what the server exposes are no longer two
 scripts run in two repositories. They are one reviewed plan: the plan names

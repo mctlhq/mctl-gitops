@@ -4,6 +4,8 @@ Git is the desired state for Cloudflare configuration; OpenTofu applies it; the
 state lives in an mctl-owned R2 bucket and never in this repository.
 
 Roadmap: `mctlhq/.github#47`. Inventory and the zero-diff proof: `mctl-gitops#1083`.
+The `mcp_portal` provider-support verdict lives in `portal/README.md`'s
+"Provider support" section.
 
 ## Engine
 
