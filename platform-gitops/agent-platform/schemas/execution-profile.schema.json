@@ -136,6 +136,35 @@
               "uniqueItems": true
             }
           }
+        },
+        "capabilityDiscovery": {
+          "description": "Optional (mctl-agents#242 slice 4). Whether this profile PERMITS the issue-investigator's capability-discovery mode, and which providers discovery may reach. Absent == {enabled: false}. The catalog permits; the ISSUE_INVESTIGATOR_CAPABILITY_MODE env var still decides whether a deployment turns discovery on, and discovery runs only when both agree. mctl-agents' resolver (orchestrator/resolver.py _parse_capability_discovery) enforces the same rules and is authoritative; validate-agent-platform.py adds the cross-entry checks JSON Schema cannot express (unique aliases and (type, id) pairs, mctl-api keeps alias mctl).",
+          "type": "object",
+          "required": ["enabled"],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "providers": {
+              "description": "Ordered: alias assignment follows declaration order.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["type", "id", "alias", "endpoint"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": { "enum": ["mcp-remote", "mcp-local", "sdk-builtin"] },
+                  "id": { "type": "string", "pattern": "^[^/]+$" },
+                  "alias": { "type": "string", "pattern": "^[^/]+$" },
+                  "endpoint": {
+                    "description": "A symbolic name resolved in mctl-agents code (mctl-api-mcp -> MCTL_MCP_URL), never a URL: a catalog edit must not be able to point the gateway, and the bearer token it sends, at an arbitrary host.",
+                    "enum": ["mctl-api-mcp"]
+                  }
+                }
+              }
+            }
+          },
+          "if": { "properties": { "enabled": { "const": true } } },
+          "then": { "required": ["providers"], "properties": { "providers": { "minItems": 1 } } }
         }
       }
     }
