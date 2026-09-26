@@ -1,44 +1,26 @@
 # The MCP portal's upstream servers.
 #
-# What matters here is `scope`: the portal is its own OAuth client against each
-# upstream, and it only ever receives the scopes it names. mctl-telegram's
-# narrowGrant (internal/oauth/scopes.go) drops any negotiable scope the client
-# did not ask for, so a short string here is invisible everywhere else —
-# measured on 2026-09-12, with all 30 tools enabled, the identity on the admin
-# tier and per-account send consent on, a send still came back as a dry-run
-# preview because the portal was asking for two read scopes:
+# Every server here is registered by dynamic client registration (DCR, the
+# dashboard's "Automatic (recommended)"): `auth_type = "oauth"` with no
+# `auth_credentials` and no `client_secret`. Supplying either is what opts a
+# server INTO manual mode, whose tool catalogue is captured once at the first
+# login and never refreshed. `tg` and `api` were the last two manual servers;
+# both moved on 2026-09-26 (mctlhq/mctl-gitops#1363), see the end of this
+# file.
 #
-#   oauth: token authorization_code grant
-#   client_id:       cloudflare-portal-mcp
-#   requested_scope: telegram:dialogs:read telegram:messages:read
-#   granted_scope:   telegram:dialogs:read telegram:messages:read admin:users
+# Scope was the reason `tg` carried a hand-written registration: the portal
+# only receives the scopes it names, and mctl-telegram's narrowGrant drops any
+# negotiable scope the client did not ask for -- measured 2026-09-12, a send
+# came back as a dry-run preview because the manual registration asked for
+# two read scopes. Under DCR the portal names no scope, and an empty request
+# is granted every negotiable scope (all five tg advertises), so that failure
+# cannot recur from here. mctl-telegram#691 pins the portal's DCR client.
 #
-# (`admin:users` survives only because it is not negotiable and is granted by
-# membership. Its presence next to a missing send scope is the signature of
-# this failure: the tier was never the problem.)
-#
-# Applying a wider scope does not widen a live session. mctl-telegram's
-# boundRefreshGrant intersects a refresh with the family's original grant, so
-# after an apply the upstream must be signed out and back in in the portal.
-
-locals {
-  # The five scopes tg.mctl.ai advertises in its RFC 8414 and RFC 9728
-  # metadata, which is also exactly DCRNegotiableScopes in
-  # mctl-telegram/internal/oauth/scopes.go. A direct connector to tg.mctl.ai
-  # asks for and receives all five; the portal is brought level with it.
-  tg_scope = join(" ", [
-    "telegram:dialogs:read",
-    "telegram:messages:read",
-    "telegram:messages:send",
-    "telegram:messages:pin",
-    "account:manage",
-  ])
-}
+# Applying never widens or narrows a live session: the grant is fixed at the
+# upstream login done from the dashboard ("Authenticate server").
 
 # Adopting what is already live rather than creating it: the server was made
-# through the dashboard on 2026-09-10. Measured before this landed — the import
-# plans one update and nothing else, `client_secret` does not appear in the
-# diff at all, and there is no replacement.
+# through the dashboard on 2026-09-10.
 import {
   to = cloudflare_zero_trust_access_ai_controls_mcp_server.tg
   id = "${var.account_id}/tg"
@@ -51,39 +33,10 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "tg" {
   hostname   = "https://tg.mctl.ai/mcp"
   auth_type  = "oauth"
 
-  description = "Phase 0 pilot upstream for the private aggregate portal. Refs mctlhq/.github#35, #44."
+  description = "Fourth upstream of the private aggregate portal. Registered by DCR (pinned client, mctlhq/mctl-telegram#691). Refs mctlhq/.github#35, #137, mctlhq/mctl-gitops#1363."
 
   secure_web_gateway               = false
   is_shared_oauth_callback_enabled = false
-
-  # The OAuth registration the portal uses against this upstream. The API
-  # takes it as one opaque write-only blob and never returns it; only the
-  # read-only auth_config_summary projection comes back, which is why a
-  # refresh cannot correct this value and why the drift of it is checked
-  # separately (scripts/portal-auth-credentials-drift.py).
-  #
-  # `client_secret` is deliberately absent. It is a separate top-level field,
-  # not part of this blob, and the stored one (v1) must survive an apply:
-  # naming it here would mean committing a secret to state for no gain. Note
-  # the asymmetry, measured: CREATING a manual-mode oauth server requires a
-  # non-empty client_secret (the API answers `7001: client_secret must be a
-  # non-empty string`), while updating one does not. A future server added
-  # here from scratch will have to supply one; adopting this one does not.
-  auth_credentials = jsonencode({
-    auth_mode = "manual"
-    config = {
-      issuer                 = "https://tg.mctl.ai"
-      authorization_endpoint = "https://tg.mctl.ai/oauth/authorize"
-      token_endpoint         = "https://tg.mctl.ai/oauth/token"
-      revocation_endpoint    = "https://tg.mctl.ai/oauth/revoke"
-    }
-    registration_info = {
-      client_id                  = "cloudflare-portal-mcp"
-      redirect_uris              = ["https://mcp.mctl.ai/servers-callback"]
-      token_endpoint_auth_method = "none"
-      scope                      = local.tg_scope
-    }
-  })
 
   lifecycle {
     # `tools` and `prompts` are the capability catalogue Cloudflare syncs from
@@ -98,14 +51,9 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "tg" {
 # The fourth upstream, and the first registered by dynamic client registration
 # rather than by hand.
 #
-# `tg` above is the only `auth_mode: manual` resource in this file today. It
-# stays manual until mctl-telegram conforms to the automatic (DCR)
-# registration rule in mctlhq/.github#137 — its DCR default drops any scope
-# the client did not name, which would silently narrow what the portal is
-# granted. `api` is also live in manual mode, with no Terraform resource yet
-# (issue mctlhq/mctl-gitops#1363, blocked on mctlhq/mctl-api#395); `seerrsense`
-# moved to DCR on 2026-09-25 and is adopted at the end of this file. Manual
-# mode costs a server the thing this one is being registered to test: a manual server's capability catalogue is captured
+# When this was written every other server was manual, and manual mode costs
+# a server the thing this one was registered to test: a manual server's
+# capability catalogue is captured
 # once, at the first user authorization, and never refreshed. That is
 # Cloudflare's documented limitation, and it is why `POST servers/{id}/sync`
 # answers `success` on a manual server while `last_synced` does not move —
@@ -282,6 +230,48 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "seerrsense" {
   lifecycle {
     # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
     # allowlists/seerrsense.json (vendored from mctlhq/seerrsense).
+    ignore_changes = [updated_tools, updated_prompts]
+  }
+}
+
+# `tg` (top of this file) and `api` moved from manual to automatic (DCR) mode
+# on 2026-09-26 by the same three-step sequence as `seerrsense` above, once
+# each upstream admitted the portal's exact callbacks at its /register:
+#
+#   - api: registrations persisted in Postgres (mctlhq/mctl-api#400, 4.54.0),
+#     with the two callbacks added to OAUTH_ALLOWED_REDIRECT_URIS;
+#   - tg:  a pinned client derived from OAUTH_DCR_REDIRECT_URIS
+#     (mctlhq/mctl-telegram#691, 0.69.0), exempt from the sweep and the cap.
+#
+# Both came back ready/connected with a fresh last_synced, the same tool
+# catalogue (api 92, tg 36, name for name and in order against
+# allowlists/catalogue.json), and the portal mapping untouched -- api's
+# fifteen disabled tools stayed disabled. For `tg` this change removes the
+# write-only `auth_credentials` the resource used to carry; leaving it would
+# have put the server back into manual mode on the next apply.
+#
+# `api` is adopted here for the first time: the dashboard created it before
+# this root existed.
+import {
+  to = cloudflare_zero_trust_access_ai_controls_mcp_server.api
+  id = "${var.account_id}/api"
+}
+
+resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "api" {
+  account_id = var.account_id
+  id         = "api"
+  name       = "MCTL API (api.mctl.ai)"
+  hostname   = "https://api.mctl.ai/mcp"
+  auth_type  = "oauth"
+
+  description = "Third upstream of the private aggregate portal. Registered by DCR (mctlhq/mctl-api#400). Refs mctlhq/.github#35, #137, mctlhq/mctl-gitops#1363."
+
+  secure_web_gateway               = false
+  is_shared_oauth_callback_enabled = false
+
+  lifecycle {
+    # Same reasoning as tg above: mcp-portal.tf writes the mapping, from
+    # allowlists/api.json (vendored from mctlhq/mctl-api).
     ignore_changes = [updated_tools, updated_prompts]
   }
 }

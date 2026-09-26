@@ -69,6 +69,11 @@ this failure, and the reason "raise the access tier" is the wrong fix.
 The two-scope string had been set by hand when the server was created on
 2026-09-10, and was recorded nowhere.
 
+Since 2026-09-26 `tg` is registered by DCR and the portal names no scope at
+all. mctl-telegram grants an empty request every negotiable scope (all five),
+so the failure above cannot come back from a string in this root; there is no
+longer a string here to get wrong.
+
 ## The field OpenTofu cannot see
 
 `auth_credentials` is write-only: the API accepts it and returns only the
@@ -180,7 +185,7 @@ covered by them.
   state: an `OWNERS` entry that has not been applied yet is a plan, not an
   outage, which is the gap between merging this and clicking apply.
 
-## The sixth upstream, `coolify`, and what this change does not do
+## The sixth upstream, `coolify`, and the move of the rest to DCR
 
 `coolify.mctl.ai` is registered the same way as `projects`/`alice`: DCR, no
 `auth_credentials`, no `client_secret` (mctlhq/mctl-gitops#1363). The apply
@@ -201,12 +206,18 @@ before this server was even the subject.
 `seerrsense` moved to automatic (DCR) mode on 2026-09-25 and is adopted in
 `mcp-servers.tf`; the resource's comment has the measured API sequence, since
 the provider cannot clear a manual registration (`auth_credentials` is
-write-only). `api` is still live in manual OAuth mode with no Terraform
-resource: its DCR keeps registrations in memory and does not allow the
-portal's callbacks (mctlhq/mctl-api#395). `tg` stays manual until
-mctl-telegram restricts its DCR to the portal's exact callbacks
-(mctlhq/.github#137). Each moves the same way as `seerrsense`, joining
-`DCR_SERVERS` in `scripts/portal-auth-credentials-drift.py` in the same change.
+write-only). `api` and `tg` followed on 2026-09-26, once each admitted the
+portal's exact callbacks at its `/register` (mctlhq/mctl-api#400,
+mctlhq/mctl-telegram#691). `api` is adopted here for the first time; `tg`
+loses the write-only `auth_credentials` it carried, which an apply would
+otherwise have written back, returning it to manual mode. Both are on
+`DCR_SERVERS`, so no server is manual any more and `UNMANAGED` in
+`scripts/validate-portal-allowlists.py` is empty.
+
+With nothing manual left, `portal-auth-credentials-drift.py` compares no
+blob. It now checks the DCR side instead: a DCR server whose live
+`auth_config_summary` is not empty (someone chose "Manual credentials" in the
+dashboard) is reported as drift, exit 1.
 
 Creating the Terraform resource above registers a server with Cloudflare, but
 it does not make the server reachable through `mcp.mctl.ai`. The portal keeps
@@ -308,7 +319,8 @@ inputs.
 
 The portal keeps a snapshot of each upstream's tools (`servers/{id}.tools`,
 including every `outputSchema`) and serves clients from it. For a server in
-manual OAuth mode — `tg` and `api` today — that snapshot is taken **once**, when
+manual OAuth mode — none today; `tg` and `api` were the last, until
+2026-09-26 — that snapshot is taken **once**, when
 the first user completes upstream OAuth, and is never refreshed. That is
 documented, not a bug: the MCP Portals limitations list says *"Manual OAuth
 capabilities are captured during the first user authorization … Background

@@ -44,9 +44,8 @@ What this script enforces, and what it deliberately does not:
     mapping entry carries a literal `updated_tools` list instead; every
     vendored server has a `sources.json` provenance entry.
   - existence: every server named in `mapping.json` is either on the
-    commented `UNMANAGED` list (mirroring `#1363`: `api` and `seerrsense`
-    are mapped on the portal but have no Terraform resource of their own
-    yet) or has a literal
+    commented `UNMANAGED` list (the `#1363` seam; empty since every mapped
+    server got its resource) or has a literal
     `resource "cloudflare_zero_trust_access_ai_controls_mcp_server" "<id>"`
     in `mcp-servers.tf` -- a literal grep rather than an HCL parser.
   - mapping entries: each `mapping.json` server carries exactly
@@ -170,8 +169,10 @@ MAPPING_KEYS = {*MAPPING_SWITCHES, "updated_prompts"}
 
 # Mapped on the portal, no Terraform resource of their own yet -- the
 # `#1363` seam. Recorded here, not discovered, so closing #1363 is a
-# deletion from this one list rather than a rediscovery.
-UNMANAGED = {"api", "seerrsense"}
+# deletion from this one list rather than a rediscovery. Empty since
+# 2026-09-26: `seerrsense` and then `api` were adopted into mcp-servers.tf.
+# Kept as a named empty set so a future portal-first server has a place to go.
+UNMANAGED: set[str] = set()
 
 
 class Unreadable(Exception):

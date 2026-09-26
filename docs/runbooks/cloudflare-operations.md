@@ -183,7 +183,10 @@ clean plan, because they cover what `tofu plan` cannot see:
 
 - **OAuth registration** (`scripts/portal-auth-credentials-drift.py`) —
   `auth_credentials` is write-only, so an out-of-band change never shows in a
-  plan. Exit 1 = drifted, 2 = could not run (including a failed selftest).
+  plan. Every server is registered by DCR since 2026-09-26, so exit 1 now
+  means a server grew a manual registration outside Git (someone chose
+  "Manual credentials" in the dashboard); 2 = could not run (including a
+  failed selftest).
 - **Tool catalogue** (`scripts/portal-catalogue-drift.py`) — exit 1 = stale,
   re-snapshot per `infrastructure/cloudflare/portal/README.md`; 3 = a waiver
   needs deleting or narrowing, **do not** re-snapshot; 4 = an upstream is
