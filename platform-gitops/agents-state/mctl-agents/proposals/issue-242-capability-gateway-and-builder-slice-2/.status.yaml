@@ -1,0 +1,18 @@
+status: proposed
+updated_at: '2026-09-26T08:15:00Z'
+updated_by: mashkovd
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 242
+  url: https://github.com/mctlhq/mctl-agents/issues/242
+control:
+  requires_human_approval: true
+notes: >-
+  Slice 2 of 3 for mctlhq/mctl-agents#242. Slice 1 lives in
+  issue-242-feat-agent-platform-role-aware-capabilit (merged as
+  mctlhq/mctl-agents#485, cf5adda) and must not be edited. A new slug is
+  required because the implementer preflight finds the merged #485 on the old
+  branch and returns without work. The 2026-09-19 approval covered slice 1's
+  scope and is deliberately NOT carried forward: this slice needs its own
+  human approval.
