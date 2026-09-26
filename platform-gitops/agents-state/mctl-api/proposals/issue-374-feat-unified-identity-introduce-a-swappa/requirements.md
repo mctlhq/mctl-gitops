@@ -32,6 +32,11 @@ because mctl-api has no staging deployment; `agent` is a reserved provider
 name, since #376 introduces `ProviderAgent = "agent"`; and the work is cut
 into four separately mergeable slices.
 
+**Approval scope.** The DevLoop approval for this proposal authorizes Slice A
+only: one pull request. Slices B and C are filed as separate follow-up issues
+after Slice A is merged and deployed, and Slice D remains its own separately
+approved follow-up issue.
+
 ## User stories
 
 - AS a platform operator I WANT to add or replace an OIDC identity provider

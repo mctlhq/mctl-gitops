@@ -4,6 +4,15 @@ Four separately mergeable slices. Each slice is one pull request that can merge,
 deploy and be rolled back without the others. Slices B, C and D each depend on A
 being merged, but not on each other.
 
+> **Scope of this DevLoop approval: Slice A ONLY.** The implementer for this
+> proposal implements Slice A (tasks A1-A11, tests of the "Slice A" group) and
+> opens exactly one pull request. It MUST NOT implement any task from Slice B, C
+> or D in this run. After Slice A is merged and deployed, Slices B and C become
+> separate follow-up issues with their own proposals and approvals. Slice D
+> stays its already-planned, separately approved follow-up issue. The B/C/D
+> sections below are kept as the design record, and their items are
+> deliberately not checkboxes.
+
 Mapping to the reviewed proposal's numbering, for traceability:
 `A1-A9` = old tasks 1-9, `A10` = old task 12 (docs), `A11` = new (production
 canary, replacing the old cut-over step 3), `B1` = old task 10, `C1` = old task
@@ -153,9 +162,9 @@ A, `T7` in B, `T8` in C, plus new `T13-T15`.
 
 ---
 
-## Slice B — numeric GitHub id in local OAuth JWTs (depends on slice A)
+## Slice B — numeric GitHub id in local OAuth JWTs (depends on slice A; NOT in this approval, separate follow-up issue)
 
-- [ ] B1. Carry the numeric GitHub id into local OAuth tokens: switch
+- (not in this approval) B1. Carry the numeric GitHub id into local OAuth tokens: switch
       `internal/api/oauth_handlers.go:251` from `GitHubValidator.Validate` to
       `ValidateIdentity` (`internal/auth/github.go:66`), thread the id through
       `IssueCode` (`oauth_server.go:523`) and `IssueJWT`
@@ -170,9 +179,9 @@ A, `T7` in B, `T8` in C, plus new `T13-T15`.
 
 ---
 
-## Slice C — groups re-resolved on refresh (depends on slice A)
+## Slice C — groups re-resolved on refresh (depends on slice A; NOT in this approval, separate follow-up issue)
 
-- [ ] C1. Re-resolve groups on refresh: in `RefreshAccessToken`
+- (not in this approval) C1. Re-resolve groups on refresh: in `RefreshAccessToken`
       (`oauth_server.go:614-656`) call `ResolveGroups`
       (`oauth_server.go:383-395`) instead of replaying the groups stored by
       `IssueRefreshToken` (`oauth_server.go:585-611`), behind
@@ -192,13 +201,13 @@ A, `T7` in B, `T8` in C, plus new `T13-T15`.
 File this as a separate GitHub issue before starting; it is the only step that
 can refuse a production boot, so it gets its own approval.
 
-- [ ] D1. Flip the Dex provider entry to `"audience_enforcement": "enforce"`,
+- (not in this approval) D1. Flip the Dex provider entry to `"audience_enforcement": "enforce"`,
       gated on A11's metrics reading clean.
       — DoD: a Dex token with a wrong `aud` is refused with 401; Dex logins
       still work; `federation_audience_mismatch_total` stays zero. Rollback: set
       the entry back to `audit`, one values change.
 
-- [ ] D2. Remove the legacy path (depends on D1): delete the
+- (not in this approval) D2. Remove the legacy path (depends on D1): delete the
       `DEX_ISSUER_URL`/`DEX_CLIENT_ID` shim, `NewDexVerifier`'s
       `SkipClientIDCheck` branch (`oidc.go:181-183`), the `DEX_ISSUER_URL`
       default (`cmd/api/main.go:999`), the retained pre-registry chain and
@@ -274,21 +283,21 @@ Slice A:
 
 Slice B:
 
-- [ ] T7. `ghid`: a JWT with `ghid` yields `(github, <id>, display=login)` and no
+- (not in this approval) T7. `ghid`: a JWT with `ghid` yields `(github, <id>, display=login)` and no
       `GitHubIDLookup` call; a JWT without it yields the login-only identity and
       increments `oauth_jwt_without_github_id_total`; `sub` remains the login in
       both.
 
 Slice C:
 
-- [ ] T8. Refresh regroup: groups change after a gitops membership change; a
+- (not in this approval) T8. Refresh regroup: groups change after a gitops membership change; a
       `TenantResolver` error leaves the refresh successful with stored groups and
       increments `oauth_refresh_regroup_failed_total`;
       `OAUTH_REFRESH_REGROUP=false` restores replay behaviour.
 
 Slice D:
 
-- [ ] T15. Flag day: an OIDC provider entry with no `audiences` refuses boot
+- (not in this approval) T15. Flag day: an OIDC provider entry with no `audiences` refuses boot
       (`config.validate`); a Dex token with a wrong `aud` is refused with 401;
       the `SkipClientIDCheck` branch no longer exists in the tree (source pin,
       same style as T14).
