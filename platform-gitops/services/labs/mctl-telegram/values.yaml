@@ -86,6 +86,14 @@ env:
   # rewrite of this file diff it against git before the pod restarts, or the
   # server will refuse to start. Refs mctlhq/.github#35, #44.
   OAUTH_PREREGISTERED_CLIENTS: '[{"client_id":"cloudflare-portal-mcp","client_name":"Cloudflare MCP Portal (mcp.mctl.ai)","redirect_uris":["https://mcp.mctl.ai/servers-callback"]}]'
+  # Exact redirect URIs a Dynamic Client Registration may claim (0.69.0,
+  # mctlhq/mctl-telegram#691): the Cloudflare portal's two callbacks, so the
+  # `tg` upstream can run in automatic (DCR) mode (mctlhq/.github#137,
+  # mctlhq/mctl-gitops#1363). Byte-exact, separate from the host allowlist
+  # above; a registration whose redirects are all listed gets a pinned client
+  # with a server-assigned name. Keep OAUTH_PREREGISTERED_CLIENTS until an
+  # automatic-mode login is confirmed.
+  OAUTH_DCR_REDIRECT_URIS: "https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/tg"
   # Raised from the 10m default: the in-browser enable_access flow (phone -> SMS
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
   # a human to receive and enter the SMS code -> "sign-in session has expired".
