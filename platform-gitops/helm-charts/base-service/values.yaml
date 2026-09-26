@@ -199,3 +199,25 @@ blueGreen:
 otel:
   enabled: false
   endpoint: http://otel-collector.monitoring.svc.cluster.local:4318
+
+# -- Optional: Telegram work-context adapter wiring (mctlhq/mctl-telegram#443,
+# mctlhq/mctl-gitops#1405). Default-off, modelled on `otel` above: with
+# `enabled: false` this changes nothing, including whether the key is present
+# in a service's values.yaml at all. When `enabled: true`, renders an
+# ExternalSecret (templates/externalsecret-work-context.yaml) pulling the
+# surface:telegram bearer token from Vault, plus WORK_CONTEXT_ENABLED,
+# MCTL_WORK_ITEM_TENANT, MCTL_API_BASE_URL (only while apiBaseUrl is
+# non-empty) and the token itself alongside `env` -- a service's own `env` or
+# `envValueFrom` wins on conflict, same precedence `otel` already uses.
+workContext:
+  enabled: false            # wiring gate; off = render unchanged
+  featureEnabled: false     # -> WORK_CONTEXT_ENABLED, a separate flag from `enabled`
+  tenant: ""                # -> MCTL_WORK_ITEM_TENANT
+  apiBaseUrl: ""            # -> MCTL_API_BASE_URL, omitted while empty (mctl-telegram's own default applies)
+  tokenEnvName: MCTL_SURFACE_TELEGRAM_TOKEN
+  tokenVaultKey: ""         # e.g. secret/data/platform/mctl-api/surface-tokens -- required when enabled: true
+  tokenVaultProperty: ""    # e.g. telegram-token -- required when enabled: true
+  tokenSecretName: ""       # target Secret name; defaults to <fullname>-work-context
+  store: vault-backend
+  storeKind: ClusterSecretStore
+  refreshInterval: 1h
