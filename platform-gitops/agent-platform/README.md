@@ -226,8 +226,10 @@ eager mode.
 
 ## Rollback
 
-This catalog is additive and not runtime-load-bearing -- nothing resolves
-against it yet. Reverting the commit that introduced it removes the
+This catalog is additive and not runtime-load-bearing in production: no
+deployment runs `ISSUE_INVESTIGATOR_RESOLVER_MODE=declarative` yet, so no
+production run resolves against it. The resolver itself does read it, and
+fails closed on what it reads (see the two sections above). Reverting the commit that introduced it removes the
 catalog, schemas, validator, and CI step with no effect on any running
 agent, CWFT, or mctl-api state. Once real registry-backed bindings exist,
 operational rollback always selects the exact previous registry tuple
