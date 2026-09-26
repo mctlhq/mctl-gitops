@@ -1,0 +1,19 @@
+status: proposed
+updated_at: '2026-09-26T14:40:00Z'
+updated_by: mashkovd
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 242
+  url: https://github.com/mctlhq/mctl-agents/issues/242
+control:
+  requires_human_approval: true
+notes: >-
+  Slice 4 of 4 for mctlhq/mctl-agents#242, the mctl-agents half. Slices 1-3
+  live in issue-242-feat-agent-platform-role-aware-capabilit (#485),
+  issue-242-capability-gateway-and-builder-slice-2 (#508) and
+  issue-242-capability-discovery-investigator-mode-slice-3 (#509); none may
+  be edited. The mctl-gitops half (schema, profile field, release binding)
+  is a separate, human-authored mctl-gitops PR that lands after this one.
+  The live benchmark measurement is an operator step after both. This
+  approval also approves the governance decision in design.md sec. 1.
