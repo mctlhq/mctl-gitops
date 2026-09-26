@@ -81,28 +81,26 @@ const (
     devLoopOutcomeStarted        = "started"
     devLoopOutcomeAlreadyRunning = "already_running"
     devLoopOutcomeAlreadyExists  = "already_exists"
-    devLoopOutcomeRestarted      = "restarted"
     devLoopOutcomeFailed         = "failed"
 )
 
 type devLoopStartResult struct {
-    Outcome         string
-    Status          string // Temporal status of the pre-existing execution
-    RunID           string
-    TerminatedRunID string
-    Err             error
+    Outcome string
+    Status  string // Temporal status of the pre-existing execution
+    RunID   string
+    Err     error
 }
 
 // startDevLoop decides whether to start, then starts. One function so the
 // single-issue route and the wave route cannot drift on what
 // "already_running" means.
-func startDevLoop(ctx context.Context, c DevLoopClient, issueURL, workflowID string, restart bool) devLoopStartResult
+func startDevLoop(ctx context.Context, c DevLoopClient, issueURL, workflowID string) devLoopStartResult
 ```
 
 `waveOutcome*` in `handlers_roadmap_wave.go` become aliases of the new
 constants (`const waveOutcomeStarted = devLoopOutcomeStarted`, ...), so no wave
 test or audit string changes value. `ExecuteRoadmapWave`'s per-item switch is
-replaced by a `startDevLoop(..., restart=false)` call inside its existing
+replaced by a `startDevLoop(...)` call inside its existing
 `call()` timeout wrapper, keeping the "started workflow X, planned Y" guard.
 
 ### 2. Teach the client to return the existing run id
@@ -128,45 +126,16 @@ from `resp.GetWorkflowExecutionInfo().GetExecution().GetRunId()`.
 `DescribeDevLoopExecution` is added to the `DevLoopClient` interface and to
 `fakeDevLoopClient`.
 
-### 3. Restart as a start-time conflict policy, not a separate terminate call
+### 3. Handler and response
 
-`restart: true` must not be implemented as "Terminate, then
-`StartDevLoopWorkflow`": the existing call uses
-`WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE`, which refuses a new run on an id
-whose previous run has *closed* — and a terminated run is closed. The restart
-would be rejected by the very policy that makes the normal path idempotent.
-
-Instead add one method that differs only in its two policies:
-
-```go
-// RestartDevLoopWorkflow terminates any live execution on the id and starts a
-// fresh run in the same call. ALLOW_DUPLICATE (not REJECT_DUPLICATE) because a
-// terminated run is a closed run, which REJECT_DUPLICATE would refuse to
-// follow; TERMINATE_EXISTING makes the terminate-and-start atomic at the
-// Temporal frontend rather than a two-RPC race.
-func (c *Client) RestartDevLoopWorkflow(ctx context.Context, issueURL string) (workflowID, runID string, err error)
-```
-
-with `WorkflowIDReusePolicy: WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE` and
-`WorkflowIDConflictPolicy: WORKFLOW_ID_CONFLICT_POLICY_TERMINATE_EXISTING`.
-Everything else — task queue, `DevLoopWorkflowType`, the `issueRef` payload —
-is identical, so the two constructors share a private `start(ctx, issueURL,
-reuse, conflict)`. `startDevLoop` records the pre-existing execution's run id as
-`TerminatedRunID` from the describe it already performed, so the response can
-name what was discarded. This also gives `already_exists` (a *closed* loop) a
-way forward, which the current code has none of.
-
-### 4. Handler and response
-
-`startDevLoopRequest` gains `Restart bool \`json:"restart"\``.
+`startDevLoopRequest` is unchanged (`issue_url` only).
 `StartDevLoopWorkflow` keeps its auth gate, decode and `issue_url` validation
 verbatim, then calls `startDevLoop` and maps:
 
 | Outcome | Status | Body |
 | --- | --- | --- |
 | `started` | 202 | `started: true`, `run_id` (new) |
-| `restarted` | 202 | `started: true`, `run_id` (new), `terminated_run_id` |
-| `already_running` | 200 | `started: false`, `status: "Running"`, `run_id` (existing), message naming the execution and `restart: true` |
+| `already_running` | 200 | `started: false`, `status: "Running"`, `run_id` (existing), message naming the execution |
 | `already_exists` | 200 | `started: false`, `status` (closed state), `run_id` (existing) |
 | `failed` (describe unreadable) | 502 | `error` |
 | `ErrInvalidIssueURL` | 400 | unchanged |
@@ -175,30 +144,27 @@ verbatim, then calls `startDevLoop` and maps:
 client that only reads those three still works; `message` is the field whose
 *text* changes for the no-op cases, which is the whole point of the fix.
 
-Auditing: one entry per request, as today. Parameters gain `outcome` and, when
-set, `restart` and `terminated_run_id`. A no-op stays `Status: "succeeded"`
-(the request did succeed) but its `Message` reads
-`"not started: already_running (run <id>)"` — so the audit log stops being
-evidence of runs that never happened. A `restart: true` request is logged at
-`string(operations.RiskHigh)` rather than `RiskMedium`: it destroys a live
-execution.
+Auditing: one entry per request, as today, at the existing risk level.
+Parameters gain `outcome`. A no-op stays `Status: "succeeded"` (the request
+did succeed) but its `Message` reads `"not started: already_running (run <id>)"`
+— so the audit log stops being evidence of runs that never happened.
 
-### 5. MCP tool and spec
+### 4. MCP tool and spec
 
-`toolTriggerIssue` gains `mcplib.WithBoolean("restart", ...)`, forwarded in the
-`apiPostJSON` body only on the `use_temporal=true` branch; supplying `restart`
-without `use_temporal` returns a tool error rather than being dropped, mirroring
-the "approver is not an input" rejection in `ApproveDevLoopWorkflow`. The tool
-description gains a paragraph stating that the Temporal start is idempotent on
-`dev-loop-mctlhq-{repo}-{issue}`, that `started: false` means nothing was
-submitted, and that `restart: true` is how to re-investigate. **No tool is added
-or removed**, so the `server_test.go` tool-count expectation called out in
-`CLAUDE.md` is untouched.
+`toolTriggerIssue` keeps exactly its two inputs (`issue_url`, `use_temporal`)
+and still returns the response body as tool text, so the new
+`started`/`outcome` fields reach the caller verbatim. The tool description
+gains a paragraph stating that the Temporal start is idempotent on
+`dev-loop-mctlhq-{repo}-{issue}` and that `started: false` means nothing was
+submitted — the existing execution's `run_id` and `status` are what to follow
+up on with `mctl_get_dev_loop`. **No tool or input is added or removed**, so
+the `server_test.go` tool-count expectation called out in `CLAUDE.md` is
+untouched.
 
 `internal/openapi/openapi.yaml` (`/api/v1/agents/dev-loop/start`, line 2258)
-gains `restart` in the request schema, a `200` response for the not-started
-outcomes, and `started`/`outcome`/`status`/`terminated_run_id` on the `202`
-schema.
+gains a `200` response for the not-started outcomes and
+`started`/`outcome`/`status` on the `202` schema; the request schema is
+unchanged.
 
 ## Alternatives
 
@@ -218,26 +184,20 @@ against `orchestrator/temporal/cli.py`. Changing them is a cross-repo behaviour
 change to fix a reporting bug. The describe-then-start pre-check gets the same
 information without touching the contract.
 
-**C. A separate `POST /api/v1/agents/dev-loop/{workflow_id}/restart` route
-instead of a body flag.** Cleaner REST, and the issue offers it as an option.
-Rejected: it makes the caller hand-derive `dev-loop-mctlhq-{repo}-{issue}`
-(reimplementing `WorkflowIDForIssueURL` client-side) and it splits the
-re-investigate flow across two MCP tools, when the operator's actual intent —
-"investigate this issue again" — is one verb on the id they already have, the
-issue URL. The flag keeps `mctl_trigger_issue` the single entry point.
-
-**D. Implement restart as `TerminateWorkflow` followed by the existing
-`StartDevLoopWorkflow`.** Rejected on a correctness ground, not a stylistic one:
-`REJECT_DUPLICATE` refuses to start on an id whose previous run is closed, and a
-terminated run is closed — the start would be rejected. It is also a two-RPC
-race window in which another caller could start first.
+**C. Ship an explicit restart (`restart: true` flag or a dedicated
+`/dev-loop/{workflow_id}/restart` route) in the same change.** Deferred, not
+rejected: restart terminates a live execution — possibly one parked on the
+human-input gate with a sealed request — and needs its own decisions (refuse on
+`WAITING_FOR_INPUT`? `ALLOW_DUPLICATE` + `TERMINATE_EXISTING` vs a two-RPC
+terminate-then-start, which `REJECT_DUPLICATE` would refuse; audit risk level).
+Bundling it would couple a destructive capability to a reporting fix. It is a
+separate follow-up issue, mctl-api#404.
 
 ## Platform impact
 
 - **Migrations:** none. No database, no gitops schema, no Helm value.
 - **Backward compatibility:** `workflow_id`, `run_id` and `message` remain on
-  every success response; `started`, `outcome`, `status` and
-  `terminated_run_id` are additive. The one observable change for an existing
+  every success response; `started`, `outcome` and `status` are additive. The one observable change for an existing
   client is the status code on an already-existing execution: `202` becomes
   `200`. Both are 2xx, and the only in-repo consumer of this route is
   `toolTriggerIssue`, which renders the body and does not branch on the code.
@@ -261,13 +221,6 @@ race window in which another caller could start first.
   fast rather than consuming the request's 30s budget; the 502 body says "could
   not read the existing DevLoop" so an operator can tell it apart from a start
   failure.
-- **Risk: `restart: true` destroys a live execution**, including one parked on
-  the human-input gate with a sealed request a human may be answering
-  (`QueryHumanInputState`). Mitigations: admin-only via `requireTemporalAdmin`,
-  audited at `RiskHigh` with the terminated run id, absent by default, and the
-  response names `terminated_run_id` so the discard is visible rather than
-  silent. Refusing on `WAITING_FOR_INPUT` is an open question in
-  `requirements.md`.
 - **Risk: TOCTOU between describe and start.** Two operators racing can both
   see NotFound; the second start is then absorbed by `USE_EXISTING` and reported
   as `started` when it was not. This is strictly narrower than today's window
