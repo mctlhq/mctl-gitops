@@ -74,25 +74,18 @@ env:
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
   OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,www.cursor.com,cursor.com,localhost,127.0.0.1
-  # Static public clients with byte-exact redirect matching (0.63.0). These
-  # bypass the implicit-host allowlist above but not shape, exact-match or PKCE,
-  # and carry no secret: the token endpoint advertises `none` only. One entry:
-  # the Cloudflare MCP Server Portal at mcp.mctl.ai. The redirect is the value
-  # the Cloudflare API resolves for portal `mcp` / server `tg`
-  # (effective-redirect-uri, source=per_portal), not a guess. Malformed JSON or
-  # an unknown key fails startup closed, so validate with the config parser
-  # before changing it. Same yq caveat as ALLOWED_ORIGINS above, and worse:
-  # this value is JSON full of colons and quotes, so after any automated
-  # rewrite of this file diff it against git before the pod restarts, or the
-  # server will refuse to start. Refs mctlhq/.github#35, #44.
-  OAUTH_PREREGISTERED_CLIENTS: '[{"client_id":"cloudflare-portal-mcp","client_name":"Cloudflare MCP Portal (mcp.mctl.ai)","redirect_uris":["https://mcp.mctl.ai/servers-callback"]}]'
+  # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
+  # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
+  # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR
+  # client from OAUTH_DCR_REDIRECT_URIS below (mctlhq/mctl-gitops#1363).
   # Exact redirect URIs a Dynamic Client Registration may claim (0.69.0,
   # mctlhq/mctl-telegram#691): the Cloudflare portal's two callbacks, so the
   # `tg` upstream can run in automatic (DCR) mode (mctlhq/.github#137,
   # mctlhq/mctl-gitops#1363). Byte-exact, separate from the host allowlist
   # above; a registration whose redirects are all listed gets a pinned client
-  # with a server-assigned name. Keep OAUTH_PREREGISTERED_CLIENTS until an
-  # automatic-mode login is confirmed.
+  # with a server-assigned name. List the portal's exact callbacks and nothing
+  # else: each entry is a standing pinned client anyone can register
+  # (docs/cloudflare-portal-compat.md in mctl-telegram).
   OAUTH_DCR_REDIRECT_URIS: "https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/tg"
   # Raised from the 10m default: the in-browser enable_access flow (phone -> SMS
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
