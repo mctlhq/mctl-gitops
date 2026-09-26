@@ -93,8 +93,8 @@ def test_finops_storage_dashboard_structure() -> None:
     if p5:
         expr = p5["targets"][0]["expr"]
         check(
-            'argo-workdir-local.storageclass.storage.k8s.io/requests.storage' in expr,
-            f"panel 5 missing resource scoping: {expr}",
+            'namespace="argo-workflows"' in expr and 'argo-workdir-local.storageclass.storage.k8s.io/requests.storage' in expr,
+            f"panel 5 missing namespace or resource scoping: {expr}",
         )
 
     # Check panel 12: Persistent Volumes Total Capacity join

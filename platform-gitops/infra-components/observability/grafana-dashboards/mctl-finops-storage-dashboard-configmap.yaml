@@ -215,12 +215,12 @@ data:
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "kube_resourcequota{resourcequota=\"argo-workdir-local\", resource=\"argo-workdir-local.storageclass.storage.k8s.io/requests.storage\", type=\"used\"}",
+              "expr": "kube_resourcequota{namespace=\"argo-workflows\", resourcequota=\"argo-workdir-local\", resource=\"argo-workdir-local.storageclass.storage.k8s.io/requests.storage\", type=\"used\"}",
               "legendFormat": "Used Storage"
             },
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "kube_resourcequota{resourcequota=\"argo-workdir-local\", resource=\"argo-workdir-local.storageclass.storage.k8s.io/requests.storage\", type=\"hard\"}",
+              "expr": "kube_resourcequota{namespace=\"argo-workflows\", resourcequota=\"argo-workdir-local\", resource=\"argo-workdir-local.storageclass.storage.k8s.io/requests.storage\", type=\"hard\"}",
               "legendFormat": "Hard Limit (48 GiB)"
             }
           ]
