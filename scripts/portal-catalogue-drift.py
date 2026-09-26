@@ -464,20 +464,6 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
 # stopped firing is itself an error, so the file cannot quietly accumulate
 # excuses for things that were fixed months ago.
 KNOWN_STALE = {
-    ("seerrsense", "closed-output-schemas"): {
-        "until": "2026-10-15",
-        # The tools the waiver was written against. A finding is excused only
-        # if every tool it names is in here, so a SIXTH seerrsense tool
-        # acquiring a closed schema still fails -- without this the waiver
-        # would cover the regression as well as the five known schemas, since
-        # a side's finding arrives as one aggregated line. The kind pins the
-        # side: the same five tools going closed on the INPUT side is a
-        # different kind and is not excused here.
-        "tools": ["get_media", "request_media", "resolve_media",
-                  "search_media", "whoami"],
-        "why": "seerrsense publishes closed output schemas in code (zod); the fix "
-               "waits on its review freeze -- mctlhq/seerrsense#70, mctlhq/.github#64",
-    },
     ("tg", "missing-tool"): {
         "until": "2026-12-31",
         # Not stale and never will be while the flag is off: mctl-telegram
