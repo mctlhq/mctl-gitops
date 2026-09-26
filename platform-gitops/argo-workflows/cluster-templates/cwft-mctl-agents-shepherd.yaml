@@ -130,6 +130,37 @@ spec:
         # Registry version string, carried for the record only — not
         # consumed by run-shepherd. Left blank by any caller not yet
         # using the registry.
+      - name: work_item_id
+        value: ""
+        # Optional. Canonical WorkItem id, minted by the caller (the
+        # dev-loop control plane). Correlation only — carried to the runner
+        # as env and NOT forwarded as a CLI flag: unlike
+        # cwft-mctl-agents-investigate.yaml, run_shepherd.py has no
+        # --work-item-id flag, so appending one would make argparse exit
+        # non-zero on every run, including the cron sweep. Empty means
+        # absent; no value is ever derived. Read by the usage producer
+        # (mctl-agents orchestrator/usage_ledger.py) beside the existing
+        # WORKFLOW_NAME join key. Mirrors gitops#1279; owner decision 4 of
+        # mctlhq/.github#50.
+      - name: execution_id
+        value: ""
+        # Optional. Execution identity for THIS attempt, minted by the same
+        # caller alongside work_item_id. Same correlation-only, env-not-argv,
+        # empty-means-absent rules as work_item_id above.
+      - name: temporal_workflow_id
+        value: ""
+        # Optional. Id of the DevLoopWorkflow that submitted this tick. Same
+        # correlation-only, env-not-argv, empty-means-absent rules as
+        # work_item_id above.
+      - name: temporal_run_id
+        value: ""
+        # Optional. Run id of that same DevLoopWorkflow. Same rules as
+        # temporal_workflow_id.
+      - name: execution_request_id
+        value: ""
+        # Optional. The mctl-api execution request (xr_...) this run
+        # fulfils, for correlation only: the execution identity is still
+        # execution_id. Same rules as work_item_id.
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # Was an 8Gi `volumeClaimTemplates` entry — and Hetzner rounds any request up
@@ -682,6 +713,27 @@ spec:
           # else in this runner.
           - name: WORKFLOW_NAME
             value: "{{workflow.name}}"
+          # Optional Temporal / WorkItem correlation (gitops#1408, mirroring
+          # gitops#1279 on cwft-mctl-agents-investigate.yaml). Read by the
+          # usage producer (mctl-agents orchestrator/usage_ledger.py) next to
+          # WORKFLOW_NAME above; NOT consumed by run_shepherd's argv, which
+          # has no such flags. The shepherd's in-pod implementer subprocess
+          # (review-fixing path) inherits this env too, so no separate
+          # threading is needed there. Empty for every caller that does not
+          # set them. Enforced by
+          # scripts/validate-shell-param-interpolation.py: these names are in
+          # neither its BASELINE nor its CONSTRAINED set, so interpolating
+          # them into the script body instead of env would fail CI.
+          - name: WORKFLOW_WORK_ITEM_ID
+            value: "{{workflow.parameters.work_item_id}}"
+          - name: WORKFLOW_EXECUTION_ID
+            value: "{{workflow.parameters.execution_id}}"
+          - name: WORKFLOW_TEMPORAL_WORKFLOW_ID
+            value: "{{workflow.parameters.temporal_workflow_id}}"
+          - name: WORKFLOW_TEMPORAL_RUN_ID
+            value: "{{workflow.parameters.temporal_run_id}}"
+          - name: WORKFLOW_EXECUTION_REQUEST_ID
+            value: "{{workflow.parameters.execution_request_id}}"
           # Per-tick budget cap. Tier 3 spec sets the default to
           # $1.00 per tick; we bump to $5.00 here to absorb worst-case
           # ticks that drive multiple proposals through the
