@@ -1,5 +1,11 @@
 # Design: issue-472-feat-context-platform-version-promote-ob
 
+> **Correction 2026-09-27.** The first investigation assumed the evaluator
+> side of #266 existed on `main`; it does not. The missing evaluator,
+> fixtures, baseline and replay work is now mctlhq/mctl-agents#526.
+> Production promotion is therefore fail-closed on #526 evidence. The work is
+> also split into A/B/C; a single approval never authorizes the whole design.
+
 ## Current state
 
 ### Strategies exist, but only as module constants
@@ -85,7 +91,7 @@ Three gaps follow directly:
 
 ## Proposed solution
 
-A new ADR (`docs/adr/016-context-strategy-release-contract.md` — 016 is the
+A new ADR (`docs/adr/019-context-strategy-release-contract.md` — 016 is the
 one free number in `docs/adr/`) plus four code surfaces. Nothing changes
 behaviour until an operator moves one environment variable.
 
@@ -135,7 +141,7 @@ apiVersion: context.mctl.ai/v1alpha1
 kind: ContextStrategyBinding
 metadata:
   agent: issue-investigator
-  environment: production
+  environment: shadow
 spec:
   history:
     - revision: 1
@@ -145,7 +151,7 @@ spec:
       implementationHash: "sha256:..."
       promotedBy: "<github-login>"
       promotedAt: "2026-09-27T00:00:00Z"
-      reason: "baseline: today's default, made explicit"
+      reason: "inert shadow baseline: today's default, made explicit"
       evidence: {kind: none, ref: null, evaluatorVersion: null}
 ```
 
@@ -158,10 +164,15 @@ history" (`007-...:163-166`) and matches the platform's own
 `rollback_agent_binding` semantics: an exact revision, "never a guess at one
 step back".
 
-The `evidence` block is the seam to mctlhq/mctl-agents#266: `{kind: none |
-observe-log | context-eval, ref, evaluatorVersion}`. Non-`none` is required
-for a `production` promotion, optional for `shadow`. Because `none` is a legal
-value, nothing here blocks on #266 shipping `orchestrator/context_eval.py`.
+The `evidence` block is the release-side seam to the evaluation contract.
+The missing implementation from #266 is now mctlhq/mctl-agents#526.
+`evidence.kind: none` is legal only for `shadow`; production accepts only
+`context-eval` evidence naming the exact strategy/version/contentHash/
+implementationHash. The newest observation must be no older than **7 days**,
+must represent at least **3 consecutive observe-mode investigations**, and none
+may carry `hash-mismatch`. Missing, stale, insufficient or mismatched evidence
+fails closed. Passing this validation never promotes automatically: the binding
+revision still arrives through a reviewed commit.
 
 ### 3. `orchestrator/context_release.py` — loader, resolver, rollout ladder
 
@@ -231,13 +242,15 @@ a gitops env map must not crash the investigator).
    second `run_pipeline(candidates, replace(config, strategy=bound), now)`
    runs on the same pre-pipeline candidate list. This is free of I/O and
    collector cost by construction — `run_pipeline` copies its candidates and
-   touches nothing else. Its `PipelineOutcome` is turned into counters and a
-   locally sealed snapshot (needed only for its `snapshot_id`) and emitted as
-   one `CONTEXT_STRATEGY_COMPARE` line. It is **never** persisted, never
-   rendered, and never returned: only `outcome` reaches `seal()`,
-   `AssemblyResult.rendered` (`:1128-1130`) and
-   `_persist_to_work_item_store` (`:1222`), whose insert-only store would
-   correctly refuse a second document for the same execution anyway.
+   touches nothing else. Its `PipelineOutcome` is locally sealed only to
+   obtain its `snapshot_id`. `CONTEXT_STRATEGY_COMPARE` carries correlation
+   and identity only (active/candidate strategy identity, binding revision and
+   snapshot ids); evaluation metrics and verdicts come from #526 rather than
+   being reimplemented here. The candidate is **never** persisted, rendered or
+   returned: only `outcome` reaches `seal()`, `AssemblyResult.rendered`
+   (`:1128-1130`) and `_persist_to_work_item_store` (`:1222`), whose
+   insert-only store would correctly refuse a second document for the same
+   execution anyway.
 3. `AssemblyMetrics` gains `release_mode`, `binding_revision`,
    `strategy_content_hash` and `override_active`; `to_log_dict()` (`:286`)
    carries them. Counts, ids and hashes only — ADR 015 sec. 3's rule is
@@ -293,6 +306,19 @@ test — not a new workflow — recomputes every published version's
 publish` command when a change to `orchestrator/context_assembly.py` did not
 come with a republished version. This is the mechanism that makes version
 identity un-driftable; without it the whole scheme is decoration.
+
+## Delivery slices
+
+- **Slice A — inert contract/catalog.** ADR 019, ADR 009 optional provenance
+  fields, strategy-version catalog, shadow-only binding, release loader/CLI and
+  CI drift guard. It changes no runtime selection.
+- **Slice B — rollout wiring/observation.** Depends on #526 being merged and on
+  republishing any whole-file implementation hash #526 invalidates. Adds
+  off/observe/enforce/only resolution, shadow execution and release telemetry.
+  No production binding can be created without valid #526 evidence.
+- **Slice C — operator lifecycle/proof.** Documentation, telemetry reservation,
+  and the concrete production soak gate (3 consecutive observe-mode runs, <= 7
+  days old, exact identity match). Each slice gets its own review/approval.
 
 ## Alternatives
 
@@ -363,9 +389,12 @@ identity un-driftable; without it the whole scheme is decoration.
     Mitigated by resolving the `implementationHash` against the files in the
     image and failing closed, plus `tools/context_release.py resolve` as a CI
     preflight on the same commit.
-  - *Promotion without evidence.* Mitigated by the `evidence` block being
-    required non-`none` for `production`, and by promotion being a reviewed
-    commit rather than an API call.
+  - *Promotion without valid evidence.* Production accepts only #526
+    `context-eval` evidence whose strategy/version/content/implementation
+    identity matches exactly, whose newest observation is <= 7 days old, and
+    which covers >= 3 consecutive observe-mode investigations with no
+    `hash-mismatch`. Missing/stale/mismatched evidence fails closed; promotion
+    is still a reviewed commit rather than an automatic metric action.
   - *The observe pass changes what the model reads.* This is the failure that
     would invalidate the whole stage. Mitigated structurally — the second
     outcome is bound to a local name and never reaches `seal()`'s return,
