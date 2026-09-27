@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-27T22:53:34Z'
+updated_at: '2026-09-27T23:07:49Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-39a56ffd4add534d
@@ -31,13 +31,13 @@ ci_blockers_head: d1ab79671e162d20cfe0282bdcaf427ec530ad80
 ci_blockers:
 - build / product-updates
 review_attempts: 1
-refusals: 1
+refusals: 2
 refusals_head: d1ab79671e162d20cfe0282bdcaf427ec530ad80
-notes: 'implementer declined to act: The product-updates gate fails because docs/product-updates/search-messages-date-range.yaml
-  is status: draft. Verified against internal/productupdate/gate.go: only an entry
-  with status==StatusApproved is added to report.Covered (gate.go line 213), so a
-  draft entry claiming a required change always produces the ''claimed only by draft
-  ...; it needs review'' problem. The only fix is status: approved with a named human
-  in provenance.reviewed_by and reviewed_at set. docs/product-updates/README.md states
-  the merge of the content PR IS the review, and explicitly: ''the reviewer is never
-  a bot account a'
+notes: 'implementer declined to act: The single P2 finding asks to fix the product-updates
+  gate failure (search_messages schema claimed only by draft search-messages-date-range)
+  by getting the entry out of draft. This is an explicit, documented operator decision
+  in the proposal spec, not a defect: requirements.md states ''an agent may not be
+  the reviewer (provenance.reviewed_by must be a human, never the assisting model).
+  This proposal therefore has the implementer draft the entry with status: draft ...
+  and calls out in the PR body that a human reviewer must flip it to approved and
+  name themselves before the gate goes green.'' desi'
