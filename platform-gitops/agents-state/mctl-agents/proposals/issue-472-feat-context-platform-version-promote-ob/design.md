@@ -313,6 +313,10 @@ identity un-driftable; without it the whole scheme is decoration.
 
 ## Delivery slices
 
+This proposal's `tasks.md` is **Slice A only**. Slice B is
+mctlhq/mctl-agents#527 and Slice C is mctlhq/mctl-agents#528, because one
+DevLoop approval runs the implementer over the whole `tasks.md`.
+
 - **Slice A — inert contract/catalog.** ADR 019, ADR 009 optional provenance
   fields, strategy-version catalog, shadow-only binding, release loader/CLI and
   CI drift guard. It changes no runtime selection.
