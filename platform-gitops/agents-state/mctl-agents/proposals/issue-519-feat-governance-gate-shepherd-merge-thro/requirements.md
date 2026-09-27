@@ -123,6 +123,20 @@ Identity and evidence
   it across a merge-watch `continue_as_new` hop.
 - WHILE a merge-approval wait is in flight THE SYSTEM SHALL NOT hop the merge
   watch via `continue_as_new`.
+- WHILE a merge-approval wait is in flight THE SYSTEM SHALL keep running the
+  merge watch's poll loop unchanged — `get_pr_state` polls, in-loop shepherd
+  ticks, the lifecycle-ownership heartbeat (ADR-010), the `abandon` check and
+  any other per-poll exit — because the wait runs as a background task beside
+  the loop and is never awaited inline. A human wait of hours or days SHALL
+  NOT make the loop look dead to the ownership reconciler or stop review
+  fixing on the PR.
+- WHILE one merge-approval wait is in flight THE SYSTEM SHALL NOT start a
+  second one.
+- WHEN the merge watch ends for any reason while a wait is in flight (the PR
+  reads `MERGED`/`CLOSED`, a terminal exit, the deadline, `abandon`) THE
+  SYSTEM SHALL cancel the wait task and settle it in the same `finally` that
+  settles an in-flight shepherd tick, so the workflow never completes with a
+  pending task and an unconsumed receipt simply expires.
 - WHEN any approval-flow decision is recorded THE SYSTEM SHALL include
   `approval_ref`, the approver identity (`ApprovalRecord.decided_by`) and the
   observation timestamp in the `POLICY_DECISION` log record and in the
