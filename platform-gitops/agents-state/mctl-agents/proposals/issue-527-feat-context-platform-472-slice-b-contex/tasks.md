@@ -1,5 +1,17 @@
 # Tasks: issue-527-feat-context-platform-472-slice-b-contex
 
+> **Correction 2026-09-27 (before approval).** Two changes to what follows:
+> (1) `observe` resolves the **`shadow`** binding explicitly
+> (`OBSERVE_ENVIRONMENT = "shadow"`), independent of `AGENT_ENVIRONMENT`;
+> `enforce`/`only` resolve `execution.environment`. No manifest sets
+> `AGENT_ENVIRONMENT`, so the production investigator runs as `production`,
+> which has no binding, and relabelling it `shadow` would change the sealed
+> `execution.environment` and every authoritative `snapshot_id`. Operators
+> must not change `AGENT_ENVIRONMENT` to observe. (2) The catalog republish
+> appends the **next** binding revision on the base it is rebased onto, not a
+> hard-coded revision 2: mctlhq/mctl-agents#526 edits
+> `orchestrator/context_assembly.py` in parallel and drifts the same hashes.
+
 Numbering follows the issue's merged task text (6-10) so a reviewer can diff it
 against mctl-gitops `8e8b5b54`. Tasks 11-13 are prerequisites and consequences
 the merged list omits but CI will fail without.
@@ -20,8 +32,10 @@ the merged list omits but CI will fail without.
       (`ISSUE_INVESTIGATOR_CONTEXT_MODE` = does assembly happen at all;
       `CONTEXT_RELEASE_ROLLOUT_MODE` = which strategy; `CONTEXT_RELEASE_REQUIRED`
       = break-glass inside enforce/only) in the module docstring in the same RST
-      shape both existing ladders use, and note that `AGENT_ENVIRONMENT` selects
-      which binding directory is consulted (only `shadow` is committed today).
+      shape both existing ladders use, and define
+      `OBSERVE_ENVIRONMENT = "shadow"`: `observe` always consults the `shadow`
+      binding, `enforce`/`only` consult `execution.environment`; the docstring
+      says `AGENT_ENVIRONMENT` must never be changed to enable `observe`.
       A separate file rather than `context_release.py` because task 7 and T7
       require that `off` import neither `context_release` nor `yaml`, and
       `context_release.py:44-51` imports both `yaml` and `context_assembly` at
@@ -34,8 +48,8 @@ the merged list omits but CI will fail without.
 
 - [ ] 7. Wire selection into `orchestrator/context_assembly.py` (depends on 6).
       Add `replace` to the `dataclasses` import (`:42`). Add the closed reason
-      vocabulary `RELEASE_REASON_OFF = "off-env-var-decides"`,
-      `RELEASE_REASON_OBSERVE = "observe-env-var-decides"`,
+      vocabulary `RELEASE_REASON_OFF = "off-strategy-var-decides"`,
+      `RELEASE_REASON_OBSERVE = "observe-strategy-var-decides"`,
       `RELEASE_REASON_BINDING = "binding-resolved"`,
       `RELEASE_REASON_OBSERVE_SKIPPED = "binding-unresolved-observe-skipped"`,
       `RELEASE_REASON_FALLBACK = "binding-unresolved-fallback-default"`,
@@ -53,11 +67,14 @@ the merged list omits but CI will fail without.
       `context_release`; past `off`, imports `context_release` **inside the
       function body** (the pattern `_work_context_active` (`:1242`), `_client`
       (`:1256`) and `_persist_to_work_item_store` (`:1287`) already use) and
-      resolves `environment` (argument, else `os.getenv("AGENT_ENVIRONMENT",
-      "production")`, matching `:909-911`). At `only`, a non-empty
+      resolves the binding for `(agent, OBSERVE_ENVIRONMENT)` at `observe`, and
+      for `(agent, environment)` at `enforce`/`only` (argument, else
+      `os.getenv("AGENT_ENVIRONMENT", "production")`, matching `:909-911`). At `only`, a non-empty
       `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY` raises `ContextStrategyNotResolved`
       naming both the variable and the binding path, checked before `resolve()`.
-      At `observe` the env var still decides and the resolved binding is
+      At `observe` `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY` (the strategy variable,
+      not `AGENT_ENVIRONMENT`) still decides the authoritative strategy, and the
+      `shadow` binding is
       observation only; an unresolvable binding at `observe` returns reason
       `binding-unresolved-observe-skipped` and never raises. At
       `enforce`/`only` the binding decides; an unresolvable binding raises
@@ -152,15 +169,18 @@ the merged list omits but CI will fail without.
       `python tools/context_release.py promote --agent issue-investigator
       --environment shadow --strategy deterministic-fixed-order --version 1.0.0
       --promoted-by <commit author> --reason "republish pins after #527 Slice B"`.
-      Never edit revision 1 in place — the history is append-only (ADR 019
-      sec. 2); `promote` appends revision 2. Do not create a `production`
-      binding and do not bind `trust-freshness-ranked`.
+      Never edit an existing revision in place — the history is append-only
+      (ADR 019 sec. 2); `promote` appends the next revision. mctlhq/mctl-agents#526
+      edits `context_assembly.py` in parallel: if it merged first, rebase, re-run
+      both `publish` commands on the rebased head and let `promote` append on top
+      of its revision; never hard-code a revision number. Do not create a
+      `production` binding and do not bind `trust-freshness-ranked`.
       — DoD: `tests/test_context_release.py::test_published_catalog_hashes_are_not_drifted`,
       `::test_committed_shadow_binding_resolves` and
       `::test_committed_catalog_has_no_production_binding` all pass on the head
       commit; `config/context-strategies/bindings/shadow/issue-investigator.yaml`
-      has exactly two revisions and revision 1 is byte-unchanged except for
-      nothing at all.
+      has exactly one more revision than on the base branch, and every earlier
+      revision is byte-unchanged.
 
 - [ ] 12. Document the operator surface (depends on 6). Add
       `# CONTEXT_RELEASE_ROLLOUT_MODE=off` and `# CONTEXT_RELEASE_REQUIRED=true`
@@ -216,7 +236,7 @@ autouse one locally in each new test module, not globally.
       `context_release.VERDICTS`. Also: below `enforce`,
       `CONTEXT_RELEASE_REQUIRED=true` changes nothing.
 - [ ] T9. Observe isolation (the stage's whole safety claim): with
-      `AGENT_ENVIRONMENT=shadow`, `CONTEXT_RELEASE_ROLLOUT_MODE=observe` and
+      `AGENT_ENVIRONMENT` **unset**, `CONTEXT_RELEASE_ROLLOUT_MODE=observe` and
       `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY=trust-freshness-ranked` (so the bound
       and authoritative strategies actually differ), the authoritative
       snapshot's `content_hash` and `snapshot_id` are byte-identical to the same
@@ -225,9 +245,11 @@ autouse one locally in each new test module, not globally.
       `AssemblyResult.snapshot` is the authoritative one and the candidate
       snapshot is never returned; and the pre-pipeline `candidates` list is
       observably unchanged after both passes (guards `run_pipeline`'s purity
-      contract, `:1008-1016`). Plus: a `seal()`/pipeline failure injected into
-      the shadow pass leaves the run successful with reason
-      `observe-pass-failed`.
+      contract, `:1008-1016`). The `shadow` binding resolves (reason
+      `observe-strategy-var-decides`, a non-null `binding_revision`) and the sealed
+      snapshot's `execution.environment` is still `"production"`. Plus: a
+      `seal()`/pipeline failure injected into the shadow pass leaves the run
+      successful with reason `observe-pass-failed`.
 - [ ] T10. Telemetry safety: neither `CONTEXT_STRATEGY_RELEASE` nor
       `CONTEXT_STRATEGY_COMPARE` can carry a `locator`, a `selector` or any
       payload-derived string — asserted recursively over the emitted dict with
@@ -267,6 +289,10 @@ autouse one locally in each new test module, not globally.
 - [ ] T16. Catalog: `test_published_catalog_hashes_are_not_drifted` and
       `test_committed_shadow_binding_resolves` pass on the head commit (task 11),
       and `test_committed_catalog_has_no_production_binding` still passes.
+- [ ] T17. Observe environment: at `observe`, `resolve_strategy_for_run` calls
+      `context_release.resolve` with environment `"shadow"` for
+      `environment="production"`, `"staging"` and unset; at `enforce` it passes
+      the given environment through unchanged.
 
 ## Rollback
 
@@ -289,13 +315,13 @@ available without a redeploy or a revert.
    assembly happens at all and the release ladder is inert whatever it is set to.
    This is the pre-#265 behaviour.
 
-**Catalog rollback.** Task 11's revision 2 is undone by appending revision 3, not
-by deleting revision 2:
+**Catalog rollback.** Task 11's appended revision N is undone by appending
+N+1, not by deleting N:
 `python tools/context_release.py rollback --agent issue-investigator
---environment shadow --to-revision 1 --promoted-by <author> --reason "..."`.
+--environment shadow --to-revision <N-1> --promoted-by <author> --reason "..."`.
 Note that after a code revert this will re-fail the drift guard, because
-revision 1's pins match the reverted code — which is the correct coupling: a
-revert of tasks 7-9 and a rollback to revision 1 belong in the same commit.
+revision N-1's pins match the reverted code — which is the correct coupling: a
+revert of tasks 7-9 and a rollback to revision N-1 belong in the same commit.
 
 **Code revert.** `orchestrator/context_rollout.py` is new and is imported only
 from inside `resolve_strategy_for_run`, so `git revert` of the Slice B commit

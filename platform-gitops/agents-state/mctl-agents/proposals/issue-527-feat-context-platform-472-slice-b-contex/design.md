@@ -1,5 +1,17 @@
 # Design: issue-527-feat-context-platform-472-slice-b-contex
 
+> **Correction 2026-09-27 (before approval).** Two changes to what follows:
+> (1) `observe` resolves the **`shadow`** binding explicitly
+> (`OBSERVE_ENVIRONMENT = "shadow"`), independent of `AGENT_ENVIRONMENT`;
+> `enforce`/`only` resolve `execution.environment`. No manifest sets
+> `AGENT_ENVIRONMENT`, so the production investigator runs as `production`,
+> which has no binding, and relabelling it `shadow` would change the sealed
+> `execution.environment` and every authoritative `snapshot_id`. Operators
+> must not change `AGENT_ENVIRONMENT` to observe. (2) The catalog republish
+> appends the **next** binding revision on the base it is rebased onto, not a
+> hard-coded revision 2: mctlhq/mctl-agents#526 edits
+> `orchestrator/context_assembly.py` in parallel and drifts the same hashes.
+
 ## Current state
 
 ### What Slice A left on the image
@@ -193,8 +205,8 @@ Recorded as the first open question in requirements.md.
 ### 2. `resolve_strategy_for_run` in `context_assembly.py` (task 7)
 
 ```python
-RELEASE_REASON_OFF = "off-env-var-decides"
-RELEASE_REASON_OBSERVE = "observe-env-var-decides"
+RELEASE_REASON_OFF = "off-strategy-var-decides"
+RELEASE_REASON_OBSERVE = "observe-strategy-var-decides"
 RELEASE_REASON_BINDING = "binding-resolved"
 RELEASE_REASON_OBSERVE_SKIPPED = "binding-unresolved-observe-skipped"
 RELEASE_REASON_FALLBACK = "binding-unresolved-fallback-default"
@@ -230,14 +242,18 @@ Control flow:
 - `off`: `return (config.strategy, None)`. No `context_release` import, no YAML,
   no catalog file opened.
 - past `off`: `from orchestrator import context_release` **inside the body**.
-  `environment` defaults to `os.getenv("AGENT_ENVIRONMENT", "production")`,
-  matching `build_execution_correlation` (`:909-911`); `assemble()` passes
+  The binding environment is `OBSERVE_ENVIRONMENT = "shadow"` at `observe`,
+  whatever `environment` says; at `enforce`/`only` it is `environment`, which
+  defaults to `os.getenv("AGENT_ENVIRONMENT", "production")`, matching
+  `build_execution_correlation` (`:909-911`); `assemble()` passes
   `execution.environment` explicitly so the two can never disagree.
+  `execution` itself is never rebuilt, so the sealed
+  `execution.environment` is untouched at every stage.
 - `only` + a non-empty `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY` in the environment
   -> `ContextStrategyNotResolved`, message naming both the variable and the
   binding path. Checked before `resolve()`, so the error does not depend on the
   catalog being loadable.
-- `resolve(agent, environment)` inside `try/except context_release.ContextReleaseError`.
+- `resolve(agent, binding_environment)` inside `try/except context_release.ContextReleaseError`.
   - success at `observe`: `(config.strategy, StrategyResolution(reason=OBSERVE, bound_strategy=resolved.strategy, ...))`.
   - success at `enforce`/`only`: `(resolved.strategy, StrategyResolution(reason=BINDING, ...))`.
   - failure at `observe`: `(config.strategy, StrategyResolution(reason=OBSERVE_SKIPPED, bound_strategy=None, verdict=exc.code))`.
@@ -370,8 +386,10 @@ python tools/context_release.py promote  --agent issue-investigator --environmen
     --promoted-by <commit-author> --reason "republish pins after #527 Slice B"
 ```
 
-`promote` appends revision 2; revision 1 is never rewritten (ADR 019 sec. 2,
-append-only). `promote`'s Slice A guard permits `shadow` only, which is the only
+`promote` appends the next revision — revision 2 if this slice merges first,
+revision 3 if mctlhq/mctl-agents#526 (which also edits `context_assembly.py`)
+already appended one; earlier revisions are never rewritten (ADR 019 sec. 2,
+append-only). Run the commands on the final, rebased head. `promote`'s Slice A guard permits `shadow` only, which is the only
 environment that has a binding — so this repair needs no change to `promote()`.
 `publish` with no `--lifecycle` is a pure hash refresh by design
 (`build_version_document`'s docstring, `:749-763`).
@@ -432,7 +450,7 @@ fixture (ADR 015 sec. 4's double-run contract is exactly that).
 ## Platform impact
 
 **Migrations.** None in any datastore. One catalog change: two republished
-version documents and one appended binding revision (revision 2, shadow). The
+version documents and one appended binding revision (the next one, shadow). The
 append is the audit trail; nothing is rewritten.
 
 **Backward compatibility.** The default is `off` at every layer.
@@ -473,7 +491,8 @@ the long-lived Temporal worker's import graph.
 | The candidate snapshot leaks into the prompt or the store, making `observe` behaviour-affecting | It is a local whose only escaping value is a `snapshot_id` string; T9 asserts byte-identical authoritative `content_hash` with and without the pass, unchanged `rendered`, and exactly one persist-client call per run |
 | The new deferred import quietly makes `context_assembly` non-stdlib-only | `tests/test_worker_isolation.py` and `tests/test_context_assembly.py:532` run unchanged; T12 is exactly this assertion |
 | `enforce` silently substitutes a strategy while the collectors still behave as the old one | The substitution happens before `_COLLECTOR_ORDER` and rebuilds `assembly_input` via `replace`; a test asserts an `enforce` run's snapshot equals a run with the same strategy set by env var |
-| `AGENT_ENVIRONMENT` defaults to `production`, which has no binding, so every stage past `off` looks broken | Correct fail-closed behaviour and exactly T8's break-glass path; called out in requirements.md Open questions and in the ladder docstring, which tells the operator to set `AGENT_ENVIRONMENT=shadow` |
+| `observe` in production finds no binding because `AGENT_ENVIRONMENT` is `production` | `observe` resolves the `shadow` binding explicitly (`OBSERVE_ENVIRONMENT`); T9 runs with `AGENT_ENVIRONMENT` unset and asserts a resolved shadow binding and an unchanged sealed `execution.environment == "production"`. At `enforce`/`only`, a missing `production` binding is the fail-closed T8 path, by design |
+| #526 and this slice both republish the catalog | Neither hard-codes a revision; the second to merge rebases, re-runs `publish` and appends the next revision (task 11) |
 | The catalog drift guard fails the PR because the republish was forgotten | An explicit task with the exact two `publish` commands and the `promote` append; the guard's own failure message already prints the repair command |
 | A new `mctl.*` attribute is dropped by the export guard | Checked against `redaction._DENIED_KEY`'s final-segment rule: `content_hash` is not `content`, `context` is not `text`; a unit test asserts `tracing_sdk.key_allowed()` is true for all five names |
 | Slice B's telemetry grows a second evaluation implementation that then diverges from #526 | Task 9's explicit prohibition plus a module-source test asserting no counter-delta/scoring vocabulary and no arithmetic over two `AssemblyMetrics` in this module |
