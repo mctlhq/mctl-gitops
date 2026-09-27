@@ -27,12 +27,14 @@ ingress:
   enabled: true
   hosts:
     - karabu-draw-with-friends.mctl.ai
+    - draw-with-friends.mctl.ai
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: draw-with-friends-tls
       hosts:
         - karabu-draw-with-friends.mctl.ai
+        - draw-with-friends.mctl.ai
 envFrom:
   - secretRef:
       name: karabu-draw-with-friends-db-creds
