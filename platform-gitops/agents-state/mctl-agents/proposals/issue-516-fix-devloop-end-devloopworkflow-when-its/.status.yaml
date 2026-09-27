@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-27T00:25:50Z'
+status: review-stuck
+updated_at: '2026-09-27T00:56:37Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-9609eb0c14fd707f
@@ -27,4 +27,15 @@ attempt:
   expires_at: '2026-09-27T00:35:03Z'
   finished_at: '2026-09-26T23:25:08Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/518
-harness_failures: 2
+harness_failures: 3
+notes: 'The platform lost the implementer''s work 3 time(s) in a row (implementer
+  follow-up exited non-zero (51) for mctl-agents/issue-516-fix-devloop-end-devloopworkflow-when-its).
+  This is a harness defect, not a problem with the proposal — review_attempts was
+  never charged. Human triage required; see mctl-agents#366. Reason: Both P2 findings
+  were addressed in the working tree (orchestrator/temporal/workflows/dev_loop.py:
+  added TERMINAL_STATUS_CONFIRM_POLLS=2 and gated the not-found terminal-status break
+  on polls_without_pr >= TERMINAL_STATUS_CONFIRM_POLLS to stop a single stale gitops-main
+  read from ending a watch with a real PR; docs/adr/006-dev-loop-merge-deploy-monitor.md:
+  corrected the addendum''s inaccurate 14-day claim and documented the confirm-polls
+  guard; tests/test_dev_loop_workflow.py: renamed/updated the pinned single-poll test
+  to assert TERMINAL_STATUS_CONFIRM_POLLS polls and added a new regression tes'
