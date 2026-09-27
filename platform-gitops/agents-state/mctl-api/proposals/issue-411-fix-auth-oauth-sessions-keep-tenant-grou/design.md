@@ -67,8 +67,9 @@ degradation policy.
 Add to `OAuthServer`:
 
 ```go
-// GroupsMaxStaleness bounds how old the resolver's view may be, when the
-// resolver can report it. 0 selects defaultGroupsMaxStaleness (15m).
+// GroupsMaxStaleness, when > 0, enables strict mode: a checkout whose last
+// successful sync is older than this counts as a failed resolution. 0 (the
+// default) disables it; a stale checkout is then used and alerted on.
 GroupsMaxStaleness time.Duration
 // GroupsDegradedGrace bounds how long stored groups may stand in for a
 // failed resolution. 0 selects AccessTokenTTL.
@@ -97,20 +98,40 @@ Rules, in order:
   verbatim. This preserves behaviour for deployments and unit tests that
   construct an `OAuthServer` with no resolver
   (`internal/auth/oauth_server_test.go` does exactly this).
-- Freshness gate: if the resolver additionally satisfies
-  `interface{ LastSync() time.Time }` — `*gitops.Reader` does (`reader.go:773`) —
-  a zero `LastSync` or `time.Since(LastSync()) > GroupsMaxStaleness` is a
-  failure. This is what stops the `(nil, nil)` of an absent checkout
-  (`reader.go:544`) from being read as "this user has no tenants" and silently
-  stripping every session's access on a pod whose first clone failed. A resolver
-  that cannot report sync state (test doubles, future implementations) skips the
-  gate.
+- Freshness gate: this applies if the resolver also satisfies
+  `interface{ LastSync() time.Time }`, which `*gitops.Reader` does
+  (`reader.go:773`, updated on every successful 60s fetch at `reader.go:358`).
+  - A **zero** `LastSync` means the checkout was never synced. That is a
+    failure. It stops the `(nil, nil)` of an absent checkout (`reader.go:544`)
+    from being read as "this user has no tenants" and silently stripping every
+    session's access on a pod whose first clone failed.
+  - A **stale but present** checkout (`time.Since(LastSync()) >
+    groupsStaleWarnAfter`, a package constant of 15m) is **not** a failure. The
+    resolution succeeds from the checkout as it is. A rate-limited `slog.Warn`
+    logs at most once per minute with the sync age, and a Prometheus gauge
+    `mctl_api_gitops_last_sync_age_seconds` is set, registered the way
+    `internal/auth/federation.go` registers its metrics.
+  - Strict mode is opt-in: only when `GroupsMaxStaleness > 0`
+    (`OAUTH_GROUPS_MAX_STALENESS`, default unset) is a checkout older than that
+    treated as a failure.
+  - A resolver that cannot report sync state (test doubles, future
+    implementations) skips the gate.
+
+  Why stale is not a failure by default (reviewer amendment 2026-09-27): `LastSync` stops advancing when
+  the fetch fails, and the commonest cause is GitHub being down. gitops lives
+  on GitHub, so a membership removal cannot be pushed then either. Failing
+  closed after `15m + grace` would lock every tenant user out, admins aside,
+  about 75 minutes into any GitHub incident, with no security gain. The other
+  cause, a fetch broken only on mctl-api's side (expired PAT, revoked deploy
+  key) while GitHub accepts pushes, is covered by alerting on the gauge. Strict
+  mode stays available for operators who prefer lockout to lag.
 - `GetTenantsForUser` error is a failure, wrapped with `fmt.Errorf("resolve
   tenant groups for %q: %w", login, err)` per the repo's error convention.
 - On success, record `s.lastResolveOK` (an `atomic.Int64` of Unix nanos) and
   memoize the result for `GroupsCacheTTL` in a small mutex-guarded
   `map[string]groupsCacheEntry`, mirroring the existing `GitHubValidator.cache`
-  pattern (`internal/auth/github.go:36-51`). `lastResolveOK` is seeded at
+  pattern (`internal/auth/github.go:36-51`). Expired entries are evicted
+  opportunistically on write, so the map cannot grow without bound (reviewer amendment 2026-09-27). `lastResolveOK` is seeded at
   `NewOAuthServer` with the process start, so a pod that boots with a broken
   gitops still has a bounded grace window rather than an open-ended one.
 
@@ -190,7 +211,8 @@ and caps added staleness at 30s, versus the 1h–30d staleness today.
 `RefreshTokenTTL` assignments (around `:144`):
 
 ```go
-oauthServer.GroupsMaxStaleness = parseDuration(os.Getenv("OAUTH_GROUPS_MAX_STALENESS"), 15*time.Minute)
+// Unset/0 = strict mode off: a stale checkout is used and alerted on, not failed (reviewer amendment 2026-09-27).
+oauthServer.GroupsMaxStaleness = parseDuration(os.Getenv("OAUTH_GROUPS_MAX_STALENESS"), 0)
 oauthServer.GroupsCacheTTL = parseDuration(os.Getenv("OAUTH_GROUPS_CACHE_TTL"), 30*time.Second)
 // GroupsDegradedGrace left at 0 → AccessTokenTTL, the bound the issue names.
 ```
@@ -255,8 +277,15 @@ is needed; the Helm chart needs no change unless an operator overrides them.
   readers and is only excluded during the 60s-interval refresh.
 - **Risks and mitigations:**
   - *Mass loss of access if the resolver silently answers empty.* Mitigated by
-    the `LastSync` freshness gate plus the never-synced check, and by the fact
-    that a failure takes the stored-groups path rather than the empty path.
+    the never-synced check, and by the fact that a failure takes the
+    stored-groups path rather than the empty path.
+  - *Mass loss of access during a GitHub outage.* Avoided by default: a stale
+    but present checkout keeps answering, and only the opt-in strict mode turns
+    staleness into a failure (reviewer amendment 2026-09-27).
+  - *Revocation lag while mctl-api's own fetch is broken.* Bounded by how
+    fast the operator reacts to the `mctl_api_gitops_last_sync_age_seconds`
+    alert. This is accepted in exchange for not locking users out; strict mode
+    removes the lag at the cost of lockout.
   - *Revocation lag.* Bounded by `GroupsCacheTTL` (30s) in the healthy case and
     by `GroupsDegradedGrace` (one access-token TTL, default 1h) in the degraded
     case. Both are strict improvements on the current unbounded behaviour.
