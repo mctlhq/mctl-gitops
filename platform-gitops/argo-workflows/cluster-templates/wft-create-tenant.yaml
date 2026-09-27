@@ -580,6 +580,7 @@ spec:
           # (mctlhq/mctl-gitops#1431). The argocd-config chart assembles
           # argocd-rbac-cm from every rbac/tenants/*.csv fragment at render time.
           RBAC_FILE="platform-gitops/argocd/rbac/tenants/${TENANT}.csv"
+          mkdir -p "$(dirname "$RBAC_FILE")"
 
           # Check if tenant already has an RBAC fragment (shouldn't happen given
           # validate step, but be safe)

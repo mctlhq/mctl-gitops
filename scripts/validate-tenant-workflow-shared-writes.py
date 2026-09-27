@@ -16,8 +16,9 @@ not come back, here or anywhere else in these three templates.
 
 It parses each template's `script.source` block(s), finds every path written
 via `cat > ... <<HEREDOC`, `sed -i ... FILE`, `git add`, `git rm` / `git rm
--rf`, or `mv SRC DEST` (the classic "build a new file, then rename it into
-place" pattern the old `awk` block used), resolves simple one-level shell
+-rf`, `mv SRC DEST` (the classic "build a new file, then rename it into
+place" pattern the old `awk` block used), `cp SRC DEST`, or a plain
+non-heredoc redirect (`... > FILE`), resolves simple one-level shell
 variable references back to their literal form, and fails on any resolved
 path that both sits under `platform-gitops/` and does not carry the tenant
 name.
@@ -62,6 +63,12 @@ SED_LINE_RE = re.compile(r'^.*\bsed\s+-i\b.*$', re.MULTILINE)
 GIT_ADD_RE = re.compile(r'\bgit add\s+((?:"[^"]*"\s*)+)')
 GIT_RM_RE = re.compile(r'\bgit rm\s+(?:-[a-zA-Z]+\s+)*("[^"]*")')
 MV_RE = re.compile(r'\bmv\s+\S+\s+("[^"]*"|\S+)')
+CP_RE = re.compile(r'\bcp\s+\S+\s+("[^"]*"|\S+)')
+# Plain (non-heredoc) redirection, e.g. `echo ... > FILE` or `cmd ... > "FILE"`.
+# The trailing `(?!\s*<<)` skips the `cat > FILE <<HEREDOC` shape, which
+# CAT_HEREDOC_RE already handles; the leading `(?<!<)` avoids matching the
+# second `<` of a `<<` operator itself.
+REDIRECT_RE = re.compile(r'(?<!<)>\s*(~?[^\s<>]+|"[^"]*")(?!\s*<<)', re.MULTILINE)
 QUOTED_RE = re.compile(r'"([^"]*)"')
 
 
@@ -135,6 +142,12 @@ def find_write_paths(source: str, var_map: dict[str, str]) -> list[str]:
         resolved.append(resolve_token(m.group(1), var_map))
 
     for m in MV_RE.finditer(source):
+        resolved.append(resolve_token(m.group(1), var_map))
+
+    for m in CP_RE.finditer(source):
+        resolved.append(resolve_token(m.group(1), var_map))
+
+    for m in REDIRECT_RE.finditer(source):
         resolved.append(resolve_token(m.group(1), var_map))
 
     return resolved
@@ -264,10 +277,89 @@ def selftest() -> int:
         )
         return 1
 
+    # A plain (non-heredoc) redirect into a shared, non-tenant path must fire.
+    # Before REDIRECT_RE existed this was a silent false negative.
+    redirect_source = '''
+          echo "not a heredoc, just an echo" > "platform-gitops/argocd/values.yaml"
+'''
+    redirect_failures = check_source(redirect_source)
+    if "platform-gitops/argocd/values.yaml" not in redirect_failures:
+        print(
+            f"FAIL selftest: detector did not fire on a plain `echo > FILE` "
+            f"redirect into a shared path; got failures={redirect_failures}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # A `cp SRC DEST` into a shared, non-tenant path must fire, same as `mv`.
+    cp_shared_source = '''
+          cp new-fragment.csv "platform-gitops/argocd/values.yaml"
+'''
+    cp_shared_failures = check_source(cp_shared_source)
+    if "platform-gitops/argocd/values.yaml" not in cp_shared_failures:
+        print(
+            f"FAIL selftest: detector did not fire on a `cp` into a shared "
+            f"path; got failures={cp_shared_failures}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # The real awk-into-a-.tmp-then-mv-into-place shape used by
+    # wft-delete-tenant-safe.yaml for the shared CNPG files must stay silent:
+    # the `.tmp` intermediate is passed by the `.tmp` suffix rule and the
+    # final `mv` destination is a WAIVED_PATHS entry.
+    awk_tmp_source = '''
+          CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
+          if grep -q "name: ${TENANT}-" "${CNPG_DIR}/cluster.yaml" 2>/dev/null; then
+            awk -v tenant="${TENANT}-" '
+              /^[[:space:]]*- name: / {
+                if ($0 ~ "^[[:space:]]*- name: " tenant) { skip=1; next }
+                if (skip) { skip=0 }
+              }
+              skip { next }
+              { print }
+            ' "${CNPG_DIR}/cluster.yaml" > "${CNPG_DIR}/cluster.yaml.tmp" && mv "${CNPG_DIR}/cluster.yaml.tmp" "${CNPG_DIR}/cluster.yaml"
+          fi
+'''
+    awk_tmp_failures = check_source(awk_tmp_source)
+    if awk_tmp_failures:
+        print(
+            f"FAIL selftest: detector raised a false positive on the "
+            f"awk-into-.tmp-then-mv CNPG pattern: {awk_tmp_failures}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # REDIRECT_RE must not ALSO trip (duplicate or otherwise) on the existing
+    # `cat > "$RBAC_FILE" <<EOF` heredoc pattern already proven silent above.
+    if check_source(new_source):
+        print(
+            f"FAIL selftest: REDIRECT_RE introduced a false positive on the "
+            f"existing per-tenant cat-heredoc style: {check_source(new_source)}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # The one real `cp` call in the templates (staging the git deploy key
+    # outside platform-gitops/) must stay silent.
+    cp_deploy_key_source = '''
+          cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
+'''
+    cp_deploy_key_failures = check_source(cp_deploy_key_source)
+    if cp_deploy_key_failures:
+        print(
+            f"FAIL selftest: detector raised a false positive on the deploy "
+            f"key cp (outside platform-gitops/): {cp_deploy_key_failures}",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
-        "OK selftest: detector fires on the old awk-into-values.yaml pattern and "
-        "on a fresh unwaived shared path, and stays silent on the new per-tenant "
-        "style and on the waived CNPG paths"
+        "OK selftest: detector fires on the old awk-into-values.yaml pattern, "
+        "on a fresh unwaived shared path, on a plain redirect into a shared "
+        "path, and on a `cp` into a shared path; and stays silent on the new "
+        "per-tenant style, the waived CNPG paths, the awk-into-.tmp-then-mv "
+        "pattern, and the deploy-key cp"
     )
     return 0
 
