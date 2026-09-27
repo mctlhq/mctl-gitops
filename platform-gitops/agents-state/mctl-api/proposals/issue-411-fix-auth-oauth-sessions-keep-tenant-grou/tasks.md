@@ -122,13 +122,13 @@ validate-time re-resolution.
   the resolution is treated as failed and takes the degraded/fail-closed path.
   Second case: `GroupsMaxStaleness = 5*time.Minute` with `LastSync()` 10m old,
   below the 15m warn threshold, also fails. The stricter operator setting wins.
+- [ ] T9c. Memo eviction: after `GroupsCacheTTL` passes, writes for other logins
+  evict the expired entry (map size stays bounded).
 - [ ] T9d. Gauge tracks recovery: a scrape of
   `mctl_api_gitops_last_sync_age_seconds` reports ~7200 with `LastSync()` 2h old
   and ~0 right after `LastSync()` is advanced, with no auth traffic in between.
   It reports -1 while `LastSync()` is zero. Must fail if the metric is written
   only on the stale branch.
-- [ ] T9c. Memo eviction: after `GroupsCacheTTL` passes, writes for other logins
-  evict the expired entry (map size stays bounded).
 - [ ] T10. `TenantResolver == nil` back-compat: stored groups pass through
   unchanged on refresh and on `ValidateJWT`; the existing
   `internal/auth/oauth_server_test.go` tests keep passing untouched.

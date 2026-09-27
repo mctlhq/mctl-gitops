@@ -76,7 +76,8 @@ is the one that decides the fallback policy below.
   resolution as failed, SHALL NOT interpret it as "the user has no tenants", and
   SHALL log a warning naming the login and the reason.
 - WHILE the resolver's checkout exists but its last successful sync is older
-  than the staleness-warning threshold (default 15m) THE SYSTEM SHALL keep using
+  than the staleness-warning threshold (a fixed 15m package constant, not
+  configurable) THE SYSTEM SHALL keep using
   the checkout's answer as a *successful* resolution, SHALL log a warning, and
   SHALL expose the sync age as a Prometheus gauge so the condition can be
   alerted on. A stale checkout SHALL NOT, by default, count toward the
