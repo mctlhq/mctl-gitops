@@ -1,8 +1,16 @@
 # Tasks: issue-472-feat-context-platform-version-promote-ob
 
-- [ ] 1. Write `docs/adr/016-context-strategy-release-contract.md` (016 is the
-      one free number in `docs/adr/`; 011 is deliberately reused three times,
-      016 is genuinely absent). It fixes: the `ContextStrategyVersion` and
+> **Correction 2026-09-27.** This proposal is intentionally split into three
+> separately approved/mergeable slices. Slice A is behaviour-neutral contract
+> work. Slice B may not start until mctlhq/mctl-agents#526 has landed and can
+> produce the production evidence required below. Slice C records the operator
+> lifecycle and soak proof. One DevLoop approval must never authorize all three
+> slices at once.
+
+## Slice A — inert contract, catalog and validation
+
+- [ ] 1. Write `docs/adr/019-context-strategy-release-contract.md` (019 is the
+      next free number in `docs/adr/`; 016 is occupied by the shepherd merge-approval ADR and 017/018 are also taken). It fixes: the `ContextStrategyVersion` and
       `ContextStrategyBinding` shapes; the `implementationHash` encoding; the
       reuse of ADR 007's `published`/`deprecated`/`disabled` version lifecycle
       and its `publish`/`promote`/`deprecate`/`disable`/`rollback` transition
@@ -32,13 +40,16 @@
 - [ ] 3. Create the catalog: `config/context-strategies/versions/
       deterministic-fixed-order/1.0.0.yaml`,
       `config/context-strategies/versions/trust-freshness-ranked/1.0.0.yaml`,
-      and bindings at `config/context-strategies/bindings/{production,shadow}/
-      issue-investigator.yaml` whose revision 1 pins `deterministic-fixed-order
-      1.0.0` — today's default, made explicit, with `evidence: {kind: none}`
-      and a reason recording that revision 1 is the baseline. (depends on 1)
-      — DoD: both bindings' revision 1 resolve to exactly the strategy the
-      investigator runs today; no behaviour changes because nothing reads them
-      yet.
+      and a **shadow-only** binding at
+      `config/context-strategies/bindings/shadow/issue-investigator.yaml`
+      whose revision 1 pins `deterministic-fixed-order 1.0.0` — today's
+      default, made explicit, with `evidence: {kind: none}` and a reason
+      recording that revision 1 is the inert baseline. Do **not** create a
+      production binding in Slice A. (depends on 1)
+      — DoD: the shadow binding resolves to exactly the strategy the
+      investigator runs today; no behaviour changes because nothing reads it
+      yet; there is no production promotion that could be mistaken for having
+      passed an evidence gate.
 
 - [ ] 4. Add `tools/context_release.py` with `publish`, `promote`, `rollback`
       and `resolve` subcommands, modelled on `tools/publish_agent_release.py`
@@ -64,11 +75,22 @@
       apiVersion/kind allow-list, path-vs-`metadata.{agent,environment}`
       cross-check, positive-integer strictly-increasing gapless revisions,
       non-`disabled` lifecycle, and recomputation of both hashes against the
-      files in the running image. Verdicts are a closed vocabulary, in
-      `orchestrator/lifecycle/contract.py`'s style: anything outside it is
-      `unknown`, never silently `ok`. (depends on 3)
+      files in the running image. Production promotion validation additionally
+      requires `evidence.kind: context-eval`, exact strategy/version/
+      `contentHash`/`implementationHash` identity, newest observation age
+      <= **7 days**, at least **3 consecutive observe-mode investigations**,
+      and no `hash-mismatch` verdict. Missing, stale and mismatched evidence
+      have distinct closed-vocabulary refusal codes. Verdicts are a closed
+      vocabulary, in `orchestrator/lifecycle/contract.py`'s style: anything
+      outside it is `unknown`, never silently `ok`. (depends on 3)
       — DoD: unit tests cover every refusal path; a hash mismatch raises with
       the exact `tools/context_release.py publish` command in the message.
+
+## Slice B — rollout wiring and observation
+
+**Hard prerequisite: mctlhq/mctl-agents#526 is merged and available on the
+running image.** Before Slice B starts, republish any strategy version whose
+conservative whole-file `implementationHash` was invalidated by #526.
 
 - [ ] 6. Add the rollout ladder to `orchestrator/context_release.py`:
       `OFF/OBSERVE/ENFORCE/ONLY`, `_ORDER`, `ENV_VAR =
@@ -119,15 +141,16 @@
       `to_log_dict()` (`:286`) with `release_mode`, `binding_revision`,
       `strategy_content_hash`, `override_active`. Add a
       `CONTEXT_STRATEGY_RELEASE` line (one resolution verdict per run) and a
-      `CONTEXT_STRATEGY_COMPARE` line (both strategies' identity, both
-      `snapshot_id`s, and the per-strategy counter deltas), both emitted in
-      `_emit_snapshot_answer`'s single-`json.dumps(..., sort_keys=True)` shape
-      (`:1231-1239`). Use a closed divergence vocabulary in
-      `orchestrator/lifecycle/shadow.py`'s style rather than free text.
-      (depends on 8)
+      `CONTEXT_STRATEGY_COMPARE` correlation line carrying only the two
+      strategy identities, binding revision and the two `snapshot_id`s.
+      **Do not reimplement #526's evaluation metrics or counter-delta logic in
+      this module.** When #526 yields an evaluation record/reference, include
+      only that closed-vocabulary reference/verdict. Both lines use
+      `_emit_snapshot_answer`'s single-`json.dumps(..., sort_keys=True)`
+      shape (`:1231-1239`). (depends on 8)
       — DoD: a test asserts no `locator`, `selector` or payload byte can appear
-      in either line, extending the rule `AssemblyMetrics.to_log_dict()` and
-      ADR 015 sec. 3 already hold.
+      in either line, and a test proves release telemetry delegates evaluation
+      semantics to #526 instead of maintaining a second metric implementation.
 
 - [ ] 10. Reserve the new telemetry attribute names. Per
       `docs/observability/execution-traces.md`, any new `mctl.*` attribute must
@@ -149,6 +172,8 @@
       — DoD: deliberately editing `rank_candidates` without republishing fails
       CI with an actionable message.
 
+## Slice C — operator documentation and promotion proof
+
 - [ ] 12. Documentation and defaults: add the four new variables to
       `.env.example` next to the existing `ISSUE_INVESTIGATOR_CONTEXT_*` block
       (which already documents the pilot's modes and its safe rollback), all
@@ -159,14 +184,18 @@
       code reading, and `.env.example` states that unset means unchanged
       behaviour.
 
-- [ ] 13. Define the promotion soak gate in the ADR and the README: a
-      production promotion requires N consecutive investigations at `observe`
-      with a non-`none` `evidence` block and no `hash-mismatch` verdict.
-      ADR 010 sec. 13's rule applies — "a rollout whose safety criterion has no
-      metric behind it is a rollout judged by anecdote" — so the gate is stated
-      in terms of the counters task 9 emits, not in prose. (depends on 9)
-      — DoD: the gate names the exact log fields it is read from, and the
-      README says how to read them.
+- [ ] 13. Define the promotion soak gate in ADR 019 and the README:
+      production promotion requires **3 consecutive observe-mode
+      investigations**, all referring to the exact strategy/version/
+      `contentHash`/`implementationHash` being promoted, with the newest
+      observation no older than **7 days**, and with no `hash-mismatch`
+      verdict. The evidence is produced by #526; task 9 carries correlation,
+      not a duplicate evaluator. Promotion remains a human-reviewed PR even
+      when the gate passes. (depends on 9 and mctlhq/mctl-agents#526)
+      — DoD: missing evidence, evidence older than 7 days, fewer than 3
+      consecutive runs, or any identity mismatch each fail with a distinct
+      closed-vocabulary reason; README shows how to inspect the evidence and
+      how to use `CONTEXT_RELEASE_ROLLOUT_MODE=off` for break-glass.
 
 ## Tests
 
@@ -185,10 +214,13 @@
 - [ ] T4. Binding loading: `metadata.agent`/`metadata.environment` disagreeing
       with the path, a non-positive revision, a duplicated revision, a gap in
       the revision sequence, and an empty history each raise.
-- [ ] T5. Promotion rules: a `production` promotion with `evidence.kind: none`
-      is refused; the same promotion to `shadow` is accepted; promoting a
-      `deprecated` version is refused while an existing binding on it still
-      resolves.
+- [ ] T5. Promotion rules: a `production` promotion with
+      `evidence.kind: none` is refused; the same promotion to `shadow` is
+      accepted; production evidence older than 7 days, with fewer than 3
+      consecutive observe runs, with `hash-mismatch`, or naming a different
+      strategy/version/content/implementation hash is refused with the exact
+      documented reason; promoting a `deprecated` version is refused while an
+      existing binding on it still resolves.
 - [ ] T6. Rollback rules: `rollback(to_revision=1)` appends a revision
       restoring revision 1's exact strategy/version/hash triple with
       `rollbackOf: 1`, leaves revisions 1..N intact, and never infers a target;
