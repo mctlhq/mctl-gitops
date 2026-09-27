@@ -172,6 +172,12 @@ argo-cd:
       controller.diff.server.side: "false"
 
     rbac:
+      # argocd-rbac-cm is rendered by this chart's own
+      # templates/argocd-rbac-cm.yaml, not by the argo-cd subchart, so that
+      # each tenant's policy lines can live in
+      # platform-gitops/argocd/rbac/tenants/<tenant>.csv instead of here
+      # (mctlhq/mctl-gitops#1431).
+      create: false
       policy.default: ""
       scopes: "[groups]"
       policy.csv: |
@@ -201,44 +207,11 @@ argo-cd:
 
         # Tenant roles: no exec. Argo CD exec is a cluster-admin-adjacent
         # shell into application pods; only role:admin retains it. New
-        # tenants are seeded without exec by wft-create-tenant.
-        # Tenant: labs
-        p, role:team-labs, applications, get, apps/labs-*, allow
-        p, role:team-labs, applications, list, apps/labs-*, allow
-        p, role:team-labs, applications, sync, apps/labs-*, allow
-        p, role:team-labs, applications, override, apps/labs-*, allow
-        p, role:team-labs, logs, get, apps/labs-*, allow
-        g, labs, role:team-labs
-
-        # Tenant: yyy
-        p, role:team-yyy, applications, get, apps/yyy-*, allow
-        p, role:team-yyy, applications, list, apps/yyy-*, allow
-        p, role:team-yyy, applications, sync, apps/yyy-*, allow
-        p, role:team-yyy, applications, override, apps/yyy-*, allow
-        p, role:team-yyy, logs, get, apps/yyy-*, allow
-        g, yyy, role:team-yyy
-
-        p, role:team-xxxx, applications, get, apps/xxxx-*, allow
-        p, role:team-xxxx, applications, list, apps/xxxx-*, allow
-        p, role:team-xxxx, applications, sync, apps/xxxx-*, allow
-        p, role:team-xxxx, applications, override, apps/xxxx-*, allow
-        p, role:team-xxxx, logs, get, apps/xxxx-*, allow
-        g, xxxx, role:team-xxxx
-        # Tenant: ovk
-        p, role:team-ovk, applications, get, apps/ovk-*, allow
-        p, role:team-ovk, applications, list, apps/ovk-*, allow
-        p, role:team-ovk, applications, sync, apps/ovk-*, allow
-        p, role:team-ovk, applications, override, apps/ovk-*, allow
-        p, role:team-ovk, logs, get, apps/ovk-*, allow
-        g, ovk, role:team-ovk
-
-        # Tenant: karabu
-        p, role:team-karabu, applications, get, apps/karabu-*, allow
-        p, role:team-karabu, applications, list, apps/karabu-*, allow
-        p, role:team-karabu, applications, sync, apps/karabu-*, allow
-        p, role:team-karabu, applications, override, apps/karabu-*, allow
-        p, role:team-karabu, logs, get, apps/karabu-*, allow
-        g, karabu, role:team-karabu
+        # tenants are seeded without exec by wft-create-tenant. Each
+        # tenant's own policy lines live in
+        # platform-gitops/argocd/rbac/tenants/<tenant>.csv and are appended
+        # to this base policy at render time by
+        # templates/argocd-rbac-cm.yaml (mctlhq/mctl-gitops#1431).
     secret:
       createSecret: true
 
