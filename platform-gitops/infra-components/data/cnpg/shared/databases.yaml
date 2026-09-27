@@ -257,3 +257,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: karabu-draw-with-friends-db
+spec:
+  name: "karabu-draw-with-friends"
+  owner: "karabu-draw-with-friends"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
