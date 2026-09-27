@@ -4,7 +4,10 @@
 > had delivered ADR 015's evaluator, fixtures, baseline and stored-run replay.
 > Current `main` has only the ADR and the extracted `run_pipeline` portion.
 > The missing evidence implementation is now mctlhq/mctl-agents#526.
-> Slice A below may establish the inert release contract, but production
+> This proposal's `tasks.md` implements Slice A only; Slice B is
+> mctlhq/mctl-agents#527 and Slice C is mctlhq/mctl-agents#528. In Slice A a
+> production promotion is always refused as `evidence-missing`.
+> Slice A may establish the inert release contract, but production
 > promotion/enforcement is gated on #526. No production path may treat
 > `evidence.kind: none` as sufficient evidence.
 

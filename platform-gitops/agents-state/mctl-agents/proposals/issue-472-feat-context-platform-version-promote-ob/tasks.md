@@ -1,13 +1,19 @@
 # Tasks: issue-472-feat-context-platform-version-promote-ob
 
-> **Correction 2026-09-27.** This proposal is intentionally split into three
-> separately approved/mergeable slices. Slice A is behaviour-neutral contract
-> work. Slice B (the ladder and the behaviour-neutral `observe` pass) does not
-> depend on mctlhq/mctl-agents#526: it has to exist before the evaluator so
-> there is something to measure. Slice C — production evidence validation,
-> the soak gate, production promotion and the runbook — is hard-dependent on
-> #526. One DevLoop approval must never authorize all three
-> slices at once.
+> **Correction 2026-09-27.** This proposal was split into three slices.
+> **This `tasks.md` is Slice A only**: approving this DevLoop runs the
+> implementer over every task below, so the file contains exactly the work
+> one approval authorizes. The implementation PR says
+> `Refs mctlhq/mctl-agents#472` and must not close it.
+>
+> - **Slice B** — rollout ladder, the behaviour-neutral `observe` shadow pass,
+>   release telemetry: mctlhq/mctl-agents#527 (does not depend on #526).
+> - **Slice C** — production evidence validation, soak gate, production
+>   promotion, runbook: mctlhq/mctl-agents#528 (hard-depends on
+>   mctlhq/mctl-agents#526).
+>
+> Their task text moved verbatim into those issues. Task numbers are kept, so
+> task 11 and T13 still read as before.
 
 ## Slice A — inert contract, catalog and validation
 
@@ -17,7 +23,8 @@
       reuse of ADR 007's `published`/`deprecated`/`disabled` version lifecycle
       and its `publish`/`promote`/`deprecate`/`disable`/`rollback` transition
       table; the `off/observe/enforce/only` ladder; the `evidence` seam to
-      mctlhq/mctl-agents#266; the source-of-truth boundary (git owns desired
+      mctlhq/mctl-agents#526 (the undelivered evaluator half of #266); the
+      source-of-truth boundary (git owns desired
       catalog state, the snapshot and the execution record own what ran); and a
       restatement of ADR 009 sec. 5 ("context relevance is never an
       authorization mechanism") as normative for everything below.
@@ -77,12 +84,12 @@
       apiVersion/kind allow-list, path-vs-`metadata.{agent,environment}`
       cross-check, positive-integer strictly-increasing gapless revisions,
       non-`disabled` lifecycle, and recomputation of both hashes against the
-      files in the running image. Production promotion validation additionally
-      requires `evidence.kind: context-eval`, exact strategy/version/
-      `contentHash`/`implementationHash` identity, newest observation age
-      <= **7 days**, at least **3 consecutive observe-mode investigations**,
-      and no `hash-mismatch` verdict. Missing, stale and mismatched evidence
-      have distinct closed-vocabulary refusal codes. Verdicts are a closed
+      files in the running image. In Slice A a `production` promotion is
+      **always refused** with the closed-vocabulary code `evidence-missing`:
+      the evidence it would validate is #526's record, whose format does not
+      exist yet, so Slice A does not guess at it. The real checks
+      (`context-eval`, exact identity, <= 7 days, >= 3 consecutive observe
+      runs, no `hash-mismatch`) are mctlhq/mctl-agents#528. Verdicts are a closed
       vocabulary, in `orchestrator/lifecycle/contract.py`'s style: anything
       outside it is `unknown`, never silently `ok`. (depends on 3)
       — DoD: unit tests cover every refusal path; a hash mismatch raises with
@@ -97,113 +104,11 @@
       — DoD: deliberately editing `rank_candidates` without republishing fails
       CI with an actionable message.
 
-## Slice B — rollout wiring and observation
+## Slice B and Slice C
 
-**No dependency on mctlhq/mctl-agents#526.** `observe` is behaviour-neutral
-(nothing it computes reaches the prompt, the sealed snapshot or the store), and
-it must run before the evaluator exists so there is data to evaluate. Slice B
-creates no production binding.
-
-- [ ] 6. Add the rollout ladder to `orchestrator/context_release.py`:
-      `OFF/OBSERVE/ENFORCE/ONLY`, `_ORDER`, `ENV_VAR =
-      "CONTEXT_RELEASE_ROLLOUT_MODE"`, `REQUIRED_ENV_VAR =
-      "CONTEXT_RELEASE_REQUIRED"`, and `mode()`, `at_least()`,
-      `binding_is_observed()`, `binding_decides()`, `binding_is_sole_selector()`,
-      `blocks_on_unknown()`. Copy `work_context/rollout.py`'s rules verbatim:
-      an unrecognised value answers `off` and warns rather than raising, and
-      each switch is read in exactly one module. Document the three-switch
-      table (`ISSUE_INVESTIGATOR_CONTEXT_MODE` = does assembly happen at all;
-      `CONTEXT_RELEASE_ROLLOUT_MODE` = which strategy;
-      `CONTEXT_RELEASE_REQUIRED` = break-glass inside enforce/only) in the
-      module docstring, as both existing ladders do. (depends on 5)
-      — DoD: with the env var unset, every predicate answers the `off` value
-      and no catalog file is opened.
-
-- [ ] 7. Wire selection into `orchestrator/context_assembly.py`. Add
-      `resolve_strategy_for_run(agent, config)` which, at `off`, returns
-      `(config.strategy, None)` with no import of `context_release`; past
-      `off`, imports `context_release` **inside the function body** — the
-      deferred-import pattern `_work_context_active`/`_client`/
-      `_persist_to_work_item_store` already use (`:1243`, `:1256`, `:1287`) —
-      and returns the resolved strategy. At `only`, a set
-      `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY` is a hard error. At `enforce`/`only`
-      an unresolvable binding raises when `blocks_on_unknown()`, else falls back
-      to `deterministic-fixed-order` with reason code
-      `binding-unresolved-fallback-default`. (depends on 6)
-      — DoD: `tests/test_worker_isolation.py` and
-      `tests/test_context_snapshot.py`'s import-direction test pass unchanged,
-      proving `context_assembly`'s module-scope import graph is still
-      stdlib-only.
-
-- [ ] 8. Implement the `observe` shadow pass in `assemble()`
-      (`context_assembly.py:1083`): after the authoritative
-      `run_pipeline(candidates, config, now)` call (`:1106`), run
-      `run_pipeline(candidates, replace(config, strategy=bound), now)` on the
-      same pre-pipeline candidate list — safe by `run_pipeline`'s own
-      documented contract (pure, copies its candidates, ADR 015 sec. 4's
-      double-run requirement, `:1008-1016`). Seal the candidate outcome locally
-      only to obtain its `snapshot_id`. It must never reach `seal()`'s return
-      value, `AssemblyResult.rendered` (`:1128-1130`), or
-      `_persist_to_work_item_store` (`:1222`). (depends on 7)
-      — DoD: a test asserts the authoritative snapshot's `content_hash` is
-      byte-identical with the observe pass enabled and disabled, and a test
-      asserts the persist client is called exactly once per run at `observe`.
-
-- [ ] 9. Observability. Extend `AssemblyMetrics` (`:259`) and
-      `to_log_dict()` (`:286`) with `release_mode`, `binding_revision`,
-      `strategy_content_hash`, `override_active`. Add a
-      `CONTEXT_STRATEGY_RELEASE` line (one resolution verdict per run) and a
-      `CONTEXT_STRATEGY_COMPARE` correlation line carrying only the two
-      strategy identities, binding revision and the two `snapshot_id`s.
-      **Do not reimplement #526's evaluation metrics or counter-delta logic in
-      this module.** When #526 yields an evaluation record/reference, include
-      only that closed-vocabulary reference/verdict — added in Slice C, once
-      #526 exists; Slice B emits identities and `snapshot_id`s only. Both lines use
-      `_emit_snapshot_answer`'s single-`json.dumps(..., sort_keys=True)`
-      shape (`:1231-1239`). (depends on 8)
-      — DoD: a test asserts no `locator`, `selector` or payload byte can appear
-      in either line, and a test proves release telemetry delegates evaluation
-      semantics to #526 instead of maintaining a second metric implementation.
-
-- [ ] 10. Reserve the new telemetry attribute names. Per
-      `docs/observability/execution-traces.md`, any new `mctl.*` attribute must
-      be listed there marked **proposed** and get a reservation PR against
-      mctl-docs' `docs/reference/telemetry-attributes.md` before this issue
-      closes. Add `mctl.context.strategy.name`, `.version`,
-      `.content_hash`, `mctl.context.binding.revision`,
-      `mctl.context.release.mode`. (depends on 9)
-      — DoD: the attributes table in `docs/observability/execution-traces.md`
-      lists all five as `proposed`, and the mctl-docs reservation PR is linked
-      from this issue.
-
-## Slice C — production gate, promotion and operator lifecycle
-
-**Hard prerequisite: mctlhq/mctl-agents#526 is merged and available on the
-running image.** Before Slice C starts, republish any strategy version whose
-conservative whole-file `implementationHash` was invalidated by #526.
-
-- [ ] 12. Documentation and defaults: add the four new variables to
-      `.env.example` next to the existing `ISSUE_INVESTIGATOR_CONTEXT_*` block
-      (which already documents the pilot's modes and its safe rollback), all
-      commented out and defaulting to today's behaviour; add a README section
-      covering publish -> promote-to-shadow -> observe -> promote-to-production
-      -> roll back, and the soak gate from task 13. (depends on 9)
-      — DoD: an operator can run the whole lifecycle from the README with no
-      code reading, and `.env.example` states that unset means unchanged
-      behaviour.
-
-- [ ] 13. Define the promotion soak gate in ADR 019 and the README:
-      production promotion requires **3 consecutive observe-mode
-      investigations**, all referring to the exact strategy/version/
-      `contentHash`/`implementationHash` being promoted, with the newest
-      observation no older than **7 days**, and with no `hash-mismatch`
-      verdict. The evidence is produced by #526; task 9 carries correlation,
-      not a duplicate evaluator. Promotion remains a human-reviewed PR even
-      when the gate passes. (depends on 9 and mctlhq/mctl-agents#526)
-      — DoD: missing evidence, evidence older than 7 days, fewer than 3
-      consecutive runs, or any identity mismatch each fail with a distinct
-      closed-vocabulary reason; README shows how to inspect the evidence and
-      how to use `CONTEXT_RELEASE_ROLLOUT_MODE=off` for break-glass.
+Not in this proposal's implementation run: see mctlhq/mctl-agents#527 (tasks
+6-10, tests T7-T10 and T12) and mctlhq/mctl-agents#528 (tasks 12-13, the
+production half of T5).
 
 ## Tests
 
@@ -222,43 +127,24 @@ conservative whole-file `implementationHash` was invalidated by #526.
 - [ ] T4. Binding loading: `metadata.agent`/`metadata.environment` disagreeing
       with the path, a non-positive revision, a duplicated revision, a gap in
       the revision sequence, and an empty history each raise.
-- [ ] T5. Promotion rules: a `production` promotion with
-      `evidence.kind: none` is refused; the same promotion to `shadow` is
-      accepted; production evidence older than 7 days, with fewer than 3
-      consecutive observe runs, with `hash-mismatch`, or naming a different
-      strategy/version/content/implementation hash is refused with the exact
-      documented reason; promoting a `deprecated` version is refused while an
-      existing binding on it still resolves.
+- [ ] T5. Promotion rules: a `production` promotion is refused with
+      `evidence-missing` whatever its `evidence` block says (including a
+      well-formed-looking `context-eval` block); the same promotion to `shadow`
+      with `evidence.kind: none` and a `reason` is accepted; promoting a
+      `deprecated` version is refused while an existing binding on it still
+      resolves.
 - [ ] T6. Rollback rules: `rollback(to_revision=1)` appends a revision
       restoring revision 1's exact strategy/version/hash triple with
       `rollbackOf: 1`, leaves revisions 1..N intact, and never infers a target;
       rolling back to a revision whose version is now `disabled` is refused and
       names it.
-- [ ] T7. Ladder: `off` (default) opens no catalog file and imports no YAML;
-      `observe` runs two pipeline passes and lets the env var decide;
-      `enforce` lets the binding decide; `only` rejects a set
-      `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY`; an unrecognised mode answers `off`
-      and warns without raising.
-- [ ] T8. Break-glass: at `enforce` with an unresolvable binding,
-      `CONTEXT_RELEASE_REQUIRED=true` (default) fails the assembly and
-      `=false` falls back to `deterministic-fixed-order` with the documented
-      reason code.
-- [ ] T9. Observe isolation (the stage's whole safety claim): the
-      authoritative snapshot is byte-identical with and without the shadow
-      pass; `AssemblyResult.rendered` is unchanged; the work-item store client
-      is called exactly once; the candidate snapshot is never returned.
-- [ ] T10. Telemetry safety: neither new log line can carry a `locator`, a
-      `selector` or any payload-derived string, asserted recursively over the
-      emitted dict the way `tests/test_context_snapshot.py` already asserts the
-      schema's field names.
+
 - [ ] T11. Authorization boundary: the recursive field-name assertion (no
       `allow`/`deny`/`permit`/`grant`/`authorized` token) and the subprocess
       import-direction assertion from `tests/test_context_snapshot.py` are
       extended to `orchestrator/context_release.py`, proving no policy path
       imports it.
-- [ ] T12. Isolation: `tests/test_worker_isolation.py` passes unchanged,
-      proving `orchestrator/context_assembly.py`'s module-scope imports are
-      still stdlib-only after task 7's deferred import.
+
 - [ ] T13. Drift guard: a synthetic edit to a declared implementation file
       makes task 11's test fail with the republish command in its message.
 - [ ] T14. End-to-end: `tools/context_release.py publish` then `promote` then
@@ -266,6 +152,11 @@ conservative whole-file `implementationHash` was invalidated by #526.
       `ResolvedContextStrategy`, and `--dry-run` writes nothing.
 
 ## Rollback
+
+For Slice A alone nothing reads the catalog at runtime, so rollback is a plain
+revert of the Slice A PR (tier 4 below, without the `release_revision` caveat,
+since no snapshot is sealed under a binding yet). Tiers 1-3 describe the
+lifecycle once #527 and #528 land.
 
 Four tiers, fastest first. Each is independently sufficient.
 
