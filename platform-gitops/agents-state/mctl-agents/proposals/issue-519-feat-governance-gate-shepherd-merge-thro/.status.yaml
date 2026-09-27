@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-27T09:45:27Z'
+updated_at: '2026-09-27T10:15:49Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-ae359db1918d7f3d
@@ -30,5 +30,4 @@ pr: https://github.com/mctlhq/mctl-agents/pull/524
 ci_blockers_head: e0b7741dc65a9cfe52316a78bab3bf0e4ac88c71
 ci_blockers:
 - PR validation / lint
-review_attempts: 1
-harness_failures: 1
+review_attempts: 2
