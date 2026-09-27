@@ -1,5 +1,17 @@
 # Context release rollout ladder, observe shadow pass, and release telemetry (#472 Slice B)
 
+> **Correction 2026-09-27 (before approval).** Two changes to what follows:
+> (1) `observe` resolves the **`shadow`** binding explicitly
+> (`OBSERVE_ENVIRONMENT = "shadow"`), independent of `AGENT_ENVIRONMENT`;
+> `enforce`/`only` resolve `execution.environment`. No manifest sets
+> `AGENT_ENVIRONMENT`, so the production investigator runs as `production`,
+> which has no binding, and relabelling it `shadow` would change the sealed
+> `execution.environment` and every authoritative `snapshot_id`. Operators
+> must not change `AGENT_ENVIRONMENT` to observe. (2) The catalog republish
+> appends the **next** binding revision on the base it is rebased onto, not a
+> hard-coded revision 2: mctlhq/mctl-agents#526 edits
+> `orchestrator/context_assembly.py` in parallel and drifts the same hashes.
+
 ## Context
 
 mctlhq/mctl-agents#472 Slice A landed the inert half of the context-strategy
@@ -92,6 +104,12 @@ keeps its exact bytes and its `snapshot_id`.
 - WHILE the ladder is at `observe` THE SYSTEM SHALL keep
   `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY` (via `AssemblyConfig.strategy`)
   authoritative and treat the resolved binding as observation only.
+- WHILE the ladder is at `observe` THE SYSTEM SHALL resolve the binding for
+  `(agent, "shadow")` — the candidate slot ADR 019 sec. 2 allows with
+  `evidence.kind: none` — whatever `AGENT_ENVIRONMENT` or
+  `execution.environment` holds, and SHALL NOT alter `execution.environment`.
+- WHILE the ladder is at `enforce` or `only` THE SYSTEM SHALL resolve the
+  binding for `(agent, execution.environment)`.
 - WHILE the ladder is at `enforce` or `only` THE SYSTEM SHALL make the resolved
   binding's strategy the authoritative one.
 - IF the ladder is at `only` AND `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY` is set to
@@ -237,16 +255,17 @@ keeps its exact bytes and its `snapshot_id`.
   issue (the later and more specific instruction) and treats the ADR sentence as
   satisfied in Slice C via #526's evaluation reference. Flagged so the ADR can be
   amended rather than silently diverged from.
-- **Which environment a run resolves.** ADR 019 sec. 4 does not name the source.
-  This proposal uses `ExecutionCorrelation.environment`, which
-  `build_execution_correlation` already derives from `AGENT_ENVIRONMENT`
-  defaulting to `"production"` (`context_assembly.py:909-911`). The only
-  committed binding is `shadow`
-  (`config/context-strategies/bindings/shadow/issue-investigator.yaml`), so with
-  `AGENT_ENVIRONMENT` unset every stage past `off` hits an unresolvable binding —
-  which is precisely the break-glass path T8 exercises, and the correct
-  fail-closed default. Operators must set `AGENT_ENVIRONMENT=shadow` to actually
-  observe anything.
+- **Which environment a run resolves.** Resolved by stage. `observe` always
+  resolves the `shadow` binding (constant `OBSERVE_ENVIRONMENT`): it is the
+  candidate slot, and the production investigator must be able to observe it
+  without relabelling itself. `AGENT_ENVIRONMENT` is set by no manifest today,
+  so `execution.environment` is `"production"` (`context_assembly.py:909-911`),
+  and it is sealed into every snapshot (`context_snapshot.py`
+  `ExecutionCorrelation.environment`), so setting `AGENT_ENVIRONMENT=shadow` to
+  observe would change every authoritative `snapshot_id` and mislabel
+  production runs. `enforce`/`only` resolve `execution.environment`, so with no
+  `production` binding they hit the unresolvable-binding path T8 exercises —
+  the correct fail-closed default until #528 creates one.
 - **What `observe` can honestly compare.** The shadow pass runs over the
   authoritative pass's pre-pipeline candidate list, as the task text requires,
   but `collect_prior_proposal` is itself strategy-sensitive
@@ -264,6 +283,13 @@ keeps its exact bytes and its `snapshot_id`.
   `off`), which is what amendment 2 anticipates — but it is not in the merged
   Slice B task list, so it stays out of scope here and needs its own slice or an
   explicit reviewer instruction.
+- **Catalog republish alongside #526.** mctlhq/mctl-agents#526 also edits
+  `orchestrator/context_assembly.py` (`AssemblyResult.store_ref`,
+  `_persist_to_work_item_store`'s return value) and is implemented in parallel,
+  so both PRs drift the same `implementationHash`es. Whichever merges second
+  rebases, re-runs `publish` for both versions and appends the next binding
+  revision on top of whatever the first appended; neither hard-codes a revision
+  number.
 - **The cross-repo reservation PR.** Task 10's DoD requires a merged-or-open PR
   in mctl-docs. The implementer may not have write access there; the in-repo half
   (the five `**proposed**` rows plus the mctl-docs checklist entry) is
