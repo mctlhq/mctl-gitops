@@ -250,6 +250,26 @@ jobs:
           scripts/validate-yq-interpolation.py --selftest
           scripts/validate-yq-interpolation.py
 
+      - name: Tenant workflow templates only write tenant-scoped paths
+        run: |
+          set -euo pipefail
+          # A tenant workflow template that writes a shared file breaks the
+          # "concurrent tenant ops touch disjoint git paths" guarantee and
+          # reintroduces the merge-conflict-then-set-e-abort failure mode
+          # that orphaned Vault policies on 2026-09-27 (gitops#1431).
+          # --selftest first, same reason as the detectors above.
+          scripts/validate-tenant-workflow-shared-writes.py --selftest
+          scripts/validate-tenant-workflow-shared-writes.py
+
+      - name: ArgoCD tenant RBAC fragments match the canonical policy
+        run: |
+          set -euo pipefail
+          # Machine-checks the SOC F4 "no tenant exec" control instead of
+          # relying on a values.yaml comment: a hand-edited fragment that
+          # widens a glob or adds a verb now fails CI (gitops#1431).
+          scripts/validate-argocd-tenant-rbac.py --selftest
+          scripts/validate-argocd-tenant-rbac.py
+
       - name: Origin mTLS is still enforced
         run: |
           set -euo pipefail
