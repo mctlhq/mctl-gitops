@@ -205,8 +205,8 @@ Recorded as the first open question in requirements.md.
 ### 2. `resolve_strategy_for_run` in `context_assembly.py` (task 7)
 
 ```python
-RELEASE_REASON_OFF = "off-env-var-decides"
-RELEASE_REASON_OBSERVE = "observe-env-var-decides"
+RELEASE_REASON_OFF = "off-strategy-var-decides"
+RELEASE_REASON_OBSERVE = "observe-strategy-var-decides"
 RELEASE_REASON_BINDING = "binding-resolved"
 RELEASE_REASON_OBSERVE_SKIPPED = "binding-unresolved-observe-skipped"
 RELEASE_REASON_FALLBACK = "binding-unresolved-fallback-default"

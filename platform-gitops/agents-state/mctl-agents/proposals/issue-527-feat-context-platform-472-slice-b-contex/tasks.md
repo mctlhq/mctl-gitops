@@ -48,8 +48,8 @@ the merged list omits but CI will fail without.
 
 - [ ] 7. Wire selection into `orchestrator/context_assembly.py` (depends on 6).
       Add `replace` to the `dataclasses` import (`:42`). Add the closed reason
-      vocabulary `RELEASE_REASON_OFF = "off-env-var-decides"`,
-      `RELEASE_REASON_OBSERVE = "observe-env-var-decides"`,
+      vocabulary `RELEASE_REASON_OFF = "off-strategy-var-decides"`,
+      `RELEASE_REASON_OBSERVE = "observe-strategy-var-decides"`,
       `RELEASE_REASON_BINDING = "binding-resolved"`,
       `RELEASE_REASON_OBSERVE_SKIPPED = "binding-unresolved-observe-skipped"`,
       `RELEASE_REASON_FALLBACK = "binding-unresolved-fallback-default"`,
@@ -72,7 +72,9 @@ the merged list omits but CI will fail without.
       `os.getenv("AGENT_ENVIRONMENT", "production")`, matching `:909-911`). At `only`, a non-empty
       `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY` raises `ContextStrategyNotResolved`
       naming both the variable and the binding path, checked before `resolve()`.
-      At `observe` the env var still decides and the resolved binding is
+      At `observe` `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY` (the strategy variable,
+      not `AGENT_ENVIRONMENT`) still decides the authoritative strategy, and the
+      `shadow` binding is
       observation only; an unresolvable binding at `observe` returns reason
       `binding-unresolved-observe-skipped` and never raises. At
       `enforce`/`only` the binding decides; an unresolvable binding raises
@@ -244,7 +246,7 @@ autouse one locally in each new test module, not globally.
       snapshot is never returned; and the pre-pipeline `candidates` list is
       observably unchanged after both passes (guards `run_pipeline`'s purity
       contract, `:1008-1016`). The `shadow` binding resolves (reason
-      `observe-env-var-decides`, a non-null `binding_revision`) and the sealed
+      `observe-strategy-var-decides`, a non-null `binding_revision`) and the sealed
       snapshot's `execution.environment` is still `"production"`. Plus: a
       `seal()`/pipeline failure injected into the shadow pass leaves the run
       successful with reason `observe-pass-failed`.
