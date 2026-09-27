@@ -61,6 +61,9 @@ resource "cloudflare_zero_trust_access_application" "mcp_portal" {
   # mashkovdm.dm@gmail.com), referenced by id so the import leaves it as it
   # is. Writing it inline would rewrite the policy the portal's own door
   # depends on as part of an import that exists only to change a duration.
+  # It has no resource of its own: it is app-scoped (`reusable: false`, absent
+  # from GET /access/policies on 2026-09-27), so there is no standalone policy
+  # to import, and it is tracked through this application (#1416).
   policies = [
     {
       id         = "5f0102c7-fd88-499c-9b15-9167633d6c63"

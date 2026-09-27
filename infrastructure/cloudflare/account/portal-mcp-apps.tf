@@ -31,9 +31,9 @@
 # and cannot create this; CF_APPLY_TOKEN_ACCOUNT, which applies this root,
 # already manages cloudflare_zero_trust_access_application.projects_mcp.
 #
-# The three pre-existing sibling applications stay out of state for now: they
-# are live, unmanaged drift that predates this file, and importing them is its
-# own reviewed change rather than a rider on this one.
+# The three pre-existing sibling applications (tg, seerrsense, api), created
+# by hand on 2026-09-10, are adopted import-only in portal-mcp-apps-adopted.tf
+# under mctlhq/mctl-gitops#1416, at their live values.
 resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
   account_id = var.account_id
   name       = "MCP server: projects (via portal mcp.mctl.ai)"
