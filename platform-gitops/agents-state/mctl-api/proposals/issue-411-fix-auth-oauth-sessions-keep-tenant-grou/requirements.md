@@ -71,11 +71,27 @@ is the one that decides the fallback policy below.
 - WHILE no `TenantResolver` is configured THE SYSTEM SHALL keep the stored or
   claimed groups unchanged, so a deployment without a gitops reader behaves
   exactly as it does today.
-- IF the tenant resolver returns an error, or cannot be shown to be reading a
-  recently synced checkout, THEN THE SYSTEM SHALL treat the resolution as
-  failed, SHALL NOT interpret it as "the user has no tenants", and SHALL log a
-  warning naming the login and the reason.
-- WHILE group resolution has been failing for no longer than the degraded-grace
+- IF the tenant resolver returns an error, or reports that its checkout has
+  never been synced (`LastSync()` is zero), THEN THE SYSTEM SHALL treat the
+  resolution as failed, SHALL NOT interpret it as "the user has no tenants", and
+  SHALL log a warning naming the login and the reason.
+- WHILE the resolver's checkout exists but its last successful sync is older
+  than the staleness-warning threshold (a fixed 15m package constant, not
+  configurable) THE SYSTEM SHALL keep using
+  the checkout's answer as a *successful* resolution, SHALL log a warning, and
+  SHALL expose the sync age as a Prometheus gauge so the condition can be
+  alerted on. A stale checkout SHALL NOT, by default, count toward the
+  degraded-grace window or trigger fail-closed. Rationale: when the fetch is
+  broken because GitHub is down, a removal cannot be pushed to gitops either, so
+  failing closed would lock every tenant user out with no security gain. A
+  fetch that is broken only on mctl-api's side, such as an expired token or a
+  revoked deploy key, is an ops incident, and the gauge alert covers it.
+  (reviewer amendment 2026-09-27)
+- WHERE an operator sets `OAUTH_GROUPS_MAX_STALENESS` to a positive duration THE
+  SYSTEM SHALL additionally treat a checkout older than that as a failed
+  resolution (strict mode). The default is unset, which disables strict mode.
+  (reviewer amendment 2026-09-27)
+- WHILE group resolution has been failing (as defined above) for no longer than the degraded-grace
   window (default: one access-token TTL) THE SYSTEM SHALL fall back to the
   stored or claimed tenant groups, combined with a freshly computed `admins`.
 - IF group resolution has been failing for longer than the degraded-grace
