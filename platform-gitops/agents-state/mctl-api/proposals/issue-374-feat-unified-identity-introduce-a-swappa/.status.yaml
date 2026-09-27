@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-27T02:42:13Z'
+status: review-stuck
+updated_at: '2026-09-27T03:11:54Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-61b8e11d375d92c2
@@ -31,4 +31,15 @@ ci_blockers_head: 6870b55ea1c65ee064fbb338a25a7fb1be7d94c8
 ci_blockers:
 - validate / lint
 review_attempts: 2
-harness_failures: 2
+harness_failures: 3
+notes: 'The platform lost the implementer''s work 3 time(s) in a row (implementer
+  follow-up exited non-zero (51) for mctl-api/issue-374-feat-unified-identity-introduce-a-swappa).
+  This is a harness defect, not a problem with the proposal — review_attempts was
+  never charged. Human triage required; see mctl-agents#366. Reason: The implementer
+  sub-agent made uncommitted edits to internal/auth/federation_config.go, internal/auth/provider_oidc.go,
+  internal/auth/federation_test.go, docs/federation.md, and cmd/api/main.go addressing
+  the P1 (admins exemption over-stripped for the documented production canary), P2
+  (docs/federation.md shim-replacement procedure) and P2 (missing BuildFederationRegistry
+  test) findings, and reported go build/go vet/go test ./internal/auth/... passing
+  before it ran out of budget. However, this orchestrator run''s own execution budget
+  was exhausted immediately afterward (denied before even ''git s'
