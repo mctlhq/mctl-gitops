@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-27T03:10:39Z'
+status: review-stuck
+updated_at: '2026-09-27T03:22:50Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-7498b88ca96bacd9
@@ -28,3 +28,5 @@ attempt:
   finished_at: '2026-09-27T01:20:49Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/523
 review_attempts: 5
+notes: 'Current-head blockers persisted across 5 follow-up attempts: 1 review finding(s)
+  (claude[bot]). Human triage required.'
