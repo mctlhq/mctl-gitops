@@ -69,7 +69,18 @@ neither ever edits a file another tenant shares.
   on any fragment that adds a verb, widens the object glob, or grants `exec`.
 - IF a tenant directory `platform-gitops/tenants/<t>/` exists without a matching
   `rbac/tenants/<t>.csv` (or the reverse) THEN THE SYSTEM SHALL fail CI with the
-  offending tenant named.
+  offending tenant named. The one exception is `admins`: its directory exists but
+  its Argo CD access is the base policy's `g, admins, role:admin`, not a
+  `role:team-admins` block. The gate SHALL exempt `admins` through an explicit,
+  commented allow-list, and SHALL fail if a `rbac/tenants/admins.csv` fragment
+  appears. Adding one would change effective policy.
+  (Reviewer amendment, 2026-09-27.)
+- WHEN the chart renders `argocd-rbac-cm` THE SYSTEM SHALL carry over every key of
+  `argo-cd.configs.rbac` except `create` and `annotations`, as the upstream
+  subchart template does (`omit .Values.configs.rbac "create" "annotations"`).
+  Only `policy.csv` is extended with the tenant fragments. A key added to
+  `configs.rbac` later (e.g. `policy.matchMode`) SHALL reach the ConfigMap without
+  a template change. (Reviewer amendment, 2026-09-27.)
 - IF a tenant workflow template (`wft-create-tenant.yaml`,
   `wft-delete-tenant.yaml`, `wft-delete-tenant-safe.yaml`) writes, stages, or
   deletes a repository path that does not contain the tenant name and is not on an
@@ -100,6 +111,13 @@ neither ever edits a file another tenant shares.
 - Moving service Applications out of the shared `apps` AppProject.
 - Argo Workflows SSO RBAC (`platform-gitops/argo-workflows/sso-team-<t>.yaml`) —
   already per-tenant, including the precedence derivation.
+- mctl-api's operation registry (`internal/operations/registry.go`, the
+  `create-tenant` and `delete-tenant` entries) lists
+  `platform-gitops/argocd/values.yaml` in `ModifiesPaths`. That field is
+  descriptive metadata only: it is shown by `list_operations`, and nothing parses
+  tenant blocks from the file. It goes stale after this change and is fixed in a
+  separate mctl-api PR, not here. (Reviewer note, 2026-09-27: the out-of-repo
+  reader grep in task 11 was run; this is the only hit.)
 
 ## Open questions
 

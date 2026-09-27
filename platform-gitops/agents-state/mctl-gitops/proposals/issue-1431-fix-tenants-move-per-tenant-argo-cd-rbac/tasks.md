@@ -22,9 +22,14 @@ without the new template would leave `argocd-rbac-cm` unmanaged.
   `.Files.Glob "rbac/tenants/*.csv"` (sorted, concatenated into the single
   `policy.csv` key), with the in-file comment explaining why the subchart no longer
   owns the ConfigMap (depends on 2).
+  The template must carry over every `configs.rbac` key except `create` and
+  `annotations`, as the subchart does, and must not hard-code
+  `policy.default`/`scopes` (reviewer amendment 2026-09-27).
   DoD: `helm template test platform-gitops/argocd -f
   platform-gitops/argocd/values.yaml` emits exactly one `argocd-rbac-cm`, and
-  `helm lint platform-gitops/argocd` passes.
+  `helm lint platform-gitops/argocd` passes. A scratch render with an extra
+  `configs.rbac` key (e.g. `policy.matchMode: glob`) shows that key in the
+  ConfigMap.
 
 - [ ] 4. In `platform-gitops/argocd/values.yaml`: set `argo-cd.configs.rbac.create:
   false` with a comment pointing at `rbac/tenants/`, delete the five tenant blocks
@@ -58,11 +63,15 @@ without the new template would leave `argocd-rbac-cm` unmanaged.
   stays silent on the post-change templates; the real run is green.
 
 - [ ] 8. Add `scripts/validate-argocd-tenant-rbac.py` with `--selftest`: 1:1 between
-  `platform-gitops/tenants/*/` and `platform-gitops/argocd/rbac/tenants/*.csv`, each
+  `platform-gitops/tenants/*/` and `platform-gitops/argocd/rbac/tenants/*.csv`
+  (`admins` exempt via a commented `EXEMPT_TENANTS` set; a fragment for an exempt
+  tenant is itself a failure; reviewer amendment 2026-09-27), each
   fragment byte-equal to the canonical six lines for its tenant, and no `role:team-`
   line left in `platform-gitops/argocd/values.yaml` (depends on 4).
   DoD: `--selftest` fires on each of: an added `exec` rule, a widened `*` object glob,
-  a tenant dir with no fragment, a fragment with no tenant dir.
+  a tenant dir with no fragment, a fragment with no tenant dir, and an
+  `admins.csv` fragment. It stays silent on the real tree, where `admins` has no
+  fragment.
 
 - [ ] 9. Wire both scripts into `.github/workflows/validate-manifests.yml` as two
   steps next to the existing interpolation checks, `--selftest` first, each with the
