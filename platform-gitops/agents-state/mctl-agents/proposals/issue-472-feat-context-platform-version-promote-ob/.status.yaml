@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-27T18:04:40Z'
+status: merged
+updated_at: '2026-09-27T18:31:55Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-b3d96f62cdfda79c
@@ -27,4 +27,5 @@ attempt:
   expires_at: '2026-09-27T18:17:35Z'
   finished_at: '2026-09-27T16:59:57Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/530
-review_attempts: 2
+merged_at: '2026-09-27T18:31:55Z'
+merge_commit: db32ddd06a9d8a07ed46940ec1882155a572774a
