@@ -42,7 +42,8 @@ return `encode: …` as an `IsError` result *after* the handler already wrote an
   after an OAuth scope change) without grepping logs.
 - AS a connected Telegram user I WANT my own audit log to show failed calls,
   not only successful ones SO THAT `get_my_audit_log` is a truthful record of
-  what was attempted against my account.
+  what was attempted against my account. (The failed rows appear with their
+  existing `status` and `error` fields; the new `reason` stays operator-only.)
 - AS a maintainer I WANT the recording to live in one wrapper rather than in
   each of the ~36 tool handlers SO THAT a tool added later cannot reintroduce
   the blind spot by forgetting to call `s.audit`.
@@ -92,20 +93,27 @@ return `encode: …` as an `IsError` result *after* the handler already wrote an
   the audit rows, INFO slog lines and `mctl_tool_invocations_total` /
   `mctl_tool_invocation_duration_seconds` samples it produces today, with no
   additional row or line contributed by the wrapper.
-- WHILE a tool is on the audit-exempt list (`get_my_audit_log`, whose handler
-  deliberately does not audit itself to avoid an audit-of-audit row on every
-  page fetch) THE SYSTEM SHALL still record `IsError=true` outcomes but SHALL
-  NOT add a row for a successful call.
+- WHILE a tool is on the audit-exempt-on-success list (`get_my_audit_log`,
+  whose handler deliberately does not audit itself to avoid an audit-of-audit
+  row on every page fetch, and `get_my_identity` / `get_my_send_status`, which
+  do not audit their successes today) THE SYSTEM SHALL still record
+  `IsError=true` outcomes but SHALL NOT add a row for a successful call.
 - IF the request context is already cancelled or past its deadline when the
   outcome is recorded THEN THE SYSTEM SHALL write the audit row on a detached
   context bounded by `auditWriteTimeout`, as `auditDetached`
   (`internal/mcp/tools.go:2399`) does today.
-- WHEN a `reason` is written to `audit_logs` THE SYSTEM SHALL keep every
-  pre-existing row verifiable by `Store.VerifyAuditChain`
-  (`internal/db/store.go`), by appending the reason to `hashAuditEntry`
-  (`internal/db/audit_chain.go:29`) only when it is non-empty, behind its own
-  marker byte, following the precedent set by `call_path` and the
-  `auditEdgeMarker` correlation block.
+- WHEN a `reason` is written to `audit_logs` THE SYSTEM SHALL store it in its
+  own nullable column that is NOT part of the hash chain: `hashAuditEntry`
+  (`internal/db/audit_chain.go:29`) and `Store.VerifyAuditChain` SHALL remain
+  byte-for-byte unchanged, so every row written by the new binary also
+  verifies under the previous binary and an image rollback cannot make the
+  chain report tampering. The `reason` is a classification derived from the
+  already-hashed `status` / `error` fields, so leaving it unhashed does not
+  weaken the chain's tamper evidence over what actually happened.
+- WHILE persisting `reason` THE SYSTEM SHALL NOT expose it through
+  `get_my_audit_log`: `db.AuditEntry`'s JSON shape and that tool's
+  `outputSchema` SHALL remain unchanged. The column is for operators (SQL,
+  Loki, metrics), not part of the user-facing tool contract.
 - WHILE labelling `mctl_tool_call_errors_total` THE SYSTEM SHALL use only
   compile-time reason constants, never a client-supplied string, so label
   cardinality stays bounded.
@@ -151,17 +159,18 @@ return `encode: …` as an `IsError` result *after* the handler already wrote an
   does not know the tool list. This proposal does **not** pre-create, and
   documents the `increase()` caveat in `docs/runbook.md`. Reviewer may prefer
   exporting the tool-name list from `internal/mcp` and pre-creating.
-- **Exposing `reason` to users.** Adding `reason` to `db.AuditEntry` makes it
-  visible in `get_my_audit_log` output, which changes that tool's declared
-  output schema. This proposal adds it (`json:"reason,omitempty"`) because the
-  tool's own description already promises a truthful record; reviewer may
-  prefer keeping the column internal to operators.
-- **Audit-exempt list.** Only `get_my_audit_log` carries an explicit
-  "intentionally do NOT audit-log this call" comment. `get_my_identity` and
-  `get_my_send_status` simply never audit, with no stated rationale. This
-  proposal starts auditing them (they are ordinary read tools) and exempts
-  only `get_my_audit_log`. Confirm that the small increase in audit volume for
-  those two tools is acceptable.
+- **Exposing `reason` to users.** Resolved at review (operator, 2026-09-27):
+  keep `reason` operator-only. `get_my_audit_log`'s output schema does not
+  change in this issue; exposing it can be a separate, user-facing change.
+- **Audit-exempt list.** Resolved at review (operator, 2026-09-27): do not
+  start auditing successful `get_my_identity` / `get_my_send_status` calls in
+  this issue. All three `get_my_*` tools are exempt on success and recorded on
+  failure. Auditing their successes is a separate decision.
+- **Hashing `reason`.** Resolved at review (operator, 2026-09-27): not hashed.
+  A hashed `reason` behind a new marker byte would make a rolled-back binary
+  report every new error row as tampered, as the first revision of this
+  proposal noted in its Rollback section.
+  For a derived diagnostic field that risk is not worth it.
 - **Reason for Telegram RPC failures.** A single `telegram_error` reason keeps
   cardinality flat but loses the MTProto code (`PEER_ID_INVALID`,
   `CHAT_FORBIDDEN`, …) that `internal/mcp/errorcatalog.go` already classifies

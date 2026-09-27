@@ -1,26 +1,22 @@
 # Tasks: issue-696-mcp-tool-call-failures-before-audit-and
 
-- [ ] 1. Add the `reason` column to `audit_logs` and extend the hash chain.
+- [ ] 1. Add the `reason` column to `audit_logs`, outside the hash chain.
   Add `addColumnIfMissing(ctx, dbConn, pg, "audit_logs", "reason", "TEXT", "TEXT")`
   to `Migrate` in `internal/db/db.go`, next to the existing `call_path` and
   correlation-column adds; do **not** add it to `sqliteSchema()` / `pgSchema()`.
-  In `internal/db/audit_chain.go` add `auditReasonMarker = 0x02` and append a
-  terminal len-prefixed `reason` block to `hashAuditEntry`, written only when
-  `reason != ""`, and update the frozen field-order doc comment.
+  Do **not** touch `internal/db/audit_chain.go`: `reason` is not hashed.
   — DoD: `db.Migrate` is idempotent on a fresh and on a pre-existing SQLite and
-  Postgres database; `hashAuditEntry` with an empty reason produces byte-identical
-  output to the pre-change function for every existing combination of
-  `call_path` / edge block.
+  Postgres database; `git diff` shows no change to `audit_chain.go`.
 
 - [ ] 2. Thread `reason` through the store (depends on 1). Add a trailing
   `reason string` parameter to `Store.LogToolCall` (`internal/db/store.go:1745`),
-  write it with `nullable(reason)`, include it in the `hashAuditEntry` call and
-  the `INSERT` column list. Add `Reason string \`json:"reason,omitempty"\`` to
-  `db.AuditEntry` and select the column in `ListAuditFor` and
-  `VerifyAuditChain`.
+  write it with `nullable(reason)` in the `INSERT` column list only — do not
+  pass it to `hashAuditEntry`. Leave `db.AuditEntry`, `ListAuditFor` and
+  `VerifyAuditChain` unchanged.
   — DoD: `go build ./...` passes; every existing `LogToolCall` caller compiles
   (pass `""` from non-MCP callers in `internal/oauth` and `internal/agentapi`);
-  `ListAuditFor` returns the reason for new rows and an empty string for old ones.
+  a row written with a reason stores it in `audit_logs.reason` (asserted by a
+  direct SQL read in the test), and old rows read back NULL.
 
 - [ ] 3. Add the `mctl_tool_call_errors_total{tool,reason}` counter. Declare
   `ToolCallErrorsTotal *prometheus.CounterVec` on `metrics.Registry`, construct
@@ -64,8 +60,10 @@
   absorb a non-nil handler error and a recovered panic into an `IsError` result,
   apply the four flush rules from design.md section B, and increment
   `ToolCallErrorsTotal{req.Params.Name, reason}` exactly once per erroring call.
-  Define `auditExemptOnSuccess = map[string]bool{"get_my_audit_log": true}`
-  with a comment citing the existing rationale in `toolGetMyAuditLog`.
+  Define `auditExemptOnSuccess` with `get_my_audit_log`, `get_my_identity`
+  and `get_my_send_status`, with a comment citing the existing rationale in
+  `toolGetMyAuditLog` for the first and "success volume unchanged; decided at
+  review 2026-09-27" for the other two.
   — DoD: the wrapper never reads `req.GetArguments()`; a synthesised record
   carries an empty peer; `go vet` and `golangci-lint` clean.
 
@@ -88,12 +86,11 @@
   — DoD: `TestPortalAllowlist*` and the `newMCPServer()`-based schema tests still
   pass; the registered tool list is unchanged.
 
-- [ ] 10. Surface `reason` in `get_my_audit_log` (depends on 2).
-  Update `toolGetMyAuditLog`'s description in `internal/mcp/tools.go` to list
-  `reason` among the returned fields, and refresh any golden output-schema
-  fixture the `outputSchema` tests compare against.
-  — DoD: `internal/mcp/output_schema_test.go` and `output_schema_open_test.go`
-  pass; the description text and the actual JSON field list agree.
+- [ ] 10. ~~Surface `reason` in `get_my_audit_log`.~~ Dropped at review
+  (2026-09-27): `reason` stays operator-only. — DoD: `get_my_audit_log`'s
+  description and `outputSchema` are unchanged;
+  `internal/mcp/output_schema_test.go` and `output_schema_open_test.go` pass
+  without fixture changes.
 
 - [ ] 11. Documentation and dashboard (depends on 3).
   Add `mctl_tool_call_errors_total` to `docs/runbook.md` under the
@@ -111,11 +108,11 @@
 
 ## Tests
 
-- [ ] T1. Chain compatibility (`internal/db/audit_chain_test.go`): write rows
-  with an empty reason, mixed with rows that have `call_path` set and rows with
-  edge columns set, and assert `VerifyAuditChain` reports `OK` — proving the new
-  marker block does not invalidate pre-change history. Also assert a row written
-  *with* a reason verifies, and that tampering with the reason is detected.
+- [ ] T1. Chain independence (`internal/db/audit_chain_test.go`): write rows
+  with and without a reason, mixed with rows that have `call_path` and edge
+  columns set, and assert `VerifyAuditChain` reports `OK`; assert that the
+  `entry_hash` of a row written with reason `X` equals the hash of the same
+  row written with an empty reason — proving `reason` is outside the chain.
 
 - [ ] T2. Write-through unchanged (`internal/mcp/tools_test.go`): keep an
   existing direct-handler audit test (for example
@@ -163,9 +160,11 @@
   `mctl_tool_call_errors_total` sample, and one
   `mctl_tool_invocations_total{list_dialogs,ok}` increment.
 
-- [ ] T10. Audit-exempt tool: a successful `get_my_audit_log` adds no row; a
-  failing one (bad `before` timestamp) adds exactly one row with
-  `reason="invalid_argument"`.
+- [ ] T10. Audit-exempt tools: a successful `get_my_audit_log`,
+  `get_my_identity` or `get_my_send_status` adds no row; a failing
+  `get_my_audit_log` (bad `before` timestamp) adds exactly one row with
+  `reason="invalid_argument"`, and the tool's JSON output for that row has no
+  `reason` field.
 
 - [ ] T11. Handler error and panic absorption: register a test tool that returns
   `(nil, errors.New("boom"))` and one that panics. Assert each yields an
@@ -198,17 +197,11 @@ schema addition, which roll back independently.
    one-line escape hatch if the wrapper misbehaves in production.
 2. **Full binary rollback.** Roll the image back with
    `mctl_rollback_service` to the prior tag. The `audit_logs.reason` column
-   stays in place and is simply not written. Rows written by the new binary
-   *with* a non-empty reason were hashed including the reason block, and the
-   old binary's `VerifyAuditChain` does not know about `auditReasonMarker`, so
-   it would report those specific rows as tampered. Mitigation: rollback of a
-   deploy that has been live long enough to write error rows should be paired
-   with re-deploying the new binary rather than left in place — the audit page
-   is the only consumer of `VerifyAuditChain`, and the discrepancy is
-   read-only and self-healing on roll-forward. Note this explicitly in the PR
-   description.
-3. **Never drop the column.** `reason` is nullable and harmless when unused.
-   Dropping it would break `VerifyAuditChain` for every row that has one.
+   stays in place and is simply not written. Because `reason` is not hashed,
+   every row written by the new binary verifies under the old binary's
+   `VerifyAuditChain` — the rollback is safe at any point.
+3. **Leave the column in place.** `reason` is nullable and harmless when
+   unused; dropping it is unnecessary and would only lose operator data.
 4. **Metric removal.** `mctl_tool_call_errors_total` simply stops being
    reported; any dashboard panel referencing it renders empty. Remove the panel
    from `deploy/grafana/mctl-telegram-beta.json` only if the rollback is

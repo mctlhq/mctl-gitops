@@ -197,8 +197,10 @@ The wrapper flushes. Flush rules:
    fix for every early return.
 3. If the result is successful and no record was staged, the wrapper
    synthesises an `ok` record — except for tools on `auditExemptOnSuccess`
-   (`get_my_audit_log`), which keeps that tool's deliberate no-audit-of-audit
-   property while still recording its failures.
+   (`get_my_audit_log`, `get_my_identity`, `get_my_send_status`). That keeps
+   `get_my_audit_log`'s deliberate no-audit-of-audit property and leaves the
+   other two tools' success volume exactly as today, while still recording
+   the failures of all three.
 4. All staged records are written in order through the existing
    `Server.audit` write-through path, on a `context.WithoutCancel` +
    `auditWriteTimeout` context, so a client disconnect can no longer drop the
@@ -285,20 +287,18 @@ record **or** the hook's line, never both.
   `addColumnIfMissing(ctx, dbConn, pg, "audit_logs", "reason", "TEXT", "TEXT")`.
   Following the `call_path` precedent, it is **not** added to the
   `sqliteSchema()` / `pgSchema()` CREATE TABLE literals.
-- `internal/db/audit_chain.go`: a new terminal block in `hashAuditEntry`,
-  written only when `reason != ""`, opened by `auditReasonMarker = 0x02`
-  (distinct from `auditEdgeMarker = 0x01`) so `("edge set, reason unset")` and
-  `("edge unset, reason set")` cannot serialize identically. Every row written
-  before this change has an empty reason and therefore hashes exactly as
-  before — `VerifyAuditChain` stays green across the upgrade, which a
-  regression test pins.
+- `internal/db/audit_chain.go`: **unchanged.** `reason` is deliberately not
+  part of `hashAuditEntry`. It is a classification derived from `status` and
+  `error`, which are already hashed, so the chain still proves what happened.
+  Keeping it out of the hash means rows written by the new binary verify under
+  the old one, and an image rollback is free (see Rollback).
 - `internal/db/store.go`: `LogToolCall` gains a trailing `reason string`
-  parameter and writes it with `nullable(reason)`; `AuditEntry` gains
-  `Reason string \`json:"reason,omitempty"\``; `ListAuditFor` and
-  `VerifyAuditChain` select the new column.
-- `internal/mcp/tools.go`: `auditLogResult`'s `outputSchema` reflects the new
-  field automatically; `toolGetMyAuditLog`'s description text gains `reason` in
-  its documented output field list.
+  parameter and writes it with `nullable(reason)` in the `INSERT` column list
+  only — not in the `hashAuditEntry` call. `db.AuditEntry`, `ListAuditFor` and
+  `VerifyAuditChain` are unchanged.
+- `internal/mcp/tools.go`: `get_my_audit_log`'s output and `outputSchema` are
+  unchanged; `reason` is visible to operators via SQL, the `mcp tool call`
+  slog line and `mctl_tool_call_errors_total`.
 
 ### E. The counter — `internal/metrics/metrics.go`
 
@@ -381,18 +381,15 @@ migration artefact, no backfill, no downtime, no lock of consequence (Postgres
 NULL.
 
 **Backward compatibility.**
-- *Audit chain*: preserved by construction — the reason block is hashed only
-  when non-empty, behind its own marker byte, exactly as `call_path` and the
-  correlation block already are. A regression test must write rows with the
-  pre-change code path (reason empty), then verify the chain after the change.
+- *Audit chain*: untouched — `reason` is not hashed, so `hashAuditEntry` and
+  `VerifyAuditChain` are byte-for-byte the same. A regression test pins that a
+  row written with a non-empty reason verifies with the unchanged chain code.
 - *Rollback*: a binary rolled back after the column exists writes rows with no
   reason and hashes over the pre-change field set — those rows verify under
   both binaries. Forward-rolling again is likewise safe. The column itself is
   never dropped.
-- *`get_my_audit_log` output*: gains an optional `reason` field. Additive and
-  `omitempty`, so a client reading the documented field list is unaffected;
-  the tool's `outputSchema` changes, which `internal/mcp/output_schema_test.go`
-  and `output_schema_open_test.go` will notice.
+- *`get_my_audit_log` output*: unchanged. Failed calls now appear in it as
+  ordinary rows with `status="error"`; no new field.
 - *Client-visible behaviour*: one deliberate change — a handler that returns a
   Go error previously surfaced as JSON-RPC `INTERNAL_ERROR` and now surfaces
   as an `IsError=true` tool result. No registered handler returns a non-nil
@@ -401,11 +398,9 @@ NULL.
   a safety net, not an observable change.
 
 **Resource impact.**
-- *Audit volume*: new rows only for calls that previously produced none —
-  failing early-return paths (rare), plus successful `get_my_identity` and
-  `get_my_send_status` calls (low frequency, self-introspection tools).
-  `get_my_audit_log` successes stay unaudited. Expect a low single-digit
-  percentage increase in `audit_logs` growth.
+- *Audit volume*: new rows only for failing calls that previously produced
+  none (early returns, rare). Successes of the three `get_my_*` tools stay
+  unaudited, so success volume is unchanged.
 - *Metrics*: `mctl_tool_call_errors_total` creates a child series only on first
   occurrence of a `(tool, reason)` pair. Realistic steady state is tens of
   series; theoretical ceiling ~650 (36 tools x 18 reasons), all from
