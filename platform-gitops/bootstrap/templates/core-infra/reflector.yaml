@@ -10,7 +10,10 @@ spec:
   source:
     repoURL: https://emberstack.github.io/helm-charts
     chart: reflector
-    targetRevision: 10.0.5
+    # >= 10.0.41 (upstream #645): 10.0.5 dropped ConfigMap auto-sources whenever
+    # the namespace watcher restarted, so new tenant namespaces got no
+    # mctl-platform-config for up to an hour (karabu, 2026-09-27).
+    targetRevision: 10.0.65
     helm:
       values: |
         configuration:
