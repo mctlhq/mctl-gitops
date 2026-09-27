@@ -137,8 +137,11 @@ metadata:
     app.kubernetes.io/part-of: argocd
     app.kubernetes.io/component: rbac-cm
 data:
-  policy.default: {{ index $rbac "policy.default" | default "" | quote }}
-  scopes: {{ index $rbac "scopes" | quote }}
+  {{- /* Every configs.rbac key except create/annotations, like the subchart
+       (reviewer amendment 2026-09-27); policy.csv is emitted below, extended. */}}
+  {{- range $k, $v := omit $rbac "create" "annotations" "policy.csv" }}
+  {{ $k }}: {{ $v | toString | quote }}
+  {{- end }}
   policy.csv: |
     {{- index $rbac "policy.csv" | trim | nindent 4 }}
     {{- range $path, $content := .Files.Glob "rbac/tenants/*.csv" }}
@@ -209,7 +212,12 @@ throwaway template and asserts the detector fires on it, and asserts it does *no
 fire on the post-change template — this is the regression test the issue asks for.
 
 `scripts/validate-argocd-tenant-rbac.py` (new): assert a 1:1 correspondence
-between `platform-gitops/tenants/*/` and `platform-gitops/argocd/rbac/tenants/*.csv`,
+between `platform-gitops/tenants/*/` and `platform-gitops/argocd/rbac/tenants/*.csv`.
+One exemption applies, through a commented `EXEMPT_TENANTS = {"admins"}`: `admins`
+gets its access from the base policy's `g, admins, role:admin` and has no
+`role:team-admins` block today. A `rbac/tenants/admins.csv` would therefore change
+effective policy, and the gate must reject it (reviewer amendment 2026-09-27).
+The gate also asserts
 and that each fragment equals the canonical rendering for its tenant name
 (so no extra verb, no widened object glob, and no `exec` can be slipped into a
 fragment by hand — the SOC F4 control becomes machine-checked, which
