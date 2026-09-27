@@ -218,7 +218,7 @@ gets its access from the base policy's `g, admins, role:admin` and has no
 `role:team-admins` block today. A `rbac/tenants/admins.csv` would therefore change
 effective policy, and the gate must reject it (reviewer amendment 2026-09-27).
 The gate also asserts
-and that each fragment equals the canonical rendering for its tenant name
+that each fragment equals the canonical rendering for its tenant name
 (so no extra verb, no widened object glob, and no `exec` can be slipped into a
 fragment by hand — the SOC F4 control becomes machine-checked, which
 `values.yaml`'s comment never was). Also assert `platform-gitops/argocd/values.yaml`
