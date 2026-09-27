@@ -1,5 +1,5 @@
 status: merged
-updated_at: '2026-09-27T15:52:51Z'
+updated_at: '2026-09-27T15:54:27Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-87a33a1845bca3a9
@@ -27,9 +27,5 @@ attempt:
   expires_at: '2026-09-27T16:54:17Z'
   finished_at: '2026-09-27T14:59:29Z'
 pr: https://github.com/mctlhq/mctl-gitops/pull/1435
-github:
-  state: merged
-  head_sha: cdc30f06f2dc5a55002e0001e5566f9ff5b0d215
-  observed_at: '2026-09-27T15:52:51Z'
-merged_at: '2026-09-27T15:52:51Z'
+merged_at: '2026-09-27T15:54:27Z'
 merge_commit: 60eb174f4936905475ac25f72644b1d4c73e4822
