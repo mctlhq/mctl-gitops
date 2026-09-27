@@ -10,9 +10,12 @@
   sentinel when `TenantResolver == nil`, treats a `GetTenantsForUser` error as a
   failure, and fails when the resolver satisfies
   `interface{ LastSync() time.Time }` and reports a **zero** sync. A stale
-  but present checkout succeeds, with a rate-limited warn and the
-  `mctl_api_gitops_last_sync_age_seconds` gauge. It fails only in strict mode,
-  `GroupsMaxStaleness > 0` (reviewer amendment 2026-09-27).
+  but present checkout succeeds, with a rate-limited warn. It fails only in
+  strict mode, `GroupsMaxStaleness > 0`, and that check runs first and
+  independently of the fixed 15m warn threshold (reviewer amendment
+  2026-09-27, round 2). The sync-age metric is a scrape-time `GaugeFunc`
+  (`time.Since(LastSync())`, `-1` while never synced), registered once in
+  `cmd/api/main.go`. It is not written from the stale branch. (reviewer amendment 2026-09-27).
   — DoD: unit-testable method exists with doc comments explaining each rule;
   `go vet` and `golangci-lint` clean; no call sites changed yet.
 
@@ -117,6 +120,13 @@ validate-time re-resolution.
   back into a failure by default.
 - [ ] T9b. Strict mode: same as T9a with `GroupsMaxStaleness = 15*time.Minute`;
   the resolution is treated as failed and takes the degraded/fail-closed path.
+  Second case: `GroupsMaxStaleness = 5*time.Minute` with `LastSync()` 10m old,
+  below the 15m warn threshold, also fails. The stricter operator setting wins.
+- [ ] T9d. Gauge tracks recovery: a scrape of
+  `mctl_api_gitops_last_sync_age_seconds` reports ~7200 with `LastSync()` 2h old
+  and ~0 right after `LastSync()` is advanced, with no auth traffic in between.
+  It reports -1 while `LastSync()` is zero. Must fail if the metric is written
+  only on the stale branch.
 - [ ] T9c. Memo eviction: after `GroupsCacheTTL` passes, writes for other logins
   evict the expired entry (map size stays bounded).
 - [ ] T10. `TenantResolver == nil` back-compat: stored groups pass through

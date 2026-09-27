@@ -108,12 +108,24 @@ Rules, in order:
   - A **stale but present** checkout (`time.Since(LastSync()) >
     groupsStaleWarnAfter`, a package constant of 15m) is **not** a failure. The
     resolution succeeds from the checkout as it is. A rate-limited `slog.Warn`
-    logs at most once per minute with the sync age, and a Prometheus gauge
-    `mctl_api_gitops_last_sync_age_seconds` is set, registered the way
-    `internal/auth/federation.go` registers its metrics.
-  - Strict mode is opt-in: only when `GroupsMaxStaleness > 0`
-    (`OAUTH_GROUPS_MAX_STALENESS`, default unset) is a checkout older than that
-    treated as a failure.
+    logs the sync age at most once per minute.
+  - The sync age is exported as `mctl_api_gitops_last_sync_age_seconds`, a
+    Prometheus **`GaugeFunc`** that computes `time.Since(reader.LastSync())` at
+    scrape time. Report `-1` while `LastSync` is zero, so "never synced" can be
+    told apart from "just synced". Register it once in `cmd/api/main.go` next to
+    the reader, the way `internal/auth/federation.go` registers its metrics. It
+    must **not** be a gauge written only on the stale branch: that would never
+    reset after recovery, and would not move without auth traffic. A scrape-time
+    function is always current and needs no reset path (reviewer amendment 2026-09-27, PR review round 2).
+  - The warning threshold and the strict-mode threshold are **independent
+    checks**, evaluated in this order on every resolution:
+    1. If `GroupsMaxStaleness > 0` (`OAUTH_GROUPS_MAX_STALENESS`, default unset)
+       and the age exceeds it, the resolution is a failure. This holds whatever
+       the fixed 15m constant is, so `OAUTH_GROUPS_MAX_STALENESS=5m` fails at
+       5m.
+    2. Otherwise, if the age exceeds `groupsStaleWarnAfter`, the resolution
+       succeeds with the rate-limited warning.
+    The 15m constant never overrides a stricter operator setting (reviewer amendment 2026-09-27, PR review round 2).
   - A resolver that cannot report sync state (test doubles, future
     implementations) skips the gate.
 
