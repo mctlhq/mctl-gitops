@@ -85,8 +85,9 @@ Three gaps follow directly:
 
 ## Proposed solution
 
-A new ADR (`docs/adr/016-context-strategy-release-contract.md` — 016 is the
-one free number in `docs/adr/`) plus four code surfaces. Nothing changes
+A new ADR (`docs/adr/019-context-strategy-release-contract.md`. 016 is taken
+by mctlhq/mctl-agents#524's `016-shepherd-merge-approval.md`, and 017/018 are
+on `main`) plus four code surfaces. Nothing changes
 behaviour until an operator moves one environment variable.
 
 ### 1. `ContextStrategyVersion` — an immutable, content-pinned version
@@ -158,10 +159,30 @@ history" (`007-...:163-166`) and matches the platform's own
 `rollback_agent_binding` semantics: an exact revision, "never a guess at one
 step back".
 
-The `evidence` block is the seam to mctlhq/mctl-agents#266: `{kind: none |
-observe-log | context-eval, ref, evaluatorVersion}`. Non-`none` is required
-for a `production` promotion, optional for `shadow`. Because `none` is a legal
-value, nothing here blocks on #266 shipping `orchestrator/context_eval.py`.
+The `evidence` block is the seam to the #266 evaluator: `{kind: none |
+observe-log | context-eval, ref, evaluatorVersion, implementationHash}`.
+
+**What #266 actually provides today.** #266 was closed as completed with only
+its tasks 1-3 merged (#521): ADR 015 and the pure `run_pipeline`. The
+evaluator (`orchestrator/context_eval.py`), the fixture set, `baseline.json`
+and the replay CLI are its tasks 4-11, tracked as mctlhq/mctl-agents#525.
+
+**The rule, fail-closed.**
+
+| environment | accepted `evidence.kind` | checks |
+|---|---|---|
+| `shadow` | `none`, `observe-log`, `context-eval` | `reason` required |
+| `production` | `context-eval` only | `ref` resolves to a committed `ContextEvalRecord`/baseline; `evidence.implementationHash` == the promoted version's `implementationHash` (else the evidence measured other code: **stale**); `evidence.evaluatorVersion` == the evaluator in the same commit (else **stale** against the evaluator); an evaluator exists at all (else **missing**) |
+
+Missing or stale evidence refuses the promotion with the failing check and the
+regeneration command. Until #525 lands there is no evaluator, so every
+`production` promotion is refused and `production` stays on revision 1 (the
+explicit baseline). That is the intended answer to "what happens when
+evaluation data is missing": the lifecycle still works end to end in
+`shadow`, and `production` cannot move on anecdote. The `observe` compare line
+(section 4) carries only `AssemblyMetrics` counters, never a quality score, so
+it does not re-implement ADR 015's metrics; it is supplementary evidence at
+most.
 
 ### 3. `orchestrator/context_release.py` — loader, resolver, rollout ladder
 
@@ -294,6 +315,16 @@ publish` command when a change to `orchestrator/context_assembly.py` did not
 come with a republished version. This is the mechanism that makes version
 identity un-driftable; without it the whole scheme is decoration.
 
+### 8. Implementation slices
+
+Three PRs (`requirements.md`, "Implementation slices"): **A** the inert
+contract (ADR 019, ADR 009 amendment 2, catalog, `context_release.py`, CLI,
+drift guard); **B** the ladder, wiring, `observe` pass and telemetry; **C** the
+evaluator-version check, soak gate and runbook, after #525. None of them
+touches `orchestrator/temporal/workflows/dev_loop.py` or
+`orchestrator/run_shepherd.py`. The only file shared with the in-review
+mctlhq/mctl-agents#524 is `README.md` (slice C, a different section).
+
 ## Alternatives
 
 1. **New mctl-api tables and routes (`ContextStrategyVersion`,
@@ -363,9 +394,10 @@ identity un-driftable; without it the whole scheme is decoration.
     Mitigated by resolving the `implementationHash` against the files in the
     image and failing closed, plus `tools/context_release.py resolve` as a CI
     preflight on the same commit.
-  - *Promotion without evidence.* Mitigated by the `evidence` block being
-    required non-`none` for `production`, and by promotion being a reviewed
-    commit rather than an API call.
+  - *Promotion without evidence.* Mitigated by `production` accepting only
+    fresh `context-eval` evidence (see the table in section 2), refused
+    outright until #525 exists, and by promotion being a reviewed commit rather
+    than an API call.
   - *The observe pass changes what the model reads.* This is the failure that
     would invalidate the whole stage. Mitigated structurally — the second
     outcome is bound to a local name and never reaches `seal()`'s return,

@@ -106,8 +106,25 @@ rather than inventing a third vocabulary.
   `deprecated`, `disabled`, or whose `implementationHash` does not match the
   code in the same commit THEN THE SYSTEM SHALL refuse the promotion.
 - WHEN a promotion targets the `production` environment THE SYSTEM SHALL
-  require `evidence.kind` to be other than `none`; WHEN it targets `shadow`
-  THE SYSTEM SHALL accept `evidence.kind: none` with a recorded `reason`.
+  require `evidence.kind: context-eval`, with `evidence.ref` naming a committed
+  `ContextEvalRecord`/baseline produced by the #266 evaluator
+  (`orchestrator/context_eval.py`, ADR 015; its remaining tasks are
+  mctlhq/mctl-agents#525), `evidence.evaluatorVersion`, and
+  `evidence.implementationHash`. `observe-log` evidence is supplementary and
+  never sufficient on its own for `production`. WHEN a promotion targets
+  `shadow` THE SYSTEM SHALL accept `evidence.kind: none` or `observe-log` with
+  a recorded `reason`.
+- IF a `production` promotion's evidence is missing, OR its
+  `evidence.implementationHash` differs from the promoted version's
+  `implementationHash` (the evidence measured different code), OR its
+  `evidence.evaluatorVersion` differs from the evaluator version in the same
+  commit (the evidence is stale against the current evaluator), OR no
+  evaluator exists in the commit at all THEN THE SYSTEM SHALL refuse the
+  promotion, naming which check failed and the command that regenerates the
+  evidence. The fail-closed direction is deliberate: while #525 has not landed
+  there is no evaluator, so every `production` promotion is refused, and only
+  revision 1 — the baseline that makes today's default explicit — exists in
+  `production`.
 - WHEN a rollback is requested THE SYSTEM SHALL require an explicit target
   revision, SHALL append a new revision restoring that revision's exact
   strategy/version/hash triple with `rollbackOf: <revision>` recorded, and
@@ -190,8 +207,14 @@ rather than inventing a third vocabulary.
   catalog is committed in `mctl-agents` for this proposal; a cross-repo
   gitops/registry promotion path is a named follow-up.
 - Implementing `orchestrator/context_eval.py`, its fixture set, its baseline
-  or its replay CLI — that is mctlhq/mctl-agents#266 / ADR 015. This proposal
-  only defines the `evidence` block a promotion record may point at.
+  or its replay CLI. mctlhq/mctl-agents#266 was closed as completed with only
+  its proposal tasks 1-3 merged (#521: ADR 015, ADR 009's follow-up row, the
+  `run_pipeline` extraction); none of those four exists on `main`. The
+  remaining tasks 4-11 are mctlhq/mctl-agents#525. This proposal defines the
+  `evidence` block and the freshness checks a `production` promotion applies to
+  #525's output, and does not duplicate any of #525's evaluation logic: the
+  `observe` compare line carries the counters `AssemblyMetrics` already
+  defines, never a relevance or quality score.
 - Writing a new strategy or ranker, or changing what either existing strategy
   selects. `deterministic-fixed-order` and `trust-freshness-ranked` keep their
   behaviour byte-for-byte.
@@ -204,6 +227,30 @@ rather than inventing a third vocabulary.
 - Per-tenant or per-repository strategy selection.
 - Automatic promotion on a metric threshold. Every promotion in this proposal
   is a reviewed commit by a human.
+
+## Implementation slices
+
+This proposal is implemented as three PRs, in order, each leaving `main`
+behaviour-neutral until an operator moves an env var. Every slice PR says
+`Refs mctlhq/mctl-agents#472`; only the last may close the issue.
+
+- **Slice A — the contract, inert.** ADR 019, ADR 009 amendment 2 (the two
+  optional `ContextStrategy` fields), the catalog (two version documents, the
+  `production`/`shadow` bindings at revision 1), `orchestrator/context_release.py`
+  (types, loaders, `resolve`, pure `promote`/`rollback` with the evidence
+  checks above), `tools/context_release.py`, and the CI drift guard. Nothing
+  imports `context_release` at runtime yet. This is the smallest slice that
+  proves the lifecycle: publish -> promote to `shadow` -> resolve -> exact
+  rollback runs end to end on a temporary catalog root, and a `production`
+  promotion is refused for want of evidence.
+- **Slice B — the ladder and wiring.** `CONTEXT_RELEASE_ROLLOUT_MODE`
+  (`off/observe/enforce/only`), `CONTEXT_RELEASE_REQUIRED`, the deferred-import
+  wiring in `context_assembly.assemble()`, the `observe` shadow pass, the
+  `CONTEXT_STRATEGY_RELEASE`/`_COMPARE` lines and the telemetry-attribute
+  reservation.
+- **Slice C — the production gate and runbook.** Validation of
+  `evidence.evaluatorVersion` against #525's evaluator, the soak gate, the
+  README lifecycle section and `.env.example`. Depends on mctlhq/mctl-agents#525.
 
 ## Open questions
 

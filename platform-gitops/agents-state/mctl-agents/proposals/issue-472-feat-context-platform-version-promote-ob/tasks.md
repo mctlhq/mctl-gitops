@@ -1,8 +1,14 @@
 # Tasks: issue-472-feat-context-platform-version-promote-ob
 
-- [ ] 1. Write `docs/adr/016-context-strategy-release-contract.md` (016 is the
-      one free number in `docs/adr/`; 011 is deliberately reused three times,
-      016 is genuinely absent). It fixes: the `ContextStrategyVersion` and
+Slices (see `requirements.md`, "Implementation slices"): **A** = tasks 1-5
+and 11; **B** = tasks 6-10; **C** = tasks 12-14, after mctlhq/mctl-agents#525.
+Each slice is its own PR with `Refs mctlhq/mctl-agents#472`; only slice C
+may close the issue.
+
+- [ ] 1. *(slice A)* Write `docs/adr/019-context-strategy-release-contract.md`
+      (016 is taken by mctlhq/mctl-agents#524's
+      `016-shepherd-merge-approval.md`; 017 and 018 are on `main`). It fixes: the
+      `ContextStrategyVersion` and
       `ContextStrategyBinding` shapes; the `implementationHash` encoding; the
       reuse of ADR 007's `published`/`deprecated`/`disabled` version lifecycle
       and its `publish`/`promote`/`deprecate`/`disable`/`rollback` transition
@@ -15,7 +21,7 @@
       follow-up table and from ADR 015's non-goal line, and it states which of
       its own decisions a follow-up may not reopen, in ADR 007/009's style.
 
-- [ ] 2. Add ADR 009 **amendment 2** to
+- [ ] 2. *(slice A)* Add ADR 009 **amendment 2** to
       `docs/adr/009-context-snapshot-contract.md` and implement it in
       `orchestrator/context_snapshot.py`: `ContextStrategy` (`:649-678`) gains
       optional `release_revision: int | None` and `content_hash: str | None`.
@@ -29,7 +35,7 @@
       without the two fields has a `snapshot_id` identical to one sealed before
       this change.
 
-- [ ] 3. Create the catalog: `config/context-strategies/versions/
+- [ ] 3. *(slice A)* Create the catalog: `config/context-strategies/versions/
       deterministic-fixed-order/1.0.0.yaml`,
       `config/context-strategies/versions/trust-freshness-ranked/1.0.0.yaml`,
       and bindings at `config/context-strategies/bindings/{production,shadow}/
@@ -40,7 +46,7 @@
       investigator runs today; no behaviour changes because nothing reads them
       yet.
 
-- [ ] 4. Add `tools/context_release.py` with `publish`, `promote`, `rollback`
+- [ ] 4. *(slice A)* Add `tools/context_release.py` with `publish`, `promote`, `rollback`
       and `resolve` subcommands, modelled on `tools/publish_agent_release.py`
       (argparse, `--dry-run`, non-2xx/failure returned as a value not an
       exception, per-target isolation so one bad document never half-writes the
@@ -53,7 +59,7 @@
       from the committed code; `promote` and `rollback` refuse to mutate or
       drop any existing revision.
 
-- [ ] 5. Add `orchestrator/context_release.py`: the frozen
+- [ ] 5. *(slice A)* Add `orchestrator/context_release.py`: the frozen
       `ContextStrategyVersion` / `ContextStrategyBinding` /
       `ResolvedContextStrategy` types, `load_version`, `load_binding`,
       `resolve(agent, environment)`, and the pure `promote()` / `rollback()`
@@ -66,11 +72,15 @@
       non-`disabled` lifecycle, and recomputation of both hashes against the
       files in the running image. Verdicts are a closed vocabulary, in
       `orchestrator/lifecycle/contract.py`'s style: anything outside it is
-      `unknown`, never silently `ok`. (depends on 3)
+      `unknown`, never silently `ok`. `promote()` applies `design.md`
+      section 2's evidence rule: `production` accepts only `context-eval`
+      evidence whose `implementationHash` equals the promoted version's, and
+      refuses as `missing` while no evaluator exists in the commit (true until
+      mctlhq/mctl-agents#525), naming the failed check. (depends on 3)
       — DoD: unit tests cover every refusal path; a hash mismatch raises with
       the exact `tools/context_release.py publish` command in the message.
 
-- [ ] 6. Add the rollout ladder to `orchestrator/context_release.py`:
+- [ ] 6. *(slice B)* Add the rollout ladder to `orchestrator/context_release.py`:
       `OFF/OBSERVE/ENFORCE/ONLY`, `_ORDER`, `ENV_VAR =
       "CONTEXT_RELEASE_ROLLOUT_MODE"`, `REQUIRED_ENV_VAR =
       "CONTEXT_RELEASE_REQUIRED"`, and `mode()`, `at_least()`,
@@ -85,7 +95,7 @@
       — DoD: with the env var unset, every predicate answers the `off` value
       and no catalog file is opened.
 
-- [ ] 7. Wire selection into `orchestrator/context_assembly.py`. Add
+- [ ] 7. *(slice B)* Wire selection into `orchestrator/context_assembly.py`. Add
       `resolve_strategy_for_run(agent, config)` which, at `off`, returns
       `(config.strategy, None)` with no import of `context_release`; past
       `off`, imports `context_release` **inside the function body** — the
@@ -101,7 +111,7 @@
       proving `context_assembly`'s module-scope import graph is still
       stdlib-only.
 
-- [ ] 8. Implement the `observe` shadow pass in `assemble()`
+- [ ] 8. *(slice B)* Implement the `observe` shadow pass in `assemble()`
       (`context_assembly.py:1083`): after the authoritative
       `run_pipeline(candidates, config, now)` call (`:1106`), run
       `run_pipeline(candidates, replace(config, strategy=bound), now)` on the
@@ -115,7 +125,7 @@
       byte-identical with the observe pass enabled and disabled, and a test
       asserts the persist client is called exactly once per run at `observe`.
 
-- [ ] 9. Observability. Extend `AssemblyMetrics` (`:259`) and
+- [ ] 9. *(slice B)* Observability. Extend `AssemblyMetrics` (`:259`) and
       `to_log_dict()` (`:286`) with `release_mode`, `binding_revision`,
       `strategy_content_hash`, `override_active`. Add a
       `CONTEXT_STRATEGY_RELEASE` line (one resolution verdict per run) and a
@@ -129,7 +139,7 @@
       in either line, extending the rule `AssemblyMetrics.to_log_dict()` and
       ADR 015 sec. 3 already hold.
 
-- [ ] 10. Reserve the new telemetry attribute names. Per
+- [ ] 10. *(slice B)* Reserve the new telemetry attribute names. Per
       `docs/observability/execution-traces.md`, any new `mctl.*` attribute must
       be listed there marked **proposed** and get a reservation PR against
       mctl-docs' `docs/reference/telemetry-attributes.md` before this issue
@@ -140,7 +150,7 @@
       lists all five as `proposed`, and the mctl-docs reservation PR is linked
       from this issue.
 
-- [ ] 11. CI drift guard: a pytest test (not a new workflow —
+- [ ] 11. *(slice A)* CI drift guard: a pytest test (not a new workflow —
       `.github/workflows/pr-validation.yml` already runs pytest, ruff and mypy)
       that recomputes every published version's `implementationHash` against
       the working tree and fails with the exact republish command when they
@@ -149,7 +159,7 @@
       — DoD: deliberately editing `rank_candidates` without republishing fails
       CI with an actionable message.
 
-- [ ] 12. Documentation and defaults: add the four new variables to
+- [ ] 12. *(slice C)* Documentation and defaults: add the four new variables to
       `.env.example` next to the existing `ISSUE_INVESTIGATOR_CONTEXT_*` block
       (which already documents the pilot's modes and its safe rollback), all
       commented out and defaulting to today's behaviour; add a README section
@@ -159,14 +169,23 @@
       code reading, and `.env.example` states that unset means unchanged
       behaviour.
 
-- [ ] 13. Define the promotion soak gate in the ADR and the README: a
+- [ ] 13. *(slice C)* Define the promotion soak gate in the ADR and the README: a
       production promotion requires N consecutive investigations at `observe`
-      with a non-`none` `evidence` block and no `hash-mismatch` verdict.
+      with fresh `context-eval` evidence and no `hash-mismatch` verdict. N is
+      a fixed value stated in the ADR, not left to the promoter, and is
+      changed only by an ADR amendment.
       ADR 010 sec. 13's rule applies — "a rollout whose safety criterion has no
       metric behind it is a rollout judged by anecdote" — so the gate is stated
       in terms of the counters task 9 emits, not in prose. (depends on 9)
       — DoD: the gate names the exact log fields it is read from, and the
       README says how to read them.
+
+- [ ] 14. *(slice C, after mctlhq/mctl-agents#525)* Validate
+      `evidence.evaluatorVersion` against `orchestrator/context_eval.py`'s
+      `evaluator_version` in the same commit, and resolve `evidence.ref` to a
+      committed `ContextEvalRecord`/baseline; a mismatch is refused as stale.
+      — DoD: once #525 is merged, a `production` promotion with fresh evidence
+      is accepted and one with an older `evaluatorVersion` is refused.
 
 ## Tests
 
@@ -186,7 +205,11 @@
       with the path, a non-positive revision, a duplicated revision, a gap in
       the revision sequence, and an empty history each raise.
 - [ ] T5. Promotion rules: a `production` promotion with `evidence.kind: none`
-      is refused; the same promotion to `shadow` is accepted; promoting a
+      or `observe-log` is refused; a `production` promotion with
+      `context-eval` evidence whose `implementationHash` differs from the
+      version's is refused as stale; with no evaluator in the commit every
+      `production` promotion is refused as missing; the same promotion to
+      `shadow` is accepted; promoting a
       `deprecated` version is refused while an existing binding on it still
       resolves.
 - [ ] T6. Rollback rules: `rollback(to_revision=1)` appends a revision
