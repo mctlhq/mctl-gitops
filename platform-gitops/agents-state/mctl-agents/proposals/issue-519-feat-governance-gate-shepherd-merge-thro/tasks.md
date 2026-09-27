@@ -1,5 +1,10 @@
 # Tasks: issue-519-feat-governance-gate-shepherd-merge-thro
 
+> **Sequencing.** Implement on top of mctl-agents#518 (#516), which also
+> extends `_watch_pr` and `MergeWatchResume` (`proposal_terminal_end`,
+> `saw_open_pr`). The new `merge_gate_*` fields and `gate_task` sit beside
+> those, and this PR must not start before #518 is merged.
+
 - [ ] 1. Carry over #484's approval-evidence plumbing (no ticket, no store).
       Add `Decision.approver` / `Decision.decided_at` and
       `ApprovalOutcome.decided_by` in `orchestrator/policy_checkpoint.py`,
@@ -73,14 +78,19 @@
       workflow state, add `merge_gate_execution_id` / `merge_gate_trace_id` to
       `MergeWatchResume` and rehydrate them in `_resume_merge_watch`, refuse a
       `continue_as_new` hop while a merge-approval wait is in flight in
-      `_merge_watch_hop_suggested`, call `run_gated_action(
-      "merge_pull_request_gated", ...)` while the polled PR is open with
-      `max_wait_seconds` bounded by the remaining merge-watch budget, and
-      handle every outcome per design.md's table (no automatic
-      `next_attempt()`). — DoD: one stable `execution_id` is used for the
-      request and every revalidation, including across a hop; a history without
-      the marker replays unchanged; `ran` logs `MERGE_APPROVED` with
-      `approval_ref`/approver/`decided_at`.
+      `_merge_watch_hop_suggested`, start `run_gated_action(
+      "merge_pull_request_gated", ...)` as a background `gate_task`
+      (`asyncio.create_task`, like `tick_task`; never awaited inline, at most
+      one in flight) while the polled PR is open, with `max_wait_seconds`
+      bounded by the remaining merge-watch budget. Read its result at a poll
+      boundary once `done()` and handle every outcome per design.md's table
+      (no automatic `next_attempt()`). Cancel and settle an in-flight
+      `gate_task` in the watch's `finally` beside `_settle_tick`. — DoD: one
+      stable `execution_id` is used for the request and every revalidation,
+      including across a hop; a history without the marker replays unchanged;
+      `ran` logs `MERGE_APPROVED` with `approval_ref`/approver/`decided_at`;
+      while a wait is in flight the loop keeps polling, ticking and
+      heartbeating.
 
 - [ ] 8. Documentation (depends on 4, 7) — update ADR-014 §7 and its open
       decision 3 to name the merge gate as the first `run_gated_action`
@@ -138,6 +148,15 @@
       enters the gate; the same `execution_id` is used before and after a
       merge-watch `continue_as_new` hop; no hop is taken while the wait is in
       flight; `denied` does not trigger a second request.
+- [ ] T8b. Concurrency of the wait (`tests/test_dev_loop_workflow.py`): with a
+      merge-approval wait pending across N polls, `get_pr_state` is still
+      called on every poll, in-loop shepherd ticks are still submitted, and the
+      ownership heartbeat still fires every `LIFECYCLE_HEARTBEAT_EVERY_POLLS`;
+      only one wait is in flight at a time.
+- [ ] T8c. Settling: the PR reads `MERGED` (a human merged in the UI), and
+      separately `abandon` arrives, while a wait is pending. The watch ends,
+      the child `ActionApprovalWaitWorkflow` is cancelled, no `gh pr merge` is
+      issued, and the workflow completes with no pending task.
 - [ ] T9. Lint/type gates the repo already runs (`ruff`, `pytest`) stay green;
       `tests/test_patch_memoization.py` still pins the marker semantics.
 

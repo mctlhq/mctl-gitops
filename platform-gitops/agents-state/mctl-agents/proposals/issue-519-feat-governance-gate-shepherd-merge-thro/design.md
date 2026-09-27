@@ -213,13 +213,36 @@ command it never recorded:
   lacked. Additionally, extend `_merge_watch_hop_suggested` to refuse a hop
   while a merge-approval wait is in flight, mirroring its existing "never hop
   with an in-loop shepherd tick in flight" rule.
-- **The call.** While the polled `PRState` is open, call
-  `run_gated_action("merge_pull_request_gated", GatedActionInput(payload={repo,
-  pr_number, head_sha, service, slug}, execution_id=..., actor=...,
-  trace_id=...), poll_seconds=..., max_wait_seconds=remaining merge-watch
-  budget)`. The wait is bounded by the receipt's own expiry minus
-  `CONSUME_MARGIN_SECONDS` anyway; bounding by the remaining budget keeps the
-  gate inside `MERGE_WATCH_DEADLINE`.
+- **The call — concurrent, never inline.** While the polled `PRState` is open
+  and no gate task is in flight, start
+  `gate_task = asyncio.create_task(run_gated_action("merge_pull_request_gated",
+  GatedActionInput(payload={repo, pr_number, head_sha, service, slug},
+  execution_id=..., actor=..., trace_id=...), poll_seconds=...,
+  max_wait_seconds=remaining merge-watch budget))`, the same pattern the loop
+  already uses for `tick_task` (concurrent shepherd ticks). The poll loop does
+  NOT await it. Every poll keeps doing exactly what it does today while the
+  human decides:
+  - reading `get_pr_state`;
+  - submitting in-loop shepherd ticks, so review fixing continues;
+  - heartbeating the lifecycle-ownership claim every
+    `LIFECYCLE_HEARTBEAT_EVERY_POLLS`, so ADR-010 never sees a dead owner
+    during a multi-day wait;
+  - honouring `abandon` and the mctl-agents#516 terminal exit.
+
+  Awaiting it inline would freeze the whole watch for the length of the human
+  wait (days, bounded only by the receipt expiry and the remaining budget),
+  and a stale heartbeat would license a takeover of a PR the loop still owns.
+  At each poll boundary, if `gate_task.done()`, read its `GatedActionResult`
+  and apply the outcome table below, then clear it. The wait itself stays
+  bounded by the receipt's own expiry minus `CONSUME_MARGIN_SECONDS`;
+  bounding by the remaining budget keeps the gate inside
+  `MERGE_WATCH_DEADLINE`.
+- **Settling.** The watch's existing `finally` (which already runs
+  `_settle_tick`) also cancels and awaits an in-flight `gate_task`. The
+  cancellation propagates to the child `ActionApprovalWaitWorkflow`, and the
+  unconsumed receipt expires. This covers every exit: `MERGED`/`CLOSED`
+  (including a human merge in the GitHub UI during the wait), the #516
+  terminal exit, the deadline and `abandon`.
 - **Outcomes.**
   | outcome | action |
   | --- | --- |
@@ -229,8 +252,9 @@ command it never recorded:
   | `denied`, `expired`, `timed_out` | log and keep watching; **never** call `next_attempt()` automatically, so nobody is re-asked the same question in a loop and a denial cannot be worn down |
   | `consumed`, `effect_failed` | never merge again on that receipt; re-read PR state and keep watching so a human sees it |
   | `already_waiting`, `undecided` | nothing this poll |
-- Cancellation (`abandon`/`terminate` during the merge watch, #420) propagates
-  to the child wait; an unconsumed receipt simply expires.
+- Cancellation (`abandon`/`terminate` during the merge watch, #420) reaches
+  the child wait through the `finally` settle above; an unconsumed receipt
+  simply expires.
 
 ### 5. Docs
 
