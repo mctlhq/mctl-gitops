@@ -26,7 +26,8 @@ environment binding, no revision history, no recorded promoter, no evidence
 link, and no rollback primitive beyond unsetting the env var.
 
 ADR 009 amendment 1 closes with the sentence this issue exists to discharge:
-"Wiring promotion/rollback of strategies is mctlhq/mctl-agents#472; measuring\nthem is #266" (`docs/adr/009-context-snapshot-contract.md:402`), and ADR 015
+"Wiring promotion/rollback of strategies is mctlhq/mctl-agents#472; measuring
+them is #266" (`docs/adr/009-context-snapshot-contract.md:402`), and ADR 015
 repeats it as an explicit non-goal ("promoting or rolling back a strategy on
 this evidence... is #472", `docs/adr/015-context-evaluation-contract.md:153`).
 #266 was closed after only that contract/extraction slice; the missing evaluator,
@@ -128,7 +129,10 @@ rather than inventing a third vocabulary.
   SHALL refuse it as `evidence-insufficient` unless it represents at least
   **3 consecutive observe-mode investigations** with no `hash-mismatch`
   verdict. These are validation rules, not automatic promotion: a human-reviewed
-  binding PR is still required.
+  binding PR is still required. The 7-day window and the 3-run minimum are
+  **v1 promotion policy constants**, named as such in ADR 019 and changed only
+  by amending it; they are release policy, not a property of the #526
+  evaluator.
 - WHEN a promotion targets `shadow` THE SYSTEM SHALL accept
   `evidence.kind: none` with a recorded `reason`, because shadow is not an
   authoritative production selection.
@@ -259,7 +263,7 @@ rather than inventing a third vocabulary.
   whole-declared-file hash. This intentionally over-reports change rather than
   under-reporting it. Because #526 is expected to touch context assembly code,
   merging #526 invalidates the published hash and therefore requires an
-  explicit republish before Slice B can promote anything. This churn is
+  explicit republish before Slice C can promote anything to production. This churn is
   accepted for v1; per-symbol hashing remains a follow-up.
 - **Environments.** `orchestrator/resolver.py:114` sets `DEFAULT_ENVIRONMENT =
   "shadow"` because no production agent binding is written yet. This proposal

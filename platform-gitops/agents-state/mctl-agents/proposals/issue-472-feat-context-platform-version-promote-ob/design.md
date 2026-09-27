@@ -91,8 +91,9 @@ Three gaps follow directly:
 
 ## Proposed solution
 
-A new ADR (`docs/adr/019-context-strategy-release-contract.md` — 016 is the
-one free number in `docs/adr/`) plus four code surfaces. Nothing changes
+A new ADR (`docs/adr/019-context-strategy-release-contract.md` — 019 is the
+next free number: 016 is the shepherd merge-approval ADR from
+mctlhq/mctl-agents#524, and 017/018 are on `main`) plus four code surfaces. Nothing changes
 behaviour until an operator moves one environment variable.
 
 ### 1. `ContextStrategyVersion` — an immutable, content-pinned version
@@ -172,7 +173,10 @@ implementationHash. The newest observation must be no older than **7 days**,
 must represent at least **3 consecutive observe-mode investigations**, and none
 may carry `hash-mismatch`. Missing, stale, insufficient or mismatched evidence
 fails closed. Passing this validation never promotes automatically: the binding
-revision still arrives through a reviewed commit.
+revision still arrives through a reviewed commit. The 7-day window and the
+3-run minimum are **v1 promotion policy constants**, named as such in ADR 019
+and changed only by amending it: release policy, not a property of the
+evaluator.
 
 ### 3. `orchestrator/context_release.py` — loader, resolver, rollout ladder
 
@@ -312,13 +316,23 @@ identity un-driftable; without it the whole scheme is decoration.
 - **Slice A — inert contract/catalog.** ADR 019, ADR 009 optional provenance
   fields, strategy-version catalog, shadow-only binding, release loader/CLI and
   CI drift guard. It changes no runtime selection.
-- **Slice B — rollout wiring/observation.** Depends on #526 being merged and on
-  republishing any whole-file implementation hash #526 invalidates. Adds
-  off/observe/enforce/only resolution, shadow execution and release telemetry.
-  No production binding can be created without valid #526 evidence.
-- **Slice C — operator lifecycle/proof.** Documentation, telemetry reservation,
-  and the concrete production soak gate (3 consecutive observe-mode runs, <= 7
-  days old, exact identity match). Each slice gets its own review/approval.
+- **Slice B — rollout wiring/observation.** Does **not** depend on #526. Adds
+  off/observe/enforce/only resolution, the `observe` shadow pass and release
+  telemetry. `observe` changes nothing the model reads, seals or persists, and
+  it has to exist before the evaluator and the gate so there is something to
+  measure. Slice B creates no production binding; with only the shadow binding
+  from Slice A, a production resolution at `enforce`/`only` is unresolvable
+  and takes the documented `CONTEXT_RELEASE_REQUIRED` path.
+- **Slice C — production gate and operator lifecycle.** **Hard dependency on
+  mctlhq/mctl-agents#526** (merged and on the running image), after
+  republishing any whole-file `implementationHash` #526 invalidates. Adds
+  production evidence validation against #526's records, the soak gate (the v1
+  policy constants: 3 consecutive observe-mode runs, <= 7 days old, exact
+  identity match), production promotion, and the runbook/docs. Each slice gets
+  its own review/approval.
+
+The ladder is therefore `A: contract -> B: observe machinery -> #526:
+evaluator -> C: production gate -> production promotion`.
 
 ## Alternatives
 

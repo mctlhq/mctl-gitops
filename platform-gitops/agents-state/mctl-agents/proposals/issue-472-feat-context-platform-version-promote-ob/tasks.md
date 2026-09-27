@@ -2,9 +2,11 @@
 
 > **Correction 2026-09-27.** This proposal is intentionally split into three
 > separately approved/mergeable slices. Slice A is behaviour-neutral contract
-> work. Slice B may not start until mctlhq/mctl-agents#526 has landed and can
-> produce the production evidence required below. Slice C records the operator
-> lifecycle and soak proof. One DevLoop approval must never authorize all three
+> work. Slice B (the ladder and the behaviour-neutral `observe` pass) does not
+> depend on mctlhq/mctl-agents#526: it has to exist before the evaluator so
+> there is something to measure. Slice C — production evidence validation,
+> the soak gate, production promotion and the runbook — is hard-dependent on
+> #526. One DevLoop approval must never authorize all three
 > slices at once.
 
 ## Slice A — inert contract, catalog and validation
@@ -86,11 +88,21 @@
       — DoD: unit tests cover every refusal path; a hash mismatch raises with
       the exact `tools/context_release.py publish` command in the message.
 
+- [ ] 11. CI drift guard: a pytest test (not a new workflow —
+      `.github/workflows/pr-validation.yml` already runs pytest, ruff and mypy)
+      that recomputes every published version's `implementationHash` against
+      the working tree and fails with the exact republish command when they
+      disagree, plus a `tools/context_release.py resolve` preflight asserting
+      every committed binding resolves on this commit. (depends on 5)
+      — DoD: deliberately editing `rank_candidates` without republishing fails
+      CI with an actionable message.
+
 ## Slice B — rollout wiring and observation
 
-**Hard prerequisite: mctlhq/mctl-agents#526 is merged and available on the
-running image.** Before Slice B starts, republish any strategy version whose
-conservative whole-file `implementationHash` was invalidated by #526.
+**No dependency on mctlhq/mctl-agents#526.** `observe` is behaviour-neutral
+(nothing it computes reaches the prompt, the sealed snapshot or the store), and
+it must run before the evaluator exists so there is data to evaluate. Slice B
+creates no production binding.
 
 - [ ] 6. Add the rollout ladder to `orchestrator/context_release.py`:
       `OFF/OBSERVE/ENFORCE/ONLY`, `_ORDER`, `ENV_VAR =
@@ -145,7 +157,8 @@ conservative whole-file `implementationHash` was invalidated by #526.
       strategy identities, binding revision and the two `snapshot_id`s.
       **Do not reimplement #526's evaluation metrics or counter-delta logic in
       this module.** When #526 yields an evaluation record/reference, include
-      only that closed-vocabulary reference/verdict. Both lines use
+      only that closed-vocabulary reference/verdict — added in Slice C, once
+      #526 exists; Slice B emits identities and `snapshot_id`s only. Both lines use
       `_emit_snapshot_answer`'s single-`json.dumps(..., sort_keys=True)`
       shape (`:1231-1239`). (depends on 8)
       — DoD: a test asserts no `locator`, `selector` or payload byte can appear
@@ -163,16 +176,11 @@ conservative whole-file `implementationHash` was invalidated by #526.
       lists all five as `proposed`, and the mctl-docs reservation PR is linked
       from this issue.
 
-- [ ] 11. CI drift guard: a pytest test (not a new workflow —
-      `.github/workflows/pr-validation.yml` already runs pytest, ruff and mypy)
-      that recomputes every published version's `implementationHash` against
-      the working tree and fails with the exact republish command when they
-      disagree, plus a `tools/context_release.py resolve` preflight asserting
-      both committed bindings resolve on this commit. (depends on 5)
-      — DoD: deliberately editing `rank_candidates` without republishing fails
-      CI with an actionable message.
+## Slice C — production gate, promotion and operator lifecycle
 
-## Slice C — operator documentation and promotion proof
+**Hard prerequisite: mctlhq/mctl-agents#526 is merged and available on the
+running image.** Before Slice C starts, republish any strategy version whose
+conservative whole-file `implementationHash` was invalidated by #526.
 
 - [ ] 12. Documentation and defaults: add the four new variables to
       `.env.example` next to the existing `ISSUE_INVESTIGATOR_CONTEXT_*` block
