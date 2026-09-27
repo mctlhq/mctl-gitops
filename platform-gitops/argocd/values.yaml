@@ -231,6 +231,14 @@ argo-cd:
         p, role:team-ovk, applications, override, apps/ovk-*, allow
         p, role:team-ovk, logs, get, apps/ovk-*, allow
         g, ovk, role:team-ovk
+
+        # Tenant: karabu
+        p, role:team-karabu, applications, get, apps/karabu-*, allow
+        p, role:team-karabu, applications, list, apps/karabu-*, allow
+        p, role:team-karabu, applications, sync, apps/karabu-*, allow
+        p, role:team-karabu, applications, override, apps/karabu-*, allow
+        p, role:team-karabu, logs, get, apps/karabu-*, allow
+        g, karabu, role:team-karabu
     secret:
       createSecret: true
 
