@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-27T22:33:05Z'
+updated_at: '2026-09-27T22:53:34Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-39a56ffd4add534d
@@ -27,7 +27,17 @@ attempt:
   expires_at: '2026-09-27T23:58:02Z'
   finished_at: '2026-09-27T22:04:17Z'
 pr: https://github.com/mctlhq/mctl-telegram/pull/699
-ci_blockers_head: 9c9696997ed247ecf190103f4b8b0cafd2f10216
+ci_blockers_head: d1ab79671e162d20cfe0282bdcaf427ec530ad80
 ci_blockers:
 - build / product-updates
 review_attempts: 1
+refusals: 1
+refusals_head: d1ab79671e162d20cfe0282bdcaf427ec530ad80
+notes: 'implementer declined to act: The product-updates gate fails because docs/product-updates/search-messages-date-range.yaml
+  is status: draft. Verified against internal/productupdate/gate.go: only an entry
+  with status==StatusApproved is added to report.Covered (gate.go line 213), so a
+  draft entry claiming a required change always produces the ''claimed only by draft
+  ...; it needs review'' problem. The only fix is status: approved with a named human
+  in provenance.reviewed_by and reviewed_at set. docs/product-updates/README.md states
+  the merge of the content PR IS the review, and explicitly: ''the reviewer is never
+  a bot account a'
