@@ -1,5 +1,16 @@
 # Design: issue-526-feat-context-evals-complete-evaluation-b
 
+> **Correction 2026-09-27 (after #472 Slice A, mctlhq/mctl-agents#530).**
+> Two things this proposal defined are now owned elsewhere on `main`:
+> (1) the implementation identity of a strategy version is #472's catalog
+> `contentHash`/`implementationHash` (`config/context-strategies/`,
+> `orchestrator/context_release.py`, ADR 019), and evidence must carry it so
+> #528 can match it exactly; (2) the freshness window (7 days) and minimum
+> consecutive observations (3) are ADR 019's **v1 promotion policy
+> constants**, changed only by amending ADR 019 — so this evaluator takes them
+> as parameters and reads no env var for them. `assess_evidence` reports a
+> status; the promotion decision is #528's.
+
 ## Current state
 
 ### The contract exists; the producer does not
@@ -252,8 +263,11 @@ style:
   ratios.
 - `OutcomeLink(outcome, outcome_source, work_item_state, execution_phase, reason_code)`.
 - `EvidenceIdentity(strategy_name, strategy_version, ranker_name,
-  ranker_version, evaluator_name, evaluator_version, metrics_contract_version,
-  pipeline_source_hash)`.
+  ranker_version, strategy_content_hash, strategy_implementation_hash,
+  evaluator_name, evaluator_version, metrics_contract_version,
+  pipeline_source_hash)`. The two `strategy_*_hash` fields are #472's catalog
+  `contentHash`/`implementationHash`, supplied by the caller;
+  `pipeline_source_hash` is diagnostic only.
 - `EvalRecord(record_kind, evaluator_name, evaluator_version, verdict,
   identity: EvidenceIdentity, evidence_kind, context_snapshot_id,
   content_hash, store_ref, metrics: EvalMetrics | None, outcome, observed_at,
@@ -298,19 +312,23 @@ functions are passed in by the caller, keeping the import out of the module.
 
 ### 3. Freshness semantics (deliverable 9, the #472 seam)
 
-Also in `context_eval.py`, so #472 imports one module:
+Also in `context_eval.py`, so #472 imports one module. The values are ADR
+019's v1 promotion policy constants (#472 Slice A), exported under names that
+say so; there is no `from_env()` and no `CONTEXT_EVAL_*` variable, because an
+env var that can widen the production gate would bypass the ADR amendment
+that ADR 019 requires to change them:
 
 ```python
-DEFAULT_FRESHNESS_WINDOW_SECONDS = 604_800      # 7 days
-DEFAULT_MIN_CONSECUTIVE_OBSERVATIONS = 3
+# ADR 019 v1 promotion policy constants; change only by amending ADR 019.
+ADR019_V1_FRESHNESS_WINDOW_SECONDS = 604_800      # 7 days
+ADR019_V1_MIN_CONSECUTIVE_OBSERVATIONS = 3
 
 @dataclass(frozen=True)
 class FreshnessPolicy:
-    window_seconds: int = DEFAULT_FRESHNESS_WINDOW_SECONDS
-    min_consecutive_observations: int = DEFAULT_MIN_CONSECUTIVE_OBSERVATIONS
-    require_pipeline_identity: bool = True
-    @classmethod
-    def from_env(cls) -> FreshnessPolicy: ...   # CONTEXT_EVAL_* vars
+    window_seconds: int
+    min_consecutive_observations: int
+    # no defaults and no from_env(): the caller (#528) passes ADR 019's
+    # constants explicitly; __post_init__ rejects non-positive values.
 
 @dataclass(frozen=True)
 class EvidenceAssessment:
@@ -325,14 +343,21 @@ def assess_evidence(records, *, expected: EvidenceIdentity, now, policy) -> Evid
 
 Precedence is fixed and documented, because "missing" and "mismatched" would
 otherwise be order-dependent: empty or `kind == "none"` -> `missing`; then any
-declared-identity difference -> `mismatched`; then `require_pipeline_identity`
-and a differing `pipeline_source_hash` -> `mismatched`; then newest
+declared-identity difference -> `mismatched`; then a differing catalog identity
+(`strategy_content_hash`/`strategy_implementation_hash`) -> `mismatched`; then newest
 observation older than the window -> `stale`; then fewer than
 `min_consecutive_observations` newest-first records agreeing on the same
-identity -> `insufficient-observations`; else `fresh`. Only `fresh` licenses a
-production promotion, and `assess_evidence` never returns `fresh` for
+identity -> `insufficient-observations`; else `fresh`. `fresh` is the only
+status #528 may accept for a production promotion, and `assess_evidence` never returns `fresh` for
 `kind == "none"` by construction. `assess_evidence` takes `now` as an
 argument — the evaluator still reads no clock.
+
+The identity comparison is on the declared fields plus the catalog identity
+(`strategy_content_hash`, `strategy_implementation_hash`), which is exactly
+what #528 matches against the binding it promotes. A record whose catalog
+identity is empty (the caller could not load the version) is `mismatched`
+with `catalog-identity-unavailable`. `assess_evidence` returns a status and a
+reason code; it does not decide promotion — that is #528's, reading ADR 019.
 
 This module grants nothing. ADR 015 sec. 6 is restated in its docstring: no
 policy or capability-eligibility path may read an `EvalRecord`, and a test
@@ -446,9 +471,10 @@ exercised in both shapes; 05 makes the ranked strategy populate
 
 - `docs/adr/015-context-evaluation-contract.md`: status `proposed` ->
   `accepted`; add **sec. 7, "Evidence freshness and promotion readiness"**
-  (the closed status set, the precedence order, the defaults, the
-  `require_pipeline_identity` rule, and the explicit statement that #472's
-  production path must refuse `evidence.kind = none`). Sections 1-6 are
+  (the closed status set, the precedence order, the catalog-identity rule,
+  a reference to ADR 019 as the owner of the window/observation constants,
+  and the explicit statement that #472's production path must refuse
+  `evidence.kind = none`). Sections 1-6 are
   untouched; the Implementation map is updated to record what #526 delivered.
 - `docs/adr/009-context-snapshot-contract.md`: follow-up row (f) annotated
   with #526 as the delivering issue, matching how row (b) names #431/#490.
@@ -456,11 +482,9 @@ exercised in both shapes; 05 makes the ranked strategy populate
   emission, how to read a `context_eval=` line, how to run the replay CLI, how
   to regenerate the baseline, and what #472 requires of the evidence.
 - `.env.example`: a new block after the existing "Context assembly pilot"
-  block (lines 65-81) for `ISSUE_INVESTIGATOR_CONTEXT_EVAL`,
-  `CONTEXT_EVAL_FRESHNESS_WINDOW_SECONDS`,
-  `CONTEXT_EVAL_MIN_CONSECUTIVE_OBSERVATIONS` and
-  `CONTEXT_EVAL_REQUIRE_PIPELINE_IDENTITY`, all commented out so a copied file
-  pins nothing.
+  block (lines 65-81) for `ISSUE_INVESTIGATOR_CONTEXT_EVAL`, commented out
+  so a copied file pins nothing. There is deliberately no variable for the
+  freshness window or observation count (ADR 019).
 
 ## Alternatives
 
@@ -494,8 +518,8 @@ exercised in both shapes; 05 makes the ranked strategy populate
    `pipeline_source_hash`.** Rejected: a SHA changes on every commit to the
    repo, so every merge would invalidate every observation; a hash over the
    pipeline's own source changes only when the measured code changes. The
-   cost — a comment-only edit invalidating evidence — is accepted, made
-   explicit, and made relaxable via `require_pipeline_identity`.
+   cost is moot now: the enforced identity is #472's catalog
+   `implementationHash`, and `pipeline_source_hash` is diagnostic only.
 
 6. **Infer the freshness window from observation cadence.** Rejected: the
    issue requires it be explicit rather than inferred, and an inferred window
@@ -549,7 +573,9 @@ to three HTTP GETs per invocation and is operator-triggered only.
 - *The replay CLI is mistaken for a write path.* Mitigated by the module
   docstring, by requiring no writer token, and by a test asserting a fake
   client receiving any non-GET request fails the test.
-- *`pipeline_source_hash` churn makes evidence perpetually `mismatched`.*
-  Mitigated by the documented `CONTEXT_EVAL_REQUIRE_PIPELINE_IDENTITY` knob
-  and by the runbook telling operators to regenerate the baseline and restart
-  the observation window as one deliberate step.
+- *Catalog-hash churn makes evidence perpetually `mismatched`.* A change to a
+  declared implementation file changes `implementationHash` and requires a
+  republish (#472's CI drift guard). Mitigated by the runbook telling
+  operators to republish, regenerate the baseline and restart the observation
+  window as one deliberate step. There is no relaxing knob: evidence that
+  measured other code is not evidence for this version.

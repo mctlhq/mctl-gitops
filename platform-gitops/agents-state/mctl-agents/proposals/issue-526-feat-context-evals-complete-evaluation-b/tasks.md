@@ -1,5 +1,16 @@
 # Tasks: issue-526-feat-context-evals-complete-evaluation-b
 
+> **Correction 2026-09-27 (after #472 Slice A, mctlhq/mctl-agents#530).**
+> Two things this proposal defined are now owned elsewhere on `main`:
+> (1) the implementation identity of a strategy version is #472's catalog
+> `contentHash`/`implementationHash` (`config/context-strategies/`,
+> `orchestrator/context_release.py`, ADR 019), and evidence must carry it so
+> #528 can match it exactly; (2) the freshness window (7 days) and minimum
+> consecutive observations (3) are ADR 019's **v1 promotion policy
+> constants**, changed only by amending ADR 019 — so this evaluator takes them
+> as parameters and reads no env var for them. `assess_evidence` reports a
+> status; the promotion decision is #528's.
+
 - [ ] 1. Add `StoreRef` and `store_ref_from(snapshot, answer)` to
   `orchestrator/work_context/snapshots.py`, reusing the existing
   `_is_snapshot_id` TypeGuard for the `cs_` prefix check — DoD: frozen
@@ -55,13 +66,20 @@
 
 - [ ] 7. Add freshness/promotion-readiness semantics to `context_eval.py`
   (depends on 4) — DoD: `EVIDENCE_KINDS`, `FRESHNESS_STATUSES`,
-  `FreshnessPolicy` (window 604800s, 3 consecutive observations,
-  `require_pipeline_identity=True`) with `from_env()` reading
-  `CONTEXT_EVAL_*`; `pipeline_source_hash(*functions)` over
-  `inspect.getsource`; `assess_evidence(records, *, expected, now, policy)`
-  applying the documented precedence missing -> mismatched ->
-  pipeline-identity mismatch -> stale -> insufficient-observations -> fresh;
-  `now` is an argument; `fresh` is unreachable for `kind == "none"`.
+  `ADR019_V1_FRESHNESS_WINDOW_SECONDS = 604800` and
+  `ADR019_V1_MIN_CONSECUTIVE_OBSERVATIONS = 3` (ADR 019's v1 promotion policy
+  constants); `FreshnessPolicy(window_seconds, min_consecutive_observations)`
+  with no defaults, no `from_env()` and no `CONTEXT_EVAL_*` variable;
+  `EvidenceIdentity` carries `strategy_content_hash` and
+  `strategy_implementation_hash`; `pipeline_source_hash(*functions)` over
+  `inspect.getsource`, recorded as a diagnostic only;
+  `assess_evidence(records, *, expected, now, policy)` applying the documented
+  precedence missing -> mismatched (declared fields) -> mismatched (catalog
+  identity, including empty = `catalog-identity-unavailable`) -> stale ->
+  insufficient-observations -> fresh; `now` is an argument; `fresh` is
+  unreachable for `kind == "none"`. The callers (tasks 8, 10, 12) resolve the
+  catalog identity through `orchestrator.context_release.load_version`
+  imported inside the function body; `context_eval` never imports it.
 
 - [ ] 8. Add the guarded live emission (depends on 2, 5) — DoD:
   `_context_eval_enabled()` reads `ISSUE_INVESTIGATOR_CONTEXT_EVAL`, default
@@ -113,8 +131,9 @@
 - [ ] 13. Update the ADRs (depends on 7) — DoD:
   `docs/adr/015-context-evaluation-contract.md` status `proposed` ->
   `accepted`, a new sec. 7 "Evidence freshness and promotion readiness"
-  (closed status set, precedence order, committed defaults, the
-  `require_pipeline_identity` rule, and the statement that #472's production
+  (closed status set, precedence order, the catalog-identity rule, a
+  reference to ADR 019 as owner of the window/observation constants, and the
+  statement that #472's production
   path must refuse `evidence.kind = none`), and the Implementation map updated
   to record what #526 delivered; sections 1-6 byte-unchanged;
   `docs/adr/009-context-snapshot-contract.md` follow-up row (f) annotated with
@@ -124,10 +143,9 @@
   evaluation" subsection covering enabling live emission, reading a
   `context_eval=` line, running the replay CLI, regenerating the baseline, and
   what #472 requires; a `.env.example` block after the existing "Context
-  assembly pilot" block (lines 65-81) for `ISSUE_INVESTIGATOR_CONTEXT_EVAL`,
-  `CONTEXT_EVAL_FRESHNESS_WINDOW_SECONDS`,
-  `CONTEXT_EVAL_MIN_CONSECUTIVE_OBSERVATIONS` and
-  `CONTEXT_EVAL_REQUIRE_PIPELINE_IDENTITY`, every line commented out.
+  assembly pilot" block (lines 65-81) for `ISSUE_INVESTIGATOR_CONTEXT_EVAL`
+  only, commented out; the freshness constants are ADR 019's and have no
+  variable.
 
 ## Tests
 
@@ -176,14 +194,21 @@
   `context_snapshot_id`.
 - [ ] T15. `assess_evidence` precedence: empty list and `kind == "none"` ->
   `missing`; a differing `strategy_version` -> `mismatched`; a differing
-  `pipeline_source_hash` with `require_pipeline_identity=True` -> `mismatched`,
-  and `fresh` with it `False`; an observation older than the window ->
+  `strategy_implementation_hash` or `strategy_content_hash` with every
+  declared field equal -> `mismatched`; an empty catalog identity ->
+  `mismatched` / `catalog-identity-unavailable`; a differing
+  `pipeline_source_hash` alone -> still `fresh` (diagnostic only); an
+  observation older than the window ->
   `stale`; two observations against a minimum of three ->
   `insufficient-observations`; three agreeing recent observations -> `fresh`.
   Every case asserts the reason code, and `fresh` is never returned for
   `kind == "none"`.
-- [ ] T16. `FreshnessPolicy.from_env()` returns the committed defaults with no
-  env set, and rejects a non-positive window or observation count loudly.
+- [ ] T16. `ADR019_V1_FRESHNESS_WINDOW_SECONDS == 604800` and
+  `ADR019_V1_MIN_CONSECUTIVE_OBSERVATIONS == 3`, pinned against the values
+  stated in `docs/adr/019-context-strategy-release-contract.md`;
+  `FreshnessPolicy` has no defaults and no `from_env`, rejects a non-positive
+  window or count loudly, and no `CONTEXT_EVAL_` string appears in
+  `context_eval`'s source.
 - [ ] T17. With `ISSUE_INVESTIGATOR_CONTEXT_EVAL` unset, investigator stdout
   contains no `context_eval=` line and is otherwise unchanged; with it `on`,
   exactly one `context_eval=` line is printed after the
@@ -214,9 +239,14 @@
   `context_eval` except `run_issue_investigator` and `run_context_eval`,
   asserted by scanning imports — in particular no policy, capability or
   lifecycle module does.
-- [ ] T28. Purity: `context_eval`'s module source contains no `os.getenv`
-  outside `FreshnessPolicy.from_env`, no `urllib`/`httpx`/`subprocess` import,
-  and no `datetime.now` call.
+- [ ] T28. Purity: `context_eval`'s module source contains no `os.getenv` or
+  `os.environ` at all, no `urllib`/`httpx`/`subprocess` import, no import of
+  `context_release` or `yaml`, and no `datetime.now` call.
+- [ ] T29. Catalog identity in the callers: the fixture harness and the replay
+  CLI put the committed catalog's `contentHash`/`implementationHash` for each
+  strategy version into every record; a temporary catalog whose
+  `implementationHash` does not match the code yields records assessed
+  `mismatched` / `catalog-identity-unavailable`.
 
 ## Rollback
 
@@ -227,11 +257,10 @@ Three independent levels, smallest first.
    before importing `context_eval`. Investigator output returns to
    byte-identical-to-today, pinned by T17. The replay CLI and the fixture suite
    are unaffected and stay usable.
-2. **Relax the strictest gate.** If `pipeline_source_hash` churn makes evidence
-   perpetually `mismatched`, set
-   `CONTEXT_EVAL_REQUIRE_PIPELINE_IDENTITY=false` so assessment compares
-   declared identity only (T15 covers both settings). This is a deliberate
-   loosening and should be recorded in the promotion decision it enables.
+2. **Catalog-hash churn.** There is no knob to relax identity: evidence that
+   measured other code is not evidence for this version. Republish the
+   strategy version (`tools/context_release.py publish`), regenerate the
+   baseline, and restart the observation window.
 3. **Revert the commit.** Everything added is additive: one new module, one new
    CLI, one new test file, one new fixture directory, four doc edits, and two
    touched functions. Reverting restores

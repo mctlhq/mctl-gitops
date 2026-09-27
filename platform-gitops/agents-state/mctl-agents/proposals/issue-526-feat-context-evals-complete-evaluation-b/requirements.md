@@ -1,5 +1,16 @@
 # Context evaluation, baseline and replay evidence for context promotion
 
+> **Correction 2026-09-27 (after #472 Slice A, mctlhq/mctl-agents#530).**
+> Two things this proposal defined are now owned elsewhere on `main`:
+> (1) the implementation identity of a strategy version is #472's catalog
+> `contentHash`/`implementationHash` (`config/context-strategies/`,
+> `orchestrator/context_release.py`, ADR 019), and evidence must carry it so
+> #528 can match it exactly; (2) the freshness window (7 days) and minimum
+> consecutive observations (3) are ADR 019's **v1 promotion policy
+> constants**, changed only by amending ADR 019 — so this evaluator takes them
+> as parameters and reads no env var for them. `assess_evidence` reports a
+> status; the promotion decision is #528's.
+
 ## Context
 
 `docs/adr/015-context-evaluation-contract.md` is committed and normative: it
@@ -200,10 +211,22 @@ the join key an evaluation needs is unavailable to its caller.
 - WHEN evidence is produced THE SYSTEM SHALL record its `kind` from the closed
   set `{"none", "fixture-baseline", "stored-replay", "live"}`.
 - WHEN evidence is produced THE SYSTEM SHALL record the evaluated
-  `strategy_name`, `strategy_version`, `ranker_name`, `ranker_version`, and an
-  implementation identity comprising `evaluator_name`, `evaluator_version`,
-  `metrics_contract_version` and a `pipeline_source_hash` over the pipeline
-  implementation actually exercised.
+  `strategy_name`, `strategy_version`, `ranker_name`, `ranker_version`, the
+  strategy version's catalog identity `strategy_content_hash` and
+  `strategy_implementation_hash` (#472's `contentHash`/`implementationHash`
+  for that name/version), and the evaluator identity `evaluator_name`,
+  `evaluator_version`, `metrics_contract_version`. `pipeline_source_hash` is
+  recorded as a diagnostic only and is never an assessment input.
+- WHEN the catalog identity is needed THE SYSTEM SHALL obtain it in the
+  caller (the live emitter, the fixture harness, the replay CLI) through
+  `orchestrator.context_release.load_version(name, version)`, imported inside
+  the function body as `context_assembly` already does for its non-stdlib
+  helpers, and pass it to the evaluator; `context_eval` itself stays
+  stdlib-only and never reads the catalog. IF the version cannot be loaded
+  (absent, `disabled`, or its recomputed `implementationHash` differs from
+  the committed one) THEN the record SHALL carry empty catalog identity and
+  assessment SHALL return `mismatched` with reason code
+  `catalog-identity-unavailable`.
 - WHEN a promotion candidate is assessed THE SYSTEM SHALL return a status from
   the closed set `{"fresh", "missing", "stale", "mismatched",
   "insufficient-observations"}` with a machine-readable reason code.
@@ -216,12 +239,17 @@ the join key an evaluation needs is unavailable to its caller.
   return `insufficient-observations`.
 - IF any declared identity field of the evidence differs from the promotion
   candidate's THEN THE SYSTEM SHALL return `mismatched`.
-- WHILE `require_pipeline_identity` holds THE SYSTEM SHALL also return
-  `mismatched` when `pipeline_source_hash` differs, even if every declared
-  version matches.
+- IF the evidence's `strategy_content_hash` or `strategy_implementation_hash`
+  differs from the promotion candidate's catalog identity THEN THE SYSTEM
+  SHALL return `mismatched`, even if every declared name and version matches.
 - WHILE the freshness window and minimum-observation count are in force THE
-  SYSTEM SHALL take them from explicit, documented configuration with
-  committed defaults, and SHALL NOT infer either from observation history.
+  SYSTEM SHALL take them as explicit parameters from the caller, SHALL export
+  ADR 019's v1 values as named constants for that caller to pass, SHALL read
+  no environment variable for them, and SHALL NOT infer either from
+  observation history. Changing them is an ADR 019 amendment.
+- WHILE assessing evidence THE SYSTEM SHALL only report a status and reason
+  code; deciding that a `fresh` assessment permits a production promotion is
+  #472 Slice C's (mctlhq/mctl-agents#528), not this module's.
 - WHILE any of this exists THE SYSTEM SHALL keep retrieval quality
   non-authoritative: no policy, capability-eligibility or authorization
   decision SHALL read an evaluation record (ADR 009 sec. 5/6, ADR 014).
@@ -249,14 +277,17 @@ the join key an evaluation needs is unavailable to its caller.
   fixture JSON under `tests/fixtures/context_eval/cases/`, and the evaluator
   accepts them as an optional argument, so a live record is always unlabelled
   and reports `null` for precision/recall/f1.
-- **Default freshness window and minimum observations.** The issue requires
-  both be explicit but names no value. Taken as 7 days (604800s) and 3
-  consecutive observations, committed as defaults in code and documented in
-  `.env.example`; #472 may tighten them, never silently widen them.
-- **`pipeline_source_hash` sensitivity.** A hash over pipeline source
-  invalidates evidence on a comment-only edit. Taken as: recorded always,
-  enforced by default (`require_pipeline_identity=true`), with the knob
-  documented so #472 can relax to declared-version comparison deliberately.
+- **Freshness window and minimum observations.** Resolved by ADR 019 (#472
+  Slice A): 7 days (604800s) and 3 consecutive observations are v1 promotion
+  policy constants. This module exports them as `ADR019_V1_FRESHNESS_WINDOW_SECONDS`
+  and `ADR019_V1_MIN_CONSECUTIVE_OBSERVATIONS` for the caller to pass, with a
+  test pinning them to ADR 019; there is no env override, so no variable can
+  widen the gate.
+- **Implementation identity.** Resolved by #472's catalog: the enforced
+  identity is `contentHash`/`implementationHash`. `pipeline_source_hash` stays
+  as a recorded diagnostic (it explains *which function* moved when the
+  catalog hash changes) but no longer gates, so the
+  `require_pipeline_identity` knob is dropped.
 - **Outcome vocabulary mapping.** `WORK_ITEM_STATES` is
   `{active, waiting, completed, superseded, archived}` and `ExecutionRef.phase`
   is mctl-api's `Pending|Running|Succeeded|Failed|Error`. Neither is an
