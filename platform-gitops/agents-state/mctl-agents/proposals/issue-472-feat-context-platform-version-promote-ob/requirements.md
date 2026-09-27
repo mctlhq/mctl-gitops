@@ -1,5 +1,13 @@
 # Context strategy release lifecycle: version, promote, observe and roll back
 
+> **Correction 2026-09-27.** The original proposal assumed mctlhq/mctl-agents#266
+> had delivered ADR 015's evaluator, fixtures, baseline and stored-run replay.
+> Current `main` has only the ADR and the extracted `run_pipeline` portion.
+> The missing evidence implementation is now mctlhq/mctl-agents#526.
+> Slice A below may establish the inert release contract, but production
+> promotion/enforcement is gated on #526. No production path may treat
+> `evidence.kind: none` as sufficient evidence.
+
 ## Context
 
 `orchestrator/context_assembly.py` already assembles, ranks, deduplicates,
@@ -18,10 +26,13 @@ environment binding, no revision history, no recorded promoter, no evidence
 link, and no rollback primitive beyond unsetting the env var.
 
 ADR 009 amendment 1 closes with the sentence this issue exists to discharge:
-"Wiring promotion/rollback of strategies is mctlhq/mctl-agents#472; measuring
-them is #266" (`docs/adr/009-context-snapshot-contract.md:402`), and ADR 015
+"Wiring promotion/rollback of strategies is mctlhq/mctl-agents#472; measuring\nthem is #266" (`docs/adr/009-context-snapshot-contract.md:402`), and ADR 015
 repeats it as an explicit non-goal ("promoting or rolling back a strategy on
 this evidence... is #472", `docs/adr/015-context-evaluation-contract.md:153`).
+#266 was closed after only that contract/extraction slice; the missing evaluator,
+baseline and replay implementation is tracked in #526 and is a prerequisite for
+production promotion in this proposal.
+
 This proposal supplies the missing half: an immutable, content-pinned
 `ContextStrategyVersion`, an atomic per-(agent, environment)
 `ContextStrategyBinding` with append-only revision history, a four-stage
@@ -106,8 +117,21 @@ rather than inventing a third vocabulary.
   `deprecated`, `disabled`, or whose `implementationHash` does not match the
   code in the same commit THEN THE SYSTEM SHALL refuse the promotion.
 - WHEN a promotion targets the `production` environment THE SYSTEM SHALL
-  require `evidence.kind` to be other than `none`; WHEN it targets `shadow`
-  THE SYSTEM SHALL accept `evidence.kind: none` with a recorded `reason`.
+  require `evidence.kind: context-eval`; `none` and any unknown kind are
+  refused. The evidence SHALL name the exact strategy name/version,
+  `contentHash`, `implementationHash`, evaluator version, observation
+  timestamp and consecutive-run count.
+- WHEN production evidence is evaluated THE SYSTEM SHALL refuse it as
+  `evidence-mismatch` unless its strategy/version/content/implementation
+  identity exactly matches the version being promoted; SHALL refuse it as
+  `evidence-stale` when the newest observation is older than **7 days**; and
+  SHALL refuse it as `evidence-insufficient` unless it represents at least
+  **3 consecutive observe-mode investigations** with no `hash-mismatch`
+  verdict. These are validation rules, not automatic promotion: a human-reviewed
+  binding PR is still required.
+- WHEN a promotion targets `shadow` THE SYSTEM SHALL accept
+  `evidence.kind: none` with a recorded `reason`, because shadow is not an
+  authoritative production selection.
 - WHEN a rollback is requested THE SYSTEM SHALL require an explicit target
   revision, SHALL append a new revision restoring that revision's exact
   strategy/version/hash triple with `rollbackOf: <revision>` recorded, and
@@ -115,6 +139,18 @@ rather than inventing a third vocabulary.
 - IF a rollback names a revision whose strategy version has since become
   `disabled` THEN THE SYSTEM SHALL refuse the rollback and name the disabled
   version.
+
+### Evidence provenance and freshness
+
+- WHILE mctlhq/mctl-agents#526 is not implemented on the running image THE
+  SYSTEM SHALL allow contract/catalog validation and shadow binding work, but
+  SHALL NOT create or accept a production promotion revision.
+- WHEN #526 emits promotion evidence THE release layer SHALL consume its
+  closed-vocabulary verdicts and correlation fields rather than reimplementing
+  evaluation metrics. `#472` owns release decisions; `#526` owns evaluation.
+- A break-glass `CONTEXT_RELEASE_ROLLOUT_MODE=off` may always remove the
+  release binding from the execution path without mutating historical evidence
+  or snapshots.
 
 ### Rollout ladder and resolution
 
@@ -190,8 +226,10 @@ rather than inventing a third vocabulary.
   catalog is committed in `mctl-agents` for this proposal; a cross-repo
   gitops/registry promotion path is a named follow-up.
 - Implementing `orchestrator/context_eval.py`, its fixture set, its baseline
-  or its replay CLI — that is mctlhq/mctl-agents#266 / ADR 015. This proposal
-  only defines the `evidence` block a promotion record may point at.
+  or its replay CLI — the undelivered part of mctlhq/mctl-agents#266 is now
+  mctlhq/mctl-agents#526. This proposal defines and validates the release-side
+  evidence reference, but does not duplicate evaluator logic. Production
+  promotion/enforcement remains blocked until #526 is implemented.
 - Writing a new strategy or ranker, or changing what either existing strategy
   selects. `deterministic-fixed-order` and `trust-freshness-ranked` keep their
   behaviour byte-for-byte.
@@ -217,13 +255,12 @@ rather than inventing a third vocabulary.
   to `mctl-gitops/platform-gitops/agent-platform/` alongside
   `CATALOG_RELEASES_DIR` (`resolver.py:105`) once a content pin is enforced
   there is the natural follow-up; proceeding in-repo.
-- **Implementation-hash granularity.** The hash covers whole declared files,
-  so editing `deterministic-fixed-order`'s branch invalidates
-  `trust-freshness-ranked`'s hash too. This over-reports change rather than
-  under-reporting it, which is the fail-safe direction and is precisely the
-  trade `tools/publish_agent_release.py` already makes for an `inline:
-  path.py:function` prompt source. Per-function hashing is recorded as a
-  follow-up; proceeding with whole-file hashing.
+- **Implementation-hash granularity.** Slice A keeps the conservative
+  whole-declared-file hash. This intentionally over-reports change rather than
+  under-reporting it. Because #526 is expected to touch context assembly code,
+  merging #526 invalidates the published hash and therefore requires an
+  explicit republish before Slice B can promote anything. This churn is
+  accepted for v1; per-symbol hashing remains a follow-up.
 - **Environments.** `orchestrator/resolver.py:114` sets `DEFAULT_ENVIRONMENT =
   "shadow"` because no production agent binding is written yet. This proposal
   writes both a `shadow` and a `production` context-strategy binding directory
