@@ -552,17 +552,13 @@ spec:
               echo "WARNING: $TENANT_DIR not found, skipping."
             fi
 
-            ARGOCD_VALUES="platform-gitops/argocd/values.yaml"
-            if grep -q "role:team-${TENANT}," "$ARGOCD_VALUES"; then
-              sed -i "/# Tenant: ${TENANT}/d" "$ARGOCD_VALUES"
-              sed -i "/role:team-${TENANT},/d" "$ARGOCD_VALUES"
-              sed -i "/g, ${TENANT}, role:team-${TENANT}/d" "$ARGOCD_VALUES"
-              sed -i '/^$/N;/^\n$/d' "$ARGOCD_VALUES"
-              git add "$ARGOCD_VALUES"
-              echo "Removed ArgoCD RBAC for tenant: ${TENANT}"
+            RBAC_FILE="platform-gitops/argocd/rbac/tenants/${TENANT}.csv"
+            if [ -f "$RBAC_FILE" ]; then
+              git rm "$RBAC_FILE"
+              echo "Removed $RBAC_FILE"
               CHANGED=true
             else
-              echo "WARNING: No ArgoCD RBAC found for tenant ${TENANT}, skipping."
+              echo "WARNING: $RBAC_FILE not found, skipping."
             fi
 
             SSO_FILE="platform-gitops/argo-workflows/sso-team-${TENANT}.yaml"
@@ -630,7 +626,7 @@ spec:
 
           - Retired all services for tenant ${TENANT}
           - Removed platform-gitops/tenants/${TENANT}/
-          - Removed ArgoCD RBAC for role:team-${TENANT}
+          - Removed ArgoCD RBAC fragment: platform-gitops/argocd/rbac/tenants/${TENANT}.csv
           - Removed database resources (DB CRDs, Secrets, Roles)
           - Removed platform skill bindings for tenant ${TENANT}
 
