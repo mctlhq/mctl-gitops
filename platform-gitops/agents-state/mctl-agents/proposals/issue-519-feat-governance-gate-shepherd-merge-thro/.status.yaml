@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-27T12:13:41Z'
+status: implemented
+updated_at: '2026-09-27T15:49:37Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-ae359db1918d7f3d
@@ -27,16 +27,7 @@ attempt:
   expires_at: '2026-09-27T10:11:58Z'
   finished_at: '2026-09-27T08:41:51Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/524
-review_attempts: 3
-harness_failures: 3
-notes: 'The platform lost the implementer''s work 3 time(s) in a row (implementer
-  follow-up exited non-zero (51) for mctl-agents/issue-519-feat-governance-gate-shepherd-merge-thro).
-  This is a harness defect, not a problem with the proposal — review_attempts was
-  never charged. Human triage required; see mctl-agents#366. Reason: Both P2 findings
-  were implemented in the working tree (orchestrator/temporal/workflows/dev_loop.py:
-  _settle_gate now applies _apply_gate_outcome to a drained finished gate_task instead
-  of discarding it, covering the four exits from _watch_pr that were not covered by
-  the 7a31425 MERGE_APPROVED fix, via a `last: PRState | None` parameter threaded
-  from the finally block''s call site; orchestrator/run_shepherd.py: no functional
-  change needed, tests/test_run_shepherd.py gained four new unit tests covering the
-  four call sites of _merge_gate_delegated -- merge_pr''s MERGE_GATED refusal, _merge_owner_fo'
+github:
+  state: open
+  head_sha: e557f1ff7d8a5395b45d05889f30cd33aa4a7614
+  observed_at: '2026-09-27T15:49:37Z'

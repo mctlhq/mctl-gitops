@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-27T03:22:50Z'
+status: merged
+updated_at: '2026-09-27T15:49:39Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-7498b88ca96bacd9
@@ -27,6 +27,11 @@ attempt:
   expires_at: '2026-09-27T03:07:28Z'
   finished_at: '2026-09-27T01:20:49Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/523
-review_attempts: 5
 notes: 'Current-head blockers persisted across 5 follow-up attempts: 1 review finding(s)
   (claude[bot]). Human triage required.'
+github:
+  state: merged
+  head_sha: 7dabdaccd964869b8f77942acf30afeb4b9cc19b
+  observed_at: '2026-09-27T15:49:39Z'
+merged_at: '2026-09-27T15:49:39Z'
+merge_commit: 610504e1b013e0da6abc1b4b56c3d4718a186c48
