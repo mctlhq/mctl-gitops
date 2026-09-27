@@ -477,6 +477,16 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_otel_collector_backends_render.py
 
+      - name: Unit-test the ArgoCD tenant RBAC render (gitops#1431)
+        # The per-tenant rbac/tenants/*.csv fragments plus the base policy
+        # must render the same effective policy.csv as the pre-migration
+        # single-file version, minus the two intentionally dropped orphan
+        # tenants (yyy, xxxx); create: false must hold so the argo-cd
+        # subchart never also tries to own argocd-rbac-cm.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_argocd_rbac_policy_render.py
+
       - name: Unit-test the DevLoop trace fixtures (issue-903)
         # T3/T4: the representative fixture has one root span per execution,
         # no orphaned parentSpanId, every correlation attribute, and at least
