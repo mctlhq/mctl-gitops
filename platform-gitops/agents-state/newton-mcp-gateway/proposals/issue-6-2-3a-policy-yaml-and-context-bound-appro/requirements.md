@@ -1,5 +1,15 @@
 # Policy YAML and context-bound approvals
 
+> **Amended at owner review (before approval):**
+> (1) The stdio fingerprint covers the full `env` mapping, names **and** values, because
+> a stdio server's target is often set through env (e.g. `HA_URL`). Rotating a value
+> therefore invalidates outstanding approvals, which fails safe for short-lived approvals.
+> (2) URL canonicalisation keeps userinfo and IPv6 brackets byte-exact and lowercases only
+> the scheme and the host name.
+> (3) The docs state that `binding` is context-binding, not authentication.
+> The owner accepts both flagged behaviour changes: `confidence=None` does not satisfy a
+> non-zero `min_confidence`, and `requires_confirmation` never raises `deny` to `confirm`.
+
 ## Context
 
 `src/newton_mcp/action/policy.py` today is a 69-line in-code policy engine: a
@@ -137,19 +147,22 @@ in the binding the configured label plus a canonical transport fingerprint.
   remote server states its own `name`/`version`.
 - WHEN the transport is `streamable-http` THE SYSTEM SHALL fingerprint
   `{"kind": "streamable-http", "url": <canonical url>}`, where canonicalisation
-  lowercases only the scheme and the host, elides an explicit port equal to the
-  scheme default (443 for https, 80 for http), and leaves path, query and fragment
-  byte-exact.
+  lowercases only the scheme and the host name, elides an explicit port equal to the
+  scheme default (443 for https, 80 for http), and leaves userinfo (`user:pass@`),
+  IPv6 brackets, path, query and fragment byte-exact. Two URLs that differ only in
+  userinfo SHALL fingerprint differently.
 - WHEN the transport is `stdio` THE SYSTEM SHALL fingerprint
-  `{"kind": "stdio", "command": <command>, "args": [<args in order>], "env_names":
-  [<sorted env variable names>]}`, with `command` and `args` byte-exact and no
-  `PATH` lookup or filesystem resolution; environment variable *values* SHALL NOT
-  enter the fingerprint.
-- IF an operator changes a server's `url`, `command`, `args`, or the set of `env`
-  variable names under an unchanged `name`/`identity` THEN THE SYSTEM SHALL make
-  every approval issued before the change invalid.
-- IF an operator only rotates an environment variable's *value* THEN THE SYSTEM
-  SHALL leave an outstanding approval valid.
+  `{"kind": "stdio", "command": <command>, "args": [<args in order>], "env":
+  {<name>: <value>, ...}}`, with `command`, `args`, env names and env values
+  byte-exact, keys sorted by the canonical JSON, and no `PATH` lookup or filesystem
+  resolution. Env values enter only the sha256 input. They SHALL NOT appear in
+  `binding_identity`, an `Approval`, a reason string or a log.
+- IF an operator changes a server's `url`, `command`, `args`, or any `env` variable
+  name or value under an unchanged `name`/`identity` THEN THE SYSTEM SHALL make
+  every approval issued before the change invalid. A value change counts because
+  a stdio server's target is often configured through env; a credential rotation
+  therefore also invalidates outstanding approvals, which is accepted as fail-safe
+  for short-lived approvals.
 
 ### Approval and verification
 
@@ -200,11 +213,12 @@ in the binding the configured label plus a canonical transport fingerprint.
 
 ## Open questions
 
-- **`env` values in the stdio fingerprint.** This proposal fingerprints env
-  variable *names* only, so credential rotation does not invalidate outstanding
-  approvals while adding, removing or renaming a variable does. An owner who
-  considers a changed env *value* a re-pointing-class event should say so and the
-  fingerprint input becomes the full mapping. Recorded, proceeding with names-only.
+- **`env` values in the stdio fingerprint.** Resolved at owner review: the full
+  mapping (names and values) is fingerprinted. See the amendment note above.
+- **`binding` is not authentication.** A keyless sha256 proves which action an
+  approval is for, not who issued it: anyone able to write an `Approval` can compute
+  a valid binding. Authenticity (signed approvals, an authenticated approver) stays
+  out of scope, and the docs say so.
 - **`confidence is None` against a non-zero `min_confidence`.** Today's code lets a
   `None` confidence pass such a rule. This proposal tightens it to "does not
   match" as a fail-closed change. It is a behaviour change not listed in the
