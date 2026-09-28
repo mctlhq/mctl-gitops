@@ -1,5 +1,19 @@
 # Context strategy release lifecycle, Slice C: production evidence gate, soak gate, production promotion and operator runbook
 
+> **Correction 2026-09-28 (before approval).** ADR 019 requires production
+> evidence from **>= 3 consecutive observe-mode investigations**. As first
+> written, this proposal collected it by making the candidate authoritative:
+> binding it in `shadow` at `enforce`, which on the production investigator
+> resolves `AGENT_ENVIRONMENT`/`production` and never reaches the shadow
+> binding (`context_assembly.py:1176`), or setting
+> `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY=<candidate>`. Either way it is production
+> exposure before the gate. Both paths are removed. Production soak evidence
+> now comes only from Slice B's **non-authoritative observe candidate**,
+> evaluated in the same production investigation as
+> `evidence_kind: observe-candidate`. It carries its own `execution_ref`,
+> never a borrowed `store_ref`, because the candidate is never persisted. The
+> candidate does not serve the investigation that evaluates it.
+
 ## Context
 
 Slices A (mctlhq/mctl-agents#472) and B (#527) shipped the context-strategy
@@ -66,12 +80,17 @@ Promotion gate
 - WHEN the same promotion (same strategy, version and reason) is made to
   `environment="shadow"` with `evidence_kind="none"` THE SYSTEM SHALL accept it and
   append exactly one revision, unchanged from today's Slice A behaviour.
-- WHEN production evidence is supplied whose newest store-backed observation is older
+- WHEN production evidence is supplied whose newest counted observation is older
   than `ADR019_V1_FRESHNESS_WINDOW_SECONDS` (7 days) THE SYSTEM SHALL refuse with
   `evidence-stale`.
 - WHEN production evidence carries fewer than `ADR019_V1_MIN_CONSECUTIVE_OBSERVATIONS`
   (3) consecutive observe-mode observations of the promoted identity THE SYSTEM SHALL
   refuse with `evidence-insufficient`.
+- WHILE assessing production evidence THE SYSTEM SHALL count only records with
+  `evidence_kind: observe-candidate`; `live`, `stored-replay`, `fixture-baseline` and
+  `none` records, including `live` records of a run where the candidate was itself
+  authoritative, SHALL be dropped before assessment, so they can never satisfy the
+  soak gate (a pool with none left -> `evidence-missing`).
 - WHEN production evidence names a different strategy, version, `contentHash` or
   `implementationHash` than the version being promoted THE SYSTEM SHALL refuse with
   `evidence-mismatch`.
@@ -98,6 +117,30 @@ Promotion gate
   argument, as `context_eval.assess_evidence` already requires.
 - IF the gate passes THEN THE SYSTEM SHALL still require a human-reviewed commit — no
   code path in this proposal writes a binding without an operator invoking the CLI.
+
+Observe-candidate evidence (the only production soak source)
+
+- WHEN the rollout ladder is at `observe` AND the shadow pass sealed a candidate
+  snapshot AND `ISSUE_INVESTIGATOR_CONTEXT_EVAL=on` THE SYSTEM SHALL evaluate that
+  candidate snapshot too and print one more `[context] context_eval=` record with
+  `evidence_kind: "observe-candidate"`, after the authoritative record.
+- THE SYSTEM SHALL keep the candidate non-authoritative: it SHALL NOT reach the
+  prompt, `AssemblyResult.snapshot`, `rendered` or the work-item store (Slice B's
+  invariant, unchanged). It MAY be returned on a new, separate
+  `AssemblyResult.observe_candidate` field that only the evaluation emitter reads.
+- THE SYSTEM SHALL give an `observe-candidate` record `store_ref: null` and a new
+  `execution_ref: {work_item_id, execution_id}` taken from the candidate snapshot's
+  own `work_context` (the execution it was assembled in), and SHALL never attach the
+  authoritative snapshot's `store_ref` to it.
+- WHEN an `observe-candidate` record is verified THE SYSTEM SHALL check the
+  candidate's document identity (`content_hash`, `snapshot_id`) and SHALL NOT apply a
+  store match: this is ADR 015's second provenance mode, `execution-observed`, not an
+  exception to `StoreRef`.
+- WHEN evidence is counted THE SYSTEM SHALL key an `observe-candidate` observation
+  on `execution_ref.(work_item_id, execution_id)`, exactly as a stored observation is
+  keyed on `store_ref`, so the retries of one investigation are one observation; an
+  `observe-candidate` record without an `execution_ref` (no store execution, e.g.
+  the work-context rollout below `observe`) SHALL NOT be counted.
 
 Catalog and loader
 
@@ -160,27 +203,25 @@ Compatibility
 
 ## Open questions
 
-- **What counts as an "observe-mode investigation".** ADR 019 sec. 4 says the `observe`
-  shadow pass's snapshot is never persisted, and
-  `context_eval._observation_key` only counts records that carry a
-  `store_ref.execution_id` — so the shadow pass can never itself be a counted
-  observation. Proceeding with the only interpretation the code supports: an
-  observation is an investigation whose **authoritative, persisted** snapshot carries the
-  candidate identity — produced either by binding the candidate in the `shadow`
-  environment and running at `enforce`, or by setting
-  `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY=<candidate>` on the soaking worker — with
-  `ISSUE_INVESTIGATOR_CONTEXT_EVAL=on`. The README states this explicitly. A follow-up
-  may make the observe pass itself persist an evaluable snapshot.
+- **What counts as an "observe-mode investigation".** Resolved by the owner
+  (2026-09-28): the non-authoritative `observe` candidate of a real investigation,
+  evaluated as `evidence_kind: observe-candidate` with its own `execution_ref`.
+  Making the candidate authoritative to collect evidence is rejected: it is
+  production exposure before the gate, and on the production investigator the
+  `enforce` path does not even reach the `shadow` binding. The candidate snapshot
+  stays unpersisted; ADR 015 gains a second provenance mode rather than a
+  `StoreRef` that does not describe stored bytes.
 - **"the four new variables" in task 12.** Two (`CONTEXT_RELEASE_ROLLOUT_MODE`,
   `CONTEXT_RELEASE_REQUIRED`) already landed in `.env.example` with Slice B and one
   (`ISSUE_INVESTIGATOR_CONTEXT_EVAL`) with #526. Proceeding by auditing the whole
   `ISSUE_INVESTIGATOR_CONTEXT_*` / `CONTEXT_RELEASE_*` block rather than blindly adding
   four more, and cross-referencing the new README section from it.
-- **Evidence file transport.** The issue does not say how records reach the CLI.
-  Proceeding with a JSONL file of `context_eval` record payloads (exactly what
-  `python -m orchestrator.run_context_eval --json` prints), passed as
-  `--evidence-file`, with `evidence.ref` recording where that file came from. This keeps
-  `orchestrator/context_release.py` free of network and store access.
+- **Evidence file transport.** A JSONL file of `context_eval` record payloads, passed as
+  `--evidence-file`, with `evidence.ref` recording where it came from. Because
+  `observe-candidate` records are never stored, they are collected from the
+  investigator's `[context] context_eval=` log lines (the Argo workflow log archive),
+  not from `run_context_eval` replay. This keeps `orchestrator/context_release.py`
+  free of network and store access.
 - **Whether a non-`{shadow, production}` environment should stay `evidence-missing`.**
   Slice A refuses e.g. `staging` as `evidence-missing`
   (`test_non_shadow_promotion_is_refused_even_when_not_named_production`). Proceeding

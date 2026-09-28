@@ -1,5 +1,19 @@
 # Design: issue-528-feat-context-platform-472-slice-c-produc
 
+> **Correction 2026-09-28 (before approval).** ADR 019 requires production
+> evidence from **>= 3 consecutive observe-mode investigations**. As first
+> written, this proposal collected it by making the candidate authoritative:
+> binding it in `shadow` at `enforce`, which on the production investigator
+> resolves `AGENT_ENVIRONMENT`/`production` and never reaches the shadow
+> binding (`context_assembly.py:1176`), or setting
+> `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY=<candidate>`. Either way it is production
+> exposure before the gate. Both paths are removed. Production soak evidence
+> now comes only from Slice B's **non-authoritative observe candidate**,
+> evaluated in the same production investigation as
+> `evidence_kind: observe-candidate`. It carries its own `execution_ref`,
+> never a borrowed `store_ref`, because the candidate is never persisted. The
+> candidate does not serve the investigation that evaluates it.
+
 ## Current state
 
 **The release catalog and its loader (Slice A).**
@@ -113,6 +127,39 @@ This is the smallest change that lets Slice C consume #526's evidence without
 either re-deriving the record shape in `context_release.py` (two copies of one
 schema) or making `context_release.py` talk to mctl-api.
 
+### 1b. `orchestrator/context_eval.py` — the `execution-observed` provenance mode
+
+- `EVIDENCE_KINDS` gains `"observe-candidate"`.
+- A new frozen `ExecutionRef(work_item_id, execution_id)` with
+  `to_dict`/`from_dict`, and `EvalRecord.execution_ref: ExecutionRef | None =
+  None`, emitted by `to_log_dict()` only when set, so every existing record keeps
+  its shape. `evaluate()` accepts `execution_ref=` and refuses it unless
+  `evidence_kind == "observe-candidate"` and `store_ref is None`. The inverse
+  holds too: an `observe-candidate` evaluation refuses a `store_ref`.
+- Verification for an `observe-candidate` record is the document identity only;
+  `IdentityCheck.store_ok` stays `None` (not applicable), never `True`.
+- `_observation_key` returns `(work_item_id, execution_id)` from `store_ref` for
+  a stored record, or from `execution_ref` for an `observe-candidate` record,
+  else `None`. Retries of one investigation stay one observation, and the
+  freshness anchor rule (newest counted observation) applies unchanged.
+- ADR 015 sec. 1 names two provenance modes: `store-backed` (`store_ref`,
+  store match) and `execution-observed` (`execution_ref`, document identity
+  only, `observe-candidate` only). Sec. 7 step 5 counts both by execution.
+
+### 1c. `orchestrator/context_assembly.py` + live emitter — evaluate the candidate
+
+- `AssemblyResult` gains `observe_candidate: ContextSnapshot | None = None`,
+  set only when the `observe` shadow pass sealed a candidate. It is never
+  rendered, returned as `snapshot`, or persisted: the store call still takes
+  `result.snapshot` only (Slice B's T9 stays exactly as it is).
+- `run_issue_investigator._emit_context_eval` prints, after the authoritative
+  record, one more record for `result.observe_candidate` with
+  `evidence_kind="observe-candidate"`, the candidate strategy's catalog identity
+  (`_load_catalog_identity(candidate.strategy.name, candidate.strategy.version)`)
+  and `execution_ref` from `candidate.work_context` (only for a `we_` execution).
+  It is best-effort, like the authoritative record: a failure warns and never
+  fails the investigation.
+
 ### 2. `orchestrator/context_release.py` — the production gate
 
 - New constants next to the existing vocabularies:
@@ -146,6 +193,11 @@ schema) or making `context_release.py` talk to mctl-api.
       evidence_evaluator_version: str | None, now: datetime,
   ) -> ProductionEvidenceVerdict   # (code, reason_code, observations, newest_age_seconds, observed_at)
   ```
+
+  Before anything else it keeps only `evidence_kind == "observe-candidate"`
+  records (`PRODUCTION_EVIDENCE_KINDS`). A `live` record of a run where the
+  candidate was authoritative is dropped, so "we already rolled it out" can
+  never pass as soak evidence. An empty remainder is `evidence-missing`.
 
   It imports `orchestrator.context_eval` **inside the function body** — the
   same deferred-import discipline `run_issue_investigator._load_catalog_identity`
@@ -235,18 +287,17 @@ inspection subcommand is added. `--evidence-ref` becomes required whenever
 
 - **`README.md`**: a new `### Context strategy release` section directly after
   "### Context evaluation", covering the full ladder with runnable commands:
-  `publish` -> `promote --environment shadow` -> soak (how to produce
-  observations: `ISSUE_INVESTIGATOR_CONTEXT_EVAL=on` with the candidate as the
-  authoritative strategy, either via the `shadow` binding at
-  `CONTEXT_RELEASE_ROLLOUT_MODE=enforce` or via
-  `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY`, with the work-item store enabled so
-  each run persists a snapshot) -> build the evidence file with a
-  `python -m orchestrator.run_context_eval --work-item ... --json >> evidence.jsonl`
-  loop -> inspect with `promote --dry-run` -> open the promotion PR ->
-  `rollback --to-revision N` -> break-glass `CONTEXT_RELEASE_ROLLOUT_MODE=off`.
-  It states plainly that the shadow `observe` pass is not itself a counted
-  observation, and prints the refusal-reason table so an operator can read a
-  failure without opening `context_release.py`.
+  `publish` -> `promote --environment shadow` (the candidate) -> soak (the
+  production investigator at `CONTEXT_RELEASE_ROLLOUT_MODE=observe` with
+  `ISSUE_INVESTIGATOR_CONTEXT_EVAL=on` and a store execution per run; the
+  default strategy stays authoritative and the candidate is never served) ->
+  build the evidence file from the `[context] context_eval=` log lines whose
+  `evidence_kind` is `observe-candidate` -> inspect with `promote --dry-run` ->
+  open the promotion PR -> `rollback --to-revision N` -> break-glass
+  `CONTEXT_RELEASE_ROLLOUT_MODE=off`. It states plainly that making the
+  candidate authoritative (a binding at `enforce`, or
+  `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY`) produces no soak evidence and is itself
+  a production change, and prints the refusal-reason table.
 - **`.env.example`**: audit the `ISSUE_INVESTIGATOR_CONTEXT_*` /
   `CONTEXT_RELEASE_*` block so each of the four lifecycle variables
   (`ISSUE_INVESTIGATOR_CONTEXT_MODE`, `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY`,
@@ -321,6 +372,13 @@ inspection subcommand is added. `--evidence-ref` becomes required whenever
     (`test_published_catalog_hashes_are_not_drifted`) as its DoD — the same
     dance revisions 2-5 already record. It must be the **last** code task, or it
     is immediately stale.
+  - *The gate turns into "we checked what we already rolled out".* Mitigated by
+    the gate counting `observe-candidate` records only, and by a regression test
+    that three `live` records of an authoritative candidate are refused.
+  - *The candidate leaks into the investigation it is measured in.* Unchanged
+    Slice B invariant, now also covering `AssemblyResult.observe_candidate`: a
+    test asserts it never reaches the prompt, `snapshot`, `rendered` or the
+    store client.
   - *A hand-edited evidence file passes the gate.* The evidence file is operator
     input. Mitigated by `EvalRecord.from_dict` validating `record_kind`/`verdict`,
     by the identity match being against the catalog's own
