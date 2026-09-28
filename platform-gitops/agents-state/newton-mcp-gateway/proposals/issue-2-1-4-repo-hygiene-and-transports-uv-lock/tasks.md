@@ -37,15 +37,16 @@
       `UV_LINK_MODE=copy`; dependency layer via
       `uv sync --locked --no-dev --no-install-project` before `src/` is copied, then
       `uv sync --locked --no-dev`. Runtime stage on the same base, non-root user
-      created with `useradd`, `COPY --from=builder --chown=` of `/app/.venv` only (no
-      `uv` in the runtime image), `ENV PATH="/app/.venv/bin:$PATH"`,
+      created with `useradd`, `COPY --from=builder` of `/app/.venv` only, **root-owned
+      (no `--chown`)**, followed by `RUN chmod -R go-w /app` (no `uv` in the runtime
+      image), `ENV PATH="/app/.venv/bin:$PATH"`,
       `PYTHONUNBUFFERED=1`, `NEWTON_BACKEND=mock`,
       `NEWTON_MCP_TRANSPORT=streamable-http`, `HOST=0.0.0.0`, `PORT=8000`,
       `EXPOSE 8000`, `USER <user>`, `ENTRYPOINT ["newton-mcp"]`. No `HEALTHCHECK`.
 
 - [ ] 6. Update `.github/workflows/ci.yml` (depends on 1, 5) — DoD: the `test` job's
       install step is `uv sync --locked --group dev`; a second independent `docker` job
-      builds the image and runs the two image assertions from T7 and T8. Both jobs are
+      builds the image and runs the image assertions from T7, T7b and T8. Both jobs are
       green on the PR.
 
 - [ ] 7. Add `NEWTON_MCP_TRANSPORT`, `HOST` and `PORT` to `.env.example` (depends on 2)
@@ -98,6 +99,10 @@
       or `port`. No socket is opened and no real transport starts.
 - [ ] T7. CI image assertion: `docker run --rm --entrypoint id <image> -u` prints a
       non-zero uid.
+- [ ] T7b. CI image assertion: running as the image's default (non-root) user,
+      `docker run --rm --entrypoint sh <image> -c 'touch /app/.venv/.w'` FAILS
+      (non-zero exit), and `stat -c %U /app/.venv` prints `root` — the runtime user has
+      no write access to the application directory.
 - [ ] T8. CI smoke check: start the image with `-d -p 8000:8000`, poll
       `http://127.0.0.1:8000/mcp` until an HTTP status code is returned (not a
       connection refusal), then stop the container. The check asserts that a status was
