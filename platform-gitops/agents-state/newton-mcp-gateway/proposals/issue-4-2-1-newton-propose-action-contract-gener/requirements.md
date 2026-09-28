@@ -106,8 +106,8 @@ Parsing, validation and the single retry
   and an `errors` list that ends with one `backend_failed` error for that attempt. The error's
   message SHALL be the backend's `error` text verbatim. When the backend gave none, it SHALL be
   a fixed statement that the backend reported `status=failed` without an error message.
-  `raw_text` SHALL be the first output only if the backend actually returned a string, and
-  `null` otherwise; nothing is synthesised. Transport or HTTP errors that the backend raises
+  `raw_text` SHALL be the first output only if `outputs` is non-empty and that first output
+  is a string, and `null` otherwise (including `outputs == []`); nothing is synthesised. Transport or HTTP errors that the backend raises
   (`NewtonApiError`, including 401) keep propagating as tool errors, unchanged.
 - IF an attempt whose backend result is `status == "completed"` yields non-JSON text, a JSON
   value that is not an object, a Pydantic validation error, an empty `outputs` list, or a

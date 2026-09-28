@@ -153,7 +153,8 @@ Flow, in one small explicit function plus helpers:
    if `result.status == "failed"`, record
    `ProposeError(attempt=n, kind="backend_failed", message=result.error or "backend reported
    status=failed without an error message")` and return `status="failed"` at once. In that case
-   `raw_text` is `result.outputs[0]` only if it is a `str`, otherwise `None`, and there is no
+   `raw_text` is `result.outputs[0]` only when `result.outputs` is non-empty and that first
+   element is a `str`, otherwise `None`, so an empty `outputs` list is never indexed, and there is no
    retry and no further `/query` call. The retry suffix tells the model how to fix its output,
    which cannot fix a backend failure; a second call would only hide the incident behind a
    second error (owner amendment). Otherwise take `result.outputs[0]` and classify failures into `ProposeError`s
