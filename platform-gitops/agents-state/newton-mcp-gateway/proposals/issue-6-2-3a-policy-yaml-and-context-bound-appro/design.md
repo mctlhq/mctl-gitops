@@ -116,16 +116,25 @@ def binding_identity(self) -> str:
 The canonical transport form is a plain dict handed to `sha256_hex`:
 
 - `HttpTransport` -> `{"kind": "streamable-http", "url": _canonical_url(self.url)}`.
-  `_canonical_url` uses `urllib.parse.urlsplit`, lowercases scheme and hostname,
-  drops a port equal to the scheme default, and re-joins with path/query/fragment
-  byte-exact. Nothing else is normalised, so two URLs that differ only in
+  `_canonical_url` uses `urllib.parse.urlsplit`. It lowercases the scheme and
+  lowercases only the host-name part of the netloc. It drops a port equal to the
+  scheme default. Any userinfo (`user:pass@`) and IPv6 brackets are kept byte-exact.
+  Path, query and fragment are re-joined byte-exact. The netloc is **not** rebuilt
+  from `hostname` + `port`, because that would silently drop userinfo and the IPv6
+  brackets, and two URLs that differ only in credentials would then fingerprint the
+  same (owner amendment). Nothing else is normalised, so two URLs that differ only in
   percent-encoding fingerprint differently — spurious invalidation, never spurious
   validity.
 - `StdioTransport` -> `{"kind": "stdio", "command": self.command, "args":
-  list(self.args), "env_names": sorted(self.env)}`. `command` and `args` are
-  byte-exact: no `shutil.which`, no `realpath` (both are I/O and non-deterministic,
-  and `resolve()` in this package is structurally I/O-free). Env *names* are
-  fingerprinted, values are not.
+  list(self.args), "env": dict(self.env)}`. `command` and `args` are byte-exact: no
+  `shutil.which`, no `realpath` (both are I/O and non-deterministic, and `resolve()`
+  in this package is structurally I/O-free). The full `env` mapping, names and
+  values, is fingerprinted (owner amendment). A stdio server's target is often set
+  through env (`HA_URL=…`), and the fingerprint cannot tell a credential rotation
+  from an endpoint change, so a value change invalidates outstanding approvals. That
+  fails safe because approvals are short-lived. Values are only ever sha256 input:
+  `binding_identity` carries the digest, never a value, and no reason string or log
+  line includes one.
 
 **Why the fingerprint is required at all.** Issue #5 left `server_identity` as the
 configured label. The threat that forces the change here is the re-pointing case
@@ -340,7 +349,11 @@ rules:
 ```
 
 Docs: `docs/action-runtime.md` replaces the deferred-identity paragraph (lines
-85-91) with the decision taken here plus the re-pointing rationale, and drops
+85-91) with the decision taken here plus the re-pointing rationale. It states
+explicitly that `binding` is **context-binding, not authentication**: a keyless
+sha256 shows which exact action an approval covers, but anyone able to write an
+`Approval` can compute a valid binding, so it does not prove who approved
+(owner amendment; signed approvals are out of scope). and drops
 "policy evaluation" / "bind an approval" from the "what this package does not do"
 list while keeping execute/lifecycle/audit there. `docs/architecture.md` marks the
 approval box implemented and points its "Approval is invalidated if parameters
@@ -435,7 +448,8 @@ already a dependency, so `uv.lock` is unchanged.
   approval, not a spuriously valid one.
 - *Approvals invalidated by benign config edits become an operator annoyance and
   get worked around.* Mitigated by scoping the fingerprint to transport
-  re-pointing (env *values* and observed `serverInfo` excluded) and by documenting
+  re-pointing (observed `serverInfo` excluded; env values included by owner decision,
+  accepting that a credential rotation invalidates short-lived approvals) and by documenting
   in `docs/action-runtime.md` that a transport edit invalidates outstanding
   approvals.
 - *`verify_approval` returning `ApprovalCheck(valid=False, ...)` rather than

@@ -12,12 +12,14 @@
       `ServerConfig.binding_identity` to `src/newton_mcp/runtime/config.py`
       (depends on 1) — DoD: `transport_fingerprint` is `sha256_hex` of
       `{"kind": "streamable-http", "url": _canonical_url(url)}` for `HttpTransport`
-      and `{"kind": "stdio", "command": ..., "args": [...], "env_names":
-      sorted(env)}` for `StdioTransport`; `_canonical_url` lowercases scheme and
-      hostname, elides a port equal to the scheme default, leaves path/query/
-      fragment byte-exact; `binding_identity` is
+      and `{"kind": "stdio", "command": ..., "args": [...], "env": dict(env)}`
+      (names and values) for `StdioTransport`; `_canonical_url` lowercases the
+      scheme and only the host-name part of the netloc, elides a port equal to the
+      scheme default, and keeps userinfo, IPv6 brackets and path/query/fragment
+      byte-exact (the netloc is not rebuilt from `hostname`/`port`); `binding_identity` is
       `f"{resolved_identity}@sha256:{transport_fingerprint}"`. No field added to
-      any model, `runtime.yaml` schema unchanged, env *values* never digested.
+      any model, `runtime.yaml` schema unchanged, env values enter only the sha256
+      input and never `binding_identity`, an `Approval`, a reason or a log.
 
 - [ ] 3. Add `server_binding_identity: str` to `CandidateAction` and populate it in
       `Resolver._evaluate()` in `src/newton_mcp/runtime/resolver.py` (depends on 2)
@@ -107,7 +109,9 @@
 
 - [ ] 14. Update docs (depends on 11) — DoD: `docs/action-runtime.md` replaces the
       deferred-identity paragraph (currently lines 85-91) with the decision taken
-      here, the re-pointing rationale, why observed `serverInfo` is excluded, and a
+      here, the re-pointing rationale, an explicit statement that `binding` is
+      context-binding and not authentication (a keyless sha256 does not prove who
+      approved), why observed `serverInfo` is excluded, and a
       note that a transport edit invalidates outstanding approvals, and removes
       "policy evaluation" / "bind an approval" from "What this package does not do"
       while keeping execute/lifecycle/audit; `docs/architecture.md` marks the
@@ -147,9 +151,16 @@ dict, `tmp_path` for files, `pytest.raises`.
       `args`, does too.
 - [ ] T7. `_canonical_url` treats `https://Host.local/mcp`,
       `https://host.local:443/mcp` and `https://host.local/mcp` as one fingerprint,
-      while `https://host.local/mcp/` (trailing slash) stays distinct.
-- [ ] T8. Rotating an `env` *value* leaves `transport_fingerprint` unchanged;
-      adding, removing or renaming an `env` variable changes it.
+      while `https://host.local/mcp/` (trailing slash) stays distinct. Owner
+      amendment: `https://alice:x@host.local/mcp` and `https://bob:x@host.local/mcp`
+      fingerprint differently, and `https://alice:x@host.local/mcp` differs from
+      `https://host.local/mcp`. `http://[::1]:8080/mcp` keeps its brackets and port,
+      and `http://[::1]:80/mcp` equals `http://[::1]/mcp`.
+- [ ] T8. (owner amendment) Changing an `env` *value* changes
+      `transport_fingerprint`, and so does adding, removing or renaming an `env`
+      variable. The same mapping in a different insertion order gives the same
+      fingerprint. `binding_identity` never contains an env value. An approval issued before an env value change
+      verifies invalid.
 - [ ] T9. **Re-pointing test (the issue's explicit ask):** an approval created
       against a server, then verified against the candidate produced after the
       server's `url` was re-pointed under the same `name`, is invalid.
