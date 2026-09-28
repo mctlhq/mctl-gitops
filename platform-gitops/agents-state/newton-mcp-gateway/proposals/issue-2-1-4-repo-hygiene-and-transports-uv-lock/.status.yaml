@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-28T09:43:53Z'
+updated_at: '2026-09-28T10:02:03Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-26862e127f97a1ed
@@ -27,3 +27,7 @@ attempt:
   expires_at: '2026-09-28T11:49:26Z'
   finished_at: '2026-09-28T09:43:53Z'
 pr: https://github.com/mctlhq/newton-mcp-gateway/pull/19
+ci_blockers_head: 0cc5898df4633bdce95faaf0653436242ea55a48
+ci_blockers:
+- ci / docker
+review_attempts: 1
