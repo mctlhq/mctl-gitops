@@ -27,7 +27,8 @@ the repo: `ArchetypeNewtonBackend.query` performs exactly one call,
 `to_payload()` forces `sanitize_response = False`, and `NewtonQueryResult`
 (`backend`, `query_id`, `status`, `model`, `outputs`, `inference_time_sec`, `error`,
 `raw`). Note that `data.base64_img` is already in the type enum but has **no**
-constructor — the repo has so far declined to guess its `event_data` shape.
+constructor yet; this change adds one, because its `event_data` shape is documented
+(see below).
 
 **The server exposes two tools.** `src/newton_mcp/server.py` builds an `MCPServer`
 (`mcp>=2`; FastMCP was renamed), registers `newton_query` and
@@ -65,261 +66,139 @@ content-type headers generated from `files=` with `setdefault`, so a client-leve
 produces `content-type: application/json` with **no multipart boundary**. A multipart
 upload on this client would silently be sent with the wrong content type.
 
-## Documentation review that shapes this design
+## Documentation review that shapes this design (amended at owner review)
 
-Read on docs.archetypeai.app and `/llms.txt` before designing:
+| Thing | Documented? | Source |
+|---|---|---|
+| `events` accepts `data.base64_img`; payload shapes per Data Events | yes | `/api-reference/query` → links `/core-concepts/streams/events/data-events` |
+| `data.base64_img` → `event_data.contents` (str, required, "the base64 encoded image as a byte string"), with example | **yes** | Data Events page (marked archived; current `/llms.txt` states its payload shapes are those Direct Query uses in `events`) |
+| `file_ids`: pass the extension-bearing `file_id`, not `file_uid`; `/query` filters by extension; `.png/.jpg/.jpeg` contents injected into text-model context | yes | `/api-reference/query` |
+| `POST /v0.5/files`, `multipart/form-data`, `-F "file=@…"`; response `is_valid`, `file_id`, `file_uid`; 512 MB; JPEG/PNG accepted | yes | `/api-reference/files/upload` |
+| `POST /v0.5/files/base64`, multipart `file` holding base64 text | yes | `/api-reference/files/upload-base64` |
+| `mime_type` as any API field | no | — gateway-side validation only |
+| `data.json` `event_data` | arbitrary keys (`some_key: …`), no `contents` wrapper | Data Events page — differs from current `newton_query`; **not changed here**, flagged for #12 |
 
-| Thing | Documented? |
-|---|---|
-| `POST {ATAI_API_ENDPOINT}/files`, `multipart/form-data`, `Authorization: Bearer` | yes (Files API reference) |
-| Upload response `{"is_valid", "file_id", "file_uid"}` | yes |
-| Pass the extension-bearing `file_id` (not `file_uid`) in `file_ids`; `/query` filters file types by extension | yes, explicitly |
-| Limits: 512 MB; JPEG, PNG, MP4, text, CSV, JSON accepted | yes |
-| `data.base64_img` as an `events` type string | yes (enum only) |
-| The keys inside `data.base64_img`'s `event_data` | **no** — no example, no field list |
-| `mime_type` as any API field | **no** — appears nowhere |
-| Upload path spelling | **conflicting**: `/llms.txt` indexes `POST /files/upload` + `/files/upload-base64`; the reference documents `POST /v0.5/files` |
-
-Consequence, and the single most important design decision: **only the Files API route
-is implemented.** Sending `{"type": "data.base64_img", "event_data": {"contents": ...}}`
-would be inventing a parameter name, which hard rule 1 forbids, however plausible the
-`contents` convention looks next to `data.json`. The `upload` flag stays in the tool
-schema but `upload=False` with inline bytes is a fast, explanatory failure rather than a
-guess.
+Consequence — the single most important design decision: **the analysis tool is
+stateless.** Bytes go inline as `data.base64_img`; an existing file goes as `file_ids`.
+The tool never uploads, so `read_only_hint=True` is truthful (an MCP annotation is static
+for the whole tool; a tool that sometimes uploads would create organisation-scoped Files
+state and could not be marked read-only). The documented multipart upload is still
+implemented and tested, but as a backend capability for later tools, not reachable from
+this tool.
 
 ## Proposed solution
 
-Five small, additive edits plus one bug fix. No new module, no new dependency.
-
-### 1. `newton/models.py` — two new Pydantic v2 models
+### 1. `newton/models.py`
 
 ```python
 IMAGE_MIME_EXTENSIONS: dict[str, str] = {"image/png": ".png", "image/jpeg": ".jpg"}
+IMAGE_FILE_EXTENSIONS = (".png", ".jpg", ".jpeg")
+
+class DataEvent(...):
+    @classmethod
+    def base64_img(cls, b64: str) -> "DataEvent":
+        return cls(type="data.base64_img", event_data={"contents": b64})
 
 class ImageUpload(BaseModel):
     data: bytes
     mime_type: Literal["image/png", "image/jpeg"]
-
     @property
-    def filename(self) -> str:      # extension matters: /query type-filters on file_id
+    def filename(self) -> str:
         return f"image{IMAGE_MIME_EXTENSIONS[self.mime_type]}"
 
 class UploadedFile(BaseModel):
     backend: Literal["mock", "api"]
-    file_id: str                    # the documented, extension-bearing identifier
-    file_uid: str | None = None     # documented but deliberately unused downstream
-    is_valid: bool = True
+    file_id: str
+    file_uid: str | None = None
 ```
 
-`NewtonQueryRequest` is untouched — every field the image path needs already exists.
-No `DataEvent.base64_img()` constructor is added; its absence is the design.
+`NewtonQueryRequest` is untouched.
 
-### 2. `newton/protocol.py` — extend the seam by one method
+### 2. `newton/protocol.py`
 
-```python
-async def upload_image(self, image: ImageUpload) -> UploadedFile: ...
-```
+Add `async def upload_image(self, image: ImageUpload) -> UploadedFile: ...` so both
+backends expose the documented upload as a capability (one mock/real switch in
+`build_backend`). No tool calls it in this change.
 
-Putting the upload on the existing backend Protocol, rather than in a separate
-`FilesClient`, keeps one mock/real switch (`build_backend`) and lets the mock stay
-self-consistent: it can mint a `file_id` and then recognise it in a later `query`.
+### 3. `newton/api.py`
 
-### 3. `newton/api.py` — the documented upload, and the header fix
+- Client constructed with `headers={"Authorization": f"Bearer {api_key}"}` only — no
+  client-level `Content-Type` (verified against the locked httpx: a client-level
+  `Content-Type: application/json` overrides the multipart header a `files=` request would
+  generate, dropping the boundary). `query()` keeps `json=`, so its header is unchanged.
+- `upload_image`: `POST f"{self._endpoint}/files"` with
+  `files={"file": (image.filename, image.data, image.mime_type)}`; non-200, falsy
+  `is_valid` or missing `file_id` → `NewtonApiError`; returns
+  `UploadedFile(backend="api", file_id=..., file_uid=...)`.
 
-```python
-self._client = client or httpx.AsyncClient(
-    headers={"Authorization": f"Bearer {api_key}"},   # no client-level Content-Type
-    timeout=timeout_sec,
-)
-```
+### 4. `config.py`
 
-`query()` already passes `json=`, which sets `application/json` per request, so nothing
-is lost. Then:
+`max_image_bytes: int = 8 * 1024 * 1024` from `NEWTON_MAX_IMAGE_BYTES`, with
+`DOCUMENTED_MAX_UPLOAD_BYTES = 512 * 1024 * 1024`; reject non-integer, `<= 0`, `> 512 MiB`,
+naming the variable — existing `ValueError` style.
 
-```python
-async def upload_image(self, image: ImageUpload) -> UploadedFile:
-    resp = await self._client.post(
-        f"{self._endpoint}/files",
-        files={"file": (image.filename, image.data, image.mime_type)},
-    )
-    body = self._json(resp)
-    if resp.status_code != 200:
-        raise NewtonApiError(resp.status_code, body.get("errors", body.get("detail", body)))
-    if not body.get("is_valid", False) or not body.get("file_id"):
-        raise NewtonApiError(resp.status_code, body.get("errors", body))
-    return UploadedFile(backend="api", file_id=str(body["file_id"]),
-                        file_uid=body.get("file_uid"))
-```
+### 5. `server.py` — `newton_analyze_image`
 
-Reuses the existing `_json` helper and `NewtonApiError`. No retry logic, no new
-timeout knob.
+Signature `(ctx, question, image_base64=None, mime_type=None, file_id=None,
+system_prompt="", max_new_tokens=400, model=None)`, annotated
+`ToolAnnotations(read_only_hint=True, open_world_hint=True)`. Description: exactly one of
+`image_base64` (+ `mime_type`) or `file_id`; the tool never uploads or stores anything.
 
-### 4. `config.py` — one new setting
+Order, every rejection pre-network:
+1. `if (image_base64 is None) == (file_id is None): raise ValueError(...)`.
+2. Inline branch: `mime_type` required and in `IMAGE_MIME_EXTENSIONS`; strip an optional
+   `data:<mime>;base64,` prefix; `raw = base64.b64decode(payload, validate=True)` in
+   `try/except (binascii.Error, ValueError)` re-raised without echoing the payload;
+   `len(raw) > settings.max_image_bytes` → `ValueError` naming size, limit and variable;
+   the normalized base64 sent on the wire is `base64.b64encode(raw).decode()` (canonical,
+   prefix-free). Request:
+   `events=[DataEvent.base64_img(b64)]`, `file_ids=[]`.
+3. `file_id` branch: extension must be in `IMAGE_FILE_EXTENSIONS` (case-insensitive),
+   else `ValueError` citing the documented `file_id`-vs-`file_uid` rule. Request:
+   `file_ids=[file_id]`, `events=[]`.
+4. `NewtonQueryRequest(model=model or settings.text_model, query=question,
+   system_prompt=system_prompt, instruction_prompt=system_prompt, ..., 
+   max_new_tokens=max_new_tokens)` (mirrors `newton_query`), one `backend.query(...)`,
+   `return result.model_dump(exclude={"raw"})`.
 
-`max_image_bytes: int = 8 * 1024 * 1024`, read from `NEWTON_MAX_IMAGE_BYTES` in
-`from_env()`, in the same style as the existing validators: reject non-integer, reject
-`<= 0`, reject `> DOCUMENTED_MAX_UPLOAD_BYTES` (512 * 1024 * 1024), and name the
-variable in the message. 8 MiB is a transport-shaped default, not a documented one: the
-base64 form arrives inside a JSON tool-call argument.
+### 6. `newton/mock.py`
 
-### 5. `server.py` — the `newton_analyze_image` tool
-
-```python
-@server.tool(
-    name="newton_analyze_image",
-    description=(
-        "Ask Newton C a question about one image. Supply exactly one of image_base64 "
-        "(with mime_type) or file_id from a previous upload. The image is uploaded "
-        "through Archetype's documented Files API and passed to /query as a file_id."
-    ),
-    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True),
-)
-async def newton_analyze_image(
-    ctx: Context,
-    question: str,
-    image_base64: str | None = None,
-    mime_type: str | None = None,
-    file_id: str | None = None,
-    system_prompt: str = "",
-    upload: bool = True,
-    max_new_tokens: int = 400,
-    model: str | None = None,
-) -> dict[str, Any]:
-```
-
-Body, in strict order so that every rejection is pre-network:
-
-1. `if (image_base64 is None) == (file_id is None): raise ValueError(...)` — the
-   exactly-one rule, enforced in one expression.
-2. Inline branch: require `mime_type`; check it against `IMAGE_MIME_EXTENSIONS`; strip an
-   optional `data:<mime>;base64,` prefix; `base64.b64decode(payload, validate=True)`
-   inside `try/except (binascii.Error, ValueError)` re-raised as a `ValueError` that does
-   not echo the payload; then
-   `if len(raw) > state.settings.max_image_bytes: raise ValueError(...)` naming the
-   decoded size, the limit and `NEWTON_MAX_IMAGE_BYTES`.
-3. `if not upload: raise ValueError("inline data.base64_img is not implemented: its "
-   "event_data fields are not publicly documented - see docs/newton-api-notes.md")`.
-4. `uploaded = await state.backend.upload_image(ImageUpload(data=raw, mime_type=mime_type))`;
-   `resolved_id = uploaded.file_id`. In the `file_id` branch, `resolved_id = file_id`
-   and no upload happens at all.
-5. Build `NewtonQueryRequest(model=model or state.settings.text_model, query=question,
-   system_prompt=system_prompt, instruction_prompt=system_prompt,
-   file_ids=[resolved_id], max_new_tokens=max_new_tokens)` — mirroring `newton_query`'s
-   duplication of `system_prompt` into `instruction_prompt`.
-6. `return (await state.backend.query(request)).model_dump(exclude={"raw"})`.
-
-The exactly-one constraint is expressed to MCP clients by making both parameters
-`| None = None` plus the description; the runtime `ValueError` is the enforcement. A
-Pydantic discriminated union in the signature would be stricter but the `mcp>=2`
-`@server.tool` decorator derives the schema from the annotations, and a flat signature
-keeps the tool callable from hosts that flatten arguments.
-
-### 6. `newton/mock.py` — image-aware, still unmistakably fake
-
-```python
-async def upload_image(self, image: ImageUpload) -> UploadedFile:
-    ext = IMAGE_MIME_EXTENSIONS[image.mime_type]
-    file_id = f"mock-image-{next(self._counter):06d}{ext}"
-    self._uploads[file_id] = image          # new dict, alongside self.requests
-    return UploadedFile(backend="mock", file_id=file_id)
-```
-
-and in `query()`, before the existing text branch, a check for any `request.file_ids`
-entry present in `self._uploads`:
-
-```
-"[mock] Newton is not connected and no image was analyzed. "
-"Received file_id='mock-image-000001.png' (mime_type='image/png', 20614 bytes) "
-"and question='what is on the bench?'. "
-"Set NEWTON_BACKEND=api with an authorized ATAI_API_KEY for real inference."
-```
-
-Byte count and mime type only — no scene description, no object list, nothing that could
-be mistaken for having looked at pixels. A `file_id` the mock did not mint falls through
-to the existing text branch unchanged.
+- `upload_image`: mints `f"mock-image-{n:06d}{ext}"` (deterministic counter).
+- `query()`, before the existing text branch: if the request carries a `data.base64_img`
+  event → one output
+  `"[mock] Newton is not connected and no image was analyzed. Received a data.base64_img event (<N> bytes decoded) and question=<q!r>. Set NEWTON_BACKEND=api with an authorized ATAI_API_KEY for real inference."`;
+  else if any `file_ids` entry ends in an image extension → same shape naming the
+  `file_id`. Otherwise the existing text branch unchanged. Never any scene description.
 
 ### 7. Docs
 
-- **`docs/newton-api-notes.md` (new)** — the traceability ledger the issue requires: the
-  table above, verbatim-quoted field names with the page each came from, the three
-  recorded gaps (`data.base64_img` `event_data` keys, `mime_type` absent as an API field,
-  the `/llms.txt` vs reference path discrepancy), the documented-but-deliberately-unused
-  `/query` fields (`multi_image`, `max_frames`, `temperature`, `top_p`, `top_k`,
-  `do_sample`, `repetition_penalty`, `presence_penalty`, `response_start_prompt`,
-  `template_name`, `query_metadata`, `render`, `max_query_size_mb`, `max_wait_time_sec`),
-  the `read_only_hint`-on-an-upload nuance, and a standing note that none of it has been
-  run against a live account.
-- **`README.md`** — add the `newton_analyze_image` row to the tools table; drop "image
-  analysis via the Files API" from the "Planned" line; keep the mock-validated status
-  wording untouched.
-- **`.env.example`** — document `NEWTON_MAX_IMAGE_BYTES`.
+- `docs/newton-api-notes.md` (new): the table above with URLs; documented-but-unused
+  `/query` fields; limits; the `data.json` discrepancy recorded as an open item for #12;
+  the multipart part name `file` as from the cURL example; "not validated against a live
+  account".
+- `README.md`: tools-table row for `newton_analyze_image` (Newton C; one image inline as
+  `data.base64_img` or an existing `file_id`; stateless); drop image analysis from
+  "Planned"; keep mock-validated wording; link the notes file.
+- `.env.example`: `NEWTON_MAX_IMAGE_BYTES`.
 
 ## Alternatives
 
-1. **Inline `data.base64_img` with a guessed `event_data.contents` key.** The fastest
-   path, one HTTP call instead of two, no server-side state, and `contents` is what
-   `data.json` and `data.numeric_array` use. Dropped: the key is not documented for this
-   event type and `mime_type` is not documented at all, so shipping it would invent
-   parameters — the exact thing hard rule 1 and the issue's "if the docs do not document
-   a field, do not implement it" forbid. A guess that happens to be right is still a
-   guess, and it would be indistinguishable in review from one that is wrong.
-2. **Add image parameters to `newton_query` instead of a new tool.** Keeps the tool count
-   at two, which matches the repo's "few tools" rule. Dropped: the issue asks for a named
-   tool; more importantly `newton_query` would then need conditional size validation, a
-   mime whitelist and an upload side effect on a path that today is a pure pass-through,
-   making a well-scoped read tool substantially harder to reason about.
-3. **A separate `FilesClient` class (or a `newton/files.py` module) instead of a method on
-   `NewtonBackend`.** Cleaner single-responsibility split, and it avoids widening a
-   `runtime_checkable` Protocol. Dropped: it creates a *second* mock/real switch that
-   `build_backend` does not own, and the mock could no longer correlate the `file_id` it
-   minted with the later `query`, which is exactly what makes the honest
-   "no image was analyzed" mock message possible.
-4. **A generic `newton_upload_file` tool plus plain `newton_query`.** Most composable,
-   and it maps one-to-one onto the documented endpoint. Dropped: explicitly out of scope
-   in the issue, and a write-capable file tool cannot honestly carry `read_only_hint`.
+1. **Upload inside the tool (first draft).** Dropped: makes the tool stateful while
+   annotated read-only, and needlessly two calls; the inline path is documented.
+2. **An `upload` flag on the tool.** Dropped for the same annotation reason — the
+   annotation cannot depend on an argument.
+3. **Image parameters on `newton_query`.** Dropped: turns a pass-through tool into one
+   with mime/size validation; the issue asks for a named tool.
+4. **A `newton_upload_file` tool now.** Out of scope; if added later it is a separate,
+   non-read-only tool reusing `upload_image`.
 
 ## Platform impact
 
-**Migrations.** None. No database, no schema file. `schemas/physical-action-contract.schema.json`
-is untouched, so the sync test in `tests/test_action_contract.py` is unaffected.
-
-**Backward compatibility.**
-- `newton_query` and `newton_embed_timeseries` keep identical signatures and behaviour.
-- Removing `Content-Type: application/json` from the client constructor is behaviour-
-  preserving for `query()`, which uses `json=` and therefore sets the header per request.
-  `tests/test_api_backend.py` injects its own client and asserts only the URL and
-  `Authorization`, so it stays green.
-- Adding `upload_image` to the `runtime_checkable` `NewtonBackend` Protocol is a
-  source-breaking change for any out-of-repo implementation, and `isinstance` checks
-  against it would newly fail for a backend lacking the method. Both in-repo
-  implementations are updated in this change, and `NewtonBackend` is re-exported from
-  `newton/__init__.py`, so the break is worth one line in the notes file. Version stays
-  `0.1.0`; nothing here is released.
-- `Settings` gains a field with a default, so `Settings()` calls in `tests/conftest.py`
-  keep working unchanged.
-
-**Resource impact.** Two HTTP calls instead of one on the inline path, on the existing
-90 s client timeout — an image upload plus inference can plausibly approach it, which is
-worth watching on the first live run. Peak memory is roughly the base64 string plus its
-decoded bytes (about 2.3x the image), bounded by `NEWTON_MAX_IMAGE_BYTES` (8 MiB default)
-— but bounded only *after* the base64 string has already been received in the tool call,
-so the transport-level ceiling of the MCP host still applies upstream of us. No new
-dependency, so `uv.lock` is unchanged and CI's `uv sync --locked` stays green.
-
-**Risks and mitigations.**
-
-| Risk | Mitigation |
-|---|---|
-| The upload path is wrong (`/files` vs `/files/upload`) and every live upload 404s | Recorded as an open question in `docs/newton-api-notes.md`; the endpoint is one `f`-string in `upload_image`; `ATAI_API_ENDPOINT` already lets an operator redirect the base |
-| The multipart form field name is not what the server expects | Documented as unverified; the filename carries the extension the docs say `/query` filters on, which is the part the docs are explicit about |
-| The client-level `Content-Type` bug silently corrupts the upload | Fixed in this change and pinned by a test asserting the request's content-type starts with `multipart/form-data` |
-| `file_uid` accidentally used in `file_ids` (the docs say it is rejected) | `UploadedFile.file_uid` is captured but never read downstream; a test asserts the `/query` body carries the `file_id` |
-| The mock drifts into sounding like real vision output | The mock echoes only byte count and mime type; a test asserts the output starts with `[mock]`, contains "no image was analyzed", and contains the byte count |
-| A caller sends a 200 MB base64 blob | Decoded-size check before any network call, with the limit and variable named in the error |
-| Someone later reads the `data.base64_img` entry in `EventType` as an invitation to implement it | `docs/newton-api-notes.md` states the gap explicitly, and the `upload=False` error message points there |
-| The new tool is mistaken for live-validated | README status block and `docs/newton-api-notes.md` keep saying mock-validated until a credentialed run happens |
-
-**Security.** No credential handling changes; the API key stays in the one
-`Authorization` header. Error messages never echo image bytes or the base64 payload. The
-upload creates state in the caller's Archetype account that this gateway offers no way to
-delete (`DELETE /files/{file_id}` is out of scope) — called out in the notes file.
+- No migration, schema or lockfile change; `newton_query` / `newton_embed_timeseries`
+  unchanged. `tests/test_mcp_server.py::test_lists_exactly_the_documented_tools` exact set
+  must be updated.
+- Adding `upload_image` to the `runtime_checkable` Protocol is source-breaking for
+  out-of-repo backends; both in-repo backends implement it; noted in the notes file.
+- One HTTP call per image question; payload bounded by `NEWTON_MAX_IMAGE_BYTES` after
+  the MCP host has already delivered the argument.
+- Security: no credential change; errors never echo image bytes or base64.
