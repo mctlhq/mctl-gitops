@@ -1,0 +1,20 @@
+status: proposed
+updated_at: '2026-09-28T07:09:19Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-e57eb64fb36184b3
+  trace_id: 2cf15a12e2ed1e7565b2ac51c3799793
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 417
+  url: https://github.com/mctlhq/mctl-api/issues/417
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-dc32fe6658439bbb
+  content_hash: sha256:dc32fe6658439bbb09538fbad7bf277fdc04726f842c3a0a83181fd76faafb35
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
