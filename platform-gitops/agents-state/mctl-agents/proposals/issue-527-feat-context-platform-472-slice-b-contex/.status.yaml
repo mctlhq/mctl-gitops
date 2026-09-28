@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-28T00:18:46Z'
+updated_at: '2026-09-28T00:49:06Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-47d9fd1ff948ed2c
@@ -30,8 +30,6 @@ pr: https://github.com/mctlhq/mctl-agents/pull/532
 ci_blockers_head: f929573c3d1a9e8c0cc0746c5d800a83381c9237
 ci_blockers:
 - PR validation / lint
-refusals: 1
-refusals_head: f929573c3d1a9e8c0cc0746c5d800a83381c9237
 notes: 'implementer declined to act: Finding at context_assembly.py:1368 (observe
   shadow pass should recollect candidates under the bound strategy before the collector
   loop) is invalid: it reopens a design decision explicitly recorded on this proposal.
@@ -40,3 +38,4 @@ notes: 'implementer declined to act: Finding at context_assembly.py:1368 (observ
   observe is supposed to be behaviour- and cost-neutral, and the task text explicitly
   specifies ''the same pre-pipeline candidate list''. The asymmetry is documented
   in the module docstring and in requirements.md instead." r'
+review_attempts: 1
