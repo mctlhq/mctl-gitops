@@ -1,6 +1,6 @@
-status: review-stuck
-updated_at: '2026-09-27T23:40:02Z'
-updated_by: mctl-agents[bot]
+status: merged
+updated_at: '2026-09-28T21:24:31Z'
+updated_by: mashkovd
 execution:
   context_id: ex-9e2175576f37844f
   trace_id: b1146eca7c7a3e7eb2049f65049f812d
@@ -28,6 +28,7 @@ attempt:
   finished_at: '2026-09-27T21:11:20Z'
 pr: https://github.com/mctlhq/mctl-agents/pull/531
 review_attempts: 5
-notes: Follow-up failed deterministically 5 time(s) (implementer follow-up exited
-  non-zero (42) for mctl-agents/issue-526-feat-context-evals-complete-evaluation-b);
-  human triage required.
+notes: 'Merged by hand after review-stuck: the owner approved option B; human follow-up
+  commits 53d2f22, 695cace, 2ac23c2 and 067b51a, then Claude APPROVED and agy PASS on 067b51a.'
+merged_at: '2026-09-28T07:34:02Z'
+merge_commit: 27805d3fec1f5f78ee7c46c29d5b62b0e4a61524
