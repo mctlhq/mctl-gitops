@@ -1,5 +1,19 @@
 # Tasks: issue-528-feat-context-platform-472-slice-c-produc
 
+> **Correction 2026-09-28 (before approval).** ADR 019 requires production
+> evidence from **>= 3 consecutive observe-mode investigations**. As first
+> written, this proposal collected it by making the candidate authoritative:
+> binding it in `shadow` at `enforce`, which on the production investigator
+> resolves `AGENT_ENVIRONMENT`/`production` and never reaches the shadow
+> binding (`context_assembly.py:1176`), or setting
+> `ISSUE_INVESTIGATOR_CONTEXT_STRATEGY=<candidate>`. Either way it is production
+> exposure before the gate. Both paths are removed. Production soak evidence
+> now comes only from Slice B's **non-authoritative observe candidate**,
+> evaluated in the same production investigation as
+> `evidence_kind: observe-candidate`. It carries its own `execution_ref`,
+> never a borrowed `store_ref`, because the candidate is never persisted. The
+> candidate does not serve the investigation that evaluates it.
+
 Preflight (before task 1): confirm mctlhq/mctl-agents#526 and Slice B (#527)
 are merged and on the running image, then run
 `uv run pytest tests/test_context_release.py -k "not_drifted or committed_shadow_binding"`.
@@ -18,6 +32,32 @@ the issue's hard dependency about hashes #526 invalidated.
       — DoD: `EvalRecord.from_dict(r.to_log_dict()) == r` holds for a record
       with and without `store_ref`, `metrics` and `outcome`; the existing
       import-direction test in `tests/test_context_eval.py` still passes.
+
+- [ ] 1b. Add the `execution-observed` provenance mode to
+      `orchestrator/context_eval.py` (depends on 1): `"observe-candidate"` in
+      `EVIDENCE_KINDS`; frozen `ExecutionRef(work_item_id, execution_id)` with
+      `to_dict`/`from_dict`; `EvalRecord.execution_ref` (omitted from
+      `to_log_dict()` when `None`); `evaluate(..., execution_ref=)` refusing it
+      unless `evidence_kind == "observe-candidate"` with `store_ref is None`, and
+      refusing a `store_ref` for that kind; document-identity-only verification
+      for it (`store_ok` stays `None`); `_observation_key` keyed on
+      `execution_ref` for `observe-candidate`. Amend ADR 015 sec. 1 (two
+      provenance modes) and sec. 7 step 5 (both counted per execution).
+      — DoD: an `observe-candidate` record round-trips through `to_log_dict`/
+      `from_dict`; it can never carry a `store_ref`; existing record shapes are
+      byte-identical.
+
+- [ ] 1c. Evaluate the observe candidate (depends on 1b):
+      `AssemblyResult.observe_candidate` set only by the `observe` shadow pass;
+      `_emit_context_eval` prints a second record for it with
+      `evidence_kind="observe-candidate"`, the candidate's catalog identity and
+      `execution_ref` from its `work_context` (`we_` executions only),
+      best-effort.
+      — DoD: at `observe` with a differing bound strategy and
+      `ISSUE_INVESTIGATOR_CONTEXT_EVAL=on`, exactly two `context_eval=` lines are
+      printed (authoritative `live`, then `observe-candidate`); the candidate
+      never reaches the prompt, `snapshot`, `rendered` or the store client (Slice
+      B's T9 still passes unchanged).
 
 - [ ] 2. Extend `orchestrator/context_release.py`'s catalog types (depends on 1):
       add `PROMOTION_ENVIRONMENTS = {"shadow", "production"}` and
@@ -39,8 +79,9 @@ the issue's hard dependency about hashes #526 invalidated.
       builds an `EvidenceIdentity` from the loaded `ContextStrategyVersion`,
       and calls `assess_evidence(..., policy=FreshnessPolicy(
       ADR019_V1_FRESHNESS_WINDOW_SECONDS, ADR019_V1_MIN_CONSECUTIVE_OBSERVATIONS))`.
-      Fixed precedence: non-`context-eval` kind -> `evidence-missing`; no
-      records -> `evidence-missing`; a matching-identity record with
+      It first keeps only `evidence_kind == "observe-candidate"` records
+      (`PRODUCTION_EVIDENCE_KINDS`). Fixed precedence: non-`context-eval` kind ->
+      `evidence-missing`; no observe-candidate records -> `evidence-missing`; a matching-identity record with
       `verdict: "hash-mismatch"` -> `hash-mismatch`; evaluator-version
       disagreement -> `evidence-mismatch`; then `missing`/`mismatched`/`stale`/
       `insufficient-observations` -> `evidence-missing`/`evidence-mismatch`/
@@ -96,12 +137,15 @@ the issue's hard dependency about hashes #526 invalidated.
       publish -> promote-to-shadow -> soak -> build the evidence file -> inspect
       with `--dry-run` -> promotion PR -> `rollback --to-revision N` ->
       break-glass `CONTEXT_RELEASE_ROLLOUT_MODE=off`, with runnable commands;
-      the soak gate stated in operator terms (3 consecutive store-backed
-      observations of the exact strategy/version/`contentHash`/
-      `implementationHash`, newest at most 7 days old, no `hash-mismatch`); an
-      explicit note that the `observe` shadow pass is never itself a counted
-      observation and how to produce observations that are; and the
-      refusal-reason table.
+      the soak gate stated in operator terms (3 consecutive `observe-candidate`
+      observations from 3 distinct executions of the exact strategy/version/
+      `contentHash`/`implementationHash`, newest at most 7 days old, no
+      `hash-mismatch`); soak = the production investigator at
+      `CONTEXT_RELEASE_ROLLOUT_MODE=observe` with
+      `ISSUE_INVESTIGATOR_CONTEXT_EVAL=on`, evidence collected from the
+      `context_eval=` log lines; an explicit warning that making the candidate
+      authoritative yields no soak evidence and is itself a production change;
+      and the refusal-reason table.
       — DoD: an operator can run the whole lifecycle from the README with no code
       reading; every command in the section is copy-pasteable and correct for the
       merged CLI.
@@ -154,7 +198,7 @@ the issue's hard dependency about hashes #526 invalidated.
 - [ ] T2 (T5, production half — `evidence.kind: none`). A `production` promotion
       with `evidence_kind="none"` is refused as `evidence-missing`; the *same*
       promotion to `shadow` is accepted and appends one revision.
-- [ ] T3 (T5 — stale). Production evidence whose newest store-backed observation
+- [ ] T3 (T5 — stale). Production evidence whose newest counted observe-candidate observation
       is 7 days + 1 second old is refused as `evidence-stale`; the same evidence
       one second inside the window passes.
 - [ ] T4 (T5 — insufficient). Two consecutive observations are refused as
@@ -199,6 +243,18 @@ the issue's hard dependency about hashes #526 invalidated.
       naming `evidence-stale`; a malformed evidence line exits non-zero with
       `unknown:` and the line number; `--evidence-kind context-eval` without
       `--evidence-ref` is rejected.
+- [ ] T15. Observe-candidate soak: three production investigations, each with
+      the default strategy authoritative and the candidate at `observe`, produce
+      `observe-candidate` records that pass the gate (`fresh`); two are
+      `evidence-insufficient`; three retries of one execution count once.
+- [ ] T16. An authoritative candidate cannot satisfy the soak: three `live`
+      records (store-backed, candidate identity) are refused as
+      `evidence-missing`, with or without `observe-candidate` records of a
+      different identity mixed in.
+- [ ] T17. Provenance: an `observe-candidate` record never carries a `store_ref`
+      (`evaluate` refuses it), carries the candidate's own `execution_ref`, and
+      verifies on document identity only (`store_ok is None`); a
+      `live`/`stored-replay` record with an `execution_ref` is refused.
 - [ ] T14. Guards after task 10: published catalog hashes are not drifted, the
       committed shadow binding resolves, and no production binding is shipped.
 
