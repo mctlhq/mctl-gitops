@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-27T23:23:31Z'
+status: implemented
+updated_at: '2026-09-28T21:39:30Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-39a56ffd4add534d
@@ -30,16 +30,7 @@ pr: https://github.com/mctlhq/mctl-telegram/pull/699
 ci_blockers_head: d1ab79671e162d20cfe0282bdcaf427ec530ad80
 ci_blockers:
 - build / product-updates
-review_attempts: 1
-refusals: 3
-refusals_head: d1ab79671e162d20cfe0282bdcaf427ec530ad80
-notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
-  was never charged — the proposal is not at fault; a human must reconcile the review
-  with the operator decision. Last reason: CI''s build/product-updates gate fails
-  because docs/product-updates/search-messages-date-range.yaml:18 has status: draft,
-  which the productupdates gate treats as covering nothing. Fixing this requires flipping
-  status to approved with a non-empty provenance.reviewed_by naming a human reviewer.
-  docs/product-updates/README.md (''The two approvals'' section) states an entry only
-  lands with ''status: approved'' and ''a named human in provenance.reviewed_by'',
-  and explicitly: ''A model may help word an update (provenance.assisted_by). It cannot
-  approve one: the reviewer is never a bot account and never the'
+github:
+  state: open
+  head_sha: e87ecb21da410d28309d95553c26f8918a3548c7
+  observed_at: '2026-09-28T21:39:30Z'
