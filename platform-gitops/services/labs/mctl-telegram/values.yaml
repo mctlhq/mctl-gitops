@@ -35,9 +35,20 @@ resources:
     # LimitRange max (3) and ResourceQuota limits.cpu (12), so no tenant-quota
     # change is needed. NOT trimmed during the 2026-08-03 right-sizing pass.
     cpu: 1000m
-    memory: 256Mi
+    # Raised 256Mi -> 768Mi (2026-09-28): the 2026-08-03 trim sized this from
+    # p95 working set (~60MB) and missed media peaks. One get_messages call
+    # with fetch_media=true may pull up to 20 MiB of files, which is held
+    # raw, as base64 and serialized several times over (text and
+    # structuredContent both carry it), peaking at ~200MB+ on top of the
+    # baseline; it OOM-killed the pod on 2026-09-28 19:55 UTC. The request
+    # stays at 128Mi, so nothing extra is reserved on the node; the code-side
+    # fix that removes the amplification is tracked in mctl-telegram.
+    memory: 768Mi
 env:
   APP_ENV: production
+  # Soft heap target below the 768Mi limit so the Go GC works harder before
+  # the kernel OOM-kills the container.
+  GOMEMLIMIT: 600MiB
   AUTH_MODE: local-jwt
   AUTH_REQUIRED: "true"
   ALLOW_SEND: "true"
