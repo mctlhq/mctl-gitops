@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-28T10:15:41Z'
+status: merged
+updated_at: '2026-09-28T10:30:51Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-26862e127f97a1ed
@@ -27,4 +27,5 @@ attempt:
   expires_at: '2026-09-28T11:49:26Z'
   finished_at: '2026-09-28T09:43:53Z'
 pr: https://github.com/mctlhq/newton-mcp-gateway/pull/19
-review_attempts: 1
+merged_at: '2026-09-28T10:30:51Z'
+merge_commit: c7a60a89109634e8550c5b9dec95c46e261ad8f5
