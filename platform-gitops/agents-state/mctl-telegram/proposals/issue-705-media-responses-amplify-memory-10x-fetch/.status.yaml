@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-28T23:15:23Z'
+updated_at: '2026-09-28T23:50:21Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-a31096e2f7157615
@@ -27,3 +27,8 @@ attempt:
   expires_at: '2026-09-29T00:48:38Z'
   finished_at: '2026-09-28T23:15:23Z'
 pr: https://github.com/mctlhq/mctl-telegram/pull/706
+ci_blockers_head: c394190f9f767c67bb41c1c22ee35c216a6aa3f9
+ci_blockers:
+- build / product-updates
+- build / test
+harness_failures: 1
