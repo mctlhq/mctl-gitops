@@ -3,10 +3,10 @@
 - [ ] 1. Add the module-level compiled pattern `_SEVERITY_RE` to
       `orchestrator/run_shepherd.py`, immediately above `_extract_severity`
       (currently L1656). Use the exact pattern in design.md, which was verified
-      against all 20 existing `test_extract_severity_*` assertions plus T1-T7
-      below (40/40). Anchored with `re.MULTILINE | re.VERBOSE`; three branches
-      (closed bold `**P2**` + delimiter-or-end-of-line, open bold `**P2` +
-      required delimiter, bare `P2` + required delimiter); delimiter class `:`,
+      against the full existing `tests/test_run_shepherd.py` and T1-T9 below. Anchored with `re.MULTILINE | re.VERBOSE`; three branches
+      (closed bold `**P2**` + delimiter-or-end-of-line, or + parenthetical
+      qualifier + required delimiter; open bold `**P2` + optional qualifier + required
+      delimiter; bare `P2` + optional qualifier + required delimiter); delimiter class `:`,
       `—`, `–`, `-`; intra-marker gap `[ \t]*`, never `\s*`; optional single
       leading list bullet (`-`, `*`, `+`, `1.`, `1)`) and leading whitespace;
       end-of-line reachable only after a closing `**`. Comment the pattern with
@@ -41,7 +41,7 @@
       `address-review`, not just the helper.
 - [ ] 6. Run the mutation check (depends on 4, 5): locally revert the
       `_extract_severity` body to the pre-change branches, run the new tests,
-      confirm T1, T2, T3, T7 fail and the pre-existing tests still pass, then
+      confirm T1, T2, T3, T7, T9 fail and the pre-existing tests still pass, then
       restore. Record the observed failure output in the PR description. — DoD:
       the PR description shows the mutation-check evidence, per the workspace
       rule that a regression test must be proven to catch the regression.
@@ -90,6 +90,12 @@
       `_route_gh(pr, reviews=..., review_comments=...)`; assert
       `len(review.findings) == 1`, `review.findings[0].severity == "P2"`, and
       `decide(pr, review)[0] == "address-review"` (today: `"wait"`).
+- [ ] T9. Parenthetical qualifier (owner amendment): `P2 (carried over from prior review,
+      still unaddressed — non-blocking): x` -> `"P2"`; the verbatim newton-mcp-gateway#21
+      round-2 body `P3 (carried over from prior review, still unaddressed — non-blocking): ...`
+      -> `"P3"`; `**P2** (security): x` -> `"P2"`; `**P2 (security):** x` -> `"P2"`;
+      `- **P1** (regression) — x` -> `"P1"`. Non-matches -> `None`: `there are P2 (maybe): x`,
+      `see **P2** (security): above`, `P2 (x)`, `**P2** (x)`, `"P2 (a\nb): x"`.
 - [ ] T8. Regression guard for the existing block: re-run the seven
       pre-existing `test_extract_severity_*` tests unchanged, including the
       mid-body case at L3429 (`"Has P1/P2 findings, ...\n\n**P2 — Title
