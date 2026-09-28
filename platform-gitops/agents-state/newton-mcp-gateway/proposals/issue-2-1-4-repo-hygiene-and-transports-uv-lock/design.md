@@ -181,8 +181,9 @@ Multi-stage, `uv`-based, slim Python 3.12:
   itself. `UV_COMPILE_BYTECODE=1` and `UV_LINK_MODE=copy` are set so the venv is
   self-contained and importable from the runtime stage.
 - **Runtime**: the same `python:3.12-slim` base, a non-root user created with
-  `useradd`, `COPY --from=builder --chown=<user> /app/.venv /app/.venv`,
-  `ENV PATH="/app/.venv/bin:$PATH"`, `USER <user>`, `EXPOSE 8000`, and
+  `useradd`, `COPY --from=builder /app/.venv /app/.venv` — **root-owned, no
+  `--chown`** — followed by `RUN chmod -R go-w /app` so no group/other write bit
+  survives, then `ENV PATH="/app/.venv/bin:$PATH"`, `USER <user>`, `EXPOSE 8000`, and
   `ENTRYPOINT ["newton-mcp"]`. Image-level `ENV` defaults are
   `NEWTON_BACKEND=mock`, `NEWTON_MCP_TRANSPORT=streamable-http`, `HOST=0.0.0.0`,
   `PORT=8000`, plus `PYTHONUNBUFFERED=1` so container logs are not swallowed.
@@ -192,6 +193,12 @@ default stays `stdio`, is what reconciles the issue's two requirements: a bare
 `docker run -p 8000:8000` serves HTTP, and a bare `uv run newton-mcp` still speaks
 stdio. Every one of those values is overridable with `docker run -e`, including
 `-e NEWTON_MCP_TRANSPORT=stdio` for `docker run -i`.
+
+The runtime user never owns `/app` or `/app/.venv`: the process runs as the non-root
+user with read/execute access only, which is what the "owning no write access to the
+application directory" acceptance criterion requires. (Amended before approval: the
+first draft used `COPY --chown=<user>`, which would have made the service user the
+owner of the venv and contradicted that criterion.)
 
 `uv` is deliberately *not* present in the runtime stage — only the resulting venv is
 copied. That keeps the runtime image free of the build toolchain and means
