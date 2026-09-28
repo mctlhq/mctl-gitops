@@ -1,5 +1,15 @@
 # Action runtime skeleton: MCP host, tool discovery and deterministic capability resolver
 
+> **Amended at owner review (before approval):**
+> (1) Cancellation of `refresh()` propagates. The catalog catches only `Exception`, never
+> `BaseExceptionGroup`.
+> (2) `server_timeout_seconds` bounds the whole per-server discovery cycle: connect, initialize,
+> and every `list_tools` page. A hung server cannot block discovery of the others.
+> (3) `verification.*` is removed from the template roots.
+> (4) The catalog records the server's observed MCP `serverInfo` (`name`, `version`) as metadata
+> only. Transport fingerprints, canonical server identity and approval-binding semantics are
+> deliberately left to #6, where they become a security boundary.
+
 ## Context
 
 `newton-mcp-gateway` today only implements Direction B: an MCP *server* that exposes Newton as a
@@ -77,7 +87,21 @@ Catalog
   `tool_missing` problem naming server and tool, and SHALL keep the rest of the catalog usable.
 - IF a server cannot be connected, times out, or fails during listing THEN THE SYSTEM SHALL record a
   `server_unavailable` problem carrying the error text and SHALL NOT propagate the exception out of
-  `refresh()`.
+  `refresh()`. Only `Exception` and its subclasses, including `ExceptionGroup`, are converted into
+  problems.
+- WHEN the task running `refresh()` is cancelled THE SYSTEM SHALL propagate the cancellation and
+  SHALL NOT record it as a problem or swallow it. The catalog SHALL NOT catch `BaseException`,
+  `BaseExceptionGroup` or the backend's cancellation exception. The previous snapshot stays in
+  place, because an aborted refresh never assigns.
+- WHILE discovering one server THE SYSTEM SHALL bound the entire per-server cycle with a single
+  `server_timeout_seconds` deadline: client connect, the MCP initialize handshake, and every
+  `list_tools` page. IF that deadline expires THEN THE SYSTEM SHALL record `server_unavailable` for
+  that server and continue with the remaining servers, so a server that connects and then hangs
+  cannot block discovery of the others.
+- WHEN a server's initialize handshake completes THE SYSTEM SHALL record the server's observed MCP
+  `serverInfo` `name` and `version` in the snapshot as metadata only, or `None` when the connection
+  carries no `serverInfo`. The catalog and resolver SHALL NOT use it for filtering, ranking or
+  identity. `CandidateAction.server_identity` stays the configured identity.
 - WHEN `refresh()` completes THE SYSTEM SHALL replace the previous snapshot atomically, so a tool that
   disappeared from a server disappears from the catalog and a newly added allow-listed tool appears.
 - WHEN a caller reads the catalog before any successful `refresh()` THE SYSTEM SHALL return an empty
@@ -123,8 +147,10 @@ Resolver
   `goal_prefixes` as a list (a capability commonly serves `reduce_room_temperature` and
   `raise_room_temperature`); a single-string form is not accepted, to keep one shape.
 - The issue does not define the argument-template language. This proposal uses explicit
-  `${path}` placeholders over contract fields (`goal`, `target.*`, `constraints.*`,
-  `verification.condition`). There is no escape sequence in v0, so a literal `${` cannot appear in a
+  `${path}` placeholders over contract fields (`goal`, `reason`, `confidence`, `target.*`,
+  `constraints.*`). `verification.*` is deliberately not a template root (owner amendment): tool
+  arguments must not be derived from the verification section, and #8 replaces
+  `verification.condition` with structured predicates. There is no escape sequence in v0, so a literal `${` cannot appear in a
   template value; if that ever matters, `$${` is the natural follow-up.
 - Target matching uses case-insensitive exact location equality. Hierarchical locations
   (`building/floor2/kitchen`) and `target.resource` matching are deliberately deferred; `resource` is

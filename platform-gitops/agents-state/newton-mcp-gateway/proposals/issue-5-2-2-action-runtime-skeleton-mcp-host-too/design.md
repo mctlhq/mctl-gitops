@@ -92,7 +92,9 @@ CatalogEntry     : capability: CapabilityConfig, server: ServerConfig, tool: Dis
                    read_tool: DiscoveredTool | None
 CatalogProblem   : kind: Literal["server_unavailable", "tool_missing", "read_tool_missing"],
                    server: str, tool: str | None, detail: str
-CatalogSnapshot  : entries: tuple[CatalogEntry, ...], problems: tuple[CatalogProblem, ...]
+ObservedServerInfo : server: str, name: str, version: str   # from the initialize handshake, metadata only
+CatalogSnapshot  : entries: tuple[CatalogEntry, ...], problems: tuple[CatalogProblem, ...],
+                   server_info: tuple[ObservedServerInfo, ...]
 ```
 
 ```python
@@ -100,14 +102,20 @@ ClientFactory = Callable[[ServerConfig], AbstractAsyncContextManager[SupportsLis
 
 class CapabilityCatalog:
     def __init__(self, config: RuntimeConfig, *, client_factory: ClientFactory | None = None,
-                 connect_timeout_seconds: float = DEFAULT_CONNECT_TIMEOUT_SECONDS) -> None
+                 server_timeout_seconds: float = DEFAULT_SERVER_TIMEOUT_SECONDS) -> None
     @property def snapshot(self) -> CatalogSnapshot          # empty before the first refresh
     async def refresh(self) -> CatalogSnapshot
 ```
 
 `refresh()` walks servers in config order (deterministic output ordering), and per server:
 
-1. opens the client from `client_factory` inside `anyio.fail_after(connect_timeout_seconds)`;
+1. opens one `anyio.fail_after(server_timeout_seconds)` scope around the **whole** per-server
+   cycle. Inside it: enter the client from `client_factory`, which performs connect and the MCP
+   initialize handshake; read `client.server_info` (an `Implementation | None` on mcp 2.2; `None`
+   on connections that carry no `serverInfo` stamp) into an `ObservedServerInfo`, or skip it when
+   `None`; then page `list_tools()`. The deadline covers connect, initialize and every page, so a
+   server that connects and then hangs mid-listing times out like one that never connects
+   (owner amendment);
 2. pages `list_tools()` until `next_cursor is None`, with a hard `MAX_TOOL_PAGES` guard so a
    misbehaving server cannot loop forever;
 3. intersects the listing with the capabilities allow-listed for that server. Tools the server
@@ -115,8 +123,21 @@ class CapabilityCatalog:
    "problems", they are simply not ours. An allow-listed tool missing from the listing becomes a
    `tool_missing` problem; a configured `read_tool` missing becomes `read_tool_missing` (the
    capability still resolves, it is just not verifiable later);
-4. catches `Exception` **and** `BaseExceptionGroup` (anyio task groups wrap failures) and records a
-   single `server_unavailable` problem with `repr(exc)` truncated; the loop continues.
+4. catches `Exception` only, which includes `ExceptionGroup` (anyio task groups wrap ordinary
+   failures in it) and the `TimeoutError` raised by `fail_after`. It records a single
+   `server_unavailable` problem with `repr(exc)` truncated, and the loop continues. It never catches
+   `BaseException` or `BaseExceptionGroup` (owner amendment): an outer cancellation arrives as the
+   backend's cancellation exception, possibly wrapped in a `BaseExceptionGroup`, and must propagate
+   out of `refresh()` untouched. Since the snapshot is assigned only at the end, a cancelled refresh
+   leaves the previous snapshot in place.
+   The `try` wraps the `fail_after` scope, not code inside it: anyio raises `TimeoutError` when
+   the scope exits, so a `try` nested inside the scope would miss the timeout.
+
+`server_info` is metadata only: nothing in the catalog or resolver filters, ranks or identifies on
+it, and `CandidateAction.server_identity` remains the configured identity. What a server's
+canonical identity is (config label, transport fingerprint, observed `serverInfo`, or a
+combination) and what an approval binds to is decided in #6, where it becomes a security boundary.
+#5 only makes the observed value available.
 
 `refresh()` builds a fresh snapshot and assigns it atomically at the end, so a tool that vanished
 from a server vanishes from the catalog — no merge with stale state. The default `client_factory`
@@ -166,8 +187,10 @@ is replaced by the resolved contract value **with its JSON type preserved** (so
 `"${constraints.desired_temperature_c}"` becomes the int `23` and passes an `integer` schema); a
 string containing `${path}` among other text gets string interpolation; dicts and lists are rendered
 recursively; anything else passes through as a literal. Supported roots: `goal`, `reason`,
-`confidence`, `target.type`, `target.location`, `target.resource`, `constraints.<key>`,
-`verification.condition`, `verification.timeout_seconds`. An unknown root or a missing
+`confidence`, `target.type`, `target.location`, `target.resource`, `constraints.<key>`.
+`verification.*` is deliberately **not** a root (owner amendment): tool arguments must not be
+derived from the verification section, and #8 replaces `verification.condition` with structured
+predicates, so a template root on it would break then. An unknown root or a missing
 `constraints` key raises `TemplateError`, caught by the resolver into a `template_error` rejection
 naming the placeholder. There is no escape sequence in v0.
 
@@ -250,10 +273,11 @@ Direction A saying discovery and resolution exist and execute nothing.
   `uv sync --locked --group dev` fails. Neither package affects the Docker image size materially.
 - **Resource impact**: `refresh()` opens one short-lived connection per configured server; for stdio
   servers that means spawning a subprocess per refresh in production use. Bounded by
-  `connect_timeout_seconds` and `MAX_TOOL_PAGES`. Tests spawn nothing.
+  `server_timeout_seconds` (the full per-server cycle) and `MAX_TOOL_PAGES`. Tests spawn nothing.
 - **Risks and mitigations**:
   - *An MCP server is hostile or broken* (huge listings, malformed schemas, never-returning cursor):
-    mitigated by the per-server timeout, the page cap, catching `BaseExceptionGroup`, and treating an
+    mitigated by the per-server timeout over the full cycle, the page cap, catching `Exception`
+    (including `ExceptionGroup`) while letting cancellation propagate, and treating an
     invalid `inputSchema` as a rejection rather than an exception.
   - *The allow-list is silently widened by a config typo*: mitigated by `extra="forbid"` everywhere
     and by uniqueness validators; a bad config fails loudly at load time.
