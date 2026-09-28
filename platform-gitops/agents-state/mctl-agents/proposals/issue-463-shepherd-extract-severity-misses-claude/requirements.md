@@ -1,3 +1,9 @@
+> **Amended at owner review (before approval):** the grammar also accepts an optional
+> same-line parenthetical qualifier between the marker and its delimiter
+> (`P2 (carried over …): …`, `**P2** (security): …`), a form claude[bot] already wrote on
+> mctlhq/newton-mcp-gateway#21 round 2. Line anchoring and the prose non-match criteria are
+> unchanged.
+
 # Shepherd: parse closed-bold severity markers (`**P2** —`, `**P2**:`) so CHANGES_REQUESTED PRs enter the fix loop
 
 ## Context
@@ -64,6 +70,14 @@ observed family, while keeping the badge check and the existing
   return the most severe one (`P1` over `P2` over `P3`), which is the
   precedence the current severity-ordered `for` loop produces, regardless of
   the order the markers appear in the body.
+- WHEN a marker opening a line (bare, open bold or closed bold) is followed on the same line
+  by one parenthetical qualifier and then a delimiter — `P2 (carried over from prior review,
+  still unaddressed — non-blocking): ...`, `**P2** (security): ...`, `**P2 (security):** ...`,
+  `- **P1** (regression) — ...` — THE SYSTEM SHALL return that severity. The qualifier may not
+  contain `)` or a line break.
+- IF a marker with a parenthetical qualifier appears mid-line (`there are P2 (maybe): x`,
+  `see **P2** (security): above`), has no delimiter after the qualifier (`P2 (x)`,
+  `**P2** (x)`), or its qualifier spans a line break THEN THE SYSTEM SHALL return `None`.
 - WHEN the marker is preceded on its line only by whitespace and at most one
   Markdown list bullet (`-`, `*`, `+`, or `1.` / `1)`), THE SYSTEM SHALL still
   return that severity, since claude[bot] review bodies list findings as

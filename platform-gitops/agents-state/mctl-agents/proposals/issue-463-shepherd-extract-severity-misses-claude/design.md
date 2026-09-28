@@ -72,13 +72,14 @@ is and keeping severity precedence.
 # span may end the line with no delimiter at all.
 _SEVERITY_RE = re.compile(
     r"""
-    ^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?      # optional list bullet
+    ^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?       # optional list bullet
     (?:
         \*\*(P[123])(?:
-              \*\*[ \t]*(?::|—|–|-|$)   # closed bold: **P2** — / **P2**: / **P2**
-            | [ \t]*(?::|—|–|-)         # open bold:   **P2 —  / **P2:
+              \*\*[ \t]*(?::|—|–|-|$)                             # **P2** — / **P2**: / **P2**
+            | \*\*[ \t]*\([^)\n]*\)[ \t]*(?::|—|–|-)             # **P2** (security): / **P2** (x) —
+            | (?:[ \t]*\([^)\n]*\))?[ \t]*(?::|—|–|-)            # **P2 — / **P2: / **P2 (security):
           )
-      | (P[123])[ \t]*(?::|—|–|-)       # bare: P2 — / P2:
+      | (P[123])(?:[ \t]*\([^)\n]*\))?[ \t]*(?::|—|–|-)          # P2 — / P2: / P2 (carried over …):
     )
     """,
     re.MULTILINE | re.VERBOSE,
@@ -116,15 +117,24 @@ Why this shape:
   `(?:\*\*)?[ \t]*(?::|—|-|$)` would make `**P2\n— text` parse as `P2`, which
   is why it is two sub-branches.
 - **Verified against every existing assertion.** The pattern above was run
-  against all 20 assertions in the current `test_extract_severity_*` block plus
-  the 20 new cases in tasks.md T1-T7 before this design was written: 40/40 as
-  specified, no regression in the accepted set.
+  against the full current `tests/test_run_shepherd.py` (288 passed) plus the
+  T1-T9 cases in tasks.md, including the amended parenthetical-qualifier
+  cases: no regression in the accepted set.
 - **`finditer` + severity-ordered lookup, not `search`.** A plain `search`
   would return the *first* marker positionally and silently downgrade a body
   whose `P2` precedes its `P1`. Collecting all matches into a set and then
   scanning `("P1", "P2", "P3")` keeps the existing severity precedence
   byte-for-byte, and keeps the badge check in the same ordered scan so
   `![P1 Badge]` still outranks a `P2` line.
+- **Optional parenthetical qualifier (owner amendment).** claude[bot]'s round-2 review on
+  mctlhq/newton-mcp-gateway#21 wrote `P3 (carried over from prior review, still unaddressed —
+  non-blocking): ...`; the same spelling with `P2` would reproduce the #21 stall. One
+  same-line group `\([^)\n]*\)` is allowed between the marker and the delimiter in all three
+  branches. After a closed bold it *requires* a delimiter (`**P2** (x)` alone does not parse),
+  so the end-of-line rule stays reachable only directly after `**`. The qualifier excludes `)`
+  and `\n`, so it cannot swallow text across lines, and line anchoring still rejects
+  `there are P2 (maybe): x`. Checked against the full existing `tests/test_run_shepherd.py`
+  (288 passed) plus 22 cases including every T1-T9 example.
 - **Optional list bullet.** claude[bot] review bodies commonly list findings as
   `- **P2**: ...`. Allowing at most one bullet (or `1.` / `1)`) plus leading
   whitespace costs one token group and does not weaken the prose criteria:
