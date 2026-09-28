@@ -22,8 +22,10 @@
       `CapabilityCatalog.refresh()`.
       — DoD: `refresh()` pages `list_tools` to exhaustion under `MAX_TOOL_PAGES`, keeps only
       allow-listed tools that exist, records `tool_missing` / `read_tool_missing` /
-      `server_unavailable` problems, catches `Exception` and `BaseExceptionGroup` per server, applies
-      `anyio.fail_after(connect_timeout_seconds)`, replaces the snapshot atomically, and returns an
+      `server_unavailable` problems, catches `Exception` only (never `BaseExceptionGroup`) per
+      server, applies one `anyio.fail_after(server_timeout_seconds)` around the full per-server
+      cycle (connect + initialize + every `list_tools` page), records observed `serverInfo`
+      (`name`, `version`) as metadata only, replaces the snapshot atomically, and returns an
       empty snapshot before the first refresh. No `call_tool` anywhere in the module.
 - [ ] 5. Create `src/newton_mcp/runtime/resolver.py` (depends on 4) with `render_arguments()` +
       `TemplateError`, `CandidateAction`, `Rejection`, `Resolution`, `Resolver.resolve()` and the
@@ -79,9 +81,27 @@
 - [ ] T6. `test_catalog.py`: an allow-listed tool missing from the listing is reported as a
       `tool_missing` problem while the remaining entries stay usable; a missing `read_tool` is
       reported as `read_tool_missing` and the entry still resolves.
-- [ ] T7. `test_catalog.py`: a server whose factory raises (and a second one that raises inside a task
-      group as a `BaseExceptionGroup`) produces a `server_unavailable` problem; `refresh()` does not
-      raise and the other server's tools are still discovered.
+- [ ] T7. `test_catalog.py`: a server whose factory raises, and a second one that raises an ordinary
+      error inside a task group (surfacing as an `ExceptionGroup`), each produce a
+      `server_unavailable` problem. `refresh()` does not raise, and the other server's tools are
+      still discovered.
+- [ ] T7a. Cancellation propagates (owner amendment). Run `refresh()` in a task group or cancel
+      scope and cancel it while a fake server's `list_tools` is blocked on an `anyio.Event`. The
+      cancellation propagates: the scope reports `cancelled_caught`, and `refresh()` does not
+      return a snapshot. No problem is recorded, and `catalog.snapshot` still equals the snapshot
+      from the previous successful refresh. Mutation check: adding `BaseExceptionGroup` (or
+      `BaseException`) to the catch must fail this test.
+- [ ] T7b. A hung server does not block the others (owner amendment). With
+      `server_timeout_seconds` small, a fake server that completes initialize and then never
+      answers `list_tools` (or answers page 1 and hangs on page 2) produces `server_unavailable`
+      whose detail indicates a timeout, and a second, healthy server's allow-listed tools are still
+      discovered in the same `refresh()`. A variant where the client factory itself hangs before
+      initialize gives the same result, which shows the deadline covers connect, initialize and
+      pagination.
+- [ ] T7c. Observed `serverInfo` is metadata only (owner amendment). The snapshot's `server_info`
+      carries the fake server's `name`, and `version` as the server reports it. Renaming the fake
+      server's `serverInfo.name` changes no `CandidateAction` (same `server_identity`, `score` and
+      ranking).
 - [ ] T8. `test_catalog.py`: `refresh()` picks up changes — a tool added to the fake server between
       two refreshes appears, a tool removed disappears, and the snapshot before any refresh is empty.
 - [ ] T9. `test_catalog.py`: the fake server's tool bodies flip a module-level flag when invoked; after
@@ -96,6 +116,9 @@
       `Resolution(candidates=(), rejections=...)` with one rejection per configured capability, each
       naming the stage — covering `goal_prefix`, `target_type`, `target_location`,
       `server_unavailable` and `tool_missing`.
+- [ ] T13a. `test_resolver.py`: `"${verification.condition}"` and
+      `"${verification.timeout_seconds}"` are rejected as unknown roots with a `template_error`
+      naming the placeholder (owner amendment).
 - [ ] T13. `test_resolver.py`: `render_arguments()` preserves JSON type for a whole-string placeholder
       (`"${constraints.desired_temperature_c}"` -> `23`), interpolates an embedded placeholder into a
       string, renders nested dicts/lists, and a placeholder naming a missing constraint or an unknown
