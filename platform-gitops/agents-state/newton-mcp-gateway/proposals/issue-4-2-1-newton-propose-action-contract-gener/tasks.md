@@ -19,7 +19,9 @@
       a non-JSON `json_events` entry and an `allowed_goals` list that reduces to empty, all raised
       before any `backend.query`; deterministic
       `obs-<sha256(canonical events)[:16]>` fallback id; bounded `" | "`-joined summary; at most
-      two `backend.query` calls; failures classified as `empty_output` / `not_a_string` /
+      two `backend.query` calls; a result with `status == "failed"` is a terminal
+      `backend_failed` error carrying `result.error` verbatim, returned with no retry;
+      model-output failures classified as `empty_output` / `not_a_string` /
       `invalid_json` / `not_an_object` / `validation_error` / `goal_not_allowed`; retry appends
       `build_retry_suffix(errors_so_far)` to both `system_prompt` and `instruction_prompt`;
       `allowed_goals` membership checked after Pydantic validation; on success `evidence` is
@@ -106,8 +108,24 @@ All new tests go in `tests/test_propose_action.py` unless noted, and go through
 - [ ] T12. Envelope shape: the returned `structured_content` keys are exactly
       `{"status", "contract", "raw_text", "errors", "backend", "observation_id"}` on both the
       success and the failure path.
-- [ ] T13. Empty or non-string `outputs` (`[]`, `[None]`, `[{"a": 1}]`) are classified as
-      `empty_output` / `not_a_string` and still get exactly one retry.
+- [ ] T13. Empty or non-string `outputs` (`[]`, `[None]`, `[{"a": 1}]`) on a
+      `status == "completed"` result are classified as `empty_output` / `not_a_string` and still
+      get exactly one retry.
+- [ ] T17. Backend failure is terminal (owner amendment): the scripted backend returns
+      `NewtonQueryResult(status="failed", outputs=[], error="upstream timeout")` on attempt 1 ->
+      `status == "failed"`, `contract is None`, `raw_text is None`, `errors ==
+      [{kind: "backend_failed", attempt: 1, message: "upstream timeout", ...}]`, and the backend
+      was queried **exactly once**. Second case: attempt 1 returns invalid JSON and attempt 2
+      returns `status="failed"` with `error=None` -> errors are `[invalid_json@1,
+      backend_failed@2]`, the `backend_failed` message is the fixed "no error message" statement,
+      and there were exactly two calls. Mutation check: allowing a retry after `backend_failed`
+      must fail the first case.
+- [ ] T18. Mock + incompatible `allowed_goals` (owner amendment): calling the tool through the
+      `mock_backend` fixture with `allowed_goals=["turn_on_light"]`, which excludes the example's
+      `reduce_room_temperature`, gives `status == "failed"`, `backend == "mock"`,
+      `contract is None`, and two `goal_not_allowed` errors (attempts 1 and 2) that name
+      `reduce_room_temperature` and the allowed set. The mock does not adapt its contract to the
+      requested goals: doing so would simulate reasoning.
 - [ ] T14. `tools/list` shows `newton_propose_action` with `read_only_hint is True` (covered by
       the updated `tests/test_mcp_server.py`, listed here for traceability).
 - [ ] T15. `allowed_goals` normalisation: duplicates and surrounding whitespace are collapsed
