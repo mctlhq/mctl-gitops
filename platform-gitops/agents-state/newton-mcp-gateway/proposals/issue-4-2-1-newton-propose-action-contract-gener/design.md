@@ -107,7 +107,7 @@ is testable with a scripted fake.
 ```python
 class ProposeError(BaseModel):
     attempt: int                      # 1 or 2
-    kind: Literal["empty_output", "not_a_string", "invalid_json",
+    kind: Literal["backend_failed", "empty_output", "not_a_string", "invalid_json",
                   "not_an_object", "validation_error", "goal_not_allowed"]
     message: str
     loc: str | None = None            # dotted Pydantic error location when available
@@ -149,8 +149,15 @@ Flow, in one small explicit function plus helpers:
    instruction_prompt=prompt, events=[...], max_new_tokens=...)`. Setting both `system_prompt`
    and `instruction_prompt` copies exactly what `newton_query` and `newton_analyze_image` already
    do; no new or invented API field is introduced.
-6. Attempt loop, at most `MAX_ATTEMPTS` iterations: `await backend.query(request)`; take
-   `result.outputs[0]` and classify failures into `ProposeError`s
+6. Attempt loop, at most `MAX_ATTEMPTS` iterations: `await backend.query(request)`. **First**,
+   if `result.status == "failed"`, record
+   `ProposeError(attempt=n, kind="backend_failed", message=result.error or "backend reported
+   status=failed without an error message")` and return `status="failed"` at once. In that case
+   `raw_text` is `result.outputs[0]` only when `result.outputs` is non-empty and that first
+   element is a `str`, otherwise `None`, so an empty `outputs` list is never indexed, and there is no
+   retry and no further `/query` call. The retry suffix tells the model how to fix its output,
+   which cannot fix a backend failure; a second call would only hide the incident behind a
+   second error (owner amendment). Otherwise take `result.outputs[0]` and classify failures into `ProposeError`s
    (`empty_output` / `not_a_string` / `invalid_json` / `not_an_object` / `validation_error` /
    `goal_not_allowed`). On attempt 2 the request's `system_prompt` / `instruction_prompt` get
    `build_retry_suffix(errors_so_far)` appended. `pydantic.ValidationError.errors()` is flattened

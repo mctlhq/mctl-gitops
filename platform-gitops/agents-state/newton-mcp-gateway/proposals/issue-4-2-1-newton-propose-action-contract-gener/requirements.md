@@ -1,5 +1,11 @@
 # newton_propose_action: contract generation through Newton
 
+> **Amended at owner review (before approval):** a backend-reported failure
+> (`NewtonQueryResult.status == "failed"`) is a terminal `backend_failed` error with no retry and
+> with the backend's own `error` text preserved. The single retry is reserved for bad *model
+> output*: it corrects what the model wrote and must not mask a backend incident. Added a test
+> for the mock path with an `allowed_goals` set that excludes the example contract's goal.
+
 ## Context
 
 `newton-mcp-gateway` today implements Direction B only: three read-only MCP tools
@@ -95,9 +101,19 @@ Parsing, validation and the single retry
   surrounding whitespace only, and SHALL NOT strip markdown fences, extract a JSON substring, or
   otherwise repair the text.
 - WHEN the parsed object validates against `PhysicalActionContract` THE SYSTEM SHALL return it.
-- IF the first attempt yields non-JSON text, a JSON value that is not an object, a Pydantic
-  validation error, an empty `outputs` list, or a non-string first output THEN THE SYSTEM SHALL
-  retry exactly once, appending the recorded errors of the first attempt to the prompt.
+- IF the backend returns a result with `status == "failed"` on any attempt THEN THE SYSTEM SHALL
+  stop immediately without another `/query` call and return `status: "failed"`, `contract: null`,
+  and an `errors` list that ends with one `backend_failed` error for that attempt. The error's
+  message SHALL be the backend's `error` text verbatim. When the backend gave none, it SHALL be
+  a fixed statement that the backend reported `status=failed` without an error message.
+  `raw_text` SHALL be the first output only if `outputs` is non-empty and that first output
+  is a string, and `null` otherwise (including `outputs == []`); nothing is synthesised. Transport or HTTP errors that the backend raises
+  (`NewtonApiError`, including 401) keep propagating as tool errors, unchanged.
+- IF an attempt whose backend result is `status == "completed"` yields non-JSON text, a JSON
+  value that is not an object, a Pydantic validation error, an empty `outputs` list, or a
+  non-string first output THEN THE SYSTEM SHALL retry exactly once, appending the recorded
+  errors of the first attempt to the prompt. Only these model-output errors (and
+  `goal_not_allowed`, below) are retryable.
 - IF the second attempt also fails THEN THE SYSTEM SHALL return `status: "failed"` with the raw
   text of the second attempt and the errors of both attempts.
 - WHILE handling any failure THE SYSTEM SHALL NOT return a guessed, defaulted or repaired
