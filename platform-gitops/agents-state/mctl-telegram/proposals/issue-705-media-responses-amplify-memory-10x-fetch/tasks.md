@@ -39,7 +39,8 @@
 - [ ] 5. Preallocate the download buffer: add
       `telegram.DownloadMediaSized(ctx, c, loc, maxBytes, sizeHint)` in
       `internal/telegram/media_download.go` seeding
-      `cappedBuffer{buf: make([]byte, 0, min(sizeHint, maxBytes))}`; keep
+      `cappedBuffer{buf: make([]byte, 0, min(sizeHint, maxBytes))}` when both are
+      positive and no preallocation otherwise (never the cap on an unknown size); keep
       `DownloadMedia` as a `sizeHint = 0` wrapper with its exact current signature.
       Thread a `sizeHint` parameter through `mediaDownloader` /
       `downloadMediaViaPool` (`bulk_media.go:53`, `:78`) passing
@@ -62,10 +63,12 @@
       DoD: a `*Server` from `mcp.New` without the setter behaves exactly as before;
       `go test ./internal/mcp` passes with no test changes for this task alone.
 
-- [ ] 8. Wire the gate into the two media paths (depends on 7): acquire once at the
-      top of `fetchMediaInline` with `defer release()`; acquire in `toolGetMedia`
-      after the confirmation claim and before `borrowWithRetry`, releasing once the
-      base64 exists. On refusal return
+- [ ] 8. Wire the gate into the two media paths (depends on 7): in the
+      `get_messages` / `get_unread_messages` handlers acquire once when
+      `fetch_media=true`, before `fetchMediaInline`, with `defer release()` in the
+      handler so the slot covers result construction; in `toolGetMedia` acquire
+      after the confirmation claim and before `borrowWithRetry`, with
+      `defer release()` in the handler. On refusal return
       `"media downloads are at capacity — retry shortly"`, and in `toolGetMedia`
       release the claim via `s.Confirms.Unclaim(confID); released = true` so the
       `confirmation_id` survives for a retry (mirror `media_tools.go:252-262`).
@@ -99,8 +102,10 @@
       behaviour above 1 MiB of encoded media. Regenerate the snapshot:
       `go test ./internal/mcp -run TestToolDescriptorsSnapshotMatchesRegistry -update-descriptors`.
       Document the three new env vars wherever `MEDIA_DOWNLOAD_MAX_BYTES` is
-      documented (`README.md` / `docs/`), including the memory formula
-      `MEDIA_MAX_CONCURRENT * ~4 * cap`.
+      documented (`README.md` / `docs/`), including the memory estimate
+      `MEDIA_MAX_CONCURRENT * ~4 * cap`, stated as an estimate: the gate limits
+      concurrent media operations, and the final mcp-go marshal runs after the
+      slot is released.
       DoD: `docs/tool-descriptors.json` matches the registry; no emoji; English only.
 
 - [ ] 12. Final sweep: `go fmt ./...`, `go vet ./...`, `golangci-lint run`, full
@@ -125,7 +130,13 @@
       `stubDownloader` returning synthetic (non-real, non-Telegram) bytes, then measure
       `runtime.MemStats.TotalAlloc` (or `testing.Benchmark(...).AllocedBytesPerOp`)
       across `fetchMediaInline` + result construction + `json.Marshal` of the
-      `*CallToolResult`, asserting the delta stays under 4x `BulkMediaByteCap`.
+      `*CallToolResult`, asserting the delta stays under 6x `BulkMediaByteCap`.
+      Allocate the stub's synthetic bytes before reading the baseline `MemStats`
+      so they are not counted (`TotalAlloc` counts every allocation, including
+      buffer-growth garbage: base64 ~1.33x plus marshal growth ~2-2.7x is ~4x on
+      a correct implementation, so 4x would be flaky). Do not raise the threshold
+      to make the test pass; if the measured value is above 6x, the copy
+      elimination is incomplete.
       Include `BenchmarkFetchMediaInlineResult` with `-benchmem` for trend data.
       Verify the test fails against the pre-change code path.
 - [ ] T5. `internal/telegram/media_download_test.go` —

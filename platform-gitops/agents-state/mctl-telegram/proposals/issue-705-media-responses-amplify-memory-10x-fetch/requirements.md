@@ -96,7 +96,9 @@ Copy elimination
   `cappedBuffer.Write` (`internal/telegram/media_download.go:331`) does not
   double a 20 MiB slice through `append` growth.
 - WHILE no declared size is available (photos report `Size == 0`), THE SYSTEM
-  SHALL preallocate no more than the effective per-item cap.
+  SHALL NOT preallocate the buffer (capacity starts at 0, as today); it SHALL
+  NOT fall back to preallocating the cap, which would reserve up to 20 MiB for
+  every small photo.
 
 Caps and admission control
 
@@ -126,8 +128,11 @@ Regression protection
 - WHEN the media allocation test runs with `BulkMediaByteCap` shrunk to a small
   value and a stubbed downloader (`stubDownloader`,
   `internal/mcp/bulk_media_test.go:60`), THE SYSTEM SHALL keep total bytes
-  allocated while building and marshalling the response below a fixed multiple
-  (4x) of the aggregate byte cap.
+  allocated while building and marshalling the response below 6x the aggregate
+  byte cap. The stub's synthetic input bytes SHALL be allocated before the
+  measurement starts so they are not counted. The threshold SHALL be chosen so
+  the test fails against the pre-change code path (~10x), and SHALL NOT be
+  raised to make a failing implementation pass.
 - WHEN `docs/tool-descriptors.json` is compared against the live registry, THE
   SYSTEM SHALL match (regenerated with
   `go test ./internal/mcp -run TestToolDescriptorsSnapshotMatchesRegistry -update-descriptors`).
