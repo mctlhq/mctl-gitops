@@ -181,8 +181,9 @@ carry a summary.
   ```
 
   which seeds `cappedBuffer{cap: maxBytes, buf: make([]byte, 0, alloc)}` where
-  `alloc = min(sizeHint, maxBytes)` when both are positive, `maxBytes` when only
-  the cap is known and is itself sane, and `0` otherwise. `DownloadMedia` keeps
+  `alloc = min(sizeHint, maxBytes)` when both are positive and `0` otherwise
+  (in particular `0` when the declared size is unknown: preallocating the cap
+  there would reserve up to 20 MiB per small photo and defeat the change). `DownloadMedia` keeps
   its exact signature and becomes `DownloadMediaSized(..., 0)`, so
   `cmd/local/daemon.go:865` and `media_download_test.go` compile unchanged.
 - `bulk_media.go`: pass `msgs[i].MediaInfo.Size` as the hint through
@@ -220,11 +221,23 @@ in `internal/mcp/server.go` (the established `With*` pattern, e.g.
 Acquisition points — one slot per *operation*, not per item, because a slot's
 purpose is to bound how many callers can be accumulating media bytes:
 
-- `fetchMediaInline` (`bulk_media.go:143`) acquires once at the top,
-  `defer release()`. A failure to acquire returns a new sentinel that the two
-  handlers render as a retryable error result before any download starts.
+- The `get_messages` / `get_unread_messages` handlers acquire once, only when
+  `fetch_media=true`, before calling `fetchMediaInline`, with `defer release()`
+  in the handler, so the slot is held through `mediaJSONResult` as well. A
+  failure to acquire is rendered as a retryable error result before any
+  download starts.
 - `toolGetMedia` acquires after the confirmation is claimed and before
-  `borrowWithRetry`, releasing after `dataB64` is built and `buf` is nil'd. On
+  `borrowWithRetry`, with `defer release()` in the handler (not released as
+  soon as `dataB64` exists).
+
+Scope of the bound, stated honestly: mcp-go serializes the JSON-RPC response
+*after* the handler returns, so the final marshal of the payload — the largest
+single allocation — happens outside the slot. The gate therefore bounds
+concurrent downloads and result construction, not total media memory. Holding
+the slot until the handler returns is the latest point available without
+changing the transport. Documentation and the metric help text must describe
+`MEDIA_MAX_CONCURRENT` as a limit on concurrent media operations, and the memory
+figure below as an estimate, not a guaranteed ceiling. On
   refusal the confirmation is released with `s.Confirms.Unclaim(confID)` and
   `released = true`, exactly like the existing deadline branch
   (`media_tools.go:252-262`), so the client can retry with the same
@@ -273,7 +286,9 @@ peak ≈ base64(cap) + marshal_buffer(base64(cap) up to ~2x during growth)
 - bulk `fetch_media` at the new 8 MiB aggregate cap: ~32 MiB per call (was
   ~200 MiB+).
 - single `get_media` at the unchanged 20 MiB per-file cap: ~70-80 MiB per call.
-- with `MEDIA_MAX_CONCURRENT=2`: worst case ~160 MiB above a ~60MB baseline, i.e.
+- with `MEDIA_MAX_CONCURRENT=2`: typical worst case ~160 MiB above a ~60MB baseline
+  (an estimate: responses already handed to mcp-go can still be marshalling
+  while new operations start, see section C), i.e.
   ~220 MiB — inside 256Mi, and comfortably inside a 384Mi limit with
   `GOMEMLIMIT` at ~300MiB, which is what the follow-up gitops PR should aim for
   rather than jumping straight back to 256Mi.
@@ -338,8 +353,9 @@ peak ≈ base64(cap) + marshal_buffer(base64(cap) up to ~2x during growth)
   external users are this package's own tests.
 
 **Resource impact.** Expected per-request peak drops from ~200MB+ to ~32 MiB
-(bulk) / ~80 MiB (single file), with total media memory bounded by
-`MEDIA_MAX_CONCURRENT * ~4 * cap`. Slightly more CPU is spent on nothing — one
+(bulk) / ~80 MiB (single file), with total media memory estimated at
+`MEDIA_MAX_CONCURRENT * ~4 * cap` (an estimate, not a hard bound: the final
+mcp-go marshal happens after the slot is released). Slightly more CPU is spent on nothing — one
 fewer full marshal and one fewer large string copy per media response, so CPU
 should improve. Latency for media calls can now include up to 2s of gate wait
 under concurrency, and a refusal where previously the call proceeded (and might
