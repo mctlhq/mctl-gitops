@@ -70,9 +70,9 @@ The names also appear in four non-code places:
 
 `docs/architecture.md` mentions no bind address and needs no change.
 `.github/workflows/ci.yml` starts the container with `docker run -d -p 8000:8000`
-and polls `http://127.0.0.1:8000/mcp`; it relies on the image's `ENV` defaults but
-never names `HOST` or `PORT` itself, so it is an unchanged end-to-end check that the
-renamed `ENV` entries still produce a `0.0.0.0:8000` bind.
+and polls `http://127.0.0.1:8000/mcp`, relying on the image's bare `ENV` defaults;
+that step stays as is, and the `docker` job gains the two override checks described
+below (T9).
 
 ## Proposed solution
 
@@ -140,8 +140,13 @@ variable supplied the bad value. New tests will assert the precise name.
 
 Non-code changes, all mechanical:
 
-- `Dockerfile`: `HOST=0.0.0.0 \ PORT=8000` becomes
-  `NEWTON_MCP_HOST=0.0.0.0 \ NEWTON_MCP_PORT=8000`. `EXPOSE 8000` is unchanged.
+- `Dockerfile`: **unchanged** — it keeps `HOST=0.0.0.0` / `PORT=8000` as bare
+  compatibility defaults and does not set the prefixed names. Because the prefixed
+  names out-rank the bare ones, an image that set `NEWTON_MCP_*` would make every
+  `docker run -e HOST=…` / `-e PORT=…` override a silent no-op. With the bare defaults
+  in the image: default container binds `0.0.0.0:8000`; `-e HOST=`/`-e PORT=` still
+  override (the #2 interface); `-e NEWTON_MCP_HOST=`/`-e NEWTON_MCP_PORT=` override and
+  win over the image's bare defaults, as intended. (Amended at owner review.)
 - `.env.example`: the trailing block is rewritten to `NEWTON_MCP_HOST=127.0.0.1` /
   `NEWTON_MCP_PORT=8000`, and its comment is rewritten from "these are unprefixed and
   can collide" to a statement of the new rule: prefixed names are preferred, the bare
@@ -150,8 +155,14 @@ Non-code changes, all mechanical:
 - `README.md` line 76: `PORT=8000` becomes `NEWTON_MCP_PORT=8000`.
 - `CONTRIBUTING.md`: the transport table row becomes "binds `NEWTON_MCP_HOST` /
   `NEWTON_MCP_PORT` (default `127.0.0.1:8000`; bare `HOST` / `PORT` still accepted as
-  a fallback)", and the image-override paragraph names
-  `NEWTON_MCP_HOST=0.0.0.0`, `NEWTON_MCP_PORT=8000`.
+  a fallback)", and the image-override paragraph states that the image ships the
+  bare `HOST=0.0.0.0` / `PORT=8000` as compatibility defaults and that operators
+  should override with `-e NEWTON_MCP_HOST=…` / `-e NEWTON_MCP_PORT=…`.
+- `.github/workflows/ci.yml` `docker` job: one new step — start the image with
+  `-e PORT=9001 -p 9001:9001` and poll `http://127.0.0.1:9001/mcp` for a non-`000`
+  status, and a second run with `-e NEWTON_MCP_PORT=9002 -e PORT=9001 -p 9002:9002`
+  polling port 9002. These pin the container-level override semantics the unit tests
+  cannot see.
 
 No other file in the tree references these names.
 
@@ -201,11 +212,13 @@ reviewer's attention:
    trade a loud failure for a silent default in one narrow case. Mitigation: the
    fall-through order is documented in `.env.example` and `CONTRIBUTING.md`, and a
    dedicated test pins the new behaviour so it is deliberate rather than incidental.
-2. *A container that previously received `HOST` from the image `ENV` now receives
-   `NEWTON_MCP_HOST`.* An operator who overrides only `-e HOST=...` against the new
-   image still wins, because the image no longer sets the prefixed name — the bare
-   override is the highest-precedence value actually present. An operator who sets
-   *both* gets the prefixed one, which is the documented rule.
+2. *Container overrides.* The image keeps only the bare `HOST` / `PORT` defaults, so
+   an operator's `-e HOST=…` / `-e PORT=…` replaces them and is the highest-precedence
+   value present — the #2 override interface keeps working. `-e NEWTON_MCP_*` wins
+   over the image's bare defaults, and when an operator sets *both* the prefixed one
+   wins, which is the documented rule. (The first draft renamed the image `ENV` to the
+   prefixed names and claimed bare overrides "still win"; that was wrong — the image's
+   own prefixed value would always out-rank them.)
 
 **Resource impact.** Zero. No new dependency, no new I/O, no change to `uv.lock`,
 no change to image size or layer count (the `ENV` block keeps the same number of
@@ -216,12 +229,12 @@ entries). `Settings.from_env()` gains at most two extra dict lookups.
 - *Risk:* a docs surface is missed and keeps advertising a bare name, leaving the
   repo internally inconsistent. *Mitigation:* the changed set is closed and was
   enumerated by grep — `Dockerfile`, `.env.example`, `README.md`, `CONTRIBUTING.md`;
-  `docs/architecture.md` and `.github/workflows/ci.yml` contain no occurrences. Task 6
+  `docs/architecture.md` contains no occurrences. Task 6
   re-greps for `\bHOST\b` / `\bPORT\b` as a completion check.
-- *Risk:* the Docker `ENV` rename breaks the container's HTTP bind. *Mitigation:* the
-  existing CI "Smoke-check streamable-http listens on /mcp" job already boots the
-  image and polls `http://127.0.0.1:8000/mcp`; it is untouched and fails loudly if the
-  renamed `ENV` entries do not produce the same bind.
+- *Risk:* container-level override semantics regress (image `ENV` shadowing an
+  operator's `-e`). *Mitigation:* the `Dockerfile` `ENV` block is unchanged, and the
+  CI `docker` job gains explicit `-e PORT=9001` and `-e NEWTON_MCP_PORT=9002` (+ bare
+  `PORT=9001`) smoke checks on the published port.
 - *Risk:* an operator sets both variables to different values and is surprised by
   which one wins. *Mitigation:* the port validation error names the winning variable,
   and precedence is stated in `CONTRIBUTING.md` and `.env.example`.
