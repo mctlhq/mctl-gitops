@@ -1,5 +1,20 @@
 # Action lifecycle (including UNKNOWN), correlation ids and a JSONL audit log
 
+> **Amended at owner review (before approval):**
+> (1) **No `EXECUTING -> FAILED` edge.** A synchronous MCP error response is still a completed
+> call attempt and goes `EXECUTING -> EXECUTED -> VERIFYING`. `FAILED` is reachable only
+> through `VERIFYING`, so "failed" always means verified failure; `verified_failure=True` on
+> `FAILED -> EXECUTING` remains an additional guard.
+> (2) **Attempt-scoped ids.** `observation_id` and `action_id` are immutable for the whole
+> action. `tool_call_id` and `verification_id` belong to one attempt. Attempt 1 uses the ids
+> created by `new_action_record()`. `AUTHORIZED -> EXECUTING` changes no id (only `attempt`
+> 0 -> 1), and `EXECUTED/UNKNOWN -> VERIFYING` does not change `verification_id`. Only a retry
+> `FAILED -> EXECUTING` opens a new attempt and replaces **both** `tool_call_id` and
+> `verification_id` together. Explicitly supplied ids may override the generated pair only on
+> that transition.
+> (3) `observation_id` is normally propagated from `newton_propose_action`; generation in
+> `new_action_record()` is a fallback only.
+
 ## Context
 
 The action runtime in `src/newton_mcp/runtime/` can today discover MCP tools
@@ -53,8 +68,11 @@ executor and verifier (#8) consume this module; they are not part of it.
 - WHILE an action is in `PROPOSED` THE SYSTEM SHALL allow transitions only to `AUTHORIZED` or
   `DENIED`.
 - WHILE an action is in `AUTHORIZED` THE SYSTEM SHALL allow a transition only to `EXECUTING`.
-- WHILE an action is in `EXECUTING` THE SYSTEM SHALL allow transitions only to `EXECUTED`, `UNKNOWN`
-  or `FAILED`.
+- WHILE an action is in `EXECUTING` THE SYSTEM SHALL allow transitions only to `EXECUTED` or
+  `UNKNOWN`. A synchronous MCP error response is a completed call attempt and goes to `EXECUTED`.
+  `UNKNOWN` is reserved for a timeout or transport failure (owner amendment).
+- WHILE the transition table is in force THE SYSTEM SHALL make `FAILED` reachable only from
+  `VERIFYING`, so a `FAILED` record always means a verified failure.
 - WHILE an action is in `EXECUTED` THE SYSTEM SHALL allow a transition only to `VERIFYING`.
 - WHILE an action is in `UNKNOWN` THE SYSTEM SHALL allow transitions only to `VERIFYING` or
   `ESCALATED`.
@@ -93,14 +111,20 @@ executor and verifier (#8) consume this module; they are not part of it.
   a new record and SHALL NOT mutate the one it was given.
 - WHEN a transition enters `EXECUTING` THE SYSTEM SHALL increment the attempt counter by one, so the
   first execution is attempt `1` and a retry after `FAILED` is attempt `2`.
-- WHEN a transition enters `EXECUTING` or `VERIFYING` without an explicit `tool_call_id` or
-  `verification_id` respectively THE SYSTEM SHALL mint a fresh id of that kind, so a retry never
-  reuses the previous attempt's `tool_call_id`.
+- WHILE an action exists THE SYSTEM SHALL treat `tool_call_id` and `verification_id` as scoped to one
+  attempt: attempt 1 uses the ids created by `new_action_record()`, and neither
+  `AUTHORIZED -> EXECUTING` nor `EXECUTED -> VERIFYING` nor `UNKNOWN -> VERIFYING` changes either id
+  (owner amendment).
+- WHEN a retry `FAILED -> EXECUTING` is accepted THE SYSTEM SHALL open a new attempt by replacing
+  **both** `tool_call_id` and `verification_id` together, with freshly generated ids unless the
+  caller supplied them, so a retry never reuses the previous attempt's ids and a call and its
+  verification never belong to different attempts.
 - IF a caller passes `observation_id` or `action_id` to `transition()`, THEN THE SYSTEM SHALL raise
   `ValueError`: those two ids are the correlation roots and are fixed at record creation.
-- IF a caller passes `tool_call_id` or `verification_id` to a transition that does not enter
-  `EXECUTING` or `VERIFYING` respectively, THEN THE SYSTEM SHALL raise `ValueError` rather than
-  silently rewriting an id mid-flight.
+- IF a caller passes `tool_call_id` or `verification_id` to any transition other than a retry
+  `FAILED -> EXECUTING`, THEN THE SYSTEM SHALL raise `ValueError` rather than silently rewriting
+  an id mid-attempt. That includes `AUTHORIZED -> EXECUTING` and any entry into `VERIFYING`. On a
+  retry, either id may be supplied, and any id not supplied is generated.
 - IF a caller passes an empty or whitespace-only `reason`, THEN THE SYSTEM SHALL raise `ValueError`:
   an unexplained state change is not auditable.
 - IF a caller passes a naive (timezone-less) timestamp anywhere in this module, THEN THE SYSTEM SHALL
@@ -171,16 +195,18 @@ executor and verifier (#8) consume this module; they are not part of it.
 
 Recorded, not blocking; each has a chosen default already reflected above.
 
-1. **`EXECUTING -> FAILED`.** The issue's arrow chain lists only `EXECUTING -> EXECUTED | UNKNOWN`.
-   This proposal also allows `EXECUTING -> FAILED`, because an MCP response with an explicit error
-   (for example an unknown device id) is a *known* negative, and forcing it into `UNKNOWN` would make
-   the runtime claim ignorance it does not have, while forcing it into `EXECUTED` would be a lie.
-   `UNKNOWN` stays reserved for a timeout or transport failure. If the owner prefers the literal
-   table, drop this one edge; nothing else in the design depends on it.
+1. **`EXECUTING -> FAILED`: resolved at owner review, dropped.** An explicit MCP error response
+   does not prove that the physical action did not happen, or did not partly happen. It is a
+   completed call attempt (`EXECUTED`) whose physical outcome must still be verified. `FAILED` is
+   therefore reachable only via `VERIFYING`.
 2. **`FAILED -> ESCALATED`.** Not named in the issue. Allowed here so an exhausted retry budget has a
    terminal home other than staying `FAILED` forever.
 3. **All four ids from creation.** "Every line carries all 4 ids" is read as four non-null ids, which
    requires minting `tool_call_id`/`verification_id` at record creation before any tool call exists.
+   Per the owner amendment, those creation-time ids *are* attempt 1's ids, and they stay unchanged
+   through attempt 1's `EXECUTING` and `VERIFYING`. `observation_id` is normally passed in from the
+   `newton_propose_action` result (its deterministic `obs-<sha256>`); generating one in
+   `new_action_record()` is a fallback only.
    The alternative reading (keys present but `null` until minted) is also defensible; the chosen one
    makes correlation work from the first line and keeps the audit schema non-optional.
 4. **Verified failure as a flag, not a string.** `transition(..., verified_failure=True)` is an

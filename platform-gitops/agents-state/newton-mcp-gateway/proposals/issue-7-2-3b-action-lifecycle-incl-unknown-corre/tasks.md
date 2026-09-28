@@ -33,9 +33,10 @@
       args=None, id_factory=None, **ids)` (depends on 4, 5) — DoD: checks run in the documented order
       (blank reason, `**ids` key validation, table legality, verified-failure guard, aware `now`);
       returns a new `ActionRecord` and never mutates the input; `attempt` increments only on entering
-      `EXECUTING`; a fresh `tool_call_id` / `verification_id` is minted on entering
-      `EXECUTING` / `VERIFYING` when not supplied; `observation_id` / `action_id` in `**ids` raise
-      `ValueError`, as does an id key that does not belong to the target state or an unknown key.
+      `EXECUTING`; ids are attempt-scoped: only a retry `FAILED -> EXECUTING` replaces
+      `tool_call_id` and `verification_id` together (supplied or freshly minted), and no other
+      transition changes either; `observation_id` / `action_id` in `**ids` raise `ValueError`, as
+      does `tool_call_id` / `verification_id` on any non-retry transition, or an unknown key.
 - [ ] 7. Wire the audit write into `transition()` (depends on 2, 6) — DoD: exactly one `AuditEvent` is
       written per accepted transition and only after the new record is computed; it carries all four
       ids, `from`, `to`, `reason`, `attempt`, `verified_failure` and `at` via
@@ -76,7 +77,9 @@ with type hints and `from __future__ import annotations`, matching `tests/runtim
 - [ ] T1. Exhaustive table-driven transition test: parametrize over the full cartesian product of
       `ActionState` x `ActionState`; every pair listed in `ALLOWED_TRANSITIONS` succeeds and returns a
       record in the target state, and every other pair raises `IllegalTransition`. `FAILED ->
-      EXECUTING` is exercised with `verified_failure=True` in the allowed half. This covers the
+      EXECUTING` is exercised with `verified_failure=True` in the allowed half. `EXECUTING -> FAILED`
+      is in the illegal half (owner amendment), and a separate assertion checks that `VERIFYING` is
+      the only state whose outgoing set contains `FAILED`. This covers the
       acceptance criterion "every allowed transition" and additionally fails if an edge is ever added
       without updating the table.
 - [ ] T2. `test_unknown_cannot_go_straight_back_to_executing` — a named standalone test asserting
@@ -98,12 +101,19 @@ with type hints and `from __future__ import annotations`, matching `tests/runtim
       ids are preserved verbatim.
 - [ ] T9. Attempt counter: `PROPOSED -> AUTHORIZED -> EXECUTING` yields `attempt == 1`; a
       `FAILED -> EXECUTING` retry yields `attempt == 2`; no other transition changes `attempt`.
-- [ ] T10. `tool_call_id` is freshly minted on each entry into `EXECUTING` (a retry's id differs from
-      the first attempt's), `verification_id` is freshly minted on entry into `VERIFYING`, and an
-      explicitly supplied id on those transitions wins.
+- [ ] T10. Attempt-scoped ids (owner amendment), with a deterministic `id_factory`:
+      - After creation, `AUTHORIZED -> EXECUTING`, `EXECUTED -> VERIFYING` and `UNKNOWN -> VERIFYING`,
+        `tool_call_id` and `verification_id` still equal the creation-time values.
+      - After `VERIFYING -> FAILED -> EXECUTING` (retry), both ids differ from attempt 1's, are
+        distinct from each other's previous values, and `attempt == 2`.
+      - On a retry, a supplied `tool_call_id` and/or `verification_id` wins, and the unsupplied one
+        is still freshly generated.
+      - The audit lines show the exact sequence `call-1/ver-1` for every attempt-1 line and
+        `call-2/ver-2` from the retry on.
 - [ ] T11. Id-keyword validation: passing `observation_id` or `action_id` to `transition()` raises
-      `ValueError`; passing `tool_call_id` on a non-`EXECUTING` transition (or `verification_id` on a
-      non-`VERIFYING` one) raises `ValueError`; an unknown `**ids` key raises `ValueError`.
+      `ValueError`; passing `tool_call_id` or `verification_id` on any transition other than a retry
+      `FAILED -> EXECUTING` raises `ValueError`, explicitly including `AUTHORIZED -> EXECUTING` and
+      `EXECUTED -> VERIFYING`; an unknown `**ids` key raises `ValueError`.
 - [ ] T12. A blank or whitespace-only `reason` raises `ValueError`, and a naive `now` raises
       `ValueError`.
 - [ ] T13. Happy-path audit test (the issue's acceptance criterion): drive `PROPOSED -> AUTHORIZED ->

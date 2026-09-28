@@ -1,5 +1,20 @@
 # Design: issue-7-2-3b-action-lifecycle-incl-unknown-corre
 
+> **Amended at owner review (before approval):**
+> (1) **No `EXECUTING -> FAILED` edge.** A synchronous MCP error response is still a completed
+> call attempt and goes `EXECUTING -> EXECUTED -> VERIFYING`. `FAILED` is reachable only
+> through `VERIFYING`, so "failed" always means verified failure; `verified_failure=True` on
+> `FAILED -> EXECUTING` remains an additional guard.
+> (2) **Attempt-scoped ids.** `observation_id` and `action_id` are immutable for the whole
+> action. `tool_call_id` and `verification_id` belong to one attempt. Attempt 1 uses the ids
+> created by `new_action_record()`. `AUTHORIZED -> EXECUTING` changes no id (only `attempt`
+> 0 -> 1), and `EXECUTED/UNKNOWN -> VERIFYING` does not change `verification_id`. Only a retry
+> `FAILED -> EXECUTING` opens a new attempt and replaces **both** `tool_call_id` and
+> `verification_id` together. Explicitly supplied ids may override the generated pair only on
+> that transition.
+> (3) `observation_id` is normally propagated from `newton_propose_action`; generation in
+> `new_action_record()` is a fallback only.
+
 ## Current state
 
 The repo is a Python 3.12 / `uv` / Pydantic v2 project (`pyproject.toml`, `AGENTS.md`) with two
@@ -74,7 +89,7 @@ The safety argument lives in one readable data structure, not in control flow:
 ALLOWED_TRANSITIONS: Mapping[ActionState, frozenset[ActionState]] = MappingProxyType({
     ActionState.PROPOSED:   frozenset({ActionState.AUTHORIZED, ActionState.DENIED}),
     ActionState.AUTHORIZED: frozenset({ActionState.EXECUTING}),
-    ActionState.EXECUTING:  frozenset({ActionState.EXECUTED, ActionState.UNKNOWN, ActionState.FAILED}),
+    ActionState.EXECUTING:  frozenset({ActionState.EXECUTED, ActionState.UNKNOWN}),
     ActionState.EXECUTED:   frozenset({ActionState.VERIFYING}),
     ActionState.UNKNOWN:    frozenset({ActionState.VERIFYING, ActionState.ESCALATED}),
     ActionState.VERIFYING:  frozenset({ActionState.SUCCEEDED, ActionState.FAILED, ActionState.ESCALATED}),
@@ -95,6 +110,10 @@ TERMINAL_STATES = frozenset(s for s, targets in ALLOWED_TRANSITIONS.items() if n
 the same fail-loudly instinct as `extra="forbid"` in `runtime/config.py`. A module-level assertion (or
 a test, see tasks) checks the table's keys cover every `ActionState` member, so adding a state without
 deciding its outgoing edges fails immediately instead of producing a silently terminal state.
+
+`EXECUTING` deliberately omits `FAILED` (owner amendment): a synchronous MCP error response is a
+completed call attempt that goes to `EXECUTED` and then `VERIFYING`, because an error reply does not
+prove the physical action did not (partly) happen. `FAILED` is reachable only from `VERIFYING`.
 
 Two edges deserve their rationale inline, because they are the whole point of the issue:
 `UNKNOWN` deliberately omits `EXECUTING` (an unobserved outcome must be *verified* or *escalated*,
@@ -123,7 +142,10 @@ omits. Ids are `f"{prefix}-{id_factory()}"` with prefixes `obs-`, `act-`, `call-
 default `id_factory = lambda: secrets.token_hex(8)` (16 hex chars), echoing `propose.py`'s
 `obs-<16 hex>` shape. `id_factory` is the injectable seam that makes ids deterministic in tests,
 exactly like `ClientFactory` in `catalog.py`. All four ids exist from creation, so every audit line
-carries four non-null ids.
+carries four non-null ids. The creation-time `tool_call_id`/`verification_id` are **attempt 1's**
+ids (owner amendment): they are not placeholders and are not replaced when attempt 1 enters
+`EXECUTING` or `VERIFYING`. Callers normally pass `observation_id` from the `newton_propose_action`
+result (its deterministic `obs-<sha256>`); generating one here is a fallback only.
 
 `transition()` is the single mutation point and returns a new record rather than mutating:
 
@@ -146,9 +168,11 @@ Order of checks, each failing before anything is written:
 
 1. `reason.strip()` non-empty, else `ValueError`.
 2. `**ids` keys are validated: `observation_id`/`action_id` are rejected outright (correlation roots
-   are immutable); `tool_call_id` is accepted only when `new_state is EXECUTING`; `verification_id`
-   only when `new_state is VERIFYING`; any other key is rejected. This keeps the issue's
-   `**ids` signature while making a silent mid-flight id rewrite impossible.
+   are immutable); `tool_call_id` and `verification_id` are accepted **only** on a retry
+   (`record.state is FAILED and new_state is EXECUTING`), where they override the generated pair;
+   on every other transition, including `AUTHORIZED -> EXECUTING` and any entry into `VERIFYING`,
+   either key raises; any other key is rejected. This keeps the issue's `**ids` signature while
+   making a silent mid-attempt id rewrite impossible (owner amendment).
 3. `new_state in ALLOWED_TRANSITIONS[record.state]`, else `IllegalTransition`. A record in a terminal
    state produces a message that says so, since its allowed set is empty.
 4. `(record.state, new_state) in REQUIRES_VERIFIED_FAILURE` implies `verified_failure is True`, else
@@ -159,9 +183,19 @@ Order of checks, each failing before anything is written:
 
 Then the new record is computed: `state = new_state`, `updated_at = now`,
 `attempt = record.attempt + 1` when entering `EXECUTING` (so first execution is attempt 1, a retry is
-attempt 2) else unchanged, `tool_call_id` replaced by the supplied id or a freshly minted one when
-entering `EXECUTING`, `verification_id` likewise when entering `VERIFYING`. Minting on re-entry is
-what stops a retry from reusing the previous attempt's `tool_call_id`.
+attempt 2) else unchanged. Ids are attempt-scoped (owner amendment): only a retry
+`FAILED -> EXECUTING` replaces `tool_call_id` **and** `verification_id` together, each with the
+supplied value or a freshly minted one. `AUTHORIZED -> EXECUTING` and `EXECUTED/UNKNOWN -> VERIFYING`
+leave both unchanged. This stops a retry from reusing the previous attempt's ids, and it never lets a
+call belong to attempt 2 while its verification id is still attempt 1's:
+
+```text
+creation              attempt=0  call-1  ver-1
+AUTHORIZED->EXECUTING attempt=1  call-1  ver-1
+EXECUTED->VERIFYING   attempt=1  call-1  ver-1
+VERIFYING->FAILED     attempt=1  call-1  ver-1
+FAILED->EXECUTING     attempt=2  call-2  ver-2
+```
 
 Finally, if `sink is not None`, exactly one `AuditEvent` is written — after the new record exists, so
 the line always reflects a transition that actually happened. An illegal transition writes nothing.
