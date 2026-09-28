@@ -29,20 +29,22 @@
       — DoD: docstring mentions both new names and the fallback, and contradicts
       nothing in `AGENTS.md`.
 
-- [ ] 4. Update the `Dockerfile` runtime-stage `ENV` block: replace `HOST=0.0.0.0`
-      with `NEWTON_MCP_HOST=0.0.0.0` and `PORT=8000` with `NEWTON_MCP_PORT=8000`.
-      Leave `NEWTON_BACKEND=mock`, `NEWTON_MCP_TRANSPORT=streamable-http`,
-      `EXPOSE 8000`, `USER newton` and the `ENTRYPOINT` untouched.
-      — DoD: `docker build -t newton-mcp-gateway:local .` succeeds and
-      `docker run --rm -p 8000:8000 newton-mcp-gateway:local` answers on
-      `http://127.0.0.1:8000/mcp` with a non-`000` HTTP status.
+- [ ] 4. **Leave the `Dockerfile` unchanged**: its bare `HOST=0.0.0.0` / `PORT=8000`
+      are the image's compatibility defaults; do NOT add `NEWTON_MCP_HOST` /
+      `NEWTON_MCP_PORT` to the image (they would out-rank every operator
+      `-e HOST=`/`-e PORT=`). Add a one-line comment above the `ENV` block saying so.
+      Extend the `docker` job in `.github/workflows/ci.yml` with the two override smoke
+      checks from T9.
+      — DoD: `git diff` on `Dockerfile` is the comment only; CI `docker` job green
+      including the new steps.
 
 - [ ] 5. Update `.env.example`: rename the trailing block to
       `NEWTON_MCP_HOST=127.0.0.1` / `NEWTON_MCP_PORT=8000`, and replace the existing
       "these are unprefixed and can collide with unrelated ambient variables" comment
       with the new rule — prefixed names win, bare `HOST` / `PORT` still work as a
-      fallback, `HOST` collides with zsh's own `HOST` parameter, and the image sets
-      `NEWTON_MCP_HOST=0.0.0.0`.
+      fallback, `HOST` collides with zsh's own `HOST` parameter, and the image ships
+      bare `HOST=0.0.0.0` / `PORT=8000` as compatibility defaults (override them with
+      `-e NEWTON_MCP_HOST=…` / `-e NEWTON_MCP_PORT=…`).
       — DoD: no bare `HOST=` or `PORT=` assignment remains in the file; the
       `NEWTON_BACKEND`, `ATAI_*`, model and `NEWTON_MCP_TRANSPORT` blocks are
       byte-identical to before.
@@ -51,13 +53,13 @@
       change the streamable-http example command to use `NEWTON_MCP_PORT=8000`. In
       `CONTRIBUTING.md`, change the `streamable-http` table row to name
       `NEWTON_MCP_HOST` / `NEWTON_MCP_PORT` (default `127.0.0.1:8000`) and note the
-      bare fallback, and change the image-override paragraph to
-      `NEWTON_MCP_HOST=0.0.0.0`, `NEWTON_MCP_PORT=8000`. Then re-grep the whole tree
+      bare fallback, and change the image-override paragraph to say the image ships
+      bare `HOST=0.0.0.0` / `PORT=8000` compatibility defaults and operators override
+      with `-e NEWTON_MCP_HOST=…` / `-e NEWTON_MCP_PORT=…`. Then re-grep the whole tree
       for `\bHOST\b` and `\bPORT\b` and confirm the only survivors are the intentional
-      fallback mentions in `config.py`, `.env.example`, `CONTRIBUTING.md` and the
-      tests.
-      — DoD: grep output reviewed and clean; `docs/architecture.md` and
-      `.github/workflows/ci.yml` remain unmodified; the README's
+      fallback mentions in `config.py`, `.env.example`, `CONTRIBUTING.md`, the
+      `Dockerfile` compatibility defaults, the CI override checks and the tests.
+      — DoD: grep output reviewed and clean; `docs/architecture.md` remains unmodified; the README's
       "ships no authentication" warning is unchanged.
 
 - [ ] 7. Add the tests below to `tests/test_config.py` (depends on 2) and run
@@ -102,24 +104,25 @@ ambient process environment.
       favour of the valid fallback.
 - [ ] T8. Regression: `test_transport_and_network_defaults`,
       `test_host_and_port_overrides` and `test_invalid_port_raises` pass unmodified.
-- [ ] T9. Container check (manual / CI): `docker build` then
-      `docker run --rm -p 8000:8000 <image>` serves `/mcp`, i.e. the unchanged
-      `.github/workflows/ci.yml` docker job stays green with the renamed `ENV` entries.
+- [ ] T9. Container override checks (CI `docker` job, new steps): the existing default
+      smoke on `:8000` stays green; `docker run -d -e PORT=9001 -p 9001:9001 <image>`
+      answers on `http://127.0.0.1:9001/mcp` (non-`000`); `docker run -d
+      -e NEWTON_MCP_PORT=9002 -e PORT=9001 -p 9002:9002 <image>` answers on port 9002
+      — the bare override works and the prefixed one wins over it.
 
 ## Rollback
 
-The change is confined to six files — `src/newton_mcp/config.py`,
-`tests/test_config.py`, `Dockerfile`, `.env.example`, `README.md`,
-`CONTRIBUTING.md` — with no dependency, lockfile, schema or generated-artifact
+The change is confined to `src/newton_mcp/config.py`, `tests/test_config.py`,
+`.env.example`, `README.md`, `CONTRIBUTING.md`, `.github/workflows/ci.yml` and a
+comment in `Dockerfile` — with no dependency, lockfile, schema or generated-artifact
 change, so `git revert <merge-commit>` on `main` restores the previous behaviour
 completely and needs no follow-up step.
 
 Partial rollback options, if only one symptom shows up:
 
-- Bind address wrong in the container only: re-add `HOST=0.0.0.0` and `PORT=8000`
-  to the `Dockerfile` `ENV` block, or start the container with
-  `-e HOST=0.0.0.0 -e PORT=8000`. The bare fallback still resolves, so this works
-  against the new code without touching `config.py`.
+- Bind address wrong in the container only: the `Dockerfile` `ENV` block is
+  unchanged, so start the container with `-e HOST=0.0.0.0 -e PORT=8000` explicitly;
+  the bare fallback still resolves without touching `config.py`.
 - Precedence itself is the problem: reorder `HOST_VARS` / `PORT_VARS` in
   `config.py` to put the bare names first. One-line change, no other edits.
 - Blank-`PORT` defaulting is judged unacceptable: drop `""` from the port

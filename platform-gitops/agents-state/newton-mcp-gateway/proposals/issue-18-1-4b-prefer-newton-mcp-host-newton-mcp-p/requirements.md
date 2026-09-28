@@ -71,16 +71,23 @@ selection, authentication or network topology changes.
 - WHILE `NEWTON_MCP_TRANSPORT` is `stdio` THE SYSTEM SHALL still parse and validate
   host and port exactly as today, so a bad value is reported eagerly rather than
   only when HTTP is enabled.
-- WHEN the container image is built THE SYSTEM SHALL declare the bind address via
-  `ENV NEWTON_MCP_HOST=0.0.0.0` and `ENV NEWTON_MCP_PORT=8000` in `Dockerfile`,
-  replacing the current `HOST` / `PORT` entries.
+- WHEN the container image is built THE SYSTEM SHALL keep declaring the bind address
+  via the bare `ENV HOST=0.0.0.0` and `ENV PORT=8000` in `Dockerfile` as
+  **compatibility defaults**, and SHALL NOT set `NEWTON_MCP_HOST` / `NEWTON_MCP_PORT`
+  in the image. (Amended at owner review: an image that set the prefixed names would
+  always out-rank an operator's `docker run -e HOST=…` / `-e PORT=…`, silently
+  breaking the #2 override interface.)
+- WHEN the container is started with `-e PORT=9001` (bare) THE SYSTEM SHALL listen on
+  9001; WHEN started with `-e NEWTON_MCP_PORT=9002` THE SYSTEM SHALL listen on 9002;
+  WHEN both are passed THE SYSTEM SHALL listen on the `NEWTON_MCP_PORT` value.
 - WHEN the container is started with no overrides THE SYSTEM SHALL serve
   streamable-http on `0.0.0.0:8000`, so the existing
   `.github/workflows/ci.yml` "Smoke-check streamable-http listens on /mcp" job keeps
   passing unchanged.
 - WHEN a reader consults `.env.example`, `README.md` or `CONTRIBUTING.md` THE SYSTEM
-  SHALL present `NEWTON_MCP_HOST` / `NEWTON_MCP_PORT` as the documented names and
-  mention the bare names only as a documented fallback.
+  SHALL present `NEWTON_MCP_HOST` / `NEWTON_MCP_PORT` as the recommended operator
+  interface and mention the bare names only as a documented fallback — and, for the
+  image, as the compatibility defaults it ships with.
 
 ## Out of scope
 
