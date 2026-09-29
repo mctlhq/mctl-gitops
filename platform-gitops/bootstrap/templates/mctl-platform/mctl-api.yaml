@@ -214,6 +214,16 @@ spec:
           # carries issues/pull_requests/workflows write on that one
           # repository -- a recorded trade, not an oversight.
           githubAppTokenSecret: mctl-api-github-app
+
+          # The versioned usage price catalog (mctlhq/mctl-gitops#1409,
+          # mctlhq/.github#50 owner decision 3), rendered by root-app from
+          # bootstrap/files/usage-pricing/ as ConfigMap mctl-api-usage-pricing
+          # (mctl-api-usage-pricing.yaml). The chart (mctl-api >= 4.55.0,
+          # mctlhq/mctl-api#403) mounts it optional and sets
+          # USAGE_PRICING_CATALOG to its catalog.json, so a missing or bad
+          # catalog logs one ERROR and usage is still recorded without a
+          # derived cost -- it never blocks the pod.
+          usagePricingConfigMap: mctl-api-usage-pricing
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the
