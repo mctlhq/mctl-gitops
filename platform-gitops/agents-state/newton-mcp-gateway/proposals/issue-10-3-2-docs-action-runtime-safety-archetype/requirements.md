@@ -1,5 +1,12 @@
 # Docs: action runtime, safety, and Archetype integration (pre-public-release doc set)
 
+> **Amended at owner review (2026-09-29).** The link-only test becomes a docs-consistency test
+> (`tests/test_docs_consistency.py`): relative links, `demo.py` flags, `uv run` targets and env
+> var names in the doc corpus are checked against the real parser, `pyproject.toml`, env
+> lookups and `.env.example`. `examples/smart-home/README.md` joins the corpus. The confirmed
+> Archetype table cites a concrete public doc page per row, the upload ceiling is written
+> "512 MB", and `task-verification` is described as its public page describes it.
+
 ## Context
 
 `newton-mcp-gateway` is about to go public and be shown to Archetype engineers. The code is
@@ -179,20 +186,36 @@ acceptance bar, not a style preference.
 - WHEN the README's confirmed-versus-proposed table is refreshed THE SYSTEM SHALL keep every
   row's source attribution accurate and SHALL add a row for the lifecycle, audit trail,
   executor and verifier as this project's proposal.
-- IF a relative link in `README.md` or in any file under `docs/` names a path THEN THE SYSTEM
-  SHALL ensure that path exists in the repository.
+- IF a relative link in `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, any file under `docs/` or
+  `examples/smart-home/README.md` names a path THEN THE SYSTEM SHALL ensure that path exists in
+  the repository.
+- IF a fenced code block or inline code span in that corpus invokes `examples/smart-home/demo.py`
+  THEN THE SYSTEM SHALL ensure every `--flag` in that command is an option string accepted by
+  the demo's own argument parser (`_build_parser()`). A `--word` in prose, or in a command that
+  does not invoke `demo.py`, is not checked.
+- IF a command in that corpus runs `uv run <name>` THEN THE SYSTEM SHALL ensure `<name>` is
+  either a key of `[project.scripts]` in `pyproject.toml`, a tool configured by a `[tool.<name>]`
+  table there (for example `pytest` via `[tool.pytest.ini_options]`), or `python` followed by a
+  script path that exists in the repository (`python -c` / `python -m` are accepted as-is).
+- IF that corpus names an environment variable with the `NEWTON_` or `ATAI_` prefix THEN THE
+  SYSTEM SHALL ensure the name is either read by the code — a string literal passed to
+  `env.get(...)`, `os.environ.get(...)`, `os.environ[...]` or `os.getenv(...)`, a name in a tuple
+  passed to `newton_mcp.config._resolve(...)`, or the value of a module constant ending in
+  `_ENV_VAR` — or assigned in `.env.example` (including a commented `# NAME=` example). A name
+  that only appears in a comment or docstring under `src/` does not count.
 
 ### Verification of the change itself
 
 - WHEN the change is complete THE SYSTEM SHALL keep `uv run pytest` green.
 - WHEN the change is complete THE SYSTEM SHALL NOT modify any file under `src/newton_mcp/`,
-  `schemas/` or `examples/`.
+  `schemas/` or `examples/`, with one exception: `examples/smart-home/README.md` MAY be edited
+  only to correct a mismatch the docs-consistency test reports.
 
 ## Out of scope
 
 - New runtime or library code. No module under `src/newton_mcp/` changes, no new MCP tool, no
-  behaviour change. The only code artefact this proposal contemplates is one small test that
-  checks relative markdown links resolve (see Open questions) — and nothing else.
+  behaviour change. The only code artefact this proposal contemplates is one test module that
+  checks the doc corpus against the code (see Open questions) — and nothing else.
 - The outreach email to Archetype (issue #16).
 - Authenticated streamable-http transport (issue #28) and structured read-only state on the
   real Alice server (`mctlhq/mctl-alice#47`). Both are referenced as known gaps, neither is
@@ -208,12 +231,12 @@ acceptance bar, not a style preference.
 ## Open questions
 
 - The issue lists "New code" as out of scope, but acceptance criterion 3 ("README links
-  resolve") has no mechanical guard without one. Proceeding with the most reasonable
-  interpretation: add exactly one test module (`tests/test_docs_links.py`) that walks relative
-  markdown links in `README.md` and `docs/*.md` and asserts each target exists. It touches no
-  package code and matches `AGENTS.md`'s "tests for every behaviour". The owner may drop task 9
-  and test T1 in `tasks.md` if "no new code" is meant strictly; every other acceptance criterion
-  still holds.
+  resolve") and the reproducibility of every documented command have no mechanical guard without
+  one. Resolved at owner review: add exactly one test module, `tests/test_docs_consistency.py`,
+  covering links, `demo.py` flags, `uv run` targets and env var names (see the acceptance
+  criteria above). It touches no package code, uses the standard library only (`ast`, `re`,
+  `shlex`, `tomllib`, `pathlib`, `importlib`) and matches `AGENTS.md`'s "tests for every
+  behaviour".
 - `docs/architecture.md` is not in the issue's "files likely touched" list, yet it currently
   owns the safety defaults table that `docs/safety.md` is being asked to contain. Proceeding
   with: `docs/safety.md` becomes canonical and `docs/architecture.md`'s "Safety defaults"
