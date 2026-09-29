@@ -1,64 +1,105 @@
 # Design: incident-2932eaa0
 
 ## Diagnosis
-The ArgoCD Application `labs-mctl-telegram` has reported health=Degraded /
-syncStatus=Synced continuously since at least 2026-09-28T23:31-23:58Z (per two
-independent `mctl-agents-shepherd` runs that observed it "newly Degraded" in
-that window — see the sibling proposals for incidents
-argo-mctl-agents-shepherd-744786f6-1790640590 and
-argo-mctl-agents-shepherd-92f3bc8a-1790639911) through at least
-2026-09-29T01:10:00Z, i.e. well over an hour.
+No skill matched this alert type, so mctl-agent collected evidence but never
+diagnosed it. Investigation shows the labs-mctl-telegram Deployment and its
+synthetic canary CronJob are fully healthy for the entire window around and
+after the alert (no errors, every 10-minute canary probe ok, every MCP tool
+call ok) — this rules out the actual serving workload as the cause. The
+separate labs-mctl-telegram-preview ArgoCD Application (a distinct, permanent
+service, not an ephemeral preview — mctl_list_previews confirms zero tracked
+ephemeral previews for this team/service) is independently reported Healthy,
+ruling out cross-contamination from that stack too.
 
-However, the workload that actually serves traffic is healthy the whole time:
-the canary CronJob (`*/10 * * * *`) and the base-service pod
-(`labs-mctl-telegram-base-service-5c945f9444-4qslh`, stable pod identity
-across the whole window — no restarts) both report successful probes and MCP
-tool calls at every sample point from 00:50 to 01:10 UTC. No skill matched
-this ticket in mctl-agent (escalated with an empty diagnostic rule), and no
-error/warning lines for the main workload were found in Loki.
+That leaves the resources declared in
+`platform-gitops/services/labs/mctl-telegram/values.yaml` under
+`extraObjects`. Most of them (the demo-session-refresh and
+demo-reviewer-watch CronJobs) are gated behind
+`renderIf: DEMO_REVIEWER_ENABLED == "true"`, which is currently `"false"`, so
+they are pruned and cannot be the cause. One Job is NOT gated by any
+renderIf and is unconditionally part of desired state on every sync:
+`labs-mctl-telegram-local-mode-flip-1` (lines ~535-621). Its own comment block
+documents that it is a one-shot migration ("move the pilot account to Local
+Bridge mode") targeting Telegram account 8745115872, and that it is
+deliberately written to fail loudly — "RETURNING plus an explicit emptiness
+check makes a no-op UPDATE a failed Job in ArgoCD rather than a silent
+'UPDATE 0'" — whenever that account has no active (non-revoked)
+`telegram_accounts` row at apply time. account 8745115872 is the same
+App-Directory demo/reviewer identity that other comments in this same file
+describe as prone to session revocation (e.g. auto-triggered
+`disconnect_telegram_account` calls) while `DEMO_REVIEWER_ENABLED` is off and
+nobody is actively maintaining its session.
 
-`syncStatus=Synced` with `health=Degraded` and an otherwise-healthy Deployment
-means a DIFFERENT resource tracked by this Application is unhealthy, not the
-main Deployment/pods. The values file
-(`platform-gitops/services/labs/mctl-telegram/values.yaml`) defines one
-resource in `extraObjects` that both (a) can fail terminally and (b) would
-produce no service-request log line: the one-shot `batch/v1 Job`
-`labs-mctl-telegram-local-mode-flip-1` (lines ~535-621), which runs a single
-SQL UPDATE to flip Telegram account `8745115872` into Local Bridge mode and
-explicitly `exit 1`s if the target user or an active (non-revoked)
-`telegram_accounts` row is missing. ArgoCD reports a Job Degraded once it
-exhausts `backoffLimit` (2 here) without succeeding, and that stays Degraded
-until `ttlSecondsAfterFinished` (86400s / 24h) elapses and the Job is pruned —
-which matches an outage that has now lasted over an hour with zero customer
-impact.
+A Job that reaches BackoffLimitExceeded (backoffLimit: 2 here) is reported
+Degraded by ArgoCD's default Job health check, and Application health is the
+worst of all its resources' health — so one stuck failed Job is sufficient to
+make the whole labs-mctl-telegram Application show Degraded while every
+serving pod is fine. Because this Job has `ttlSecondsAfterFinished: 86400`
+(24h) and no ArgoCD hook annotations, a failed run lingers as a Degraded
+resource for up to 24 hours before Kubernetes garbage-collects it — consistent
+with the sustained, multi-hour Degraded window seen here across two
+independent, unrelated deploys.
 
-This is the leading hypothesis, not a confirmed one: this agent has no
-kubectl/ArgoCD-resource-tree access, so the Job's actual pod status/events
-could not be inspected directly. The same values.yaml file documents an
-extensive, ongoing history of Telegram session-revocation issues for exactly
-this class of account (reviewer/demo session drops), which is consistent
-with — but does not prove — the Job's precondition failing.
+By contrast, the sibling file `vault-cleanup.yaml` in the same directory shows
+the established pattern for one-shot/lifecycle Jobs in this repo: it is
+annotated as an ArgoCD hook with `hook-delete-policy: HookSucceeded` so it
+never lingers as a plain resource. `labs-mctl-telegram-local-mode-flip-1` was
+never given the same treatment.
 
 ## Confidence: LOW
-Verify which resource ArgoCD is actually reporting as Degraded (ArgoCD UI
-resource tree for Application `labs-mctl-telegram`, or
-`kubectl -n labs describe job labs-mctl-telegram-local-mode-flip-1`) before
-applying the fix below. If a different resource is the actual cause, this
-proposal does not apply — capture the real cause and re-diagnose.
+This is a strong circumstantial inference from the gitops config, the
+observed Application-vs-workload health split, and the Job's own documented
+failure semantics — but it was not possible to directly query the Job's live
+Kubernetes status/conditions (no kubectl/ArgoCD resource-tree access from
+this agent) to confirm it is in fact the specific resource ArgoCD is counting
+as Degraded. The implementer should confirm via `kubectl -n labs get job
+labs-mctl-telegram-local-mode-flip-1 -o yaml` (or the ArgoCD UI resource tree
+for the labs-mctl-telegram Application) before/while applying the fix.
 
 ## Proposed Fix
-In `platform-gitops/services/labs/mctl-telegram/values.yaml`, remove the
-`labs-mctl-telegram-local-mode-flip-1` Job block from `extraObjects` (the
-whole `- apiVersion: batch/v1 / kind: Job / metadata.name:
-labs-mctl-telegram-local-mode-flip-1` entry and its trailing comment). A
-`Job`'s `metadata.name` is immutable, so ArgoCD cannot "retry" a failed run by
-resyncing the same manifest — leaving it in place only keeps the exhausted Job
-(and the Application's health) red for up to 24h. If the underlying account
-flip still needs to happen, redo it as a new Job with an incremented name
-(e.g. `labs-mctl-telegram-local-mode-flip-2`) once the precondition it failed
-on is independently confirmed fixed (an active, non-revoked
-`telegram_accounts` row for TG_ID 8745115872).
+File: `platform-gitops/services/labs/mctl-telegram/values.yaml`
+Job block: `extraObjects[].metadata.name: labs-mctl-telegram-local-mode-flip-1`
+(currently at approximately lines 535-621).
+
+Add ArgoCD hook annotations to this Job's `metadata`, matching the existing
+convention already used in this directory's `vault-cleanup.yaml`, so a
+finished run (success OR failure) is deleted immediately instead of lingering
+for up to 24h and dragging down Application health:
+
+Current:
+```yaml
+  - apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: labs-mctl-telegram-local-mode-flip-1
+      labels:
+        app.kubernetes.io/name: mctl-telegram
+        app.kubernetes.io/part-of: mctl-platform
+        mctl.me/component: local-mode-flip
+```
+
+New:
+```yaml
+  - apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: labs-mctl-telegram-local-mode-flip-1
+      annotations:
+        argocd.argoproj.io/hook: PostSync
+        argocd.argoproj.io/hook-delete-policy: HookSucceeded,HookFailed
+      labels:
+        app.kubernetes.io/name: mctl-telegram
+        app.kubernetes.io/part-of: mctl-platform
+        mctl.me/component: local-mode-flip
+```
+
+If the implementer confirms (via kubectl/ArgoCD UI) that this Job is
+currently sitting Failed, also delete the existing stuck Job object directly
+(`kubectl -n labs delete job labs-mctl-telegram-local-mode-flip-1`) so the
+Application returns to Healthy immediately rather than waiting up to 24h for
+the TTL controller, and so the next sync can re-create it under the new hook
+semantics.
 
 ## Scope
-Minimal. Only the one confirmed-failing resource is touched, and only after
-the verification step above confirms it is in fact the Degraded resource.
+Minimal. Only touches this one Job's metadata (adds annotations); no change
+to its command, target account, or any other resource in the file.

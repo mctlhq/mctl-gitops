@@ -1,51 +1,35 @@
 # Design: incident-90639911
 
 ## Diagnosis
-This shepherd tick drove proposal `issue-705-media-responses-amplify-memory-10x-fetch`
-(fingerprint names target service `mctl-telegram`) to a successful merge —
-`run-shepherd` and `commit-and-push` both completed. `post-deploy-verify` then
-slept 300s and found `argocd/labs-mctl-telegram` newly Degraded (relative to
-this workflow's own creation timestamp, 2026-09-28T23:31:49Z), confirmed it
-was still Degraded after a further 120s grace period, and failed the
-workflow — which is exactly the check's job (see
-`cwft-mctl-agents-shepherd.yaml` step 4 doc: catch a merge that broke a
-downstream Application, rather than let it surface days later).
-
-Because this run's own proposal explicitly targets `mctl-telegram` and is
-about memory usage on media-fetch responses (per the slug), it is the more
-plausible of the two flagged shepherd runs to actually be causally connected
-to `labs-mctl-telegram` going Degraded (unlike the sibling incident
-`argo-mctl-agents-shepherd-744786f6-1790640590`, whose own change targeted the
-unrelated `mctl-agents` service). However, per the investigation for sibling
-incident `18bc5134-18f5-4959-b594-6f2f2932eaa0`, the Application's own
-Deployment/pods have been serving traffic without errors or restarts
-throughout the Degraded window — the leading hypothesis there is a stuck
-one-shot Kubernetes `Job` resource in that service's manifest, not a broken
-Deployment rollout from this merge. This agent has no kubectl/ArgoCD
-resource-tree access to confirm that the Job (rather than something this
-merge changed) is the actual Degraded resource, so a direct causal link from
-`issue-705`'s code change to the Degraded status is NOT confirmed.
+Same underlying condition as incident-90640590 and incident-2932eaa0: the
+labs-mctl-telegram ArgoCD Application was already Degraded before this
+workflow's own threshold timestamp (2026-09-28T23:31:49Z), independent of
+this run's merged PR (issue-705-media-responses-amplify-memory-10x-fetch).
+The most likely root cause is the unconditional, non-hooked one-shot Job
+`labs-mctl-telegram-local-mode-flip-1` in
+`platform-gitops/services/labs/mctl-telegram/values.yaml`, which most likely
+reached BackoffLimitExceeded (its target account has no active/non-revoked
+Telegram session to flip) and, lacking any ArgoCD hook-delete-policy, lingers
+as a Degraded resource for up to its 24h `ttlSecondsAfterFinished`. See
+incident-2932eaa0's design.md in this same proposals tree for the full
+diagnosis and fix.
 
 ## Confidence: LOW
-Whether this run's merge caused the degradation, or merely coincided with an
-already-independently-failing resource, is not established. The concrete
-remediation for the Degraded Application itself is tracked in
-`mctl-gitops/proposals/incident-2932eaa0` — do not duplicate that fix here.
+Same caveat as incident-2932eaa0: inferred from gitops config and the
+Application-vs-workload health split, not from a direct live Job status
+query.
 
 ## Proposed Fix
-No independent code change proposed for this incident. Track and apply the
-fix in `mctl-gitops/proposals/incident-2932eaa0` (the primary
-`argocd_app_degraded` proposal); once `labs-mctl-telegram` returns to
-Healthy, this shepherd run's own change needs no further action — it already
-merged successfully, and `post-deploy-verify` only blocks the *workflow's own
-success signal*, not the merge itself.
-
-If, after applying `incident-2932eaa0`'s fix and confirming
-`labs-mctl-telegram` is Healthy again, the next shepherd tick's
-`post-deploy-verify` for a future change to `mctl-telegram` still flags a
-newly-Degraded app, that would indicate `issue-705`'s change itself has a
-real regression (e.g. the media-fetch memory work not actually landing) and
-should be investigated as a separate, fresh incident with its own evidence.
+Apply the same fix as incident-2932eaa0: add
+`argocd.argoproj.io/hook: PostSync` and
+`argocd.argoproj.io/hook-delete-policy: HookSucceeded,HookFailed` to the
+`labs-mctl-telegram-local-mode-flip-1` Job's metadata in
+`platform-gitops/services/labs/mctl-telegram/values.yaml`, so a finished run
+never lingers as a Degraded resource. This resolves the underlying condition
+that made shepherd's post-deploy-verify flag an otherwise-unrelated,
+successful merge. No change is needed to the shepherd workflow itself or to
+issue-705's code.
 
 ## Scope
-None (no file change) beyond what `incident-2932eaa0` already proposes.
+Minimal - no code or workflow change for issue-705; the only file touched is
+the shared `labs/mctl-telegram/values.yaml` (see incident-2932eaa0).

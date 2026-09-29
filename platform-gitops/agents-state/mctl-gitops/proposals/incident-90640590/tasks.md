@@ -1,14 +1,12 @@
 # Tasks: incident-90640590
 
-1. [ ] In `platform-gitops/argo-workflows/cluster-templates/cwft-mctl-agents-shepherd.yaml`,
-   extend the existing `post-deploy-verify` bullet in the
-   `workflows.argoproj.io/description` annotation (step 4) with a short note:
-   this check flags ANY newly-Degraded ArgoCD Application platform-wide, not
-   just ones touched by the current run's proposal, by design — a
-   `workflow_failed` naming an unrelated app is collateral from an existing
-   `argocd_app_degraded` incident, not a new bug. Check for an open incident
-   on that app first.
-2. [ ] Confirm the file still passes YAML/manifest validation (comment-only
-   change; no functional diff expected).
-3. [ ] No dependent changes — this run's own proposal (`issue-528-...`) already
-   merged successfully and needs no further action here.
+1. [ ] Apply the fix tracked in proposal `mctl-gitops/proposals/incident-2932eaa0`
+   (add ArgoCD hook-delete-policy annotations to the
+   `labs-mctl-telegram-local-mode-flip-1` Job in
+   `platform-gitops/services/labs/mctl-telegram/values.yaml`) - do not
+   duplicate the edit if that proposal has already landed it.
+2. [ ] Verify the merged PR for issue-528
+   (issue-528-feat-context-platform-472-slice-c-produc) is otherwise healthy
+   and needs no follow-up of its own.
+3. [ ] After the labs-mctl-telegram Application returns to Healthy, confirm
+   this workflow_failed alert does not recur on the next shepherd run.
