@@ -1,5 +1,18 @@
 # Smart-home testbed and end-to-end closed-loop demo (examples/smart-home/)
 
+> **Amended at owner review (2026-09-29).** `--real` means **real Newton, fake actuator**: the
+> proposal step uses the live Newton backend (`ATAI_API_KEY` / `ATAI_API_ENDPOINT`), while execution
+> and verification always run against the in-process `fake_alice`. There is no `ALICE_MCP_URL` and
+> no path to a real Alice server in this issue, because the real server
+> (`mctlhq/mctl-alice`) cannot be driven by this runtime today: its `alice_get_device_state`
+> returns Markdown text only (no `structuredContent`, so every poll would be "no observation" and
+> every run `ESCALATED`), it sits behind OAuth while `HttpTransport` has no auth-header support,
+> and it addresses devices by `device` id rather than by room. Those gaps are tracked in
+> mctlhq/mctl-alice#47 (structured read-only state) and mctlhq/newton-mcp-gateway#28 (authenticated
+> streamable-http). Plus four documented details: approval expiry covers the whole run, the
+> temperature override is labelled a testbed override, the in-process factory ignores the declared
+> transport, and Alice is described generically.
+
 ## Context
 
 Every piece of the Direction A pipeline now exists in `src/newton_mcp/` and is unit-tested in
@@ -17,7 +30,8 @@ This proposal adds that artefact as a self-contained testbed under `examples/sma
 in-process fake MCP actuator (`fake_alice.py`) with a simulated room, and a `demo.py` that runs the
 whole loop and prints a human-readable trace while writing a JSONL audit. The first real actuator
 target is an existing smart-home MCP server ("Alice") chosen because it is real hardware with
-benign, reversible actions; real mode is opt-in and never runs in CI. The runtime must remain
+benign, reversible actions; driving that real server is follow-up work (see the amendment
+note), and `--real` here means real Newton with the fake actuator, opt-in and never run in CI. The runtime must remain
 actuator-agnostic, so `src/newton_mcp/` gains nothing Alice-specific — everything actuator-specific
 lives under `examples/smart-home/`. Both the Physical Action Contract and the action runtime remain
 **this project's experimental proposal**, not an Archetype standard, and every result this proposal
@@ -41,8 +55,9 @@ server.
   never retried SO THAT an unverifiable action cannot be repeated in the physical world.
 - AS a maintainer I WANT the demo to run offline, deterministically and without credentials in CI
   SO THAT the closed loop is regression-tested on every pull request.
-- AS a maintainer I WANT real Newton and real Alice to be strictly opt-in via env-only credentials
-  SO THAT CI can never touch real hardware and no secret enters the repository.
+- AS a maintainer I WANT real Newton to be strictly opt-in via env-only credentials, with the
+  actuator always the in-process fake in this issue, SO THAT CI can never touch real hardware and no
+  secret enters the repository.
 
 ## Acceptance criteria (EARS)
 
@@ -128,9 +143,15 @@ server.
 ### Real mode and isolation
 
 - IF `--real` is given THEN THE SYSTEM SHALL read Newton credentials from `ATAI_API_KEY` /
-  `ATAI_API_ENDPOINT` and the Alice MCP endpoint from an environment variable only, never from a
-  committed file or a command-line argument, and SHALL fail loudly naming the missing variable when
-  one is absent.
+  `ATAI_API_ENDPOINT` only (never from a committed file or a command-line argument), SHALL fail
+  loudly naming the missing variable when one is absent, and SHALL still execute and verify against
+  the in-process `fake_alice` — `--real` means "real Newton, fake actuator" (owner amendment).
+- WHILE running in `--real` mode THE SYSTEM SHALL print that the actuator is the in-process fake and
+  that the proposal came from the live Newton backend, so the output cannot be read as a real
+  actuator run.
+- WHILE this issue is implemented THE SYSTEM SHALL read no Alice endpoint or Alice credential from
+  anywhere (no `ALICE_MCP_URL`); driving a real Alice server depends on mctlhq/mctl-alice#47 and
+  mctlhq/newton-mcp-gateway#28 and is out of scope.
 - WHILE any test runs THE SYSTEM SHALL never select `--real`, never open a socket and never read a
   credential; CI SHALL exercise `--mock` only.
 - WHILE this proposal is implemented THE SYSTEM SHALL add no Alice-specific name, tool shape,
@@ -147,8 +168,17 @@ server.
   `uv run python examples/smart-home/demo.py --mock` command, a short excerpt of the success trace,
   and a short excerpt of the AC-offline run ending `ESCALATED`, both labelled mock.
 - WHEN `examples/smart-home/README.md` is read THE SYSTEM SHALL document the capability set, the
-  two paths, every CLI flag and exit code, the regeneration command for `trace.jsonl`, and the
-  opt-in real-mode variables.
+  two paths, every CLI flag and exit code, the regeneration command for `trace.jsonl`, the
+  opt-in real-mode variables (`ATAI_API_KEY`, `ATAI_API_ENDPOINT` only), and why a real Alice
+  server is not yet drivable (text-only state read, no authenticated HTTP transport, device-id
+  addressing — linking mctlhq/mctl-alice#47 and mctlhq/newton-mcp-gateway#28).
+- WHEN the testbed is described THE SYSTEM SHALL describe Alice generically as an open-source
+  smart-home MCP server and SHALL NOT link or mention any hosted deployment (hard rule 6).
+- WHEN `--force-desired-temperature-c` is used THE SYSTEM SHALL label it in the printed trace and in
+  the README as a testbed override applied after the proposal, not Newton's output.
+- WHEN the demo creates an `Approval` THE SYSTEM SHALL set `expires_at` so it covers the whole run
+  including every retry under the (possibly stepped) `now_fn`, so the AC-offline run ends
+  `ESCALATED` through verification and never through an expired approval.
 
 ## Out of scope
 
@@ -174,8 +204,11 @@ server.
    clone.** `fake_alice.py` therefore defines a plausible shape (`get_room_state`,
    `set_ac_temperature`, `set_light_state`, `set_light_brightness`, `announce`) and
    `examples/smart-home/runtime.yaml` maps to exactly that shape. Proceeding on that basis: the
-   fake is the contract for mock mode, and `--real` may require the operator to edit the capability
-   mapping. The README states this. The committed `runtime.yaml` uses a deliberately non-resolvable
+   fake is the contract for this issue. **Resolved at owner review:** the real server
+   (`mctlhq/mctl-alice`, public) was checked — its tools are `alice_*`, address devices by `device`
+   id, return Markdown-only state, and require OAuth — so it is not drivable yet; `--real` is real
+   Newton with the fake actuator, and the gaps are mctlhq/mctl-alice#47 and
+   mctlhq/newton-mcp-gateway#28. The README states this. The committed `runtime.yaml` uses a deliberately non-resolvable
    placeholder URL (`https://alice.invalid/mcp`, RFC 2606) so the committed file names no real host.
 2. **"Read device state" as a capability.** `runtime.yaml` capabilities are actuator capabilities:
    each needs `goal_prefixes` and would be proposed as an *action*. Proceeding by expressing the

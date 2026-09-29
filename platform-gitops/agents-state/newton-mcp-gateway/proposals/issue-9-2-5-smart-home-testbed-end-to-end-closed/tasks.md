@@ -32,7 +32,8 @@
       — DoD: `--help` works; `main` returns the documented codes; `sys.path` is extended so
       `import fake_alice` resolves from the script's own directory.
 - [ ] 5. Wire the propose step in `run_demo` (depends on 4): build the backend
-      (`MockNewtonBackend()` in mock mode, `build_backend(Settings.from_env())` in real mode), call
+      (`MockNewtonBackend()` in mock mode, `build_backend(Settings.from_env())` in real mode — the
+      only thing `--real` changes; the actuator stays `fake_alice`), call
       `propose_action(backend, model=..., text_events=["kitchen 29.4 C, occupied"],
       allowed_goals=[...the runtime.yaml goal prefixes...])`, print the labelled envelope, and create
       the record with `new_action_record(now=..., observation_id=result.observation_id,
@@ -72,8 +73,12 @@
 - [ ] 10. Add `examples/smart-home/README.md` (depends on 8): the capability table with idempotency,
       the success path and the "AC offline -> ESCALATED" path with short trace excerpts, every flag
       and exit code, the `trace.jsonl` regeneration command, the opt-in real-mode variables
-      (`ATAI_API_KEY`, `ATAI_API_ENDPOINT`, `ALICE_MCP_URL`), and open question 1 (the real Alice
-      tool shapes are assumed, not documented).
+      (`ATAI_API_KEY`, `ATAI_API_ENDPOINT` only; `--real` = real Newton, fake actuator), why a real
+      Alice server is not drivable yet (linking mctlhq/mctl-alice#47 and
+      mctlhq/newton-mcp-gateway#28), one sentence that `binding_identity` comes from the declared
+      placeholder URL while the in-process factory ignores the transport, and the
+      `--force-desired-temperature-c` testbed-override label. Alice is described generically, with no
+      hosted deployment mentioned.
       — DoD: the document says "mock-validated", never claims a live Newton or live Alice
       integration works, and keeps the contract/runtime described as this project's experimental
       proposal.
@@ -140,6 +145,16 @@ only — no test may select `--real`, open a socket or read a credential.
       in-process `client_factory` (e.g. by asserting every recorded call arrived at the fake's
       `call_log` and the fake's server object is the only one constructed), and that `--mock`
       completes with `ATAI_API_KEY` absent from the environment (`monkeypatch.delenv`).
+- [ ] T13. (owner amendment) `run_demo(real=True)` with the live-backend builder monkeypatched to
+      return the mock backend (so no network) still routes every actuator and read call to the
+      in-process `fake_alice` `call_log`, prints the "live Newton backend; actuator: in-process fake"
+      line, and never reads any Alice-related environment variable.
+- [ ] T14. (owner amendment) A separate test, with nothing monkeypatched and `ATAI_API_KEY` unset
+      (`monkeypatch.delenv`): `--real` fails before proposing, with an error naming `ATAI_API_KEY`,
+      and `call_log` stays empty.
+- [ ] T15. (owner amendment) Under `--deterministic`, the AC-offline run's approval `expires_at`
+      is later than every `now_fn` value the run produces, and the run ends `ESCALATED` via verified
+      `FAILED` (the audit has no approval-rejection reason).
 
 ## Rollback
 
