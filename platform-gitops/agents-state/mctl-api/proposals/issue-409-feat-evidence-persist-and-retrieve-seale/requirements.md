@@ -26,7 +26,10 @@ The proposal must also answer an unresolved contract question. Tier A's
 issue-investigator runs carry one today; implementer and shepherd runs, `POLICY_DECISION`
 records and `action_approval_requests.execution_id` generally carry the runtime
 `ExecutionContext` id `ex-` (ADR 011). The storage layer may not decide this on its own, and
-must neither assume a `we_` exists nor store an `ex-` in a `we_` field.
+must neither assume a `we_` exists nor store an `ex-` in a `we_` field. That question is
+decided in mctlhq/mctl-agents#539 (the ADR 018 amendment), which is a **blocking
+prerequisite** for approving and implementing this proposal; storage mirrors the join shape
+the amended ADR fixes.
 
 ## User stories
 
@@ -43,48 +46,53 @@ must neither assume a `we_` exists nor store an `ex-` in a `we_` field.
 - AS a tenant member I WANT to read the evidence attached to a work item I can already see
   SO THAT governance is legible to the people whose work it governs, without exposing
   cross-tenant evidence.
-- AS a platform architect I WANT evidence storage to be explicitly forward-compatible with
-  both candidate resolutions of the `we_` / `ex-` split SO THAT shipping storage does not
-  pre-empt or block the ADR 018 decision.
+- AS a platform architect I WANT evidence storage to mirror exactly the execution join that
+  ADR 018 (as amended by mctlhq/mctl-agents#539) defines SO THAT storage never pre-empts or
+  silently redefines the envelope's identity semantics.
 - AS an operator I WANT an absent evidence record to read as an explicit, distinguishable
   absence SO THAT "the producer never wrote evidence" is never confused with "the evidence
   store is not configured".
 
 ## Acceptance criteria (EARS)
 
-### Ingest and identity
+### Ingest and identity (Tier A's algorithm, exactly)
 
 - WHEN a caller holding `evidence:write` POSTs a sealed envelope to
-  `POST /api/v1/evidence/records` THE SYSTEM SHALL validate it, recompute its content hash
-  and `ev-` identity from the received bytes, store the envelope verbatim and answer `201`
-  with the stored record.
-- WHEN an envelope's `apiVersion` is not in the server's supported set
-  (`evidence.mctl.ai/v1alpha1`) THE SYSTEM SHALL reject the write with `400` and code
-  `evidence_unsupported_api_version`, naming the versions it does support.
-- WHEN an envelope arrives THE SYSTEM SHALL compute `content_hash` as
-  `sha256:<hex>` over the exact received canonical bytes, using the same helper shape as
-  `workitems.HashCanonical`, without re-encoding, re-ordering or normalising them.
-- IF a request carries a `content_hash` or an `id` that does not equal the value the server
-  recomputes from the received bytes THEN THE SYSTEM SHALL reject the write with `400` and
-  code `evidence_hash_mismatch`, echoing both the submitted and the recomputed value.
+  `POST /api/v1/evidence/records` THE SYSTEM SHALL validate it, recompute its
+  `content_hash` and `evidence_id` with Tier A's sealing algorithm, store the received bytes
+  verbatim and answer `201` with the stored record.
+- WHEN an envelope's `api_version` is not in the server's supported set
+  (`evidence.mctl.ai/v1alpha1`), or its `kind` does not match that version, THE SYSTEM
+  SHALL reject the write with `400` and code `evidence_unsupported_api_version`, naming the
+  versions it does support.
+- WHEN an envelope arrives THE SYSTEM SHALL compute `content_hash` exactly as Tier A's
+  `seal()` does:
+  - take `sha256` over the canonical JSON of the envelope object minus `evidence_id`,
+    `content_hash` and `created_at`, with empty optional blocks omitted;
+  - use the canonical JSON rule of `context_snapshot._canonical_json`: sorted keys,
+    `(",", ":")` separators, `ensure_ascii`, no HTML escaping, no NaN;
+  - derive `evidence_id` as `"ev-" + content_hash[7:23]`.
+- IF the envelope has unknown keys or duplicate keys, or is not valid JSON, THEN THE SYSTEM
+  SHALL reject the write with `400` and code `evidence_invalid`.
+- IF the envelope's own `content_hash` or `evidence_id` does not equal the value the server
+  recomputes THEN THE SYSTEM SHALL reject the write with `400` and code
+  `evidence_hash_mismatch`, echoing both the submitted and the recomputed value.
 - WHILE an evidence record exists THE SYSTEM SHALL treat its `ev-` id as its immutable
-  primary key and derive that id solely from the sealed content hash.
-- WHEN the store reads an evidence record THE SYSTEM SHALL recompute the hash of the stored
-  bytes and SHALL refuse to serve the row as that evidence if the recomputed hash differs
-  from the stored `content_hash`, mirroring `scanSnapshot` in
+  primary key and its `content_hash` as unique.
+- WHEN the store reads an evidence record THE SYSTEM SHALL recompute the Tier A content hash
+  of the stored bytes. IF it differs from the stored `content_hash` THEN THE SYSTEM SHALL
+  refuse to serve the row as that evidence, mirroring `scanSnapshot` in
   `internal/workitems/snapshots.go`.
 
 ### Idempotency and conflict
 
-- WHEN an envelope is written a second time with byte-identical canonical bytes and
-  identical wrapper claims THE SYSTEM SHALL store nothing new and SHALL answer `200` with
-  the already-stored record.
-- IF a write presents an existing `ev-` id with canonical bytes that differ from the stored
-  bytes THEN THE SYSTEM SHALL reject it with `409` and code `evidence_divergence`, and
-  SHALL NOT modify the stored row.
-- IF a write presents an existing `ev-` id with identical bytes but different wrapper claims
-  (a different `execution_ref`, `execution_ref_kind` or producer) THEN THE SYSTEM SHALL
-  reject it with `409` and code `evidence_divergence`.
+- WHEN an envelope arrives whose `content_hash` equals a stored record's THE SYSTEM SHALL
+  store nothing new and SHALL answer `200` with the already-stored record. This holds
+  whether the bytes are identical or differ only in `created_at`, which Tier A excludes from
+  the hash precisely so that a re-seal is the same evidence. The first stored bytes win.
+- IF a write presents an existing `ev-` id with a different `content_hash` THEN THE SYSTEM
+  SHALL reject it with `409` and code `evidence_divergence`, and SHALL NOT modify the stored
+  row. This case is a 64-bit id-prefix collision between different content.
 - WHILE any evidence row exists THE SYSTEM SHALL refuse every `UPDATE` of it at the database
   level via a `BEFORE UPDATE` trigger, in the same shape as
   `work_item_context_snapshots_no_update`.
@@ -101,19 +109,19 @@ must neither assume a `we_` exists nor store an `ex-` in a `we_` field.
   tool payloads, artifact bodies, execution phase, work-item lifecycle state or approval
   state into the evidence tables.
 
-### The `we_` / `ex-` split
+### The `we_` / `ex-` split (owned by mctlhq/mctl-agents#539)
 
-- WHEN an envelope's `ExecutionJoin.execution_id` is stored THE SYSTEM SHALL persist it
-  verbatim in a single `execution_ref` column as the one stable primary retrieval identity,
-  regardless of whether it is a `we_` or an `ex-`.
-- WHEN `execution_ref` is stored THE SYSTEM SHALL classify it into
-  `execution_ref_kind` of `work` (prefix `we_`) or `runtime` (prefix `ex-`) by prefix alone,
-  and SHALL reject any other prefix with `400` and code `evidence_execution_ref_invalid`.
-- WHILE `execution_ref_kind` is `runtime` THE SYSTEM SHALL leave `work_execution_id` empty
-  unless it can resolve a real `we_` from canonical state, and SHALL NEVER write an `ex-`
-  value into `work_execution_id`.
-- IF canonical state cannot resolve a runtime reference to a work execution THEN THE SYSTEM
-  SHALL store the evidence anyway with empty derived references, and SHALL NOT reject the
+- WHILE mctlhq/mctl-agents#539 is not merged THE SYSTEM SHALL NOT be implemented from this
+  proposal. The join columns and their validation depend on it.
+- WHEN an envelope is stored THE SYSTEM SHALL copy exactly the `ExecutionJoin` fields that
+  ADR 018 defines (as amended by #539) into columns of the same meaning, verbatim. It SHALL
+  validate them with the same prefix rules Tier A enforces, and SHALL reject a violation with
+  `400` and code `evidence_execution_ref_invalid`.
+- WHILE storing or deriving references THE SYSTEM SHALL NOT classify, translate or map one
+  execution identity shape into another. In particular it SHALL NEVER write an `ex-` value
+  into a `we_` column, or the reverse.
+- IF canonical state cannot resolve an envelope's valid join to a work item THEN THE SYSTEM
+  SHALL store the evidence anyway with an empty derived projection, and SHALL NOT reject the
   write for lack of a `we_`.
 
 ### Retrieval and authorization
@@ -121,7 +129,7 @@ must neither assume a `we_` exists nor store an `ex-` in a `we_` field.
 - WHEN an admin requests `GET /api/v1/evidence/{id}` THE SYSTEM SHALL return the wrapper and
   the verbatim envelope bytes, base64-encoded, so that the hash survives JSON re-encoding.
 - WHEN an admin requests `GET /api/v1/evidence` with any combination of the supported
-  filters (`execution_ref`, `trace_id`, `engine` + `engine_ref`, `work_item_id`,
+  filters (the ADR-named primary execution identity and any #539 typed identity, `trace_id`, `engine` + `engine_ref`, `work_item_id`,
   `repository` + `issue`, `repository` + `pr`) THE SYSTEM SHALL return a list-shaped
   response whose shape does not depend on which filters were supplied.
 - WHEN a caller requests `GET /api/v1/work-items/{id}/evidence` THE SYSTEM SHALL apply the
@@ -134,8 +142,7 @@ must neither assume a `we_` exists nor store an `ex-` in a `we_` field.
 - WHILE the dedicated evidence-writer principal is authenticated THE SYSTEM SHALL confine it
   to `POST /api/v1/evidence/records` and answer `403` on every other route, mirroring
   `usageWriterGate` in `internal/api/handlers_usage.go`.
-- WHEN an evidence write is accepted THE SYSTEM SHALL record an audit entry naming the
-  evidence id, the execution reference and the ingesting principal.
+- WHEN an evidence write is accepted THE SYSTEM SHALL record an audit entry naming the evidence id, the primary execution identity and the ingesting principal.
 
 ### Availability, gaps and retention
 
@@ -165,22 +172,12 @@ must neither assume a `we_` exists nor store an `ex-` in a `we_` field.
 
 ## Open questions
 
-- **The exact `ev-` derivation in Tier A.** The frozen contract lives in
-  `orchestrator/execution_evidence.py` in mctl-agents, which is not in this clone. This
-  proposal therefore specifies the server-side recomputation as a pinned, version-keyed
-  algorithm (`sha256` over the received canonical bytes, `ev-` + a truncated hex digest) and
-  makes byte-for-byte agreement with Tier A a hard gate: a shared golden-vector fixture must
-  be ported into `internal/evidence/testdata/` and the Go implementation must reproduce it
-  exactly. If Tier A's digest differs (different truncation length, a prefix separator other
-  than `-`, or a canonicalisation step before hashing), only
-  `evidence.EvidenceIDFor` / `evidence.HashCanonical` change; nothing else in this design
-  moves. Proceeding on this interpretation.
-- **Which model the ADR 018 amendment picks for `we_` / `ex-`.** This proposal recommends
-  model (B) — an explicit discriminated execution reference — and shows it is a strict
-  superset of model (A): if the platform later guarantees a `we_` for every governed run,
-  every row simply carries `execution_ref_kind = 'work'` and no migration is needed. Storage
-  therefore ships unblocked, and the ADR amendment is named as a prerequisite for the
-  **producer** slice only.
+- **The `ev-` derivation is no longer open.** It is Tier A's algorithm, pinned in the
+  acceptance criteria above and in `design.md` section 2, and it is proven by ported golden
+  vectors.
+- **The `we_` / `ex-` join model is decided in mctlhq/mctl-agents#539, not here.** That
+  issue is a blocking prerequisite. If it fixes a shape `design.md` section 4 did not
+  anticipate, this proposal is re-reviewed before approval.
 - **Whether a runtime `ex-` can be resolved to a `we_` inside mctl-api today.** Nothing in
   this clone maps an `ex-` to a work execution; `internal/usage/types.go` explicitly accepts
   both shapes in one correlation column and resolves neither. The design therefore leaves
