@@ -25,9 +25,20 @@ mismatch `pruneOrphans` in `internal/monitor/poller.go` already documents at
 length as its reason for excluding `SourceAlertManager` tickets from orphan
 pruning. Five builtin skills consume the raw value when they set
 `FixResult.FilePath`: `oomkilled`, `cpu_throttle`, `probe_fix`, `rollback` and
-`scale_up`. Finally, because the chart fullname never equals `mctl-api` or
-`mctl-agent`, the `PlatformServices` branch of `DetectFilePath` is unreachable
-for AlertManager-sourced tickets about the platform's own services.
+`scale_up`.
+
+Separately, every `platform-gitops/apps/templates/` path in the agent is dead.
+That directory was renamed to `platform-gitops/bootstrap/templates/` (mctl-gitops
+commit `18d64715`, "rename apps to bootstrap"); nothing exists under
+`apps/templates/` on `main` today. `mctl-api` and `mctl-agent` ship their own
+charts with `releaseName: mctl-api` / `mctl-agent`, so their pods are
+`mctl-api-<rs>-<id>` and `extractService` already yields `mctl-api`: the
+`PlatformServices` branch of `DetectFilePath` is reachable today and always
+returns a 404 path. The same stale prefix sits in the `gitopspath` allowlist, in
+`workflow_fixer`'s `fix_appproject_whitelist` target
+(`apps/templates/projects/project-apps.yaml`, now
+`bootstrap/templates/projects/project-apps.yaml`), in the `llm_diagnosis` prompt
+and in a `previous_tag.go` comment.
 
 ## User stories
 
@@ -59,19 +70,24 @@ for AlertManager-sourced tickets about the platform's own services.
 - IF the pod name does not end in the `-base-service` chart-fullname signature
   THEN THE SYSTEM SHALL leave `extractService`'s result unchanged, including for
   `two-parts`, `myapp-6d4b5c7f8-abc12` and `a-b-c-d-e`.
-- IF a service inventory from `mctlclient.ListServices()` is available THEN THE
-  SYSTEM SHALL return the first candidate that is a registered `(team, app)` pair
-  for the ticket's tenant, and SHALL fall back to the first derived candidate when
-  no candidate is registered.
-- WHILE the mctl-api inventory is unavailable or stale THE SYSTEM SHALL still
-  produce a resolved name from the deterministic string rules alone and SHALL NOT
-  fail ticket creation.
+- THE SYSTEM SHALL resolve the name from the alert labels and deterministic
+  string rules alone, with no network call at ingestion; the first candidate is
+  the ticket's `Service`. Verification against real files happens later, when
+  the pipeline probes candidate paths in `mctl-gitops`.
 - WHEN a workload label (`deployment`, `statefulset`, `daemonset`), an Argo
   Workflow `name`, or the `TypeArgoCDDegraded` Application `name` already
   determines the service THE SYSTEM SHALL apply the same canonicalisation to that
   value and SHALL NOT reintroduce the pod-derived name.
-- WHEN `t.Service` resolves to `mctl-api` or `mctl-agent` THE SYSTEM SHALL return
-  `platform-gitops/apps/templates/{service}.yaml` from the shared path helper.
+- WHEN `t.Service` resolves to a `PlatformServices` entry (`mctl-api`,
+  `mctl-agent`) THE SYSTEM SHALL NOT read or patch any GitOps file and SHALL NOT
+  open a pull request; it SHALL escalate with a message stating that platform
+  service configuration lives in ArgoCD Application manifests under
+  `platform-gitops/bootstrap/templates/mctl-platform/` and needs a human change.
+- WHEN a skill would target the `AppProject` whitelist (`fix_appproject_whitelist`)
+  THE SYSTEM SHALL escalate instead of patching, for the same reason.
+- THE SYSTEM SHALL contain no `platform-gitops/apps/templates/` path: the prefix
+  is removed from the `gitopspath` allowlist (not replaced by `bootstrap/`), and
+  the `llm_diagnosis` prompt and `previous_tag.go` comment no longer name it.
 - WHEN a skill produces a `FixResult.FilePath` THE SYSTEM SHALL verify the path
   exists in `mctl-gitops` before generating a patch.
 - IF the resolved path does not exist THEN THE SYSTEM SHALL try the remaining
@@ -101,6 +117,13 @@ for AlertManager-sourced tickets about the platform's own services.
   for incident `77c234ee`; the manual fix is mctlhq/mctl-gitops#1450. Improving
   the sizing heuristic is separate work.
 - Migrating or re-keying existing open tickets created under the old service name.
+- Verifying candidate names against the mctl-api service registry
+  (`ListServices()`). The base-service naming convention plus path probing in
+  `mctl-gitops` covers the observed cases; a registry check can be added if a
+  release is ever found whose name is not `{tenant}-{app}`.
+- Automatic patching of platform services or AppProjects. Their manifests are
+  ArgoCD Applications and projects under `bootstrap/`; opening the agent's
+  write allowlist to `bootstrap/` is a separate security decision.
 - Re-enabling `pruneOrphans` for `SourceAlertManager` tickets. Canonical names
   make the inventory comparison meaningful again, but re-enabling it needs its own
   risk assessment and is deliberately left for a follow-up.
@@ -117,9 +140,9 @@ for AlertManager-sourced tickets about the platform's own services.
   the deterministic string fallback is what production will exercise.
 - Whether any base-service release name legitimately differs from
   `{tenant}-{app}`. Proceeding on the convention documented in `poller.go`
-  (`{release}-base-service` where `release` is `{tenant}-{app}`); the inventory
-  check is what catches a violation, and an unverified candidate simply keeps
-  today's behaviour rather than making it worse.
+  (`{release}-base-service` where `release` is `{tenant}-{app}`); path probing
+  keeps the raw value as the last candidate, so a violation keeps today's
+  behaviour rather than making it worse.
 - Whether `worker-service` chart deployments use an analogous `-worker-service`
   fullname suffix. Not observable from this repo. Resolution: make the stripped
   suffix list a package-level variable seeded with `-base-service` so adding

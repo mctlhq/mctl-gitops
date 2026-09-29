@@ -52,10 +52,19 @@ behaviour explicitly (`"admins-mctl-api-base-service-6d4b5c7f8-abc12"` ->
 
    Both branch on a `PlatformServices` map (`mctl-api`, `mctl-agent`) and
    otherwise return `platform-gitops/services/{tenant}/{service}/values.yaml`.
-   Because the chart fullname never equals `mctl-api` or `mctl-agent`, the
-   platform-services branch is in practice **unreachable** for any
-   AlertManager-sourced ticket: `admins-mctl-api-base-service` falls through to
-   the tenant path too.
+   The platform branch returns `platform-gitops/apps/templates/{service}.yaml`,
+   which **does not exist**: the directory became `bootstrap/templates/` in
+   mctl-gitops `18d64715`. The branch is reachable today, because `mctl-api` and
+   `mctl-agent` use their own charts (`releaseName: mctl-api`), so their pods are
+   `mctl-api-<rs>-<id>` and `extractService` already returns `mctl-api`. Every
+   platform-service ticket therefore 404s too, for a different reason.
+
+   The same dead prefix appears in `internal/gitopspath/gitopspath.go:34`
+   (allowlist), `internal/skill/builtin/workflow_fixer.go:118`
+   (`fix_appproject_whitelist` -> `apps/templates/projects/project-apps.yaml`,
+   now `bootstrap/templates/projects/project-apps.yaml`),
+   `internal/skill/builtin/llm_diagnosis.go:49` (prompt) and
+   `internal/fixer/previous_tag.go:84` (comment).
 
 2. **Evidence collection.** `internal/pipeline/evidence.go` `collectEvidence`
    passes `t.Tenant, t.Service` to `GetServiceStatus`, `GetServiceConfig` and
@@ -115,11 +124,6 @@ is often already replaced by the time the ticket is processed. This shapes the
 design below: the label path is supported **only** where AlertManager already
 delivers the label, and the deterministic path is the one production relies on.
 
-One source of canonical truth *is* already in-process:
-`mctlclient.Client.ListServices()` returns `[]Service{Team, App}` — the
-registry's own `(team, app)` pairs — and `Poller.pollDegraded` already calls it
-on every tick.
-
 `Skill.Fix(ctx, t, diag)` receives no `EvidenceSet` (only `Match` and `Diagnose`
 do), so a skill cannot read the raw alert labels at `Fix` time even though
 `processAlert` stores the whole alert JSON as `"alert"` evidence. Any label-based
@@ -173,37 +177,19 @@ renamed. With it, only pods carrying the chart's own fullname signature are
 touched, and `extractService`'s existing cases (`myapp-6d4b5c7f8-abc12`,
 `two-parts`, `a-b-c-d-e`, `""`) all fall straight through to candidate 4.
 
-A thin `Resolve(namespace, derived string, labels map[string]string, known func(tenant, app string) bool) string`
-returns the first candidate `known` accepts, or `Candidates(...)[0]` when
-`known` is nil or accepts none. "Accepts none" deliberately returns the *derived*
-best guess rather than the raw value, so the fix still works when mctl-api is
-down.
+A thin `Resolve(namespace, derived string, labels map[string]string) string`
+returns `Candidates(...)[0]`, or `""` for an empty input. There is no registry
+lookup at ingestion: the check that matters — does the file exist — happens in
+step 3, against `mctl-gitops` itself.
 
 ### 2. Canonicalise at ingestion, in `processAlert`
 
-`AlertHandler` gains one optional, nil-safe field, matching the existing
-`IgnoreService` / `OnResolve` / `BatchBudget` pattern on that struct:
-
-```go
-// KnownService, when non-nil, reports whether (tenant, app) is a registered
-// service. Used to pick among candidate app names. Nil disables verification
-// and falls back to the deterministic derivation.
-KnownService func(tenant, app string) bool
-```
-
-`cmd/agent/main.go` wires it to a small cache over
-`mctlclient.Client.ListServices()` — refreshed on the poller's existing tick and
-on a miss, with a short negative-result cooldown so a burst of alerts for an
-unregistered name cannot hammer mctl-api. The cache lives next to the `Poller`,
-which already owns a `mctlclient.Client`; `AlertHandler` sees only the closure,
-so its unit tests stay store-only.
-
-In `processAlert`, canonicalisation is applied **after** the existing workload /
+`AlertHandler` gains no new field and no new dependency. In `processAlert`, canonicalisation is applied **after** the existing workload /
 workflow / ArgoCD overrides and **before** the tenant/service empty-string
 fallbacks:
 
 ```go
-service = svcname.Resolve(namespace, service, a.Labels, h.KnownService)
+service = svcname.Resolve(namespace, service, a.Labels)
 ```
 
 Placing it after the overrides means a `deployment` label like
@@ -231,9 +217,24 @@ here unchanged, so this design deliberately does not add one.
 - Delete `builtin.detectFilePath` and route all six builtin call sites
   (`oomkilled`, `cpu_throttle`, `probe_fix`, `rollback`, `scale_up`,
   `llm_diagnosis`) through `fixer.DetectFilePath`, which the pipeline already
-  uses. One implementation, one `PlatformServices` map, one test table. With
-  step 2 in place the `PlatformServices` branch becomes reachable for
-  AlertManager tickets about `mctl-api` / `mctl-agent` for the first time.
+  uses. One implementation, one `PlatformServices` map, one test table.
+
+- Platform services and AppProjects stop pointing at dead paths, and are not
+  moved to live ones either. `DetectFilePath` returns `""` plus an
+  `IsPlatformService` signal for `PlatformServices`; the pipeline and the six
+  skills escalate such a ticket without reading GitOps, with:
+
+  ```
+  [escalated] mctl-api is a platform service; its configuration is an ArgoCD
+  Application under platform-gitops/bootstrap/templates/mctl-platform/ and is
+  not patched automatically. Apply the fix by hand through a mctl-gitops PR.
+  ```
+
+  `workflow_fixer`'s `fix_appproject_whitelist` escalates the same way.
+  `platform-gitops/apps/templates/` is removed from the `gitopspath` allowlist
+  and is **not** replaced by `bootstrap/`: the agent's write surface shrinks to
+  paths that exist and that it may legitimately patch. The `llm_diagnosis`
+  prompt line and the `previous_tag.go` comment are updated to match.
 
 - Add `fixer.CandidatePaths(tenant string, services []string) []string`, and in
   `internal/pipeline/pipeline.go` replace the single `GetFileContent` with a
@@ -323,24 +324,23 @@ resolved name is written into the existing `Service` column.
   should be amended to say the mismatch is now fixed at ingestion but that the
   exclusion is retained pending separate review — not silently re-enabled.
 
-**Resource impact.** One extra in-memory map of registered `(team, app)` pairs,
-refreshed from a `ListServices()` call the poller already makes. On the happy
+**Resource impact.** None at ingestion (pure string work). On the happy
 path the pipeline performs the same single `GetFileContent`; candidate probing
 costs at most a handful of extra contents GETs, and only on the path that
 currently fails outright.
 
 **Risks and mitigations.**
 - *Over-eager `{namespace}-` stripping renames a service that was correct.*
-  Mitigated by gating the strip on the `-base-service` suffix, by ordering the
-  raw value last in the candidate list, and by the registry check. Residual risk
-  is covered by step 3: the old path is still probed.
-- *mctl-api unavailable during an alert burst, so no candidate can be verified.*
-  `Resolve` degrades to the deterministic derivation; ticket creation never
-  blocks on the API. The negative-result cooldown bounds retry load.
+  Mitigated by gating the strip on the `-base-service` suffix and by ordering the
+  raw value last in the candidate list. Residual risk is covered by step 3: the
+  old path is still probed.
 - *A tenant and app share a prefix ambiguously* (tenant `labs`, app
   `labs-dashboard`). Candidate 3 (suffix stripped, prefix kept) is in the list
-  ahead of the raw value precisely for this, and the registry check disambiguates
-  when it is reachable.
+  ahead of the raw value precisely for this, and step 3 picks whichever path
+  exists.
+- *Platform-service tickets now escalate instead of attempting a patch.* They
+  already failed with a 404 on every attempt; the change makes the failure say
+  why. No working auto-fix is lost.
 - *Duplicate notifications at rollout.* Bounded, one-off, and identical in kind
   to the accepted precedent already documented in `alerthandler.go`. Deploy
   during a quiet window.
