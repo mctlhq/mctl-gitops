@@ -6,7 +6,8 @@
       `label_backstage_io_kubernetes_id`, `app.kubernetes.io/instance`,
       `label_app_kubernetes_io_instance`),
       `Candidates(namespace, derived string, labels map[string]string) []string`
-      and `Resolve(namespace, derived string, labels map[string]string, known func(tenant, app string) bool) string`.
+      and `Resolve(namespace, derived string, labels map[string]string) string`
+      (first candidate, or `""`).
       Candidate order: identity label (with `{namespace}-` stripped for the
       `instance` spellings) > suffix-stripped + prefix-stripped >
       suffix-stripped only > `derived` unchanged. The `{namespace}-` strip is
@@ -17,10 +18,8 @@
       passes.
 
 - [ ] 2. Wire canonicalisation into `internal/monitor/alerthandler.go` (depends on 1).
-      Add an optional nil-safe `KnownService func(tenant, app string) bool` field
-      to `AlertHandler`, documented in the same style as `IgnoreService` /
-      `OnResolve`. In `processAlert`, insert
-      `service = svcname.Resolve(namespace, service, a.Labels, h.KnownService)`
+      No new `AlertHandler` field. In `processAlert`, insert
+      `service = svcname.Resolve(namespace, service, a.Labels)`
       after the `deployment`/`statefulset`/`daemonset`, `TypeWorkflowFailed` and
       `TypeArgoCDDegraded` overrides and before the `tenant == ""` /
       `service == ""` fallbacks. Add a comment recording the rollout consequence
@@ -31,17 +30,20 @@
       `Service == "mctl-telegram"`; label-less infra alerts still reach
       `service == ""` so `isInfraAlert`'s manual-only gate is unaffected.
 
-- [ ] 3. Add a cached service-inventory lookup over
-      `mctlclient.Client.ListServices()` and wire it to `AlertHandler.KnownService`
-      in `cmd/agent/main.go` (depends on 2). Place it beside the `Poller`, which
-      already calls `ListServices()` each tick (`internal/monitor/poller.go:154`)
-      and already builds a `tenant+"/"+service` set. Refresh on the poller tick
-      and on a miss, with a short negative-result cooldown so an alert burst for
-      an unregistered name cannot hammer mctl-api. Must be goroutine-safe and must
-      never block or fail ticket creation.
-      — DoD: with mctl-api reachable, a candidate registered as `(labs, mctl-telegram)`
-      wins over an unregistered one; with mctl-api returning errors, resolution
-      still returns the deterministic derivation and no alert is dropped.
+- [ ] 3. Retire every dead `platform-gitops/apps/templates/` path (independent).
+      `DetectFilePath` returns `""` for a `PlatformServices` entry and the
+      package exposes `IsPlatformService(service string) bool`; the pipeline
+      (`pipeline.go` around the `DetectFilePath` fallback) and the skills escalate
+      such a ticket before any GitOps read, with the message in design.md step 3.
+      `workflow_fixer.go`'s `fix_appproject_whitelist` escalates instead of
+      returning `apps/templates/projects/project-apps.yaml`. Remove
+      `platform-gitops/apps/templates/` from `internal/gitopspath/gitopspath.go`
+      and do not add `bootstrap/`. Update the `llm_diagnosis.go:49` prompt line
+      and the `previous_tag.go:84` comment.
+      — DoD: `git grep -n 'apps/templates' -- ':!*.md'` returns nothing; a
+      `ContainerOOMKilled` ticket for `mctl-api` escalates with the platform
+      message and performs no `GetFileContent`; the allowlist rejects both
+      `apps/templates/...` and `bootstrap/...`.
 
 - [ ] 4. Delete `detectFilePath` from `internal/skill/builtin/oomkilled.go` and
       route `oomkilled.go:69`, `cpu_throttle.go:84`, `probe_fix.go:87`,
@@ -55,12 +57,12 @@
       compile against the exported helper.
 
 - [ ] 5. Add `fixer.CandidatePaths(tenant string, services []string) []string`
-      (depends on 4) that maps each candidate service name through
-      `DetectFilePath` and deduplicates, preserving order.
+      (depends on 3, 4) that maps each candidate service name through
+      `DetectFilePath`, drops empty results (platform services), and
+      deduplicates, preserving order.
       — DoD: `CandidatePaths("labs", []string{"mctl-telegram", "labs-mctl-telegram-base-service"})`
       returns the two `platform-gitops/services/labs/...` paths in that order;
-      `CandidatePaths("admins", []string{"mctl-api"})` returns the single
-      `platform-gitops/apps/templates/mctl-api.yaml`.
+      `CandidatePaths("admins", []string{"mctl-api"})` returns an empty list.
 
 - [ ] 6. Probe candidate paths before patching in `internal/pipeline/pipeline.go`
       (depends on 1, 5). Replace the single `p.github.GetFileContent(ctx, filePath, "main")`
@@ -106,16 +108,15 @@
       `("default", "myapp", nil)`, `("default", "two-parts", nil)` and
       `("labs", "labs-something", nil)` are unchanged (no `-base-service`
       signature, so no prefix strip); `("labs", "", nil)` returns empty.
-      Plus a `Resolve` test where `known` accepts only the second candidate, and
-      one where `known` is nil.
+      Plus a `Resolve` test that returns the first candidate and `""` for empty
+      input.
 
 - [ ] T2. `internal/monitor/alerthandler_test.go` — end-to-end through
       `processAlert`: `ContainerOOMKilled`, `namespace=labs`,
       `pod=labs-mctl-telegram-base-service-744f465c75-dzkhf` yields a ticket with
       `Tenant="labs"`, `Service="mctl-telegram"`. A second case with a
       non-base-service pod (`myapp-6d4b5c7f8-abc12` in `default`) yields
-      `Service="myapp"` unchanged. A third with `KnownService` returning false for
-      everything still yields `"mctl-telegram"` (deterministic fallback).
+      `Service="myapp"` unchanged.
 
 - [ ] T3. `internal/monitor/alerthandler_test.go` — update the existing assertions
       that encode the old behaviour, one per case with intent stated in the test
@@ -130,8 +131,8 @@
       is still dropped by a regex matching `openclawpr4` after canonicalisation.
 
 - [ ] T5. `internal/fixer/patcher_test.go` — `DetectFilePath` table (moved from
-      `builtin_test.go`) plus `CandidatePaths` order/dedup cases, including the
-      `PlatformServices` branch now reachable for `mctl-api` and `mctl-agent`.
+      `builtin_test.go`, platform cases now expecting `""`) plus
+      `CandidatePaths` order/dedup cases and `IsPlatformService`.
 
 - [ ] T6. `internal/pipeline/pipeline_test.go` — with a fake GitHub that 404s the
       first candidate and serves the second, the pipeline opens a PR against the
@@ -143,7 +144,15 @@
       `ValidatePath` is skipped rather than aborting the loop, and no read is
       attempted for it.
 
-- [ ] T8. Full `go build ./... && go vet ./... && go test ./...` green; `go fmt`
+- [ ] T8. `internal/pipeline/pipeline_test.go` and
+      `internal/gitopspath/gitopspath_test.go` — a `mctl-api` OOMKilled ticket
+      escalates with the platform message and zero GitOps reads; the allowlist
+      rejects `platform-gitops/apps/templates/mctl-agent.yaml` and
+      `platform-gitops/bootstrap/templates/mctl-platform/mctl-agent.yaml`
+      (update the two existing accept cases); `fix_appproject_whitelist`
+      escalates.
+
+- [ ] T9. Full `go build ./... && go vet ./... && go test ./...` green; `go fmt`
       clean, per `CLAUDE.md` conventions.
 
 ## Rollback
@@ -157,10 +166,6 @@ manifest.
 
 Partial de-risking without a full revert:
 
-- Set `AlertHandler.KnownService` to `nil` (drop the wiring from
-  `cmd/agent/main.go`) to disable registry verification while keeping the
-  deterministic derivation — useful if mctl-api's inventory turns out to be
-  unreliable.
 - Empty `svcname.ChartFullnameSuffixes` to make `Candidates` return only the raw
   value, restoring today's naming exactly while leaving the candidate-probing
   safety net in task 6 active.
