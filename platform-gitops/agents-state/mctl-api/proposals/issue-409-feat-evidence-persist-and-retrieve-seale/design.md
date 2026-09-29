@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS execution_evidence (
     content_hash             TEXT NOT NULL UNIQUE,    -- sha256:<hex>, Tier A content hash, verified server-side
     api_version              TEXT NOT NULL,           -- evidence.mctl.ai/v1alpha1
     envelope                 BYTEA NOT NULL,          -- the envelope bytes exactly as first received
-        -- join columns: exactly the ExecutionJoin fields of ADR 018 Amendment 1
+    -- join columns: exactly the ExecutionJoin fields of ADR 018 Amendment 1
     -- (mctlhq/mctl-agents#539); copied verbatim from the envelope, never
     -- classified, translated or rewritten by this layer
     execution_id             TEXT NOT NULL DEFAULT '',-- ExecutionJoin.execution_id: we_ or ''
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS execution_evidence (
     created_at               TIMESTAMPTZ NOT NULL,    -- envelope created_at: a producer claim, excluded from the hash
     ingested_by              TEXT NOT NULL,           -- authenticated caller
     ingested_by_principal_id TEXT NOT NULL DEFAULT '',-- mctl-api#373 dual-write
-        ingested_at              TIMESTAMPTZ NOT NULL,
+    ingested_at              TIMESTAMPTZ NOT NULL,
     -- the Amendment 1 cross-rejection, enforced again at the storage layer
     CONSTRAINT execution_evidence_join_present CHECK (execution_id <> '' OR runtime_execution_id <> ''),
     CONSTRAINT execution_evidence_work_shape   CHECK (execution_id = '' OR execution_id LIKE 'we\_%'),
@@ -272,7 +272,6 @@ entirely, so an index only ever contains rows it can actually answer for — the
 codebase.
 
 ```sql
--- the primary execution join; always present, so unconditional
 -- both typed identities, each independently (ADR 018 Amendment 1); partial,
 -- because either may be blank
 CREATE INDEX IF NOT EXISTS execution_evidence_work_exec
