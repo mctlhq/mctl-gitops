@@ -90,40 +90,44 @@ Add a new store package `internal/evidence`, a new HTTP surface under `/api/v1/e
 plus one work-item-scoped read, a dedicated narrow write principal, and optional wiring in
 `cmd/api/main.go`. Nothing existing changes shape; the additions are purely additive.
 
+> **Correction (owner-directed, 2026-09-29).** Sections 1-4 were rewritten after review for two reasons.
+>
+> 1. The first revision derived `content_hash` and `ev-` differently from Tier A, so every real Tier A envelope would have been rejected with `evidence_hash_mismatch`. It also answered a normal producer retry with a false `409 evidence_divergence`.
+> 2. The first revision settled the `we_` / `ex-` join model inside the storage schema. The join shape is now owned by mctlhq/mctl-agents#539 (the ADR 018 amendment, S2), and **#539 is a blocking prerequisite for approving and implementing this proposal**.
+>
+> Two smaller changes came with it: `produced_by` was removed, because the envelope has no such field, and the optional `MissingFor` task was dropped.
+
 ### 1. Two tables: an immutable record and a rebuildable projection
 
-The single most important structural decision. The sealed evidence row must be strictly
-immutable, but the useful retrieval keys (repository, issue, PR, Temporal workflow ref) are
-**derived** from canonical state that can legitimately change after sealing — a PR number
-appears after the envelope was sealed, a work item is resolved later. Putting derived
-columns in the immutable row forces a choice between "never correct the index" and
-"update an immutable row". Splitting them removes the choice.
+This is the most important structural decision.
+
+- The sealed evidence row must be strictly immutable.
+- The useful retrieval keys (repository, issue, PR, Temporal workflow ref) are **derived** from canonical state that can legitimately change after sealing. A PR number appears after the envelope was sealed; a work item is resolved later.
+- Putting derived columns in the immutable row forces a choice between "never correct the index" and "update an immutable row". Splitting them removes that choice.
 
 ```sql
 -- internal/evidence/store.go
 CREATE TABLE IF NOT EXISTS execution_evidence (
-    id                       TEXT PRIMARY KEY,        -- ev-<hex>, recomputed server-side
+    id                       TEXT PRIMARY KEY,        -- the envelope's evidence_id, ev- + 16 hex, verified server-side
+    content_hash             TEXT NOT NULL UNIQUE,    -- sha256:<hex>, Tier A content hash, verified server-side
     api_version              TEXT NOT NULL,           -- evidence.mctl.ai/v1alpha1
-    content_hash             TEXT NOT NULL,           -- sha256:<hex> of `canonical`
-    canonical                BYTEA NOT NULL,          -- the sealed envelope, verbatim
-    execution_ref            TEXT NOT NULL,           -- ExecutionJoin.execution_id, verbatim
-    execution_ref_kind       TEXT NOT NULL
-        CHECK (execution_ref_kind IN ('work', 'runtime')),
-    trace_id                 TEXT NOT NULL DEFAULT '',
-    produced_by              TEXT NOT NULL DEFAULT '', -- from the envelope
-    sealed_at                TIMESTAMPTZ NOT NULL,     -- from the envelope
-    ingested_by              TEXT NOT NULL,            -- authenticated caller
-    ingested_by_principal_id TEXT NOT NULL DEFAULT '', -- mctl-api#373 dual-write
-    ingested_at              TIMESTAMPTZ NOT NULL,
-    CONSTRAINT execution_evidence_ref_kind_matches CHECK (
-        (execution_ref_kind = 'work'    AND execution_ref LIKE 'we\_%') OR
-        (execution_ref_kind = 'runtime' AND execution_ref LIKE 'ex-%')
-    )
+    envelope                 BYTEA NOT NULL,          -- the envelope bytes exactly as first received
+    -- join columns: exactly the ExecutionJoin fields ADR 018 defines once
+    -- mctlhq/mctl-agents#539 has merged (see section 4); copied verbatim
+    -- from the envelope, never classified or rewritten by this layer
+    execution_id             TEXT NOT NULL,           -- ExecutionJoin.execution_id (v1alpha1: we_)
+    work_item_id             TEXT NOT NULL DEFAULT '',-- ExecutionJoin.work_item_id
+    trace_id                 TEXT NOT NULL DEFAULT '',-- ExecutionJoin.trace_id
+    created_at               TIMESTAMPTZ NOT NULL,    -- envelope created_at: a producer claim, excluded from the hash
+    ingested_by              TEXT NOT NULL,           -- authenticated caller
+    ingested_by_principal_id TEXT NOT NULL DEFAULT '',-- mctl-api#373 dual-write
+    ingested_at              TIMESTAMPTZ NOT NULL
 );
 
--- Rebuildable index projection. No authority: if a column here disagrees with
--- canonical state, canonical state wins and this is a stale index entry, never
--- an answer. Deleting and recomputing every row loses nothing.
+-- Rebuildable index projection. It has no authority: if a column here
+-- disagrees with canonical state, canonical state wins and the entry is a
+-- stale index, never an answer. Deleting and recomputing every row loses
+-- nothing.
 CREATE TABLE IF NOT EXISTS execution_evidence_refs (
     evidence_id       TEXT PRIMARY KEY
                       REFERENCES execution_evidence (id) ON DELETE CASCADE,
@@ -142,11 +146,10 @@ CREATE TABLE IF NOT EXISTS execution_evidence_refs (
 );
 ```
 
-The `execution_evidence_refs_work_prefix` check is the database-level guarantee that the
-storage layer can never park an `ex-` in a `we_` field, which the issue names as a hard
-requirement.
+- The join columns shown are the v1alpha1 ones. If #539 adds a typed field (for example a runtime/control execution id next to `we_`), this table gains exactly that column with exactly its ADR-defined constraint. The storage layer does not invent the field, the discriminator or the primary-retrieval rule; it mirrors what the ADR fixes.
+- The `execution_evidence_refs_work_prefix` check is the database-level guarantee that an `ex-` can never be parked in a `we_` field.
 
-Immutability is enforced the same way snapshots do it:
+Immutability is enforced the same way snapshots enforce it:
 
 ```sql
 CREATE OR REPLACE FUNCTION execution_evidence_immutable() RETURNS trigger AS $$
@@ -158,119 +161,74 @@ $$ LANGUAGE plpgsql;
 -- work_item_context_snapshots_no_update.
 ```
 
-`DELETE` remains permitted — it is the retention mechanism — and cascades to the projection.
-There is deliberately **no** foreign key from `execution_evidence` to `work_items` or
-`work_item_executions`: `docs/work-context-contract.md` mandates correlation over FKs, the
-stores may live in different databases, and an FK would make evidence die with the
-`WORKITEM_RETENTION_DAYS` sweep. It would also make an unresolvable `ex-` reference
-unstorable, which is exactly the failure mode the issue forbids.
+- `DELETE` stays permitted; it is the retention mechanism, and it cascades to the projection.
+- There is deliberately **no** foreign key from `execution_evidence` to `work_items` or `work_item_executions`:
+  - `docs/work-context-contract.md` mandates correlation over foreign keys;
+  - the stores may live in different databases;
+  - a foreign key would make evidence die with the `WORKITEM_RETENTION_DAYS` sweep.
 
-### 2. Identity, hashing and verification
+### 2. Identity, hashing and verification: Tier A's algorithm, exactly
 
-`internal/evidence/types.go`, mirroring `workitems.HashCanonical` / `SnapshotIDFor`:
+The server never invents its own identity rule. It re-derives Tier A's, as defined by `seal()` in `orchestrator/execution_evidence.py` (ADR 018):
 
-```go
-const (
-    EvidenceIDPrefix = "ev-"
-    APIVersionV1Alpha1 = "evidence.mctl.ai/v1alpha1"
-    MaxEvidenceBytes = 256 << 10
-)
+1. Parse the received envelope as strict JSON:
+   - reject duplicate keys, unknown top-level keys and unknown block keys, mirroring `ExecutionEvidence.from_dict`'s `_reject_unknown_keys`;
+   - check `api_version` against `SupportedAPIVersions`, and check that `kind` matches it.
+2. Build the **content payload**: the envelope object minus exactly `evidence_id`, `content_hash` and `created_at`.
+   - Tier A's `_content_payload` excludes those three and keeps `api_version` and `kind`.
+   - Each optional block (`policy_decisions`, `snapshot_refs`, `execution_request`, `usage`, `approvals`, `artifacts`, `gaps`) takes part only when it is present and non-empty, exactly as Tier A adds it. An empty block that is present must not change the hash.
+3. Serialise the payload with Tier A's canonical-JSON rule, `context_snapshot._canonical_json`: `json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)`, UTF-8. This means:
+   - `ensure_ascii` is on, so every non-ASCII character becomes `\uXXXX`, with surrogate pairs above the BMP;
+   - there is **no** HTML escaping; Go's `encoding/json` escapes `<`, `>` and `&` by default, and that must be turned off;
+   - keys are sorted recursively;
+   - Python's float/int formatting applies (Tier A carries no floats; reject non-integer numbers rather than guess).
+4. Compute `content_hash = "sha256:" + hex(sha256(canonical))`, then `evidence_id = "ev-" + content_hash[7:23]`, i.e. 16 lowercase hex characters, as in `seal()`.
+5. The envelope's own `content_hash` and `evidence_id` must equal the recomputed values. Otherwise answer `400 evidence_hash_mismatch`, echoing both values. Never correct them silently.
 
-// HashCanonical is the content hash of the received envelope bytes, verbatim:
-// no re-encoding, no key re-ordering, no whitespace normalisation.
-func HashCanonical(canonical []byte) string // "sha256:" + hex(sha256(canonical))
+Further rules:
 
-// EvidenceIDFor derives the immutable identity from the sealed content hash
-// alone, so byte-identical envelopes are one record by construction.
-func EvidenceIDFor(contentHash string) string // "ev-" + hex(sha256(contentHash))[:32]
-```
+- The received bytes are stored verbatim in `envelope` and served back as `envelope_b64`. On every read, `scanEvidence` re-runs steps 1-4 over the stored bytes and refuses to serve a row whose recomputed hash no longer equals its `content_hash`, the same discipline `scanSnapshot` applies.
+- The derivation is keyed by `api_version`: a future version with a different sealing rule is a new entry, never a change to the v1alpha1 one.
+- **Tier A conformance is a hard gate.** Golden vectors from mctl-agents are ported into `internal/evidence/testdata/`: the #520 fixture plus the #539 vectors for every join shape the amended ADR allows, including one with non-ASCII text and one with `<`, `>` and `&` in a string. The Go implementation must reproduce each `content_hash` and `evidence_id` byte for byte.
 
-Server-side recompute is unconditional, following `usage.Record.EnsureID`: a client-supplied
-`id` or `content_hash` that does not equal the derived value is `400`
-`evidence_hash_mismatch`, never silently corrected. On read, `scanEvidence` recomputes the
-hash of the stored bytes and returns an error rather than serving a mismatched row, exactly
-as `scanSnapshot` does.
+### 3. Ingest: compare-then-insert on the content hash
 
-`apiVersion` is validated against an allowlist (`SupportedAPIVersions`), and the digest
-function is selected by that version, so a future `v1alpha2` with a different sealing rule is
-a new entry, never a mutation of the old one.
+This follows the `SealSnapshot` pattern. Inside `withTx`, under an advisory lock keyed on the `ev-` id, `SELECT` by `id`, then:
 
-**Tier A conformance is a hard gate, not an assumption.** Because
-`orchestrator/execution_evidence.py` is not in this repo, the Go implementation must be
-validated against golden vectors ported into `internal/evidence/testdata/` from mctl-agents.
-If Tier A's derivation differs, only these two functions change.
+- **no row** → `INSERT` and return `created = true` (`201`);
+- **row with the same `content_hash`** → this is the same evidence. Return the stored row with `created = false` (`200`) and write nothing. This covers a byte-identical replay, and also a producer retry that re-sealed the same content with a different `created_at`: Tier A excludes `created_at` from the hash precisely so that sealing identical inputs twice yields one identity. The first stored bytes and `created_at` win.
+- **row with the same `ev-` id but a different `content_hash`** → a 64-bit id-prefix collision between different content. Answer `ErrEvidenceDivergence` (`409 evidence_divergence`) and write nothing. The `content_hash UNIQUE` constraint backs this up at the database level.
 
-### 3. Ingest: compare-then-insert, not `ON CONFLICT DO NOTHING`
+Server-owned ingest provenance (`ingested_by`, `ingested_at`) is not a claim about the evidence and is not compared. A replay from a different authorised principal still returns the first record.
 
-`usage` uses `ON CONFLICT (id) DO NOTHING`, which dedupes but cannot distinguish an identical
-replay from a conflicting write under the same id. The issue requires both, so evidence uses
-the `SealSnapshot` pattern instead: inside `withTx` under an advisory lock keyed on the `ev-`
-id, `SELECT` the existing row, then
+### 4. The `we_` / `ex-` split is owned by mctl-agents#539, not by this layer
 
-- no row → `INSERT`, return `created = true` (`201`);
-- row with identical `canonical` bytes **and** identical wrapper claims (`execution_ref`,
-  `execution_ref_kind`, `api_version`, `produced_by`) → return it, `created = false` (`200`);
-- row with different bytes or different claims → `ErrEvidenceDivergence` (`409`
-  `evidence_divergence`), nothing written.
+This proposal no longer chooses the join model. The contract question is recorded, analysed and decided in **mctlhq/mctl-agents#539**, the ADR 018 amendment and slice S2 of #199. That slice decides between:
 
-The "different bytes under the same id" branch is a hash-collision and truncation guard: the
-id is a truncated digest of the content hash, so the comparison must be on the full bytes,
-not on the id.
+- **(A)** governed implementer/shepherd runs resolve to a canonical `we_`; or
+- **(B)** an explicit two-identity join with distinct typed fields for the canonical work execution `we_` and the runtime/control execution `ex-`.
 
-### 4. The `we_` / `ex-` split — recommendation and why
+It then fixes the exact `ExecutionJoin` shape, which field is the primary retrieval identity, and the golden vectors.
 
-**Recommended: model (B), an ADR 018 amendment that distinguishes the canonical work
-execution from the runtime/control execution in the join**, realised in storage as a single
-verbatim `execution_ref` plus a derived-by-prefix `execution_ref_kind` discriminator.
+This layer's obligations, whatever #539 decides:
 
-Answering the issue's four constraints directly:
+- **Mirror, never classify.** The join columns are exactly the `ExecutionJoin` fields of the amended ADR, copied verbatim from the envelope and validated with the same prefix rules Tier A validates (`_check_execution_join` and whatever #539 adds). This layer never derives a discriminator of its own, never maps `ex-` to `we_`, and never puts one shape in another's column.
+- **Primary retrieval identity** is the one the ADR names. Section 6 indexes that column unconditionally; any second typed identity gets a partial index.
+- **Unresolvable is not an error.** An envelope with a valid join that mctl-api cannot resolve to a work item is stored, with an empty projection; it is not rejected for lacking a `we_`.
+- **No second execution authority.** Nothing here mints, reconciles or resolves execution identities.
 
-- *One stable primary retrieval identity.* `execution_ref` is that identity. It is stored
-  exactly as the producer sealed it, it is `NOT NULL`, it is the primary non-PK index, and it
-  never changes. Retrieval by execution never has to ask "which kind was it" first.
-- *Deterministic linkage from mutations, policy decisions and approvals.*
-  `action_approval_requests.execution_id` and `POLICY_DECISION` records carry `ex-` today;
-  with a verbatim `execution_ref` they join by value to evidence with no translation step and
-  no lossy mapping. Under model (A) that linkage would depend on a `we_` being minted for
-  every governed run first — which does not exist yet and which no storage layer can
-  manufacture.
-- *No overloaded identifier semantics.* This is where the design improves on the existing
-  `model_usage_records.execution_id`, which holds two meanings in one untagged column. The
-  explicit `execution_ref_kind`, derived from the prefix alone and constrained by
-  `execution_evidence_ref_kind_matches`, means no reader ever has to guess.
-- *No second execution authority.* `execution_ref_kind` is a classification of the one string
-  the producer sealed, computed by `strings.HasPrefix`. It mints nothing, it reconciles
-  nothing, and it can be recomputed from `execution_ref` at any time.
-
-Model (A) — force every governed implementer and shepherd run to resolve to a `we_` — is the
-cleaner end-state and this design does not foreclose it. It is rejected **as a prerequisite**
-because it requires a change in mctl-agents (minting or attaching a work execution for
-implementer and shepherd runs) that mctl-api cannot make, and blocking evidence storage on it
-would stall Tier B behind another repository's slice for no storage benefit.
-
-**Forward compatibility is exact.** If the platform later adopts model (A), every new row
-simply carries `execution_ref_kind = 'work'`; the `CHECK` already allows it, the indexes
-already serve it, `work_execution_id` in the projection is already populated for that case,
-and there is no migration. Model (B) is a strict superset of model (A) in this schema.
-
-**Answer to issue question 12 — does resolving the split require a separate mctl-agents slice
-before implementation?** No, not for this storage slice. Yes, as a prerequisite for the
-*producer* slice: the ADR 018 amendment that blesses a discriminated execution reference in
-`ExecutionJoin` must land in mctl-agents before the producer starts sealing `ex-` values, or
-the producer would be writing something the frozen contract does not sanction. That
-prerequisite is named explicitly in `tasks.md` as task 0, owned by mctl-agents, and it does
-not gate tasks 1-9 here.
+**Answer to issue question 12:** yes. #539 must merge before this proposal is approved and implemented, because it determines the join columns of `execution_evidence` and the conformance vectors. Tasks 1-10 below depend on it (task 0). If #539 settles on a shape this section did not anticipate, this proposal is re-reviewed before approval; the implementer does not adapt it ad hoc.
 
 ### 5. Derivation of the secondary references
 
 `internal/evidence/derive.go` resolves the projection at ingest, best-effort, in one query
 path, and never fails the ingest:
 
-- `execution_ref_kind = 'work'` → `work_execution_id = execution_ref`; look up
-  `work_item_executions` by id for `work_item_id`, `engine`, `engine_ref`; look up
-  `work_items` for `tenant` and `external_key`.
-- `execution_ref_kind = 'runtime'` → nothing is resolvable in mctl-api today, so everything
-  stays empty. This is recorded as an honest absence, not an error.
+- a `we_` join value (the ADR-defined work-execution field) → `work_execution_id` = that
+  value; look up `work_item_executions` by id for `work_item_id`, `engine`, `engine_ref`;
+  look up `work_items` for `tenant` and `external_key`.
+- a join with no `we_` (only possible if #539 allows one) → nothing is resolvable in
+  mctl-api today, so the projection stays empty — an honest absence, not an error.
 - `repository` / `issue_number` / `pr_number` are parsed from `work_items.external_key` when
   it matches `owner/repo#N`, with the issue-versus-PR distinction taken from the work item's
   own correlation; when it does not parse, all three stay empty and the row stays out of the
@@ -293,8 +251,10 @@ codebase.
 
 ```sql
 -- the primary execution join; always present, so unconditional
+-- the ADR-named primary retrieval identity (v1alpha1: execution_id); a second typed
+-- identity added by mctl-agents#539, if any, gets a partial index WHERE <col> <> ''
 CREATE INDEX IF NOT EXISTS execution_evidence_exec
-    ON execution_evidence (execution_ref, ingested_at DESC);
+    ON execution_evidence (execution_id, ingested_at DESC);
 -- trace_id is in ExecutionJoin but defend against an empty one
 CREATE INDEX IF NOT EXISTS execution_evidence_trace
     ON execution_evidence (trace_id, ingested_at DESC) WHERE trace_id <> '';
@@ -316,8 +276,7 @@ CREATE INDEX IF NOT EXISTS execution_evidence_refs_repo_pr
     WHERE repository <> '' AND pr_number IS NOT NULL;
 ```
 
-No index on `content_hash` (it is a function of the primary key), none on `produced_by`, none
-on `api_version` (low cardinality, and a full scan of a version cohort is a migration task,
+`content_hash` is covered by its `UNIQUE` constraint; there is no index on `api_version` (low cardinality, and a full scan of a version cohort is a migration task,
 not a hot path).
 
 ### 7. HTTP surface
@@ -328,21 +287,20 @@ New `internal/api/handlers_evidence.go`, routes added in `internal/api/router.go
 |---|---|---|
 | `POST` | `/api/v1/evidence/records` | `evidence:write` (admins + the evidence writer) |
 | `GET` | `/api/v1/evidence/{id}` | admin |
-| `GET` | `/api/v1/evidence` | admin; filters `execution_ref`, `trace_id`, `engine`+`engine_ref`, `work_item_id`, `repository`+`issue`, `repository`+`pr` |
+| `GET` | `/api/v1/evidence` | admin; filters `execution_id` (and any #539 typed identity), `trace_id`, `engine`+`engine_ref`, `work_item_id`, `repository`+`issue`, `repository`+`pr` |
 | `GET` | `/api/v1/work-items/{id}/evidence` | `visibleWorkItem` / `canSeeWorkItem` |
 
 The ingest body is the producer API of issue question 13:
 
 ```json
 {
-  "api_version":   "evidence.mctl.ai/v1alpha1",
-  "id":            "ev-...",           // optional; verified, never trusted
-  "content_hash":  "sha256:...",       // optional; verified, never trusted
-  "envelope_b64":  "<base64 of the sealed envelope, verbatim>"
+  "envelope_b64":  "<base64 of the sealed Tier A envelope JSON, verbatim>"
 }
 ```
 
-`envelope_b64` mirrors `snapshotBody.CanonicalB64` and is decoded with
+The envelope carries its own `api_version`, `evidence_id` and `content_hash`; all three are
+verified per section 2, so the wrapper repeats none of them. `envelope_b64` mirrors
+`snapshotBody.CanonicalB64` and is decoded with
 `base64.StdEncoding.Strict()` so a re-encoded envelope cannot silently change its hash. The
 body cap follows `maxSnapshotBodyBytes`: `(MaxEvidenceBytes/3+1)*4 + 16<<10`.
 
@@ -381,8 +339,7 @@ tenant-visible read is work-item-scoped and reuses `visibleWorkItem`, which alre
 leaks. Evidence whose projection has no `work_item_id` is admin-only: fail closed.
 
 Every accepted ingest writes an audit entry through the existing `h.logAudit` path, in the
-shape `auditWorkItem` uses, naming `evidence_id`, `execution_ref` and the ingesting
-principal.
+shape `auditWorkItem` uses, naming `evidence_id`, the join's primary execution identity and the ingesting principal.
 
 ### 9. Non-fatal producer failure with an observable gap (issue question 14)
 
@@ -396,10 +353,9 @@ mctl-api's half of this contract is to make the three outcomes distinguishable a
   leave evidence?" gets an unambiguous no.
 - **Evidence present** → `200`.
 
-Because the gap is a plain absence keyed on `execution_ref`, it is derivable by an ordinary
+Because the gap is a plain absence keyed on the join's primary execution identity, it is derivable by an ordinary
 left join from `work_item_executions` / `action_approval_requests` to `execution_evidence`;
-no separate gap table is invented. `Store.MissingFor(ctx, refs []string) ([]string, error)`
-exposes that join for an admin coverage read, and it is optional (task 9).
+no separate gap table is invented, and no coverage route is added in this slice.
 
 The producer's own non-fatality — treat any non-2xx as a warning, never fail the governed
 workflow — lives in the mctl-agents slice and is out of scope here. The endpoint is designed
@@ -460,17 +416,17 @@ ADR-012 whose invariants (pricing version, NUMERIC money, token semantics) have 
 with sealed evidence; bolting evidence onto it would overload a second identifier column and
 make two unrelated retention policies share one table.
 
-**D. Model (A) as a prerequisite: mint a `we_` for every governed run first.** Architecturally
-the tidiest, and the design stays compatible with it. Dropped as a *prerequisite* because it
-is an mctl-agents change mctl-api cannot make; it would block Tier B indefinitely behind
-another repository's slice; and model (B)'s schema absorbs the (A) outcome with zero
-migration if it later lands.
+**D. Decide the `we_` / `ex-` model here, in the storage schema.** This was the first
+revision: one verbatim `execution_ref` plus a prefix-derived `execution_ref_kind`. Dropped
+on review. It fixes the envelope's join semantics in a storage table while Tier A still
+rejects every non-`we_` join, and it pre-empts a contract that belongs to ADR 018. The
+decision moved to mctlhq/mctl-agents#539, which this proposal now depends on.
 
-**E. Enforce `execution_ref LIKE 'we\_%'` and reject runtime references.** Would guarantee a
-single identifier shape. Dropped because the issue explicitly forbids it: the storage layer
-must not assume every governed run already has a `we_`, and rejecting implementer and
-shepherd evidence would mean no evidence for exactly the runs that perform governed
-mutations.
+**E. Hash the received bytes verbatim and derive `ev-` from that digest.** This was also
+the first revision. Dropped on review. Tier A hashes the canonical content payload without
+`evidence_id`, `content_hash` and `created_at`, and takes `ev-` as `content_hash[7:23]`. A
+verbatim-bytes rule would reject every real Tier A envelope and turn a normal re-seal retry
+into a false divergence.
 
 ## Platform impact
 
@@ -494,16 +450,16 @@ requests before decoding.
 
 **Risks and mitigations.**
 
-- *The Go `ev-` derivation does not match Tier A byte-for-byte.* Highest-severity risk: every
+- *The Go `ev-` derivation does not match Tier A byte-for-byte* (canonical-JSON details:
+  `ensure_ascii`, no HTML escaping, recursive key order, empty optional blocks omitted). Highest-severity risk: every
   stored identity would be wrong and the store would be silently useless. Mitigated by making
   golden-vector conformance (`internal/evidence/testdata/`, ported from mctl-agents) a
   blocking test, by keeping the derivation in two small functions keyed on `apiVersion`, and
   by shipping the writer principal disabled by default so no production rows are written
   before the vectors pass.
-- *The ADR 018 amendment lands with different join semantics.* Mitigated by storing
-  `execution_ref` verbatim and deriving `execution_ref_kind` from it: if the amendment renames
-  or re-scopes the field, the stored string is still the exact thing the producer sealed, and
-  reclassification is a projection rebuild.
+- *The ADR 018 amendment (#539) lands with a join shape this design did not anticipate.*
+  Mitigated by sequencing: #539 merges before this proposal is approved, and a shape this
+  design did not foresee sends the proposal back for re-review instead of being adapted ad hoc.
 - *Stale projection rows mislead an operator.* Mitigated by labelling the projection
   non-authoritative in the table comment and in `docs/execution-evidence.md`, by exposing
   `derived_at` on every read, and by making a full rebuild a supported, lossless operation.
