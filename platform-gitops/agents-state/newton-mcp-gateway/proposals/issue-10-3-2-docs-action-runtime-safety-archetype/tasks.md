@@ -78,8 +78,9 @@
       `api-reference/agents/*` pages listed in design §3), the upload ceiling is "512 MB", the
       Agents API is stated as not wired into this gateway (#13), and `task-verification` is
       described per its public page (SOP compliance from video) with its suitability for
-      verifying a commanded physical outcome stated as not confirmed. Part 2: proposed by this project, each row naming its
-      module. Part 3: the four open questions for Archetype engineers (Newton Agents' external-
+      verifying a commanded physical outcome stated as not confirmed.
+      Part 2: proposed by this project, each row naming its module. Part 3: the four open questions
+      for Archetype engineers (Newton Agents' external-
       system integration model; sink/action connectors in the node registry; confidence and
       provenance in outputs; post-action verification support), each paired with what this project
       assumes today and the module that assumption lives in. Close with the
