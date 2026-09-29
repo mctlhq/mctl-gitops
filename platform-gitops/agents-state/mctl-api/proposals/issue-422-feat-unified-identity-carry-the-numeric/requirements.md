@@ -79,13 +79,36 @@ draining.
   identically on the retained pre-registry chain
   (`internal/auth/oidc.go:567-577`), since both paths go through
   `ValidateJWT`.
-- IF a refresh token is exchanged and the numeric GitHub id is not recorded
-  for that refresh-token family THEN THE SYSTEM SHALL mint the new access
-  token without `ghid` (login-only path, counter incremented) rather than
-  guessing an id or failing the refresh.
+- WHEN a refresh token is issued THE SYSTEM SHALL record the numeric GitHub
+  id with it on both refresh paths: the in-memory `refreshTokenEntry` and
+  the persistent `refreshstore` (new nullable column
+  `oauth_refresh_tokens.github_id BIGINT`).
+- WHEN a refresh token is rotated THE SYSTEM SHALL copy `github_id` from the
+  presented row to its successor, return it from `Rotate` (including the
+  lost-response grace path, which returns the child row's value), and mint
+  the new access token with `ghid` set from it — so a client keeps carrying
+  `ghid` for the whole life of the refresh-token family, not only on its
+  first access token. Production uses the Postgres store, access tokens live
+  1h and refresh tokens 30d (`internal/auth/oauth_server.go:767-768`), so
+  without this almost all production traffic would stay on the login-only
+  path.
+- WHEN the schema is applied THE SYSTEM SHALL add the column with
+  `ALTER TABLE oauth_refresh_tokens ADD COLUMN IF NOT EXISTS github_id BIGINT`
+  in the existing idempotent `schema` constant
+  (`internal/auth/refreshstore/postgres.go`): additive, nullable, no default,
+  no backfill, no index. Rows written before the change keep `NULL`.
+- IF a refresh token is exchanged and its stored `github_id` is `NULL` or
+  non-positive THEN THE SYSTEM SHALL mint the new access token without `ghid`
+  (login-only path, counter incremented) rather than guessing an id or
+  failing the refresh; the successor row keeps `NULL`, so such a family stays
+  login-only until the user logs in again (≤ 30 days).
+- WHILE an older mctl-api build runs against the migrated table (rollback)
+  THE SYSTEM SHALL keep working unchanged: it neither reads nor writes the
+  new column, and rows it inserts get `NULL`.
 - WHEN `docs/federation.md` is read after this change THE SYSTEM
-  documentation SHALL describe the `ghid` claim, the new counter, and the
-  refresh-token limitation, and SHALL no longer list slice B as out of
+  documentation SHALL describe the `ghid` claim, the new counter, the
+  `github_id` refresh-store column and the NULL fallback for pre-change
+  families, and SHALL no longer list slice B as out of
   scope.
 
 ## Out of scope
@@ -99,8 +122,6 @@ draining.
   `approver` input are untouched.
 - Making `sub` the numeric id, or any other change to what an existing claim
   means.
-- Adding a `github_id` column to `refreshstore` (schema migration) so that
-  refreshed access tokens also carry `ghid` — recorded as a follow-up.
 - Any change to authorization: `ghid` feeds principal *resolution* only.
   `User.ID` and `User.Groups` still decide access, exactly as in phase 1 of
   mctl-api#373.
@@ -116,15 +137,11 @@ draining.
   cheap; the alternative (deduplicating by token) would need per-token state.
   Proceeding with per-validation counting and documenting it in
   `docs/federation.md`.
-- Refreshed access tokens: the persistent refresh store
-  (`internal/auth/refreshstore/store.go:43-57`) has no place for the id, and
-  `Rotate` returns only `(login, groups)`. Proceeding with "in-memory
-  refresh-token entries carry the id, the persistent path does not", which
-  means a refreshed token on the Postgres path takes the login-only path.
-  That path is cheap after first sight, because
-  `Store.ResolveGitHubLogin` (`internal/principals/store.go:275-283`) answers
-  from the database and only an unknown login reaches `GitHubIDLookup`. A
-  `github_id` column is the clean fix and is listed as a follow-up.
+- Refreshed access tokens — **resolved by owner decision 2026-09-30**: the
+  persistent refresh store gets a nullable `github_id` column in this slice
+  (see acceptance criteria above). The earlier "in-memory only, column as a
+  follow-up" option was rejected because production uses the Postgres path,
+  where it would have limited `ghid` to the first hour of each login.
 - `ghid` is emitted as a JSON number. GitHub ids are well inside float64
   exact-integer range today (~10^8), and this server both mints and parses
   the claim with `encoding/json` into `int64`, so no precision issue arises

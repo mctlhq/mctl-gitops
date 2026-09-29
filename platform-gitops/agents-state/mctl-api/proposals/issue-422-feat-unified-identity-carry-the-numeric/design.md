@@ -146,10 +146,42 @@ unknown, so no existing test fixture or client parser sees a new key.
 - `IssueJWT(login string, githubID int64, groups []string)` sets
   `GitHubID: githubID`.
 - `IssueRefreshToken(login string, githubID int64, groups []string, clientID string)`
-  records `GitHubID` on the in-memory `refreshTokenEntry`; the
-  `refreshstore.Store` branch is unchanged (no schema change — see
-  Alternatives). `RefreshAccessToken` passes `entry.GitHubID` on the
-  in-memory path and `0` on the store path.
+  records `GitHubID` on the in-memory `refreshTokenEntry` **and** passes it
+  to the persistent store (owner decision 2026-09-30, see "Refresh store"
+  below). `RefreshAccessToken` passes the recovered id to `IssueJWT` and to
+  the successor on both paths.
+
+### Refresh store: persist the id (owner decision 2026-09-30)
+
+Production runs the Postgres `refreshstore` (mctl-api logs
+`oauth refresh token store initialized` at boot), with `AccessTokenTTL` 1h
+and `RefreshTokenTTL` 30d (`oauth_server.go:767-768`). If only the in-memory
+path carried the id, every production token after the first refresh — almost
+all traffic — would lose `ghid`. So the id is persisted with the refresh-token
+family:
+
+- **Schema** (`internal/auth/refreshstore/postgres.go`, the idempotent
+  `schema` constant): append
+  `ALTER TABLE oauth_refresh_tokens ADD COLUMN IF NOT EXISTS github_id BIGINT;`
+  Nullable, no default, no backfill, no index (the column is only ever read
+  together with the row already fetched by `token_hash`).
+- **Interface** (`internal/auth/refreshstore/store.go`):
+  - `Insert(rawToken, login string, githubID int64, clientID string, groups []string, expiresAt time.Time) error`
+    writes `NULL` when `githubID <= 0`, otherwise the value;
+  - `Rotate(...)` returns `(login string, githubID int64, groups []string, err error)`.
+    The main path reads `github_id` from the presented row (`NULL` → `0`)
+    and **copies it into the successor row's INSERT**; the lost-response
+    grace path returns the already-inserted child row's `github_id`. Every
+    other error path returns `0`.
+- **Callers:** `IssueRefreshToken` passes `githubID` to `Insert`;
+  `RefreshAccessToken` takes the id returned by `Rotate` and passes it to
+  `IssueJWT`. A `0` means "unknown" and takes the existing login-only branch.
+- **Fakes:** every in-repo `Store` implementation used by tests (at least
+  `internal/auth/oauth_server_groups_test.go`) gets the same signature.
+
+Families created before the deploy carry `NULL` and stay login-only until the
+user logs in again (bounded by the 30-day refresh TTL), which is also when
+`oauth_jwt_without_github_id_total` is expected to decay to zero.
 
 Explicit new parameters rather than sibling methods: every call site (one
 production site, ~15 test sites) becomes a compile error until it has been
@@ -233,8 +265,9 @@ once per authenticated request, which is the operational question being asked
   keeps resolving through the login-only path;
 - new row in the metrics table (`:246-258`) for
   `oauth_jwt_without_github_id_total`, with the per-validation caveat;
-- the refresh-token limitation (Postgres refresh path mints without `ghid`)
-  and its follow-up;
+- the `oauth_refresh_tokens.github_id` column: refreshed tokens keep `ghid`,
+  and families created before the change stay login-only (`NULL`) until the
+  next login, at most 30 days;
 - remove "Carrying the numeric GitHub id into local OAuth JWTs (slice B)"
   from the not-covered list (`:280`), leaving slices C and D.
 
@@ -267,10 +300,11 @@ once per authenticated request, which is the operational question being asked
    `internal/auth/refreshstore/postgres.go`, a change to the exported `Store`
    interface (`store.go:43-57`) and to the in-flight-rotation grace path —
    the same interface/schema blast radius the parent design record refused for
-   slice C's group snapshot. Dropped from this slice, recorded as a follow-up;
-   the fallback it leaves in place is correct and cheap
-   (`ResolveGitHubLogin` answers from the database for any login already
-   seen).
+   slice C's group snapshot. **Adopted by owner decision 2026-09-30** (see
+   "Refresh store" above): without it production tokens carry `ghid` only
+   for the first hour of a login. Unlike slice C's group snapshot this column
+   changes no authorization input — only principal resolution — and is
+   additive and nullable.
 
 4. **Keep `IssueJWT`'s signature and add `IssueJWTWithGitHubID`.** Zero test
    churn, but it leaves a path that silently mints a token without `ghid`, and
@@ -280,8 +314,10 @@ once per authenticated request, which is the operational question being asked
 
 ## Platform impact
 
-**Migrations.** None. No database schema change, no Helm/env change, no new
-configuration flag. `docs/federation.md` and the code change together.
+**Migrations.** One additive, idempotent statement:
+`ALTER TABLE oauth_refresh_tokens ADD COLUMN IF NOT EXISTS github_id BIGINT`,
+applied by the existing `schema` constant at store init. No backfill, no
+Helm/env change, no new configuration flag. `docs/federation.md` and the code change together.
 
 **Backward compatibility.**
 
@@ -293,7 +329,13 @@ configuration flag. `docs/federation.md` and the code change together.
   replica mints `ghid`, an old replica ignores it (`encoding/json` drops
   unknown keys); a token minted by an old replica is handled by a new replica
   through the login-only branch.
-- `refreshstore` rows written before the change are read unchanged.
+- `refreshstore` rows written before the change read `github_id = NULL`,
+  map to `0`, and refresh exactly as today (login-only); their successors
+  keep `NULL`.
+- Rollback to an older build after the column exists is safe: the old code
+  names its columns explicitly in every `INSERT`/`SELECT`, so it neither
+  reads nor writes `github_id`, and its inserts leave it `NULL`. The column
+  is not dropped on rollback.
 - The exported signature changes (`IssueCode`, `IssueJWT`,
   `IssueRefreshToken`) are internal to this module (`internal/...`), so no
   external consumer breaks. In-repo call sites: `internal/api/oauth_handlers.go`
@@ -328,13 +370,15 @@ login-scan queries on the authentication path. One new unlabelled counter.
   tampered payload fails `verifyJWT`. `ghid` is never read from an unverified
   token (the unverified peek is `iss` only, `docs/federation.md:61-72`).
 - *Risk: the new counter never reaching zero, hiding a real regression.* It
-  cannot reach zero while the Postgres refresh path mints without `ghid`;
-  documented in the metrics table so it is not read as a fault, with the
-  `github_id` column as the follow-up that would make it a clean zero.
+  counts validations of pre-change tokens and of families created before the
+  column existed, so it should decay to zero within the 30-day refresh TTL;
+  a non-zero value after that points at a mint path that drops the id.
 - *Risk: `groups` handling accidentally changed while editing `IssueJWT` and
   `RefreshAccessToken`.* Slice C owns that behaviour; the existing
   `oauth_server_groups_test.go` suite (degraded grace, fail-closed, snapshot
   non-overwrite) must pass untouched apart from mechanical signature updates.
 
-**Rollback.** Revert the commit; see `tasks.md`. Nothing persists the new
-claim, so a revert is immediate and total.
+**Rollback.** Revert the commit; see `tasks.md`. The only persisted artefact
+is the nullable `github_id` column, which older builds ignore; it is left in
+place (dropping it is unnecessary and would be a separate, deliberate
+change).
