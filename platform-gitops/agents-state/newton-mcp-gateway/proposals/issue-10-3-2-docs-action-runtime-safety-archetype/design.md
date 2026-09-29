@@ -359,10 +359,10 @@ traced is deleted rather than hedged.
   a dependency group to a repo whose stated preference is small explicit artefacts, and generated
   prose cannot carry the safety argument — the invariants are claims about absent edges and
   deliberate omissions, which no docstring extractor can state.
-- **Add no test and rely on manual review for link validity.** Rejected as the default, but kept
-  as a one-task fallback in `requirements.md` open questions, since the issue lists "New code" as
-  out of scope. Without it, acceptance criterion 3 is a human promise; with it, it is a CI
-  failure.
+- **Add no test and rely on manual review for links and commands.** Rejected at owner review:
+  without `tests/test_docs_consistency.py`, acceptance criterion 3 and the reproducibility of every
+  documented `demo.py` / `uv run` command and env var name are a human promise; with it, a drift
+  is a CI failure.
 
 ## Platform impact
 
@@ -372,7 +372,7 @@ traced is deleted rather than hedged.
   `## Safety defaults` section loses its table; any external bookmark to that anchor still
   resolves because the heading is retained with a pointer. Second, nothing in `src/` references
   `docs/safety.md` or `docs/archetype-integration.md` today, so adding them breaks nothing —
-  and the new link test guards the links added in the other direction.
+  and the new docs-consistency test guards the links added in the other direction.
 - **Resource impact.** Negligible. One extra test module adds a few milliseconds of filesystem
   work to `uv run pytest`; CI (`uv sync --locked --group dev && uv run pytest -q`, plus the Docker
   job) is otherwise unchanged. No new dependency: the test uses only `pathlib` and `re`.
