@@ -1,5 +1,14 @@
 # Executor + verifier: structured conditions, verify-before-retry (contract v0.2)
 
+> **Amended at owner review (2026-09-29).** (a) The executor re-checks the context-bound
+> `Approval` with `verify_approval()` immediately before every call attempt, including a retry;
+> (b) `Executor.execute()` is the single owner of every `-> EXECUTING` transition, and
+> `run_action()` only decides retry vs escalate; (c) a capability may declare `read_arguments`,
+> rendered by the resolver like `arguments`, and the verifier calls `read_tool` with exactly those
+> arguments; plus three documented edge cases (a read-tool error result is a failed poll, a
+> capability without `read_tool` always ends `ESCALATED`, the last poll may overrun the deadline
+> by at most `read_timeout_seconds`).
+
 ## Context
 
 `newton-mcp-gateway` can already discover MCP tools (`src/newton_mcp/runtime/catalog.py`),
@@ -101,6 +110,22 @@ runtime and by a reviewer reading the JSON.
 - IF the server named by the candidate is absent from the loaded `runtime.yaml`, or its
   `binding_identity` no longer equals `candidate.server_binding_identity` THEN THE SYSTEM SHALL
   refuse to call the tool and SHALL raise before any transport is opened.
+- WHEN the executor is about to issue any call attempt, the first one or a retry, THE SYSTEM SHALL
+  call `newton_mcp.action.approval.verify_approval(approval, candidate, record.action_id,
+  policy_version, now)` immediately before the `-> EXECUTING` transition, and SHALL proceed only
+  if it returns `valid=True` (owner amendment).
+- IF that check fails on the first attempt THEN THE SYSTEM SHALL raise `ApprovalRejected` (a
+  subclass of `ExecutorError`) naming the failing field, SHALL leave the record in `AUTHORIZED`,
+  SHALL write no audit line and SHALL open no transport.
+- IF that check fails on a retry (for example the approval expired between attempts) THEN THE
+  SYSTEM SHALL transition `FAILED -> ESCALATED` with a reason naming the failing field and SHALL
+  issue no further tool call.
+- WHILE a policy decision is `auto` THE SYSTEM SHALL still execute only against an `Approval`: the
+  caller issues one with `approved_by="policy:<policy_version>:<rule>"`, so there is exactly one
+  execution path and no approval-less bypass.
+- WHEN a call attempt starts THE SYSTEM SHALL perform its `-> EXECUTING` transition exactly once and
+  only inside `Executor.execute()`: `AUTHORIZED -> EXECUTING` for the first attempt and
+  `FAILED -> EXECUTING` with `verified_failure=True` for a retry (owner amendment).
 - WHILE a call is in flight THE SYSTEM SHALL let task or process cancellation
   (`BaseException`/`BaseExceptionGroup`) propagate untouched, as `CapabilityCatalog.refresh()`
   already does.
@@ -123,6 +148,17 @@ runtime and by a reviewer reading the JSON.
   declares `read_only_hint is False`, or every poll failed — THEN THE SYSTEM SHALL transition
   `VERIFYING -> ESCALATED` and SHALL NOT report `FAILED` or `SUCCEEDED`.
 - WHILE polling THE SYSTEM SHALL call only the `read_tool`, never the action tool.
+- WHEN the verifier calls `read_tool` THE SYSTEM SHALL pass exactly `candidate.read_args`, rendered
+  by the resolver from the capability's optional `read_arguments` template with the same
+  `${...}` roots and the same refusal of `verification.*` as `arguments`; an absent template means
+  `{}` (owner amendment).
+- IF the `read_tool` returns an MCP error result THEN THE SYSTEM SHALL count that poll as failed
+  (no observation), never as an observation, even if it carries structured content.
+- WHILE a capability declares no `read_tool` THE SYSTEM SHALL still end the run `ESCALATED` after
+  the call (it can never be verified); `docs/action-runtime.md` SHALL say so, since it applies to
+  capabilities such as `announce`.
+- WHILE polling THE SYSTEM SHALL issue no poll after the deadline; a poll started before it may
+  complete up to `read_timeout_seconds` later, and the docs SHALL state that bound.
 
 ### Retry rule
 
@@ -135,6 +171,9 @@ runtime and by a reviewer reading the JSON.
   `FAILED -> EXECUTING` with `verified_failure=True`, minting a fresh attempt-scoped
   `tool_call_id`/`verification_id` pair; otherwise THE SYSTEM SHALL transition
   `FAILED -> ESCALATED`.
+- WHEN `run_action()` decides to retry THE SYSTEM SHALL delegate the `FAILED -> EXECUTING`
+  transition to `Executor.execute()`, which runs the approval check first; `run_action()` itself
+  SHALL never transition into `EXECUTING`.
 - WHILE the runtime is in `UNKNOWN` THE SYSTEM SHALL never transition directly to `EXECUTING` (the
   edge does not exist in `ALLOWED_TRANSITIONS`).
 - WHEN a run finishes THE SYSTEM SHALL end in exactly one of `SUCCEEDED` or `ESCALATED`.
@@ -157,9 +196,10 @@ runtime and by a reviewer reading the JSON.
 - LLM-based or model-assisted verification; the verifier is deterministic.
 - New MCP tools on the gateway: nothing here is registered in `create_server()` and
   `newton_mcp.config.Settings` is untouched.
-- Wiring `verify_approval` / `policy_version` enforcement into the execution path. The executor
-  requires a record already in `AUTHORIZED`, which the lifecycle table enforces structurally;
-  who authorised it stays the caller's concern.
+- Authenticating the approver. The `Approval` binding is context binding (it pins server,
+  tool, args, action, policy version and expiry), not authentication; who may approve stays the
+  caller's concern. (The earlier "wiring `verify_approval` is out of scope" line was removed at
+  owner review: the executor now enforces it.)
 - Backward compatibility with v0.1 contracts, a migration shim, or dual-version acceptance.
 - Long-lived MCP sessions, connection pooling, reconnection backoff.
 - Temporal, Kubernetes, a database, an auth platform or a UI.
