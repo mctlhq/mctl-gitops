@@ -167,8 +167,7 @@ Documentation-only plus one test, so rollback is a plain revert with no state to
   no runtime behaviour can regress.
 - Partial rollback if only the new test is unwanted (for example if the owner reads "no new code"
   strictly): delete `tests/test_docs_consistency.py`. The three documents and the README changes stand
-  on
-  their own; acceptance criterion 3 reverts to a manual check.
+  on their own; acceptance criterion 3 and the command checks revert to a manual check.
 - Partial rollback if the `docs/architecture.md` edit is unwanted: restore its
   `## Safety defaults` table from git history. `docs/safety.md` then duplicates it, which is worse
   but not broken; prefer instead to move the canonical copy back into `architecture.md` and leave
