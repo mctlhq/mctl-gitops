@@ -21,11 +21,26 @@ and must be re-read before editing.
       recording it on the in-memory `refreshTokenEntry` (`:1524-1530`);
       `ExchangeCode` (`:1266-1290`) passing `entry.GitHubID` to both.
       `RefreshAccessToken` (`:1339-1401`) passes `entry.GitHubID` on the
-      in-memory path and `0` on the `RefreshStore` path, with a comment
-      explaining why (no column; see design "Alternatives" 3). — DoD:
-      package compiles; no change to any group-resolution call
-      (`groupsForSession`, `sessionGroups`, `ResolveGroups`) beyond the
-      mechanical signature update; `refreshstore` package untouched.
+      in-memory path and the id returned by `RefreshStore.Rotate` on the
+      store path (task 2a). — DoD: package compiles; no change to any
+      group-resolution call (`groupsForSession`, `sessionGroups`,
+      `ResolveGroups`) beyond the mechanical signature update.
+
+- [ ] 2a. Persist the id in the refresh store (depends on 2; owner decision
+      2026-09-30): in `internal/auth/refreshstore/postgres.go` append
+      `ALTER TABLE oauth_refresh_tokens ADD COLUMN IF NOT EXISTS github_id BIGINT;`
+      to the `schema` constant (nullable, no default, no backfill, no index).
+      Change `Store` (`store.go`) to
+      `Insert(rawToken, login string, githubID int64, clientID string, groups []string, expiresAt time.Time) error`
+      and `Rotate(...) (login string, githubID int64, groups []string, err error)`.
+      `Insert` writes `NULL` for `githubID <= 0`. `Rotate` reads `github_id`
+      from the presented row, copies it into the successor INSERT, and
+      returns it; the lost-response grace path returns the child row's
+      value; every error path returns `0`. `IssueRefreshToken` passes the id
+      to `Insert`; `RefreshAccessToken` passes the id from `Rotate` to
+      `IssueJWT`. Update every in-repo `Store` fake. — DoD: `go test
+      ./internal/auth/refreshstore/...` (Postgres-backed) passes with T9;
+      the schema constant applied twice is a no-op; no `SELECT *` introduced.
 
 - [ ] 3. Use `ValidateIdentity` at the callback (depends on 2):
       `internal/api/oauth_handlers.go:254` becomes
@@ -70,13 +85,16 @@ and must be re-read before editing.
       `sub` still the login, login-only fallback for older tokens); add the
       `oauth_jwt_without_github_id_total` row to the metrics table
       (`:246-258`) with the "counted per validation, not per token" caveat
-      and the note that the Postgres refresh path mints without `ghid`;
+      and the note that it decays to zero as pre-change refresh families
+      (`github_id` `NULL`) expire; describe the new
+      `oauth_refresh_tokens.github_id` column;
       remove slice B from the not-covered list (`:280`), leaving slices C
       and D. — DoD: no statement in the document contradicts the code;
       slice C and D wording untouched.
 
 - [ ] 8. Update all in-repo call sites and run the gates (depends on
-      2, 3, 5, 6): `internal/auth/oauth_server_test.go`,
+      2, 2a, 3, 5, 6): `internal/auth/oauth_server_test.go`,
+      `internal/auth/refreshstore/postgres_test.go`,
       `oauth_server_groups_test.go`, `oauth_clientstore_test.go`,
       `oauth_registry_expiry_test.go`, `federation_test.go:721`. — DoD:
       `go build ./...`, `go vet ./...`, `golangci-lint run` and
@@ -124,30 +142,42 @@ and must be re-read before editing.
       resolves to the same principal id on both paths (extend
       `internal/principals/store_test.go` / `resolver_test.go` fixtures).
 
-- [ ] T7. Refresh behaviour is unchanged where it must be: an in-memory
-      refresh exchange preserves `ghid` on the new access token; a
-      `RefreshStore` refresh mints without `ghid` and increments the counter
-      on the next validation; every existing test in
+- [ ] T7. Refresh keeps `ghid` on both paths: an in-memory refresh exchange
+      and a `RefreshStore` refresh each mint a new access token carrying the
+      same `ghid` as the first token; a `RefreshStore` family whose row has
+      `github_id` `NULL` mints without `ghid` and increments the counter on
+      the next validation; every existing test in
       `oauth_server_groups_test.go` (degraded grace, fail-closed, snapshot
       non-overwrite) still passes.
+
+- [ ] T9. Postgres refresh store (`internal/auth/refreshstore/postgres_test.go`):
+      (a) `Insert` with id `4242` then `Rotate` returns `4242`, and a second
+      `Rotate` of the successor returns `4242` again (the id is copied, not
+      only read — mutation pin: dropping `github_id` from the successor
+      INSERT must fail this); (b) the lost-response grace path returns the
+      child's `4242`; (c) `Insert` with `0` stores `NULL` and `Rotate`
+      returns `0`; (d) a row inserted by raw SQL without the column (a
+      pre-change row) rotates successfully and returns `0`; (e) applying the
+      schema constant twice succeeds.
 
 - [ ] T8. Full gates: `go test ./...` and `cd e2e && go test -v` (e2e only if
       the environment for it is available; it is not expected to be affected).
 
 ## Rollback
 
-- Code: `git revert` the single PR. Nothing persists `ghid` — it lives only
-  inside access tokens with a 1 h default TTL and inside in-memory auth-code
-  and refresh-token entries — so after a revert every token in flight is
-  simply handled by the pre-existing login-only path again. No database
-  migration to undo, no Helm value, no configuration flag to flip.
+- Code: `git revert` the single PR. After a revert every token in flight is
+  handled by the pre-existing login-only path again. The nullable
+  `oauth_refresh_tokens.github_id` column stays: the reverted code names its
+  columns explicitly in every `INSERT`/`SELECT`, so it ignores the column and
+  its inserts leave it `NULL`. Do not drop it as part of a rollback. No Helm
+  value, no configuration flag to flip.
 - Partial rollback without a revert: none is needed and none is added
   deliberately. A feature flag for one optional claim would have to be read
   at both mint and validate time and would create a fourth token shape to
   reason about; the login-only path is itself the always-available fallback.
 - Operational check after deploy: `oauth_jwt_without_github_id_total` should
-  stop growing for freshly logged-in clients (it keeps growing for the
-  Postgres refresh path, by design — see `docs/federation.md`),
+  stop growing for freshly logged-in clients and decay towards zero as
+  pre-change refresh families expire (≤ 30 days),
   `federation_provider_contract_violations_total{provider="github"}` must
   stay at zero, and `principal_resolution_failed_total` must not rise. A rise
   in the last one is the signal to revert.
