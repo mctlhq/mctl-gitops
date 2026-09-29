@@ -1,5 +1,12 @@
 # Tasks: issue-10-3-2-docs-action-runtime-safety-archetype
 
+> **Amended at owner review (2026-09-29).** The link-only test becomes a docs-consistency test
+> (`tests/test_docs_consistency.py`): relative links, `demo.py` flags, `uv run` targets and env
+> var names in the doc corpus are checked against the real parser, `pyproject.toml`, env
+> lookups and `.env.example`. `examples/smart-home/README.md` joins the corpus. The confirmed
+> Archetype table cites a concrete public doc page per row, the upload ceiling is written
+> "512 MB", and `task-verification` is described as its public page describes it.
+
 - [ ] 1. Build a claims-to-source index for the doc set: for every constant, state, symbol and env
       var the three documents will name, record the file and line in `src/` that defines it
       (`contract.py`, `conditions.py`, `runtime/config.py`, `runtime/catalog.py`,
@@ -66,7 +73,12 @@
       fields, event types, model families and env var names the code already cites
       (`/query`, `/v0.5/files`, `/v0.5/files/base64`, `DataEvent`/`EventType`, `Newton::c2_...`,
       `OmegaEncoder::...`, 768-dim, `ATAI_API_KEY`/`ATAI_API_ENDPOINT`, the Agents API
-      blueprint → bundle → run concepts). Part 2: proposed by this project, each row naming its
+      blueprint → bundle → run concepts). Every row cites a concrete docs.archetypeai.app page
+      (Agents rows: `core-concepts/agents/overview.md`, `api.md`, the five blueprint pages and the
+      `api-reference/agents/*` pages listed in design §3), the upload ceiling is "512 MB", the
+      Agents API is stated as not wired into this gateway (#13), and `task-verification` is
+      described per its public page (SOP compliance from video) with its suitability for
+      verifying a commanded physical outcome stated as not confirmed. Part 2: proposed by this project, each row naming its
       module. Part 3: the four open questions for Archetype engineers (Newton Agents' external-
       system integration model; sink/action connectors in the node registry; confidence and
       provenance in outputs; post-action verification support), each paired with what this project
@@ -92,14 +104,16 @@
       no live validation anywhere; the table's source attributions are each defensible against
       `docs/archetype-integration.md` part 1.
 
-- [ ] 9. Add `tests/test_docs_links.py` (depends on 8). Collect relative markdown links and
-      backticked `docs/...` paths from `README.md`, `AGENTS.md`, `CONTRIBUTING.md` and every
-      `docs/*.md`, strip anchors, skip `http(s)://` and `mailto:`, resolve against the repo root,
-      and assert each target exists. No network access, no new dependency (`pathlib` + `re` only).
-      This is the only code artefact in the change; see `requirements.md` open questions — drop
-      this task and test T1 if "no new code" is meant strictly.
-      — DoD: the test passes on the updated tree, fails when a link is deliberately broken in a
-      scratch edit, and adds no entry to `pyproject.toml`.
+- [ ] 9. Add `tests/test_docs_consistency.py` (depends on 8), exactly as design §5: corpus
+      `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `docs/*.md`, `examples/smart-home/README.md`;
+      four checks — relative links resolve; `--flags` in commands that invoke
+      `examples/smart-home/demo.py` are accepted by its `_build_parser()`; `uv run <name>` targets
+      are a `[project.scripts]` key, a `[tool.<name>]` tool or `python` + existing script/`-c`/`-m`;
+      `NEWTON_*`/`ATAI_*` names are read by code (ast-collected lookups, `_resolve` tuples,
+      `*_ENV_VAR` constants) or assigned in `.env.example`. Standard library only, no network.
+      Fix any doc the test flags (including `examples/smart-home/README.md`), never the test.
+      — DoD: the module passes on the updated tree; each of the four checks fails on its own
+      deliberate scratch break (T1–T4), then reverts; no entry added to `pyproject.toml`.
 
 - [ ] 10. Marketing-language and hard-rules pass over the full diff (depends on 2, 3, 4, 5, 6, 7,
       8). Remove superlatives about the project, any claimed adoption, partnership, endorsement or
@@ -113,26 +127,34 @@
 - [ ] 11. Scope check and green build (depends on 9, 10).
       — DoD: `git diff --stat` touches only `README.md`, `docs/action-runtime.md`,
       `docs/architecture.md`, `docs/safety.md`, `docs/archetype-integration.md` and
-      `tests/test_docs_links.py` — nothing under `src/newton_mcp/`, `schemas/` or `examples/`;
+      `tests/test_docs_consistency.py` (plus `examples/smart-home/README.md` only if task 9 flagged
+      it) — nothing under `src/newton_mcp/`, `schemas/`, or any other file under `examples/`;
       `uv sync --locked --group dev && uv run pytest -q` is green.
 
 ## Tests
 
-- [ ] T1. `tests/test_docs_links.py::test_relative_markdown_links_resolve` — every relative link
-      and backticked repo path in `README.md`, `AGENTS.md`, `CONTRIBUTING.md` and `docs/*.md`
-      resolves to an existing file or directory. Guards the "README links resolve" acceptance
-      criterion. Verify the test actually bites by temporarily adding a link to
-      `docs/does-not-exist.md` and confirming the test fails, then reverting.
-- [ ] T2. Regression: `uv run pytest -q` is fully green, in particular
+- [ ] T1. `tests/test_docs_consistency.py::test_relative_links_resolve` — every relative link and
+      backticked repo path in the corpus resolves. Bites on a link to `docs/does-not-exist.md`.
+- [ ] T2. `tests/test_docs_consistency.py::test_demo_commands_use_real_flags` — every `--flag` in a
+      command invoking `examples/smart-home/demo.py` is a `_build_parser()` option. Bites on
+      `--mock --no-such-flag` in a README code block; a `--word` in prose does not trip it.
+- [ ] T3. `tests/test_docs_consistency.py::test_uv_run_targets_exist` — every `uv run <name>` is a
+      `[project.scripts]` key, a `[tool.<name>]` tool, or `python` + existing path/`-c`/`-m`. Bites
+      on `uv run newton-mpc` and on `uv run python examples/smart-home/nope.py`.
+- [ ] T4. `tests/test_docs_consistency.py::test_env_vars_are_read_by_code` — every
+      `NEWTON_*`/`ATAI_*` name in the corpus is ast-collected from real lookups or assigned in
+      `.env.example`. Bites on an invented `NEWTON_FOO`, and still bites when `NEWTON_FOO` is
+      added only to a comment under `src/`.
+- [ ] T5. Regression: `uv run pytest -q` is fully green, in particular
       `tests/test_action_contract.py` (the committed JSON schema is untouched by this change) and
       `tests/test_demo.py` (the demo and its trace are untouched).
-- [ ] T3. Manual claim-diff review, recorded in the PR description: for each of
+- [ ] T6. Manual claim-diff review, recorded in the PR description: for each of
       `ALLOWED_TRANSITIONS`, the resolver score constants, the resolver rejection-reason order, the
       `Policy.evaluate()` order, the approval binding payload, the four verifier escalation gates,
       the `Verification` defaults, and the three runtime env var names, state the `src/` file and
       line the doc claim was checked against. This is the mechanism for acceptance criterion 1;
       no automated test can replace it.
-- [ ] T4. Manual wording review, recorded in the PR description: confirm each of the three
+- [ ] T7. Manual wording review, recorded in the PR description: confirm each of the three
       documents carries the proposal disclaimer, that no document claims live validation, and that
       no marketing language or mctl.ai reference is present.
 
@@ -144,12 +166,13 @@ Documentation-only plus one test, so rollback is a plain revert with no state to
   state, no dependency change. `src/newton_mcp/`, `schemas/` and `examples/` were never touched, so
   no runtime behaviour can regress.
 - Partial rollback if only the new test is unwanted (for example if the owner reads "no new code"
-  strictly): delete `tests/test_docs_links.py`. The three documents and the README changes stand on
+  strictly): delete `tests/test_docs_consistency.py`. The three documents and the README changes stand
+  on
   their own; acceptance criterion 3 reverts to a manual check.
 - Partial rollback if the `docs/architecture.md` edit is unwanted: restore its
   `## Safety defaults` table from git history. `docs/safety.md` then duplicates it, which is worse
   but not broken; prefer instead to move the canonical copy back into `architecture.md` and leave
   the pointer in `docs/safety.md`, so the table still exists in exactly one place.
 - If a doc claim is found to be wrong after merge, the fix is a follow-up documentation PR, not a
-  revert: no consumer depends on these files programmatically apart from `tests/test_docs_links.py`,
+  revert: no consumer depends on these files programmatically apart from `tests/test_docs_consistency.py`,
   which checks link targets and never content.

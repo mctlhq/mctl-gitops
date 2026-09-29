@@ -1,5 +1,12 @@
 # Design: issue-10-3-2-docs-action-runtime-safety-archetype
 
+> **Amended at owner review (2026-09-29).** The link-only test becomes a docs-consistency test
+> (`tests/test_docs_consistency.py`): relative links, `demo.py` flags, `uv run` targets and env
+> var names in the doc corpus are checked against the real parser, `pyproject.toml`, env
+> lookups and `.env.example`. `examples/smart-home/README.md` joins the corpus. The confirmed
+> Archetype table cites a concrete public doc page per row, the upload ceiling is written
+> "512 MB", and `task-verification` is described as its public page describes it.
+
 ## Current state
 
 ### What `docs/` contains today
@@ -77,7 +84,7 @@ Everything the issue asks to document is implemented:
   (default `https://api.u1.archetypeai.app/v0.5`), `NEWTON_TEXT_MODEL`, `NEWTON_OMEGA_MODEL`,
   `NEWTON_REQUEST_TIMEOUT_SEC` (90.0), `NEWTON_MCP_TRANSPORT`, `NEWTON_MCP_HOST`/`HOST`,
   `NEWTON_MCP_PORT`/`PORT`, `NEWTON_MAX_IMAGE_BYTES` (8 MiB, ceiling
-  `DOCUMENTED_MAX_UPLOAD_BYTES = 512 MiB`). The three runtime paths
+  `DOCUMENTED_MAX_UPLOAD_BYTES`, 512 MB as documented). The three runtime paths
   (`NEWTON_MCP_RUNTIME_CONFIG`, `NEWTON_MCP_POLICY_PATH`, `NEWTON_MCP_AUDIT_PATH`) are
   deliberately not in `Settings`.
 - Demo-safe actions: `examples/runtime.example.yaml` (`set_target_temperature`,
@@ -109,8 +116,9 @@ Everything the issue asks to document is implemented:
 
 ## Proposed solution
 
-Documentation-only, plus one small link test. No file under `src/newton_mcp/`, `schemas/` or
-`examples/` changes.
+Documentation-only, plus one docs-consistency test. No file under `src/newton_mcp/`, `schemas/` or
+`examples/` changes, except that `examples/smart-home/README.md` may be corrected where the test
+finds a mismatch.
 
 ### 1. `docs/safety.md` (new) becomes the canonical safety document
 
@@ -179,11 +187,20 @@ Three parts, deliberately in this order so the reader hits the boundary before t
    (`response.response`, `status`, `query_id`, `inference_time_sec`, `error_msg`, `errors`,
    `detail`); the `DataEvent` shape (`type`, `event_data`, `event_data.contents`) and the event
    types in `models.py`'s `EventType`; `POST /v0.5/files` and `POST /v0.5/files/base64` with the
-   `is_valid`/`file_id`/`file_uid` response and the documented 512 MiB ceiling; the two model
+   `is_valid`/`file_id`/`file_uid` response and the documented 512 MB ceiling; the two model
    families (`Newton::c2_...`, `OmegaEncoder::...`) and the 768-dim per-channel embedding; the
    `ATAI_API_KEY`/`ATAI_API_ENDPOINT` variable names; and the Agents API concepts
-   (blueprint → bundle → run, paginated results/events/logs, the five blueprint names). No
-   endpoint, parameter or model id appears that is not already in the code with a cited doc page.
+   (blueprint → bundle → run, paginated results/events/logs, the five blueprint names). Every row
+   cites a concrete page under https://docs.archetypeai.app/ (index: `/llms.txt`), not the site
+   root. The Agents API rows cite `core-concepts/agents/overview.md`,
+   `core-concepts/agents/api.md`, the five blueprint pages
+   (`core-concepts/agents/{anomaly-discovery,manual-generation,osm,rare-event-detection,task-verification}.md`)
+   and `api-reference/agents/{create-blueprint,create-bundle,run-bundle,get-agent-results,list-agent-events,get-agent-logs,list-node-registry}.md`,
+   and state that the Agents API is not wired into this gateway (issue #13, deferred until after
+   first contact). The upload row cites `api-reference/files/upload.md` and `upload-base64.md`
+   and writes the ceiling as "512 MB", matching `docs/newton-api-notes.md`. No endpoint,
+   parameter or model id appears that is not already in the code or in `docs/newton-api-notes.md`
+   with a cited doc page.
 2. **Proposed by this project.** The Physical Action Contract v0.2, the `runtime.yaml` capability
    allow-list and catalog, the deterministic resolver and its score, `policy.yaml` and the policy
    engine, the context-bound `Approval`, the `ActionState` lifecycle with `UNKNOWN`, the JSONL
@@ -211,9 +228,12 @@ Three parts, deliberately in this order so the reader hits the boundary before t
      model to self-report one?
    - *Support for post-action verification.* Assumption today: verification is entirely this
      project's (`src/newton_mcp/runtime/verifier.py`), polling a capability's `read_tool` and
-     evaluating a structured condition. Question: the `task-verification` blueprint is named in
-     the public Agents list — is it intended for verifying that a *commanded physical change*
-     occurred, and could a verification result be fed back as a new observation?
+     evaluating a structured condition. Public docs: the Task Verification Agent
+     (`core-concepts/agents/task-verification.md`) verifies that work is performed according to
+     standard operating procedures by observing video data. Stated separately: whether it is
+     suitable for verifying that a *commanded physical outcome* occurred is not confirmed by any
+     public page. Question: is it, or another Agent, intended for that, and could such a result
+     be fed back as a new observation?
    Plus a closing statement that nothing here reverse-engineers a private endpoint or circumvents
    an access control, and that this project is not affiliated with or endorsed by Archetype AI.
 
@@ -271,15 +291,39 @@ rewrite. Three changes:
 - The `## Direction A` prose (lines 109-180) is left alone apart from any factual correction the
   audit pass turns up; it is already accurate and already labelled.
 
-### 5. `tests/test_docs_links.py` (new, the only code)
+### 5. `tests/test_docs_consistency.py` (new, the only code)
 
-A single test that collects relative markdown links (`[text](path)`) and inline backticked paths
-of the form ``` `docs/...` ``` from `README.md`, `AGENTS.md`, `CONTRIBUTING.md` and every
-`docs/*.md`, resolves each against the repo root, and asserts the target exists. Anchors are
-stripped before resolution; `http(s)://` and `mailto:` links are skipped, so the test makes no
-network call. This is what turns acceptance criterion "README links resolve" from a manual check
-into a CI check, at the cost of roughly thirty lines and no production code. `pyproject.toml`
-already sets `testpaths = ["tests"]`, so no configuration change is needed.
+One test module, standard library only (`ast`, `re`, `shlex`, `tomllib`, `pathlib`,
+`importlib`), no network. **Corpus:** `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, every
+`docs/*.md` and `examples/smart-home/README.md`. Four checks, one test function each:
+
+- **Links.** Relative markdown links (`[text](path)`) and backticked repo paths (`` `docs/...` ``,
+  `` `examples/...` ``, `` `src/...` ``, `` `tests/...` ``) resolve against the linking file (links)
+  or the repo root (backticked paths) to an existing file or directory. Anchors are stripped;
+  `http(s)://` and `mailto:` are skipped.
+- **`demo.py` flags.** Commands are taken only from fenced code blocks (with `\` continuations
+  joined) and inline code spans, and only those that contain `examples/smart-home/demo.py` (or
+  start with `demo.py`). Each is tokenised with `shlex`; every token starting with `--` (value
+  after `=` dropped) must be in the option strings of the parser returned by the demo module's
+  `_build_parser()`, loaded with `importlib.util.spec_from_file_location` as `tests/test_demo.py`
+  already does. `--word` in prose is never checked.
+- **`uv run` targets.** For each `uv run <name>` in a command (leading `VAR=value` assignments
+  skipped): `<name>` is a `[project.scripts]` key, or has a `[tool.<name>]` table in
+  `pyproject.toml` (e.g. `pytest`), or is `python` followed by `-c`/`-m` or by a script path that
+  exists. Anything else fails with the offending command and file.
+- **Env var names.** Every `NEWTON_*`/`ATAI_*` token in the corpus must be in the set the code
+  actually reads, collected with `ast` from `src/newton_mcp/**/*.py`: string literals passed to
+  `env.get`/`os.environ.get`/`os.getenv` or used as `os.environ[...]` subscripts, the string
+  elements of a tuple passed to `_resolve(...)`, and the values of module-level constants whose
+  name ends in `_ENV_VAR` (`NEWTON_MCP_RUNTIME_CONFIG`, `NEWTON_MCP_AUDIT_PATH`,
+  `NEWTON_MCP_POLICY_PATH`) — plus the names assigned in `.env.example`, including commented
+  `# NAME=` lines. Mentions in comments or docstrings do not count, because `ast` only sees code.
+
+Each check must be shown to bite: the implementer breaks it once in a scratch edit (a bad link, an
+unknown `--flag` in a `demo.py` command, `uv run newton-mpc`, an invented `NEWTON_FOO`) and
+confirms the matching test fails, then reverts. A wrong command in any corpus file, including
+`examples/smart-home/README.md`, is fixed in the doc, never by weakening the test.
+`pyproject.toml` already sets `testpaths = ["tests"]`, so no configuration change is needed.
 
 ### Why this shape
 
@@ -350,5 +394,6 @@ traced is deleted rather than hedged.
   `examples/smart-home/README.md`'s existing "What this is not" section is the reference wording
   the new documents follow.
 - **Risk: scope creep into code.** Mitigation: a task-level constraint that `git diff --stat` for
-  this change touches only `README.md`, `docs/*.md` and `tests/test_docs_links.py`, verified as
+  this change touches only `README.md`, `docs/*.md`, `tests/test_docs_consistency.py` and, only
+  if the test finds a mismatch, `examples/smart-home/README.md`, verified as
   `tasks.md` task 11's definition of done.
