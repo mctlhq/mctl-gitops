@@ -1,0 +1,20 @@
+status: proposed
+updated_at: '2026-09-29T18:30:33Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-87d05b0b506bf411
+  trace_id: 4629759e6e17e4bca136653630960bab
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/newton-mcp-gateway
+  issue: 10
+  url: https://github.com/mctlhq/newton-mcp-gateway/issues/10
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-e9c0ac873b442522
+  content_hash: sha256:e9c0ac873b442522c18ea48cc314bd19323194015de8a4bd12b51558f063fb66
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
