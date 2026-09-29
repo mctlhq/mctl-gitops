@@ -167,7 +167,8 @@ parse args -> build backend -> propose_action -> new_action_record -> catalog.re
   support in `HttpTransport`, device-id addressing) — mctlhq/mctl-alice#47 and
   mctlhq/newton-mcp-gateway#28. Never selected by any test.
 - **Approval expiry.** `expires_at` is set from the run's `now_fn` start plus a margin that covers
-  every attempt (`(retry_limit + 1) * (call timeout + verification.timeout_seconds)` plus slack), so
+  every attempt (`(retry_limit + 1) * (Executor.call_timeout_seconds + verification.timeout_seconds)`
+  plus slack, using the `call_timeout_seconds` the demo passes to its `Executor`), so
   under `--deterministic`'s stepped clock the AC-offline run reaches `ESCALATED` through verified
   failures, never through `ApprovalRejected`.
 - **Testbed override.** `--force-desired-temperature-c N` rewrites the proposed contract's

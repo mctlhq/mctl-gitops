@@ -138,14 +138,6 @@ only — no test may select `--real`, open a socket or read a credential.
 - [ ] T10. `src/newton_mcp/` contains no Alice-specific string: walk `src/newton_mcp/**/*.py` and
       assert none contains `alice`, `fake_alice` or `ALICE_MCP_URL` (case-insensitive).
       (Acceptance criterion 5.)
-- [ ] T13. (owner amendment) `run_demo(real=True)` with a monkeypatched live-backend builder
-      (returning the mock backend, so no network) still routes every actuator and read call to the
-      in-process `fake_alice` `call_log`, prints the "live Newton backend; actuator: in-process fake"
-      line, and never reads any Alice-related environment variable; with `ATAI_API_KEY` unset,
-      `--real` fails before proposing, naming the variable.
-- [ ] T14. (owner amendment) Under `--deterministic`, the AC-offline run's approval `expires_at`
-      is later than every `now_fn` value the run produces, and the run ends `ESCALATED` via verified
-      `FAILED` (the audit has no approval-rejection reason).
 - [ ] T11. `fake_alice`'s `get_room_state` is advertised with `read_only_hint=True` in the catalog
       snapshot, and its returned mapping carries a top-level `temperature_c` the mock contract's
       `verification.condition` path resolves against.
@@ -153,6 +145,16 @@ only — no test may select `--real`, open a socket or read a credential.
       in-process `client_factory` (e.g. by asserting every recorded call arrived at the fake's
       `call_log` and the fake's server object is the only one constructed), and that `--mock`
       completes with `ATAI_API_KEY` absent from the environment (`monkeypatch.delenv`).
+- [ ] T13. (owner amendment) `run_demo(real=True)` with the live-backend builder monkeypatched to
+      return the mock backend (so no network) still routes every actuator and read call to the
+      in-process `fake_alice` `call_log`, prints the "live Newton backend; actuator: in-process fake"
+      line, and never reads any Alice-related environment variable.
+- [ ] T14. (owner amendment) A separate test, with nothing monkeypatched and `ATAI_API_KEY` unset
+      (`monkeypatch.delenv`): `--real` fails before proposing, with an error naming `ATAI_API_KEY`,
+      and `call_log` stays empty.
+- [ ] T15. (owner amendment) Under `--deterministic`, the AC-offline run's approval `expires_at`
+      is later than every `now_fn` value the run produces, and the run ends `ESCALATED` via verified
+      `FAILED` (the audit has no approval-rejection reason).
 
 ## Rollback
 
