@@ -109,27 +109,34 @@ the amended ADR fixes.
   tool payloads, artifact bodies, execution phase, work-item lifecycle state or approval
   state into the evidence tables.
 
-### The `we_` / `ex-` split (owned by mctlhq/mctl-agents#539)
+### The `we_` / `ex-` split (ADR 018 Amendment 1, mctlhq/mctl-agents#539, merged)
 
-- WHILE mctlhq/mctl-agents#539 is not merged THE SYSTEM SHALL NOT be implemented from this
-  proposal. The join columns and their validation depend on it.
-- WHEN an envelope is stored THE SYSTEM SHALL copy exactly the `ExecutionJoin` fields that
-  ADR 018 defines (as amended by #539) into columns of the same meaning, verbatim. It SHALL
-  validate them with the same prefix rules Tier A enforces, and SHALL reject a violation with
-  `400` and code `evidence_execution_ref_invalid`.
+- WHEN an envelope is stored THE SYSTEM SHALL copy `execution.execution_id` and
+  `execution.runtime_execution_id` verbatim into two separate typed columns.
+- WHEN an envelope is stored THE SYSTEM SHALL validate the join with Tier A's rules:
+  - `execution_id` is blank or starts with `we_`;
+  - `runtime_execution_id` is blank or is `ex-` followed by 16 lowercase hex characters;
+  - at least one of the two is non-blank.
+- IF the join violates any of those rules THEN THE SYSTEM SHALL reject the write with `400`
+  and code `evidence_execution_ref_invalid`.
+- WHEN computing `content_hash` THE SYSTEM SHALL apply Tier A's leaf rule: a blank
+  `runtime_execution_id` is absent from the hashed payload, and `execution_id`,
+  `work_item_id` and `trace_id` are always present.
+- WHEN an admin filters by `execution_id` or by `runtime_execution_id` THE SYSTEM SHALL
+  return every envelope carrying that identity, including a both-identities envelope looked
+  up by its runtime id.
 - WHILE storing or deriving references THE SYSTEM SHALL NOT classify, translate or map one
-  execution identity shape into another. In particular it SHALL NEVER write an `ex-` value
-  into a `we_` column, or the reverse.
+  execution identity shape into another, and SHALL NOT store a discriminator. The
+  `primary_execution_ref` returned on reads is derived at read time.
 - IF canonical state cannot resolve an envelope's valid join to a work item THEN THE SYSTEM
-  SHALL store the evidence anyway with an empty derived projection, and SHALL NOT reject the
-  write for lack of a `we_`.
+  SHALL store the evidence anyway with an empty derived projection.
 
 ### Retrieval and authorization
 
 - WHEN an admin requests `GET /api/v1/evidence/{id}` THE SYSTEM SHALL return the wrapper and
   the verbatim envelope bytes, base64-encoded, so that the hash survives JSON re-encoding.
 - WHEN an admin requests `GET /api/v1/evidence` with any combination of the supported
-  filters (the ADR-named primary execution identity and any #539 typed identity, `trace_id`, `engine` + `engine_ref`, `work_item_id`,
+  filters (`execution_id`, `runtime_execution_id`, `trace_id`, `engine` + `engine_ref`, `work_item_id`,
   `repository` + `issue`, `repository` + `pr`) THE SYSTEM SHALL return a list-shaped
   response whose shape does not depend on which filters were supplied.
 - WHEN a caller requests `GET /api/v1/work-items/{id}/evidence` THE SYSTEM SHALL apply the
@@ -175,9 +182,9 @@ the amended ADR fixes.
 - **The `ev-` derivation is no longer open.** It is Tier A's algorithm, pinned in the
   acceptance criteria above and in `design.md` section 2, and it is proven by ported golden
   vectors.
-- **The `we_` / `ex-` join model is decided in mctlhq/mctl-agents#539, not here.** That
-  issue is a blocking prerequisite. If it fixes a shape `design.md` section 4 did not
-  anticipate, this proposal is re-reviewed before approval.
+- **The `we_` / `ex-` join model is settled.** mctlhq/mctl-agents#539 merged ADR 018
+  Amendment 1 (model B, two typed fields, `v1alpha1`, hash-neutral). This proposal mirrors
+  it.
 - **Whether a runtime `ex-` can be resolved to a `we_` inside mctl-api today.** Nothing in
   this clone maps an `ex-` to a work execution; `internal/usage/types.go` explicitly accepts
   both shapes in one correlation column and resolves neither. The design therefore leaves

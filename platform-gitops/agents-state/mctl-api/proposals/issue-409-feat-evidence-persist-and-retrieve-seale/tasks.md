@@ -1,14 +1,11 @@
 # Tasks: issue-409-feat-evidence-persist-and-retrieve-seale
 
-Task 0 is a **blocking prerequisite** owned by mctl-agents. Tasks 1-10 are mctl-api and
-start only after it has merged.
+Task 0 was the blocking mctl-agents prerequisite and is **done**. Tasks 1-10 are mctl-api.
 
-- [ ] 0. (mctl-agents, BLOCKING) mctlhq/mctl-agents#539 amends ADR 018 and
-  `orchestrator/execution_evidence.py` with the explicit `we_` / `ex-` execution-join
-  contract and commits golden vectors for every join shape it allows. — DoD: #539 is merged.
-  The join columns in `design.md` section 1 are confirmed against the amended
-  `ExecutionJoin`; any shape section 4 did not anticipate returns this proposal for
-  re-review before approval.
+- [x] 0. (mctl-agents) mctlhq/mctl-agents#539 was merged in PR #540 (`9fe775f`) as ADR 018
+  Amendment 1. `ExecutionJoin` has `execution_id` (`we_`), `runtime_execution_id`
+  (`ex-` + 16 hex), `work_item_id` and `trace_id`, and golden vectors are committed in
+  `tests/fixtures/evidence/`.
 
 - [ ] 1. Create `internal/evidence/types.go`: `EvidenceIDPrefix = "ev-"`, `APIVersionV1Alpha1
   = "evidence.mctl.ai/v1alpha1"`, `SupportedAPIVersions`, `MaxEvidenceBytes = 256 << 10`,
@@ -26,8 +23,11 @@ start only after it has merged.
 
 - [ ] 2. Port Tier A golden vectors into `internal/evidence/testdata/` from mctl-agents
   (`orchestrator/execution_evidence.py`, ADR 018) — at minimum three sealed envelopes with
-  their expected `content_hash` and `ev-` id: the #520 fixture, the #539 vectors for every
-  join shape the amended ADR allows, one envelope with non-ASCII text and one with `<`, `>`
+  their expected `content_hash` and `ev-` id, taken verbatim from mctl-agents
+  `tests/fixtures/evidence/`: `investigator-evidence.json` (`we_` only),
+  `implementer-evidence.json` (`ex-` only) and `shepherd-evidence.json` (both). Also cover one
+  variant carrying `"runtime_execution_id": ""`, which must hash exactly as if the key were
+  absent, one envelope with non-ASCII text and one with `<`, `>`
   and `&` in a string (depends on 0, 1). — DoD: a table-driven test proves
   `CanonicalContentJSON`, `ContentHash` and `EvidenceIDFor` reproduce every vector byte for
   byte; if they do not, only these two functions are changed
@@ -36,7 +36,7 @@ start only after it has merged.
 - [ ] 3. Create `internal/evidence/store.go`: the two-table schema from `design.md`
   (`execution_evidence`, `execution_evidence_refs`), the `execution_evidence_immutable()`
   trigger function and its `BEFORE UPDATE` trigger in the `DO $$ ... pg_trigger` guard shape
-  used by `work_item_context_snapshots_no_update`, all eight indexes, `NewStore`, `Close`,
+  used by `work_item_context_snapshots_no_update`, all nine indexes, `NewStore`, `Close`,
   `scanEvidence` (recomputes and verifies the hash on every read, mirroring `scanSnapshot`)
   (depends on 1). — DoD: `NewStore` applies the schema idempotently against a real Postgres;
   a test proves an `UPDATE` of any column raises; a test proves `DELETE` succeeds and
@@ -61,7 +61,7 @@ start only after it has merged.
   projection and returns no error; `RebuildRefs` is idempotent and changes no
   `execution_evidence` row.
 
-- [ ] 6. Implement the read paths: `Store.Get(id)`, `Store.List(ctx, Filter)` covering the ADR-named primary execution identity (and any #539 typed identity), `trace_id`, `work_item_id`, `engine`+`engine_ref`, `repository`+`issue`,
+- [ ] 6. Implement the read paths: `Store.Get(id)`, `Store.List(ctx, Filter)` covering `execution_id`, `runtime_execution_id`, `trace_id`, `work_item_id`, `engine`+`engine_ref`, `repository`+`issue`,
   `repository`+`pr`, and `Store.ByWorkItem(ctx, workItemID)`, all returning a list-shaped
   result with a bounded default and maximum limit in the style of `MaxApprovalList` (depends
   on 5). — DoD: each filter is served by its intended index (verified with `EXPLAIN` in an
@@ -130,9 +130,13 @@ start only after it has merged.
   database level; `DELETE` succeeds and cascades to `execution_evidence_refs`.
 - [ ] T7. Read verification: a row whose stored bytes are tampered with out-of-band is
   refused on read rather than served under its old `content_hash`.
-- [ ] T8. The join contract (#539): every join shape the amended ADR allows is stored
-  verbatim in its ADR-defined column(s); a join that violates the ADR prefix rules is `400
-  evidence_execution_ref_invalid`; the database rejects any `ex-` value in
+- [ ] T8. The join contract (ADR 018 Amendment 1): the `we_`-only, `ex-`-only and
+  both-identities fixtures are stored verbatim in `execution_id` / `runtime_execution_id`. The
+  both-identities envelope is returned by an `execution_id` filter **and** by a
+  `runtime_execution_id` filter. An `ex-` in `execution_id`, a `we_` in
+  `runtime_execution_id`, a malformed `ex-` body or a join with both identities blank is
+  `400 evidence_execution_ref_invalid`, and the `CHECK` constraints reject the same rows at
+  the database level; the database rejects any `ex-` value in
   `work_execution_id`; an unresolvable valid join stores the evidence with an empty
   projection; a `we_` join resolves its engine, engine ref, work item and tenant.
 - [ ] T9. Retrieval: every documented filter returns the expected rows and an identically
