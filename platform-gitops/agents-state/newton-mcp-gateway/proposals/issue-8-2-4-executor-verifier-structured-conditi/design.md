@@ -1,5 +1,14 @@
 # Design: issue-8-2-4-executor-verifier-structured-conditi
 
+> **Amended at owner review (2026-09-29).** (a) The executor re-checks the context-bound
+> `Approval` with `verify_approval()` immediately before every call attempt, including a retry;
+> (b) `Executor.execute()` is the single owner of every `-> EXECUTING` transition, and
+> `run_action()` only decides retry vs escalate; (c) a capability may declare `read_arguments`,
+> rendered by the resolver like `arguments`, and the verifier calls `read_tool` with exactly those
+> arguments; plus three documented edge cases (a read-tool error result is a failed poll, a
+> capability without `read_tool` always ends `ESCALATED`, the last poll may overrun the deadline
+> by at most `read_timeout_seconds`).
+
 ## Current state
 
 Read in the clone at `mctlhq/newton-mcp-gateway` (Python 3.12, `uv`, Pydantic v2, `mcp>=2.2,<3`
@@ -179,7 +188,11 @@ class ExecutionOutcome(BaseModel):   # frozen
 class Executor:
     def __init__(self, catalog: CapabilityCatalog, *, client_factory: ToolClientFactory | None = None,
                  call_timeout_seconds: float = DEFAULT_CALL_TIMEOUT_SECONDS, sink: AuditSink | None = None): ...
-    async def execute(self, candidate, record, *, now) -> tuple[ActionRecord, ExecutionOutcome]: ...
+    async def execute(self, candidate, record, *, approval: Approval, policy_version: str,
+                      now, verified_failure: bool = False) -> tuple[ActionRecord, ExecutionOutcome]: ...
+
+class ExecutorError(Exception): ...
+class ApprovalRejected(ExecutorError): ...   # carries the ApprovalCheck.reason
 ```
 
 `catalog.py`'s `_default_client_factory` is promoted to a public `default_client_factory` (same
@@ -193,16 +206,25 @@ unchanged, including the test that proves `refresh()` never calls `call_tool`.
    `binding_identity != candidate.server_binding_identity` → raise `ExecutorError` **before** any
    transport is opened. A re-pointed server must never receive a call resolved against the old
    one; this mirrors why `approval.py` binds to `binding_identity` rather than the label.
-2. `transition(record, EXECUTING, reason, now=now, sink=sink, args=candidate.args)` — the audit
-   line therefore carries the redacted args and `args_digest`, provable against the approval for
-   the same action.
-3. `with anyio.fail_after(call_timeout_seconds): async with factory(server) as client:
+2. **Approval check (owner amendment).** `verify_approval(approval, candidate, record.action_id,
+   policy_version, now)`. Invalid → raise `ApprovalRejected` with the check's reason; nothing has
+   been transitioned, audited or opened yet. This runs on *every* attempt, so an approval that
+   expires between attempt 1 and a retry stops the retry. For an `auto` policy decision the caller
+   issues an `Approval` with `approved_by="policy:<policy_version>:<rule>"`, so the executor has one
+   path and no approval-less bypass. The binding is context binding, not authentication.
+3. `transition(record, EXECUTING, reason, now=now, sink=sink, args=candidate.args,
+   verified_failure=verified_failure)` — `AUTHORIZED -> EXECUTING` on attempt 1, `FAILED ->
+   EXECUTING` on a retry. `execute()` is the **only** place any `-> EXECUTING` transition happens
+   (owner amendment); the lifecycle table rejects anything else, and a retry's fresh
+   `tool_call_id`/`verification_id` pair is minted here by `transition()`. The audit line carries
+   the redacted args and `args_digest`, provable against the approval for the same action.
+4. `with anyio.fail_after(call_timeout_seconds): async with factory(server) as client:
    result = await client.call_tool(candidate.tool_name, candidate.args)` — one scope over
    connect, handshake and the call, exactly as `catalog.refresh()` bounds its per-server cycle.
-4. Any returned result, including an MCP error result → `transition(..., EXECUTED, ...)`. A
+5. Any returned result, including an MCP error result → `transition(..., EXECUTED, ...)`. A
    completed call attempt does not prove nothing happened; there is no `EXECUTING -> FAILED` edge
    to take even if one wanted to.
-5. `TimeoutError` or any `Exception`/`ExceptionGroup` from the transport → `transition(..., UNKNOWN, ...)`.
+6. `TimeoutError` or any `Exception`/`ExceptionGroup` from the transport → `transition(..., UNKNOWN, ...)`.
    `BaseException`/`BaseExceptionGroup` propagate untouched, as in `refresh()`.
 
 ### 3. `src/newton_mcp/runtime/verifier.py` (new)
@@ -232,36 +254,63 @@ under `asyncio_mode = "auto"`; `anyio.sleep` is the default `sleep`).
   unannotated (`None`) hint is allowed and the fact is recorded in the reason, per hard rule 5.
 - **Poll loop:** first read issued immediately at t=0, then every `poll_interval_seconds` until
   `verification.timeout_seconds` elapses on the injected clock. Each poll calls only the read
-  tool, bounded by `read_timeout_seconds`. The result is turned into a mapping by
-  `observation_from_result()`: `structured_content` when present, else a single text block parsed
-  as JSON into an object, else no observation (a failed poll, counted, never raised).
+  tool with exactly `candidate.read_args` (see 3a), bounded by `read_timeout_seconds`. The result
+  is turned into a mapping by `observation_from_result()`: an MCP error result (`is_error`) is
+  never an observation, even with structured content; otherwise `structured_content` when present,
+  else a single text block parsed as JSON into an object, else no observation (a failed poll,
+  counted, never raised). No poll *starts* after the deadline; one started before it may finish up
+  to `read_timeout_seconds` later — the documented worst-case overrun.
 - Satisfied → `VERIFYING -> SUCCEEDED`, stop polling.
 - Deadline reached with `observations >= 1` and never satisfied → `VERIFYING -> FAILED`, the
   verified failure the lifecycle module's invariant ("`FAILED` always means verified") depends on.
 - Deadline reached with `observations == 0` → `VERIFYING -> ESCALATED`. Calling an unobservable
   world a verified failure would license a retry on evidence nobody has; this is the one place the
   design is stricter than the issue text, and it is why `FAILED` stays honest.
+- Consequence, documented in `docs/action-runtime.md`: a capability with no `read_tool` (e.g.
+  `announce`) always ends `ESCALATED` after its call. That is the honest outcome — the runtime
+  cannot know it worked — and #9's demo must present it that way.
+
+### 3a. `read_arguments` (owner amendment)
+
+`CapabilityConfig` gains `read_arguments: dict[str, Any] = Field(default_factory=dict)` (still
+`extra="forbid"`). The resolver renders it with the existing `render_arguments(...)` — same
+`${target.*}`/`${constraints.*}` roots, same refusal of `verification.*` — and carries the result
+as `CandidateAction.read_args`. A template that fails to render rejects the candidate at the same
+stage as a failing `arguments` template. The verifier passes exactly `candidate.read_args` to
+`read_tool` and nothing else — never the action's `args`, which could carry actuator parameters
+(`target_temperature_c`) into a read tool. `examples/runtime.example.yaml` gains
+`read_arguments: {location: "${target.location}"}` for the two capabilities that declare a
+`read_tool`.
 
 ### 4. The attempt loop — `run_action()` in `executor.py`
 
 The retry rule spans both modules, so it lives in exactly one place, next to the attempt counter:
 
 ```python
-async def run_action(candidate, contract, record, *, executor, verifier, now_fn) -> tuple[ActionRecord, ActionState]:
+async def run_action(candidate, contract, record, *, approval, policy_version,
+                     executor, verifier, now_fn) -> tuple[ActionRecord, ActionState]:
+    retry = False
     while True:
-        record, execution = await executor.execute(candidate, record, now=now_fn())
+        try:
+            record, execution = await executor.execute(
+                candidate, record, approval=approval, policy_version=policy_version,
+                now=now_fn(), verified_failure=retry)       # the ONLY -> EXECUTING transition
+        except ApprovalRejected as exc:
+            if not retry:
+                raise                                       # record still AUTHORIZED, nothing called
+            return transition(record, ActionState.ESCALATED, f"approval no longer valid: {exc}",
+                              now=now_fn(), sink=sink), ActionState.ESCALATED
         record, verification = await verifier.verify(candidate, contract, record, now=now_fn())
         if verification.state in (ActionState.SUCCEEDED, ActionState.ESCALATED):
             return record, verification.state
         # verified FAILED
         if candidate.idempotent and record.attempt <= contract.verification.retry_limit:
-            record = transition(record, ActionState.EXECUTING, "retry after verified failure",
-                                now=now_fn(), sink=sink, verified_failure=True, args=candidate.args)
-            continue                      # attempt += 1, fresh tool_call_id/verification_id pair
+            retry = True                                    # execute() does FAILED -> EXECUTING
+            continue
         return transition(record, ActionState.ESCALATED, reason, now=now_fn(), sink=sink), ActionState.ESCALATED
 ```
 
-This is the whole issue in nine lines, and it reads as the issue's rule:
+This is the whole issue in one small loop, and it reads as the issue's rule:
 
 - An `UNKNOWN` attempt cannot skip the verifier: the loop body always verifies, and the state
   machine has no `UNKNOWN -> EXECUTING` edge to take. Outcome already met → `SUCCEEDED`, and the
@@ -275,12 +324,15 @@ This is the whole issue in nine lines, and it reads as the issue's rule:
 - Every arm goes through `transition()` with the shared sink, so all four correlation ids land on
   every line, and a retry's `tool_call_id`/`verification_id` are replaced together by
   `transition()` itself.
+- `run_action()` never transitions into `EXECUTING`; it only sets `retry` (owner amendment). There
+  is therefore exactly one `-> EXECUTING` line per attempt, always preceded by an approval check,
+  and no `EXECUTING -> EXECUTING` double transition to paper over.
 
 ### 5. Exports and docs
 
 `newton_mcp/action/__init__.py` gains `Condition, Predicate, AllOf, AnyOf, Op, ConditionResult,
-evaluate`; `newton_mcp/runtime/__init__.py` gains `Executor, ExecutionOutcome, Verifier,
-VerificationOutcome, run_action`. `docs/architecture.md` gets the "digital success is not physical
+evaluate`; `newton_mcp/runtime/__init__.py` gains `ApprovalRejected, Executor, ExecutionOutcome,
+ExecutorError, Verifier, VerificationOutcome, run_action`. `docs/architecture.md` gets the "digital success is not physical
 success" section stating the retry rule; `docs/action-runtime.md` loses the "executes nothing / no
 verification logic" claims and gains executor/verifier sections; `README.md` gets the v0.2 example
 and an updated runtime paragraph. All of it keeps the "experimental proposal, not an Archetype
