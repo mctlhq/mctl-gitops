@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-29T21:49:07Z'
+updated_at: '2026-09-29T22:19:27Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-37b00e9d27957569
@@ -32,3 +32,4 @@ ci_blockers:
 - validate / lint
 - validate / test
 review_attempts: 1
+harness_failures: 1
