@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-29T22:04:57Z'
+status: merged
+updated_at: '2026-09-29T22:54:13Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-4529497e463e308b
@@ -27,3 +27,9 @@ attempt:
   expires_at: '2026-09-29T23:49:58Z'
   finished_at: '2026-09-29T22:04:57Z'
 pr: https://github.com/mctlhq/mctl-telegram/pull/709
+github:
+  state: merged
+  head_sha: cfc338d3a94947b10d1985fab7b29ff39febba8f
+  observed_at: '2026-09-29T22:54:13Z'
+merged_at: '2026-09-29T22:54:13Z'
+merge_commit: 72b3aad6d772d17e33226935c6bd5c28afb77c87
