@@ -1,5 +1,18 @@
 # Design: issue-9-2-5-smart-home-testbed-end-to-end-closed
 
+> **Amended at owner review (2026-09-29).** `--real` means **real Newton, fake actuator**: the
+> proposal step uses the live Newton backend (`ATAI_API_KEY` / `ATAI_API_ENDPOINT`), while execution
+> and verification always run against the in-process `fake_alice`. There is no `ALICE_MCP_URL` and
+> no path to a real Alice server in this issue, because the real server
+> (`mctlhq/mctl-alice`) cannot be driven by this runtime today: its `alice_get_device_state`
+> returns Markdown text only (no `structuredContent`, so every poll would be "no observation" and
+> every run `ESCALATED`), it sits behind OAuth while `HttpTransport` has no auth-header support,
+> and it addresses devices by `device` id rather than by room. Those gaps are tracked in
+> mctlhq/mctl-alice#47 (structured read-only state) and mctlhq/newton-mcp-gateway#28 (authenticated
+> streamable-http). Plus four documented details: approval expiry covers the whole run, the
+> temperature override is labelled a testbed override, the in-process factory ignores the declared
+> transport, and Alice is described generically.
+
 ## Current state
 
 Everything this demo needs already exists in `src/newton_mcp/`, unit-tested with in-process fakes.
@@ -144,13 +157,25 @@ parse args -> build backend -> propose_action -> new_action_record -> catalog.re
   (`sleep` advances a float, never waits), so the contract's 600 s `timeout_seconds` is consumed in
   about ten simulated polls and the failure path finishes in milliseconds. A `confirm` decision is
   auto-approved with an explicitly mock-labelled `approved_by`.
-- **Real mode.** Backend from `newton_mcp.newton.api.build_backend(Settings.from_env())`
-  (`ATAI_API_KEY` / `ATAI_API_ENDPOINT`); the Alice endpoint from `ALICE_MCP_URL`, applied by
-  rebuilding the loaded `RuntimeConfig` with `model_copy`/re-validation so the committed placeholder
-  URL is replaced before the catalog is built (`runtime.yaml` has no env interpolation, and adding
-  one to `src/` is out of scope). Missing variables fail loudly naming the variable. Real mode uses
-  the real `anyio` clock, `default_client_factory`, and prompts on stdin for a `confirm` decision.
-  Never selected by any test.
+- **Real mode = real Newton, fake actuator (owner amendment).** Only the proposal backend changes:
+  `newton_mcp.newton.api.build_backend(Settings.from_env())` (`ATAI_API_KEY` /
+  `ATAI_API_ENDPOINT`), failing loudly naming a missing variable. Catalog, executor and verifier
+  still use `in_process_factory(fake_alice)` and the simulated clock, exactly as in mock mode; the
+  printed trace says "proposal: live Newton backend; actuator: in-process fake". A `confirm`
+  decision prompts on stdin. There is no `ALICE_MCP_URL` and no `RuntimeConfig` rewrite: a real
+  Alice server is not drivable yet (Markdown-only `alice_get_device_state`, OAuth with no auth-header
+  support in `HttpTransport`, device-id addressing) — mctlhq/mctl-alice#47 and
+  mctlhq/newton-mcp-gateway#28. Never selected by any test.
+- **Approval expiry.** `expires_at` is set from the run's `now_fn` start plus a margin that covers
+  every attempt (`(retry_limit + 1) * (call timeout + verification.timeout_seconds)` plus slack), so
+  under `--deterministic`'s stepped clock the AC-offline run reaches `ESCALATED` through verified
+  failures, never through `ApprovalRejected`.
+- **Testbed override.** `--force-desired-temperature-c N` rewrites the proposed contract's
+  `constraints.desired_temperature_c` after `propose_action`; the trace prints it as
+  "testbed override (not Newton output)" and the README says the same.
+- **Transport vs. binding.** `in_process_factory` ignores the declared transport, while
+  `binding_identity` (and so the approval binding) is computed from the declared placeholder URL in
+  `runtime.yaml`. The example README says so in one sentence.
 - **Audit.** One `JsonlAuditSink(audit_path)` instance is passed as `sink=` to both the `Executor`
   and the `Verifier` (`run_action` requires the identical object) and is also used for the demo's
   own `PROPOSED -> AUTHORIZED` / `PROPOSED -> DENIED` transition, which no module in `src/` performs.
@@ -212,7 +237,8 @@ one cross-reference sentence pointing at the testbed.
    read is deterministic, still shows the verifier polling more than once, and behaves identically
    under a simulated or a real clock.
 5. **Add an env-interpolation feature to `runtime/config.py` so `runtime.yaml` can carry
-   `${ALICE_MCP_URL}`.** Dropped: it widens an authority-boundary loader (`extra="forbid"`,
+   a real Alice URL from the environment.** Dropped (and, after the owner amendment, moot — there is
+   no real-Alice path in this issue): it widens an authority-boundary loader (`extra="forbid"`,
    fail-loudly, no defaults) for the benefit of one example, and real mode is opt-in and
    never CI-exercised. Overriding the parsed `RuntimeConfig` inside `demo.py` keeps the change local
    and reviewable.
@@ -238,10 +264,12 @@ one cross-reference sentence pointing at the testbed.
   committed file and asserts the exact transition chain, four non-empty ids per line and the absence
   of secret-looking keys; the README documents the one-line regeneration command; `--deterministic`
   makes regeneration stable.
-- **Risk: the fake's tool shapes diverge from the real Alice server**, so `--real` fails on first
-  contact. Mitigation: recorded as open question 1, stated in `examples/smart-home/README.md`, and
-  contained by design — the shapes live only in `fake_alice.py` and `runtime.yaml`, both under
-  `examples/`, so adapting them touches no runtime code.
+- **Risk: the fake's tool shapes diverge from the real Alice server.** Confirmed at owner review
+  (device-id addressing, Markdown-only state, OAuth). Mitigation: `--real` never targets a real
+  actuator in this issue; the README states the gap and links mctlhq/mctl-alice#47 and
+  mctlhq/newton-mcp-gateway#28; the shapes live only under `examples/`, so adapting them later
+  touches no runtime code. Alice is described generically, with no hosted deployment mentioned
+  (hard rule 6).
 - **Risk: a future `src/` change silently breaks the composed loop.** Mitigation: that is precisely
   what `tests/test_demo.py` now guards — it is the first test in the repo that exercises
   propose -> resolve -> policy -> approve -> execute -> verify as one chain.
