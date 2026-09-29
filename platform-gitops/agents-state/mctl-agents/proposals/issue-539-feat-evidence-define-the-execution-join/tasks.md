@@ -84,7 +84,11 @@
       `primary_execution_ref` is the execution-scoped retrieval identity while
       `evidence_id` stays the envelope's own key; the deterministic-linkage
       rule (policy decisions and `aar_` intents bind to `runtime_execution_id`
-      per `policy_checkpoint.py:641` and `action_approvals.py:140-148`); the
+      per `policy_checkpoint.py:641` and `action_approvals.py:140-148`); that
+      Tier B must store and index `execution_id` and `runtime_execution_id`
+      as two separate typed columns, each independently queryable, with
+      `primary_execution_ref` a derived convenience and never the only lookup
+      key; the
       completeness rule for a runtime-only run; the `v1alpha1`-stays-additive
       justification; and the named follow-ups. (depends on 7) — DoD: one join
       model named, no contradiction with the shipped code, no emoji, English

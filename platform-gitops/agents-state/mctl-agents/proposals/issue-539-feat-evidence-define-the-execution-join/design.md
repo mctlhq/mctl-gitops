@@ -192,11 +192,19 @@ def primary_execution_ref(self) -> tuple[str, str]:
     return ("", "")
 ```
 
-Tier B (mctl-api#409) indexes on the **pair** — two typed columns,
-`primary_execution_kind` and `primary_execution_id` — so an `ex-` and a `we_`
-are never comparable as one untagged value, which is precisely the defect
-`usage_ledger.execution_id` and `model_usage_records.execution_id` already
-carry. Stability holds per envelope because both inputs are hashed fields of
+Tier B (mctl-api#409) **persists and indexes both typed fields
+separately** — `execution_id` (`we_`) and `runtime_execution_id` (`ex-`), each
+in its own column with its own index (partial where the field may be blank) —
+so an `ex-` and a `we_` are never comparable as one untagged value, which is
+precisely the defect `usage_ledger.execution_id` and
+`model_usage_records.execution_id` already carry. The derived
+`primary_execution_ref` pair is a convenience for "the one id to show or sort
+by"; it is **not** the only lookup key. Retrieval by `runtime_execution_id`
+must find every envelope carrying that `ex-`, including a both-identities
+envelope whose primary is its `we_` — that is how evidence is reached from a
+`POLICY_DECISION` or an `aar_` approval, which carry only the `ex-`. Indexing
+the primary pair alone would make those envelopes unreachable by the runtime
+id the linkage rule binds them to. Stability holds per envelope because both inputs are hashed fields of
 an immutable, content-addressed document: attaching a `we_` later produces a
 *new* envelope with a new `ev-`, never a mutation of this one.
 
@@ -293,7 +301,7 @@ literal `content_hash`, literal `ev-`, `to_dict()` round-trip and
 | --- | --- | --- |
 | `investigator-evidence.json` (existing, unchanged) | `we_` only | investigator run, `("work", "we_…")` |
 | `implementer-evidence.json` (new) | `ex-` only | implementer run: `policy_decisions` + `approvals` bound to the `ex-`, `("runtime", "ex-…")` |
-| `shepherd-evidence.json` (new) | both | #519/#524 gated merge: `we_` attached and `ex-` runtime, `("work", "we_…")` |
+| `shepherd-evidence.json` (new) | both | a shepherd run with a `we_` attached (the optional model-(A) producer enhancement, follow-up 3) and its `ex-` runtime, `("work", "we_…")`. Shepherd runs carry only an `ex-` today; this vector pins the both-identities shape, not current behaviour |
 
 Naming follows the repo's `tests/fixtures/<domain>/<role>-<domain>.json`
 convention (`tests/fixtures/identity/investigator-context.json`,
@@ -392,9 +400,12 @@ handle, no new dependency in `pyproject.toml`; the module stays stdlib-only
 - *Prefix drift between `ex-` here and in `execution_identity.py`.* Mitigated
   by the extracted `CONTEXT_ID_PREFIX` constant and the extended T11 equality
   test.
-- *Tier B indexes the pair as one column anyway.* Mitigated by shipping the
-  `ex-`-only and both-identities golden vectors as the conformance fixtures
-  mctl-api#409 ports, so a single-column implementation fails them.
+- *Tier B indexes the pair as one column, or indexes only the primary pair.*
+  Mitigated by the amendment requiring both typed fields to be stored and
+  indexed separately, and by shipping the `ex-`-only and both-identities
+  golden vectors as the conformance fixtures mctl-api#409 ports: the
+  both-identities vector must be retrievable by its `ex-` as well as by its
+  `we_`.
 
 **Security.** Unchanged. No new authorization-shaped field name is
 introduced — `runtime_execution_id`, `primary_execution_ref` and
