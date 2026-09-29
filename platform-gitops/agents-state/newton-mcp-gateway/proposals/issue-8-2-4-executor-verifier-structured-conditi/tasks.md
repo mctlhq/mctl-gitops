@@ -47,10 +47,11 @@
       the arguments stage; existing resolver/config tests stay green.
 - [ ] 8. Add `src/newton_mcp/runtime/executor.py` with `SupportsCallTool`, `ToolClientFactory`,
       `ExecutionOutcome`, `ExecutorError`, `ApprovalRejected` and `Executor.execute(candidate, record,
-      *, approval, policy_version, now, verified_failure=False)` (depends on 7) — DoD: calls
-      `verify_approval(approval, candidate, record.action_id, policy_version, now)` before anything
-      else on every attempt and raises `ApprovalRejected` with no transition, no audit line and no
-      transport when invalid; is the only code that transitions into `EXECUTING`
+      *, approval, policy_version, now, verified_failure=False)` (depends on 7) — DoD: checks run
+      in design.md's order on every attempt: (1) server resolution / `binding_identity` check →
+      `ExecutorError`, (2) `verify_approval(approval, candidate, record.action_id, policy_version,
+      now)` → `ApprovalRejected`, (3) the `-> EXECUTING` transition, (4) the call; a failure at (1)
+      or (2) leaves no transition, no audit line and no transport opened; is the only code that transitions into `EXECUTING`
       (`AUTHORIZED -> EXECUTING`, or `FAILED -> EXECUTING` with `verified_failure=True`); resolves
       the `ServerConfig` by `resolved_identity` and raises `ExecutorError` before opening any
       transport when the server is unknown or `binding_identity != candidate.server_binding_identity`;
@@ -59,7 +60,7 @@
       (including an MCP error result) → `EXECUTED`; timeout/transport `Exception` → `UNKNOWN`;
       `BaseException`/`BaseExceptionGroup` propagate untouched.
 - [ ] 9. Add `src/newton_mcp/runtime/verifier.py` with `VerificationOutcome`, `Verifier` and
-      `observation_from_result()` (depends on 2, 7) — DoD: transitions into `VERIFYING` first;
+      `observation_from_result()` (depends on 2, 7, 7a) — DoD: transitions into `VERIFYING` first;
       escalates before any poll when there is no `read_tool`, the read tool was not discovered, or
       it declares `read_only_hint is False`; calls the read tool with exactly `candidate.read_args`;
       an MCP error result from it is a failed poll, never an observation; no poll starts after the
