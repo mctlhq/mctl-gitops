@@ -175,4 +175,4 @@ Documentation-only plus one test, so rollback is a plain revert with no state to
   the pointer in `docs/safety.md`, so the table still exists in exactly one place.
 - If a doc claim is found to be wrong after merge, the fix is a follow-up documentation PR, not a
   revert: no consumer depends on these files programmatically apart from `tests/test_docs_consistency.py`,
-  which checks link targets and never content.
+  which checks link targets and selected command/config references, not semantic prose claims.
