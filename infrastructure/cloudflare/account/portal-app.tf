@@ -57,8 +57,8 @@ resource "cloudflare_zero_trust_access_application" "mcp_portal" {
   http_only_cookie_attribute = false
   options_preflight_bypass   = false
 
-  # The existing app-scoped policy (include: mashkoffdmitry@gmail.com,
-  # mashkovdm.dm@gmail.com), referenced by id so the import leaves it as it
+  # The existing app-scoped policy (include: the two pilot users),
+  # referenced by id so the import leaves it as it
   # is. Writing it inline would rewrite the policy the portal's own door
   # depends on as part of an import that exists only to change a duration.
   # It has no resource of its own: it is app-scoped (`reusable: false`, absent

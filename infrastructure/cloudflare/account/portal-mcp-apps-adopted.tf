@@ -26,8 +26,8 @@
 # `oauth_configuration` is unset, as it is live.
 #
 # Policies. Each application has exactly one policy, "Phase 0 pilot users"
-# (allow; include mashkoffdmitry@gmail.com and mashkovdm.dm@gmail.com; no
-# exclude, no require). All three are app-scoped (`reusable: false`) and are
+# (allow; include the two pilot users; no exclude, no require). All three
+# are app-scoped (`reusable: false`) and are
 # absent from GET /accounts/{account_id}/access/policies, so there is no
 # standalone cloudflare_zero_trust_access_policy to import: each is referenced
 # by its id, as mcp_portal references 5f0102c7-... in portal-app.tf. Writing

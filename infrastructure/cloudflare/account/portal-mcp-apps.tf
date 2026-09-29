@@ -17,7 +17,7 @@
 # Measured on 2026-09-19, with 1 and 2 both correct — server `ready` /
 # `connected` with all 8 tools synced, and a portal `servers[]` holding four
 # members with `projects` at 8 of 8 enabled — the portal page still rendered
-# "3 enabled servers" for mashkoffdmitry@gmail.com, and the portal's own
+# "3 enabled servers" for a pilot user, and the portal's own
 # `portal_toggle_single_server` answered `not found` for `projects` while
 # listing it among the portal's servers in the same message. Both are this
 # application being absent: api, tg and seerrsense each have one, created by
