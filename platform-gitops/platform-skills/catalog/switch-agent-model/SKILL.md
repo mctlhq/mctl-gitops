@@ -178,11 +178,12 @@ and `orchestrator/run_implementer.py` in `mctl-agents` never need direct
 edits — they resolve their model via `os.getenv("<X>_MODEL",
 SERVICE_AGENT_MODEL)` fallback chains and inherit automatically once the
 `balanced` profile changes. The investigator is pinned separately by
-`ISSUE_INVESTIGATOR_MODEL` in `cwft-mctl-agents-investigate.yaml` (Opus);
-migrate it together with the other Opus selections — the reusable reviewer's
-`model-high` and `mctl-coolify-mcp`'s own
-`claude.yml` / `claude-code-review.yml`, which do not use the reusable
-reviewer.
+`ISSUE_INVESTIGATOR_MODEL` in `cwft-mctl-agents-investigate.yaml` (Opus).
+Unlike the other Opus selections (the reusable reviewer's `model-high`,
+`mctl-coolify-mcp`'s own `claude.yml` / `claude-code-review.yml`), it does NOT
+move in the same pass: it waits until the mctl-agents image carrying the new
+CLI is deployed — see "Engine first" above — and then goes in its own
+mctl-gitops PR.
 
 **Recorded data is not a model selection** and keeps the old ID: the old
 model's price-catalog entry (rows priced before the move resolve to it),
