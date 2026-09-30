@@ -570,6 +570,19 @@ spec:
           # owner decision. Roll back by setting "off".
           - name: ISSUE_INVESTIGATOR_CONTEXT_MODE
             value: "shadow"
+          # WorkItem intents as a ContextSnapshot source (mctlhq/mctl-agents#542
+          # tasks 12-18, orchestrator/work_context/intents.py; released in
+          # mctl-agents 1.63.0). `on`: the investigator reads the WorkItem's
+          # canonical intents from mctl-api (GET /api/v1/work-items/{id}/intents,
+          # mctl-api 4.58.0) and seals them into the ContextSnapshot, including
+          # the resume intent named by the execution request's `intent_id`; a
+          # referenced intent it cannot resolve fails the run
+          # (`intent-unresolved`) rather than proceeding without it. Intents are
+          # provenance and input only, never authorization. Only this template
+          # reads it: the Temporal workers run no context assembly. Roll back by
+          # setting "off" (the default, byte-neutral).
+          - name: WORK_ITEM_INTENT_SOURCE
+            value: "on"
           # Workflow param injected as an env var so the shell layer can
           # quote it safely. Direct workflow.parameters.* interpolation in
           # the script body is a shell-injection vector.
