@@ -687,7 +687,7 @@ spec:
           # Go toolchain exhausting the cap), not model quality, and changing
           # both at once would make the next run unattributable.
           - name: ISSUE_INVESTIGATOR_MODEL
-            value: "claude-opus-5"
+            value: "claude-opus-5-5"
           # Raised 3.00 -> 8.00 alongside the model above: $3 was already tight
           # on Sonnet (see the 8Gi memory bump below, same class of headroom
           # problem on the largest repos) and Opus spends more per equivalent
