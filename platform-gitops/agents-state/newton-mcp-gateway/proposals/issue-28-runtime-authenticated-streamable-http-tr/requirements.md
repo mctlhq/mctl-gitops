@@ -58,12 +58,14 @@ Configuration and validation
   `transport_fingerprint` is byte-identical to the value it produces before this change.
 - IF an `auth` block carries any key other than `header`, `scheme` and `env` (for example
   `value`, `token`, `password`, `secret`), THEN THE SYSTEM SHALL refuse to load the config
-  with an error that names the offending key and the owning server, and THE SYSTEM SHALL NOT
+  with an error naming a fixed field path (and a validated owning server name when
+  available), and THE SYSTEM SHALL NOT
   include the rejected key's value in the error text, its `repr`, or any `input_value`
   echoed by the validation machinery.
 - IF `auth.env` is absent, empty, or not a syntactically valid POSIX environment variable
   name (`[A-Za-z_][A-Za-z0-9_]*`), THEN THE SYSTEM SHALL refuse to load the config with an
-  error that names the field and the owning server but never the rejected value.
+  error that names the fixed field path (and a validated owning server name when
+  available) but never the rejected value.
 - IF `auth.header` is not a valid HTTP field name (RFC 9110 token characters only -- in
   particular no CR, LF, colon or space), THEN THE SYSTEM SHALL refuse to load the config.
 - IF `auth.header` case-insensitively names a header the MCP streamable-http transport
@@ -110,8 +112,10 @@ Secret containment
   `AuditEvent.reason` or an `ExecutionOutcome.detail`, THE SYSTEM SHALL NOT emit the resolved
   header value.
 - WHEN a transport error occurs during `CapabilityCatalog._discover_server()` for a server
-  that declares `auth`, THE SYSTEM SHALL pass the recorded `detail` through a redaction step
-  that replaces any occurrence of the resolved secret with `[redacted]` before it is stored.
+  that declares `auth`, THE SYSTEM SHALL expose a safe, class-only transport failure instead of raw exception
+  text. A missing-variable diagnostic may name the validated variable and server.
+  Sanitization SHALL happen before truncation and SHALL NOT re-read the environment to
+  discover what secret the failed connection used.
 - WHEN `Executor.execute()`'s call attempt fails, THE SYSTEM SHALL keep the existing
   `_classify_call_failure()` behaviour (exception class only, never its message).
 
@@ -174,3 +178,36 @@ Documentation
   because it is the only way to inherit the SDK's own connect/read timeouts; the fallback
   (constructing `httpx2.AsyncClient` directly and declaring `httpx2` in `pyproject.toml`) is
   written up in design.md.
+
+## Review amendments: containment is a connection-bound invariant
+
+- Reject secret-bearing inline auth anywhere in the raw runtime document before Pydantic
+  can report an unrelated field error. Cover HTTP and stdio declarations, unknown transport
+  kinds, malformed root/server shapes, and direct model validation. An unrelated error must
+  not echo a sibling auth block. Validate all auth fields without echoing untrusted values
+  or arbitrary rejected key names; only fixed field names and validated server/env names
+  are diagnostic data. `auth: null` means no authentication.
+- Validate the resolved header value before giving it to httpx2: reject control characters
+  (including CR/LF/DEL) and values the client cannot encode, with a value-free error. Check
+  blankness without silently stripping or otherwise altering a nonblank credential.
+- The production authenticated transport boundary SHALL prevent SDK/client exceptions and
+  exception groups from exposing request credentials through `str`, `repr`, rendered
+  traceback, chaining, or captured logs. Safe diagnostics may contain fixed messages and
+  exception class names; raw provider text is not necessary. Do not convert cancellation
+  into a catalog problem, and preserve exceptions raised by a caller inside the client
+  context rather than reclassifying them as transport failures.
+- Any defensive redaction uses the credential captured for that exact connection, before
+  truncation. Re-reading env after a failure is forbidden: the value may have rotated while
+  the request was in flight. Do not retain resolved credentials in configuration models,
+  catalog snapshots, approvals, or a global secret registry.
+- Default HTTP clients SHALL keep redirect following disabled. A cross-origin redirect
+  SHALL not deliver the configured auth header to the other origin; test the existing SDK
+  guarantee rather than introducing a custom redirect implementation.
+- Containment tests SHALL exercise hostile provider exceptions containing the full header
+  and token, a token spanning the catalog truncation boundary, environment rotation during
+  an awaited failure, and nested exception groups. Include logs and formatted tracebacks,
+  not merely final success-path audit events.
+- Prove approval behavior with actual candidates/approvals and executor calls: changing only
+  the env value keeps the approval usable; changing header/scheme/env name rejects the old
+  binding before any actuator call. Include verifier read-back HTTP requests in the
+  authenticated integration test.

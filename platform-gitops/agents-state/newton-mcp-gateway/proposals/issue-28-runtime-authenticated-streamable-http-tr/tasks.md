@@ -3,15 +3,16 @@
 - [ ] 1. Add the `HttpAuth` model and the `auth` field to `HttpTransport` in
   `src/newton_mcp/runtime/config.py`, with `AuthConfigError(Exception)` and a
   `model_validator(mode="before")` on `HttpTransport` that screens the raw `auth` mapping:
-  reject any key outside `{header, scheme, env}`, reject a non-mapping `auth`, validate
+  reject any key outside `{header, scheme, env}` without echoing arbitrary key names,
+  accept `auth: null` as omitted auth, reject other non-mapping `auth`, validate
   `header` against the RFC 9110 token regex, reject `_SDK_MANAGED_HEADERS`
   (`content-type`, `accept`, `mcp-session-id`, `mcp-protocol-version`, case-insensitive),
   validate `scheme` as a single token when present, and validate `env` against
   `^[A-Za-z_][A-Za-z0-9_]*$`.
   — DoD: `AuthConfigError` subclasses `Exception` and **not** `ValueError`, so pydantic-core
   propagates it instead of wrapping it in a `ValidationError` that would echo `input_value`;
-  no message emitted by this validator contains any value other than field names, header
-  names and the env-var name; `StdioTransport` still rejects `auth` via `extra="forbid"`;
+  no message emitted by this validator contains unvalidated data; stdio auth is rejected
+  by the safe raw-input screen before `extra="forbid"` can echo its value;
   `uv run pytest` is green with no changes to existing tests.
 
 - [ ] 2. Extend `ServerConfig.transport_fingerprint` (depends on 1) so the canonical dict for
@@ -24,8 +25,8 @@
 
 - [ ] 3. Add `src/newton_mcp/runtime/auth.py` (depends on 1) with `MissingAuthSecret(Exception)`,
   `resolve_auth_header(auth, *, server_name, env=None) -> tuple[str, str]` (injectable env
-  mapping, `f"{scheme} {value}"` when `scheme` is set, raw value otherwise, `.strip()` applied
-  to the raw variable), and `redact(text, secrets) -> str` reusing
+  mapping, `f"{scheme} {value}"` when `scheme` is set, raw value otherwise, blankness checked with `.strip()` but nonblank credentials preserved byte-exact; reject
+  control characters and unencodable values with fixed safe errors), and `redact(text, secrets) -> str` reusing
   `newton_mcp.runtime.audit.REDACTED`.
   — DoD: a missing or blank variable raises `MissingAuthSecret` whose message names
   `auth.env` and the server but contains no value; `redact()` is a no-op for an empty or
@@ -45,14 +46,12 @@
   `TYPE_CHECKING` for annotations and `create_mcp_http_client` is imported inside the default
   builder; the stdio branch is untouched.
 
-- [ ] 5. Redact the auth path's `server_unavailable` detail in `CapabilityCatalog.refresh()`
-  (depends on 3, 4): when the server's transport is an `HttpTransport` with `auth`, pass the
-  `_truncate(repr(exc))` detail through `redact(...)` with the resolved secret (resolved
-  defensively inside a `try`, so a `MissingAuthSecret` there does not mask the original
-  failure).
-  — DoD: a `MissingAuthSecret` raised by the factory becomes exactly one `server_unavailable`
-  problem naming the variable; the rest of the servers in the same `refresh()` are still
-  discovered; `_classify_call_failure()` in `executor.py` and `Verifier._poll()` are unchanged.
+- [ ] 5. Implement connection-bound safe authenticated transport errors (depends on 3, 4).
+  Cover builder/connect/list/call/close and nested exception groups; expose fixed messages or
+  exception class names, not raw provider text. Keep missing-variable diagnostics useful.
+  — DoD: no secret in `str`/`repr`/traceback/chaining/logs/catalog/audit/outcome; sanitize before
+  truncation, never re-read env for redaction; cancellation and caller-body exceptions keep
+  their semantics. Preserve executor/verifier safety behavior.
 
 - [ ] 6. Update `docs/action-runtime.md` (depends on 2, 4): add `auth` to the `runtime.yaml`
   example block; extend the `streamable-http` bullet in "Server identity in an approval
@@ -127,7 +126,8 @@
   any value, while a second, unauthenticated server in the same config is still discovered.
 - [ ] T11. Same module: with the variable set and the transport forced to fail (ASGI app that
   500s or a builder raising a synthetic `httpx2` error whose message embeds the sentinel),
-  the resulting `CatalogProblem.detail` contains `[redacted]` and not the sentinel.
+  the resulting `CatalogProblem.detail` is a useful safe diagnostic and contains no sentinel.
+  Prefer class-only failures; a redaction marker is not required.
 - [ ] T12. `tests/runtime/test_catalog.py`: `default_client_factory` for an `HttpTransport`
   with `auth is None` still returns a plain `Client` built from the URL (the unchanged path),
   and for `StdioTransport` still builds `StdioServerParameters` -- guard against collateral
@@ -158,3 +158,26 @@ the intended fail-safe direction.
 If only the leak containment is suspect and the feature must stay, the narrow mitigation is to
 unset the named environment variable: `refresh()` then degrades that one server to
 `server_unavailable` and no call is ever attempted, while the rest of the catalog keeps working.
+
+## Additional review tasks and verification
+
+- [ ] R1. Extend task 1 with a runtime raw-input screen before sibling Pydantic validation;
+  test unrelated invalid fields, stdio auth, unknown kinds, malformed server/root containers,
+  direct model validation, arbitrary extra keys containing the sentinel, and `auth: null`.
+  Sentinel must be absent from `str`, `repr`, and formatted tracebacks for every rejection.
+- [ ] R2. Extend T6 with CR/LF/DEL and unencodable secret values and with a nonblank value
+  containing surrounding whitespace. Invalid values fail before client creation without
+  echo; valid values are not silently trimmed.
+- [ ] R3. Extend T11 to full-header/token reflection, nested groups, a sentinel straddling
+  the truncation limit, and env rotation during an awaited failure. Inspect captured logs,
+  externally rendered exception chains, catalog problems, and audit/outcomes.
+- [ ] R4. Extend T7/T8 to verifier read-back requests, actual approval reuse after value
+  rotation, and rejection before actuator calls after header/scheme/env-name changes.
+- [ ] R5. Exercise cancellation during connect/call and exceptions from the caller's async
+  context body; ensure resources close and neither is converted to `server_unavailable`.
+- [ ] R6. Verify a cross-origin redirect never receives the configured credential, using
+  the default SDK redirect policy and a socket-free transport double.
+- [ ] R7. Before ready/merge, run the full suite and mock demo smoke and perform reversible
+  mutation checks: remove auth from the request, add secret value to fingerprint, drop env
+  name from fingerprint, disable containment, and sanitize only after truncation/re-reading
+  rotated env. Each relevant detector must pass normally and fail under its mutation.
