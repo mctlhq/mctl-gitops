@@ -187,39 +187,31 @@ which is now the appended record.
 
 ### 3. `exemptFromSLO` → `synthesized`
 
-> **AMENDED (human review, 2026-10-01):** the server-fault predicate below is NOT implemented.
-> `feedsSLO` is `return !r.synthesized`, so no synthesized record feeds the SLO
-> pair, and `serverFaultReason` is not added (it would be dead code). The
-> availability SLO input set stays pre-#696. Server faults are caught by the
-> `MctlToolHandlerFaults` alert (section 4) instead. The original text is kept
-> below for the record.
+> **AMENDED (human review, 2026-10-01).** This section is the design of record;
+> the proposal's original server-fault predicate was removed from this file and
+> must not be implemented (it survives only in git history, mctlhq/mctl-gitops#1478).
 
 Rename the `callRecord` field to `synthesized` and set it on **every** record
 `flushRecordedCall` creates (Rule 1's appended record, Rule 2, Rule 3). The
 invariant becomes total and self-describing: staged by `Server.audit` ⇒ not
 synthesized.
 
-`writeAuditRow` gates the SLO pair on a new method:
+`writeAuditRow` gates the SLO pair on:
 
 ```go
 // feedsSLO reports whether this record may sample the two series the
-// tool-availability SLO reads. Records staged by Server.audit always do
-// (pre-#696 behaviour, unchanged). A synthesized record does only when it
-// records a server fault: a panic, a handler-returned error, a store failure
-// or a response-encoding failure are ours, and hiding them from the SLO is
-// how a real outage stays quiet. Client-fault rejections stay out, so a
-// looping bad client cannot page on-call.
+// tool-availability SLO reads. Only records staged by Server.audit do
+// (pre-#696 behaviour). A record synthesized by flushRecordedCall never does,
+// whatever its reason: server faults are surfaced by MctlToolHandlerFaults
+// and mctl_tool_call_errors_total, not by the availability SLO.
 func (r callRecord) feedsSLO() bool {
-    return !r.synthesized || serverFaultReason(r.reason)
+    return !r.synthesized
 }
 ```
 
-`serverFaultReason` is a small `map[string]bool` over `ReasonPanic`,
-`ReasonHandlerError`, `ReasonStoreError`, `ReasonEncodeFailed`, kept next to
-the `Reason*` block so a new reason is classified when it is added.
-
-A Rule 3 success record is synthesized with an empty reason, so it never feeds
-the pair — the second half of the invariant the issue calls out.
+No reason-based predicate is added. A Rule 3 success record is synthesized, so
+it never feeds the pair either, which returns the denominator to its pre-#696
+input set.
 
 ### 4. A dedicated handler-fault alert
 
@@ -281,35 +273,14 @@ if errors.As(err, &coder) { code = coder.ToJSONRPCError().Error.Code }
 `errors.As` accepts an interface target, so the local `jsonrpcCoder` interface
 is unchanged.
 
-### 7. `db.ToolCall` params struct
+### 7. ~~`db.ToolCall` params struct~~
 
-> **WITHDRAWN (human review, 2026-10-01):** moved to mctlhq/mctl-telegram#716 (33 lines across 12
-> non-test files, mostly OAuth / connect flows). Nothing in this section is
-> implemented under #703.
-
-```go
-// ToolCall is one audit row's payload. A struct rather than positional
-// arguments: the previous signature ended in six consecutive bare strings,
-// where transposing status and errMsg still compiled.
-type ToolCall struct {
-    UserID       int64
-    Tool         string
-    PeerRedacted string
-    Status       string
-    ErrMsg       string
-    CallPath     string
-    Reason       string
-}
-
-func (s *Store) LogToolCall(ctx context.Context, call ToolCall)
-```
-
-The body is unchanged; only the parameter shape moves. All call sites
-(`internal/mcp/tools.go:2403`, `internal/agentapi/json.go:75`,
-`internal/agentapi/profilehandler.go:182,201`, and the `internal/db` tests) are
-migrated in the same commit. `Store` is an `internal/` type, so there is no
-external compatibility surface and no deprecated wrapper is kept — one
-signature, one spelling.
+> **WITHDRAWN (human review, 2026-10-01) → mctlhq/mctl-telegram#716.** The
+> original design (a `ToolCall` struct and a new `LogToolCall(ctx, ToolCall)`
+> signature) was removed from this file so it cannot be picked up as an
+> instruction. `Store.LogToolCall`'s signature does not change under #703. The
+> real blast radius (33 lines across 12 non-test files, 24 of them in
+> `internal/oauth`) is documented in #716.
 
 ### 8. Docs and test-comment corrections
 
@@ -384,7 +355,7 @@ assertion);
   Rule 3's synthesized `ok` samples added by #696 and returns to its pre-#696
   input set. It gains nothing. The paragraph below describes the original
   proposal and no longer applies.
-- **Metric / alert impact (the main risk).** `feedsSLO` adds a small number of
+- ~~**Metric / alert impact (the main risk).** `feedsSLO` adds a small number of
   server-fault errors to the `mctl_tool_invocations_total` numerator, and
   removes Rule 3's `ok` samples from the denominator. Both push the measured
   error rate *up* slightly. Mitigation: the affected reasons (`panic`,
@@ -393,7 +364,7 @@ assertion);
   removal is bounded by the tools that never audit their own success; validate
   the before/after denominator on the Grafana board
   (`deploy/grafana/mctl-telegram-beta.json`) for one 24h window post-deploy,
-  and revert `feedsSLO` to `!r.synthesized` if fast-burn noise appears.
+  and revert `feedsSLO` to `!r.synthesized` if fast-burn noise appears.~~ *(superseded, see the AMENDED bullet above)*
 - **Cardinality:** strictly reduced. The allowlist removes the last path by
   which a client-supplied string reaches a Prometheus label. Existing series
   created by that hole (if any) age out of the TSDB normally.

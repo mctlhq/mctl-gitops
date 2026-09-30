@@ -125,7 +125,10 @@ API/docs/tests slice.
   reason list if any reason's meaning changed. **AMENDED:** (a) must state
   that synthesized records (every Rule 1 append, Rule 2 and Rule 3 record)
   never feed the SLO pair, so server faults are visible in the error counter
-  and the `MctlToolHandlerFaults` alert, not in the availability SLO. — DoD: section reads correctly
+  and the `MctlToolHandlerFaults` alert, not in the availability SLO. It must
+  also state, next to the alert description from task 10, that `store_error`
+  and `encode_failed` are observable in `mctl_tool_call_errors_total` but are
+  not alerted. — DoD: section reads correctly
   against the shipped rule file; `internal/mcp/troubleshooting_doc_test.go` and
   `deploy/alerts/runbook_links_test.go` pass.
 
