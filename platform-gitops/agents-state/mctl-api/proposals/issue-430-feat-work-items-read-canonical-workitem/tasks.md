@@ -99,7 +99,10 @@
       non-numeric id such as `"abc"` (no Postgres cast error).
 - [ ] T5. Store: an intent whose `text` was set to NULL (simulating the
       retention sweep with a direct `UPDATE work_item_intents SET text=NULL`)
-      is returned by both `Intents` and `Intent` with `Text == ""`.
+      is returned by both `Intents` and `Intent` with `Text == ""` and
+      `TextRedacted == true`; an intent with text has `TextRedacted == false`,
+      and so does one appended with an empty string (if the POST allows it).
+      Mutation check: dropping the flag makes this test fail.
 - [ ] T6. Store: `limit <= 0` yields 50 rows at most and `limit > 100` is
       clamped to 100, with `IntentPage.Limit` reporting the effective value.
 - [ ] T7. `internal/api/handlers_work_items_test.go`: extend `workItemsRouter`

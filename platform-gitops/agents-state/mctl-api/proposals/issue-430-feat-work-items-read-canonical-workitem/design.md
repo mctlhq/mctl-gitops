@@ -111,7 +111,11 @@ func (s *Store) Intent(ctx context.Context, itemID, id string) (*Intent, error)
   no new index.
 - `text` is scanned into `*string` and flattened to `""` when NULL, exactly as
   `getIntent` and `AppendIntent` already do, so a retention-swept row still
-  reads. `created_at` is normalized with `.UTC()`, as everywhere else.
+  reads. The read also sets a new response field `text_redacted` (true exactly
+  when the column was NULL). The field is additive, and existing `Intent` JSON
+  consumers ignore it. Without it, a swept row and a genuinely empty text are
+  indistinguishable, which is the "could not observe" vs. "observed absent"
+  confusion AGENTS.md forbids. `created_at` is normalized with `.UTC()`, as everywhere else.
 - `Intents` returns an empty, non-nil slice for an unknown item — the same
   contract `Events` documents ("An unknown id answers an empty list, not
   ErrNotFound, so the caller Gets the item first"). The handler has already
@@ -263,7 +267,7 @@ an item the caller cannot see, and service-principal access via the existing
   intent; only `slog.Error("work-items store error", ...)` on a store failure,
   which carries no row content.
 - **Retention interaction.** A swept intent (`text` NULL) is returned as
-  `text: ""` rather than erroring, so a caller assembling context from an old
+  `text: ""` with `text_redacted: true` rather than erroring, so a caller assembling context from an old
   item degrades instead of failing; the row's provenance (`actor_principal`,
   `surface`, `created_at`) survives.
 - **Operational note.** With no store configured (`WORK_ITEMS_DB_URL` and

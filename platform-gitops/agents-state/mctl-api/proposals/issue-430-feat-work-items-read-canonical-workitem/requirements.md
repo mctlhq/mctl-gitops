@@ -101,7 +101,11 @@ Response content
   transcript, no authorization or approval state, no event history.
 - IF the retention sweeper has nulled an intent's `text` (the column is
   nullable for exactly that reason) THEN THE SYSTEM SHALL return the row with
-  `text` as the empty string rather than failing the read.
+  `text` as the empty string AND `text_redacted: true` rather than failing the
+  read. An intent whose text is present carries `text_redacted: false`. A swept
+  intent is "could not observe the text", never "the text was empty", and a
+  consumer (mctl-agents#542's context assembly) must be able to tell the two
+  apart without guessing from an empty string.
 
 Read-only
 
