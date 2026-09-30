@@ -1,5 +1,5 @@
 status: merged
-updated_at: '2026-09-30T00:33:34Z'
+updated_at: '2026-09-30T00:39:24Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-2d92638e1fc1d7fb
@@ -27,9 +27,5 @@ attempt:
   expires_at: '2026-09-30T02:01:46Z'
   finished_at: '2026-09-29T23:53:49Z'
 pr: https://github.com/mctlhq/.github/pull/144
-github:
-  state: merged
-  head_sha: 9eab8581fe1c96310b4b76199b589c4ce1f5ffb1
-  observed_at: '2026-09-30T00:33:34Z'
-merged_at: '2026-09-30T00:33:34Z'
+merged_at: '2026-09-30T00:39:24Z'
 merge_commit: 664634db9c1dbb07ef50d3f8c676fac4160dcd54
