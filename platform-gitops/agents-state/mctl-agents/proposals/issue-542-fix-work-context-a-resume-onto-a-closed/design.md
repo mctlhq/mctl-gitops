@@ -335,3 +335,54 @@ added wall-clock is the clone plus assembly, on the order of tens of seconds.
 - *`is_store_execution` misclassifies a correlation-only `--execution-id`.* The predicate
   requires the `we_` prefix, and `_resolve_work_context_ref` already refuses a `we_` that
   is not in the item's ledger — so a foreign id cannot open the context-only path.
+
+## Correction 2026-09-30: the `work-item-intent` source
+
+§5's claim that the resume intent reaches C2 through issue comments is
+withdrawn. The intent is canonical WorkItem state in mctl-api, so this design
+adds a first-class source for it.
+
+- **Vocabulary.** `orchestrator/context_snapshot.py` `SOURCE_KINDS` gains
+  `"work-item-intent"`. This is additive within `context.mctl.ai/v1alpha1`, the
+  same way `human-input-response` was added for #333. `from_dict` still rejects
+  unknown keys.
+- **Client.** `orchestrator/work_context/client.py` `ROUTES` gains
+  `"list_intents": "/api/v1/work-items/{id}/intents"` and
+  `"work_item_intent": "/api/v1/work-items/{id}/intents/{intent_id}"`, each with
+  an `answer_from_*` classifier that keeps "could not observe" (a transport
+  error, 5xx, malformed body, or a truncated final page) apart from "observed
+  absent" (a documented 404 or `200 []`). This follows the rules already
+  applied to `execution_snapshot`.
+- **Resume intent id.** The investigator reads its execution request
+  (`ROUTES["execution_request"]`, which already exists) by
+  `--execution-request-id` and takes `intent_id` from it. It never takes the id
+  from argv or the issue.
+- **Collector.** `context_assembly.collect_work_item_intents(assembly_input)`
+  returns one `CandidateSource` per selected intent:
+  - `kind="work-item-intent"` and `source_id="work-item-intent:<wi>:<id>"`;
+  - content is the canonical JSON of `{"text":..., "params":...}`;
+  - `uri` is the mctl-api route;
+  - `retrieved_at` is the read time and `updated_at` is the intent's `created_at`;
+  - trust is `reported`.
+
+  The resume intent is marked pinned. `_PINNED_KINDS` is not widened to the
+  whole kind, because older intents stay ranked and droppable. The kind joins
+  `_CONTENT_ADDRESSED_KINDS`, since intents are immutable, with freshness
+  `None`.
+- **Selection.** Take the intents with `id` greater than the highest
+  `work-item-intent` id among C1's sources, in ascending order, capped at 20.
+  Always add the pinned resume intent, even if it is older (a re-resume).
+  Selection is a pure function of `(C1 sources, intent list, resume intent id)`,
+  so a retry of the same `we_` produces identical bytes and replays instead of
+  diverging.
+- **Where it runs.** It runs in every WorkItem-backed assembly, both the full
+  path and the context-only path from §1–§2, before the idempotency guard is
+  consulted. A cold, non-WorkItem run does not call it.
+- **Failure.** If the referenced resume intent is unresolved, the run raises
+  and ends as `failed` / `intent-unresolved` (§3), and E2 advances to `Failed`.
+  If a non-referenced intent cannot be listed (the list read fails), the same
+  outcome applies. Sealing a C2 that claims completeness it does not have is
+  worse than failing.
+- **Not authorization.** Nothing in `policy_checkpoint`, approval resolution or
+  the ADR 011 provenance block reads `work-item-intent` sources. The resume
+  provenance remains the only link to W1/E1/C1.

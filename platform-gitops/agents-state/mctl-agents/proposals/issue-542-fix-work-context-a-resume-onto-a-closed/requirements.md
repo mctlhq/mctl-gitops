@@ -129,3 +129,65 @@ the issue a silent 'already handled'".
 - Should a context-only run also post a short issue comment naming the sealed snapshot?
   Assumed no: commenting on an issue whose proposal already merged is noise. Recorded here
   in case the owner disagrees.
+
+## Correction 2026-09-30 (owner decision, option 1): canonical WorkItem intents are a snapshot source
+
+The resume intent lives in mctl-api (`POST /api/v1/work-items/{id}/intents`),
+not in a GitHub comment. The earlier reading of design.md §5 ("the new intent is
+visible in C2 because the collectors re-read the issue and its comments") was
+wrong: an intent appended through the WorkItem API is never an issue comment,
+so #431 acceptance item 7 would not be met. The owner rejected duplicating the
+input into a GitHub comment.
+
+Order of operations for a WorkItem-backed resumed execution (unchanged from
+decision (a), now including intents):
+
+1. resolve W1, E1, C1 and the resume intent;
+2. assemble and seal C2, with the WorkItem intents as a source;
+3. persist C2;
+4. only then apply the proposal idempotency guard;
+5. if the proposal is terminal, skip the proposal rewrite but keep E2 and C2.
+
+### Additional acceptance criteria (EARS)
+
+- WHEN a WorkItem-backed run assembles context, THE SYSTEM SHALL read the item's
+  intents from the canonical mctl-api work-context API
+  (`GET /api/v1/work-items/{id}/intents`, mctlhq/mctl-api#430) through
+  `orchestrator/work_context/client.py`. It SHALL NOT read them from GitHub
+  comments or from any caller-supplied text.
+- WHEN the run is a dispatched resume whose execution request carries an
+  `intent_id`, THE SYSTEM SHALL always include that intent in C2 as a pinned
+  source that the budget never drops.
+- IF that referenced intent cannot be resolved (404, a different work item, a
+  read failure or a malformed body), THEN THE SYSTEM SHALL fail the run with
+  `outcome_code="failed"`, `outcome_reason="intent-unresolved"` and a non-zero
+  exit. It SHALL NOT seal a C2 that silently lacks the intent. A failed read is
+  never treated as "no intent".
+- WHILE selecting other intents, THE SYSTEM SHALL order them deterministically
+  by ascending intent `id`. It SHALL take only intents newer than the highest
+  intent id recorded in C1's provenance (all intents when there is no C1), up to
+  a fixed cap. Intents already carried by C1 are referenced, not copied again.
+- WHEN an intent enters C2, THE SYSTEM SHALL record it as a `ContextSource` of
+  the new kind `work-item-intent` with a stable `source_id`
+  `work-item-intent:<work_item_id>:<intent_id>`. The recorded provenance SHALL
+  include the intent id, `actor_principal`, `surface`, `created_at` and a
+  content hash of the canonical `{text, params}`, at `trust.tier="reported"`,
+  the same tier as `human-input-response`.
+- WHILE intents are in C2, THE SYSTEM SHALL treat them as input and provenance
+  only. Nothing SHALL derive authorization, approval or policy state from them,
+  and no historical conversation transcript SHALL be copied.
+- WHILE assembling, THE SYSTEM SHALL apply the existing per-source limit,
+  budget, dedup (by `source_id`) and freshness model to intents. Intents are
+  immutable records, so they are classified as content-addressed.
+- WHEN the proposal status is `accepted`, `implemented` or `merged`, THE SYSTEM
+  SHALL still produce C2 on a valid WorkItem resume, and C2 SHALL contain the
+  resume intent with its provenance.
+
+### Dependency
+
+mctlhq/mctl-api#430 (a read route for intents) must be released before the
+source can be switched on. Until then, the collector finds the route absent.
+That is a failed read for a referenced resume intent, so the run fails
+explicitly; it is not an empty list. The investigator also needs
+`execution_request_id` delivered to it, which is mctlhq/mctl-api#426 (released
+in mctl-api 4.57.0).
