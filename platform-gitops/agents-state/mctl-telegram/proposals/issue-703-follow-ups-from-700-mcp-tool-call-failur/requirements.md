@@ -187,11 +187,13 @@ rather than fourteen drive-by edits.
 - Whether server-fault reasons should re-enter the availability SLO or whether
   the SLO input set should stay byte-identical to pre-#696 and the gap be
   closed by the new alert alone. **RESOLVED in review (2026-10-01): alert
-  only; the SLO input set stays pre-#696.** Both halves of the issue's
-  complaint are addressed by the chosen option; the alert-only variant is
-  recorded in `design.md` under Alternatives and is a one-line revert of the
-  predicate if burn-rate noise appears.
+  only; the SLO input set stays pre-#696 (`feedsSLO() = !synthesized`), and no
+  reason-based predicate exists to revert.** Server faults are surfaced by the
+  `MctlToolHandlerFaults` alert and `mctl_tool_call_errors_total`. Letting them
+  burn the error budget would be a separate, deliberate change.
 - Whether `telegram_error` / `bridge_error` count as server faults for SLO
-  purposes. Treated as **not** server faults here (they are upstream/remote
+  purposes. **Moot after the review amendment:** no synthesized record feeds the
+  SLO, whatever its reason; staged records keep today's treatment. Original
+  answer, kept for the record: Treated as **not** server faults here (they are upstream/remote
   faults, and pre-#696 they already reached the SLO through `Server.audit`
   staging, so their SLO treatment is unchanged either way).
