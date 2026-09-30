@@ -192,9 +192,9 @@ Partial rollbacks, in increasing order of preference:
 
 1. **AMENDED: not applicable.** `feedsSLO` already is `!r.synthesized`, so the
    SLO input set does not change and there is no SLO-noise rollback. Original:
-   ~~**SLO noise only**: change `feedsSLO` back to `return !r.synthesized`.~~ One line; keeps
+   ~~**SLO noise only**: change `feedsSLO` back to `return !r.synthesized`. One line; keeps
    every classification fix and the new `MctlToolHandlerFaults` alert, which
-   then carries the handler-fault signal alone (design.md Alternative 4).
+   then carries the handler-fault signal alone (design.md Alternative 4).~~
 2. **Alert too noisy:** raise `for:` on `MctlToolHandlerFaults` or drop the rule
    from `deploy/alerts/mctl-telegram.rules.yaml`; the runbook anchor may stay,
    and `runbook_links_test.go` only checks the alert → runbook direction.
