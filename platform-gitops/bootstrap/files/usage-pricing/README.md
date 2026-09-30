@@ -15,10 +15,21 @@ https://platform.claude.com/docs/en/about-claude/pricing, retrieved
 | canonical_model | input | output | cache_write (5m) | cache_read | web_search_per_call | source |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude-opus-5` | 5.00 | 25.00 | 6.25 | 0.50 | 0.01 | "Model pricing" table (base input / 5m cache writes / cache hits and refreshes / output tokens) |
+| `claude-opus-5-5` | 4.00 | 20.00 | 5.00 | 0.20 | 0.01 | "Model pricing" table, retrieved 2026-09-30 |
 | `claude-sonnet-5` | 2.00 | 10.00 | 2.50 | 0.20 | 0.01 | "Model pricing" table |
+| `claude-sonnet-5-5` | 2.00 | 10.00 | 2.50 | 0.20 | 0.01 | "Model pricing" table, retrieved 2026-09-30 |
 | `claude-haiku-4-5` | 1.00 | 5.00 | 1.25 | 0.10 | 0.01 | "Model pricing" table |
 
-`web_search_per_call: 0.01` for all three comes from the same page's
+`claude-opus-5-5` and `claude-sonnet-5-5` are their own entries (version
+`2026-09-30-firstparty-1`, `effective_from: 2026-09-30T00:00:00Z`), added
+when the agents moved from Opus 5 / Sonnet 5 to the 5.5 models. The catalog
+is keyed by `canonical_model`, so without them every 5.5 row would be stored
+unpriced. Sonnet 5.5's rates equal Sonnet 5's; Opus 5.5 is cheaper than
+Opus 5 and its cache hits are 0.05x base input (\$0.20), not the usual 0.1x
+(pricing page footnote 2). The `claude-opus-5` and `claude-sonnet-5`
+entries stay for the rows recorded before the move.
+
+`web_search_per_call: 0.01` for all five comes from the same page's
 "Specific tool pricing -> Web search tool" section: $10 per 1,000 searches,
 i.e. $0.01 per call.
 

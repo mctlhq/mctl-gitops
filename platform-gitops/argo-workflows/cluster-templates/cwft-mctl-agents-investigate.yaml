@@ -681,7 +681,7 @@ spec:
           # run_issue_investigator.py reads this env var directly as its
           # highest-priority override -- so the change needs no mctl-agents
           # release and no agent_image bump, and reverting this PR restores
-          # claude-sonnet-5 from the `service_agent` task's `balanced` profile.
+          # claude-sonnet-5-5 from the `service_agent` task's `balanced` profile.
           # The implementer deliberately stays on Sonnet for now: its recent
           # failures were infrastructural (a missing platform contract, a cold
           # Go toolchain exhausting the cap), not model quality, and changing
