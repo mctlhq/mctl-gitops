@@ -55,7 +55,7 @@ pass at :435-447). The work is wiring, rendering and two surfaces.
   today; `broadcast.Store` (service.go:66-72) needs no new method;
   `SetBroadcastCampaignSourceRef` is left in place and still passes its tests.
 
-- [x] ~~6.~~ **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** Replaced by 6′. ~~Add the operator MCP tool (depends on 3, 4, 5) — new
+- [x] 6. **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** Replaced by 6′. Add the operator MCP tool (depends on 3, 4, 5) — new
   `internal/mcp/productupdate_tools.go` with
   `toolPrepareProductUpdateDigest`, registered in the builder loop at
   `internal/mcp/server.go:456-461`. Inputs `category`, `digest_id`,
@@ -73,13 +73,13 @@ pass at :435-447). The work is wiring, rendering and two surfaces.
   `digest_version`, `content_hash`, `entry_ids`, `newly_frozen`; audited via
   `s.audit` like its neighbours; sends nothing and offers no approval path.
 
-- [x] ~~7.~~ **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** The allowlist does not change. ~~Regenerate `docs/portal-allowlist.json` (depends on 6) — the file is
+- [x] 7. **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** The allowlist does not change. Regenerate `docs/portal-allowlist.json` (depends on 6) — the file is
   derived from the registered tool set by
   `internal/mcp/portal_allowlist_test.go`; the new tool must appear against
   `admin:broadcast` alongside the four broadcast tools.
   DoD: `go test ./internal/mcp/ -run PortalAllowlist` passes with no diff.
 
-- [x] ~~8.~~ **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** The tool descriptors do not change. ~~Regenerate `docs/tool-descriptors.json` and add the feed entry for
+- [x] 8. **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** The tool descriptors do not change. Regenerate `docs/tool-descriptors.json` and add the feed entry for
   this change (depends on 6) — adding an MCP tool changes the tool surface,
   so `go run ./cmd/productupdates gate` (`.github/workflows/build.yml:187`)
   will fail until this same pull request carries an **approved**
@@ -137,7 +137,7 @@ pass at :435-447). The work is wiring, rendering and two surfaces.
   or a category that differs from the campaign's, it writes nothing and
   returns `ErrCampaignSourceMismatch`. Run against both SQLite and Postgres,
   matching `internal/db/product_updates_test.go`.
-- [ ] T5. **AMENDED: exercise `HandlePrepareDigest`, see the correction.** ~~`prepare_product_update_digest`~~ end to end on a seeded feed: freezes,
+- [ ] T5. **AMENDED: exercise `HandlePrepareDigest`, see the correction.** `prepare_product_update_digest` end to end on a seeded feed: freezes,
   persists, prepares, and the resulting campaign read back through
   `GetBroadcastCampaign` carries the expected `SourceRef`.
 - [ ] T6. **AMENDED: page-action refusals, see the correction.** Called twice with the same `(digest_id, version)`, the second call
