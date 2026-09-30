@@ -119,6 +119,16 @@ live selections were:
   model); swap the IDs, keep the tiers. Callers pin the workflow by SHA and
   Dependabot bumps the pins weekly, so callers pick the change up without an
   edit — except a caller that overrides an input (e.g. `projects-mcp`).
+- `projects-mcp`: `.github/workflows/claude-review.yml` overrides the reusable
+  reviewer's `model-high` (to keep Sonnet on its sensitive paths) — it does
+  not inherit the default change, so edit it directly.
+- `mctl-coolify-mcp`: `.github/workflows/claude.yml` and
+  `.github/workflows/claude-code-review.yml` pin `--model` themselves (no
+  reusable reviewer). `evals.yml` defaults to Haiku and is separate.
+- `mctl-gitops` `execution-profiles/*/profile.yaml`: do NOT touch a profile
+  just to refresh a comment naming a model. Any content change requires a
+  `spec.version` bump and a re-pinned release binding under
+  `agent-platform/releases/` (`validate-profile-version-bumps.py`).
 - **Not in scope: `mctl-academy`.** Its content pipeline
   (`content-replenish.yml`, `AUTHOR_MODEL` / `REVIEWER_MODEL`) chooses its own
   models per provider (Anthropic or Nebius) and is not a platform agent; leave
