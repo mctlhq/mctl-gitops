@@ -58,12 +58,14 @@ Configuration and validation
   `transport_fingerprint` is byte-identical to the value it produces before this change.
 - IF an `auth` block carries any key other than `header`, `scheme` and `env` (for example
   `value`, `token`, `password`, `secret`), THEN THE SYSTEM SHALL refuse to load the config
-  with an error naming only a fixed field label and a validated owning server name, and THE SYSTEM SHALL NOT
+  with an error naming a fixed field path (and a validated owning server name when
+  available), and THE SYSTEM SHALL NOT
   include the rejected key's value in the error text, its `repr`, or any `input_value`
   echoed by the validation machinery.
 - IF `auth.env` is absent, empty, or not a syntactically valid POSIX environment variable
   name (`[A-Za-z_][A-Za-z0-9_]*`), THEN THE SYSTEM SHALL refuse to load the config with an
-  error that names the field and the owning server but never the rejected value.
+  error that names the fixed field path (and a validated owning server name when
+  available) but never the rejected value.
 - IF `auth.header` is not a valid HTTP field name (RFC 9110 token characters only -- in
   particular no CR, LF, colon or space), THEN THE SYSTEM SHALL refuse to load the config.
 - IF `auth.header` case-insensitively names a header the MCP streamable-http transport

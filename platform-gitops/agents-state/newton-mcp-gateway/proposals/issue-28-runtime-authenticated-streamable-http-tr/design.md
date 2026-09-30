@@ -178,8 +178,13 @@ Every check inside that validator raises `AuthConfigError` with a message that c
 names and, at most, the *env variable name* -- never a value. The `env` name is safe to print
 by construction: it is the one part of the block the whole design treats as non-secret.
 
-`load_runtime_config()` needs no change: `AuthConfigError` propagates out of
-`RuntimeConfig.model_validate(data or {})` as-is, which is the desired fail-loudly behaviour.
+`AuthConfigError` propagates out of `RuntimeConfig.model_validate(data or {})` as-is.
+The runtime-level raw-input screen described below must execute before ordinary model
+validation; do not assume `load_runtime_config()` needs no changes. The transport-local
+validator has no parent server name: its diagnostics use fixed field paths only. The
+root-level screen may add an owning server name only when available and independently
+validated; malformed containers and direct `HttpTransport` validation use the safe field
+path fallback. Server-name context plumbing is not required.
 Existing `pytest.raises(ValidationError)` tests for unknown keys elsewhere are untouched,
 because the screen only fires for `transport.auth`.
 
