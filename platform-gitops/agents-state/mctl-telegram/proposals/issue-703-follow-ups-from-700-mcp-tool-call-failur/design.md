@@ -335,11 +335,11 @@ assertion);
 
 4. **Close the SLO blind spot with the new alert alone, leaving the SLO input
    set byte-identical to pre-#696.** **ADOPTED in review (2026-10-01)** as the
-   design of record; the text below is the original rationale for dropping it. The lowest-risk option, and the fallback
-   if burn-rate noise appears. Dropped as the primary because the issue objects
-   to `panic`/`handler_error` *leaving the SLO*, and a fault the availability
-   SLO ignores is a fault the error budget says never happened. Reverting is
-   one line in `feedsSLO`.
+   design of record. Original rationale for dropping it, superseded:
+   ~~The lowest-risk option, and the fallback if burn-rate noise appears.
+   Dropped as the primary because the issue objects to `panic`/`handler_error`
+   *leaving the SLO*, and a fault the availability SLO ignores is a fault the
+   error budget says never happened. Reverting is one line in `feedsSLO`.~~
 
 ## Platform impact
 
