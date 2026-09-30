@@ -1,0 +1,150 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-usage-collector
+  annotations:
+    workflows.argoproj.io/description: |
+      Pulls reviewer-stage model-usage-records artifacts (claude-review.yml,
+      mctlhq/.github#126) into the mctl-api usage ledger (ADR-012,
+      mctlhq/mctl-agents#506).
+
+      Runs `python -m orchestrator.run_usage_collector` inside
+      ghcr.io/mctlhq/mctl-agents. Read-only against GitHub (gh api GET
+      only); the only write is a POST to mctl-api's confined usage-writer
+      endpoint. No gitops clone, no git push, no mutex.
+spec:
+  serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: mctl-agents
+      mctl.ai/team: admins
+  ttlStrategy:
+    secondsAfterCompletion: 259200
+  # A bounded HTTP sweep: SERVICES.length list calls plus a handful of
+  # artifact downloads. Generous margin over the realistic ceiling, not a
+  # measured floor.
+  activeDeadlineSeconds: 900
+  entrypoint: collect-usage
+  onExit: notify-telegram
+
+  arguments:
+    parameters:
+      - name: lookback_days
+        value: "3"
+        # The scheduled tick's default. Pass "90" for the one-shot backfill
+        # after un-suspending (step c below) — the ledger dedupes, so a
+        # widened window is a safe redundant read, never a double count.
+      - name: dry_run
+        value: "false"
+      - name: agent_image
+        value: ghcr.io/mctlhq/mctl-agents:1.61.0
+        # Bump alongside the other CWFTs' agent_image default; the registry's
+        # resolved image_ref overrides this once a caller pins per-run.
+
+  volumes:
+    - name: workdir
+      emptyDir:
+        sizeLimit: 256Mi
+
+  templates:
+    - name: collect-usage
+      container:
+        image: "{{workflow.parameters.agent_image}}"
+        imagePullPolicy: IfNotPresent
+        command: ["/entrypoint.sh"]
+        args:
+          - "sh"
+          - "-c"
+          - |
+            set -e
+            set -- python -m orchestrator.run_usage_collector \
+              --lookback-days "$WORKFLOW_LOOKBACK_DAYS"
+            if [ "$WORKFLOW_DRY_RUN" = "true" ]; then
+              set -- "$@" --dry-run
+            fi
+            printf '→'; printf ' %s' "$@"; printf '\n'
+            exec "$@"
+        env:
+          - name: WORKFLOW_LOOKBACK_DAYS
+            value: "{{workflow.parameters.lookback_days}}"
+          - name: WORKFLOW_DRY_RUN
+            value: "{{workflow.parameters.dry_run}}"
+          # Read-only against GitHub Actions artifacts. NOT optional: a
+          # missing secret should fail at pod-scheduling time, not as an
+          # opaque `gh` auth error mid-sweep.
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: github-token
+          # optional: true — matches every other CWFT wiring this secret
+          # (e.g. cwft-mctl-agents-implement.yaml). An unset writer token
+          # makes the collector log one warning, post nothing, and exit
+          # zero (see run_usage_collector.py's module docstring).
+          - name: MCTL_USAGE_WRITER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: usage-writer-token
+                optional: true
+          - name: MCTL_API_BASE_URL
+            value: https://api.mctl.ai
+        resources:
+          requests: { cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi }
+          limits:   { cpu: 500m, memory: 512Mi, ephemeral-storage: 512Mi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── Telegram notification (onExit) ──────────────────────────────────
+    # Same "quiet unless it did something worth flagging" policy as the
+    # reconcile CWFT: a routine Succeeded tick reports nothing, since
+    # near-zero artifacts is the expected state until step (d) lands.
+    - name: notify-telegram
+      script:
+        image: alpine:3.19
+        command: [sh]
+        env:
+          - name: TG_BOT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-bot-token
+                optional: true
+          - name: TG_CHAT_ID
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-chat-id
+                optional: true
+          - name: WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: WORKFLOW_DURATION
+            value: "{{workflow.duration}}"
+        source: |
+          set +e
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ]; then
+            echo "usage-collector succeeded; routine tick, skipping Telegram notify."
+            exit 0
+          fi
+          apk add --no-cache curl ca-certificates >/dev/null 2>&1
+          case "$WORKFLOW_STATUS" in
+            Failed) ICON="❌" ;;
+            Error)  ICON="⚠️" ;;
+            *)      ICON="⏳" ;;
+          esac
+          UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
+          TEXT="${ICON} mctl-agents: usage-collector — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
+              -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          else
+            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
+          fi
+          exit 0

@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mctl-agents-usage-collector
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Hourly trigger for the reviewer-usage collector
+      (mctlhq/mctl-agents#506). Workflow logic lives in ClusterWorkflowTemplate
+      mctl-agents-usage-collector. Suspended on first apply — see
+      docs/operations/usage-collector.md in mctl-agents for the
+      un-suspend + backfill checklist.
+spec:
+  # :21 — the family already owns :00 (token rotation), :03 (reconcile),
+  # :07 (issue-poll), :09 (shepherd), :11/:15 (incidents). The collector
+  # takes no gitops mutex and pushes nothing, so the offset is only about
+  # not bunching GitHub API calls with the rest of the platform in the same
+  # minute; it is not contending for a lock any of those hold.
+  schedule: "21 * * * *"
+  timezone: "UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 168
+  failedJobsHistoryLimit: 48
+  # Un-suspend only after: the Vault secret `usage-writer-token` exists at
+  # mctl-agents-secrets (optional: true above means the collector degrades
+  # gracefully without it, but a suspended-forever cron collects nothing),
+  # and a manual `--dry-run` one-shot has been sanity-checked against
+  # mctlhq/.github, the one repository already producing artifacts.
+  suspend: true
+  workflowSpec:
+    workflowTemplateRef:
+      name: mctl-agents-usage-collector
+      clusterScope: true
