@@ -31,7 +31,7 @@ four gaps and re-verifies the release gate and the operator daily digest.
 
 ## User stories
 
-- AS a broadcast operator I WANT one MCP tool that freezes the next weekly
+- **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** ~~AS a broadcast operator I WANT one MCP tool that freezes the next weekly
   digest for a category and returns a broadcast preview SO THAT I can review
   and approve one deduplicated message instead of hand-copying entry text.
 - AS a broadcast operator approving on the broadcast page I WANT to see which
@@ -98,7 +98,7 @@ four gaps and re-verifies the release gate and the operator daily digest.
 
 ### Freezing and preparing, operator present
 
-- WHEN a broadcast operator calls the new `prepare_product_update_digest` MCP
+- **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** The page action replaces it. ~~WHEN a broadcast operator calls the new `prepare_product_update_digest` MCP
   tool with a `category`, a `digest_id` and a `version` THE SYSTEM SHALL
   freeze and persist the digest with `productupdate.FreezeNextDigest`, render
   it, and call `broadcast.Service.Prepare` with the selector category set to
