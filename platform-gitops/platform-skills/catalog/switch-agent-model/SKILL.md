@@ -119,7 +119,10 @@ live selections were:
   model); swap the IDs, keep the tiers. Callers pin the workflow by SHA and
   Dependabot bumps the pins weekly, so callers pick the change up without an
   edit — except a caller that overrides an input (e.g. `projects-mcp`).
-- `mctl-academy`: `.github/workflows/content-replenish.yml` (`AUTHOR_MODEL`).
+- **Not in scope: `mctl-academy`.** Its content pipeline
+  (`content-replenish.yml`, `AUTHOR_MODEL` / `REVIEWER_MODEL`) chooses its own
+  models per provider (Anthropic or Nebius) and is not a platform agent; leave
+  it alone unless its owner asks.
 - `mctl-gitops`: `platform-gitops/bootstrap/files/usage-pricing/claude-firstparty.json`
   — **add** a price entry for the new model (append-only, never edit the old
   one) and bump `ROLLOUT_MARKER` in
@@ -134,8 +137,11 @@ and `orchestrator/run_implementer.py` in `mctl-agents` never need direct
 edits — they resolve their model via `os.getenv("<X>_MODEL",
 SERVICE_AGENT_MODEL)` fallback chains and inherit automatically once the
 `balanced` profile changes. The investigator is pinned separately by
-`ISSUE_INVESTIGATOR_MODEL` in `cwft-mctl-agents-investigate.yaml`; a Sonnet
-migration leaves that Opus pin alone.
+`ISSUE_INVESTIGATOR_MODEL` in `cwft-mctl-agents-investigate.yaml` (Opus);
+migrate it together with the other Opus selections — the reusable reviewer's
+`model-high` and `mctl-coolify-mcp`'s own
+`claude.yml` / `claude-code-review.yml`, which do not use the reusable
+reviewer.
 
 **Recorded data is not a model selection** and keeps the old ID: the old
 model's price-catalog entry (rows priced before the move resolve to it),
@@ -154,10 +160,18 @@ found (`grep -n "_MODEL=" .env`) and tell them what to change by hand.
 
 ## Verification
 
+Re-run the org-wide sweep on each repo's default branch after the PRs merge —
+not only the two agent repos, since live selections also sit in
+`mctlhq/.github`, `mctl-coolify-mcp`, `projects-mcp` and `mctl-gitops`
+(`mctl-academy` hits are expected and out of scope, see above):
+
 ```bash
-grep -rn "<old-model-id-patterns>" mctl-agent mctl-agents \
-  --include="*.go" --include="*.py" --include="*.yml" --include="*.yaml" --include="*.example"
+gh search code "<old-model-id>" --owner mctlhq --json repository,path \
+  --jq '.[] | "\(.repository.name) \(.path)"' | sort -u
 ```
+`gh search code` matches tokens, so `claude-sonnet-5` also hits files that
+only contain `claude-sonnet-5-5`; confirm each hit with a local
+`git grep -nE "<old-id>([^-.0-9]|$)" origin/main` in that repo.
 Every match must show the new model ID, with two admissible exceptions: a file
 listed in the carve-out section above, and recorded data as defined under
 "Repos and files covered". A hit that is dead code but *not* yet

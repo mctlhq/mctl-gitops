@@ -48,7 +48,7 @@ spec:
     # checks this name against a real os.getenv() call in the driver.
     legacyEnvOverride: ISSUE_INVESTIGATOR_MODEL
     # And it IS set: cwft-mctl-agents-investigate.yaml pins
-    # ISSUE_INVESTIGATOR_MODEL=claude-opus-5, so the `task` above describes the
+    # ISSUE_INVESTIGATOR_MODEL=claude-opus-5-5, so the `task` above describes the
     # fallback this agent no longer takes, not the model it runs on. Recorded
     # here because a reader who trusts `task: service_agent` alone would
     # conclude claude-sonnet-5-5, which is what the implementer runs, not this

@@ -33,9 +33,10 @@ spec:
             # the pod restarts (mctlhq/mctl-api#387); the chart has no pod
             # annotation hook, so changing this value is how gitops restarts
             # the pod. Last bumped 2026-09-30: load the usage price card
-            # with the claude-sonnet-5-5 entry (the catalog is read once at
-            # startup, see bootstrap/files/usage-pricing/README.md).
-            ROLLOUT_MARKER: "2026-09-30-pricing-sonnet-5-5"
+            # with the claude-opus-5-5 and claude-sonnet-5-5 entries (the
+            # catalog is read once at startup, see
+            # bootstrap/files/usage-pricing/README.md).
+            ROLLOUT_MARKER: "2026-09-30-pricing-5-5-models"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
