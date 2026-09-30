@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-30T02:08:23Z'
+status: review-stuck
+updated_at: '2026-09-30T02:24:04Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-a837f1f7ea2236ac
@@ -31,13 +31,15 @@ github:
   state: open
   head_sha: cbdd62879b9472822376c482498e4b4d6aca0cfc
   observed_at: '2026-09-30T00:34:47Z'
-refusals: 2
+refusals: 3
 refusals_head: cbdd62879b9472822376c482498e4b4d6aca0cfc
-notes: 'implementer declined to act: The given finding text ''[P1] Claude finished
-  @mctl-agents[bot]''s task in 1m 6s -- [View job](https://github.com/mctlhq/mctl-api/actions/runs/36647259337)''
-  is only the truncated header of a PR issue comment, not a description of a defect.
-  I fetched the full comment via `gh pr view 424 --repo mctlhq/mctl-api --json comments`
-  and it reads in full: ''Review complete - Verdict: Approve - no P1/P2 findings''
-  with an itemized analysis of the diff (helm/templates/deployment.yaml, helm/values.yaml,
-  helm/render_test.go) concluding ''P1: 0 - P2: 0 - P3: 0''. I also checked `gh pr
-  view 424 --json reviews`, wh'
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: The P1 finding text handed to me was only
+  the auto-generated header line of PR #424 comment IC_kwDORfnDZc8AAAABX73-GQ (''Claude
+  finished @mctl-agents[bot]''s task in 1m 6s''). The full comment body, retrieved
+  via gh pr view --json comments, states ''Verdict: Approve'' with no P1/P2 findings,
+  gives a detailed analysis of the helm template diff, and ends ''P1: 0 . P2: 0 .
+  P3: 0''. This is corroborated by the formal PR review (gh api repos/mctlhq/mctl-api/pulls/424/reviews:
+  state APPROVED, body ''No P1/P2 findings (0 P3). Good to merge.''), by a second
+  automated reviewer (Antigravity/agy: ''No significant'
