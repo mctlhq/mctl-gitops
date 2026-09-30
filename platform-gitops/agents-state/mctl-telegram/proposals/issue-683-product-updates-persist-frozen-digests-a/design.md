@@ -194,7 +194,7 @@ by an older binary, it is already tested
 (`internal/db/product_updates_test.go`), and its `source_digest_id IS NULL`
 guard means it can never contradict an atomic write.
 
-### 4. The operator entry point
+### 4. The operator entry point: WITHDRAWN, replaced by "Correction 2026-09-30" at the end (broadcasts page action, no MCP tool)
 
 New `internal/mcp/productupdate_tools.go`, tool
 `prepare_product_update_digest`, registered in the list at
