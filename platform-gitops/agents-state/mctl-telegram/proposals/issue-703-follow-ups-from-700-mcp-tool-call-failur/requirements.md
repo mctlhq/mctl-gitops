@@ -32,15 +32,25 @@ rather than fourteen drive-by edits.
 - AS an on-call engineer I WANT a handler panic or a returned handler error to
   either burn the availability error budget or fire its own alert SO THAT a
   server-fault failure mode cannot run silently in production.
+
+  > **AMENDED (human review, 2026-10-01):** satisfied by the dedicated alert only. The availability
+  > SLO input set is not widened in #703; see the amended acceptance criteria
+  > under Recording semantics.
 - AS an operator auditing a user I WANT the audit row of a completed
   destructive action (`send_message:sent`) to survive a later response-encoding
   failure SO THAT the audit log never denies that a message was actually sent.
 - AS a platform operator I WANT `mctl_tool_call_errors_total`'s label
   cardinality to be bounded by an allowlist of registered tool names SO THAT a
   hostile or broken client cannot grow the Prometheus series set.
-- AS a maintainer I WANT `Store.LogToolCall` to take a params struct instead of
+- ~~AS a maintainer I WANT `Store.LogToolCall` to take a params struct instead of
   six consecutive bare strings SO THAT a call site cannot silently transpose
-  `status` and `errMsg`.
+  `status` and `errMsg`.~~
+
+  > **WITHDRAWN (human review, 2026-10-01):** moved to mctlhq/mctl-telegram#716. The real
+  > blast radius is 33 lines across 12 non-test files, most in the OAuth /
+  > connect / Local Bridge flows, not the ~4 sites this proposal assumed. A
+  > signature change of that size must not ride along with reason-recording
+  > changes.
 - AS an on-call engineer reading `docs/runbook.md` I WANT the deliberate
   disagreement between `mctl_tool_call_errors_total` and the SLO metric pair
   stated explicitly, together with the audit row volume Rule 2 creates, SO THAT
@@ -88,19 +98,30 @@ rather than fourteen drive-by edits.
 - WHILE any record was synthesized by `flushRecordedCall` rather than staged by
   `Server.audit`, THE SYSTEM SHALL mark it as synthesized — Rule 2 and Rule 3
   alike — so the field's invariant holds for every synthesized record.
-- WHEN a synthesized record carries a server-fault reason (`panic`,
+- ~~WHEN a synthesized record carries a server-fault reason (`panic`,
   `handler_error`, `store_error`, `encode_failed`), THE SYSTEM SHALL feed
   `ToolInvocationsTotal` / `ToolInvocationDuration` for it; WHEN it carries a
-  client-fault reason (`auth_required`, `scope_denied`, `invalid_argument`,
-  `mode_unsupported`, `refused`, `rate_limited`, `not_found`,
-  `confirmation_rejected`, `media_capacity`, `unknown`), THE SYSTEM SHALL keep
-  it out of that pair.
+  client-fault reason (...), THE SYSTEM SHALL keep it out of that pair.~~
+
+  > **AMENDED (human review, 2026-10-01):** the availability SLO input set stays what it was
+  > before #696. WHILE a record is synthesized by `flushRecordedCall` (Rule 1
+  > append, Rule 2, Rule 3), THE SYSTEM SHALL NOT feed
+  > `ToolInvocationsTotal` / `ToolInvocationDuration` for it, whatever its
+  > reason (`feedsSLO() = !synthesized`). Records staged by `Server.audit` feed
+  > the pair exactly as today. Changing what burns the production error budget
+  > is a separate, deliberate decision and is out of scope for #703.
 - WHILE a synthesized record has `status == "ok"` (Rule 3), THE SYSTEM SHALL
   keep it out of the SLO metric pair, so an unaudited success cannot dilute the
   availability denominator.
 - WHEN `mctl_tool_call_errors_total{reason=~"panic|handler_error"}` is
   non-zero over a 15-minute window, THE SYSTEM SHALL fire a dedicated alert
   whose `runbook_url` resolves to an existing anchor in `docs/runbook.md`.
+
+  > **AMENDED (human review, 2026-10-01):** the alert covers `panic|handler_error` only.
+  > `store_error` and `encode_failed` stay observable through
+  > `mctl_tool_call_errors_total{reason}` but are deliberately NOT part of this
+  > alert, and THE SYSTEM's runbook SHALL say so. Alerting on them is a separate
+  > decision, not a silent widening of this rule.
 - WHEN `Server.jsonrpcHooks` sets the `tool` label on
   `ToolCallErrorsTotal`, THE SYSTEM SHALL emit the verbatim name only if it is
   in the set of tool names the server actually registered, and SHALL emit the
@@ -111,10 +132,12 @@ rather than fourteen drive-by edits.
 
 ### API, docs and tests
 
-- WHEN a caller writes an audit row, THE SYSTEM SHALL accept a single
+- ~~WHEN a caller writes an audit row, THE SYSTEM SHALL accept a single
   `db.ToolCall` params struct instead of six consecutive bare `string`
-  parameters, and every in-repo call site (`internal/mcp`, `internal/agentapi`,
-  and the `internal/db` tests) shall be migrated.
+  parameters, and every in-repo call site shall be migrated.~~
+
+  > **WITHDRAWN (human review, 2026-10-01):** moved to mctlhq/mctl-telegram#716.
+  > `Store.LogToolCall`'s signature is unchanged by #703.
 - WHILE `docs/runbook.md` documents the tool-call error breakdown, THE SYSTEM
   SHALL state that `mctl_tool_call_errors_total` and the
   `mctl_tool_invocations_total` SLO pair deliberately disagree, and why.
@@ -124,8 +147,9 @@ rather than fourteen drive-by edits.
   rows/hour/identity), and that each such write serializes on that user's chain
   lock (`SELECT … FOR UPDATE` on Postgres, `BEGIN IMMEDIATE` on SQLite).
 - WHEN `internal/mcp/record_test.go` explains why a Rule 2 record does not feed
-  the SLO pair, THE SYSTEM SHALL name the actual mechanism (the synthesized /
-  server-fault predicate) rather than a missing elapsed duration, and the
+  the SLO pair, THE SYSTEM SHALL name the actual mechanism (**AMENDED:** the
+  `synthesized` flag; there is no server-fault predicate) rather than a missing
+  elapsed duration, and the
   `histogramSampleCount` helper's doc line shall describe
   `mctl_tool_invocation_duration_seconds`'s real single `tool` label.
 
@@ -145,6 +169,8 @@ rather than fourteen drive-by edits.
   about `increase()` stays as written.
 - Any migration of existing `audit_logs` rows. Rows written before this change
   keep the reason they were written with.
+- (Added in review.) Changing which records burn the availability error budget,
+  and the `Store.LogToolCall` params-struct refactor (mctlhq/mctl-telegram#716).
 
 ## Open questions
 
@@ -158,13 +184,16 @@ rather than fourteen drive-by edits.
   out of `mtprotoErrResult` as `nil`, reach `toolErr("%s: %v", tool, err)`, and
   classify as `unknown`. Resolved by hinting `telegram_error` at the
   `borrowErrResult` source rather than by enumerating more texts.
-- Whether server-fault reasons should re-enter the availability SLO (chosen
-  here) or whether the SLO input set should stay byte-identical to pre-#696 and
-  the gap be closed by the new alert alone. Both halves of the issue's
-  complaint are addressed by the chosen option; the alert-only variant is
-  recorded in `design.md` under Alternatives and is a one-line revert of the
-  predicate if burn-rate noise appears.
+- Whether server-fault reasons should re-enter the availability SLO or whether
+  the SLO input set should stay byte-identical to pre-#696 and the gap be
+  closed by the new alert alone. **RESOLVED in review (2026-10-01): alert
+  only; the SLO input set stays pre-#696 (`feedsSLO() = !synthesized`), and no
+  reason-based predicate exists to revert.** Server faults are surfaced by the
+  `MctlToolHandlerFaults` alert and `mctl_tool_call_errors_total`. Letting them
+  burn the error budget would be a separate, deliberate change.
 - Whether `telegram_error` / `bridge_error` count as server faults for SLO
-  purposes. Treated as **not** server faults here (they are upstream/remote
+  purposes. **Moot after the review amendment:** no synthesized record feeds the
+  SLO, whatever its reason; staged records keep today's treatment. Original
+  answer, kept for the record: Treated as **not** server faults here (they are upstream/remote
   faults, and pre-#696 they already reached the SLO through `Server.audit`
   staging, so their SLO treatment is unchanged either way).

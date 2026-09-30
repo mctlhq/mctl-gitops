@@ -65,7 +65,15 @@ API/docs/tests slice.
   two-row expectation and renamed to match what it now pins; Rule 5 still
   increments exactly one `ToolCallErrorsTotal` sample.
 
-- [ ] 7. `exemptFromSLO` → `synthesized` + `feedsSLO` (depends on 6): rename the
+- [ ] 7. **AMENDED (human review, 2026-10-01):** rename `exemptFromSLO` →
+  `synthesized` and set it on every record `flushRecordedCall` creates (Rule 1
+  append, Rule 2, Rule 3); gate `writeAuditRow`'s SLO samples on
+  `feedsSLO() = !r.synthesized`. Do NOT add `serverFaultReason`. — DoD:
+  scope-denied, a panicking handler, a handler_error and a Rule 3 success
+  each contribute 0 to both SLO series; a record staged by `Server.audit`
+  contributes exactly as today; `grep -rn exemptFromSLO` and
+  `grep -rn serverFaultReason` return nothing.
+  Original task, superseded: ~~`exemptFromSLO` → `synthesized` + `feedsSLO` (depends on 6): rename the
   `callRecord` field, set it on every record `flushRecordedCall` creates (Rule
   1's append, Rule 2, Rule 3), add `serverFaultReason` (`panic`,
   `handler_error`, `store_error`, `encode_failed`) next to the `Reason*` block,
@@ -73,7 +81,7 @@ API/docs/tests slice.
   samples on `rec.feedsSLO()`. — DoD: scope-denied (Rule 2, client fault) still
   contributes 0 to both SLO series; a panicking handler contributes 1 to
   `ToolInvocationsTotal{tool,"error"}` and one duration sample; a Rule 3
-  success contributes 0; `grep -rn exemptFromSLO` returns nothing.
+  success contributes 0; `grep -rn exemptFromSLO` returns nothing.~~
 
 - [ ] 8. `labelTool` allowlist (independent of 1-7): thread an
   `atomic.Pointer[map[string]struct{}]` from `newMCPServer` into
@@ -84,7 +92,9 @@ API/docs/tests slice.
   labels `unregistered`; a registered tool name still labels verbatim; the
   `mcp jsonrpc error` slog line still carries the verbatim name.
 
-- [ ] 9. `db.ToolCall` params struct (independent): introduce the struct in
+- [ ] 9. **WITHDRAWN (human review, 2026-10-01) → mctlhq/mctl-telegram#716.**
+  Do not change `Store.LogToolCall`'s signature in this PR.
+  Original task, not to be implemented: ~~`db.ToolCall` params struct (independent): introduce the struct in
   `internal/db/store.go`, change `Store.LogToolCall` to
   `(ctx, ToolCall)`, and migrate every call site —
   `internal/mcp/tools.go:2403`, `internal/agentapi/json.go:75`,
@@ -93,13 +103,16 @@ API/docs/tests slice.
   `identity_migration_test.go`, `store_audit_test.go`). — DoD: `go build
   ./... && go test ./...` clean; no positional-string overload left behind; the
   doc comment block above `LogToolCall` is preserved verbatim apart from the
-  parameter description.
+  parameter description.~~
 
 - [ ] 10. `MctlToolHandlerFaults` alert (depends on 7): add the rule to the
   `mctl-telegram-tool-availability` group in
   `deploy/alerts/mctl-telegram.rules.yaml`, a silence/firing pair in
   `deploy/alerts/mctl-telegram.rules_test.yaml`, and the runbook section with
-  an explicit `<a id="mctltoolhandlerfaults"></a>` anchor. — DoD:
+  an explicit `<a id="mctltoolhandlerfaults"></a>` anchor. **AMENDED:** the
+  expression stays `reason=~"panic|handler_error"`; the runbook section states
+  that `store_error` and `encode_failed` are observable in
+  `mctl_tool_call_errors_total` but not alerted by this rule. — DoD:
   `go test ./deploy/alerts/...` passes (`TestRunbookURLsResolve` resolves the
   new anchor) and the promtool job in `.github/workflows/build.yml` passes both
   the silence and the firing case.
@@ -109,13 +122,19 @@ API/docs/tests slice.
   "why the two families deliberately disagree" paragraph, (b) the Rule 2 row
   volume + chain-lock paragraph naming `RATE_LIMIT_PER_USER` (default 30/min →
   ≤1800 rows/hour/identity) and `AUDIT_RETENTION_DAYS`, and (c) update the
-  reason list if any reason's meaning changed. — DoD: section reads correctly
+  reason list if any reason's meaning changed. **AMENDED:** (a) must state
+  that synthesized records (every Rule 1 append, Rule 2 and Rule 3 record)
+  never feed the SLO pair, so server faults are visible in the error counter
+  and the `MctlToolHandlerFaults` alert, not in the availability SLO. It must
+  also state, next to the alert description from task 10, that `store_error`
+  and `encode_failed` are observable in `mctl_tool_call_errors_total` but are
+  not alerted. — DoD: section reads correctly
   against the shipped rule file; `internal/mcp/troubleshooting_doc_test.go` and
   `deploy/alerts/runbook_links_test.go` pass.
 
 - [ ] 12. Test-comment corrections (depends on 7): rewrite the comment at
-  `internal/mcp/record_test.go:155-166` to name `synthesized` /
-  `serverFaultReason` instead of a missing elapsed duration, and fix
+  `internal/mcp/record_test.go:155-166` to name `synthesized`
+  (**AMENDED:** not `serverFaultReason`, which is not added) instead of a missing elapsed duration, and fix
   `histogramSampleCount`'s doc line to describe the single `tool` label on
   `mctl_tool_invocation_duration_seconds`. — DoD: comments match the code they
   sit above; no behavioural change in the diff for this task.
@@ -139,19 +158,22 @@ API/docs/tests slice.
 - [ ] T7. `TestRecordToolCall_LocalRefusalIsNotBridgeError` —
   `fetch_media=true` on a `local` account: `reason=mode_unsupported`,
   `call_path="local"`.
-- [ ] T8. `TestFeedsSLO_ServerFaultCountsClientFaultDoesNot` — panic and
-  handler_error each contribute one `ToolInvocationsTotal{_,error}` sample and
-  one duration sample; scope_denied, invalid_argument and a Rule 3 success
-  contribute zero.
+- [ ] T8. **AMENDED:** `TestFeedsSLO_SynthesizedNeverFeedsSLO` — panic,
+  handler_error, scope_denied, invalid_argument and a Rule 3 success each
+  contribute zero `ToolInvocationsTotal` samples and zero duration samples; a
+  record staged by `Server.audit` still contributes one. Mutation-check: making
+  `feedsSLO` return true for a panic must fail the test.
+  Original, superseded: ~~`TestFeedsSLO_ServerFaultCountsClientFaultDoesNot` — panic and
+  handler_error each contribute one sample; client faults and Rule 3 contribute zero.~~
 - [ ] T9. `TestJSONRPCHook_WrappedErrorKeepsCode` — a wrapped `requestError`
   logs a non-zero `jsonrpc_code`.
 - [ ] T10. `TestJSONRPCHook_UnregisteredLabelIsAllowlisted` — a
   `capability_disabled` rejection with an arbitrary client-supplied name labels
   `unregistered`; a registered name labels verbatim; the filtered-out case
   (`ToolFilter: "read-only"` on a write tool) also labels `unregistered`.
-- [ ] T11. `go test ./internal/db/...` after the `ToolCall` migration —
+- [ ] T11. **WITHDRAWN → #716.** ~~`go test ./internal/db/...` after the `ToolCall` migration —
   `TestLogToolCall_ReasonIsExcludedFromTheHash` and the chain tests pass
-  unchanged, proving the struct move is shape-only.
+  unchanged, proving the struct move is shape-only.~~
 - [ ] T12. `go test ./deploy/alerts/...` plus the promtool unit test for
   `MctlToolHandlerFaults` (silence and firing).
 - [ ] T13. Snapshot guard: `docs/tool-descriptors.json` and
@@ -168,10 +190,11 @@ sample sources simply stop.
 
 Partial rollbacks, in increasing order of preference:
 
-1. **SLO noise only** (fast-burn/slow-burn firing more than expected after
-   deploy): change `feedsSLO` back to `return !r.synthesized`. One line; keeps
+1. **AMENDED: not applicable.** `feedsSLO` already is `!r.synthesized`, so the
+   SLO input set does not change and there is no SLO-noise rollback. Original:
+   ~~**SLO noise only**: change `feedsSLO` back to `return !r.synthesized`. One line; keeps
    every classification fix and the new `MctlToolHandlerFaults` alert, which
-   then carries the handler-fault signal alone (design.md Alternative 4).
+   then carries the handler-fault signal alone (design.md Alternative 4).~~
 2. **Alert too noisy:** raise `for:` on `MctlToolHandlerFaults` or drop the rule
    from `deploy/alerts/mctl-telegram.rules.yaml`; the runbook anchor may stay,
    and `runbook_links_test.go` only checks the alert → runbook direction.
