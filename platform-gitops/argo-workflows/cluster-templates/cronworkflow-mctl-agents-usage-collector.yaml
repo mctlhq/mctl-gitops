@@ -7,7 +7,8 @@ metadata:
     workflows.argoproj.io/description: |
       Hourly trigger for the reviewer-usage collector
       (mctlhq/mctl-agents#506). Workflow logic lives in ClusterWorkflowTemplate
-      mctl-agents-usage-collector. Suspended on first apply — see
+      mctl-agents-usage-collector. Suspended on first apply, un-suspended
+      2026-09-30 — see
       docs/operations/usage-collector.md in mctl-agents for the
       un-suspend + backfill checklist.
 spec:
@@ -27,7 +28,11 @@ spec:
   # gracefully without it, but a suspended-forever cron collects nothing),
   # and a manual `--dry-run` one-shot has been sanity-checked against
   # mctlhq/.github, the one repository already producing artifacts.
-  suspend: true
+  # Un-suspended 2026-09-30 after a clean dry-run one-shot
+  # (mctl-agents-usage-collector-dryrun-lmmnd: 16 repositories, 25 artifacts
+  # found and read, 0 skipped, 0 failures) against the existing
+  # mctl-agents-secrets github-token path.
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-usage-collector
