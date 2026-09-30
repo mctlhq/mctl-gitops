@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-30T00:34:45Z'
+status: merged
+updated_at: '2026-09-30T07:49:44Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-37b00e9d27957569
@@ -31,13 +31,13 @@ ci_blockers_head: 0af2306e3db1f917572d0ec5af113cd2acde2fc4
 ci_blockers:
 - validate / lint
 - validate / test
-review_attempts: 1
-harness_failures: 3
 notes: The platform lost the implementer's work 3 time(s) in a row (implementer follow-up
   exited non-zero (46) for mctl-api/issue-409-feat-evidence-persist-and-retrieve-seale).
   This is a harness defect, not a problem with the proposal — review_attempts was
   never charged. Human triage required; see mctl-agents#366.
 github:
-  state: open
-  head_sha: 0af2306e3db1f917572d0ec5af113cd2acde2fc4
-  observed_at: '2026-09-30T00:34:45Z'
+  state: merged
+  head_sha: 94bfb0903421cdeefc8393ac2c6b28319ce92411
+  observed_at: '2026-09-30T07:49:44Z'
+merged_at: '2026-09-30T07:49:44Z'
+merge_commit: c5bc7f388a5399a9bc2035d62d05d6eba52f2827

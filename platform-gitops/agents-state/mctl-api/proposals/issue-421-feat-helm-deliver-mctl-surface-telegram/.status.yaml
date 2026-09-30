@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-09-30T02:24:04Z'
+status: merged
+updated_at: '2026-09-30T07:49:46Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-a837f1f7ea2236ac
@@ -28,11 +28,9 @@ attempt:
   finished_at: '2026-09-29T23:49:59Z'
 pr: https://github.com/mctlhq/mctl-api/pull/424
 github:
-  state: open
+  state: merged
   head_sha: cbdd62879b9472822376c482498e4b4d6aca0cfc
-  observed_at: '2026-09-30T00:34:47Z'
-refusals: 3
-refusals_head: cbdd62879b9472822376c482498e4b4d6aca0cfc
+  observed_at: '2026-09-30T07:49:46Z'
 notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
   was never charged — the proposal is not at fault; a human must reconcile the review
   with the operator decision. Last reason: The P1 finding text handed to me was only
@@ -43,3 +41,5 @@ notes: 'The implementer declined to act 3 time(s) and the findings still stand. 
   P3: 0''. This is corroborated by the formal PR review (gh api repos/mctlhq/mctl-api/pulls/424/reviews:
   state APPROVED, body ''No P1/P2 findings (0 P3). Good to merge.''), by a second
   automated reviewer (Antigravity/agy: ''No significant'
+merged_at: '2026-09-30T07:49:46Z'
+merge_commit: d9414f269f3218fcfc5fde42d82fd213bdb749da
