@@ -78,6 +78,30 @@ grep -rln "<import path>" <repo> --include="*.go"
 If that ever comes back non-empty, the file is no longer dead — drop it from
 this list and edit it like any other live file.
 
+## Engine first — the Claude Code CLI moves with the model
+
+A new model is gated by a minimum Claude Code CLI version. An older CLI fails
+every call with `API Error: 400 Claude Code <ver> does not support this model;
+version <min> or newer is required` (the 5.5 models need 2.1.280+). A model
+migration is therefore always model ID **plus** engine:
+
+- `mctl-agents`: `claude-agent-sdk==X` in `pyproject.toml` + `uv lock
+  --upgrade-package claude-agent-sdk`. The wheel bundles the CLI; check
+  `claude_agent_sdk/_cli_version.py` in the installed package. Read the SDK
+  CHANGELOG between the two versions for breaking changes.
+- `claude-code-action` pins — `mctlhq/.github` `claude-review.yml` (both
+  steps) and `mctl-agents` `diagrams-refresh.yml`: `@<sha> # vX (CLI Y)`.
+  The action's `action.yml` declares `CLAUDE_CODE_VERSION`; resolve the sha
+  with `gh api repos/anthropics/claude-code-action/commits/<tag> --jq .sha`.
+- `mctl-coolify-mcp` uses `@v1` (floating) and follows automatically.
+- `mctl-agent` calls the API directly (anthropic-sdk-go) — no CLI gate.
+
+Take the latest SDK and action releases. Rollout order: engine live first
+(mctl-agents release, then its image-tag bump in mctl-gitops), then any gitops
+env pin that selects the new model. The shared reviewer bumps engine and
+defaults in the same PR, which is safe because its own run on that PR
+exercises both.
+
 ## Tiering removal — CI review bot
 
 Both repos' `.github/workflows/claude-review.yml` had a "Classify PR
@@ -130,7 +154,8 @@ live selections were:
   included — needs a patch `spec.version` bump plus a re-pinned binding in
   `agent-platform/releases/shadow/<agent>.yaml` (new `bindingRevision`, the
   old one pushed onto `history`), or `validate-profile-version-bumps.py`
-  fails. Worked example: the 1.5.0 -> 1.5.1 bump in mctl-gitops#1476.
+  fails. Worked example: issue-investigator-default 1.4.0 -> 1.5.0 with
+  binding revision 11 -> 12 (mctl-gitops 14d4bd59).
 - **Not in scope: `mctl-academy`.** Its content pipeline
   (`content-replenish.yml`, `AUTHOR_MODEL` / `REVIEWER_MODEL`) chooses its own
   models per provider (Anthropic or Nebius) and is not a platform agent; leave
@@ -140,6 +165,10 @@ live selections were:
   one) and bump `ROLLOUT_MARKER` in
   `bootstrap/templates/mctl-platform/mctl-api.yaml`, or every usage record on
   the new model is stored unpriced. Merge this one before the agents move.
+  `ISSUE_INVESTIGATOR_MODEL` in `cwft-mctl-agents-investigate.yaml` is NOT
+  part of that PR: it takes effect on the next workflow run, with whatever
+  mctl-agents image is deployed, so it moves only after the engine bump below
+  is live (see "Engine first").
   CWFT comments that name the resolved model
   (`cwft-mctl-agents-investigate.yaml`, `cwft-mctl-agents-run.yaml`,
   `execution-profiles/issue-investigator-default/profile.yaml`) follow — the profile only with the version bump described above.

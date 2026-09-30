@@ -44,13 +44,10 @@ spec:
     profileCompatibility: ">=1.0.0 <2.0.0"
   profile:
     name: issue-investigator-default
-    version: "1.5.1"
-  bindingRevision: 13
-  previousBindingRevision: 12
+    version: "1.5.0"
+  bindingRevision: 12
+  previousBindingRevision: 11
   history:
-    - bindingRevision: 12
-      definition: {name: issue-investigator, version: "1"}
-      profile: {name: issue-investigator-default, version: "1.5.0"}
     - bindingRevision: 11
       definition: {name: issue-investigator, version: "1"}
       profile: {name: issue-investigator-default, version: "1.4.0"}
