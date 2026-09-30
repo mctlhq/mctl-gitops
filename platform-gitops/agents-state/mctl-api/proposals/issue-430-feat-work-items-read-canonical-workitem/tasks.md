@@ -63,7 +63,9 @@
       limit}` plus 400/404; a new `/api/v1/work-items/{id}/intents/{intent_id}`
       path with `get`, 200 `{schema_version, intent}` and a 404 documenting
       both `work_item_not_found` and `intent_not_found`; a new `WorkItemIntent`
-      component schema referenced by both; the "Surface Identity" tag
+      component schema referenced by both (and by the existing POST
+      response), including a required boolean `text_redacted` with its
+      meaning described; the "Surface Identity" tag
       description's relay-route list extended with the two GETs.
 
 - [ ] 8. Document both routes in `docs/work-context-contract.md` (depends on 5,
@@ -75,7 +77,9 @@
       (mctl-api#350)" extended; the `WorkItemIntent` bullet in "Resource model"
       states that intents are readable by whoever can see the item and remain
       provenance and input, never authorization or approval state; a note that
-      a retention-swept intent reads back with `text` empty.
+      a retention-swept intent reads back with `text` empty and
+      `text_redacted: true`, and that consumers must treat it as "text not
+      observable", not as an empty intent.
 
 - [ ] 9. Run the full local gate (depends on 1-8) — DoD: `go fmt ./...`,
       `go vet ./...`, `golangci-lint run` and `go test ./...` clean; with
@@ -99,7 +103,10 @@
       non-numeric id such as `"abc"` (no Postgres cast error).
 - [ ] T5. Store: an intent whose `text` was set to NULL (simulating the
       retention sweep with a direct `UPDATE work_item_intents SET text=NULL`)
-      is returned by both `Intents` and `Intent` with `Text == ""`.
+      is returned by both `Intents` and `Intent` with `Text == ""` and
+      `TextRedacted == true`; an intent with text has `TextRedacted == false`,
+      and so does one appended with an empty string (if the POST allows it).
+      Mutation check: dropping the flag makes this test fail.
 - [ ] T6. Store: `limit <= 0` yields 50 rows at most and `limit > 100` is
       clamped to 100, with `IntentPage.Limit` reporting the effective value.
 - [ ] T7. `internal/api/handlers_work_items_test.go`: extend `workItemsRouter`

@@ -22,7 +22,13 @@ Storage exists; the read path does not.
 - Type. `workitems.Intent` (`internal/workitems/types.go:213`) already has the
   exact JSON shape the issue asks for: `id`, `work_item_id`,
   `actor_principal`, `surface,omitempty`, `text`, `params,omitempty`,
-  `created_at`. `SchemaVersion` is `workitem/v1`.
+  `created_at`. `SchemaVersion` is `workitem/v1`. This change adds one field
+  to that shared struct, `TextRedacted bool` with tag `json:"text_redacted"`
+  (no `omitempty`, so `false` is always explicit). It is set in `getIntent`
+  and in the new list scan from whether the `text` column was NULL. Because the
+  struct is shared, `AppendIntent`'s POST response `{schema_version, intent}`
+  gains the field too, always `false` there, since a freshly appended intent
+  has not been swept. The change is additive, and no existing consumer reads it.
 - HTTP write. `Handlers.AppendWorkItemIntent`
   (`internal/api/handlers_work_items.go:509`) → `visibleWorkItem` →
   `mutationFor` → `AppendIntent`, answering
@@ -111,7 +117,11 @@ func (s *Store) Intent(ctx context.Context, itemID, id string) (*Intent, error)
   no new index.
 - `text` is scanned into `*string` and flattened to `""` when NULL, exactly as
   `getIntent` and `AppendIntent` already do, so a retention-swept row still
-  reads. `created_at` is normalized with `.UTC()`, as everywhere else.
+  reads. The read also sets a new response field `text_redacted` (true exactly
+  when the column was NULL). The field is additive, and existing `Intent` JSON
+  consumers ignore it. Without it, a swept row and a genuinely empty text are
+  indistinguishable, which is the "could not observe" vs. "observed absent"
+  confusion AGENTS.md forbids. `created_at` is normalized with `.UTC()`, as everywhere else.
 - `Intents` returns an empty, non-nil slice for an unknown item — the same
   contract `Events` documents ("An unknown id answers an empty list, not
   ErrNotFound, so the caller Gets the item first"). The handler has already
@@ -180,8 +190,10 @@ an item the caller cannot see, and service-principal access via the existing
   `schema_version`, `intents`, `truncated`, `limit`; add a new
   `/api/v1/work-items/{id}/intents/{intent_id}` path with `get`. Introduce a
   `WorkItemIntent` component schema (`id`, `work_item_id`, `actor_principal`,
-  `surface`, `text`, `params`, `created_at`) so both responses reference one
-  definition. Extend the "Surface Identity" tag description's relay-route list
+  `surface`, `text`, `params`, `created_at`, `text_redacted` — boolean,
+  required, "true when retention removed the text; `text` is then empty and
+  must not be read as the intent's content") so both responses, and the
+  existing POST response, reference one definition. Extend the "Surface Identity" tag description's relay-route list
   with the two GETs.
 - `docs/work-context-contract.md`: add the two routes to the REST surface table
   (line ~380), append them to the relay-route sentence in "Surface relay
@@ -263,7 +275,7 @@ an item the caller cannot see, and service-principal access via the existing
   intent; only `slog.Error("work-items store error", ...)` on a store failure,
   which carries no row content.
 - **Retention interaction.** A swept intent (`text` NULL) is returned as
-  `text: ""` rather than erroring, so a caller assembling context from an old
+  `text: ""` with `text_redacted: true` rather than erroring, so a caller assembling context from an old
   item degrades instead of failing; the row's provenance (`actor_principal`,
   `surface`, `created_at`) survives.
 - **Operational note.** With no store configured (`WORK_ITEMS_DB_URL` and
