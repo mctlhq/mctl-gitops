@@ -93,7 +93,8 @@
 
 - [ ] T1. `tests/test_run_issue_investigator.py`: a dispatched resume (`work_item_id`,
   store `we_` `execution_id`, `resume_from_execution_id`, `execution_request_id`) onto a
-  proposal whose `.status.yaml` is `merged`, with `ISSUE_INVESTIGATOR_CONTEXT_MODE=shadow`,
+  proposal whose `.status.yaml` is **each of `accepted`, `implemented` and `merged`**
+  (parametrized), with `ISSUE_INVESTIGATOR_CONTEXT_MODE=shadow`,
   seals a snapshot and returns `context_only=True`, `outcome_code="succeeded"`,
   `outcome_reason="proposal-terminal"`.
 - [ ] T2. The same run leaves the proposal directory byte-identical: hash every file (and
@@ -149,3 +150,54 @@ Nothing written by this change is persistent state that needs undoing: a context
 seals a `ContextSnapshot` in mctl-api and writes nothing to gitops, and an extra sealed
 snapshot is additive, immutable and already handled by `snapshots.persist`'s
 replay/divergence classification. No migration to reverse.
+
+## Correction 2026-09-30: WorkItem intents as a source (owner option 1)
+
+- [ ] 12. Add `"work-item-intent"` to `SOURCE_KINDS` in `orchestrator/context_snapshot.py`
+  (additive, with a comment naming #542 and #431). — DoD: `from_dict` round-trips a
+  snapshot carrying the kind; an unknown kind is still rejected.
+- [ ] 13. Add `list_intents` / `work_item_intent` to `ROUTES` in
+  `orchestrator/work_context/client.py`, with `answer_from_*` classifiers that keep a failed,
+  partial, malformed or truncated read distinct from a documented absence (depends on
+  mctlhq/mctl-api#430's contract). — DoD: table tests cover 200, `200 []`, 404, 5xx, a
+  transport error, a malformed body and a truncated last page.
+- [ ] 14. Resolve the resume intent id from the execution request (`intent_id`) read via
+  `--execution-request-id`; never from argv or the issue (depends on 13). — DoD: a test
+  proves a request with no `intent_id` pins nothing and a request whose `intent_id` 404s
+  fails the run.
+- [ ] 15. Add `collect_work_item_intents` to `orchestrator/context_assembly.py` with the
+  selection rule in design.md (ascending id, newer than C1's highest intent id, cap 20,
+  pinned resume intent), content-addressed, `trust.tier="reported"` (depends on 12-14). —
+  DoD: pure-function tests for selection; budget/dedup/freshness applied; the resume intent
+  survives a budget that drops every other ranked source.
+- [ ] 16. Wire the collector into every WorkItem-backed assembly (full and context-only
+  paths), before the idempotency guard; fail as `failed`/`intent-unresolved` on an
+  unresolved referenced intent or a failed list read (depends on 15, 6). — DoD: E2 advances
+  to `Failed` in that case, with a non-zero exit.
+
+- [ ] 17. Add the `WORK_ITEM_INTENT_SOURCE` switch (`off` default, `on`, anything else
+  means `off` with a warning), read per call, gating tasks 13-16. — DoD: with the switch
+  `off`, a run makes no intents request and its snapshot bytes are identical to today's; the
+  `[context] work-item-intent source=off` line is printed.
+- [ ] 18. Set `WORK_ITEM_INTENT_SOURCE=on` in mctl-gitops (worker + investigate CWFT) as a
+  separate PR, only after mctlhq/mctl-api#430 is released. — DoD: follow-up PR linked here.
+
+### Additional tests
+
+- [ ] T12. For each of `accepted`, `implemented`, `merged`: a dispatched resume whose request
+  carries `intent_id` seals C2 containing a `work-item-intent` source for that intent with
+  intent id, `actor_principal`, `surface`, `created_at` and content hash in its provenance,
+  and leaves the proposal byte-identical.
+- [ ] T13. The resume intent read from a stubbed mctl-api intents route appears in C2 with
+  provenance while the issue comments stub returns nothing: proves the intent does not
+  depend on GitHub comments.
+- [ ] T14. A referenced intent that is unresolved (404 / other item / 5xx / malformed) fails
+  the run with `intent-unresolved`; no snapshot is persisted.
+- [ ] T15. Determinism: two assemblies over the same inputs produce identical snapshot
+  bytes; a retry of the same `we_` replays rather than diverging.
+- [ ] T16. No authorization reads intents: a test asserts `policy_checkpoint` and approval
+  resolution are unchanged by the presence of `work-item-intent` sources.
+- [ ] T18. Switch: `off` (and unset, and `bogus`) never calls the intents routes and keeps
+  today's bytes; `on` applies T12-T14; a C1 with no `work-item-intent` source selects all
+  intents up to the cap.
+- [ ] T17. Regression for each new test: revert the change it covers and watch it fail.
