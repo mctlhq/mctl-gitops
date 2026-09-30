@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-09-30T01:34:59Z'
+updated_at: '2026-09-30T01:53:22Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-a837f1f7ea2236ac
@@ -31,3 +31,12 @@ github:
   state: open
   head_sha: cbdd62879b9472822376c482498e4b4d6aca0cfc
   observed_at: '2026-09-30T00:34:47Z'
+refusals: 1
+refusals_head: cbdd62879b9472822376c482498e4b4d6aca0cfc
+notes: 'implementer declined to act: The handed-in text ''[P1] Claude finished @mctl-agents[bot]''s
+  task in 1m 6s -- [View job](https://github.com/mctlhq/mctl-api/actions/runs/36647259337)''
+  is only the header/footer line of a GitHub comment, not a finding itself. I fetched
+  the full PR (mctlhq/mctl-api#424) via `gh pr view feat/agents-issue-421-feat-helm-deliver-mctl-surface-telegram
+  --repo mctlhq/mctl-api --json number,url,comments,reviews` and read the complete
+  body of that same comment (id IC_kwDORfnDZc8AAAABX73-GQ): it explicitly states ''Verdict:
+  Approve -- no P1/P2 findings'', gives a detailed analysis confirming the helm/deploy'
