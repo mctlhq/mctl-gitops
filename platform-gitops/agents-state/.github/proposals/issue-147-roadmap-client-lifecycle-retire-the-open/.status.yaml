@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-09-30T01:57:11Z'
+status: merged
+updated_at: '2026-09-30T02:03:49Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-85ea6e611328611d
@@ -27,4 +27,9 @@ attempt:
   expires_at: '2026-09-30T03:48:12Z'
   finished_at: '2026-09-30T01:40:31Z'
 pr: https://github.com/mctlhq/.github/pull/148
-merge_owner: human-codeowner
+github:
+  state: merged
+  head_sha: c8865bdc38a1197126eb3238e9dd60ab0f5547a8
+  observed_at: '2026-09-30T02:03:49Z'
+merged_at: '2026-09-30T02:03:49Z'
+merge_commit: 3b8aebd41d8f2da197b36b197866f0dd41bd8eea
