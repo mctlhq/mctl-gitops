@@ -63,7 +63,9 @@
       limit}` plus 400/404; a new `/api/v1/work-items/{id}/intents/{intent_id}`
       path with `get`, 200 `{schema_version, intent}` and a 404 documenting
       both `work_item_not_found` and `intent_not_found`; a new `WorkItemIntent`
-      component schema referenced by both; the "Surface Identity" tag
+      component schema referenced by both (and by the existing POST
+      response), including a required boolean `text_redacted` with its
+      meaning described; the "Surface Identity" tag
       description's relay-route list extended with the two GETs.
 
 - [ ] 8. Document both routes in `docs/work-context-contract.md` (depends on 5,
@@ -75,7 +77,9 @@
       (mctl-api#350)" extended; the `WorkItemIntent` bullet in "Resource model"
       states that intents are readable by whoever can see the item and remain
       provenance and input, never authorization or approval state; a note that
-      a retention-swept intent reads back with `text` empty.
+      a retention-swept intent reads back with `text` empty and
+      `text_redacted: true`, and that consumers must treat it as "text not
+      observable", not as an empty intent.
 
 - [ ] 9. Run the full local gate (depends on 1-8) — DoD: `go fmt ./...`,
       `go vet ./...`, `golangci-lint run` and `go test ./...` clean; with

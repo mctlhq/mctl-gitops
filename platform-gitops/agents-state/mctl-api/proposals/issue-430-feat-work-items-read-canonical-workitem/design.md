@@ -22,7 +22,13 @@ Storage exists; the read path does not.
 - Type. `workitems.Intent` (`internal/workitems/types.go:213`) already has the
   exact JSON shape the issue asks for: `id`, `work_item_id`,
   `actor_principal`, `surface,omitempty`, `text`, `params,omitempty`,
-  `created_at`. `SchemaVersion` is `workitem/v1`.
+  `created_at`. `SchemaVersion` is `workitem/v1`. This change adds one field
+  to that shared struct, `TextRedacted bool` with tag `json:"text_redacted"`
+  (no `omitempty`, so `false` is always explicit). It is set in `getIntent`
+  and in the new list scan from whether the `text` column was NULL. Because the
+  struct is shared, `AppendIntent`'s POST response `{schema_version, intent}`
+  gains the field too, always `false` there, since a freshly appended intent
+  has not been swept. The change is additive, and no existing consumer reads it.
 - HTTP write. `Handlers.AppendWorkItemIntent`
   (`internal/api/handlers_work_items.go:509`) → `visibleWorkItem` →
   `mutationFor` → `AppendIntent`, answering
@@ -184,8 +190,10 @@ an item the caller cannot see, and service-principal access via the existing
   `schema_version`, `intents`, `truncated`, `limit`; add a new
   `/api/v1/work-items/{id}/intents/{intent_id}` path with `get`. Introduce a
   `WorkItemIntent` component schema (`id`, `work_item_id`, `actor_principal`,
-  `surface`, `text`, `params`, `created_at`) so both responses reference one
-  definition. Extend the "Surface Identity" tag description's relay-route list
+  `surface`, `text`, `params`, `created_at`, `text_redacted` — boolean,
+  required, "true when retention removed the text; `text` is then empty and
+  must not be read as the intent's content") so both responses, and the
+  existing POST response, reference one definition. Extend the "Surface Identity" tag description's relay-route list
   with the two GETs.
 - `docs/work-context-contract.md`: add the two routes to the REST surface table
   (line ~380), append them to the relay-route sentence in "Surface relay

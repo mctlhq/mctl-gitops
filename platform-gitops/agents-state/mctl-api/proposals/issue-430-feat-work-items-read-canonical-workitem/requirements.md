@@ -97,7 +97,8 @@ Response content
 
 - WHILE returning an intent THE SYSTEM SHALL return exactly the stored
   `workitems.Intent` fields — `id`, `work_item_id`, `actor_principal`,
-  `surface`, `text`, `params`, `created_at` — and no derived content: no
+  `surface`, `text`, `params`, `created_at` — plus the single retention
+  marker `text_redacted` defined below, and no other derived content: no
   transcript, no authorization or approval state, no event history.
 - IF the retention sweeper has nulled an intent's `text` (the column is
   nullable for exactly that reason) THEN THE SYSTEM SHALL return the row with
