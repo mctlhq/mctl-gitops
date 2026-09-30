@@ -158,13 +158,15 @@ def _screen_auth_block(cls, data: Any) -> Any:
     if not isinstance(data, dict) or "auth" not in data:
         return data
     auth = data["auth"]
+    if auth is None:
+        return data
     if not isinstance(auth, dict):
         raise AuthConfigError("transport.auth must be a mapping of header/scheme/env")
-    extra = sorted(set(auth) - _ALLOWED_AUTH_KEYS)
+    extra = set(auth) - _ALLOWED_AUTH_KEYS
     if extra:
         raise AuthConfigError(
             f"transport.auth may only contain {sorted(_ALLOWED_AUTH_KEYS)}; "
-            f"rejected key(s) {extra}. A secret value must never appear in runtime.yaml -- "
+            "unsupported auth field. A secret value must never appear in runtime.yaml -- "
             "name an environment variable with `env:` instead. "
             "(The rejected value is intentionally not shown.)"
         )
@@ -225,7 +227,7 @@ def resolve_auth_header(
             "which is unset or blank; set it or remove the auth block "
             "(the runtime will not connect unauthenticated)"
         )
-    value = raw.strip()
+    value = raw  # preserve the credential; validate control characters/encoding before use
     return auth.header, (f"{auth.scheme} {value}" if auth.scheme else value)
 
 
@@ -288,17 +290,33 @@ Because the header is resolved *inside* the factory, and the factory is called o
 connect by all three components, `list_tools`, `call_tool` and the verifier's read poll all
 carry it -- there is still exactly one place that maps a transport to a client.
 
-### 5. Containment at the two remaining leak sites
+### 5. Containment at the production authenticated boundary
 
-- `CapabilityCatalog.refresh()`: when `server.transport` is an `HttpTransport` with `auth`,
-  pass the recorded `detail` through `redact(...)`. Resolution failures
-  (`MissingAuthSecret`) are caught by the same `except Exception` arm and become one
-  `server_unavailable` problem whose detail names the variable, never a value. Using
-  `repr(exc)` for `MissingAuthSecret` is safe by construction, and the `redact()` pass is
-  belt-and-braces for httpx2 exceptions that might echo a request header.
-- `Executor`/`Verifier`: unchanged. `_classify_call_failure()` already records only the
-  exception class, and `Verifier._poll()` swallows the exception entirely (`except Exception:
-  return None`).
+Expose safe transport diagnostics (fixed text / exception class only), never raw SDK or
+provider exception messages. A missing/blank variable remains a dedicated safe error naming
+only the validated server and env variable. Containment must cover builder, connect, SDK
+operations, and close, including nested exception groups and rendered chained tracebacks.
+Suppress sensitive causes/contexts from externally rendered diagnostics, and verify captured
+logs do not contain them. Preserve cancellation and exceptions from the caller's context body.
+The implementation may introduce a small authenticated client wrapper at the existing
+`ClientFactory` seam; do not assume returning the SDK client verbatim meets this invariant.
+
+`CapabilityCatalog` records the safe error before truncation. Do not recover secrets by
+re-reading env in `refresh()`; a connection can fail after its env value has rotated. If
+defensive redaction is retained, capture its input at that connection and apply it before
+truncation; class-only diagnostics are preferred. Executor class-only classification and
+verifier unknown-on-failure behavior remain intact.
+
+The before-validator sketch above is insufficient by itself: a runtime-level raw-input
+screen must run before any sibling Pydantic error can echo a credential-containing parent
+dict, including auth on stdio, unknown transport kinds, and malformed containers. Direct
+model validation must be safe too. Never interpolate arbitrary extra keys/rejected values
+into diagnostics; use fixed field labels. Treat explicit `auth: null` as omitted auth.
+
+Validate nonblank env values without changing their bytes before constructing HTTP headers.
+Reject controls and unencodable values using safe errors. Keep SDK redirect following
+disabled and exercise cross-origin redirects in a fake transport test. No custom redirect
+stack is needed.
 
 ### Docs
 
@@ -315,8 +333,7 @@ carry it -- there is still exactly one place that maps a transport to a client.
   supported, but Alice's OAuth authorization-code flow is not", keeping the other two gaps and
   the mock-validated framing intact.
 - Example variable name in docs stays operator-namespaced (`ALICE_MCP_TOKEN`), outside the
-  `NEWTON_*`/`ATAI_*` prefixes that `test_env_vars_are_read_by_code` polices. `.env.example`
-  is not touched.
+  `NEWTON_*`/`ATAI_*` prefixes that `test_env_vars_are_read_by_code` polices. `.env.example` gains only a comment about operator-chosen variable names.
 
 ## Alternatives
 
@@ -389,8 +406,8 @@ raise, and asserts the sentinel is absent from `str(exc)`, `repr(exc)` and the f
 traceback. Without that test the feature can regress silently on any pydantic upgrade.
 
 **Risk: a leaked secret through an httpx2 exception repr in `CatalogProblem.detail`.**
-Mitigated by the `redact()` pass on the auth path, and asserted by a test that forces a
-transport failure with the sentinel configured.
+Mitigated by connection-bound safe diagnostics before truncation, with failure-path tests
+covering environment rotation, exception groups, traceback rendering, and logs.
 
 **Risk: a leaked HTTP client (socket/fd) if the wrapper is written as a bare
 `Client(streamable_http_client(url, http_client=hc))`.** The SDK will not close a
@@ -403,9 +420,8 @@ duplicate or break session handling. Mitigated by the load-time `_SDK_MANAGED_HE
 rejection.
 
 **Risk: header injection via a `\r\n` in `header` or `scheme`.** Mitigated by the RFC 9110
-token regexes at load time. The *value* comes from the environment and is not regex-checked;
-`httpx2` rejects control characters in header values itself, and a check here would risk
-echoing the value in an error message.
+token regexes at load time. The *value* is checked before httpx2 sees it; controls and unencodable values produce a
+fixed, value-free error. Relying on httpx2 rejection alone can echo the value in a traceback.
 
 **Resource impact.** One extra `httpx2.AsyncClient` construction per connect for authenticated
 servers only. `CapabilityCatalog.refresh()` already opens and closes one client per server per
