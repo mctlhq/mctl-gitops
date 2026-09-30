@@ -200,3 +200,34 @@ rollback is a redeploy of the previous image tag. Specifically:
    Reverting task 2 (the `COPY` line) alone disables freezing while leaving
    the rest of the server healthy, which is the safest kill switch if the
    feed itself turns out to be the problem.
+
+## Correction 2026-09-30 (owner decision): broadcasts page, no MCP tool
+
+Tasks 6, 7 and 8 above are **withdrawn** and replaced by 6′. Task 11 and tests
+T5 and T6 are amended as follows. All other tasks and tests stand.
+
+- [ ] 6′. Add the prepare-from-digest action to the broadcasts page (depends on
+  3, 4, 5). Add `HandlePrepareDigest` in `internal/web/broadcasts.go` through
+  the existing action helper (scope, `IsOperator` and same-origin exactly as
+  approve/cancel), the POST route
+  `/telegram/connect/broadcasts/prepare-digest` in `cmd/server/main.go`, and the
+  form in `broadcastTemplate`. It runs the guards and sequence from design.md
+  "Correction 2026-09-30", in that order. It refuses a `text` field and a
+  category that differs from the digest's.
+  DoD: preparing never approves; the new campaign shows digest id, version and
+  hash on the list. No file under `internal/mcp/` gains a tool, and
+  `docs/portal-allowlist.json` and `docs/tool-descriptors.json` are
+  byte-identical.
+- [ ] 11 (amended). The README operator steps are: open
+  `/telegram/connect/broadcasts`, "Prepare from digest", review, then Approve.
+  There is no mention of an MCP tool.
+- [ ] T5 (amended). The flow is exercised end to end through
+  `HandlePrepareDigest` on a seeded feed: it freezes, persists, prepares one
+  campaign with `source_ref`, and sends nothing.
+- [ ] T6 (amended). The page action refuses each of the following as
+  approve/cancel do: a missing `admin:broadcast` scope, a non-operator, a
+  cross-origin POST, a `text` field, a category mismatch, and a second
+  non-terminal campaign in the same category.
+- [ ] T-no-tool. A test asserts that the registered MCP tool set is unchanged
+  by this change: no tool name contains `digest`, and the portal allowlist
+  golden file does not change.
