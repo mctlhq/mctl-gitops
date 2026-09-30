@@ -51,7 +51,7 @@ spec:
     # ISSUE_INVESTIGATOR_MODEL=claude-opus-5, so the `task` above describes the
     # fallback this agent no longer takes, not the model it runs on. Recorded
     # here because a reader who trusts `task: service_agent` alone would
-    # conclude claude-sonnet-5, which is what the implementer runs, not this
+    # conclude claude-sonnet-5-5, which is what the implementer runs, not this
     # agent. Unset the CWFT env var and the task's `balanced` profile applies
     # again.
     compatibility: ">=1.0.0 <2.0.0"

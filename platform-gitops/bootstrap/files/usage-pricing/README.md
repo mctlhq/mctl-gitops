@@ -16,9 +16,17 @@ https://platform.claude.com/docs/en/about-claude/pricing, retrieved
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude-opus-5` | 5.00 | 25.00 | 6.25 | 0.50 | 0.01 | "Model pricing" table (base input / 5m cache writes / cache hits and refreshes / output tokens) |
 | `claude-sonnet-5` | 2.00 | 10.00 | 2.50 | 0.20 | 0.01 | "Model pricing" table |
+| `claude-sonnet-5-5` | 2.00 | 10.00 | 2.50 | 0.20 | 0.01 | "Model pricing" table, retrieved 2026-09-30 |
 | `claude-haiku-4-5` | 1.00 | 5.00 | 1.25 | 0.10 | 0.01 | "Model pricing" table |
 
-`web_search_per_call: 0.01` for all three comes from the same page's
+`claude-sonnet-5-5` is its own entry (version `2026-09-30-firstparty-1`,
+`effective_from: 2026-09-30T00:00:00Z`), added when the agents moved from
+Sonnet 5 to Sonnet 5.5. Its rates equal Sonnet 5's, but the catalog is keyed
+by `canonical_model`, so without the entry every Sonnet 5.5 row would be
+stored unpriced. The `claude-sonnet-5` entry stays for the rows recorded
+before the move.
+
+`web_search_per_call: 0.01` for all four comes from the same page's
 "Specific tool pricing -> Web search tool" section: $10 per 1,000 searches,
 i.e. $0.01 per call.
 

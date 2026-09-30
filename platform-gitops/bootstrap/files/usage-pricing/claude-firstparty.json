@@ -22,6 +22,17 @@
     "web_search_per_call": 0.01
   },
   {
+    "version": "2026-09-30-firstparty-1",
+    "canonical_model": "claude-sonnet-5-5",
+    "provider": "firstParty",
+    "effective_from": "2026-09-30T00:00:00Z",
+    "input_per_mtok": 2.00,
+    "output_per_mtok": 10.00,
+    "cache_read_per_mtok": 0.20,
+    "cache_write_per_mtok": 2.50,
+    "web_search_per_call": 0.01
+  },
+  {
     "version": "2026-09-01-firstparty-1",
     "canonical_model": "claude-haiku-4-5",
     "provider": "firstParty",
