@@ -89,7 +89,9 @@ The findings are visible directly in this code:
 
 - `Store.LogToolCall(ctx, userID int64, tool, peerRedacted, status, errMsg,
   callPath, reason string)` (`internal/db/store.go:1752`) — six consecutive
-  bare strings, ~25 call sites in repo (`internal/mcp/tools.go:2403`,
+  bare strings. **Corrected in review:** 33 lines across 12 non-test files
+  (`internal/oauth` alone has 24), not ~25 sites; see #716. Original text:
+  ~25 call sites in repo (`internal/mcp/tools.go:2403`,
   `internal/agentapi/json.go:75`, `internal/agentapi/profilehandler.go:182,201`,
   plus `internal/db` tests).
 - `docs/runbook.md:1468-1512` documents the reason breakdown and the
@@ -183,7 +185,14 @@ the failure — as a second row instead of a rewrite, which is the assertion tha
 has to change. Rule 5 is unaffected: it still keys off `records[len-1].reason`,
 which is now the appended record.
 
-### 3. `exemptFromSLO` → `synthesized`, plus a server-fault predicate
+### 3. `exemptFromSLO` → `synthesized`
+
+> **AMENDED (human review, 2026-10-01):** the server-fault predicate below is NOT implemented.
+> `feedsSLO` is `return !r.synthesized`, so no synthesized record feeds the SLO
+> pair, and `serverFaultReason` is not added (it would be dead code). The
+> availability SLO input set stays pre-#696. Server faults are caught by the
+> `MctlToolHandlerFaults` alert (section 4) instead. The original text is kept
+> below for the record.
 
 Rename the `callRecord` field to `synthesized` and set it on **every** record
 `flushRecordedCall` creates (Rule 1's appended record, Rule 2, Rule 3). The
@@ -213,6 +222,12 @@ A Rule 3 success record is synthesized with an empty reason, so it never feeds
 the pair — the second half of the invariant the issue calls out.
 
 ### 4. A dedicated handler-fault alert
+
+> **AMENDED (human review, 2026-10-01):** this alert is now the only mechanism that surfaces server
+> faults. Its scope stays `panic|handler_error`. `store_error` and
+> `encode_failed` remain visible in `mctl_tool_call_errors_total{reason}` and on
+> the dashboard, but they are not alerted in #703, and the runbook section must
+> say so explicitly.
 
 Add to `deploy/alerts/mctl-telegram.rules.yaml`, in the
 `mctl-telegram-tool-availability` group:
@@ -268,6 +283,10 @@ is unchanged.
 
 ### 7. `db.ToolCall` params struct
 
+> **WITHDRAWN (human review, 2026-10-01):** moved to mctlhq/mctl-telegram#716 (33 lines across 12
+> non-test files, mostly OAuth / connect flows). Nothing in this section is
+> implemented under #703.
+
 ```go
 // ToolCall is one audit row's payload. A struct rather than positional
 // arguments: the previous signature ended in six consecutive bare strings,
@@ -313,9 +332,10 @@ section:
   `AUDIT_RETENTION_DAYS` sweeps it.
 - The new `MctlToolHandlerFaults` section with its explicit anchor.
 
-`internal/mcp/record_test.go`: the comment at ~line 159 names `synthesized` +
-`serverFaultReason` (and must, after this change, assert that a **panic**
-record *does* feed the pair, which is the behaviour change's real test);
+`internal/mcp/record_test.go`: the comment at ~line 159 names `synthesized`
+(**AMENDED:** not `serverFaultReason`, which is not added; the test must assert
+that a **panic** record does NOT feed the pair, and that is the mutation-checked
+assertion);
 `histogramSampleCount`'s doc line drops the non-existent "outcome" label.
 
 ## Alternatives
@@ -343,7 +363,8 @@ record *does* feed the pair, which is the behaviour change's real test);
    maintenance.
 
 4. **Close the SLO blind spot with the new alert alone, leaving the SLO input
-   set byte-identical to pre-#696.** The lowest-risk option, and the fallback
+   set byte-identical to pre-#696.** **ADOPTED in review (2026-10-01)** as the
+   design of record; the text below is the original rationale for dropping it. The lowest-risk option, and the fallback
    if burn-rate noise appears. Dropped as the primary because the issue objects
    to `panic`/`handler_error` *leaving the SLO*, and a fault the availability
    SLO ignores is a fault the error budget says never happened. Reverting is
@@ -354,11 +375,15 @@ record *does* feed the pair, which is the behaviour change's real test);
 - **Migrations:** none. No schema change, no `audit_logs` backfill, `reason`
   stays out of `hashAuditEntry` (`internal/db/audit_chain.go`), so
   `VerifyAuditChain` is unaffected.
-- **Backward compatibility:** `Store.LogToolCall`'s signature changes, but
+- **Backward compatibility:** (AMENDED: `Store.LogToolCall`'s signature does NOT change under #703; see #716.) Original: `Store.LogToolCall`'s signature changes, but
   `internal/db` is an internal package with all call sites in this repo. No MCP
   tool descriptor, output schema, or error text a client sees changes —
   `docs/tool-descriptors.json` and `portal_allowlist_test.go` snapshots must
   therefore be byte-identical after the change, which is itself a test.
+- **AMENDED (human review, 2026-10-01):** with `feedsSLO = !synthesized`, the SLO pair loses only
+  Rule 3's synthesized `ok` samples added by #696 and returns to its pre-#696
+  input set. It gains nothing. The paragraph below describes the original
+  proposal and no longer applies.
 - **Metric / alert impact (the main risk).** `feedsSLO` adds a small number of
   server-fault errors to the `mctl_tool_invocations_total` numerator, and
   removes Rule 3's `ok` samples from the denominator. Both push the measured
@@ -386,6 +411,7 @@ record *does* feed the pair, which is the behaviour change's real test);
   - *`borrowErrResult` gaining a `ctx` parameter touches many call sites.*
     Mechanical and compiler-enforced; `go build ./...` is the check.
   - *Behaviour drift in the 632-line `record_test.go`.* Two assertions change
-    deliberately (encode-after-ok row count, panic feeding the SLO pair); every
+    deliberately (encode-after-ok row count; **AMENDED:** the panic-feeds-SLO
+    assertion is dropped, a panic still feeds nothing); every
     other test must pass unchanged, which is the review signal that the rest of
     #700's contract is intact.
