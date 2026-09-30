@@ -370,11 +370,18 @@ adds a first-class source for it.
   `_CONTENT_ADDRESSED_KINDS`, since intents are immutable, with freshness
   `None`.
 - **Selection.** Take the intents with `id` greater than the highest
-  `work-item-intent` id among C1's sources, in ascending order, capped at 20.
+  `work-item-intent` id among C1's sources (none, when C1 is absent or predates
+  this kind, in which case all intents qualify), in ascending order, capped at 20.
   Always add the pinned resume intent, even if it is older (a re-resume).
   Selection is a pure function of `(C1 sources, intent list, resume intent id)`,
   so a retry of the same `we_` produces identical bytes and replays instead of
   diverging.
+- **Switch.** `WORK_ITEM_INTENT_SOURCE` (`off`|`on`, default `off`) is read
+  fresh on every call, like `_context_mode()`. When it is `off`, the collector
+  is not called at all, and the run logs `[context] work-item-intent source=off`.
+  This keeps the correction inert until mctl-api#430 is released and the value
+  is set in mctl-gitops, so a missing route can never fail every WorkItem-backed
+  run. An unrecognised value means `off`.
 - **Where it runs.** It runs in every WorkItem-backed assembly, both the full
   path and the context-only path from §1–§2, before the idempotency guard is
   consulted. A cold, non-WorkItem run does not call it.

@@ -175,6 +175,13 @@ replay/divergence classification. No migration to reverse.
   unresolved referenced intent or a failed list read (depends on 15, 6). — DoD: E2 advances
   to `Failed` in that case, with a non-zero exit.
 
+- [ ] 17. Add the `WORK_ITEM_INTENT_SOURCE` switch (`off` default, `on`, anything else
+  means `off` with a warning), read per call, gating tasks 13-16. — DoD: with the switch
+  `off`, a run makes no intents request and its snapshot bytes are identical to today's; the
+  `[context] work-item-intent source=off` line is printed.
+- [ ] 18. Set `WORK_ITEM_INTENT_SOURCE=on` in mctl-gitops (worker + investigate CWFT) as a
+  separate PR, only after mctlhq/mctl-api#430 is released. — DoD: follow-up PR linked here.
+
 ### Additional tests
 
 - [ ] T12. For each of `accepted`, `implemented`, `merged`: a dispatched resume whose request
@@ -190,4 +197,7 @@ replay/divergence classification. No migration to reverse.
   bytes; a retry of the same `we_` replays rather than diverging.
 - [ ] T16. No authorization reads intents: a test asserts `policy_checkpoint` and approval
   resolution are unchanged by the presence of `work-item-intent` sources.
+- [ ] T18. Switch: `off` (and unset, and `bogus`) never calls the intents routes and keeps
+  today's bytes; `on` applies T12-T14; a C1 with no `work-item-intent` source selects all
+  intents up to the cap.
 - [ ] T17. Regression for each new test: revert the change it covers and watch it fail.

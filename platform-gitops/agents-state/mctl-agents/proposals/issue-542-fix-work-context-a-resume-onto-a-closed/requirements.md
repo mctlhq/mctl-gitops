@@ -165,8 +165,10 @@ decision (a), now including intents):
   never treated as "no intent".
 - WHILE selecting other intents, THE SYSTEM SHALL order them deterministically
   by ascending intent `id`. It SHALL take only intents newer than the highest
-  intent id recorded in C1's provenance (all intents when there is no C1), up to
-  a fixed cap. Intents already carried by C1 are referenced, not copied again.
+  intent id recorded in C1's provenance, up to a fixed cap. There may be no C1,
+  or a C1 that carries no `work-item-intent` source (every C1 sealed before this
+  feature). Either case counts as "no highest id", so all intents qualify, up to
+  the cap. Intents already carried by C1 are referenced, not copied again.
 - WHEN an intent enters C2, THE SYSTEM SHALL record it as a `ContextSource` of
   the new kind `work-item-intent` with a stable `source_id`
   `work-item-intent:<work_item_id>:<intent_id>`. The recorded provenance SHALL
@@ -182,6 +184,21 @@ decision (a), now including intents):
 - WHEN the proposal status is `accepted`, `implemented` or `merged`, THE SYSTEM
   SHALL still produce C2 on a valid WorkItem resume, and C2 SHALL contain the
   resume intent with its provenance.
+
+### Activation switch
+
+- WHILE `WORK_ITEM_INTENT_SOURCE` is unset or `off` (the default), THE SYSTEM
+  SHALL NOT call the intents routes and SHALL assemble exactly as it did before
+  this correction. The run SHALL print one `[context] work-item-intent source=off`
+  line, so a C2 without intents is attributable to the switch and not mistaken
+  for an item with no intents.
+- WHILE `WORK_ITEM_INTENT_SOURCE=on`, THE SYSTEM SHALL apply every criterion in
+  this section, including the explicit `intent-unresolved` failure.
+- IF the value is anything other than `off` or `on`, THEN THE SYSTEM SHALL treat
+  it as `off` and log a warning. An unrecognised value never enables the source.
+- The switch is set in mctl-gitops, on the worker and the investigate CWFT,
+  only after mctlhq/mctl-api#430 is released. The #431 live proof runs with it
+  `on`.
 
 ### Dependency
 
