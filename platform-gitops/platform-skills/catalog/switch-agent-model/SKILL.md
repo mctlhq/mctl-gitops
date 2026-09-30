@@ -125,10 +125,12 @@ live selections were:
 - `mctl-coolify-mcp`: `.github/workflows/claude.yml` and
   `.github/workflows/claude-code-review.yml` pin `--model` themselves (no
   reusable reviewer). `evals.yml` defaults to Haiku and is separate.
-- `mctl-gitops` `execution-profiles/*/profile.yaml`: do NOT touch a profile
-  just to refresh a comment naming a model. Any content change requires a
-  `spec.version` bump and a re-pinned release binding under
-  `agent-platform/releases/` (`validate-profile-version-bumps.py`).
+- `mctl-gitops` `execution-profiles/*/profile.yaml`: a profile whose comments
+  name the migrated model must follow, and any content change — comments
+  included — needs a patch `spec.version` bump plus a re-pinned binding in
+  `agent-platform/releases/shadow/<agent>.yaml` (new `bindingRevision`, the
+  old one pushed onto `history`), or `validate-profile-version-bumps.py`
+  fails. Worked example: the 1.5.0 -> 1.5.1 bump in mctl-gitops#1476.
 - **Not in scope: `mctl-academy`.** Its content pipeline
   (`content-replenish.yml`, `AUTHOR_MODEL` / `REVIEWER_MODEL`) chooses its own
   models per provider (Anthropic or Nebius) and is not a platform agent; leave
@@ -140,7 +142,7 @@ live selections were:
   the new model is stored unpriced. Merge this one before the agents move.
   CWFT comments that name the resolved model
   (`cwft-mctl-agents-investigate.yaml`, `cwft-mctl-agents-run.yaml`,
-  `execution-profiles/issue-investigator-default/profile.yaml`) follow.
+  `execution-profiles/issue-investigator-default/profile.yaml`) follow — the profile only with the version bump described above.
 
 `orchestrator/run_issue_investigator.py`, `orchestrator/run_incident_responder.py`,
 and `orchestrator/run_implementer.py` in `mctl-agents` never need direct
