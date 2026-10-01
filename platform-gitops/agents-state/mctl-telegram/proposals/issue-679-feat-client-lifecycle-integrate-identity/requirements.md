@@ -1,66 +1,88 @@
-# Integrate identity, consent, reachability and product communication into the client lifecycle
+# Client onboarding glue: `/start` reachability, manage-page reachability, explicit first-connect category choice
 
 ## Context
 
 Issue mctlhq/mctl-telegram#679 is the `onboarding-integration` work item of the
-`client-lifecycle` epic (mctlhq/.github#22). Its dependencies already shipped as
-separate pieces. Identity capture and provenance are in `internal/db/identity_capture.go`
-and `internal/db/identity_provenance.go`. Bot reachability is in `internal/db/reachability.go`
-and `internal/notify/classify.go`. Category consent is in `internal/db/notification_prefs.go`.
-Safe broadcast (#439) is in `internal/broadcast/`. Deterministic product-update evidence
-(#440) is in `internal/productupdate/`. Each piece works by itself, but the client never sees
-them as one onboarding path. Only the admin projection `db.IdentityRow` puts them together.
-Two more gaps remain. Reachability is learned only from outbound deliveries (digest and
-broadcast). The inbound login-bot receiver (`internal/bot/`, issue-619) is running, but no
-handlers are registered in `cmd/server/main.go`, so a client who starts the bot is still
-reported as `unknown`.
+`client-lifecycle` epic (mctlhq/.github#22). The owner fixed its scope on 2026-10-01
+(issue comment "Owner decision, 2026-10-01: scoped onboarding follow-up (authoritative)").
+This proposal implements exactly that scope and nothing else.
 
-This proposal adds a generic client lifecycle. One pure derivation turns the existing facts
-into an ordered onboarding checklist and a stage. Self-service surfaces (web manage page,
-`/api/account`, MCP) show that checklist to the client, and admins see the stage in the
-identity list. An inbound login-bot handler records reachability once the client has started
-the bot. Consent stays separate from authentication. Broadcast authority stays behind the
-#439 preview/approval/audit path. Per the issue's authoritative context, nothing here uses
-an operator-identity or OpenClaw-only lookup account.
+A read-only gap analysis of `main` at `f52bc11` found every base capability present and
+tested:
+
+- **Reachability.** `client_bot_reachability`, `internal/db/reachability.go`, and
+  `internal/notify/classify.go`.
+- **Category consent, separate from authentication.** `client_notification_prefs` and
+  `internal/db/notification_prefs.go`. `product_updates` defaults to unsubscribed.
+- **Safe broadcast (#439).** `internal/broadcast/`.
+- **Product-update feed and digest (#440, #683).** `internal/productupdate/`.
+
+What is missing is the glue that turns them into an onboarding path:
+
+1. **Reachability is learned only from outbound deliveries.** It comes from the digest and the
+   broadcast worker. The inbound login-bot receiver (`internal/bot/`, issue-619) runs with an
+   empty handler registry, so a client who presses Start on the login bot stays `unknown`.
+2. **The manage page does not tell the client** whether the bot can reach them, or how to
+   start it.
+3. **Nothing in the first-connect flow asks the client to make a category choice.** The
+   success page links to "Manage your session" without saying a choice is needed, so
+   `product_updates` silently stays at its default.
 
 ## User stories
 
-- AS a client I WANT one place that shows what is left in my onboarding (connected, bot reachable, notification choices made) SO THAT I know which step to take next.
-- AS a client I WANT to start the login bot and have the platform recognise that SO THAT I can receive the product updates and security notices I subscribed to.
-- AS a client I WANT my notification choices to stay separate from signing in SO THAT connecting my account never means I agreed to marketing.
-- AS an operator (`admin:users`) I WANT each identity's lifecycle stage in `list_telegram_identities` SO THAT I can see why a client is not receiving product communication without combining four fields by hand.
-- AS a broadcast operator I WANT the audience preview to keep relying on the same consent and reachability facts SO THAT the lifecycle view and the broadcast eligibility can never disagree.
+- AS a client I WANT pressing Start on the login bot to be recognised SO THAT the notices I subscribe to can reach me.
+- AS a client I WANT the manage page to show whether the bot can reach me, with a link to start it, SO THAT I know what to do next.
+- AS a client I WANT to be asked explicitly which categories I want when I first connect SO THAT connecting my account never counts as agreeing to product updates.
+- AS a broadcast operator I WANT the audience evaluation to keep relying on the same consent and reachability rows SO THAT onboarding gives no new send path.
 
 ## Acceptance criteria (EARS)
 
-- WHEN the lifecycle of a user is derived THE SYSTEM SHALL compute it with one pure function (`lifecycle.Derive`) from the facts already stored: identity capture, onboarding completion / active session, bot reachability and resolved notification preferences. The derivation SHALL perform no I/O.
-- WHEN `lifecycle.Derive` runs THE SYSTEM SHALL return an ordered list of steps (`identity`, `connected`, `bot_reachable`, `notifications_decided`). Each step SHALL have a status (`done`, `pending`, `action_required`, `unknown`) and a stable `reason_code`. The result SHALL also include one `stage` value equal to the first step that is not done, or `complete`.
-- WHILE a user has no `client_bot_reachability` row THE SYSTEM SHALL report the `bot_reachable` step as `unknown` (never as `done`), and SHALL NOT write a synthetic reachability row.
-- WHILE the `product_updates` preference is not explicit (`ResolvedPref.Explicit == false`) THE SYSTEM SHALL report `notifications_decided` as `pending` and SHALL NOT treat the default (unsubscribed) as consent.
-- IF a client authenticates or connects a Telegram session THEN THE SYSTEM SHALL NOT change any notification preference. Consent SHALL stay a separate, explicit act through the existing setters (`SetNotificationPrefs` via the manage page, `/api/account/notifications`, or `set_my_notification_preferences`).
-- WHEN an authenticated client calls `GET /api/account/lifecycle` THE SYSTEM SHALL return that client's derived lifecycle as JSON, and SHALL return 401 when no identity is present.
-- WHEN an authenticated client calls the new read-only MCP tool `get_my_onboarding_status` THE SYSTEM SHALL return the same structure as `GET /api/account/lifecycle`, with a declared output schema and read-only annotations, and without requiring any admin scope.
-- WHEN a client opens `/telegram/connect/manage` THE SYSTEM SHALL render a "Getting started" checklist from the derived lifecycle. Each non-done step SHALL have a remedy link: connect, start the bot, or the notification section on the same page.
-- WHERE `TELEGRAM_LOGIN_BOT_USERNAME` is configured THE SYSTEM SHALL render the bot-reachability remedy as a `https://t.me/<username>` link. IF it is not configured THEN THE SYSTEM SHALL render plain-text instructions and no link.
-- WHEN an admin calls `list_telegram_identities` THE SYSTEM SHALL include an omitempty `lifecycle_stage` field on each `IdentityRow`, derived with the same `lifecycle.Derive`, and SHALL leave every existing field unchanged.
-- WHEN the bot receiver accepts a `message` update from a known private chat THE SYSTEM SHALL record `client_bot_reachability.state = reachable` with `source = bot_inbound` for the user that owns that chat. The write SHALL happen inside the receiver's dispatch transaction.
-- IF the inbound update comes from an unknown, group, channel or ambiguous chat THEN THE SYSTEM SHALL NOT record reachability. The existing `KnownChatFunc` drop path covers this.
-- WHILE handling an inbound update THE SYSTEM SHALL NOT decode or persist message text, SHALL NOT send any message, and SHALL NOT change notification preferences.
-- WHEN a broadcast audience is evaluated THE SYSTEM SHALL keep using `broadcast.Evaluate` unchanged, so lifecycle onboarding gives a model no new send path and no broadcast authority.
-- WHEN the lifecycle surfaces render THE SYSTEM SHALL NOT log phone numbers, message bodies, or session data. Only the stage and reason codes MAY be logged.
+### `/start` records reachability, never consent
+
+- WHEN the login-bot receiver accepts a `message` update whose first entity is a `bot_command` at offset 0 naming `/start` (bare, `@<bot>`-suffixed, or with a payload) THE SYSTEM SHALL classify the update as kind `start_command`, and SHALL keep only that classification: neither the message text nor the payload is held in any field, logged, or stored.
+- WHEN a `start_command` update arrives from a known private chat THE SYSTEM SHALL record `client_bot_reachability.state = reachable`, `reason_code = bot_start`, `source = bot_start` for the user who owns that chat, inside the receiver's dispatch transaction.
+- IF the chat is unknown, not private (id ≤ 0) or maps to more than one user THEN THE SYSTEM SHALL record nothing. The existing `KnownChatFunc` drop path, outcome `unknown_chat`, covers this.
+- WHEN a `start_command` update is handled THE SYSTEM SHALL NOT change any notification preference and SHALL NOT send any message.
+- WHEN any other `message` update arrives THE SYSTEM SHALL NOT dispatch it to any handler, write any row other than its own `bot_updates` bookkeeping, send any message, or invoke any model or action path. Kind `message` stays unregistered, so the update ends with the existing `no_handler` outcome.
+- WHEN the same update is delivered twice THE SYSTEM SHALL handle it at most once (`DispatchOnce`), and a handler error SHALL roll back the reachability write together with the done mark.
+
+### Manage page shows reachability and a `t.me` entry point
+
+- WHEN a signed-in client opens `/telegram/connect/manage` THE SYSTEM SHALL render a bot-reachability block above the notification form, showing one of `unknown` (no row), `reachable`, or `blocked`. `cannot_initiate` is shown as "not started". The `unknown` copy SHALL be observational only: it says the platform has not yet seen the login bot reach the client (for example: "We have not yet seen your login bot respond; start it to confirm delivery"). It SHALL NEVER claim the client did not start the bot, because a client may have started it before the receiver was enabled.
+- WHERE `TELEGRAM_LOGIN_BOT_USERNAME` is configured and valid THE SYSTEM SHALL render a `https://t.me/<username>?start=onboarding` link in that block. WHERE it is unset or invalid THE SYSTEM SHALL render plain-text instructions and no link.
+- WHILE the reachability state is not `reachable` THE SYSTEM SHALL show a note that the login bot cannot deliver the categories the client has enabled until the client starts the bot.
+- WHEN the manage page renders THE SYSTEM SHALL NOT write any notification preference or reachability row. A reachability read failure SHALL hide the block without breaking the page or the disconnect controls.
+
+### Explicit category choice on first connect
+
+- WHEN `/telegram/connect/done` succeeds THE SYSTEM SHALL present an explicit "choose your notifications" step that links to `/telegram/connect/manage?onboarding=1#notifications`, and WHERE `TELEGRAM_LOGIN_BOT_USERNAME` is configured a `https://t.me/<username>?start=onboarding` start-the-bot link (plain-text instructions otherwise).
+- WHILE the `product_updates` preference has never been saved (`ResolvedPref.Explicit == false`) THE SYSTEM SHALL show a prompt on the manage page asking the client to choose, and the `product_updates` checkbox SHALL be unchecked.
+- IF a client authenticates or connects a Telegram session THEN THE SYSTEM SHALL NOT change any notification preference. Only an explicit save of the category form (or the existing REST/MCP setters) writes consent.
+- WHEN a client saves `product_updates = subscribed` THE SYSTEM SHALL include that client in a `product_updates` broadcast audience, subject to the unchanged `broadcast.Evaluate` rules. Until then the client SHALL be skipped as `unsubscribed`.
+
+### Safety and privacy
+
+- THE SYSTEM SHALL leave `broadcast.Evaluate`, the broadcast worker, approval and audit unchanged.
+- THE SYSTEM SHALL NOT log chat ids, phone numbers, message text or command payloads in the new code paths.
 
 ## Out of scope
 
-- Bot commands that read message text (`/subscribe`, `/settings`, `/stop`): these need `bot.Update` to be widened, which `internal/bot/update.go` requires to happen in a separate change that makes its own case.
-- Callback-query handling (owned by #571) and any bot reply or welcome message.
-- Any operator-identity or OpenClaw-only lookup account (#400 and mctl-gitops#1182 are retired).
-- Changes to broadcast eligibility rules, approval flow, or product-update digest generation.
-- New notification categories.
-- Automatic outreach to clients whose reachability is `unknown`. Probing stays forbidden by `internal/notify`.
+- The `internal/lifecycle` package, `GET /api/account/lifecycle`, the MCP tool `get_my_onboarding_status`, and `IdentityRow.LifecycleStage`.
+- Bot commands other than `/start` (`/subscribe`, `/settings`, `/stop`), consent changes through the bot, and any bot reply or welcome message.
+- Callback-query handling (#571).
+- `edited_message` and `channel_post` / `edited_channel_post` updates, even when they carry `/start`: they are not classified as `start_command` (edited messages keep their current `unsupported` handling), so only a fresh private `message` counts as evidence.
+- Any operator-identity or OpenClaw-only lookup (#400 and mctl-gitops#1182 are retired).
+- Changes to broadcast eligibility, approval, or digest generation; new notification categories.
+- Probing reachability. `internal/notify` still forbids a message sent only to classify reachability.
 
-## Open questions
+## Rollout and closure
 
-- Is an inbound private message acceptable evidence of reachability? `internal/notify/classify.go` currently says reachability is derived "only from the outcome of a real Telegram Bot API delivery". This proposal treats a message the client sent to the bot as real, non-probe evidence and updates that package comment. A reviewer may prefer to keep inbound evidence in a separate column instead. That is the alternative B2 in design.md.
-- Should `notifications_decided` require an explicit choice only for `product_updates` (the marketing category), or for every category? The proposal requires only `product_updates`, because operational categories default to subscribed by design.
-- The bot username could be configured (`TELEGRAM_LOGIN_BOT_USERNAME`) or discovered with `getMe` at startup. The proposal uses configuration to avoid a startup network dependency.
-- The issue does not say what counts as "done" for the epic. This proposal assumes that the integrated self-service view, the admin stage and inbound reachability are enough to close `onboarding-integration`.
+1. Merge and release the code. The receiver stays off: `BOT_RECEIVER_ENABLED` is not set in production today.
+2. After that release is live, a **separate** mctl-gitops PR sets `BOT_RECEIVER_ENABLED` (and `TELEGRAM_LOGIN_BOT_USERNAME`) for `labs/mctl-telegram`.
+3. Live proof: onboarding → `/start` → reachability `reachable` → explicit category preferences saved → a broadcast preview respects them. #679 closes only after this proof.
+
+## Resolved questions
+
+- **Is a `/start` the client sent acceptable evidence of reachability?** Yes, by the owner's decision. Telegram delivers it only from a user who has started (and not blocked) the bot. It is not a probe, because the client initiated it. Only `/start` counts; other inbound messages are not evidence in this change.
+- **What does "decided" mean for consent?** An explicit save of `product_updates` in either direction. Operational categories keep their defaults.
+- **Is the bot username configured or discovered?** Configured (`TELEGRAM_LOGIN_BOT_USERNAME`), to avoid a startup network dependency.
