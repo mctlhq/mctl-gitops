@@ -60,7 +60,11 @@ distinct kind:
     only content-derived fact and why.
 - `Update.Kind()` returns `KindStartCommand` for a message with `StartCommand == true`, and
   `KindMessage` for any other message. Callback and unsupported kinds are unchanged.
-- The metrics label set gains one bounded value (`start_command`).
+- The metrics label set gains one bounded value (`start_command`): the `kind` label of
+  `bot_updates_total` is still drawn only from the `db.Kind*` constants, never from content.
+- `edited_message`, `channel_post` and `edited_channel_post` are not decoded into `Message`,
+  so a `/start` in them is never `start_command`; they keep their current `unsupported`
+  kind.
 
 **Handler.**
 
@@ -95,8 +99,11 @@ distinct kind:
   over `getBotReachability`) and passes a small view to the template: state label, an
   optional `t.me` URL `https://t.me/<username>?start=onboarding`, and a `NotReachable` flag.
 - `manageTemplate`: a "Login bot" block above the notification form.
-  - It shows `Unknown — you have not started the bot yet`, `Reachable`, `Blocked`, or
-    `Not started` (for `cannot_initiate`), and the link or plain-text instructions.
+  - It shows `Not yet observed — we have not yet seen your login bot respond; start it to
+    confirm delivery` (no row), `Reachable`, `Blocked`, or `Not started` (for
+    `cannot_initiate`), and the link or plain-text instructions. The no-row copy is
+    observational only and never says the client did not start the bot: a client may have
+    started it before the receiver was enabled, and that start was never recorded.
   - While not reachable, it adds a note: "The login bot cannot deliver the categories you
     enable until you start it."
   - A reachability read error hides the block, mirroring the prefs-failure rule.
@@ -104,6 +111,10 @@ distinct kind:
 
 ### 3. Explicit category choice on first connect (task 3)
 
+- `ConnectConfig` (`internal/web/connect.go`) gains `LoginBotUsername`, set from the same
+  validated `TelegramLoginBotUsername` in `cmd/server/main.go`, because `HandleConnectDone`
+  belongs to `ConnectServer`, not `ManageServer`. The URL is built by one shared helper
+  (`loginBotStartURL(username)`), so the two pages cannot diverge.
 - `HandleConnectDone` success page: replace the plain "Manage your session" link with an
   explicit step: "Choose which notifications the login bot may send you" →
   `/telegram/connect/manage?onboarding=1#notifications`, plus "Start the login bot" with the

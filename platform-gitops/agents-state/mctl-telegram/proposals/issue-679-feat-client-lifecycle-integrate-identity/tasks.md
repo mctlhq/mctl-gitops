@@ -15,15 +15,16 @@ bot, or callback handling (#571). No change to `docs/tool-descriptors.json` or
   - (e) Add `bot.StartHandler` in `internal/bot/start.go`. Through the dispatch tx, for chat id > 0, it records `reachable` / reason `bot_start` / source `bot_start` and returns `reachability_recorded`.
   - (f) Register only that handler, for `KindStartCommand`, in `cmd/server/main.go`. `KindMessage` and `KindCallbackQuery` stay unregistered.
 
-  — DoD: a plain message ends `no_handler` with no other write and no send; `/start` writes only `client_bot_reachability`; no notification preference changes; no text is held in any struct field; `RecordBotReachability`'s existing tests pass unchanged.
+  — DoD: the `bot_updates_total` metric emits `kind="start_command"` for a `/start`, and its `kind` label stays bounded to the `db.Kind*` constants; a plain message ends `no_handler` with no other write and no send; `/start` writes only `client_bot_reachability`; no notification preference changes; no text is held in any struct field; `RecordBotReachability`'s existing tests pass unchanged.
 - [ ] 2. **Manage page shows reachability and a `t.me` entry point.**
   - (a) Add the optional config `TelegramLoginBotUsername` (`TELEGRAM_LOGIN_BOT_USERNAME`), validated as a Telegram bot username; an invalid value is ignored with a startup warning.
   - (b) Pass it to `ManageServer`.
   - (c) Add `Store.GetBotReachability`.
-  - (d) Render a "Login bot" block above the notification form in `manageTemplate`. It shows `unknown` / `reachable` / `blocked` (and "not started" for `cannot_initiate`), a `https://t.me/<username>?start=onboarding` link only when configured (otherwise plain-text instructions), and, while not reachable, a note that enabled categories cannot be delivered until the bot is started.
+  - (d) Render a "Login bot" block above the notification form in `manageTemplate`. It shows `unknown` (observational copy only, e.g. "We have not yet seen your login bot respond; start it to confirm delivery" — never "you have not started the bot") / `reachable` / `blocked` (and "not started" for `cannot_initiate`), a `https://t.me/<username>?start=onboarding` link only when configured (otherwise plain-text instructions), and, while not reachable, a note that enabled categories cannot be delivered until the bot is started.
 
   — DoD: GET performs no write; a reachability read error hides the block and leaves disconnect working; config tests cover set, unset and invalid values.
 - [ ] 3. **Explicit category choice on first connect.**
+  - (0) Add `LoginBotUsername` to `ConnectConfig` (`internal/web/connect.go`), set in `cmd/server/main.go` from the same validated `TelegramLoginBotUsername` as `ManageServer`, with one shared `loginBotStartURL` helper used by both pages. — DoD: the success page renders the `t.me` link when configured and plain-text instructions when not.
   - (a) Change the `HandleConnectDone` success page to show an explicit "Choose which notifications the login bot may send you" step linking to `/telegram/connect/manage?onboarding=1#notifications`, plus the start-the-bot link when configured.
   - (b) In `HandleManage`, render a "not chosen yet — product updates stay off until you save" prompt while `product_updates` has `Explicit == false`, and give the section `id="notifications"`.
   - (c) Keep `HandleSetNotifications` as the only web consent writer.
@@ -53,18 +54,20 @@ bot, or callback handling (#571). No change to `docs/tool-descriptors.json` or
   - a `bot_command` that is not the first entity
   - text with no entities
 
-  After decoding, the `Update` value (reflect over all fields) holds no part of the text or payload.
+  After decoding, the `Update` value (reflect over all fields) holds no part of the text or payload. An `edited_message` or `channel_post` carrying `/start` is not `start_command`.
+- [ ] T11. Metrics: a `/start` update increments `bot_updates_total{kind="start_command",outcome="reachability_recorded"}`; across all T1 inputs the emitted `kind` label values are a subset of the `db.Kind*` constants.
 - [ ] T2. Handler: a known private chat with `/start` → `reachable` with reason and source `bot_start`, and outcome `reachability_recorded`. An unknown, negative or ambiguous chat is dropped before dispatch (`unknown_chat`) and records nothing. A handler error rolls back the reachability row and the done mark together. A redelivered update is not handled twice (`DispatchOnce`).
 - [ ] T3. Inertness: a plain `message` update from a known chat ends `no_handler`, writes no `client_bot_reachability` and no `client_notification_prefs` row, and makes no outbound HTTP call (stub transport asserts zero requests).
 - [ ] T4. `/start` leaves every `client_notification_prefs` row (and resolved prefs) byte-identical, including for a user with explicit prefs.
 - [ ] T5. `/start` overwrites a prior `blocked` with `reachable`; a later non-conclusive outbound outcome (429) leaves it `reachable`.
 - [ ] T6. Manage page render covers:
   - each of `unknown` (no row), `reachable` and `blocked`, with the right label;
+  - the `unknown` copy is observational and contains no claim that the client did not start the bot (assert the absence of "have not started" / "did not start");
   - the `t.me` link only when the username is configured, and text otherwise;
   - the not-delivered note only when the state is not reachable;
   - a failing reachability read hides the block while disconnect still renders;
   - no write happens on GET.
-- [ ] T7. First connect: the success page contains the explicit choice link to `/telegram/connect/manage?onboarding=1#notifications`, and the connect flow writes no preference. The manage page shows the "not chosen yet" prompt while `product_updates` is not explicit, and hides it after a save.
+- [ ] T7. First connect: the success page contains the explicit choice link to `/telegram/connect/manage?onboarding=1#notifications`, the `t.me/<username>?start=onboarding` link when `LoginBotUsername` is configured and plain-text instructions (no link) when it is not, and the connect flow writes no preference. The manage page shows the "not chosen yet" prompt while `product_updates` is not explicit, and hides it after a save.
 - [ ] T8. Broadcast respects the choice. Before any save, a `product_updates` campaign audience skips the user as `unsubscribed`. After saving `product_updates=subscribed` through `HandleSetNotifications`, the user is in the audience. `broadcast.Evaluate` tests pass unchanged.
 - [ ] T9. Redaction: the receiver and handler log lines, captured through slog, contain no chat id, no message text and no payload for `/start` or plain messages.
 - [ ] T10. Config: `TELEGRAM_LOGIN_BOT_USERNAME` set and valid, unset, and invalid (ignored with a warning).

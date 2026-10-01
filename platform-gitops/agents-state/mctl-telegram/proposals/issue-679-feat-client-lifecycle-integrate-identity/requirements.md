@@ -48,14 +48,14 @@ What is missing is the glue that turns them into an onboarding path:
 
 ### Manage page shows reachability and a `t.me` entry point
 
-- WHEN a signed-in client opens `/telegram/connect/manage` THE SYSTEM SHALL render a bot-reachability block above the notification form, showing one of `unknown` (no row), `reachable`, or `blocked`. `cannot_initiate` is shown as "not started".
+- WHEN a signed-in client opens `/telegram/connect/manage` THE SYSTEM SHALL render a bot-reachability block above the notification form, showing one of `unknown` (no row), `reachable`, or `blocked`. `cannot_initiate` is shown as "not started". The `unknown` copy SHALL be observational only: it says the platform has not yet seen the login bot reach the client (for example: "We have not yet seen your login bot respond; start it to confirm delivery"). It SHALL NEVER claim the client did not start the bot, because a client may have started it before the receiver was enabled.
 - WHERE `TELEGRAM_LOGIN_BOT_USERNAME` is configured and valid THE SYSTEM SHALL render a `https://t.me/<username>?start=onboarding` link in that block. WHERE it is unset or invalid THE SYSTEM SHALL render plain-text instructions and no link.
 - WHILE the reachability state is not `reachable` THE SYSTEM SHALL show a note that the login bot cannot deliver the categories the client has enabled until the client starts the bot.
 - WHEN the manage page renders THE SYSTEM SHALL NOT write any notification preference or reachability row. A reachability read failure SHALL hide the block without breaking the page or the disconnect controls.
 
 ### Explicit category choice on first connect
 
-- WHEN `/telegram/connect/done` succeeds THE SYSTEM SHALL present an explicit "choose your notifications" step that links to `/telegram/connect/manage?onboarding=1#notifications`.
+- WHEN `/telegram/connect/done` succeeds THE SYSTEM SHALL present an explicit "choose your notifications" step that links to `/telegram/connect/manage?onboarding=1#notifications`, and WHERE `TELEGRAM_LOGIN_BOT_USERNAME` is configured a `https://t.me/<username>?start=onboarding` start-the-bot link (plain-text instructions otherwise).
 - WHILE the `product_updates` preference has never been saved (`ResolvedPref.Explicit == false`) THE SYSTEM SHALL show a prompt on the manage page asking the client to choose, and the `product_updates` checkbox SHALL be unchecked.
 - IF a client authenticates or connects a Telegram session THEN THE SYSTEM SHALL NOT change any notification preference. Only an explicit save of the category form (or the existing REST/MCP setters) writes consent.
 - WHEN a client saves `product_updates = subscribed` THE SYSTEM SHALL include that client in a `product_updates` broadcast audience, subject to the unchanged `broadcast.Evaluate` rules. Until then the client SHALL be skipped as `unsubscribed`.
@@ -70,6 +70,7 @@ What is missing is the glue that turns them into an onboarding path:
 - The `internal/lifecycle` package, `GET /api/account/lifecycle`, the MCP tool `get_my_onboarding_status`, and `IdentityRow.LifecycleStage`.
 - Bot commands other than `/start` (`/subscribe`, `/settings`, `/stop`), consent changes through the bot, and any bot reply or welcome message.
 - Callback-query handling (#571).
+- `edited_message` and `channel_post` / `edited_channel_post` updates, even when they carry `/start`: they are not classified as `start_command` (edited messages keep their current `unsupported` handling), so only a fresh private `message` counts as evidence.
 - Any operator-identity or OpenClaw-only lookup (#400 and mctl-gitops#1182 are retired).
 - Changes to broadcast eligibility, approval, or digest generation; new notification categories.
 - Probing reachability. `internal/notify` still forbids a message sent only to classify reachability.
