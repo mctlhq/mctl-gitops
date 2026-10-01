@@ -152,6 +152,14 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
         # Access IS the authorization server, so the portal is just another
         # client and this list is what it is checked against.
         "https://mcp.mctl.ai/servers-callback",
+
+        # ChatGPT's connector callback. Access does not read Client ID Metadata
+        # Documents, so ChatGPT registers through DCR with the redirect its own
+        # document lists (https://chatgpt.com/oauth/client.json, read
+        # 2026-10-02). Without it, the first ChatGPT sign-in on 2026-10-01 ended
+        # at Access with "Redirect URI not allowed by application
+        # configuration".
+        "https://chatgpt.com/connector_platform_oauth_redirect",
       ]
 
       # Claude Desktop and Claude Code complete the flow on a loopback port that
