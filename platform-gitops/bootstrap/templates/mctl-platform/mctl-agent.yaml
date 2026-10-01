@@ -98,11 +98,24 @@ spec:
           OPTIMIZER_DRY_RUN: "true"
           OPTIMIZER_TENANT_ALLOWLIST: "labs"
           DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-agent"
+          # /start bridge (mctl-telegram#679): when the webhook sees a /start
+          # update for @MCTL_AI_bot it forwards a minimal observation (no raw
+          # message text) to mctl-telegram's internal endpoint, authenticated
+          # with BOT_START_FORWARD_TOKEN from the bot-start-bridge Secret below.
+          # Either value unset means the forwarder is a no-op. Cluster-internal
+          # only: allow-mctl-agent-to-mctl-telegram-bot-start in labs admits this
+          # pod on 8080; the Service is not exposed through any Ingress route.
+          BOT_START_FORWARD_URL: "http://labs-mctl-telegram-base-service.labs.svc:8080/internal/bot-start-observations"
         envFrom:
           - secretRef:
               name: mctl-agent-secrets
           - secretRef:
               name: mctl-agent-db-creds
+          # optional: the Vault value is created by hand; until it exists the
+          # Secret is absent, the pod still starts and the forwarder stays off.
+          - secretRef:
+              name: mctl-agent-bot-start-bridge
+              optional: true
         # Same Secret as envFrom above, mounted as a file so kubelet keeps it
         # current. Only the projected volume tracks Secret updates; the env
         # copy never does. Same shape as admins/mctl-agents-worker.
@@ -177,6 +190,19 @@ spec:
               - secretKey: DB_PASSWORD
                 remoteKey: platform/mctl-agent/database
                 property: password
+          # Shared /start bridge token (mctl-telegram#679) — the same Vault value
+          # labs-mctl-telegram receives as BOT_START_BRIDGE_TOKEN. Kept out of
+          # mctl-agent-secrets on purpose: a missing remote key fails the whole
+          # ExternalSecret, and that one carries the 15-minute GitHub token
+          # rotation. On its own, a missing value fails only this sync.
+          mctl-agent-bot-start-bridge:
+            store: vault-backend
+            storeKind: ClusterSecretStore
+            refreshInterval: 1h
+            data:
+              - secretKey: BOT_START_FORWARD_TOKEN
+                remoteKey: platform/shared/bot-start-bridge
+                property: token
         ingress:
           enabled: true
           ingressClassName: traefik
