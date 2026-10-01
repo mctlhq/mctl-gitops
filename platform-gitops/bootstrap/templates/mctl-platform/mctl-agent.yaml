@@ -201,7 +201,7 @@ spec:
             refreshInterval: 1h
             data:
               - secretKey: BOT_START_FORWARD_TOKEN
-                remoteKey: platform/shared/bot-start-bridge
+                remoteKey: secret/data/platform/shared/bot-start-bridge
                 property: token
         ingress:
           enabled: true

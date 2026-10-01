@@ -90,6 +90,12 @@ jobs:
           kubeconform -strict -summary -schema-location default \
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
+          # A platform NetworkPolicy placed in a tenant namespace must also be
+          # on mctl-tenant-networkpolicy-allowlist, or the API server rejects
+          # it at sync while every check above stays green (gitops#1484).
+          # --selftest first: a detector never seen to fire is not known to work.
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-tenant-networkpolicy-allowlist.py --selftest "$tmpdir/bootstrap.yaml"
 
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
