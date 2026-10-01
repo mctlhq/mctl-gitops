@@ -114,6 +114,16 @@ env:
   # TELEGRAM_OIDC_CLIENT_SECRET is sourced from Vault via the oauth
   # ExternalSecret below.
   TELEGRAM_OIDC_CLIENT_ID: "8568443430"
+  # Public @username of the same bot, used for the t.me/<bot>?start= deep link
+  # that starts the /start onboarding flow (mctl-telegram#679). Not a secret.
+  TELEGRAM_LOGIN_BOT_USERNAME: "MCTL_AI_bot"
+  # BOT_RECEIVER_ENABLED is deliberately absent and must NEVER be set to "true"
+  # here. @MCTL_AI_bot's updates are webhook-owned by mctl-agent
+  # (agent.mctl.ai): long polling from this service would get 409 Conflict, and
+  # "fixing" that with deleteWebhook would cut mctl-agent off. /start reaches
+  # this service through the bot-start bridge instead — mctl-agent forwards a
+  # minimal observation to /internal/bot-start-observations, authenticated with
+  # BOT_START_BRIDGE_TOKEN (see labs-mctl-telegram-bot-start-bridge below).
   # CSV of Telegram user IDs that receive full scopes (admin allowlist).
   # 210408407 = operator (@MashkovD) ONLY. The demo/reviewer account 8745115872
   # (@mctlhq) is intentionally NON-admin (client tier): App-Directory reviewers
@@ -228,6 +238,12 @@ envFrom:
       name: "labs-mctl-telegram-login"
   - secretRef:
       name: "labs-mctl-telegram-demo"
+  # optional: the Vault value is created by hand. Until it exists the Secret is
+  # absent, the pod still starts, and the bridge endpoint stays unmounted
+  # (mctl-telegram only mounts it when BOT_START_BRIDGE_TOKEN is set).
+  - secretRef:
+      name: "labs-mctl-telegram-bot-start-bridge"
+      optional: true
 extraExternalSecrets:
   labs-mctl-telegram-tg-api:
     # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
@@ -318,6 +334,23 @@ extraExternalSecrets:
       - secretKey: TELEGRAM_BOT_TOKEN
         remoteKey: secret/data/platform/mctl-agent/tokens
         property: telegram-bot-token
+  # Shared bearer token for the mctl-agent -> mctl-telegram /start bridge
+  # (mctl-telegram#679). The same Vault value is synced into admins as
+  # mctl-agent's BOT_START_FORWARD_TOKEN. A dedicated random value (64 hex
+  # chars), distinct from every service/admin/surface token; it never appears
+  # in this repo. mctl-telegram refuses to start if it is set but shorter than
+  # 32 chars. Its own ExternalSecret so a missing Vault value only fails this
+  # sync, never the other secrets above.
+  labs-mctl-telegram-bot-start-bridge:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-bot-start-bridge
+    data:
+      - secretKey: BOT_START_BRIDGE_TOKEN
+        remoteKey: secret/data/platform/shared/bot-start-bridge
+        property: token
 # Reviewer-session recovery. Narrowed on 2026-08-24: this job used to hold the
 # demo/reviewer row (8745115872) open against both session TTLs, and that half
 # is now redundant — the absolute ceiling is waived for
