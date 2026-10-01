@@ -77,7 +77,10 @@ distinct kind:
 - `internal/bot/start.go` (new): `StartHandler(store)` is a `HandlerFunc` for
   `KindStartCommand`. For `ChatID.Int64 > 0` it resolves the user through `tx` and records
   `notify.DeliveryOutcome{State: StateReachable, ReasonCode: "bot_start", Conclusive: true}`
-  with source `bot_start` through `tx`. It returns the outcome `reachability_recorded`.
+  with source `bot_start` through `tx`. It returns the outcome `db.OutcomeReachabilityRecorded`
+  (`"reachability_recorded"`, a new named constant next to the other `Outcome*` values in
+  `internal/db/bot_updates.go`). The `mctl_bot_updates_total` Help text in
+  `internal/metrics/metrics.go`, which enumerates every outcome, is updated in the same change.
   - It sends nothing, touches no preference, and logs no chat id.
   - A repeated `/start` upserts the same state with a newer `observed_at` (idempotent).
 - `cmd/server/main.go`: register only `StartHandler` for `KindStartCommand`. `KindMessage`
@@ -97,7 +100,9 @@ distinct kind:
 - `ManageServer` receives the username (constructor argument). `HandleManage` reads
   reachability through an exported `Store.GetBotReachability(ctx, userID)` (a thin wrapper
   over `getBotReachability`) and passes a small view to the template: state label, an
-  optional `t.me` URL `https://t.me/<username>?start=onboarding`, and a `NotReachable` flag.
+  optional `t.me` URL built by the shared `loginBotStartURL(username)` helper (the same one the
+  success page uses, §3; it returns `https://t.me/<username>?start=onboarding`, or "" when the
+  username is unset), and a `NotReachable` flag. Neither page builds the URL inline.
 - `manageTemplate`: a "Login bot" block above the notification form.
   - It shows `Not yet observed — we have not yet seen your login bot respond; start it to
     confirm delivery` (no row), `Reachable`, `Blocked`, or `Not started` (for
@@ -161,8 +166,11 @@ distinct kind:
 - **Activation.** Nothing runs until `BOT_RECEIVER_ENABLED` is set in a separate gitops PR
   after the release. Without `TELEGRAM_LOGIN_BOT_USERNAME`, the pages show text instead of a
   link.
-- **Resource impact.** One indexed read per manage-page load. One lookup and one upsert per
-  `/start` on a low-volume 1:1 bot.
+- **Resource impact.** One indexed read per manage-page load. Per `/start` on a low-volume
+  1:1 bot: two identity lookups and one upsert. `KnownChatFunc` resolves the chat before
+  dispatch (outside the tx, as for every update), then `StartHandler` resolves it again through
+  `UserIDByTelegramIDTx` inside the dispatch tx so the write uses a user id read in the same
+  transaction. Both are indexed point reads.
 - **Risks and mitigations.**
   - *Content leakage via the new decode.* Text is decoded into a local and dropped. A test
     asserts that no field or log line contains it.

@@ -12,15 +12,15 @@ bot, or callback handling (#571). No change to `docs/tool-descriptors.json` or
   - (b) Give `bot.Message` a custom `UnmarshalJSON` that decodes `text` and `entities` into locals only, sets the exported `StartCommand bool` (first entity is a `bot_command` at offset 0 whose token, up to an optional `@suffix`, equals `/start`; any payload ignored), and keeps no text.
   - (c) Make `Update.Kind()` return `KindStartCommand` for such messages.
   - (d) Add `RecordBotReachabilityTx` (the upsert moved into an `execer` helper; `RecordBotReachability` unchanged) and `UserIDByTelegramIDTx`.
-  - (e) Add `bot.StartHandler` in `internal/bot/start.go`. Through the dispatch tx, for chat id > 0, it records `reachable` / reason `bot_start` / source `bot_start` and returns `reachability_recorded`.
+  - (e) Add `bot.StartHandler` in `internal/bot/start.go`. Through the dispatch tx, for chat id > 0, it records `reachable` / reason `bot_start` / source `bot_start` and returns the new named outcome `db.OutcomeReachabilityRecorded` (`"reachability_recorded"`, in `internal/db/bot_updates.go`). Update the `mctl_bot_updates_total` Help text in `internal/metrics/metrics.go` to list it.
   - (f) Register only that handler, for `KindStartCommand`, in `cmd/server/main.go`. `KindMessage` and `KindCallbackQuery` stay unregistered.
 
-  — DoD: the `bot_updates_total` metric emits `kind="start_command"` for a `/start`, and its `kind` label stays bounded to the `db.Kind*` constants; a plain message ends `no_handler` with no other write and no send; `/start` writes only `client_bot_reachability`; no notification preference changes; no text is held in any struct field; `RecordBotReachability`'s existing tests pass unchanged.
+  — DoD: `db.OutcomeReachabilityRecorded` exists and the `mctl_bot_updates_total` Help text lists `reachability_recorded`; the `bot_updates_total` metric emits `kind="start_command"` for a `/start`, and its `kind` label stays bounded to the `db.Kind*` constants; a plain message ends `no_handler` with no other write and no send; `/start` writes only `client_bot_reachability`; no notification preference changes; no text is held in any struct field; `RecordBotReachability`'s existing tests pass unchanged.
 - [ ] 2. **Manage page shows reachability and a `t.me` entry point.**
   - (a) Add the optional config `TelegramLoginBotUsername` (`TELEGRAM_LOGIN_BOT_USERNAME`), validated as a Telegram bot username; an invalid value is ignored with a startup warning.
   - (b) Pass it to `ManageServer`.
   - (c) Add `Store.GetBotReachability`.
-  - (d) Render a "Login bot" block above the notification form in `manageTemplate`. It shows `unknown` (observational copy only, e.g. "We have not yet seen your login bot respond; start it to confirm delivery" — never "you have not started the bot") / `reachable` / `blocked` (and "not started" for `cannot_initiate`), a `https://t.me/<username>?start=onboarding` link only when configured (otherwise plain-text instructions), and, while not reachable, a note that enabled categories cannot be delivered until the bot is started.
+  - (d) Render a "Login bot" block above the notification form in `manageTemplate`. It shows `unknown` (observational copy only, e.g. "We have not yet seen your login bot respond; start it to confirm delivery" — never "you have not started the bot") / `reachable` / `blocked` (and "not started" for `cannot_initiate`), a `https://t.me/<username>?start=onboarding` link built by the shared `loginBotStartURL(username)` helper (never inline) only when configured (otherwise plain-text instructions), and, while not reachable, a note that enabled categories cannot be delivered until the bot is started.
 
   — DoD: GET performs no write; a reachability read error hides the block and leaves disconnect working; config tests cover set, unset and invalid values.
 - [ ] 3. **Explicit category choice on first connect.**
@@ -55,7 +55,7 @@ bot, or callback handling (#571). No change to `docs/tool-descriptors.json` or
   - text with no entities
 
   After decoding, the `Update` value (reflect over all fields) holds no part of the text or payload. An `edited_message` or `channel_post` carrying `/start` is not `start_command`.
-- [ ] T11. Metrics: a `/start` update increments `bot_updates_total{kind="start_command",outcome="reachability_recorded"}`; across all T1 inputs the emitted `kind` label values are a subset of the `db.Kind*` constants.
+- [ ] T11. Metrics: a `/start` update increments `bot_updates_total{kind="start_command",outcome="reachability_recorded"}`; across all T1 inputs the emitted `kind` label values are a subset of the `db.Kind*` constants. The outcome is `db.OutcomeReachabilityRecorded`, and the metric's Help text contains `reachability_recorded`.
 - [ ] T2. Handler: a known private chat with `/start` → `reachable` with reason and source `bot_start`, and outcome `reachability_recorded`. An unknown, negative or ambiguous chat is dropped before dispatch (`unknown_chat`) and records nothing. A handler error rolls back the reachability row and the done mark together. A redelivered update is not handled twice (`DispatchOnce`).
 - [ ] T3. Inertness: a plain `message` update from a known chat ends `no_handler`, writes no `client_bot_reachability` and no `client_notification_prefs` row, and makes no outbound HTTP call (stub transport asserts zero requests).
 - [ ] T4. `/start` leaves every `client_notification_prefs` row (and resolved prefs) byte-identical, including for a user with explicit prefs.
