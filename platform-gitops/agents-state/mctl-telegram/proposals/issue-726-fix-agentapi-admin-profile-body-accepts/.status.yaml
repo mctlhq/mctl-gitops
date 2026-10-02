@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-10-02T22:03:31Z'
+status: implemented
+updated_at: '2026-10-02T22:10:55Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-1c704f988e709e21
-  trace_id: d88148e00dfcb4209da3995a3fa0c290
-  agent: issue-investigator
+  context_id: ex-61c08b9156805a8a
+  trace_id: 0cf298167406c6cccdb3d9df9140261c
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -19,5 +19,11 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-10-02T22:03:31Z'
+attempt:
+  id: c407ca5aeac19e7f1a01645e981e9baa7afce3729d8818e0e027c77e89765f58
+  started_at: '2026-10-02T22:04:55Z'
+  expires_at: '2026-10-03T00:14:55Z'
+  finished_at: '2026-10-02T22:10:55Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/728
