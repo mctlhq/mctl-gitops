@@ -22,7 +22,10 @@ FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec702
 ARG MC_RELEASE
 ARG MC_COMMIT
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath
-RUN apk add --no-cache git
+# apk pins use `~` (same upstream version, any -rN revision): an exact `=`
+# pin breaks the build as soon as Alpine ships a security rebuild and drops
+# the old revision from the index. Bump these together with the base digests.
+RUN apk add --no-cache git~2.54
 WORKDIR /src
 RUN git clone --depth 1 --branch "${MC_RELEASE}" https://github.com/minio/mc.git . \
  && test "$(git rev-parse HEAD)" = "${MC_COMMIT}"
@@ -39,7 +42,7 @@ LABEL org.opencontainers.image.title="mc" \
       org.opencontainers.image.version="${MC_RELEASE}" \
       org.opencontainers.image.revision="${MC_COMMIT}" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates~20260909
 COPY --from=build /out/mc /usr/bin/mc
 COPY --from=build /src/LICENSE /licenses/LICENSE
 COPY --from=build /src/CREDITS /licenses/CREDITS
