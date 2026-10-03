@@ -376,3 +376,92 @@ spec:
   validationActions: [Deny]
   matchResources:
     namespaceSelector: {}
+{{- with .Values.externalManifestSecrets }}
+---
+# Pods in a namespace whose manifests the platform does not review may only
+# name the Secrets that namespace was given (values.yaml
+# externalManifestSecrets explains why). Ephemeral containers are checked too:
+# kubectl debug goes through pods/ephemeralcontainers.
+#
+# Proven both ways against a real API server by
+# scripts/test-secret-allowlist-policy.sh (fixtures in
+# tests/fixtures/secret-allowlist).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-external-manifests-secret-allowlist
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods", "pods/ephemeralcontainers"]
+  variables:
+    - name: allowed
+      expression: >-
+        {
+        {{- range $ns, $names := . }}
+          {{ $ns | squote }}: [{{ range $i, $n := $names }}{{ if $i }}, {{ end }}{{ $n | squote }}{{ end }}],
+        {{- end }}
+        }[request.namespace]
+    - name: containers
+      expression: >-
+        object.spec.containers +
+        (has(object.spec.initContainers) ? object.spec.initContainers : [])
+  validations:
+    - expression: >-
+        !has(object.spec.volumes) || object.spec.volumes.all(v,
+          (!has(v.secret) || (has(v.secret.secretName) && v.secret.secretName in variables.allowed)) &&
+          (!has(v.projected) || !has(v.projected.sources) || v.projected.sources.all(s,
+            !has(s.secret) || (has(s.secret.name) && s.secret.name in variables.allowed))))
+      messageExpression: >-
+        "a volume names a Secret outside this namespace's allowlist " + variables.allowed.join(", ") +
+        " (bootstrap values externalManifestSecrets)"
+      reason: Forbidden
+    - expression: >-
+        variables.containers.all(c,
+          (!has(c.env) || c.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.secretKeyRef) ||
+            (has(e.valueFrom.secretKeyRef.name) && e.valueFrom.secretKeyRef.name in variables.allowed))) &&
+          (!has(c.envFrom) || c.envFrom.all(e, !has(e.secretRef) ||
+            (has(e.secretRef.name) && e.secretRef.name in variables.allowed))))
+      messageExpression: >-
+        "a container env/envFrom names a Secret outside this namespace's allowlist " + variables.allowed.join(", ") +
+        " (bootstrap values externalManifestSecrets)"
+      reason: Forbidden
+    - expression: >-
+        !has(object.spec.ephemeralContainers) || object.spec.ephemeralContainers.all(c,
+          (!has(c.env) || c.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.secretKeyRef) ||
+            (has(e.valueFrom.secretKeyRef.name) && e.valueFrom.secretKeyRef.name in variables.allowed))) &&
+          (!has(c.envFrom) || c.envFrom.all(e, !has(e.secretRef) ||
+            (has(e.secretRef.name) && e.secretRef.name in variables.allowed))))
+      messageExpression: >-
+        "an ephemeral container names a Secret outside this namespace's allowlist " + variables.allowed.join(", ")
+      reason: Forbidden
+    # Checked after the ServiceAccount admission plugin has copied the
+    # ServiceAccount's imagePullSecrets into the Pod, so those count too.
+    - expression: >-
+        !has(object.spec.imagePullSecrets) || object.spec.imagePullSecrets.all(s,
+          has(s.name) && s.name in variables.allowed)
+      messageExpression: >-
+        "an imagePullSecret is outside this namespace's allowlist " + variables.allowed.join(", ")
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-external-manifests-secret-allowlist
+spec:
+  policyName: mctl-external-manifests-secret-allowlist
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values:
+            {{- range $ns, $_ := . }}
+            - {{ $ns | quote }}
+            {{- end }}
+{{- end }}

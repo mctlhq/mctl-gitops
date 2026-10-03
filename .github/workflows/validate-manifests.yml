@@ -578,3 +578,10 @@ jobs:
           set -euo pipefail
           python3 -m pip install --quiet pyyaml
           scripts/test-reserved-hosts-policy.sh --services --platform
+
+      # Same toolchain, its own k3s: the Secret allowlist for namespaces whose
+      # manifests come from outside the platform (externalManifestSecrets).
+      - name: Prove the external-manifests Secret allowlist policy
+        run: |
+          set -euo pipefail
+          scripts/test-secret-allowlist-policy.sh

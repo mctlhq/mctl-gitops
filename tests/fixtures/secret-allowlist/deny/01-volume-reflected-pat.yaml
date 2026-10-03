@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reflected-pat-volume
+  namespace: erpact
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: c
+      image: busybox
+  volumes:
+    - name: s
+      secret:
+        secretName: github-actions-pat

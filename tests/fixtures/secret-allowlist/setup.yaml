@@ -1,0 +1,20 @@
+# Created for real before the fixtures run (dry-run Pods need these to exist).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: puller
+  namespace: erpact
+imagePullSecrets:
+  - name: ghcr-credentials
+---
+# The target of the ephemeral-container check: admitted, never scheduled.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-target
+  namespace: erpact
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: c
+      image: busybox
