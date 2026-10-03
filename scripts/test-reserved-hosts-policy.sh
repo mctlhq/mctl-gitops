@@ -201,7 +201,10 @@ kubectl get --raw /readyz >/dev/null
 echo "== Traefik CRDs $TRAEFIK_VERSION (${TRAEFIK_COMMIT:0:8})"
 curl -fsSL --retry 3 --retry-delay 2 "$TRAEFIK_CRDS" -o "$WORK/traefik-crds.yaml"
 got="$( (command -v sha256sum >/dev/null && sha256sum || shasum -a 256) < "$WORK/traefik-crds.yaml" | awk '{print $1}')"
-[ "$got" = "$TRAEFIK_CRDS_SHA256" ] || { echo "FAIL: traefik CRD digest $got, expected $TRAEFIK_CRDS_SHA256"; exit 1; }
+# Case-insensitive: the tools print lowercase hex, an override may not. tr,
+# not ${x,,}, because macOS ships bash 3.2.
+want="$(printf %s "$TRAEFIK_CRDS_SHA256" | tr 'A-F' 'a-f')"
+[ "$got" = "$want" ] || { echo "FAIL: traefik CRD digest $got, expected $TRAEFIK_CRDS_SHA256"; exit 1; }
 kubectl apply --server-side -f "$WORK/traefik-crds.yaml" >/dev/null
 kubectl wait --for=condition=Established --timeout=60s \
   crd/ingressroutes.traefik.io crd/ingressroutetcps.traefik.io >/dev/null
