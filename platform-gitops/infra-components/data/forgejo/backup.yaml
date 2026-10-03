@@ -47,6 +47,11 @@ spec:
             runAsUser: 1000
             runAsGroup: 1000
             fsGroup: 1000
+            # Must equal podSecurityContext.seLinuxOptions.level of the Forgejo
+            # pod (bootstrap/templates/data/forgejo.yaml). A different level
+            # relabels the shared volume on mount and locks Forgejo out of it.
+            seLinuxOptions:
+              level: "s0:c731,c732"
           affinity:
             podAffinity:
               requiredDuringSchedulingIgnoredDuringExecution:

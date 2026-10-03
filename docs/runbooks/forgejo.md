@@ -81,6 +81,12 @@ Restore:
   chunks or use LFS.
 - The volume is ReadWriteOnce on one hcloud volume; `replicaCount` must stay 1
   and the strategy `Recreate`.
+- Nodes run SELinux and relabel a volume to the mounting pod's MCS level.
+  The Forgejo pod and the backup Job pin the same level (`s0:c731,c732`);
+  any new pod that mounts `forgejo-data` must use it too, or its mount locks
+  Forgejo out of `/data`. `/api/healthz` does not notice that (it checks the
+  DB and cache only) — the symptom is HTTP 500 and "permission denied" in
+  the Forgejo log on any repository operation.
 - The backup Job pod must land on Forgejo's node; if Forgejo is down the
   backup cannot run and `ForgejoBackupStale` fires the next day.
 
