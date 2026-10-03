@@ -126,3 +126,108 @@ tests:
                 Mind the backup's emptyDir sizeLimit (data/forgejo/backup.yaml)
                 too — the compressed archive has to fit in it.
                 Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  # ---------------------------------------------------------------------
+  # Declarative reconcile (forgejo/forgejo-reconcile)
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a reconcile that succeeded an hour ago stays quiet
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-3600x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoReconcileStale
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoReconcileNeverSucceeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoReconcileMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: a reconcile without success for over 2h fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-7300x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoReconcileStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-reconcile
+            exp_annotations:
+              summary: Forgejo declarative reconcile has not succeeded in over 2 hours
+              description: >-
+                forgejo/forgejo-reconcile has failed its last four runs. Read the
+                latest Job's log: a FAIL line names the repository and branch
+                (diverged in Forgejo, unreadable source, missing branch); a
+                Terraform error points at the manifest in Vault.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a fresh reconcile cronjob without a success is not yet an alert
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-3600x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoReconcileNeverSucceeded
+        exp_alerts: []
+
+  - interval: 1m
+    name: a reconcile cronjob older than 2h without any success fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-7300x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoReconcileNeverSucceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-reconcile
+            exp_annotations:
+              summary: Forgejo declarative reconcile has never succeeded
+              description: >-
+                forgejo/forgejo-reconcile has existed for over 2 hours without one
+                successful run, so ForgejoReconcileStale cannot fire for it. A
+                pod stuck in CreateContainerConfigError means the
+                forgejo-reconcile Secret is missing: the Vault secret
+                platform/forgejo/reconcile was never written.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a missing reconcile cronjob fires after 30m
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ForgejoReconcileMetricAbsent
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ForgejoReconcileMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-reconcile
+            exp_annotations:
+              summary: forgejo-reconcile CronJob is not visible to kube-state-metrics
+              description: >-
+                No kube_cronjob_created series for forgejo/forgejo-reconcile. The
+                CronJob was removed or is not scraped, and the other reconcile
+                alerts are blind while this lasts.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
