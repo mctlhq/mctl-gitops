@@ -114,3 +114,28 @@ spec:
     staticConfig:
       targets:
         - https://git.mctl.ai/api/healthz
+---
+# ZITADEL (bootstrap/templates/core-infra/zitadel.yaml). Its own job, like
+# forgejo-healthz: id.mctl.ai pages at warning (vm-rules/zitadel-alerts.yaml)
+# until mctl-api and the platform sign-in depend on it. /debug/* is denied at
+# the edge (identity/zitadel/debug-edge-deny.yaml), so the probe uses the OIDC
+# discovery document: it needs the instance resolved from the database, so it
+# covers pod, ingress, certificate and shared-pg together.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: zitadel-public
+  namespace: monitoring
+spec:
+  jobName: zitadel-public
+  interval: 60s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://id.mctl.ai/.well-known/openid-configuration
+        # The Login V2 UI is a separate Deployment behind its own Ingress; a
+        # healthy API with a dead login page still means nobody can sign in.
+        - https://id.mctl.ai/ui/v2/login/healthy

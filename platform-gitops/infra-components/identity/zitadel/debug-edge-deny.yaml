@@ -1,0 +1,44 @@
+# ZITADEL serves /debug/{healthz,ready,metrics} on the same port as the API,
+# and the chart's Ingress routes `/` for id.mctl.ai, so without this the
+# metrics endpoint would be public. Probes and the VMServiceScrape reach
+# /debug in-cluster and never traverse traefik, so denying it at the edge
+# costs nothing. The public health check (blackbox) uses
+# /.well-known/openid-configuration instead.
+#
+# Same construction as the /metrics deny in services/labs/mctl-telegram-preview:
+# ipAllowList with TEST-NET-1 (RFC 5737, unroutable) is how traefik v3 spells
+# "deny"; v2's ipWhiteList name silently does nothing on this traefik.io CRD.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: zitadel-deny-debug
+  namespace: zitadel
+spec:
+  ipAllowList:
+    sourceRange:
+      - 192.0.2.0/24
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: zitadel-debug-deny
+  namespace: zitadel
+spec:
+  # websecure only: the `web` entrypoint redirects everything to https before
+  # any router matches (traefik static config from the kube-hetzner module).
+  entryPoints:
+    - websecure
+  routes:
+    # Explicit priority so this never depends on traefik's rule-length ordering
+    # against the chart Ingress's Host && PathPrefix(`/`).
+    - match: Host(`id.mctl.ai`) && PathPrefix(`/debug`)
+      kind: Rule
+      priority: 1000
+      middlewares:
+        - name: zitadel-deny-debug
+      # A route needs a backend even though the middleware rejects first.
+      services:
+        - name: zitadel
+          port: 8080
+  tls:
+    secretName: zitadel-tls

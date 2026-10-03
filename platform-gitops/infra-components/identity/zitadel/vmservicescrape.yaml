@@ -1,0 +1,22 @@
+# ZITADEL's built-in Prometheus endpoint (/debug/metrics on the API port,
+# metrics.enabled in the chart values). Unauthenticated, which is why the
+# edge deny in debug-edge-deny.yaml exists; in-cluster it is reachable only
+# from monitoring (networkpolicy.yaml).
+# Native VMOperator kind, same reasoning as data/forgejo/vmservicescrape.yaml.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: zitadel
+  namespace: zitadel
+  labels:
+    app.kubernetes.io/name: zitadel
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zitadel
+      app.kubernetes.io/instance: zitadel
+  endpoints:
+    - port: http2-server
+      interval: 60s
+      path: /debug/metrics
+      scheme: http

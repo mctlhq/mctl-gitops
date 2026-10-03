@@ -156,6 +156,8 @@ spec:
       - host karabu-draw-with-friends karabu-draw-with-friends all scram-sha-256
       # Forgejo (platform git, bootstrap/templates/data/forgejo.yaml)
       - host forgejo forgejo all scram-sha-256
+      # ZITADEL (platform identity provider, bootstrap/templates/core-infra/zitadel.yaml)
+      - host zitadel zitadel all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -313,6 +315,18 @@ spec:
         ensure: present
         passwordSecret:
           name: forgejo-db-creds
+      # ZITADEL (bootstrap/templates/core-infra/zitadel.yaml): one API replica
+      # capped at MaxOpenConns 15, plus the init/setup Sync-hook Jobs that run
+      # while the old pod is still up during an upgrade. Kept tight because
+      # the per-role limits here already sum past max_connections (200). The
+      # role owns the zitadel database, so ZITADEL's `init zitadel` creates
+      # its schemas without any superuser credential.
+      - name: zitadel
+        login: true
+        connectionLimit: 25
+        ensure: present
+        passwordSecret:
+          name: zitadel-db-creds
       #   passwordSecret:
       #     name: team1-app1-db-creds
 

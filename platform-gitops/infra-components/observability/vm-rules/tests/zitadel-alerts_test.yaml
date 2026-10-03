@@ -1,0 +1,111 @@
+# Unit tests for zitadel-alerts.yaml (group mctl.zitadel).
+# rule_files is resolved relative to this file; generated/ is produced by
+# scripts/check-vm-rules.sh.
+rule_files:
+  - generated/zitadel-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: a healthy zitadel is quiet
+    input_series:
+      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/.well-known/openid-configuration"}'
+        values: '1x30'
+      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/ui/v2/login/healthy"}'
+        values: '1x30'
+      - series: 'up{namespace="zitadel",service="zitadel"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ZitadelDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ZitadelProbeAbsent
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ZitadelMetricsScrapeFailing
+        exp_alerts: []
+
+  - interval: 1m
+    name: a dead login UI fires on its own target only
+    input_series:
+      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/.well-known/openid-configuration"}'
+        values: '1x15'
+      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/ui/v2/login/healthy"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ZitadelDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ZitadelDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: zitadel
+              job: zitadel-public
+              instance: https://id.mctl.ai/ui/v2/login/healthy
+            exp_annotations:
+              summary: id.mctl.ai has failed its health check for 5 minutes
+              description: >-
+                blackbox-exporter has had no 2xx from https://id.mctl.ai/ui/v2/login/healthy for
+                5 minutes. If it is the openid-configuration target, check
+                `kubectl -n zitadel logs deploy/zitadel` for database errors
+                before the ingress; if only the /ui/v2/login target fails, the
+                Login UI is down or cannot reach the API
+                (`kubectl -n zitadel logs deploy/zitadel-login`).
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/zitadel.md
+
+  - interval: 1m
+    name: a missing probe series fires after 15m
+    input_series:
+      - series: 'up{namespace="zitadel",service="zitadel"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ZitadelProbeAbsent
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ZitadelProbeAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: zitadel
+              job: zitadel-public
+            exp_annotations:
+              summary: No probe_success series for job=zitadel-public
+              description: >-
+                The zitadel-public VMProbe produces no data, so ZitadelDown
+                cannot fire and ZITADEL availability is unmonitored. Check the
+                VMProbe in observability/blackbox/vmprobes.yaml and vmagent targets.
+
+  - interval: 1m
+    name: a failing scrape fires after 15m
+    input_series:
+      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/.well-known/openid-configuration"}'
+        values: '1x30'
+      - series: 'up{namespace="zitadel",service="zitadel",job="zitadel",instance="10.42.0.10:8080"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ZitadelMetricsScrapeFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ZitadelMetricsScrapeFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: zitadel
+              namespace: zitadel
+              job: zitadel
+              instance: 10.42.0.10:8080
+            exp_annotations:
+              summary: vmagent cannot scrape ZITADEL /debug/metrics
+              description: >-
+                The zitadel scrape target has been down for 15 minutes. If
+                ZitadelDown is quiet, ZITADEL is serving and the scrape is
+                failing in-cluster: check the allow-zitadel-http NetworkPolicy
+                still admits the monitoring namespace, and the VMServiceScrape
+                in identity/zitadel/vmservicescrape.yaml.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/zitadel.md
