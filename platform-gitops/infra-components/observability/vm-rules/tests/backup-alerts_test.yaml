@@ -138,3 +138,108 @@ tests:
       - eval_time: 90m
         alertname: VictoriaMetricsBackupMetricAbsent
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # Forgejo volume backup (forgejo/forgejo-backup)
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a forgejo backup 24h old stays quiet
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-86400x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoBackupStale
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoBackupNeverSucceeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoBackupMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: a forgejo backup older than 25h fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-90000x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-backup
+            exp_annotations:
+              summary: Forgejo volume backup has not succeeded in over 25 hours
+              description: >-
+                forgejo/forgejo-backup has no successful run in 25 hours. The Job
+                pod is pinned to Forgejo's node, so a Forgejo outage also stops
+                backups — check ForgejoDown first.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  # The first-day case: created hours ago, no success yet, must stay quiet.
+  - interval: 1m
+    name: a freshly created forgejo cronjob without a success is not yet an alert
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-36000x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoBackupNeverSucceeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoBackupMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: a forgejo cronjob older than 26h without any success fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-100000x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoBackupNeverSucceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-backup
+            exp_annotations:
+              summary: Forgejo volume backup has never succeeded
+              description: >-
+                forgejo/forgejo-backup has existed for over 26 hours without one
+                successful run, so ForgejoBackupStale cannot fire for it.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a missing forgejo cronjob fires after 30m
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ForgejoBackupMetricAbsent
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ForgejoBackupMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-backup
+            exp_annotations:
+              summary: forgejo-backup CronJob is not visible to kube-state-metrics
+              description: >-
+                No kube_cronjob_created series for forgejo/forgejo-backup. The
+                CronJob was removed or is not scraped, and every other Forgejo
+                backup alert is blind while this lasts.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md

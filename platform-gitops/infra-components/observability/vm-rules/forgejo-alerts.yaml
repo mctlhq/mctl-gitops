@@ -1,0 +1,82 @@
+# Availability and capacity of platform Forgejo (git.mctl.ai). Backup
+# freshness lives with the other backups in backup-alerts.yaml.
+#
+# Severity is warning throughout: Forgejo is not on any request path of the
+# platform in phase 1, so an outage is worth knowing about, not waking up for.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-forgejo-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: forgejo
+spec:
+  groups:
+    - name: mctl.forgejo
+      interval: 60s
+      rules:
+        - alert: ForgejoDown
+          # The probe goes out through Cloudflare and back, so this covers the
+          # pod, the ingress route, the certificate and the DB together.
+          expr: probe_success{job="forgejo-healthz"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "git.mctl.ai has failed its health check for 5 minutes"
+            description: >-
+              blackbox-exporter has had no 2xx from {{ $labels.instance }} for
+              5 minutes. /api/healthz also fails when Forgejo cannot reach
+              shared-pg, so check `kubectl -n forgejo logs deploy/forgejo` for
+              database errors before the ingress.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        - alert: ForgejoProbeAbsent
+          # Without the series ForgejoDown can never fire — same reasoning as
+          # BlackboxProbeMetricAbsent in blackbox-alerts.yaml.
+          expr: absent(probe_success{job="forgejo-healthz"})
+          for: 15m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "No probe_success series for job=forgejo-healthz"
+            description: >-
+              The forgejo-healthz VMProbe produces no data, so ForgejoDown
+              cannot fire and Forgejo availability is unmonitored. Check the
+              VMProbe in observability/blackbox/vmprobes.yaml and vmagent targets.
+        - alert: ForgejoMetricsScrapeFailing
+          # up == 0 with the probe green almost always means the bearer token
+          # in forgejo-metrics no longer matches what Forgejo loaded (401).
+          expr: up{namespace="forgejo", service="forgejo-http"} == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "vmagent cannot scrape Forgejo /metrics"
+            description: >-
+              The forgejo-http scrape target has been down for 15 minutes. If
+              ForgejoDown is quiet, Forgejo is serving and the scrape is being
+              refused — usually a metrics token rotated in Vault while the pod
+              still runs with the old one. Restart the deployment to reload it.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        - alert: ForgejoVolumeFillingUp
+          expr: |
+            kubelet_volume_stats_used_bytes{namespace="forgejo", persistentvolumeclaim="forgejo-data"}
+              / kubelet_volume_stats_capacity_bytes{namespace="forgejo", persistentvolumeclaim="forgejo-data"}
+              > 0.8
+          for: 15m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "Forgejo repository volume is over 80% full"
+            description: >-
+              forgejo-data is {{ $value | humanizePercentage }} full. A full
+              volume rejects pushes. hcloud-volumes expands online: raise
+              persistence.size in bootstrap/templates/data/forgejo.yaml.
+              Mind the backup's emptyDir sizeLimit (data/forgejo/backup.yaml)
+              too — the compressed archive has to fit in it.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md

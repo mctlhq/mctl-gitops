@@ -93,3 +93,24 @@ spec:
       targets:
         - https://mctl.me/
         - https://mctl.ru/
+---
+# Forgejo (bootstrap/templates/data/forgejo.yaml). Its own job rather than a
+# target in platform-public: git.mctl.ai is not a front door, so it pages at
+# warning (vm-rules/forgejo-alerts.yaml), not PublicEndpointDown's critical.
+# /api/healthz answers without a session even with REQUIRE_SIGNIN_VIEW, and
+# returns non-2xx when Forgejo cannot reach its database.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: forgejo-healthz
+  namespace: monitoring
+spec:
+  jobName: forgejo-healthz
+  interval: 60s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://git.mctl.ai/api/healthz

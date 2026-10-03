@@ -1,0 +1,187 @@
+# Platform Forgejo — self-hosted git at https://git.mctl.ai.
+#
+# Forgejo is the GPL community fork of Gitea (https://forgejo.org/compare-to-gitea/).
+# It runs on what the platform already operates instead of bringing its own
+# stack: the repositories live on one hcloud volume, metadata in shared-pg
+# (CNPG, already backed up to R2), secrets come from Vault through ESO.
+#
+# Phase 1 scope: web + git over HTTPS only. SSH, Forgejo Actions and pull
+# mirrors are deliberately off and land as separate changes (docs/runbooks/forgejo.md).
+#
+# Login: no forward-auth in front of the ingress. Backstage forward-auth would
+# put an OIDC redirect in front of `git clone` / `git push` over HTTPS, which a
+# git client cannot follow. Access control is Forgejo's own: registration is
+# closed and REQUIRE_SIGNIN_VIEW hides everything from anonymous users.
+#
+# The manifests next to the chart (ExternalSecrets, NetworkPolicies, metrics
+# scrape, PVC backup) live in platform-gitops/infra-components/data/forgejo.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: forgejo
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    # OCI registry: no scheme in repoURL is what tells ArgoCD to pull the chart
+    # over OCI (public registry, so no repository credentials are needed).
+    - repoURL: code.forgejo.org/forgejo-helm
+      chart: forgejo
+      # Chart 17.1.7 ships Forgejo 15.0.9 (the LTS line).
+      targetRevision: 17.1.7
+      helm:
+        values: |
+          replicaCount: 1
+          # The chart's own warning: RollingUpdate on a RWO volume deadlocks.
+          strategy:
+            type: Recreate
+
+          persistence:
+            enabled: true
+            claimName: forgejo-data
+            size: 10Gi
+            storageClass: hcloud-volumes
+            annotations:
+              # hcloud-volumes reclaims with Delete, and ArgoCD ignores the
+              # chart's own helm.sh/resource-policy: keep. Without these, an
+              # Application delete or a renamed claim would destroy every
+              # repository on the volume.
+              helm.sh/resource-policy: keep
+              argocd.argoproj.io/sync-options: Prune=false,Delete=false
+
+          service:
+            http:
+              type: ClusterIP
+              port: 3000
+            ssh:
+              # Phase 1 has no SSH; the chart still renders the Service.
+              type: ClusterIP
+
+          ingress:
+            enabled: true
+            className: traefik
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+            hosts:
+              - host: git.mctl.ai
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    port: http
+            tls:
+              - secretName: forgejo-tls
+                hosts:
+                  - git.mctl.ai
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
+
+          # The chart's test-connection Pod pulls busybox:latest and runs only
+          # on `helm test`; ArgoCD would keep it as a stray hook resource.
+          test:
+            enabled: false
+
+          gitea:
+            admin:
+              # Keys `username` / `password` (+ `email` from below).
+              existingSecret: forgejo-admin
+              email: admin@mctl.ai
+              # Rotation happens in Vault; keep the account in step with it.
+              passwordMode: keepUpdated
+
+            metrics:
+              enabled: true
+
+            # DB credentials and the metrics token as FORGEJO__section__KEY env
+            # vars, which take precedence over `config` below and keep them out
+            # of the chart-rendered config Secret.
+            #
+            # SECRET_KEY / INTERNAL_TOKEN / JWT_SECRET / LFS_JWT_SECRET are NOT
+            # supplied: the chart's init script generates them on first start
+            # and, once /data/gitea/conf/app.ini exists, drops any env value for
+            # them. Holding copies in Vault would look like a rotation path and
+            # change nothing. They live in app.ini on the volume, which is why
+            # the PVC backup (infra-components/data/forgejo/backup.yaml) must
+            # include it: SECRET_KEY decrypts 2FA and mirror credentials in the DB.
+            additionalConfigFromEnvs:
+              - name: FORGEJO__DATABASE__USER
+                valueFrom:
+                  secretKeyRef:
+                    name: forgejo-db-creds
+                    key: username
+              - name: FORGEJO__DATABASE__PASSWD
+                valueFrom:
+                  secretKeyRef:
+                    name: forgejo-db-creds
+                    key: password
+              - name: FORGEJO__METRICS__TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: forgejo-metrics
+                    key: token
+
+            config:
+              APP_NAME: mctl git
+              server:
+                DOMAIN: git.mctl.ai
+                ROOT_URL: https://git.mctl.ai/
+                DISABLE_SSH: true
+                START_SSH_SERVER: false
+                LFS_START_SERVER: true
+                OFFLINE_MODE: true
+              database:
+                DB_TYPE: postgres
+                HOST: shared-pg-rw.platform-db.svc.cluster.local:5432
+                NAME: forgejo
+                SSL_MODE: disable
+              service:
+                DISABLE_REGISTRATION: true
+                REQUIRE_SIGNIN_VIEW: true
+                DEFAULT_KEEP_EMAIL_PRIVATE: true
+              repository:
+                DEFAULT_PRIVATE: private
+              security:
+                INSTALL_LOCK: true
+              session:
+                COOKIE_SECURE: true
+              actions:
+                ENABLED: false
+              federation:
+                ENABLED: false
+              mailer:
+                ENABLED: false
+              cron.update_checker:
+                ENABLED: false
+
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/data/forgejo
+
+  ignoreDifferences:
+    # Same ESO handling as minio.yaml / valkey.yaml: admission-injected
+    # annotations and status only; never jq paths that index into spec arrays (#789).
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .metadata.annotations
+        - .spec.target.deletionPolicy
+        - .status
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: forgejo
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
