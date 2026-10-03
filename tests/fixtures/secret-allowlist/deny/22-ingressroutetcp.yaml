@@ -1,14 +1,15 @@
 # expect: Traefik objects are not allowed
 apiVersion: traefik.io/v1alpha1
-kind: IngressRoute
+kind: IngressRouteTCP
 metadata:
-  name: claim
+  name: claim-tcp
   namespace: erpact
 spec:
   entryPoints: [websecure]
   routes:
-    - match: Host(`labs-app.mctl.ai`)
-      kind: Rule
+    - match: HostSNI(`labs-app.mctl.ai`)
       services:
         - name: web
-          port: 80
+          port: 443
+  tls:
+    passthrough: true

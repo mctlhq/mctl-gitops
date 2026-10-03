@@ -24,7 +24,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURES="$ROOT/tests/fixtures/secret-allowlist"
 POLICY=mctl-external-manifests
-POLICIES="mctl-external-manifests-secret-allowlist mctl-external-manifests-ingress-hosts mctl-external-manifests-services mctl-external-manifests-no-traefik-routes"
+POLICIES="mctl-external-manifests-secret-allowlist mctl-external-manifests-ingress-hosts mctl-external-manifests-services mctl-external-manifests-no-traefik"
 # Keep in step with the platform cluster and scripts/test-reserved-hosts-policy.sh.
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.33.13-k3s1}"
 TRAEFIK_VERSION="${TRAEFIK_VERSION:-v3.7.13}"

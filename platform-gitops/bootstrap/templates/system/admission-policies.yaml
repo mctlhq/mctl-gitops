@@ -514,13 +514,14 @@ spec:
         operations: ["CREATE", "UPDATE"]
         resources: ["ingresses"]
   variables:
-    # A missing pattern matches no host. matches() is a search, so the
+    # A missing pattern ('a^': nothing, not even the empty string) matches no
+    # host. matches() is a search, so the
     # anchors are added here rather than trusted to the value.
     - name: pattern
       expression: >-
         '^(?:' + {
         {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
-          {{ $n | squote }}: dyn({{ if hasKey $v "hostPattern" }}{{ index $v "hostPattern" | toJson }}{{ else }}'$^'{{ end }}),
+          {{ $n | squote }}: dyn({{ if hasKey $v "hostPattern" }}{{ index $v "hostPattern" | toJson }}{{ else }}'a^'{{ end }}),
         {{- end }}
         }[request.namespace] + ')$'
   validations:
@@ -580,14 +581,16 @@ spec:
           operator: In
           values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}
 ---
-# Traefik's own route kinds are refused outright in those namespaces: the
-# host pattern above only reads Ingress, and an IngressRoute would reach the
-# same hosts around it. Project erpact (#1516) admits no traefik.io kind
-# either; this keeps the containment from resting on that alone.
+# Every Traefik kind is refused in those namespaces. Routes would reach the
+# hosts the pattern above guards, around it; and a TLSOption or TLSStore
+# named "default" in ANY namespace becomes Traefik's global default, which
+# would drop the Cloudflare origin-pull client-certificate check or replace
+# the origin certificate for every host. Project erpact (#1516) admits no
+# traefik.io kind either; this keeps the containment from resting on that.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
-  name: mctl-external-manifests-no-traefik-routes
+  name: mctl-external-manifests-no-traefik
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -595,18 +598,18 @@ spec:
       - apiGroups: ["traefik.io", "traefik.containo.us"]
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
-        resources: ["ingressroutes", "ingressroutetcps", "ingressrouteudps"]
+        resources: ["*"]
   validations:
     - expression: "false"
-      message: "Traefik routes are not allowed in this namespace; use an Ingress whose hosts match its hostPattern"
+      message: "Traefik objects are not allowed in this namespace; use an Ingress whose hosts match its hostPattern"
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
-  name: mctl-external-manifests-no-traefik-routes
+  name: mctl-external-manifests-no-traefik
 spec:
-  policyName: mctl-external-manifests-no-traefik-routes
+  policyName: mctl-external-manifests-no-traefik
   validationActions: [Deny]
   matchResources:
     namespaceSelector:

@@ -243,7 +243,7 @@ surfaceTelegramToken:
 # ExternalSecret producing it.
 #
 # Three more policies hold what reaches outside the namespace: Ingress hosts
-# must match hostPattern, Traefik IngressRoutes are refused, and Services
+# must match hostPattern, every Traefik kind is refused, and Services
 # must be ClusterIP without externalIPs (no NodePort, no LoadBalancer: those
 # open node ports or buy a Hetzner load balancer).
 #
@@ -267,7 +267,7 @@ externalManifestNamespaces:
       - default
     # Ingress hosts (rules and TLS) must match this RE2 pattern in full (the
     # policy anchors it), so the repository cannot claim another tenant's
-    # unreserved *.mctl.ai name. Traefik route kinds are refused outright.
+    # unreserved *.mctl.ai name. Traefik kinds of any sort are refused outright.
     hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai'
 
 # Platform hostnames and the namespaces allowed to serve them (#1503),
