@@ -31,21 +31,12 @@ spec:
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: erpact
-  ignoreDifferences:
-    # Same ESO handling as data/forgejo.yaml: no jq paths into spec arrays (#789).
-    - group: external-secrets.io
-      kind: ExternalSecret
-      jqPathExpressions:
-        - .metadata.annotations
-        - .spec.target.deletionPolicy
-        - .status
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - ApplyOutOfSyncOnly=true
-      - RespectIgnoreDifferences=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
     retry:
       limit: 5
@@ -79,21 +70,12 @@ spec:
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: erpact
-  ignoreDifferences:
-    # Same ESO handling as data/forgejo.yaml: no jq paths into spec arrays (#789).
-    - group: external-secrets.io
-      kind: ExternalSecret
-      jqPathExpressions:
-        - .metadata.annotations
-        - .spec.target.deletionPolicy
-        - .status
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - ApplyOutOfSyncOnly=true
-      - RespectIgnoreDifferences=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
     retry:
       limit: 5
@@ -121,21 +103,12 @@ spec:
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: erpact
-  ignoreDifferences:
-    # Same ESO handling as data/forgejo.yaml: no jq paths into spec arrays (#789).
-    - group: external-secrets.io
-      kind: ExternalSecret
-      jqPathExpressions:
-        - .metadata.annotations
-        - .spec.target.deletionPolicy
-        - .status
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - ApplyOutOfSyncOnly=true
-      - RespectIgnoreDifferences=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
     retry:
       limit: 5
@@ -163,21 +136,12 @@ spec:
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: erpact
-  ignoreDifferences:
-    # Same ESO handling as data/forgejo.yaml: no jq paths into spec arrays (#789).
-    - group: external-secrets.io
-      kind: ExternalSecret
-      jqPathExpressions:
-        - .metadata.annotations
-        - .spec.target.deletionPolicy
-        - .status
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - ApplyOutOfSyncOnly=true
-      - RespectIgnoreDifferences=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
     retry:
       limit: 5

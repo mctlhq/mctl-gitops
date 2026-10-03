@@ -122,7 +122,11 @@ def repo_id(url):
     # or a harmless spelling change would silently drop this repo's coverage.
     u = url.strip().lower().rstrip("/")
     u = u[:-4] if u.endswith(".git") else u
-    return u.split("://", 1)[-1]
+    if "://" in u:
+        u = u.split("://", 1)[1]
+    elif re.match(r"^[^/@]+@[^/:]+:", u):  # scp-style git@host:owner/repo
+        u = u.split("@", 1)[1].replace(":", "/", 1)
+    return u.split("@", 1)[-1]  # drop user@ of ssh://git@host/...
 
 SELF = repo_id("https://github.com/mctlhq/mctl-gitops.git")
 
