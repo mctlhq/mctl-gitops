@@ -56,10 +56,15 @@ spec:
                       app.kubernetes.io/instance: forgejo
                   topologyKey: kubernetes.io/hostname
           volumes:
+            # No readOnly here: on the claim it makes the hcloud CSI driver
+            # mount the block device a second time with `-o ro`, which fails
+            # with "Resource busy" because Forgejo already has it mounted rw on
+            # this node (seen on the first manual run, 2026-10-03). Read-only
+            # is enforced on the volumeMount below instead, which kubelet turns
+            # into a ro bind mount of the already-staged volume.
             - name: data
               persistentVolumeClaim:
                 claimName: forgejo-data
-                readOnly: true
             - name: archive
               emptyDir:
                 sizeLimit: 12Gi
