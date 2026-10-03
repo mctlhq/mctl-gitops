@@ -112,6 +112,23 @@ spec:
             metrics:
               enabled: true
 
+            # Sign-in through ZITADEL (#1520 S4). The client credentials come
+            # from forgejo-oidc-zitadel, which the zitadel-iac Job fills
+            # (helm-charts/zitadel-iac/iac/forgejo.tf); the name is part of the
+            # callback URL registered there, so the two must change together.
+            # The chart's init container adds or updates the source on every
+            # start. `scopes` is split on commas by the Forgejo CLI.
+            #
+            # Registration stays disabled (service below), so a ZITADEL
+            # identity can only be linked to an existing account with that
+            # account's own credentials; it never creates one.
+            oauth:
+              - name: ZITADEL
+                provider: openidConnect
+                existingSecret: forgejo-oidc-zitadel
+                autoDiscoverUrl: https://auth.mctl.ai/.well-known/openid-configuration
+                scopes: openid,email,profile
+
             # DB credentials and the metrics token as FORGEJO__section__KEY env
             # vars, which take precedence over `config` below and keep them out
             # of the chart-rendered config Secret.
