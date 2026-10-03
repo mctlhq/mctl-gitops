@@ -1,6 +1,7 @@
 # k3s-preview — Preprod Cluster on Hetzner Cloud
 
-Terraform configuration for the `mctl-preprod` K3s cluster.
+OpenTofu configuration for the `mctl-preprod` K3s cluster (Terraform until
+#1534; the state, providers and module did not change).
 Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner) Terraform module.
 
 ## Cluster specs
@@ -20,8 +21,8 @@ Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-
 
 ## Prerequisites
 
-- Terraform >= 1.14
-- Terraform variables from the macOS Keychain: `source ./tfenv.sh`. It exports
+- OpenTofu 1.13.x (`required_version = "~> 1.13.0"`; CI pins 1.13.1)
+- Input variables from the macOS Keychain: `source ./tfenv.sh`. It exports
   `TF_VAR_hcloud_token`, `TF_VAR_etcd_s3_access_key` and
   `TF_VAR_etcd_s3_secret_key` from the Keychain items it documents. There is no
   `terraform.tfvars` any more — it held the same values in plaintext on disk,
@@ -38,7 +39,7 @@ Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-
   Restore procedure: `docs/runbooks/restore.md` at the repo root.
 - Cloudflare R2 credentials for the **state backend**, as env vars. These are a
   different credential from the etcd one (bucket `mctl-terraform-state`;
-  Keychain service `mctl-terraform-state-local`) and `terraform init` needs them
+  Keychain service `mctl-terraform-state-local`) and `tofu init` needs them
   before any variable is read, which is why `tfenv.sh` does not set them:
   ```bash
   export AWS_ACCESS_KEY_ID=$(security find-generic-password -s mctl-terraform-state-local -a access-key-id -w)
@@ -51,14 +52,14 @@ Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-
 ```bash
 cd infrastructure/k3s-preview
 source ./tfenv.sh
-terraform init
-terraform plan
-terraform apply
+tofu init
+tofu plan
+tofu apply
 ```
 
 After apply, save the kubeconfig locally (git-ignored):
 ```bash
-terraform output --raw kubeconfig > kubeconfig.yaml
+tofu output --raw kubeconfig > kubeconfig.yaml
 chmod 600 kubeconfig.yaml
 ```
 
@@ -68,13 +69,13 @@ chmod 600 kubeconfig.yaml
 source ./tfenv.sh
 
 # Plan only (safe, no changes)
-terraform plan
+tofu plan
 
 # Apply changes
-terraform apply
+tofu apply
 ```
 
-The `terraform.yml` GitHub Actions workflow runs `terraform plan` automatically
+The `terraform.yml` GitHub Actions workflow ("k3s-preview (OpenTofu)") runs `tofu plan` automatically
 on every push to `infrastructure/k3s-preview/**`. Apply requires manual dispatch with `apply: true`.
 
 **Applying from CI needs secrets that do not exist yet.** The apply path had never
@@ -105,8 +106,8 @@ version = "2.19.1"
 To upgrade:
 1. Check the [upstream changelog](https://github.com/kube-hetzner/terraform-hcloud-kube-hetzner/releases)
 2. Update `version` in `kube.tf`
-3. Run `terraform init -upgrade` to refresh the module and update `.terraform.lock.hcl`
-4. Run `terraform plan` and review for breaking variable changes
+3. Run `tofu init -upgrade` to refresh the module and update `.terraform.lock.hcl`
+4. Run `tofu plan` and review for breaking variable changes
 5. Commit both `kube.tf` and `.terraform.lock.hcl`
 
 Subscribe to upstream releases to get notified of new versions.
@@ -155,16 +156,16 @@ own config via GitOps (`platform-gitops/argocd/`) once bootstrapped, and
 letting Terraform keep tracking the same Helm release causes it to fight
 ArgoCD's reconciler for ownership (this happened 2026-04-06 to 2026-07-01:
 Terraform's tracked state went stale for ~85 days while ArgoCD kept the live
-cluster current; re-running `terraform apply` against it then required
+cluster current; re-running `tofu apply` against it then required
 manually re-labelling `argocd-self-managed`/`root-app` with Helm ownership
 metadata that ArgoCD's own reconciliation had stripped).
 
 For a genuine from-zero cluster rebuild:
-1. `terraform apply -var="bootstrap_argocd=true"` — installs ArgoCD and seeds
+1. `tofu apply -var="bootstrap_argocd=true"` — installs ArgoCD and seeds
    the `argocd-self-managed` + `root-app` Applications.
 2. Wait for both Applications to report `Healthy`/`Synced`
    (`kubectl get application -n argocd`).
-3. `terraform state rm module.cluster-bootstrap.helm_release.argocd[0]` —
+3. `tofu state rm module.cluster-bootstrap.helm_release.argocd[0]` —
    detaches it from Terraform again so routine `plan`/`apply` stays clean.
 
 **There is no ArgoCD SSO during step 2.** The bootstrap release ships no dex
@@ -241,7 +242,7 @@ ssh root@<control-plane-node>
 
 Two things to know before you use it:
 
-- A level-0 or level-1 patch is **undone by the next `terraform apply`**, which
+- A level-0 or level-1 patch is **undone by the next `tofu apply`**, which
   re-renders both manifests from Git. It must be followed by a pull request —
   the same discipline as the break-glass section in
   `infrastructure/cloudflare/README.md`.
@@ -254,6 +255,6 @@ Two things to know before you use it:
   reads them; there is no `terraform.tfvars`. If you recreate one, `.gitignore`
   still covers `*.tfvars`, but a plaintext token in the working tree is exactly
   what the Keychain move removed — and note that any tool which prints a diff of
-  that file (`terraform fmt -diff` does) will echo the token.
+  that file (`tofu fmt -diff` does) will echo the token.
 - `kubeconfig.yaml` contains cluster admin credentials — git-ignored
 - Keep file permissions tight: `chmod 600 kubeconfig.yaml`

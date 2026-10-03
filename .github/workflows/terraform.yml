@@ -1,4 +1,4 @@
-name: Terraform
+name: k3s-preview (OpenTofu)
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       apply:
-        description: "Run terraform apply (default: plan only)"
+        description: "Run tofu apply (default: plan only)"
         type: boolean
         default: false
       allow_destroy:
@@ -49,9 +49,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       
-      # Everything an apply needs, checked BEFORE Terraform runs.
+      # Everything an apply needs, checked BEFORE OpenTofu runs.
       #
-      # This exists because Terraform destroys before it creates. On
+      # This exists because a plan destroys before it creates. On
       # 2026-09-09 an apply reached hcloud_ssh_key with an empty
       # SSH_PUBLIC_KEY, destroyed the live key, and then failed to recreate it
       # ("Must not begin with a whitespace character" -- the file held the lone
@@ -131,16 +131,21 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "ci-plan-dummy" -q
       
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      # OpenTofu since #1534. The state, the providers and the module are the
+      # same ones Terraform 1.14 used; a tofu plan against the live state was
+      # identical to the terraform plan before the switch (2 local files to
+      # add, nothing else). Pinned like the other OpenTofu roots in this repo.
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
-          terraform_version: 1.14.0
-      
-      - name: Terraform Init
-        run: terraform init
-      
-      - name: Terraform Validate
-        run: terraform validate
+          tofu_version: 1.13.1
+          tofu_wrapper: false
+
+      - name: Tofu Init
+        run: tofu init -input=false
+
+      - name: Tofu Validate
+        run: tofu validate
       
       # -out, so the apply below executes the plan that was printed here
       # rather than computing a second one nobody saw. The previous shape --
@@ -150,8 +155,8 @@ jobs:
       #
       # continue-on-error is gone with it: a plan that cannot be produced is a
       # failure, not a note.
-      - name: Terraform Plan
-        run: terraform plan -no-color -input=false -out=tfplan
+      - name: Tofu Plan
+        run: tofu plan -no-color -input=false -out=tfplan
 
       # A cluster root should not be destroying anything during a routine
       # apply. terraform_data and local_file are bookkeeping -- they carry
@@ -164,7 +169,7 @@ jobs:
           ALLOW_DESTROY: ${{ inputs.allow_destroy }}
         run: |
           set -euo pipefail
-          terraform show -json tfplan > tfplan.json
+          tofu show -json tfplan > tfplan.json
           doomed=$(jq -r '
             [ .resource_changes[]?
               | select(.change.actions | index("delete"))
@@ -179,9 +184,9 @@ jobs:
             echo "::warning::allow_destroy was set; continuing"
           fi
 
-      - name: Terraform Apply
+      - name: Tofu Apply
         if: inputs.apply == true
-        run: terraform apply -no-color -input=false tfplan
+        run: tofu apply -no-color -input=false tfplan
 
       - name: Notify Telegram on failure
         if: failure()
@@ -190,7 +195,7 @@ jobs:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            ❌ *mctl-gitops terraform failed*
+            ❌ *mctl-gitops k3s-preview (OpenTofu) failed*
             Branch: `${{ github.ref_name }}`
             Apply: `${{ inputs.apply }}`
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

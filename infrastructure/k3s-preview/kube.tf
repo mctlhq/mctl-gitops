@@ -6,7 +6,8 @@
 # =============================================================================
 
 terraform {
-  required_version = ">= 1.14.0"
+  # OpenTofu (#1534); terraform.yml pins the same version.
+  required_version = "~> 1.13.0"
   required_providers {
     hcloud = {
       source  = "hetznercloud/hcloud"
