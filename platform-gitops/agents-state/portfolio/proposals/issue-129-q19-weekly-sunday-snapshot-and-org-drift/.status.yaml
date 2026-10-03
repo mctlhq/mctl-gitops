@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-03T14:25:39Z'
+status: review-stuck
+updated_at: '2026-10-03T14:40:38Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-0d89498809da74b9
@@ -28,10 +28,12 @@ attempt:
   finished_at: '2026-10-03T13:38:29Z'
 pr: https://github.com/mctlhq/portfolio/pull/131
 review_attempts: 1
-refusals: 2
+refusals: 3
 refusals_head: fb4ba78e2a0460a5e4a1de28b20fe15186a4f61a
-notes: 'implementer declined to act: Both P2 findings confirm the existing code is
-  correct and request no change. scripts/org-drift.mjs:192 already has `const maxRetries
-  = method === GET || method === PATCH ? retries : 0;` so POSTs are not retried; the
-  line 270 repo-probe classification is already correct and maps to drift.unknown/exitCode
-  1. No defect to fix.'
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: Both P2 findings (scripts/org-drift.mjs:192
+  and :270) are affirmations, not defects: they state the maxRetries=0 handling for
+  POST /issues and comments, and the 404/403 classification into drift.unknown, are
+  correct and that earlier holes are closed. They request no change, so there is nothing
+  to fix and no commit was made.'
