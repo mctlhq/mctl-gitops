@@ -1,0 +1,45 @@
+# The OIDC client of Forgejo in ZITADEL (#1520 S4). ZITADEL generates the
+# client secret, and the zitadel-iac Job (helm-charts/zitadel-iac/iac/forgejo.tf)
+# writes it here with server-side apply as field manager `zitadel-iac`.
+#
+# Argo CD creates the Secret without data and never owns `.data`
+# (ignoreDifferences in bootstrap/templates/data/forgejo.yaml), so a sync does
+# not wipe what the Job wrote. The Job may only read and patch this one Secret
+# by name: no create, no list, nothing else in this namespace.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: forgejo-oidc-zitadel
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: oidc-zitadel
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: oidc-zitadel
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["forgejo-oidc-zitadel"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: oidc-zitadel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-iac-oidc-client
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-iac
+    namespace: zitadel
