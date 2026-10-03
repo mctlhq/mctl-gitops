@@ -562,6 +562,7 @@ jobs:
   # namespace's reserved host fails here instead of at sync. Its own job: it
   # needs Docker and takes about a minute.
   reserved-hosts:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -12,6 +12,10 @@
 #
 #   tests/fixtures/reserved-hosts/deny/*.yaml   each must be REFUSED by these policies
 #   tests/fixtures/reserved-hosts/admit/*.yaml  each must be ADMITTED
+#   tests/fixtures/reserved-hosts/invalid/*.yaml  each must be REFUSED by API
+#                                               server validation (RFC 1123) before
+#                                               admission: the premise that lets the
+#                                               Ingress policy skip case/dot normalising
 #   every file given with --admit FILE          each object must be ADMITTED
 #   --services                                  every Ingress / IngressRoute that
 #                                               platform-gitops/services/*/* renders
@@ -190,7 +194,7 @@ done
 kubectl get --raw /readyz >/dev/null
 
 echo "== Traefik CRDs $TRAEFIK_VERSION"
-curl -fsSL "$TRAEFIK_CRDS" -o "$WORK/traefik-crds.yaml"
+curl -fsSL --retry 3 --retry-delay 2 "$TRAEFIK_CRDS" -o "$WORK/traefik-crds.yaml"
 kubectl apply --server-side -f "$WORK/traefik-crds.yaml" >/dev/null
 kubectl wait --for=condition=Established --timeout=60s \
   crd/ingressroutes.traefik.io crd/ingressroutetcps.traefik.io >/dev/null
@@ -232,7 +236,7 @@ done
 # Every namespace a fixture or an --admit object names. The
 # ${arr[@]+"${arr[@]}"} form is for bash 3.2 (macOS), where an empty array
 # under `set -u` is an unbound variable.
-for ns in $(cat "$FIXTURES"/deny/*.yaml "$FIXTURES"/admit/*.yaml ${EXTRA_ADMIT[@]+"${EXTRA_ADMIT[@]}"} 2>/dev/null \
+for ns in $(cat "$FIXTURES"/deny/*.yaml "$FIXTURES"/admit/*.yaml "$FIXTURES"/invalid/*.yaml ${EXTRA_ADMIT[@]+"${EXTRA_ADMIT[@]}"} 2>/dev/null \
             | grep -E '^\s+namespace: ' | awk '{print $2}' | sort -u); do
   kubectl create namespace "$ns" >/dev/null 2>&1 || true
 done
@@ -256,6 +260,15 @@ for f in "$FIXTURES"/deny/*.yaml; do
     echo "FAIL deny  $(basename "$f"): refused, but not by $POLICY: $(cat "$WORK/err")"; fail=1
   else
     echo "ok   deny  $(basename "$f")"
+  fi
+done
+for f in "$FIXTURES"/invalid/*.yaml; do
+  if kubectl apply --dry-run=server -f "$f" >/dev/null 2>"$WORK/err"; then
+    echo "FAIL invalid $(basename "$f"): admitted"; fail=1
+  elif ! grep -q "RFC 1123" "$WORK/err"; then
+    echo "FAIL invalid $(basename "$f"): refused, but not by API server host validation: $(cat "$WORK/err")"; fail=1
+  else
+    echo "ok   invalid $(basename "$f")"
   fi
 done
 for f in "$FIXTURES"/admit/*.yaml; do
@@ -282,13 +295,17 @@ for i, o in enumerate(items):
         yaml.safe_dump(o, fh)
 PY
   for o in "$WORK"/split/*.yaml; do
+    [ -e "$o" ] || continue
     n=$((n + 1))
     if ! kubectl apply --dry-run=server -f "$o" >/dev/null 2>"$WORK/err"; then
       echo "FAIL admit $(basename "$f") $(python3 -c "import sys,yaml;o=yaml.safe_load(open(sys.argv[1]));print(o['kind'], o['metadata']['namespace']+'/'+o['metadata']['name'])" "$o"): $(cat "$WORK/err")"
       bad=$((bad + 1)); fail=1
     fi
   done
-  echo "$( [ "$bad" = 0 ] && echo ok || echo FAIL)   admit $(basename "$f"): $((n - bad))/$n objects admitted"
+  # Zero objects means the dump or the extraction is broken, not that
+  # everything was admitted.
+  if [ "$n" = 0 ]; then echo "FAIL admit $(basename "$f"): no route objects in it"; fail=1; fi
+  echo "$( [ "$bad" = 0 ] && [ "$n" != 0 ] && echo ok || echo FAIL)   admit $(basename "$f"): $((n - bad))/$n objects admitted"
   rm -rf "$WORK/split"
 done
 

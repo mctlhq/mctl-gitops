@@ -82,6 +82,7 @@ spec:
     {{- toYaml $ing.tls | nindent 4 }}
   {{- end }}
   rules:
+    {{- if not $ing.hosts }}{{ fail (printf "extraIngresses[%d] needs hosts" $idx) }}{{- end }}
     {{- range $host := $ing.hosts }}
     - host: {{ $host | quote }}
       http:

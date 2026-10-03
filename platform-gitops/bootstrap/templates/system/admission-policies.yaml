@@ -255,6 +255,9 @@ spec:
         !has(object.spec.rules) || object.spec.rules.all(r, has(r.host) && r.host != '')
       message: "every Ingress rule needs a host: a host-less rule matches all hosts and can outrank a platform host's routes"
       reason: Forbidden
+    # No case or trailing-dot normalisation here, unlike the IngressRoute
+    # policy: the API server validates rule and TLS hosts as lowercase RFC 1123
+    # names before admission runs (tests/fixtures/reserved-hosts/invalid/).
     - expression: >-
         !has(object.spec.rules) ||
         object.spec.rules.all(r, !has(r.host) ||
