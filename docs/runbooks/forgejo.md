@@ -90,6 +90,69 @@ Restore:
 - The backup Job pod must land on Forgejo's node; if Forgejo is down the
   backup cannot run and `ForgejoBackupStale` fires the next day.
 
+## Declarative organisations
+
+Users, organisations, teams, repositories and the branches seeded into them
+are not created by hand. `infra-components/data/forgejo/reconcile.yaml` runs
+a CronJob every 30 minutes: Terraform (`svalabs/forgejo`, state in the
+backup bucket under `terraform/forgejo-reconcile.tfstate`) applies the
+manifest, then a fast-forward-only sync pushes each listed branch from its
+source, then Terraform applies once more to restore default branches.
+
+The desired state is in Vault, not here (this repository is public):
+`secret/platform/forgejo/reconcile`, extracted whole into the
+`forgejo-reconcile` Secret.
+
+| Key | Content |
+|---|---|
+| `MANIFEST` | JSON, schema below |
+| `USER_PASSWORDS` | JSON `{"<login>": "<initial password>"}` for every user in the manifest |
+| one key per source | a read-only token, named by that source's `token_env` |
+
+```json
+{
+  "sources": {
+    "<name>": {"url": "https://host/group", "token_env": "SRC_TOKEN",
+               "username": "oauth2", "insecure_skip_tls": false}
+  },
+  "users": [{"login": "...", "email": "...", "full_name": "..."}],
+  "orgs": [{
+    "name": "...", "full_name": "...",
+    "owners": ["<login>"], "developers": ["<login>"],
+    "repos": [{
+      "name": "...", "default_branch": "main",
+      "branches": [{"name": "main", "source": "<name>", "path": "group/repo", "ref": "main"}]
+    }]
+  }]
+}
+```
+
+- `ref` defaults to `name`, so a branch can be renamed on the way in.
+- `username` defaults to `oauth2` (GitLab). GitHub accepts any user name with a
+  token. `insecure_skip_tls` exists for a source whose certificate expired;
+  every run logs a WARN while it is on.
+- A source token needs read access to the repository and nothing else. Never
+  use an admin token here.
+
+What a run does to existing data:
+
+- Users get `must_change_password`; Terraform never resets a changed
+  password. Removing a user from the manifest deactivates the account.
+  It does not delete the account.
+- Removing a repository archives it. Removing a branch stops syncing it,
+  and the copy in Forgejo stays.
+- Pushes are never forced. If someone commits to a synced branch in Forgejo
+  and the source then moves too, the run logs `FAIL ... diverged` and exits 1.
+  Resolve it by dropping the branch from the manifest (Forgejo becomes the
+  source of truth for it) or by reconciling the histories in git. A branch
+  that is merely behind in Forgejo is fast-forwarded.
+- A source that cannot be read is a `FAIL`, never "branch absent".
+
+Read the outcome in the latest Job's log (`OK`, `SYNC`, `FAIL`, `WARN` lines).
+`ForgejoReconcileStale` fires after 2 hours without a successful run, and
+`ForgejoReconcileNeverSucceeded` fires for a CronJob that has never succeeded.
+A pod stuck in `CreateContainerConfigError` means the Vault secret is missing.
+
 ## Upgrades
 
 Bump `targetRevision` (chart) in `bootstrap/templates/data/forgejo.yaml` and the
@@ -103,4 +166,5 @@ after that needs the DB backup.
 - Forgejo Actions with a separate `forgejo-runner` Deployment.
 - SSH: a Traefik TCP entrypoint plus a DNS-only host, since the Cloudflare
   proxy does not carry SSH.
-- Native OIDC login (Backstage or GitHub) instead of local accounts.
+- Native OIDC login (Zitadel) instead of local accounts; the reconciler's
+  `users` would then only pre-create accounts for the OAuth source to link.
