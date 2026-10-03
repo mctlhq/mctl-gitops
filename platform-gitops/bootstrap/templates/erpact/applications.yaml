@@ -41,7 +41,7 @@ spec:
     syncOptions:
       - ApplyOutOfSyncOnly=true
       - RespectIgnoreDifferences=true
-    # The benches wait for MariaDB and Valkey, and the first sync races them.
+    # The first sync races the ExternalSecrets, the volume and MariaDB.
     retry:
       limit: 5
       backoff:
@@ -89,7 +89,7 @@ spec:
     syncOptions:
       - ApplyOutOfSyncOnly=true
       - RespectIgnoreDifferences=true
-    # The benches wait for MariaDB and Valkey, and the first sync races them.
+    # The first sync races the ExternalSecrets, the volume and MariaDB.
     retry:
       limit: 5
       backoff:
@@ -131,7 +131,7 @@ spec:
     syncOptions:
       - ApplyOutOfSyncOnly=true
       - RespectIgnoreDifferences=true
-    # The benches wait for MariaDB and Valkey, and the first sync races them.
+    # The first sync races the ExternalSecrets, the volume and MariaDB.
     retry:
       limit: 5
       backoff:
@@ -173,7 +173,7 @@ spec:
     syncOptions:
       - ApplyOutOfSyncOnly=true
       - RespectIgnoreDifferences=true
-    # The benches wait for MariaDB and Valkey, and the first sync races them.
+    # The first sync races the ExternalSecrets, the volume and MariaDB.
     retry:
       limit: 5
       backoff:

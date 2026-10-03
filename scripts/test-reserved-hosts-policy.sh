@@ -117,6 +117,13 @@ import glob, os, re, sys, yaml
 root, rendered = sys.argv[1], sys.argv[2]
 owners = yaml.safe_load(open(os.path.join(root, "platform-gitops/bootstrap/values.yaml")))["reservedPlatformHosts"]
 ROUTES = ("Ingress", "IngressRoute", "IngressRouteTCP")
+SELF = "https://github.com/mctlhq/mctl-gitops.git"
+
+def local(src):
+    # Files of a source in another repository (a tenant's own repository, e.g.
+    # git.mctl.ai/erpact/mctl-apps) are not in this checkout. They hold tenant
+    # routes, not platform ones; the admission policy still judges them at sync.
+    return src.get("repoURL", SELF).rstrip("/") == SELF
 
 def strings(o, path):
     if isinstance(o, dict):
@@ -135,6 +142,8 @@ def values_of(src):
     if helm.get("values"):
         yield yaml.safe_load(helm["values"])
     for f in helm.get("valueFiles") or []:
+        if not local(src):
+            continue
         if f.startswith("$"):
             continue  # ApplicationSet data; tenant/service values, not platform
         yield yaml.safe_load(open(os.path.join(root, src["path"], f)))
@@ -171,7 +180,7 @@ for app in apps:
                             "metadata": {"name": f"{name}-{len(out)}", "namespace": ns},
                             "spec": {"rules": [{"host": h}], "tls": [{"hosts": [h]}]}})
         path = src.get("path")
-        if not path or path == "platform-gitops/bootstrap" or os.path.exists(os.path.join(root, path, "Chart.yaml")):
+        if not path or not local(src) or path == "platform-gitops/bootstrap" or os.path.exists(os.path.join(root, path, "Chart.yaml")):
             continue
         for f in sorted(glob.glob(os.path.join(root, path, "**", "*.yaml"), recursive=True)):
             for d in yaml.safe_load_all(open(f)):

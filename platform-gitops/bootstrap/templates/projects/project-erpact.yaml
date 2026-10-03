@@ -17,6 +17,9 @@ kind: AppProject
 metadata:
   name: erpact
   namespace: argocd
+  annotations:
+    # Before the repository secret and erpact-infra (wave -1) that name it.
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   description: ERPact copy (tenant erpact), manifests from git.mctl.ai/erpact/mctl-apps
 
