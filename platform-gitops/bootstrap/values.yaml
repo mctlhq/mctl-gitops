@@ -242,22 +242,32 @@ surfaceTelegramToken:
 # a listed ServiceAccount. Add a Secret in the same change that adds the
 # ExternalSecret producing it.
 #
+# Two more policies hold what reaches outside the namespace: Ingress hosts
+# must match hostPattern, and Services must be ClusterIP without
+# externalIPs (no NodePort, no LoadBalancer: those open node ports or buy a
+# Hetzner load balancer).
+#
 # Platform workflows cannot run in these namespaces as a consequence
 # (argo-workflow-sa, minio-artifact-credentials): that is intended.
 externalManifestNamespaces:
-  # git.mctl.ai/erpact/mctl-apps. Its ExternalSecrets live in this chart,
-  # templates/erpact/externalsecrets.yaml (added with the erpact wiring,
-  # #1516), never in that repository: project erpact does not admit them.
+  # git.mctl.ai/erpact/mctl-apps. Its ExternalSecrets will live in this
+  # chart, templates/erpact/externalsecrets.yaml, added by the erpact wiring
+  # (#1516) together with project erpact; never in that repository.
   erpact:
     secrets:
       - clo-s3
       - deployer-git
       - deployer-secret
       - mariadb-root
-    # No RBAC is bound to default in erpact, and project erpact admits no
-    # Role/RoleBinding from the tenant's repository.
+    # No RBAC is bound to default in erpact. Project erpact (#1516) admits
+    # no Secret and no RBAC kind from the tenant's repository, so that
+    # repository can neither bind a Role to default nor mint a
+    # service-account-token Secret under an allowed name.
     serviceAccounts:
       - default
+    # Ingress hosts (rules and TLS) must match this RE2 pattern, so the
+    # repository cannot claim another tenant's unreserved *.mctl.ai name.
+    hostPattern: '^erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai$'
 
 # Platform hostnames and the namespaces allowed to serve them (#1503),
 # enforced by the mctl-reserved-platform-hosts-* admission policies in

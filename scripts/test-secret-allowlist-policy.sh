@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Prove mctl-external-manifests-secret-allowlist
-# (bootstrap/templates/system/admission-policies.yaml, allowlists in bootstrap
-# values.yaml externalManifestNamespaces) against a real API server, both ways.
+# Prove the mctl-external-manifests-* admission policies (Secret and
+# ServiceAccount allowlist, Ingress host pattern, ClusterIP-only Services;
+# bootstrap/templates/system/admission-policies.yaml, per-namespace values in
+# bootstrap values.yaml externalManifestNamespaces) against a real API
+# server, both ways.
 #
 # k3s at the cluster's version in Docker, the policy exactly as the bootstrap
 # chart renders it, then server-side dry-runs:
 #
-#   tests/fixtures/secret-allowlist/deny/*.yaml   each must be REFUSED by the policy,
+#   tests/fixtures/secret-allowlist/deny/*.yaml   each must be REFUSED by these policies,
 #                                                 with the message its `# expect:` line names
 #   tests/fixtures/secret-allowlist/admit/*.yaml  each must be ADMITTED
 #   an ephemeral container naming a non-allowed Secret, added through the
@@ -20,7 +22,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURES="$ROOT/tests/fixtures/secret-allowlist"
-POLICY=mctl-external-manifests-secret-allowlist
+POLICY=mctl-external-manifests
+POLICIES="mctl-external-manifests-secret-allowlist mctl-external-manifests-ingress-hosts mctl-external-manifests-services"
 # Keep in step with the platform cluster and scripts/test-reserved-hosts-policy.sh.
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.33.13-k3s1}"
 
@@ -54,26 +57,28 @@ python3 - "$WORK/bootstrap.yaml" "$POLICY" > "$WORK/policy.yaml" <<'PY'
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d
         and d.get("kind") in ("ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding")
-        and d["metadata"]["name"] == sys.argv[2]]
-if len(docs) != 2:
-    sys.exit(f"expected the policy and its binding in the render, found {len(docs)}")
+        and d["metadata"]["name"].startswith(sys.argv[2] + "-")]
+if len(docs) != 6:
+    sys.exit(f"expected three policies and three bindings in the render, found {len(docs)}")
 print(yaml.safe_dump_all(docs))
 PY
 kubectl apply -f "$WORK/policy.yaml" >/dev/null
 
 # An expression that does not type-check is skipped at runtime instead of
 # denying, so any warning is a failure.
-for _ in $(seq 1 30); do
-  kubectl get validatingadmissionpolicy "$POLICY" -o jsonpath='{.status.typeChecking}' 2>/dev/null | grep -q . && break
-  sleep 1
+for p in $POLICIES; do
+  for _ in $(seq 1 30); do
+    kubectl get validatingadmissionpolicy "$p" -o jsonpath='{.status.typeChecking}' 2>/dev/null | grep -q . && break
+    sleep 1
+  done
+  kubectl get validatingadmissionpolicy "$p" -o jsonpath='{.status.typeChecking}' | grep -q . \
+    || { echo "FAIL: $p never reported type-checking status"; exit 1; }
+  WARN="$(kubectl get validatingadmissionpolicy "$p" -o jsonpath='{.status.typeChecking.expressionWarnings}')"
+  if [ -n "$WARN" ] && [ "$WARN" != "[]" ]; then
+    echo "FAIL: type-check warnings on $p:"; echo "$WARN"; exit 1
+  fi
+  echo "ok   type-check $p"
 done
-kubectl get validatingadmissionpolicy "$POLICY" -o jsonpath='{.status.typeChecking}' | grep -q . \
-  || { echo "FAIL: $POLICY never reported type-checking status"; exit 1; }
-WARN="$(kubectl get validatingadmissionpolicy "$POLICY" -o jsonpath='{.status.typeChecking.expressionWarnings}')"
-if [ -n "$WARN" ] && [ "$WARN" != "[]" ]; then
-  echo "FAIL: type-check warnings on $POLICY:"; echo "$WARN"; exit 1
-fi
-echo "ok   type-check $POLICY"
 
 for ns in $(cat "$FIXTURES"/setup.yaml "$FIXTURES"/deny/*.yaml "$FIXTURES"/admit/*.yaml \
             | grep -E '^\s+namespace: ' | awk '{print $2}' | sort -u); do

@@ -1,8 +1,9 @@
 # Test-only overlay.
 # - puller (setup.yaml) is an allowed ServiceAccount, so deny/06 can only be
 #   refused for the pull secret it injects, not for itself.
-# - partial lists only serviceAccounts: a namespace entry missing a list must
-#   deny with the Forbidden message, not a CEL error (deny/10).
+# - partial lists only serviceAccounts and partial-sa only secrets: an entry
+#   missing a list must deny with the Forbidden message, not a CEL error, and
+#   allow nothing of that kind (deny/10, deny/11, deny/14).
 externalManifestNamespaces:
   erpact:
     serviceAccounts:
@@ -11,3 +12,6 @@ externalManifestNamespaces:
   partial:
     serviceAccounts:
       - default
+  partial-sa:
+    secrets:
+      - anything

@@ -384,9 +384,9 @@ spec:
 #
 # Pods only: a Deployment or Job naming a forbidden Secret is admitted and
 # syncs, and the refusal shows in its ReplicaSet/Job events. The policy also
-# relies on the namespace's AppProject keeping RBAC out of the external
-# repository (project-erpact.yaml): it pins Pods to a ServiceAccount, and
-# that ServiceAccount must stay without Secret access. Every volume
+# relies on the namespace's AppProject keeping RBAC and Secrets out of the
+# external repository (project erpact, added by #1516): it pins Pods to a
+# ServiceAccount, and that ServiceAccount must stay without Secret access. Every volume
 # source that can name a Secret is listed, in-tree plugins whose drivers are
 # gone included: the API still accepts their fields.
 #
@@ -407,17 +407,23 @@ spec:
         resources: ["pods", "pods/ephemeralcontainers"]
   variables:
     # The binding matches only these namespaces, so the lookup cannot miss.
-    - name: ns
-      expression: >-
-        {{ .Values.externalManifestNamespaces | toJson }}[request.namespace]
-    # A namespace entry missing either list allows nothing of that kind and
-    # still gets the Forbidden messages below, not a CEL evaluation error.
+    # One map per field, each value dyn(): CEL refuses map literals whose
+    # values differ in type. A namespace entry missing a list allows nothing
+    # of that kind and still gets the Forbidden messages below.
     - name: allowed
       expression: >-
-        has(variables.ns.secrets) ? variables.ns.secrets : []
+        {
+        {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
+          {{ $n | squote }}: dyn({{ if hasKey $v "secrets" }}{{ index $v "secrets" | toJson }}{{ else }}[]{{ end }}),
+        {{- end }}
+        }[request.namespace]
     - name: serviceAccounts
       expression: >-
-        has(variables.ns.serviceAccounts) ? variables.ns.serviceAccounts : []
+        {
+        {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
+          {{ $n | squote }}: dyn({{ if hasKey $v "serviceAccounts" }}{{ index $v "serviceAccounts" | toJson }}{{ else }}[]{{ end }}),
+        {{- end }}
+        }[request.namespace]
     - name: containers
       expression: >-
         object.spec.containers +
@@ -487,4 +493,88 @@ spec:
       matchExpressions:
         - key: kubernetes.io/metadata.name
           operator: In
-          values: {{ keys .Values.externalManifestNamespaces | sortAlpha | toJson }}
+          # An empty map must not render `values: []`, which In refuses;
+          # namespace names cannot contain dots, so "none.invalid" matches nothing.
+          values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}
+---
+# Ingress hosts in those namespaces must match the namespace's hostPattern
+# (values.yaml externalManifestNamespaces): the reserved-host policies above
+# protect platform names, this keeps the repository off every other
+# tenant's names too. A missing pattern allows no host.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-external-manifests-ingress-hosts
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ingresses"]
+  variables:
+    # A missing pattern matches no host.
+    - name: pattern
+      expression: >-
+        {
+        {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
+          {{ $n | squote }}: dyn({{ if hasKey $v "hostPattern" }}{{ index $v "hostPattern" | toJson }}{{ else }}'^$'{{ end }}),
+        {{- end }}
+        }[request.namespace]
+  validations:
+    - expression: >-
+        (!has(object.spec.rules) || object.spec.rules.all(r, has(r.host) && r.host.matches(variables.pattern))) &&
+        (!has(object.spec.tls) || object.spec.tls.all(t, !has(t.hosts) || t.hosts.all(h, h.matches(variables.pattern))))
+      messageExpression: >-
+        "Ingress hosts in this namespace must match " + variables.pattern +
+        " (bootstrap values externalManifestNamespaces)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-external-manifests-ingress-hosts
+spec:
+  policyName: mctl-external-manifests-ingress-hosts
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}
+---
+# Services in those namespaces stay inside the cluster.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-external-manifests-services
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["services"]
+  validations:
+    - expression: >-
+        (!has(object.spec.type) || object.spec.type == 'ClusterIP') &&
+        (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)
+      message: "Services in this namespace must be ClusterIP without externalIPs (no NodePort, LoadBalancer or ExternalName)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-external-manifests-services
+spec:
+  policyName: mctl-external-manifests-services
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}

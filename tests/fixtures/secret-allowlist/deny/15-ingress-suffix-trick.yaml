@@ -1,0 +1,19 @@
+# expect: Ingress hosts in this namespace must match
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prefix-trick
+  namespace: erpact
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: erpact-a.mctl.ai.evil.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80

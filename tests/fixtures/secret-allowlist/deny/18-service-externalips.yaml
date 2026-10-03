@@ -1,0 +1,11 @@
+# expect: must be ClusterIP
+apiVersion: v1
+kind: Service
+metadata:
+  name: eip
+  namespace: erpact
+spec:
+  externalIPs:
+    - 203.0.113.10
+  ports:
+    - port: 80
