@@ -37,9 +37,10 @@ RUN apk add --no-cache ca-certificates
 COPY --from=tofu /usr/local/bin/tofu /usr/local/bin/tofu
 COPY --from=mirror /usr/share/tofu/providers /usr/share/tofu/providers
 COPY --from=mirror /mirror-src/versions.tf /usr/share/tofu/versions.tf
-# Every provider, from any registry hostname, comes from the mirror or fails:
-# nothing is ever downloaded at run time.
-RUN printf 'provider_installation {\n  filesystem_mirror {\n    path    = "/usr/share/tofu/providers"\n    include = ["*/*"]\n  }\n  direct {\n    exclude = ["*/*"]\n  }\n}\n' > /etc/tofurc \
+# Only the mirror, no `direct` block: with no direct method there is no
+# network installation at all, whatever hostname a source names. (A pattern
+# like "*/*" would only cover the default registry host.)
+RUN printf 'provider_installation {\n  filesystem_mirror {\n    path = "/usr/share/tofu/providers"\n  }\n}\n' > /etc/tofurc \
  && tofu version
 ENV TF_CLI_CONFIG_FILE=/etc/tofurc \
     TF_IN_AUTOMATION=1 \
