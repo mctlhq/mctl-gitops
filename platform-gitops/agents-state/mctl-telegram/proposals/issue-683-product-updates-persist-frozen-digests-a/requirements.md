@@ -31,7 +31,7 @@ four gaps and re-verifies the release gate and the operator daily digest.
 
 ## User stories
 
-- AS a broadcast operator I WANT one MCP tool that freezes the next weekly
+- **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** AS a broadcast operator I WANT one MCP tool that freezes the next weekly
   digest for a category and returns a broadcast preview SO THAT I can review
   and approve one deduplicated message instead of hand-copying entry text.
 - AS a broadcast operator approving on the broadcast page I WANT to see which
@@ -98,7 +98,7 @@ four gaps and re-verifies the release gate and the operator daily digest.
 
 ### Freezing and preparing, operator present
 
-- WHEN a broadcast operator calls the new `prepare_product_update_digest` MCP
+- **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** The page action replaces it. WHEN a broadcast operator calls the new `prepare_product_update_digest` MCP
   tool with a `category`, a `digest_id` and a `version` THE SYSTEM SHALL
   freeze and persist the digest with `productupdate.FreezeNextDigest`, render
   it, and call `broadcast.Service.Prepare` with the selector category set to
@@ -212,3 +212,41 @@ four gaps and re-verifies the release gate and the operator daily digest.
   `version-1` is this proposal's guard; whether a correction must be limited
   to the earlier entry set is left to the operator, as that comment already
   states.
+
+## Correction 2026-09-30 (owner decision): the operator entry point is the broadcasts page, not an MCP tool
+
+The owner decided on #683 (issue comment, 2026-09-30) that v1 of the digest to
+broadcast handoff goes through the **existing broadcasts page**, and that **no
+new MCP mutation tool** is added. The user story and every criterion above that
+names `prepare_product_update_digest` are replaced by the following. Everything
+else in this document stands: feed loading, `latestRelease`, rendering, the
+single-insert `source_ref`, one campaign per category, English only, the docs
+page, and the untouched release gate and daily digest.
+
+- AS a broadcast operator on `/telegram/connect/broadcasts` I WANT a "Prepare
+  from digest" action that freezes the next digest for a category and prepares
+  its campaign SO THAT I review and then approve one deduplicated message on
+  the same page, without hand-copying entry text.
+- WHEN an operator submits the page's prepare-from-digest form (`category`,
+  `digest_id`, `version`, and the optional audience narrowing the page already
+  offers) THE SYSTEM SHALL freeze and persist the digest with
+  `productupdate.FreezeNextDigest`, render it, and call
+  `broadcast.Service.Prepare` with the selector category taken from the digest
+  and `source_ref` set to `(digest_id, version, content_hash)`, in the single
+  insert described above.
+- WHILE handling that form THE SYSTEM SHALL apply exactly the guards the page
+  already applies to its approve and cancel actions: `admin:broadcast` scope,
+  `IsOperator`, and a same-origin POST. A caller that fails any of them is
+  refused as those actions refuse today.
+- IF the form carries a `text` field, or a `category` that differs from the
+  digest's category, THEN THE SYSTEM SHALL refuse. A digest campaign's body and
+  category come from the digest.
+- WHEN the action succeeds THE SYSTEM SHALL show the prepared campaign on the
+  same page with its digest id, version and content hash. Preparing never
+  approves: approval stays a separate, explicit action on the page.
+- THE SYSTEM SHALL NOT add any MCP tool that freezes, prepares, approves or
+  sends a digest campaign. The read-only `list_broadcasts` and `get_broadcast`
+  may expose `source_ref`, since they mutate nothing.
+- No timer, schedule or background job freezes a digest or calls `Prepare`.
+  The action runs only on an operator's request, because `Prepare` opens the
+  30-minute approval window.

@@ -152,6 +152,25 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
         # Access IS the authorization server, so the portal is just another
         # client and this list is what it is checked against.
         "https://mcp.mctl.ai/servers-callback",
+
+        # ChatGPT's connector callback. Access does not read Client ID Metadata
+        # Documents, so ChatGPT registers through DCR with the redirect its own
+        # document lists (https://chatgpt.com/oauth/client.json, read
+        # 2026-10-02). Without it, the first ChatGPT sign-in on 2026-10-01 ended
+        # at Access with "Redirect URI not allowed by application
+        # configuration".
+        "https://chatgpt.com/connector_platform_oauth_redirect",
+
+        # The URI above was not enough. After it was applied (2026-10-01
+        # 22:54 UTC), a ChatGPT sign-in at 23:13 still ended at Access with
+        # "Redirect URI not allowed by application configuration", while the
+        # same ChatGPT account signed in to coolify.mctl.ai, which reads the
+        # metadata document. Over DCR, ChatGPT registers a per-connector
+        # callback under /connector/oauth/<id>, which is why mctl-api has
+        # allowed "https://chatgpt.com/connector/oauth/*" since March.
+        # Access matches a trailing `/*` against every sub-path; the id is
+        # minted per connector and cannot be listed in advance.
+        "https://chatgpt.com/connector/oauth/*",
       ]
 
       # Claude Desktop and Claude Code complete the flow on a loopback port that

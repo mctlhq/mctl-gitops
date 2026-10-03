@@ -1,0 +1,19 @@
+# Fixture for scripts/test-reserved-hosts-policy.sh (mctl-reserved-platform-hosts, #1503).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: x
+  namespace: karabu
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: '*.karabu-x.mctl.ai'
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svc
+            port:
+              number: 80

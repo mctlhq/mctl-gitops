@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/mctlhq/mctl-claude-remote
-  tag: "0.12.4"
+  tag: "0.13.3"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -66,14 +66,19 @@ env:
   # pr-steward automation (branch prefix per repo). Per-repo merge_mode
   # (image 0.3.0+): global default is "never" (safe — escalate only); a repo opts
   # into auto-merge explicitly. Ownership is partitioned with the Tier-3 shepherd
-  # via SHEPHERD_SKIP_SERVICES (steward owns ONLY what the shepherd skips):
+  # via SHEPHERD_SKIP_SERVICES / SHEPHERD_FIX_ONLY_SERVICES. For feat/agents-*
+  # entries in the shepherd's fix-only services, "fix_mode": "never" (image
+  # 0.13.3+) makes the shepherd CWFT the only actor that fixes review findings:
+  # the steward runs no model tick until the PR is approved at its current head
+  # and then owns only the merge path (owner decision 2026-10-03, after the
+  # mctl-telegram#730 race). claude/* and fix/* stay steward-owned end to end.
   #   mctl-design   = steward, when-green (gated by branch protection on its public main)
   #   mctl-telegram = steward, when-green + merge (claude/* and fix/* and feat/agents-*;
   #                   the repo forbids squash — #1340)
   #   mctl-docs     = shepherd-owned (removed from steward — low churn, no strict protection)
   #   mctl-gitops   = steward phase A, never (inventory/escalation only; switch
   #                   to when-green after the existing implementer backlog is triaged)
-  #   mctl-pairdesk = steward, when-green + merge (public + branch-protected; in SHEPHERD_SKIP_SERVICES)
+  #   mctl-pairdesk = steward, when-green + merge (public + branch-protected; in SHEPHERD_FIX_ONLY_SERVICES)
   # Inert in the image until this flag is "true".
   PR_STEWARD_ENABLED: "true"
   # The harness version is pinned by the image (Dockerfile ARG
@@ -267,7 +272,7 @@ extraVolumeMounts:
 # Restore workspace from MinIO before claude starts
 initContainers:
   - name: restore-state
-    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: ghcr.io/mctlhq/mc@sha256:b641ac54685b6dd7b21d680de7bae6160ae09b54c2ed32c42b383b95614b6b31
     resources:
       requests:
         cpu: 25m
@@ -332,7 +337,7 @@ initContainers:
 # handles relay-TLS-drop via cheap in-pod --resume instead of pod restarts.
 extraContainers:
   - name: s3-sync
-    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: ghcr.io/mctlhq/mc@sha256:b641ac54685b6dd7b21d680de7bae6160ae09b54c2ed32c42b383b95614b6b31
     resources:
       requests:
         cpu: 25m
@@ -377,8 +382,9 @@ extraContainers:
         # logged out for a day on 2026-08-23 while /healthz, the in-pod watchdog
         # and ArgoCD all reported healthy. See mctl-claude-remote#40.
         #
-        # minio/mc has no jq/grep/sed/awk, but /bin/sh here IS bash, so the check
-        # is pure shell: strip whitespace, then look for the empty-token markers.
+        # The check is pure shell: strip whitespace, then look for the
+        # empty-token markers. ghcr.io/mctlhq/mc's busybox sh supports `local`,
+        # ${var//pat/} and $'...' (verified when the image replaced minio/mc).
         CRED=/workspace/.claude/.credentials.json
         cred_is_valid() {
           [ -s "$CRED" ] || return 1
@@ -679,7 +685,7 @@ extraContainers:
   # stdout is unreadable: claude --remote-control renders a TUI and needs a PTY,
   # so its output can't be ANSI-stripped without dropping it to --print mode.
   - name: steward-log
-    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: ghcr.io/mctlhq/mc@sha256:b641ac54685b6dd7b21d680de7bae6160ae09b54c2ed32c42b383b95614b6b31
     resources:
       requests:
         cpu: 10m
@@ -787,6 +793,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "when-green"
           },
           {
@@ -794,6 +801,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "never",
             "merge_method": "merge"
           },
@@ -818,6 +826,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "when-green",
             "merge_method": "merge"
           },
@@ -826,6 +835,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "when-green",
             "merge_method": "merge"
           }

@@ -268,3 +268,25 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: forgejo-db
+spec:
+  name: "forgejo"
+  owner: "forgejo"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: zitadel-db
+spec:
+  name: "zitadel"
+  owner: "zitadel"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain

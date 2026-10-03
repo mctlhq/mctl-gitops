@@ -80,7 +80,7 @@ spec:
         # https://github.com/mctlhq/mctl-telegram/issues/123
         # run-investigator fails fast with a clear message if empty.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.61.0
+        value: ghcr.io/mctlhq/mctl-agents:1.64.1
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -570,6 +570,19 @@ spec:
           # owner decision. Roll back by setting "off".
           - name: ISSUE_INVESTIGATOR_CONTEXT_MODE
             value: "shadow"
+          # WorkItem intents as a ContextSnapshot source (mctlhq/mctl-agents#542
+          # tasks 12-18, orchestrator/work_context/intents.py; released in
+          # mctl-agents 1.63.0). `on`: the investigator reads the WorkItem's
+          # canonical intents from mctl-api (GET /api/v1/work-items/{id}/intents,
+          # mctl-api 4.58.0) and seals them into the ContextSnapshot, including
+          # the resume intent named by the execution request's `intent_id`; a
+          # referenced intent it cannot resolve fails the run
+          # (`intent-unresolved`) rather than proceeding without it. Intents are
+          # provenance and input only, never authorization. Only this template
+          # reads it: the Temporal workers run no context assembly. Roll back by
+          # setting "off" (the default, byte-neutral).
+          - name: WORK_ITEM_INTENT_SOURCE
+            value: "on"
           # Workflow param injected as an env var so the shell layer can
           # quote it safely. Direct workflow.parameters.* interpolation in
           # the script body is a shell-injection vector.
@@ -681,13 +694,13 @@ spec:
           # run_issue_investigator.py reads this env var directly as its
           # highest-priority override -- so the change needs no mctl-agents
           # release and no agent_image bump, and reverting this PR restores
-          # claude-sonnet-5 from the `service_agent` task's `balanced` profile.
+          # claude-sonnet-5-5 from the `service_agent` task's `balanced` profile.
           # The implementer deliberately stays on Sonnet for now: its recent
           # failures were infrastructural (a missing platform contract, a cold
           # Go toolchain exhausting the cap), not model quality, and changing
           # both at once would make the next run unattributable.
           - name: ISSUE_INVESTIGATOR_MODEL
-            value: "claude-opus-5"
+            value: "claude-opus-5-5"
           # Raised 3.00 -> 8.00 alongside the model above: $3 was already tight
           # on Sonnet (see the 8Gi memory bump below, same class of headroom
           # problem on the largest repos) and Opus spends more per equivalent

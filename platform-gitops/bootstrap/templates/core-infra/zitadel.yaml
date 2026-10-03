@@ -1,0 +1,227 @@
+# Platform ZITADEL — the MCTL human identity provider at https://auth.mctl.ai.
+#
+# Decision and roadmap: mctlhq/.github#91 (unified-identity epic), work item
+# zitadel-deployment, issue mctlhq/mctl-gitops#1499. ZITADEL becomes one more
+# OIDC provider in the mctl-api federation registry (mctl-api#434); it is not a
+# broker in front of every API request.
+#
+# Like Forgejo it runs on what the platform already operates: all state lives
+# in shared-pg (CNPG, backed up to R2), every secret comes from Vault through
+# ESO, availability is watched by blackbox + VictoriaMetrics. There is no
+# volume: the database plus the masterkey ARE the identity provider.
+#
+# Phase 1 scope: the instance, the Login V2 UI and the Console, one break-glass
+# human admin. No SMTP, no external IdPs (GitHub/Google), no SSO clients yet —
+# those land with mctl-api#434 and the platform-sso / tenant-sso items.
+#
+# The manifests next to the chart (ExternalSecrets, login service key,
+# NetworkPolicies, /debug edge deny, metrics scrape) live in
+# platform-gitops/infra-components/identity/zitadel. Runbook: docs/runbooks/zitadel.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zitadel
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://charts.zitadel.com
+      chart: zitadel
+      # Chart 10.3.0 ships ZITADEL v4.19.2 and the Login V2 UI (v4.19.2).
+      targetRevision: 10.3.0
+      helm:
+        values: |
+          replicaCount: 1
+
+          zitadel:
+            # Holds the masterkey under key `masterkey` (ExternalSecret
+            # zitadel-masterkey). The masterkey encrypts keys and tokens inside
+            # the database: a database restored without it is unusable.
+            masterkeySecretName: zitadel-masterkey
+
+            # Rendered by ESO from Vault (ExternalSecret zitadel-config): the DB
+            # user's password and the break-glass admin's password, so neither
+            # ever appears in this public repository or in a chart-made Secret.
+            configSecretName: zitadel-config
+            configSecretKey: config-yaml
+
+            configmapConfig:
+              ExternalDomain: auth.mctl.ai
+              # Without it the chart derives AUDIENCE for the Login UI from
+              # service.port and adds ":8080" to every public URL.
+              ExternalPort: 443
+              ExternalSecure: true
+              TLS:
+                Enabled: false
+              Database:
+                Postgres:
+                  Host: shared-pg-rw.platform-db.svc.cluster.local
+                  Port: 5432
+                  Database: zitadel
+                  MaxOpenConns: 15
+                  MaxIdleConns: 5
+                  User:
+                    Username: zitadel
+                    SSL:
+                      Mode: disable
+              FirstInstance:
+                InstanceName: MCTL
+                Org:
+                  Name: MCTL
+                  # The break-glass admin. Its password comes from Vault through
+                  # zitadel-config; ZITADEL's built-in default is a published
+                  # constant and would be live on a public host until first login.
+                  Human:
+                    UserName: mctl-admin
+                    FirstName: MCTL
+                    LastName: Admin
+                    Email:
+                      Address: admin@mctl.ai
+                      Verified: true
+                    PasswordChangeRequired: false
+                  # No IAM_OWNER machine user in phase 1. The chart's default one
+                  # has the setup job write its key and PAT into Secrets with
+                  # kubectl, outside GitOps; automation that needs one gets a
+                  # scoped service user later, created on purpose.
+                  Machine: null
+
+          # The login service keypair comes from cert-manager
+          # (infra-components/identity/zitadel/login-service-key.yaml). The
+          # chart's own generator relies on Helm `lookup`, which ArgoCD does not
+          # run: every render would mint a new keypair and log the UI out of
+          # the API on each sync.
+          login:
+            loginServiceKeySecretName: zitadel-login-service-key
+            sessionCookieSecretName: zitadel-login-session
+            replicaCount: 1
+            annotations:
+              argocd.argoproj.io/sync-wave: "3"
+            ingress:
+              enabled: true
+              className: traefik
+              hosts:
+                - host: auth.mctl.ai
+                  paths:
+                    - path: /ui/v2/login
+                      pathType: Prefix
+              # Same certificate as the main ingress; only that one carries the
+              # cert-manager annotation, so a single Certificate owns the Secret.
+              tls:
+                - secretName: zitadel-tls
+                  hosts:
+                    - auth.mctl.ai
+            resources:
+              requests:
+                cpu: 50m
+                memory: 192Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+
+          annotations:
+            argocd.argoproj.io/sync-wave: "3"
+
+          ingress:
+            enabled: true
+            className: traefik
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+            hosts:
+              - host: auth.mctl.ai
+                paths:
+                  - path: /
+                    pathType: Prefix
+            tls:
+              - secretName: zitadel-tls
+                hosts:
+                  - auth.mctl.ai
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
+
+          # Init and setup run as ArgoCD Sync hooks instead of the chart's Helm
+          # pre-install hooks. ArgoCD maps Helm pre-install to PreSync, which
+          # runs before ANY regular resource — including the ExternalSecrets
+          # that hold the masterkey and DB password — so the first sync could
+          # never succeed. As Sync hooks they run after wave -1 (secrets,
+          # certificate) is healthy and before the Deployments (wave 3).
+          # Setup is idempotent and re-runs on every sync, as the chart intends
+          # on every upgrade.
+          initJob:
+            # The database and its owner role already exist: CNPG creates them
+            # (infra-components/data/cnpg/shared). `zitadel` only creates
+            # ZITADEL's schemas as that owner, so no Postgres superuser
+            # credential is ever handed to this namespace.
+            command: zitadel
+            annotations:
+              helm.sh/hook: null
+              helm.sh/hook-delete-policy: null
+              helm.sh/hook-weight: null
+              argocd.argoproj.io/hook: Sync
+              argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+              argocd.argoproj.io/sync-wave: "1"
+          setupJob:
+            annotations:
+              helm.sh/hook: null
+              helm.sh/hook-delete-policy: null
+              helm.sh/hook-weight: null
+              argocd.argoproj.io/hook: Sync
+              argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+              argocd.argoproj.io/sync-wave: "2"
+            # The default 300s is tight for the first run, which also builds
+            # every projection (--init-projections=true).
+            activeDeadlineSeconds: 900
+          # Removes Secrets the setup job writes for a machine user; there is
+          # none (FirstInstance.Org.Machine is null).
+          cleanupJob:
+            enabled: false
+
+          # Scraped by VMServiceScrape (infra-components/identity/zitadel); the
+          # chart's ServiceMonitor is a Prometheus Operator kind.
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: false
+
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/identity/zitadel
+
+  ignoreDifferences:
+    # Same ESO handling as forgejo.yaml / minio.yaml: admission-injected
+    # annotations and status only; never jq paths that index into spec arrays (#789).
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .metadata.annotations
+        - .spec.target.deletionPolicy
+        - .status
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: zitadel
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    # The role and database come from a different Application (shared-pg). On a
+    # first rollout this one can sync first, and zitadel-init then fails until
+    # CNPG has created them; retrying covers that race instead of leaving a
+    # failed sync parked on the same revision.
+    retry:
+      limit: 5
+      backoff:
+        duration: 1m
+        factor: 2
+        maxDuration: 10m
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

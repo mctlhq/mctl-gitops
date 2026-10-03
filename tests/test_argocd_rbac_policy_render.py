@@ -1,40 +1,44 @@
-"""issue-1431: per-tenant ArgoCD RBAC fragments render the same effective
-policy as the pre-migration single-file `policy.csv`, minus the intentionally
-dropped orphan tenants.
+"""ArgoCD RBAC render: base policy plus per-tenant fragments (issue-1431).
 
-`helm` is not assumed to be on PATH in CI or in this run's sandbox, and
-`platform-gitops/argocd/values.yaml`'s `policy.csv` is literal, untemplated
-YAML -- no Helm functions run inside that string -- so parsing it directly
-with pyyaml and concatenating it with the per-tenant fragments exactly the
-way `platform-gitops/argocd/templates/argocd-rbac-cm.yaml` does (base,
-trimmed, then each `rbac/tenants/*.csv` fragment, sorted by filename,
-trimmed) is an accurate simulation of the real Helm render for this one key.
-No pytest, matching the plain `python3 tests/<file>.py` convention of
-`tests/test_otel_collector_backends_render.py`.
+`platform-gitops/argocd/templates/argocd-rbac-cm.yaml` renders policy.csv as
+the base `policy.csv` from `platform-gitops/argocd/values.yaml` (trimmed)
+followed by every `rbac/tenants/*.csv` fragment (sorted by filename, trimmed).
+`wft-create-tenant` writes one fragment per tenant straight to main and
+`wft-delete-tenant` removes it, so the tenant set changes without a PR.
 
-T1. The normalized (comments and blank lines stripped, sorted) union of the
-    base `policy.csv` and every `rbac/tenants/*.csv` fragment equals
-    `tests/fixtures/argocd-rbac-policy.baseline.csv`'s content minus exactly
-    the 6 `yyy` and 6 `xxxx` lines -- the only intentional difference, since
-    the migration dropped those two orphan tenants (no matching
-    `platform-gitops/tenants/{yyy,xxxx}/` directory exists for either).
-T2. `argo-cd.configs.rbac.create` is `false` -- the argo-cd subchart must not
-    also try to own `argocd-rbac-cm`.
-T3. `policy.default` is `""` and `scopes` is `"[groups]"`, unchanged by the
-    migration.
+The first version of this test compared the render with the frozen
+pre-migration snapshot `tests/fixtures/argocd-rbac-policy.baseline.csv`. That
+proved the migration once, then failed validate on every open PR the moment a
+tenant was created (2b557d10, fixed by hand in #1512). The checks below hold
+for any tenant set instead:
 
-If `helm` happens to be on PATH, an additional belt-and-suspenders render is
-attempted and cross-checked against the same normalized fixture; its absence
-is not a failure.
+T1. The base policy (every line that is not a `role:team-*` line) equals the
+    snapshot's non-tenant lines: platform roles do not drift silently.
+T2. Every tenant directory under `platform-gitops/tenants/` has exactly one
+    fragment and every fragment has a tenant directory, except tenants bound
+    to `role:admin` in the base policy, which have none. An orphan fragment
+    (the old yyy/xxxx case) grants a role nobody provisioned.
+T3. Every fragment equals what `wft-create-tenant` writes for that tenant:
+    the heredoc is read from the workflow itself, so a hand-edited fragment
+    (an extra `exec` line, another tenant's apps) or a changed template
+    without regenerated fragments fails here.
+T4. The render is exactly the base policy plus the fragments; if `helm` is on
+    PATH, a real render must agree with this simulation.
+T5. `argo-cd.configs.rbac.create` is false, `policy.default` is "" and
+    `scopes` is "[groups]".
+
+No pytest, matching the plain `python3 tests/<file>.py` convention.
 
 Run: python3 tests/test_argocd_rbac_policy_render.py
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 import yaml
@@ -43,9 +47,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "platform-gitops" / "argocd"
 VALUES_FILE = CHART / "values.yaml"
 FRAGMENTS_DIR = CHART / "rbac" / "tenants"
+TENANTS_DIR = ROOT / "platform-gitops" / "tenants"
+CREATE_TENANT = ROOT / "platform-gitops" / "argo-workflows" / "cluster-templates" / "wft-create-tenant.yaml"
 BASELINE_FILE = ROOT / "tests" / "fixtures" / "argocd-rbac-policy.baseline.csv"
-
-DROPPED_ORPHAN_TENANTS = ("yyy", "xxxx")
 
 failures: list[str] = []
 
@@ -65,44 +69,67 @@ def normalize(text: str) -> list[str]:
     return sorted(out)
 
 
+def is_tenant_line(line: str) -> bool:
+    return "role:team-" in line
+
+
 values = yaml.safe_load(VALUES_FILE.read_text())
 rbac = values["argo-cd"]["configs"]["rbac"]
-
 base_policy = rbac["policy.csv"]
+base_lines = normalize(base_policy)
 
-# Simulate templates/argocd-rbac-cm.yaml: base policy trimmed, then every
-# rbac/tenants/*.csv fragment (sorted by filename) trimmed, concatenated.
-rendered_parts = [base_policy.strip()]
+# T1: the base policy is the snapshot's platform part.
+check(not any(is_tenant_line(l) for l in base_lines),
+      "base policy.csv must not carry tenant (role:team-*) lines; they belong in rbac/tenants/<tenant>.csv")
+snapshot_base = [l for l in normalize(BASELINE_FILE.read_text()) if not is_tenant_line(l)]
+check(len(snapshot_base) > 0, f"no non-tenant lines in {BASELINE_FILE}: the read is broken, not the policy")
+check(
+    base_lines == snapshot_base,
+    "base policy.csv differs from the platform lines of the snapshot.\n"
+    f"Only in values.yaml: {sorted(set(base_lines) - set(snapshot_base))}\n"
+    f"Only in snapshot: {sorted(set(snapshot_base) - set(base_lines))}\n"
+    "If the change is intended, update the non-tenant lines of the snapshot in the same PR.",
+)
+
+# T2: tenants and fragments correspond one to one.
 fragment_paths = sorted(FRAGMENTS_DIR.glob("*.csv"))
 check(len(fragment_paths) > 0, f"no fragments found under {FRAGMENTS_DIR}")
-for p in fragment_paths:
-    rendered_parts.append(p.read_text().strip())
-rendered_policy = "\n".join(rendered_parts)
-
-rendered_lines = normalize(rendered_policy)
-
-baseline_lines = normalize(BASELINE_FILE.read_text())
-expected_lines = sorted(
-    line
-    for line in baseline_lines
-    if not any(f"team-{t}" in line or f", {t}," in line or f" {t}," in line for t in DROPPED_ORPHAN_TENANTS)
-)
-# The filter above is deliberately loose (substring match on the tenant
-# name); assert it removed exactly the 12 expected lines, not more or fewer,
-# so a coincidental substring match elsewhere would be caught here.
+tenant_dirs = sorted(p.name for p in TENANTS_DIR.iterdir() if p.is_dir())
+check(len(tenant_dirs) > 0, f"no tenant directories under {TENANTS_DIR}")
+admin_tenants = {m.group(1) for l in base_lines for m in [re.fullmatch(r"g,\s*([^,\s]+),\s*role:admin", l)] if m}
+expected_fragments = set(tenant_dirs) - admin_tenants
+actual_fragments = {p.stem for p in fragment_paths}
 check(
-    len(baseline_lines) - len(expected_lines) == 12,
-    f"expected filtering yyy/xxxx to drop exactly 12 lines from the baseline, "
-    f"dropped {len(baseline_lines) - len(expected_lines)}",
+    actual_fragments == expected_fragments,
+    "rbac/tenants fragments do not match platform-gitops/tenants/.\n"
+    f"Tenant without fragment: {sorted(expected_fragments - actual_fragments)}\n"
+    f"Fragment without tenant (orphan role): {sorted(actual_fragments - expected_fragments)}",
 )
 
+# T3: each fragment is exactly the wft-create-tenant template for its tenant.
+m = re.search(r'cat > "\$RBAC_FILE" <<EOF\n(.*?)\n[ \t]*EOF\n', CREATE_TENANT.read_text(), re.S)
+check(m is not None, f"could not find the RBAC fragment heredoc in {CREATE_TENANT}")
+if m:
+    template = textwrap.dedent(m.group(1))
+    check("${TENANT}" in template, "the RBAC heredoc in wft-create-tenant no longer uses ${TENANT}")
+    for p in fragment_paths:
+        want = normalize(template.replace("${TENANT}", p.stem))
+        got = normalize(p.read_text())
+        check(
+            got == want,
+            f"{p.relative_to(ROOT)} is not what wft-create-tenant writes for tenant {p.stem!r}.\n"
+            f"Extra: {sorted(set(got) - set(want))}\nMissing: {sorted(set(want) - set(got))}",
+        )
+
+# T4: the render is base + fragments, in the template's order.
+rendered_parts = [base_policy.strip()] + [p.read_text().strip() for p in fragment_paths]
+expected_lines = normalize("\n".join(rendered_parts))
 check(
-    rendered_lines == expected_lines,
-    "rendered policy.csv (base + fragments) does not equal the baseline minus "
-    f"the yyy/xxxx lines.\nOnly in rendered: {sorted(set(rendered_lines) - set(expected_lines))}\n"
-    f"Only in expected: {sorted(set(expected_lines) - set(rendered_lines))}",
+    len(expected_lines) == len(base_lines) + sum(len(normalize(p.read_text())) for p in fragment_paths),
+    "rendered policy lost or merged lines when concatenating fragments",
 )
 
+# T5: settings unchanged by the migration.
 check(
     rbac.get("create") is False,
     f"argo-cd.configs.rbac.create must be false so the subchart does not also "
@@ -110,18 +137,15 @@ check(
 )
 check(
     rbac.get("policy.default") == "",
-    f"argo-cd.configs.rbac['policy.default'] must survive the move unchanged, "
-    f"got {rbac.get('policy.default')!r}",
+    f"argo-cd.configs.rbac['policy.default'] must be unchanged, got {rbac.get('policy.default')!r}",
 )
 check(
     rbac.get("scopes") == "[groups]",
-    f"argo-cd.configs.rbac.scopes must survive the move unchanged, "
-    f"got {rbac.get('scopes')!r}",
+    f"argo-cd.configs.rbac.scopes must be unchanged, got {rbac.get('scopes')!r}",
 )
 
-# Belt-and-suspenders: if helm is actually available, cross-check with a real
-# render. Its absence is not a failure -- the pure-Python check above is the
-# one that must exist and pass regardless.
+# If helm is available, the real render must match the simulation. Its
+# absence is not a failure; the checks above do not depend on it.
 if shutil.which("helm"):
     try:
         with tempfile.TemporaryDirectory() as d:
@@ -138,7 +162,7 @@ if shutil.which("helm"):
                 check(
                     helm_lines == expected_lines,
                     "real helm template render of argocd-rbac-cm's policy.csv "
-                    "does not match the pure-Python simulation",
+                    "does not match the base + fragments simulation",
                 )
     except subprocess.CalledProcessError as exc:
         failures.append(f"helm template failed unexpectedly: {exc.stderr}")
@@ -148,6 +172,6 @@ if failures:
         print(f"FAIL: {f}", file=sys.stderr)
     sys.exit(1)
 print(
-    "argocd tenant rbac render: fragments + base policy equal the baseline "
-    "minus yyy/xxxx, create=false, policy.default/scopes unchanged"
+    f"argocd tenant rbac render: base policy unchanged, {len(fragment_paths)} fragments match "
+    f"{len(expected_fragments)} tenants and the wft-create-tenant template, render = base + fragments"
 )

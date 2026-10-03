@@ -78,6 +78,11 @@ spec:
 # Adding a platform-owned policy to a tenant namespace means adding its name
 # here too. That is deliberate friction: it is the only thing standing between a
 # tenant-authored policy and the isolation model.
+#
+# Platform-owned entries beyond the tenant chart's own set, each applied by
+# root-app from bootstrap/templates/mctl-platform/:
+#   allow-monitoring-to-mctl-agent               admins, mctl-agent.yaml
+#   allow-mctl-agent-to-mctl-telegram-bot-start  labs, mctl-telegram-bot-start-netpol.yaml
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -101,7 +106,8 @@ spec:
           'allow-ingress-from-traefik',
           'allow-ingress-from-monitoring',
           'allow-mctl-services-internet-egress',
-          'allow-monitoring-to-mctl-agent'
+          'allow-monitoring-to-mctl-agent',
+          'allow-mctl-agent-to-mctl-telegram-bot-start'
         ]
       message: "NetworkPolicies in tenant namespaces are limited to the platform-rendered set; policies are additive and a new one can relax the tenant's isolation"
       reason: Forbidden
@@ -182,4 +188,191 @@ spec:
   matchResources:
     # Cluster-wide: ESO's privilege is the same wherever the ExternalSecret sits,
     # so a platform namespace is no safer a place to do this than a tenant one.
+    namespaceSelector: {}
+---
+# Platform hostnames belong to the namespace that serves them (#1503).
+#
+# Tenants pick their own ingress host under *.mctl.ai, and nothing reserved
+# the platform's names: a tenant Ingress for auth.mctl.ai — the ZITADEL issuer
+# that mctl-api is about to trust (mctl-api#434) — or api.mctl.ai would be
+# accepted, and traefik would route that host, or part of it, to tenant code.
+#
+# The owner map is .Values.reservedPlatformHosts (bootstrap values.yaml): each
+# reserved host and the namespaces allowed to serve it; unlisted hosts are
+# unrestricted. Two policies, because the API server type-checks every
+# expression against every matched kind's schema and Ingress and IngressRoute
+# share no fields; both render the same map.
+#
+# Naming a host is not the only way to take its traffic. traefik orders
+# routers by rule length, so a long enough rule WITHOUT a host constraint
+# outranks `Host(auth.mctl.ai) && PathPrefix(/)` for the paths it covers. So
+# the policies also refuse, in every namespace: Ingress rules without a host,
+# spec.defaultBackend, wildcards over a platform domain, and IngressRoute
+# matches that are not a plain conjunction of literal Host/HostSNI matchers
+# (HostRegexp, negation, `||`, v2 multi-host syntax, HostSNI(`*`)). A
+# wildcard is refused when it covers a platform apex or any reserved host
+# owned by another namespace, so reserving a deeper name (x.id.mctl.ai) also
+# reserves it against *.id.mctl.ai. No live object uses any of these. A platform route that genuinely needs one gets a
+# reviewed exemption here, not a quiet carve-out.
+#
+# Cluster-wide bindings: a platform namespace is no more entitled to another
+# component's host than a tenant is, and ownership is by namespace, so the
+# platform itself needs no exemption.
+#
+# Proven both ways against a real API server at the cluster's version by
+# scripts/test-reserved-hosts-policy.sh (fixtures in tests/fixtures/reserved-hosts).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-reserved-platform-hosts-ingress
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ingresses"]
+  variables:
+    - name: owners
+      # Rendered from .Values.reservedPlatformHosts (bootstrap values.yaml), the
+      # one place the map lives; both reserved-host policies render it.
+      expression: >-
+        {
+        {{- range $host, $owners := .Values.reservedPlatformHosts }}
+          {{ $host | squote }}: [{{ range $i, $o := $owners }}{{ if $i }}, {{ end }}{{ $o | squote }}{{ end }}],
+        {{- end }}
+        }
+    - name: platformDomains
+      expression: "['mctl.ai', 'mctl.ru', 'mctl.me']"
+    - name: ns
+      expression: "object.metadata.namespace"
+  validations:
+    - expression: "!has(object.spec.defaultBackend)"
+      message: "spec.defaultBackend serves every host traefik has no other rule for, including platform hosts; give each rule an explicit host"
+      reason: Forbidden
+    - expression: >-
+        !has(object.spec.rules) || object.spec.rules.all(r, has(r.host) && r.host != '')
+      message: "every Ingress rule needs a host: a host-less rule matches all hosts and can outrank a platform host's routes"
+      reason: Forbidden
+    # No case or trailing-dot normalisation here, unlike the IngressRoute
+    # policy: the API server validates rule and TLS hosts as lowercase RFC 1123
+    # names before admission runs (tests/fixtures/reserved-hosts/invalid/).
+    - expression: >-
+        !has(object.spec.rules) ||
+        object.spec.rules.all(r, !has(r.host) ||
+          ((!(r.host in variables.owners) || variables.ns in variables.owners[r.host]) &&
+           !(r.host.startsWith('*.') && (r.host.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + r.host.substring(2)) && !(variables.ns in variables.owners[k]))))))
+      messageExpression: >-
+        'Ingress host reserved for the platform and owned by another namespace (mctl-reserved-platform-hosts): ' +
+        object.spec.rules.filter(r, has(r.host) &&
+          ((r.host in variables.owners && !(variables.ns in variables.owners[r.host])) ||
+           (r.host.startsWith('*.') && (r.host.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + r.host.substring(2)) && !(variables.ns in variables.owners[k])))))).map(r, r.host).join(', ')
+      reason: Forbidden
+    - expression: >-
+        !has(object.spec.tls) ||
+        object.spec.tls.all(t, !has(t.hosts) || t.hosts.all(h,
+          (!(h in variables.owners) || variables.ns in variables.owners[h]) &&
+          !(h.startsWith('*.') && (h.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2)) && !(variables.ns in variables.owners[k]))))))
+      message: "Ingress spec.tls lists a host reserved for the platform and owned by another namespace; a tenant certificate must not be offered for it"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-reserved-platform-hosts-ingress
+spec:
+  policyName: mctl-reserved-platform-hosts-ingress
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: {}
+---
+# The traefik CRD half of the policy above; see its comment.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-reserved-platform-hosts-ingressroute
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["traefik.io"]
+        # Every version: matchConstraints match the request version, so a
+        # pinned list would stop applying the day traefik serves a second one.
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ingressroutes", "ingressroutetcps"]
+  variables:
+    - name: owners
+      # Rendered from .Values.reservedPlatformHosts (bootstrap values.yaml), the
+      # one place the map lives; both reserved-host policies render it.
+      expression: >-
+        {
+        {{- range $host, $owners := .Values.reservedPlatformHosts }}
+          {{ $host | squote }}: [{{ range $i, $o := $owners }}{{ if $i }}, {{ end }}{{ $o | squote }}{{ end }}],
+        {{- end }}
+        }
+    - name: platformDomains
+      expression: "['mctl.ai', 'mctl.ru', 'mctl.me']"
+    - name: ns
+      expression: "object.metadata.namespace"
+    # A literal Host(`x`) / HostSNI(`x`) matcher at the top level of the
+    # conjunction: at the start of the rule, after `&&` or after `(`. Without
+    # the anchor a decoy `Host(` inside another matcher's argument counts as a
+    # host constraint the router does not have. Double quotes are refused
+    # outright (below), so only backtick arguments, which cannot nest, remain.
+    - name: literalHost
+      expression: "'(^|&&|\\\\()\\\\s*Host(SNI)?\\\\(\\\\s*`[^`]*`\\\\s*\\\\)'"
+    # What a literal host must look like once normalised: a DNS name, or a
+    # wildcard over one. A decoy literal always captures matcher syntax.
+    - name: dnsName
+      expression: "'^(\\\\*\\\\.)?([a-z0-9]([-a-z0-9]*[a-z0-9])?\\\\.)*[a-z0-9]([-a-z0-9]*[a-z0-9])?$'"
+  validations:
+    # Only plain conjunctions: `||` and `!` let a route match hosts it never
+    # names. Double-quoted arguments can hide a decoy Host(`...`) inside them,
+    # so arguments must use backticks.
+    - expression: >-
+        object.spec.routes.all(r, !r.match.contains('||') && !r.match.contains('!') && !r.match.contains('"'))
+      message: "IngressRoute match must be a plain && conjunction with backtick arguments: `||`, `!` and double-quoted arguments let a route match hosts it does not name; split it into separate routes"
+      reason: Forbidden
+    # Every Host-family matcher must be one literal Host/HostSNI, and there must
+    # be at least one: HostRegexp, HostSNIRegexp, HostHeader and the v2
+    # multi-argument Host(`a`, `b`) all fail the count comparison.
+    - expression: >-
+        object.spec.routes.all(r,
+          size(r.match.findAll(variables.literalHost)) >= 1 &&
+          size(r.match.findAll(variables.literalHost)) == size(r.match.findAll('Host[A-Za-z]*\\s*\\(')))
+      message: "every IngressRoute route needs at least one literal Host(`...`) or HostSNI(`...`) and no HostRegexp/HostSNIRegexp/HostHeader or multi-host matcher: anything else can match platform hosts"
+      reason: Forbidden
+    # traefik matches hosts case-insensitively and ignores a trailing dot, so
+    # both are normalised before the lookup.
+    - expression: >-
+        object.spec.routes.all(r, r.match.findAll(variables.literalHost)
+          .map(x, x.split('`')[1].trim().lowerAscii())
+          .map(h, h.endsWith('.') ? h.substring(0, size(h) - 1) : h)
+          .all(h,
+            h.matches(variables.dnsName) &&
+            (!(h in variables.owners) || variables.ns in variables.owners[h]) &&
+            !(h.startsWith('*.') && (h.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2)) && !(variables.ns in variables.owners[k]))))))
+      message: "IngressRoute names a host reserved for the platform and owned by another namespace (mctl-reserved-platform-hosts), a literal that is not a DNS name, or HostSNI(`*`)"
+      reason: Forbidden
+    - expression: >-
+        !has(object.spec.tls) || !has(object.spec.tls.domains) ||
+        object.spec.tls.domains.all(d,
+          ((has(d.main) ? [d.main] : []) + (has(d.sans) ? d.sans : []))
+            .map(x, x.trim().lowerAscii())
+            .map(x, x.endsWith('.') ? x.substring(0, size(x) - 1) : x).all(h,
+            (!(h.lowerAscii() in variables.owners) || variables.ns in variables.owners[h.lowerAscii()]) &&
+            !(h.startsWith('*.') && (h.substring(2).lowerAscii() in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2).lowerAscii()) && !(variables.ns in variables.owners[k]))))))
+      message: "IngressRoute spec.tls.domains lists a host reserved for the platform and owned by another namespace"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-reserved-platform-hosts-ingressroute
+spec:
+  policyName: mctl-reserved-platform-hosts-ingressroute
+  validationActions: [Deny]
+  matchResources:
     namespaceSelector: {}

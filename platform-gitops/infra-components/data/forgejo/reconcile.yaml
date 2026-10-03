@@ -1,0 +1,505 @@
+# Declarative Forgejo organisations: users, orgs, teams, repositories and the
+# branches seeded into them, reconciled every 30 minutes.
+#
+# Nothing tenant-specific lives in this public repository. The desired state is
+# the Vault secret secret/platform/forgejo/reconcile, extracted whole into the
+# forgejo-reconcile Secret (dataFrom), whose keys become the Job's environment:
+#
+#   MANIFEST        JSON {sources, users, orgs}; see docs/runbooks/forgejo.md
+#   USER_PASSWORDS  JSON login -> initial password (changed on first login)
+#   <TOKEN_ENV>     one read-only token per source, named by the manifest's
+#                   sources.<name>.token_env
+#
+# The run is Terraform (main.tf below; state in the forgejo-backup R2 bucket
+# under terraform/, beside but outside the forgejo-backups/ prefix that the
+# backup retention prunes) plus a fast-forward-only branch sync. A source that
+# diverged from Forgejo fails the run instead of overwriting work done there,
+# and ForgejoReconcileStale (vm-rules/forgejo-alerts.yaml) reports it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forgejo-reconcile
+  namespace: forgejo
+data:
+  main.tf: |
+    # Generic Forgejo organisation reconciler. Holds no tenant data: users, orgs,
+    # teams and repositories all come from var.manifest, which the CronJob reads
+    # from Vault (secret/platform/forgejo/reconcile -> manifest). Branch contents
+    # are not Terraform's job; reconcile.sh pushes them between two applies.
+    terraform {
+      required_version = ">= 1.10"
+      required_providers {
+        forgejo = {
+          source  = "svalabs/forgejo"
+          version = "1.6.1"
+        }
+        # 2.x, not 3.0.0: 3.0.0 fails the plan once the object is gone (404)
+        # instead of planning to recreate it, so it cannot detect drift.
+        restapi = {
+          source  = "Mastercard/restapi"
+          version = "2.0.1"
+        }
+      }
+      # Bucket, key, endpoint and credentials are passed by reconcile.sh with
+      # -backend-config / AWS_* env, from the forgejo-backup-r2 secret.
+      backend "s3" {
+        region                      = "auto"
+        skip_credentials_validation = true
+        skip_region_validation      = true
+        skip_requesting_account_id  = true
+        skip_metadata_api_check     = true
+        skip_s3_checksum            = true
+        use_path_style              = true
+      }
+    }
+
+    provider "forgejo" {
+      # host / username / password from FORGEJO_HOST, FORGEJO_USERNAME,
+      # FORGEJO_PASSWORD (the platform admin account).
+    }
+
+    variable "manifest" {
+      description = "JSON desired state: {users: [...], orgs: [...]}."
+      type        = string
+    }
+
+    # For what svalabs/forgejo has no resource for. Same admin account.
+    provider "restapi" {
+      uri                  = "${trimsuffix(var.forgejo_host, "/")}/api/v1"
+      username             = var.forgejo_username
+      password             = var.forgejo_password
+      write_returns_object = false
+    }
+
+    variable "forgejo_host" {
+      description = "Forgejo base URL (FORGEJO_HOST), for the API calls the provider lacks."
+      type        = string
+    }
+
+    variable "forgejo_username" {
+      type = string
+    }
+
+    variable "forgejo_password" {
+      type      = string
+      sensitive = true
+    }
+
+    variable "user_passwords" {
+      description = "JSON map login -> initial password, for users created here."
+      type        = string
+      sensitive   = true
+    }
+
+    locals {
+      m         = jsondecode(var.manifest)
+      passwords = jsondecode(var.user_passwords)
+
+      users = { for u in local.m.users : u.login => u }
+      orgs  = { for o in local.m.orgs : o.name => o }
+
+      repos = merge([
+        for o in local.m.orgs : {
+          for r in o.repos : "${o.name}/${r.name}" => merge(r, { org = o.name })
+        }
+      ]...)
+
+      # Members of the auto-created Owners team, per org.
+      owners = merge([
+        for o in local.m.orgs : {
+          for login in try(o.owners, []) : "${o.name}/${login}" => { org = o.name, login = login }
+        }
+      ]...)
+
+      # Read-only members: one "Readers" team per org that lists any (e.g. the
+      # account a CD system clones with).
+      reader_orgs = { for o in local.m.orgs : o.name => o if length(try(o.readers, [])) > 0 }
+      readers = merge([
+        for o in local.m.orgs : {
+          for login in try(o.readers, []) : "${o.name}/${login}" => { org = o.name, login = login }
+        }
+      ]...)
+
+      # Write-access developers: one "Developers" team per org that lists any.
+      dev_orgs = { for o in local.m.orgs : o.name => o if length(try(o.developers, [])) > 0 }
+      developers = merge([
+        for o in local.m.orgs : {
+          for login in try(o.developers, []) : "${o.name}/${login}" => { org = o.name, login = login }
+        }
+      ]...)
+    }
+
+    resource "forgejo_user" "this" {
+      for_each = local.users
+
+      login     = each.key
+      email     = each.value.email
+      full_name = try(each.value.full_name, null)
+      password  = local.passwords[each.key]
+      # Machine accounts ("bot": true) authenticate with this password from a
+      # Secret; a forced change would lock them out of git and the API.
+      must_change_password      = !try(each.value.bot, false)
+      visibility                = "private"
+      allow_create_organization = false
+      # A wrong entry in the manifest must not delete a person's account.
+      deactivate_on_destroy = true
+
+      lifecycle {
+        # The user changes the initial password on first login; Terraform must
+        # not reset it on every run.
+        ignore_changes = [password, must_change_password]
+      }
+    }
+
+    resource "forgejo_organization" "this" {
+      for_each = local.orgs
+
+      name        = each.key
+      full_name   = try(each.value.full_name, null)
+      description = try(each.value.description, null)
+      visibility  = "private"
+    }
+
+    data "forgejo_team" "owners" {
+      for_each = local.orgs
+
+      organization = forgejo_organization.this[each.key].name
+      name         = "Owners"
+    }
+
+    resource "forgejo_team_member" "owners" {
+      for_each = local.owners
+
+      team_id = data.forgejo_team.owners[each.value.org].id
+      user    = forgejo_user.this[each.value.login].login
+    }
+
+    resource "forgejo_team" "developers" {
+      for_each = local.dev_orgs
+
+      organization              = forgejo_organization.this[each.key].name
+      name                      = "Developers"
+      description               = "Write access to every repository of the organization"
+      permission                = "write"
+      includes_all_repositories = true
+      can_create_org_repo       = false
+      units_map = {
+        "repo.code"     = "write"
+        "repo.issues"   = "write"
+        "repo.pulls"    = "write"
+        "repo.releases" = "write"
+        "repo.wiki"     = "write"
+      }
+    }
+
+    resource "forgejo_team" "readers" {
+      for_each = local.reader_orgs
+
+      organization              = forgejo_organization.this[each.key].name
+      name                      = "Readers"
+      description               = "Read access to every repository of the organization"
+      permission                = "read"
+      includes_all_repositories = true
+      can_create_org_repo       = false
+      units_map = {
+        "repo.code"     = "read"
+        "repo.issues"   = "read"
+        "repo.pulls"    = "read"
+        "repo.releases" = "read"
+        "repo.wiki"     = "read"
+      }
+    }
+
+    resource "forgejo_team_member" "readers" {
+      for_each = local.readers
+
+      team_id = forgejo_team.readers[each.value.org].id
+      user    = forgejo_user.this[each.value.login].login
+    }
+
+    resource "forgejo_team_member" "developers" {
+      for_each = local.developers
+
+      team_id = forgejo_team.developers[each.value.org].id
+      user    = forgejo_user.this[each.value.login].login
+    }
+
+    # Every repository of the org in every team that claims "all repositories".
+    # Forgejo only adds a repository to such a team at the moment one of the two
+    # is created, and the two race when one apply creates both: on 2026-10-03
+    # Readers came up without erpact/mctl-apps and Developers without
+    # erpact/site-deployer. svalabs/forgejo has no team-repository resource;
+    # this one reads GET /teams/{id}/repos/{owner}/{repo} on every run (404 =
+    # missing, so it is planned again) and adds with the idempotent PUT.
+    # Removing it (repository dropped from the manifest) sends DELETE, which
+    # Forgejo ignores for an all-repositories team.
+    locals {
+      team_repos = merge([
+        for kind, teams in { developers = forgejo_team.developers, readers = forgejo_team.readers } : merge([
+          for org, t in teams : {
+            for rk, r in local.repos : "${kind}/${rk}" => { team_id = t.id, repo = rk } if r.org == org
+          }
+        ]...)
+      ]...)
+    }
+
+    resource "restapi_object" "team_repo" {
+      for_each = local.team_repos
+
+      path                      = "/teams/${each.value.team_id}/repos"
+      object_id                 = each.value.repo
+      data                      = "{}"
+      create_method             = "PUT"
+      create_path               = "/teams/${each.value.team_id}/repos/{id}"
+      destroy_method            = "DELETE"
+      ignore_all_server_changes = true
+
+      depends_on = [forgejo_repository.this]
+    }
+
+    resource "forgejo_repository" "this" {
+      for_each = local.repos
+
+      owner          = forgejo_organization.this[each.value.org].name
+      name           = each.value.name
+      description    = try(each.value.description, null)
+      private        = true
+      auto_init      = false
+      default_branch = each.value.default_branch
+      # Repositories are seeded from forks whose upstream workflows must never
+      # run here; Actions are off at the instance level too.
+      has_actions  = false
+      has_packages = false
+      # Removing a repo from the manifest archives it instead of deleting code.
+      archive_on_destroy = true
+    }
+
+    # The branch list flattened to one tab-separated line per branch, for
+    # reconcile.sh: the terraform image has no jq, and Terraform already parses
+    # the manifest. Columns: repo, branch, source URL, source ref, source user,
+    # token env var, skip TLS verification.
+    output "branch_plan" {
+      # Sensitive only to keep it out of every apply log; it holds no secrets.
+      sensitive = true
+      value = join("", flatten([
+        for key, r in local.repos : [
+          for b in try(r.branches, []) : format("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+            key,
+            b.name,
+            "${local.m.sources[b.source].url}/${b.path}.git",
+            try(b.ref, b.name),
+            try(local.m.sources[b.source].username, "oauth2"),
+            local.m.sources[b.source].token_env,
+            tostring(try(local.m.sources[b.source].insecure_skip_tls, false)),
+          )
+        ]
+      ]))
+    }
+  reconcile.sh: |
+    #!/bin/sh
+    # Reconcile Forgejo organisations to the manifest in Vault.
+    #
+    #   1. terraform apply  users, orgs, teams, repositories, and every repository
+    #                       into the teams that cover all of them (main.tf)
+    #   2. branch sync      every branch listed in the manifest is fetched from its
+    #                       source and pushed to Forgejo, fast-forward only
+    #   3. terraform apply  again: Forgejo makes the first branch pushed into an
+    #                       empty repository its default branch, this puts the
+    #                       manifest's default back
+    #
+    # Pushes are never forced. Once people work in Forgejo, a source that moved
+    # differently makes the push fail and the run report it, instead of
+    # overwriting their commits. To stop syncing a branch, drop it from the
+    # manifest; the copy in Forgejo stays.
+    #
+    # Credentials travel in an Authorization header, never in a URL, so git error
+    # messages cannot print them.
+    set -eu
+
+    WORK=/work
+    TF=$WORK/tf
+    mkdir -p "$TF" "$WORK/git"
+    cp /config/main.tf "$TF/"
+    cd "$TF"
+
+    export TF_IN_AUTOMATION=1 TF_INPUT=0
+    export TF_VAR_manifest="$MANIFEST" TF_VAR_user_passwords="$USER_PASSWORDS"
+    export TF_VAR_forgejo_host="$FORGEJO_HOST" TF_VAR_forgejo_username="$FORGEJO_USERNAME" \
+      TF_VAR_forgejo_password="$FORGEJO_PASSWORD"
+
+    terraform init -no-color \
+      -backend-config="bucket=$BUCKET" \
+      -backend-config="key=terraform/forgejo-reconcile.tfstate" \
+      -backend-config="endpoints={s3=\"$ENDPOINT\"}" >/dev/null
+    terraform apply -no-color -auto-approve
+    terraform output -raw -no-color branch_plan > "$WORK/plan.tsv"
+
+    basic() { printf 'Authorization: Basic %s' "$(printf '%s:%s' "$1" "$2" | base64 | tr -d '\n')"; }
+    dst_hdr=$(basic "$FORGEJO_USERNAME" "$FORGEJO_PASSWORD")
+
+    failed=0
+    tab=$(printf '\t')
+    while IFS="$tab" read -r repo branch src_url src_ref src_user token_env insecure; do
+      [ -n "$repo" ] || continue
+      case "$token_env" in
+        *[!A-Z0-9_]*|"") echo "FAIL $repo:$branch: bad token_env '$token_env'"; failed=1; continue ;;
+      esac
+      token=$(eval "printf '%s' \"\${$token_env:-}\"")
+      src_hdr=$(basic "$src_user" "$token")
+      tls=""
+      if [ "$insecure" = "true" ]; then
+        echo "WARN $repo:$branch: TLS verification is off for $src_url (insecure_skip_tls)"
+        tls="-c http.sslVerify=false"
+      fi
+      dst="${FORGEJO_HOST%/}/$repo.git"
+
+      # A failed read is a failure, never "branch absent": an unreachable Forgejo
+      # must not look like an empty repository.
+      # shellcheck disable=SC2086  # $tls is either empty or two words on purpose
+      if ! src_refs=$(git $tls -c http.extraHeader="$src_hdr" ls-remote "$src_url" "refs/heads/$src_ref"); then
+        echo "FAIL $repo:$branch: cannot read $src_url"; failed=1; continue
+      fi
+      if ! dst_refs=$(git -c http.extraHeader="$dst_hdr" ls-remote "$dst" "refs/heads/$branch"); then
+        echo "FAIL $repo:$branch: cannot read $dst"; failed=1; continue
+      fi
+      src_sha=$(printf '%s' "$src_refs" | cut -f1)
+      dst_sha=$(printf '%s' "$dst_refs" | cut -f1)
+      if [ -z "$src_sha" ]; then
+        echo "FAIL $repo:$branch: source has no branch $src_ref"; failed=1; continue
+      fi
+      if [ "$src_sha" = "$dst_sha" ]; then
+        echo "OK   $repo:$branch $src_sha"
+        continue
+      fi
+
+      mirror="$WORK/git/$(printf '%s' "$repo" | tr '/' '_').git"
+      [ -d "$mirror" ] || git init -q --bare "$mirror"
+      # shellcheck disable=SC2086
+      if git -C "$mirror" $tls -c http.extraHeader="$src_hdr" fetch -q "$src_url" "+refs/heads/$src_ref:refs/sync/$branch" \
+         && git -C "$mirror" -c http.extraHeader="$dst_hdr" push -q "$dst" "refs/sync/$branch:refs/heads/$branch"; then
+        echo "SYNC $repo:$branch ${dst_sha:-new} -> $src_sha"
+      else
+        echo "FAIL $repo:$branch: fetch or fast-forward push failed (diverged in Forgejo?)"
+        failed=1
+      fi
+      # Bound /work to the largest single repository, not the whole seed set.
+      rm -rf "$mirror"
+    done < "$WORK/plan.tsv"
+
+    terraform apply -no-color -auto-approve
+    exit "$failed"
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: forgejo-reconcile
+  namespace: forgejo
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: forgejo-reconcile
+    creationPolicy: Owner
+  # The whole Vault secret, so key names (and with them tenant and source
+  # names) never appear in this repository.
+  dataFrom:
+    - extract:
+        key: platform/forgejo/reconcile
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: forgejo-reconcile
+  namespace: forgejo
+spec:
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # The first run fetches every seeded repository in full (the largest
+      # are ~1 GB); later runs only compare refs.
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 7200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: forgejo-reconcile
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+          volumes:
+            - name: config
+              configMap:
+                name: forgejo-reconcile
+            - name: work
+              emptyDir:
+                sizeLimit: 8Gi
+          containers:
+            - name: reconcile
+              image: hashicorp/terraform:1.14.4
+              command: ["sh", "/config/reconcile.sh"]
+              envFrom:
+                - secretRef:
+                    name: forgejo-reconcile
+              env:
+                - name: HOME
+                  value: /work
+                - name: FORGEJO_HOST
+                  value: http://forgejo-http.forgejo.svc.cluster.local:3000
+                - name: FORGEJO_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: forgejo-admin
+                      key: username
+                - name: FORGEJO_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: forgejo-admin
+                      key: password
+                # Terraform state backend: the bucket-scoped backup token.
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: forgejo-backup-r2
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: forgejo-backup-r2
+                      key: AWS_SECRET_ACCESS_KEY
+                - name: BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: forgejo-backup-r2
+                      key: BUCKET
+                - name: ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: forgejo-backup-r2
+                      key: ENDPOINT
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                  readOnly: true
+                - name: work
+                  mountPath: /work
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 2Gi

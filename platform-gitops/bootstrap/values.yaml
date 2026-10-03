@@ -223,3 +223,44 @@ usageWriter:
 # Not done yet: step 0 has not landed, so this stays false.
 surfaceTelegramToken:
   enabled: false
+
+# Platform hostnames and the namespaces allowed to serve them (#1503),
+# enforced by the mctl-reserved-platform-hosts-* admission policies in
+# templates/system/admission-policies.yaml. A host that is not listed is
+# unrestricted (every tenant host). An empty list reserves a name for nobody
+# in the cluster.
+#
+# Adding a platform host = adding it here in the same change that adds its
+# Ingress. Before merging, run scripts/test-reserved-hosts-policy.sh with
+# --admit on a dump of the live routes (docs/runbooks/reserved-hosts.md): a
+# wrong owner here refuses that component's next sync.
+reservedPlatformHosts:
+  mctl.ai: [admins]
+  www.mctl.ai: [admins]
+  mctl.ru: [admins]
+  www.mctl.ru: [admins]
+  mctl.me: [admins]
+  agent.mctl.ai: [admins]
+  docs.mctl.ai: [admins]
+  ui.mctl.ai: [admins]
+  # ZITADEL, plus the usual identity-provider aliases so none of them can be
+  # stood up by a tenant to imitate the sign-in page.
+  auth.mctl.ai: [zitadel]
+  id.mctl.ai: [zitadel]
+  login.mctl.ai: [zitadel]
+  sso.mctl.ai: [zitadel]
+  accounts.mctl.ai: [zitadel]
+  api.mctl.ai: [mctl-api]
+  app.mctl.ai: [backstage]
+  ops.mctl.ai: [argocd]
+  secrets.mctl.ai: [vault]
+  workflows.mctl.ai: [argo-workflows]
+  git.mctl.ai: [forgejo]
+  grafana.mctl.ai: [monitoring]
+  temporal.mctl.ai: [temporal]
+  admins-temporal-web.mctl.ai: [temporal]
+  # mctl-telegram, a platform product deployed in the labs tenant.
+  tg.mctl.ai: [labs]
+  tg-preview.mctl.ai: [labs]
+  # The Cloudflare MCP portal; never served from the cluster.
+  mcp.mctl.ai: []

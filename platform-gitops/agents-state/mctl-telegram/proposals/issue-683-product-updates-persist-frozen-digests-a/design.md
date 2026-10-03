@@ -194,7 +194,7 @@ by an older binary, it is already tested
 (`internal/db/product_updates_test.go`), and its `source_digest_id IS NULL`
 guard means it can never contradict an atomic write.
 
-### 4. The operator entry point
+### 4. The operator entry point: WITHDRAWN, replaced by "Correction 2026-09-30" at the end (broadcasts page action, no MCP tool)
 
 New `internal/mcp/productupdate_tools.go`, tool
 `prepare_product_update_digest`, registered in the list at
@@ -346,3 +346,44 @@ no code or table with product updates. Release-please
 (`.github/workflows/release-please.yml`) is untouched; the only new coupling
 is that `APP_VERSION` must continue to be the release tag, which it already
 is (Dockerfile:12).
+
+## Correction 2026-09-30: §4 entry point moves to the broadcasts page
+
+Owner decision on #683: v1 uses the existing broadcasts page, and there is no
+new MCP mutation tool. §4 "The operator entry point" is replaced as follows.
+§1–§3 and §5 are unchanged.
+
+- **Route.** `mux.With(manageAuth).Post("/telegram/connect/broadcasts/prepare-digest", broadcastWeb.HandlePrepareDigest)`
+  in `cmd/server/main.go`, next to the existing approve and cancel routes
+  (:498-500).
+- **Handler.** `internal/web/broadcasts.go` `HandlePrepareDigest` goes through
+  the page's existing action helper (the `do(actor, r.PostForm)` path at
+  :222). It therefore inherits the scope, `IsOperator` and `sameOrigin` checks
+  at :75-77, and the refused/failed/done logging, unchanged. Form fields are
+  `category`, `digest_id`, `version`, and the optional `tiers`,
+  `connected_via` and `active_within_days`. A `text` field is refused.
+- **Guards and sequence.** These are the ones §4 listed, moved from the tool
+  to the handler:
+  1. the feed is loaded and `LatestRelease` is known;
+  2. no non-terminal campaign exists for this category (the prepared,
+     approved and sending states);
+  3. when `version > 1`, `GetProductUpdateDigest(digest_id, version-1)` exists;
+  4. `FreezeNextDigest`;
+  5. `RenderBroadcast`;
+  6. `Prepare` with `Selector.Category` taken from the digest and `SourceRef`
+     set.
+
+  The broadcast `Service` needs the feed and the build version: pass them
+  into the `BroadcastWeb` constructor rather than through a global.
+- **Template.** `broadcastTemplate` gains a small form listing the categories
+  (`productupdate` categories), a digest id input with the documented
+  `<category>-<YYYY>-w<WW>` convention as the placeholder, and a version
+  input. After a successful prepare, the redirect lands on the list, where the
+  new campaign already shows its source ref (task 9).
+- **MCP.** No new tool. `internal/mcp/productupdate_tools.go` is not created,
+  and neither `docs/portal-allowlist.json` nor `docs/tool-descriptors.json`
+  changes. `summarize` still gains `source_ref` for the read-only
+  `list_broadcasts` / `get_broadcast` (task 9).
+- **Alternatives.** "An MCP operator tool" joins the dropped alternatives: the
+  owner decision keeps v1 on the page, where a human is present by
+  construction.

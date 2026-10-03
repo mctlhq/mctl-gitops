@@ -55,7 +55,7 @@ pass at :435-447). The work is wiring, rendering and two surfaces.
   today; `broadcast.Store` (service.go:66-72) needs no new method;
   `SetBroadcastCampaignSourceRef` is left in place and still passes its tests.
 
-- [ ] 6. Add the operator MCP tool (depends on 3, 4, 5) — new
+- [x] 6. **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** Replaced by 6′. Add the operator MCP tool (depends on 3, 4, 5) — new
   `internal/mcp/productupdate_tools.go` with
   `toolPrepareProductUpdateDigest`, registered in the builder loop at
   `internal/mcp/server.go:456-461`. Inputs `category`, `digest_id`,
@@ -73,13 +73,13 @@ pass at :435-447). The work is wiring, rendering and two surfaces.
   `digest_version`, `content_hash`, `entry_ids`, `newly_frozen`; audited via
   `s.audit` like its neighbours; sends nothing and offers no approval path.
 
-- [ ] 7. Regenerate `docs/portal-allowlist.json` (depends on 6) — the file is
+- [x] 7. **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** The allowlist does not change. Regenerate `docs/portal-allowlist.json` (depends on 6) — the file is
   derived from the registered tool set by
   `internal/mcp/portal_allowlist_test.go`; the new tool must appear against
   `admin:broadcast` alongside the four broadcast tools.
   DoD: `go test ./internal/mcp/ -run PortalAllowlist` passes with no diff.
 
-- [ ] 8. Regenerate `docs/tool-descriptors.json` and add the feed entry for
+- [x] 8. **WITHDRAWN (owner decision 2026-09-30): do not implement. See "Correction 2026-09-30" at the end of this file.** The tool descriptors do not change. Regenerate `docs/tool-descriptors.json` and add the feed entry for
   this change (depends on 6) — adding an MCP tool changes the tool surface,
   so `go run ./cmd/productupdates gate` (`.github/workflows/build.yml:187`)
   will fail until this same pull request carries an **approved**
@@ -113,7 +113,7 @@ pass at :435-447). The work is wiring, rendering and two surfaces.
   DoD: the page never shows `provenance` fields; with `loadErr != nil` it
   renders a notice and no entries rather than a 500.
 
-- [ ] 11. Document the flow (depends on 6, 10) — extend
+- [ ] 11. **AMENDED: see the correction at the end; it names no MCP tool.** Document the flow (depends on 6, 10) — extend
   `docs/product-updates/README.md` with the operator steps (freeze and
   prepare via `prepare_product_update_digest`, approve on
   `/telegram/connect/broadcasts`), the recommended digest id convention
@@ -137,10 +137,10 @@ pass at :435-447). The work is wiring, rendering and two surfaces.
   or a category that differs from the campaign's, it writes nothing and
   returns `ErrCampaignSourceMismatch`. Run against both SQLite and Postgres,
   matching `internal/db/product_updates_test.go`.
-- [ ] T5. `prepare_product_update_digest` end to end on a seeded feed: freezes,
+- [ ] T5. **AMENDED: exercise `HandlePrepareDigest`, see the correction.** `prepare_product_update_digest` end to end on a seeded feed: freezes,
   persists, prepares, and the resulting campaign read back through
   `GetBroadcastCampaign` carries the expected `SourceRef`.
-- [ ] T6. Called twice with the same `(digest_id, version)`, the second call
+- [ ] T6. **AMENDED: page-action refusals, see the correction.** Called twice with the same `(digest_id, version)`, the second call
   reports `newly_frozen: false`, stores no new digest row, and is refused by
   the one-campaign-per-category guard while the first campaign is still
   `prepared`.
@@ -200,3 +200,34 @@ rollback is a redeploy of the previous image tag. Specifically:
    Reverting task 2 (the `COPY` line) alone disables freezing while leaving
    the rest of the server healthy, which is the safest kill switch if the
    feed itself turns out to be the problem.
+
+## Correction 2026-09-30 (owner decision): broadcasts page, no MCP tool
+
+Tasks 6, 7 and 8 above are **withdrawn** and replaced by 6′. Task 11 and tests
+T5 and T6 are amended as follows. All other tasks and tests stand.
+
+- [ ] 6′. Add the prepare-from-digest action to the broadcasts page (depends on
+  3, 4, 5). Add `HandlePrepareDigest` in `internal/web/broadcasts.go` through
+  the existing action helper (scope, `IsOperator` and same-origin exactly as
+  approve/cancel), the POST route
+  `/telegram/connect/broadcasts/prepare-digest` in `cmd/server/main.go`, and the
+  form in `broadcastTemplate`. It runs the guards and sequence from design.md
+  "Correction 2026-09-30", in that order. It refuses a `text` field and a
+  category that differs from the digest's.
+  DoD: preparing never approves; the new campaign shows digest id, version and
+  hash on the list. No file under `internal/mcp/` gains a tool, and
+  `docs/portal-allowlist.json` and `docs/tool-descriptors.json` are
+  byte-identical.
+- [ ] 11 (amended). The README operator steps are: open
+  `/telegram/connect/broadcasts`, "Prepare from digest", review, then Approve.
+  There is no mention of an MCP tool.
+- [ ] T5 (amended). The flow is exercised end to end through
+  `HandlePrepareDigest` on a seeded feed: it freezes, persists, prepares one
+  campaign with `source_ref`, and sends nothing.
+- [ ] T6 (amended). The page action refuses each of the following as
+  approve/cancel do: a missing `admin:broadcast` scope, a non-operator, a
+  cross-origin POST, a `text` field, a category mismatch, and a second
+  non-terminal campaign in the same category.
+- [ ] T-no-tool. A test asserts that the registered MCP tool set is unchanged
+  by this change: no tool name contains `digest`, and the portal allowlist
+  golden file does not change.
