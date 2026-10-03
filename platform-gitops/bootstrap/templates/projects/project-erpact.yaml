@@ -11,14 +11,19 @@
 #   - an explicit namespaced kind list: no NetworkPolicy (the tenant chart
 #     owns them), no ResourceQuota/LimitRange (the tenant's own budget), no
 #     RBAC, no Applications (an Application in argocd could name another
-#     project and escape this one).
+#     project and escape this one), no ExternalSecrets (one could name
+#     ClusterSecretStore vault-backend; erpact's own live in
+#     templates/erpact/externalsecrets.yaml);
+#   - Pods may only reference that namespace's own Secrets
+#     (mctl-external-manifests-secret-allowlist): everything else the
+#     reflector and the tenant chart put there stays out of reach.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
   name: erpact
   namespace: argocd
   annotations:
-    # Before the repository secret and erpact-infra (wave -1) that name it.
+    # Before the repository secret (wave 1) and the Applications that name it.
     argocd.argoproj.io/sync-wave: "-2"
 spec:
   description: ERPact copy (tenant erpact), manifests from git.mctl.ai/erpact/mctl-apps
@@ -51,15 +56,16 @@ spec:
       kind: CronJob
     - group: networking.k8s.io
       kind: Ingress
-    - group: external-secrets.io
-      kind: ExternalSecret
 
   orphanedResources:
     warn: true
     ignore:
-      # Rendered by ESO and by the tenant chart, not by these Applications.
+      # Rendered by ESO, by the tenant chart and by templates/erpact/, not by
+      # these Applications.
       - kind: Secret
       - kind: ConfigMap
       - kind: ServiceAccount
+      - group: external-secrets.io
+        kind: ExternalSecret
       - group: networking.k8s.io
         kind: NetworkPolicy
