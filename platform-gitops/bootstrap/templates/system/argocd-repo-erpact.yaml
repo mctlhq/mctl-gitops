@@ -7,8 +7,6 @@ kind: ExternalSecret
 metadata:
   name: argocd-repo-erpact
   namespace: argocd
-  annotations:
-    argocd.argoproj.io/sync-wave: "1"
 spec:
   refreshInterval: 1h
   secretStoreRef:
