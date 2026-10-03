@@ -95,6 +95,10 @@ ingress.hosts`) rather than emitting a host-less rule the policy would refuse.
 ## Bumping the cluster or traefik
 
 `K3S_IMAGE` and `TRAEFIK_VERSION` at the top of the test script track the
-cluster's Kubernetes version and traefik image. Bump them with the cluster:
+cluster's Kubernetes version and traefik image. The traefik CRDs are fetched
+by commit, not tag, and checked against a digest, so a traefik bump updates
+`TRAEFIK_VERSION`, `TRAEFIK_COMMIT` (`git ls-remote
+https://github.com/traefik/traefik refs/tags/<tag>`) and `TRAEFIK_CRDS_SHA256`
+together. Bump them with the cluster:
 the API server's CEL environment is what decides whether the expressions
 type-check (for example, `cel.bind` is not available on 1.33).
