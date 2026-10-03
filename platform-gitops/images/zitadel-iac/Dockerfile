@@ -5,35 +5,43 @@
 #
 # Built by .github/workflows/build-image.yaml with
 #   repo=mctlhq/mctl-gitops  dockerfile_path=platform-gitops/images/zitadel-iac/Dockerfile
-#   image_name=ghcr.io/mctlhq/zitadel-iac  image_tag=<tofu version>-<ZITADEL_PROVIDER_VERSION>
+#   image_name=ghcr.io/mctlhq/zitadel-iac  image_tag=<tofu version>-<ZITADEL_PROVIDER_VERSION>-<KUBERNETES_PROVIDER_VERSION>
 #
 # The official OpenTofu image is meant to have its binary copied out, not to
-# be run, so it is used only as a source here. The zitadel provider is baked
+# be run, so it is used only as a source here. The providers are baked
 # in as a filesystem mirror and registry access is excluded at runtime: the
 # Job then needs no egress beyond the ZITADEL API, and what it runs is exactly
 # what this file pins. To bump OpenTofu, edit the tag AND digest on the FROM
 # line below (an ARG cannot be checked against a digest, so there is none);
-# bump the provider version together with the root's .terraform.lock.hcl.
+# bump a provider version together with the root's .terraform.lock.hcl.
+#
+# hashicorp/kubernetes writes the OIDC client credentials ZITADEL generates
+# into the consuming application's namespace (#1520 S4), into one Secret that
+# namespace pre-creates and grants this Job update on by name.
 
 ARG ZITADEL_PROVIDER_VERSION=3.8.7
+ARG KUBERNETES_PROVIDER_VERSION=3.3.0
 
 FROM ghcr.io/opentofu/opentofu:1.13.1-minimal@sha256:dfbc3f0a8bed0adfa2cf49ff418f158afe24080eea6d6e748db8799fc4553db6 AS tofu
 
 FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS mirror
 ARG ZITADEL_PROVIDER_VERSION
+ARG KUBERNETES_PROVIDER_VERSION
 # The base already carries ca-certificates-bundle; installing the package
 # makes the TLS trust this stage's HTTPS download relies on explicit.
 RUN apk add --no-cache ca-certificates
 COPY --from=tofu /usr/local/bin/tofu /usr/local/bin/tofu
 WORKDIR /mirror-src
-RUN printf 'terraform {\n  required_providers {\n    zitadel = {\n      source  = "zitadel/zitadel"\n      version = "%s"\n    }\n  }\n}\n' "${ZITADEL_PROVIDER_VERSION}" > versions.tf \
+RUN printf 'terraform {\n  required_providers {\n    zitadel = {\n      source  = "zitadel/zitadel"\n      version = "%s"\n    }\n    kubernetes = {\n      source  = "hashicorp/kubernetes"\n      version = "%s"\n    }\n  }\n}\n' "${ZITADEL_PROVIDER_VERSION}" "${KUBERNETES_PROVIDER_VERSION}" > versions.tf \
  && tofu providers mirror -platform=linux_amd64 /usr/share/tofu/providers \
- && test -n "$(find /usr/share/tofu/providers -name '*.zip')"
+ && test -n "$(find /usr/share/tofu/providers/registry.opentofu.org/zitadel -name '*.zip')" \
+ && test -n "$(find /usr/share/tofu/providers/registry.opentofu.org/hashicorp -name '*.zip')"
 
 FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 ARG ZITADEL_PROVIDER_VERSION
+ARG KUBERNETES_PROVIDER_VERSION
 LABEL org.opencontainers.image.title="zitadel-iac" \
-      org.opencontainers.image.description="OpenTofu with the zitadel provider ${ZITADEL_PROVIDER_VERSION} pre-installed" \
+      org.opencontainers.image.description="OpenTofu with the zitadel ${ZITADEL_PROVIDER_VERSION} and kubernetes ${KUBERNETES_PROVIDER_VERSION} providers pre-installed" \
       org.opencontainers.image.source="https://github.com/mctlhq/mctl-gitops/tree/main/platform-gitops/images/zitadel-iac" \
       org.opencontainers.image.licenses="MPL-2.0"
 RUN apk add --no-cache ca-certificates
@@ -54,6 +62,7 @@ RUN --network=none mkdir /tmp/offline-check && cd /tmp/offline-check \
  && cp /usr/share/tofu/versions.tf . \
  && tofu init -backend=false \
  && tofu providers | grep -q "zitadel/zitadel\] ${ZITADEL_PROVIDER_VERSION}" \
+ && tofu providers | grep -q "hashicorp/kubernetes\] ${KUBERNETES_PROVIDER_VERSION}" \
  && cd / && rm -rf /tmp/offline-check
 # Non-root, with a writable HOME for tofu's plugin cache and .terraform.d.
 RUN adduser -D -u 65532 -h /home/tofu tofu
