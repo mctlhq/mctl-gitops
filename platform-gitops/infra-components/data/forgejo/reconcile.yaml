@@ -83,6 +83,15 @@ data:
         }
       ]...)
 
+      # Read-only members: one "Readers" team per org that lists any (e.g. the
+      # account a CD system clones with).
+      reader_orgs = { for o in local.m.orgs : o.name => o if length(try(o.readers, [])) > 0 }
+      readers = merge([
+        for o in local.m.orgs : {
+          for login in try(o.readers, []) : "${o.name}/${login}" => { org = o.name, login = login }
+        }
+      ]...)
+
       # Write-access developers: one "Developers" team per org that lists any.
       dev_orgs = { for o in local.m.orgs : o.name => o if length(try(o.developers, [])) > 0 }
       developers = merge([
@@ -95,11 +104,13 @@ data:
     resource "forgejo_user" "this" {
       for_each = local.users
 
-      login                     = each.key
-      email                     = each.value.email
-      full_name                 = try(each.value.full_name, null)
-      password                  = local.passwords[each.key]
-      must_change_password      = true
+      login     = each.key
+      email     = each.value.email
+      full_name = try(each.value.full_name, null)
+      password  = local.passwords[each.key]
+      # Machine accounts ("bot": true) authenticate with this password from a
+      # Secret; a forced change would lock them out of git and the API.
+      must_change_password      = !try(each.value.bot, false)
       visibility                = "private"
       allow_create_organization = false
       # A wrong entry in the manifest must not delete a person's account.
@@ -153,6 +164,31 @@ data:
       }
     }
 
+    resource "forgejo_team" "readers" {
+      for_each = local.reader_orgs
+
+      organization              = forgejo_organization.this[each.key].name
+      name                      = "Readers"
+      description               = "Read access to every repository of the organization"
+      permission                = "read"
+      includes_all_repositories = true
+      can_create_org_repo       = false
+      units_map = {
+        "repo.code"     = "read"
+        "repo.issues"   = "read"
+        "repo.pulls"    = "read"
+        "repo.releases" = "read"
+        "repo.wiki"     = "read"
+      }
+    }
+
+    resource "forgejo_team_member" "readers" {
+      for_each = local.readers
+
+      team_id = forgejo_team.readers[each.value.org].id
+      user    = forgejo_user.this[each.value.login].login
+    }
+
     resource "forgejo_team_member" "developers" {
       for_each = local.developers
 
@@ -186,7 +222,7 @@ data:
       sensitive = true
       value = join("", flatten([
         for key, r in local.repos : [
-          for b in r.branches : format("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+          for b in try(r.branches, []) : format("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
             key,
             b.name,
             "${local.m.sources[b.source].url}/${b.path}.git",

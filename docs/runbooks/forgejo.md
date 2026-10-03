@@ -135,10 +135,10 @@ The desired state is in Vault, not here (this repository is public):
     "<name>": {"url": "https://host/group", "token_env": "SRC_TOKEN",
                "username": "oauth2", "insecure_skip_tls": false}
   },
-  "users": [{"login": "...", "email": "...", "full_name": "..."}],
+  "users": [{"login": "...", "email": "...", "full_name": "...", "bot": false}],
   "orgs": [{
     "name": "...", "full_name": "...",
-    "owners": ["<login>"], "developers": ["<login>"],
+    "owners": ["<login>"], "developers": ["<login>"], "readers": ["<login>"],
     "repos": [{
       "name": "...", "default_branch": "main",
       "branches": [{"name": "main", "source": "<name>", "path": "group/repo", "ref": "main"}]
@@ -148,6 +148,13 @@ The desired state is in Vault, not here (this repository is public):
 ```
 
 - `ref` defaults to `name`, so a branch can be renamed on the way in.
+- `branches` may be omitted: the repository is created empty and filled by
+  pushes (a repository whose source of truth is Forgejo itself).
+- `readers` get a read-only "Readers" team, `developers` a write "Developers"
+  team, both on every repository of the org.
+- `"bot": true` marks a machine account (a CD system cloning, a service
+  pushing): it is created without `must_change_password`, which would
+  otherwise lock it out of git and the API with 403.
 - `username` defaults to `oauth2` (GitLab). GitHub accepts any user name with a
   token. `insecure_skip_tls` exists for a source whose certificate expired;
   every run logs a WARN while it is on.
@@ -156,7 +163,7 @@ The desired state is in Vault, not here (this repository is public):
 
 What a run does to existing data:
 
-- Users get `must_change_password`; Terraform never resets a changed
+- Users other than bots get `must_change_password`; Terraform never resets a changed
   password. Removing a user from the manifest deactivates the account.
   It does not delete the account.
 - Removing a repository archives it. Removing a branch stops syncing it,
