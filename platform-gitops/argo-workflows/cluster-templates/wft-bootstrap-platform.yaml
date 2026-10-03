@@ -23,6 +23,13 @@ metadata:
       Run once after initial cluster setup:
         argo submit --from clusterworkflowtemplate/bootstrap-platform -n argo-workflows
 spec:
+  # Without these the documented `argo submit --from clusterworkflowtemplate/...`
+  # is refused ("spec.entrypoint is required"), and a run that names only the
+  # entrypoint gets the namespace default ServiceAccount, which the Vault
+  # kubernetes role `argo-workflow` does not accept (bound to argo-workflow-sa,
+  # argo-workflows/config/vault-auth.yaml).
+  entrypoint: bootstrap
+  serviceAccountName: argo-workflow-sa
   templates:
     - name: bootstrap
       script:
