@@ -1,4 +1,4 @@
-# ZITADEL (id.mctl.ai)
+# ZITADEL (auth.mctl.ai)
 
 Platform identity provider: [ZITADEL](https://zitadel.com) v4, running in the
 `zitadel` namespace. Chosen 2026-10-03 for the unified-identity epic
@@ -16,7 +16,7 @@ Platform identity provider: [ZITADEL](https://zitadel.com) v4, running in the
 
 Two Deployments: `zitadel` (API, Console at `/ui/console`, OIDC/OAuth/SAML
 endpoints) and `zitadel-login` (the Login V2 UI at `/ui/v2/login`), both on
-`id.mctl.ai`.
+`auth.mctl.ai`.
 
 Phase 1 scope: the instance, Console, Login UI and one break-glass admin. No
 SMTP (no email verification or password reset by mail), no external identity
@@ -35,18 +35,18 @@ platform/tenant SSO items, each with its own change to the egress policy.
 3. The sync then runs `zitadel-init` (wave 1) and `zitadel-setup` (wave 2) as
    Sync hooks, then starts both Deployments (wave 3). The first setup builds
    every projection and can take several minutes.
-4. `curl -fsS https://id.mctl.ai/.well-known/openid-configuration` returns
-   the discovery document with `"issuer":"https://id.mctl.ai"`, and
-   `curl -fsS https://id.mctl.ai/ui/v2/login/healthy` returns 200.
-5. `curl -s -o /dev/null -w '%{http_code}' https://id.mctl.ai/debug/metrics`
+4. `curl -fsS https://auth.mctl.ai/.well-known/openid-configuration` returns
+   the discovery document with `"issuer":"https://auth.mctl.ai"`, and
+   `curl -fsS https://auth.mctl.ai/ui/v2/login/healthy` returns 200.
+5. `curl -s -o /dev/null -w '%{http_code}' https://auth.mctl.ai/debug/metrics`
    returns 403 (the edge deny), not 200.
-6. Sign in to `https://id.mctl.ai/ui/console` as the break-glass admin (below)
+6. Sign in to `https://auth.mctl.ai/ui/console` as the break-glass admin (below)
    and register a second-factor for it.
 
 ## Break-glass admin
 
 User `mctl-admin` in organization `MCTL` (the login name is
-`mctl-admin@mctl.id.mctl.ai` unless the org's login policy changes it), password
+`mctl-admin@mctl.auth.mctl.ai` unless the org's login policy changes it), password
 in Vault `secret/platform/zitadel` → `admin-password`. It has IAM_OWNER.
 
 The password in Vault is read by the setup job **only when the instance is
@@ -94,6 +94,27 @@ All state is in the `zitadel` database on shared-pg, backed up by CNPG to R2
 database to a point in time, keep the masterkey from Vault unchanged, and
 restart both Deployments.
 
+## Known risk: same site as tenant workloads
+
+`auth.mctl.ai` shares the registrable domain `mctl.ai` with tenant
+applications (`<tenant>-<service>.mctl.ai` and bare names such as
+`seerrsense.mctl.ai`), which run code the platform does not control. For a
+browser that makes them the same site:
+
+- a tenant page can set a cookie with `Domain=.mctl.ai` that the browser then
+  sends to `auth.mctl.ai` (cookie tossing), and
+- `SameSite` cookie attributes do not separate them, because a request from a
+  tenant app to the IdP is same-site.
+
+Accepted for phase 1, while nothing signs in through ZITADEL. Two follow-ups
+in the unified-identity epic close it, and must land before real sign-ins:
+
+- reserve platform hostnames (`auth`, `api`, `app`, `ops`, …) at admission,
+  so no tenant Ingress can claim `auth.mctl.ai` (#1503);
+- move tenant applications to a separate registrable domain listed in the
+  Public Suffix List (the `github.io` / `vercel.app` pattern), leaving
+  `mctl.ai` to the platform (#1504).
+
 ## Limits worth knowing
 
 - `/debug/*` (health, readiness, metrics) is denied at the edge by
@@ -105,7 +126,7 @@ restart both Deployments.
 - One replica of each Deployment in phase 1. Before anything depends on
   ZITADEL for sign-in, raise both to 2+, add PDBs, and make `ZitadelDown`
   critical.
-- `ExternalDomain` (`id.mctl.ai`) is part of the instance identity and of
+- `ExternalDomain` (`auth.mctl.ai`) is part of the instance identity and of
   every issued token's issuer. Changing it later means adding the new domain
   to the instance and migrating clients, not editing one value.
 

@@ -120,13 +120,21 @@ spec:
           # masterkey: exactly 32 bytes (hex of 16 random bytes); it encrypts data
           # inside the database and must never be regenerated once setup ran.
           # admin-password: gen is lowercase hex only, and ZITADEL's default
-          # password policy also wants an uppercase letter and a symbol, which
-          # the fixed suffix supplies; the entropy is in the 40 hex characters.
+          # password policy also wants an uppercase letter and a symbol. Both
+          # are drawn at random too, so no part of the break-glass password is
+          # a constant visible in this public repository. The symbol set avoids
+          # characters that would need escaping in the JSON below.
+          zitadel_admin_pw() {
+            printf '%s%s%s' "$(gen)" \
+              "$(LC_ALL=C tr -dc 'A-Z' </dev/urandom | head -c 4)" \
+              "$(LC_ALL=C tr -dc '!#%+=?@' </dev/urandom | head -c 2)"
+          }
+
           write_if_missing "platform/zitadel/database" \
             "{\"username\":\"zitadel\",\"password\":\"$(gen)\"}"
 
           write_if_missing "platform/zitadel" \
-            "{\"masterkey\":\"$(openssl rand -hex 16)\",\"admin-password\":\"$(gen)-Zt\",\"login-session-secret\":\"$(gen)\"}"
+            "{\"masterkey\":\"$(openssl rand -hex 16)\",\"admin-password\":\"$(zitadel_admin_pw)\",\"login-session-secret\":\"$(gen)\"}"
 
           echo ""
           echo "Bootstrap complete. ExternalSecrets will refresh within 1h."

@@ -10,9 +10,9 @@ tests:
   - interval: 1m
     name: a healthy zitadel is quiet
     input_series:
-      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/.well-known/openid-configuration"}'
+      - series: 'probe_success{job="zitadel-public",instance="https://auth.mctl.ai/.well-known/openid-configuration"}'
         values: '1x30'
-      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/ui/v2/login/healthy"}'
+      - series: 'probe_success{job="zitadel-public",instance="https://auth.mctl.ai/ui/v2/login/healthy"}'
         values: '1x30'
       - series: 'up{namespace="zitadel",service="zitadel"}'
         values: '1x30'
@@ -30,9 +30,9 @@ tests:
   - interval: 1m
     name: a dead login UI fires on its own target only
     input_series:
-      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/.well-known/openid-configuration"}'
+      - series: 'probe_success{job="zitadel-public",instance="https://auth.mctl.ai/.well-known/openid-configuration"}'
         values: '1x15'
-      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/ui/v2/login/healthy"}'
+      - series: 'probe_success{job="zitadel-public",instance="https://auth.mctl.ai/ui/v2/login/healthy"}'
         values: '0x15'
     alert_rule_test:
       - eval_time: 3m
@@ -45,11 +45,11 @@ tests:
               severity: warning
               service: zitadel
               job: zitadel-public
-              instance: https://id.mctl.ai/ui/v2/login/healthy
+              instance: https://auth.mctl.ai/ui/v2/login/healthy
             exp_annotations:
-              summary: id.mctl.ai has failed its health check for 5 minutes
+              summary: auth.mctl.ai has failed its health check for 5 minutes
               description: >-
-                blackbox-exporter has had no 2xx from https://id.mctl.ai/ui/v2/login/healthy for
+                blackbox-exporter has had no 2xx from https://auth.mctl.ai/ui/v2/login/healthy for
                 5 minutes. If it is the openid-configuration target, check
                 `kubectl -n zitadel logs deploy/zitadel` for database errors
                 before the ingress; if only the /ui/v2/login target fails, the
@@ -83,7 +83,7 @@ tests:
   - interval: 1m
     name: a failing scrape fires after 15m
     input_series:
-      - series: 'probe_success{job="zitadel-public",instance="https://id.mctl.ai/.well-known/openid-configuration"}'
+      - series: 'probe_success{job="zitadel-public",instance="https://auth.mctl.ai/.well-known/openid-configuration"}'
         values: '1x30'
       - series: 'up{namespace="zitadel",service="zitadel",job="zitadel",instance="10.42.0.10:8080"}'
         values: '0x30'

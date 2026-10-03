@@ -1,5 +1,5 @@
 # ZITADEL serves /debug/{healthz,ready,metrics} on the same port as the API,
-# and the chart's Ingress routes `/` for id.mctl.ai, so without this the
+# and the chart's Ingress routes `/` for auth.mctl.ai, so without this the
 # metrics endpoint would be public. Probes and the VMServiceScrape reach
 # /debug in-cluster and never traverse traefik, so denying it at the edge
 # costs nothing. The public health check (blackbox) uses
@@ -31,7 +31,7 @@ spec:
   routes:
     # Explicit priority so this never depends on traefik's rule-length ordering
     # against the chart Ingress's Host && PathPrefix(`/`).
-    - match: Host(`id.mctl.ai`) && PathPrefix(`/debug`)
+    - match: Host(`auth.mctl.ai`) && PathPrefix(`/debug`)
       kind: Rule
       priority: 1000
       middlewares:

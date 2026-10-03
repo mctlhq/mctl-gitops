@@ -1,4 +1,4 @@
-# Platform ZITADEL — the MCTL human identity provider at https://id.mctl.ai.
+# Platform ZITADEL — the MCTL human identity provider at https://auth.mctl.ai.
 #
 # Decision and roadmap: mctlhq/.github#91 (unified-identity epic), work item
 # zitadel-deployment, issue mctlhq/mctl-gitops#1499. ZITADEL becomes one more
@@ -48,7 +48,7 @@ spec:
             configSecretKey: config-yaml
 
             configmapConfig:
-              ExternalDomain: id.mctl.ai
+              ExternalDomain: auth.mctl.ai
               # Without it the chart derives AUDIENCE for the Login UI from
               # service.port and adds ":8080" to every public URL.
               ExternalPort: 443
@@ -102,7 +102,7 @@ spec:
               enabled: true
               className: traefik
               hosts:
-                - host: id.mctl.ai
+                - host: auth.mctl.ai
                   paths:
                     - path: /ui/v2/login
                       pathType: Prefix
@@ -111,7 +111,7 @@ spec:
               tls:
                 - secretName: zitadel-tls
                   hosts:
-                    - id.mctl.ai
+                    - auth.mctl.ai
             resources:
               requests:
                 cpu: 50m
@@ -129,14 +129,14 @@ spec:
             annotations:
               cert-manager.io/cluster-issuer: letsencrypt-prod
             hosts:
-              - host: id.mctl.ai
+              - host: auth.mctl.ai
                 paths:
                   - path: /
                     pathType: Prefix
             tls:
               - secretName: zitadel-tls
                 hosts:
-                  - id.mctl.ai
+                  - auth.mctl.ai
 
           resources:
             requests:

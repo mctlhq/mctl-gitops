@@ -1,4 +1,4 @@
-# Availability of platform ZITADEL (id.mctl.ai), the human identity provider.
+# Availability of platform ZITADEL (auth.mctl.ai), the human identity provider.
 #
 # Severity is warning in phase 1: nothing signs in through ZITADEL yet. When
 # mctl-api registers it as a federation provider (mctl-api#434) and the
@@ -27,7 +27,7 @@ spec:
             severity: warning
             service: zitadel
           annotations:
-            summary: "id.mctl.ai has failed its health check for 5 minutes"
+            summary: "auth.mctl.ai has failed its health check for 5 minutes"
             description: >-
               blackbox-exporter has had no 2xx from {{ $labels.instance }} for
               5 minutes. If it is the openid-configuration target, check
