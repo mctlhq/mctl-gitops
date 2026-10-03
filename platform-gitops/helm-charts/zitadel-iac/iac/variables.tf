@@ -11,6 +11,15 @@ variable "tenant_users" {
     appears in it.
   EOT
   type        = string
+
+  # An empty object is a failed read, not "no tenants": a mistyped Vault path
+  # or a find that matched nothing must stop the run, not plan zero users
+  # (and later, deletions). Retiring the last tenant is a reviewed change to
+  # this rule.
+  validation {
+    condition     = can(jsondecode(var.tenant_users)) && length(keys(jsondecode(var.tenant_users))) > 0
+    error_message = "tenant_users must be a non-empty JSON object; zitadel-iac-users resolved no tenants from Vault secret/platform/zitadel/users/*."
+  }
 }
 
 variable "smtp_password" {

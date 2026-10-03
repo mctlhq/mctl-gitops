@@ -1,4 +1,4 @@
-{{- $image := required "image.digest is required: pin the zitadel-iac image by digest" .Values.image.digest -}}
+{{- $_ := required "image.digest is required: pin the zitadel-iac image by digest" .Values.image.digest -}}
 {{- /*
   Applies iac/ after every sync of the zitadel Application, once ZITADEL is
   up (PostSync). The plan is checked before apply: any action outside

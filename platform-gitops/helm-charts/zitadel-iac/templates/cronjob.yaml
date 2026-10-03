@@ -1,4 +1,4 @@
-{{- $image := required "image.digest is required: pin the zitadel-iac image by digest" .Values.image.digest -}}
+{{- $_ := required "image.digest is required: pin the zitadel-iac image by digest" .Values.image.digest -}}
 {{- /*
   The same run as the PostSync Job, hourly. Users are added in Vault, which
   ArgoCD never diffs, so without this they would wait for an unrelated sync.
