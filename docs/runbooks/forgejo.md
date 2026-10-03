@@ -151,7 +151,10 @@ The desired state is in Vault, not here (this repository is public):
 - `branches` may be omitted: the repository is created empty and filled by
   pushes (a repository whose source of truth is Forgejo itself).
 - `readers` get a read-only "Readers" team, `developers` a write "Developers"
-  team, both on every repository of the org.
+  team, both on every repository of the org. Every run also checks each
+  repository's membership in both teams and re-adds a missing one
+  (`restapi_object.team_repo`): Forgejo's own "all repositories" flag only
+  acts at creation time and loses repositories created in the same run.
 - `"bot": true` marks a machine account (a CD system cloning, a service
   pushing): it is created without `must_change_password`, which would
   otherwise lock it out of git and the API with 403.

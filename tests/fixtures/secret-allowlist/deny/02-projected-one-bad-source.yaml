@@ -1,0 +1,19 @@
+# expect: a volume
+apiVersion: v1
+kind: Pod
+metadata:
+  name: projected-deploy-key
+  namespace: erpact
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: c
+      image: busybox
+  volumes:
+    - name: s
+      projected:
+        sources:
+          - secret:
+              name: mariadb-root
+          - secret:
+              name: mctl-gitops-deploy-key

@@ -1,0 +1,17 @@
+# expect: env/envFrom
+apiVersion: v1
+kind: Pod
+metadata:
+  name: envfrom-init
+  namespace: erpact
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: c
+      image: busybox
+  initContainers:
+    - name: i
+      image: busybox
+      envFrom:
+        - secretRef:
+            name: object-storage-credentials

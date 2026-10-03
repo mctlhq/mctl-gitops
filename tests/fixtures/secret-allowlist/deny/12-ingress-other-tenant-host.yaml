@@ -1,0 +1,19 @@
+# expect: every Ingress rule host in this namespace must match
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: other-tenant
+  namespace: erpact
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: labs-app.mctl.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80

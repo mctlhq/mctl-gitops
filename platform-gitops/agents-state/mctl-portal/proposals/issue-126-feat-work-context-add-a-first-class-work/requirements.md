@@ -1,5 +1,15 @@
 # First-class WorkItem view across surfaces and executions
 
+> **Superseded in part by the owner decisions of 2026-10-03 (see the top of tasks.md).** The
+> WorkItem contract is mctl-api#349 (implemented) and on-behalf-of identity is mctl-api#350
+> (implemented): the plugin uses the `surface:portal` principal with `X-MCTL-Surface-Actor` and a
+> verified SurfaceIdentityLink, never the shared admin-bypass token; mctl-api is the authorization
+> authority and portal checks are defense in depth only; there is no generic
+> `/work-items/:id/actions/:actionId` API, only existing relay routes; `workItems.actionsEnabled`
+> stays false by default. Statements below about mctl-api#227 being unavailable, the shared
+> `MCTL_API_TOKEN`, `owner.team`/`authorizeForTeam` as the authorization path, `requiredRole` and
+> `nextActions` are stale and are overridden by tasks.md.
+
 ## Context
 Issue mctlhq/mctl-portal#126 (parent roadmap mctlhq/.github#21) asks the portal to show a canonical
 WorkItem as a durable object of its own, not as one chat or one execution. A single WorkItem can span

@@ -1,0 +1,9 @@
+# expect: must be ClusterIP
+apiVersion: v1
+kind: Service
+metadata:
+  name: extname
+  namespace: erpact
+spec:
+  type: ExternalName
+  externalName: example.com

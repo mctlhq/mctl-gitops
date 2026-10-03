@@ -1,0 +1,19 @@
+# expect: every Ingress rule host in this namespace must match
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: loose-trick
+  namespace: loose
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: erpact-a.mctl.ai.evil.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80

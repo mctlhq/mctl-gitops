@@ -1,0 +1,10 @@
+# expect: must be ClusterIP
+apiVersion: v1
+kind: Service
+metadata:
+  name: lb
+  namespace: erpact
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 80
