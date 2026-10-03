@@ -1,0 +1,45 @@
+# The keypair the Login V2 UI uses to authenticate to the ZITADEL API as the
+# `login-client` system user: the UI signs JWTs with tls.key, ZITADEL verifies
+# them with tls.crt (SystemAPIUsers.login-client in the chart's ConfigMap).
+#
+# The chart can generate this pair itself, but only by reading the previous
+# Secret back with Helm `lookup`. ArgoCD renders with `helm template`, where
+# lookup is always empty, so every sync would mint a new pair. cert-manager
+# keeps one stable Secret instead. The pair never leaves the namespace and
+# nothing outside ZITADEL trusts it, so a namespaced self-signed Issuer is
+# enough. RSA because the Login UI signs with RS256.
+#
+# Ten years, so renewal is not an operational event: ZITADEL reads tls.crt
+# at start, and a renewed pair only takes effect after both Deployments
+# restart (docs/runbooks/zitadel.md).
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: zitadel-selfsigned
+  namespace: zitadel
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: zitadel-login-service-key
+  namespace: zitadel
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  secretName: zitadel-login-service-key
+  commonName: login-service
+  duration: 87600h
+  renewBefore: 720h
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    rotationPolicy: Always
+  usages:
+    - digital signature
+  issuerRef:
+    kind: Issuer
+    name: zitadel-selfsigned
