@@ -1,4 +1,4 @@
-# Default deny, then open the HTTP port only to the ingress controller and to
+# Ingress: default deny, then open the HTTP port only to the ingress controller and to
 # monitoring (metrics scrape). Phase 1 has no SSH, so nothing else listens.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -33,3 +33,92 @@ spec:
       ports:
         - protocol: TCP
           port: 3000
+---
+# Egress allowlist. This namespace takes arbitrary public input (git push,
+# the web UI) and holds an R2 credential for the backup, so a compromised
+# process should not get to reach anything it has no reason to.
+#
+#   Forgejo         DNS + shared-pg only. Phase 1 runs with OFFLINE_MODE, no
+#                   mirrors, no Actions, mailer and webhooks unused; phase 2
+#                   (mirrors) adds an internet rule here deliberately.
+#   forgejo-backup  DNS + HTTPS to the internet (R2), never to cluster or node
+#                   addresses — same except-list as the tenant
+#                   allow-internet-egress policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: forgejo
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: forgejo
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-forgejo-db-egress
+  namespace: forgejo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: forgejo
+      app.kubernetes.io/instance: forgejo
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform-db
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backup-r2-egress
+  namespace: forgejo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: forgejo-backup
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              # Node public addresses, as in the tenant policy.
+              - 78.47.58.237/32
+              - 91.99.127.137/32
+              - 91.99.152.207/32
+              - 91.99.112.66/32
+      ports:
+        - protocol: TCP
+          port: 443
