@@ -1,10 +1,10 @@
-status: proposed
-updated_at: '2026-10-03T17:12:53Z'
+status: implemented
+updated_at: '2026-10-03T21:36:24Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-1a28e161678f2b4c
-  trace_id: 88d22b01e13b0cd14af54508eb9618e9
-  agent: issue-investigator
+  context_id: ex-c9733ff6b4d1d48e
+  trace_id: 0fecfa1d36467bb0a9631c2d76a4ab67
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -18,3 +18,16 @@ context:
   content_hash: sha256:edb6855d353f3c176bc05824d05287702b9ef0e24553446dfd02274e04371565
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-03T20:44:57Z'
+attempt:
+  id: c02950213bef1bec4e587734ddaa2fa6cd8114580fd0e686e8947996a057ce04
+  started_at: '2026-10-03T20:47:03Z'
+  expires_at: '2026-10-03T22:57:03Z'
+  finished_at: '2026-10-03T21:04:43Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/733
+ci_blockers_head: 5e1ddb35410cc1f699ba5edd77182f8d602ee2e2
+ci_blockers:
+- build / test
+review_attempts: 1

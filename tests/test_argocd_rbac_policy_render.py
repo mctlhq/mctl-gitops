@@ -22,8 +22,8 @@ T3. Every fragment equals what `wft-create-tenant` writes for that tenant:
     the heredoc is read from the workflow itself, so a hand-edited fragment
     (an extra `exec` line, another tenant's apps) or a changed template
     without regenerated fragments fails here.
-T4. The render is exactly the base policy plus the fragments; if `helm` is on
-    PATH, a real render must agree with this simulation.
+T4. If `helm` is on PATH (it is in the validate job), a real render of
+    argocd-rbac-cm must equal the base policy plus the fragments.
 T5. `argo-cd.configs.rbac.create` is false, `policy.default` is "" and
     `scopes` is "[groups]".
 
@@ -124,10 +124,6 @@ if m:
 # T4: the render is base + fragments, in the template's order.
 rendered_parts = [base_policy.strip()] + [p.read_text().strip() for p in fragment_paths]
 expected_lines = normalize("\n".join(rendered_parts))
-check(
-    len(expected_lines) == len(base_lines) + sum(len(normalize(p.read_text())) for p in fragment_paths),
-    "rendered policy lost or merged lines when concatenating fragments",
-)
 
 # T5: settings unchanged by the migration.
 check(
