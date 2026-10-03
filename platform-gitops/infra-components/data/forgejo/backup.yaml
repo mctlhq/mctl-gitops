@@ -82,11 +82,13 @@ spec:
                 - |
                   set -e
                   # queues/ and indexers/ are rebuilt by Forgejo on start and
-                  # churn constantly; everything else is state.
+                  # churn constantly; everything else is state. They sit at the
+                  # volume root (APP_DATA_PATH=/data), not under gitea/ — the
+                  # first restore drill found them in the archive.
                   tar -czf /archive/forgejo-data.tar.gz \
                     -C /data \
-                    --exclude=./gitea/queues \
-                    --exclude=./gitea/indexers \
+                    --exclude=./queues \
+                    --exclude=./indexers \
                     .
                   # A missing app.ini means we archived the wrong thing (empty
                   # or unmounted volume) — fail loudly instead of uploading it.

@@ -35,6 +35,10 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: forgejo-reconcile
+        # The restore drill (restore-drill.yaml) reads the repository list.
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: forgejo-restore-drill
       ports:
         - protocol: TCP
           port: 3000
@@ -53,6 +57,9 @@ spec:
 #                   DNS + Forgejo's HTTP port + HTTPS to the internet (branch
 #                   sources, the Terraform registry, R2 state), with the same
 #                   except-list.
+#   forgejo-restore-drill
+#                   DNS + Forgejo's HTTP port (API) + HTTPS to the internet
+#                   (R2), with the same except-list.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -141,6 +148,41 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: forgejo-reconcile
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: forgejo
+              app.kubernetes.io/instance: forgejo
+      ports:
+        - protocol: TCP
+          port: 3000
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 78.47.58.237/32
+              - 91.99.127.137/32
+              - 91.99.152.207/32
+              - 91.99.112.66/32
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-restore-drill-egress
+  namespace: forgejo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: forgejo-restore-drill
   policyTypes:
     - Egress
   egress:

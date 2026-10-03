@@ -53,7 +53,7 @@ password in Vault is the one that works after the next pod restart.
 
 - Database: shared-pg CNPG backup to R2 (see `docs/runbooks/restore.md`).
 - Volume: CronJob `forgejo-backup`, daily 03:30 UTC, tarball of `/data`
-  (minus `gitea/queues`, `gitea/indexers`) to
+  (minus `queues/`, `indexers/`) to
   `s3://forgejo-backup/forgejo-backups/`, last 14 kept. The archive is
   crash-consistent; run `git fsck` on restored repositories.
 - The R2 token is bucket-scoped on purpose and must stay that way: the shared
@@ -62,6 +62,26 @@ password in Vault is the one that works after the next pod restart.
   Account API token in the dashboard (R2 → Manage API tokens, Object Read &
   Write, specific bucket `forgejo-backup`), overwrite
   `secret/platform/forgejo/r2-backup`, then delete the old token.
+
+Restore drill: CronJob `forgejo-restore-drill` (`restore-drill.yaml`), daily
+05:00 UTC, restores the newest archive from R2 into pod-local storage and never
+touches production. It fails the run when:
+
+- the bucket listing fails or is empty, or the archive does not gunzip;
+- `gitea/conf/app.ini` is missing or has no `SECRET_KEY` / `INTERNAL_TOKEN`;
+- any bare repository fails a full `git fsck` (`FAIL fsck <owner>/<repo>`);
+- a repository the database lists, created before the archive was taken, is
+  not in it, or lacks its default branch (`FAIL <owner>/<repo> ...`); a
+  failed or partial API read is a failure, not an empty list.
+
+`NEW` (created after the archive) and `GONE` (deleted since) lines are
+informational. A repository renamed or transferred after the archive shows as
+a `FAIL` until the next backup. `ForgejoRestoreDrillStale` fires when no run
+has passed for 26 hours, so a single failed drill alerts. Until the drill
+passes again, treat the newest archive as unproven.
+
+The drill covers the volume half. The database half is shared-pg's barman
+restore (restore.md section 1).
 
 Restore:
 
