@@ -5,15 +5,17 @@ image:
   # Built from platform-gitops/images/zitadel-iac by build-image.yaml; pinned
   # by digest, so a re-pushed tag can never change what applies identity.
   repository: ghcr.io/mctlhq/zitadel-iac
-  tag: "1.13.1-3.8.7"
-  # build-image.yaml run 37154653116, from e323362c (#1521).
-  digest: "sha256:03a31abf46680ea351559badce824754ea8a6d50e8c6338a0daeeb5eda920323"
+  tag: "1.13.1-3.8.7-3.3.0"
+  # build-image.yaml run 37161742223, from 9335d152 (#1528).
+  digest: "sha256:2178588a9f1a8f1d269cfc1b134606e9155802a39a6e30b299a16e782fed6cf4"
 
 # The plan actions the Job may apply, space-separated. A plan containing any
 # other action fails the Job before apply, with the plan in its log.
 #   S1 (import only): "no-op read". Imports are planned as no-op.
 #   S2 (passkey-only login policy): adds "update".
 #   S3 (SMTP, tenant orgs and users): adds "create".
+#   S4 (Forgejo OIDC application): no new action; its project, application
+#   and the data of forgejo/forgejo-oidc-zitadel are creates.
 # Widen deliberately, in the PR that needs it; "delete" never belongs here
 # without a reviewed reason.
 allowedActions: "no-op read update create"

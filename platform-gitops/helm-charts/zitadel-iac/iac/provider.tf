@@ -23,3 +23,9 @@ provider "zitadel" {
     audience = "https://auth.mctl.ai"
   }
 }
+
+# Writes the OIDC client credentials ZITADEL generates into the namespace of
+# the application that uses them (forgejo.tf). No arguments: the provider
+# picks up the Job's in-cluster service account. What it may touch is the
+# RBAC granted to zitadel-iac in each target namespace, by Secret name.
+provider "kubernetes" {}
