@@ -1,4 +1,5 @@
 g, admins, role:admin
+g, erpact, role:team-erpact
 g, karabu, role:team-karabu
 g, labs, role:team-labs
 g, ovk, role:team-ovk
@@ -12,6 +13,11 @@ p, role:admin, exec, create, */*, allow
 p, role:admin, logs, get, */*, allow
 p, role:admin, projects, *, */*, allow
 p, role:admin, repositories, *, */*, allow
+p, role:team-erpact, applications, get, apps/erpact-*, allow
+p, role:team-erpact, applications, list, apps/erpact-*, allow
+p, role:team-erpact, applications, override, apps/erpact-*, allow
+p, role:team-erpact, applications, sync, apps/erpact-*, allow
+p, role:team-erpact, logs, get, apps/erpact-*, allow
 p, role:team-karabu, applications, get, apps/karabu-*, allow
 p, role:team-karabu, applications, list, apps/karabu-*, allow
 p, role:team-karabu, applications, override, apps/karabu-*, allow
