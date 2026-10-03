@@ -109,7 +109,7 @@ fi
 if [ "$PLATFORM" = 1 ]; then
   helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/bootstrap/values.yaml" > "$WORK/platform-apps.yaml"
   python3 - "$ROOT" "$WORK/platform-apps.yaml" > "$WORK/platform.yaml" <<'PY'
-import glob, os, sys, yaml
+import glob, os, re, sys, yaml
 root, rendered = sys.argv[1], sys.argv[2]
 owners = yaml.safe_load(open(os.path.join(root, "platform-gitops/bootstrap/values.yaml")))["reservedPlatformHosts"]
 ROUTES = ("Ingress", "IngressRoute", "IngressRouteTCP")
@@ -173,7 +173,7 @@ for app in apps:
             for d in yaml.safe_load_all(open(f)):
                 if d and d.get("kind") in ROUTES:
                     d["metadata"]["namespace"] = d["metadata"].get("namespace") or ns
-                    served |= {h for h in owners if h in yaml.safe_dump(d)}
+                    served |= set(re.findall(r"[A-Za-z0-9*.-]+", yaml.safe_dump(d))) & set(owners)
                     out.append(d)
 for h in sorted(set(owners) - served):
     print(f"note: {h} is reserved but served by no bootstrap Application route; only --admit covers it", file=sys.stderr)

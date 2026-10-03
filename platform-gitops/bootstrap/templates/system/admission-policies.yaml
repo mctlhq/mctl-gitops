@@ -313,14 +313,24 @@ spec:
       expression: "['mctl.ai', 'mctl.ru', 'mctl.me']"
     - name: ns
       expression: "object.metadata.namespace"
-    # A literal Host(`x`) / HostSNI(`x`) matcher, backtick or double quote.
+    # A literal Host(`x`) / HostSNI(`x`) matcher at the top level of the
+    # conjunction: at the start of the rule, after `&&` or after `(`. Without
+    # the anchor a decoy `Host(` inside another matcher's argument counts as a
+    # host constraint the router does not have. Double quotes are refused
+    # outright (below), so only backtick arguments, which cannot nest, remain.
     - name: literalHost
-      expression: "'Host(SNI)?\\\\(\\\\s*(`[^`]*`|\"[^\"]*\")\\\\s*\\\\)'"
+      expression: "'(^|&&|\\\\()\\\\s*Host(SNI)?\\\\(\\\\s*`[^`]*`\\\\s*\\\\)'"
+    # What a literal host must look like once normalised: a DNS name, or a
+    # wildcard over one. A decoy literal always captures matcher syntax.
+    - name: dnsName
+      expression: "'^(\\\\*\\\\.)?([a-z0-9]([-a-z0-9]*[a-z0-9])?\\\\.)*[a-z0-9]([-a-z0-9]*[a-z0-9])?$'"
   validations:
-    # Only plain conjunctions: `||` and `!` let a route match hosts it never names.
+    # Only plain conjunctions: `||` and `!` let a route match hosts it never
+    # names. Double-quoted arguments can hide a decoy Host(`...`) inside them,
+    # so arguments must use backticks.
     - expression: >-
-        object.spec.routes.all(r, !r.match.contains('||') && !r.match.contains('!'))
-      message: "IngressRoute match must be a plain && conjunction: `||` and `!` let a route match hosts it does not name; split it into separate routes"
+        object.spec.routes.all(r, !r.match.contains('||') && !r.match.contains('!') && !r.match.contains('"'))
+      message: "IngressRoute match must be a plain && conjunction with backtick arguments: `||`, `!` and double-quoted arguments let a route match hosts it does not name; split it into separate routes"
       reason: Forbidden
     # Every Host-family matcher must be one literal Host/HostSNI, and there must
     # be at least one: HostRegexp, HostSNIRegexp, HostHeader and the v2
@@ -335,18 +345,20 @@ spec:
     # both are normalised before the lookup.
     - expression: >-
         object.spec.routes.all(r, r.match.findAll(variables.literalHost)
-          .map(x, (x.contains('`') ? x.split('`')[1] : x.split('"')[1]).trim().lowerAscii())
+          .map(x, x.split('`')[1].trim().lowerAscii())
           .map(h, h.endsWith('.') ? h.substring(0, size(h) - 1) : h)
           .all(h,
-            h != '*' && h != '' &&
+            h.matches(variables.dnsName) &&
             (!(h in variables.owners) || variables.ns in variables.owners[h]) &&
             !(h.startsWith('*.') && (h.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2)) && !(variables.ns in variables.owners[k]))))))
-      message: "IngressRoute names a host reserved for the platform and owned by another namespace (mctl-reserved-platform-hosts), or HostSNI(`*`)"
+      message: "IngressRoute names a host reserved for the platform and owned by another namespace (mctl-reserved-platform-hosts), a literal that is not a DNS name, or HostSNI(`*`)"
       reason: Forbidden
     - expression: >-
         !has(object.spec.tls) || !has(object.spec.tls.domains) ||
         object.spec.tls.domains.all(d,
-          ((has(d.main) ? [d.main] : []) + (has(d.sans) ? d.sans : [])).all(h,
+          ((has(d.main) ? [d.main] : []) + (has(d.sans) ? d.sans : []))
+            .map(x, x.trim().lowerAscii())
+            .map(x, x.endsWith('.') ? x.substring(0, size(x) - 1) : x).all(h,
             (!(h.lowerAscii() in variables.owners) || variables.ns in variables.owners[h.lowerAscii()]) &&
             !(h.startsWith('*.') && (h.substring(2).lowerAscii() in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2).lowerAscii()) && !(variables.ns in variables.owners[k]))))))
       message: "IngressRoute spec.tls.domains lists a host reserved for the platform and owned by another namespace"

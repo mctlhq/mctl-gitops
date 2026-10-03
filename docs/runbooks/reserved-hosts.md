@@ -24,7 +24,16 @@ In every namespace, for `networking.k8s.io/v1 Ingress` and
 - an Ingress rule without a host, or `spec.defaultBackend`;
 - an IngressRoute match that is not a plain `&&` conjunction with at least one
   literal `Host(...)` / `HostSNI(...)`: `||`, `!`, `HostRegexp`,
-  `HostSNIRegexp`, `HostHeader`, the v2 multi-host `Host(a, b)`, `HostSNI(*)`.
+  `HostSNIRegexp`, `HostHeader`, the v2 multi-host `Host(a, b)`, `HostSNI(*)`,
+  double-quoted arguments, and a host literal that is not at the top level of
+  the conjunction or is not a DNS name (a decoy `Host(` inside another
+  matcher's argument).
+
+`HostSNI(*)` is refused because on a shared entrypoint it catches every TLS
+connection no more specific router claims. Traefik requires it for a non-TLS
+`IngressRouteTCP`, so such a router cannot be created anywhere today; one that
+is genuinely needed (on its own entrypoint) gets a reviewed exemption in the
+policy, not a carve-out in a tenant.
 
 The second group exists because traefik orders routers by rule length: a long
 rule with no host constraint outranks `Host(auth.mctl.ai) && PathPrefix(/)`
