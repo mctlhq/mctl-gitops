@@ -13,6 +13,11 @@ image:
 # other action fails the Job before apply, with the plan in its log.
 #   S1 (import only): "no-op read". Imports are planned as no-op.
 #   S2 (passkey-only login policy): adds "update".
+#   S3 (SMTP, tenant orgs and users): adds "create".
 # Widen deliberately, in the PR that needs it; "delete" never belongs here
 # without a reviewed reason.
-allowedActions: "no-op read update"
+allowedActions: "no-op read update create"
+
+# The CronJob's schedule. Users come from Vault, which no sync observes, so
+# this is how a user added there reaches ZITADEL.
+schedule: "17 * * * *"
