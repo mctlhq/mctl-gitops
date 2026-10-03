@@ -12,7 +12,7 @@ strategy:
   rollingUpdate: null
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "0.62.3"
+  tag: "0.78.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -35,9 +35,20 @@ resources:
     # LimitRange max (3) and ResourceQuota limits.cpu (12), so no tenant-quota
     # change is needed. NOT trimmed during the 2026-08-03 right-sizing pass.
     cpu: 1000m
-    memory: 256Mi
+    # Raised 256Mi -> 768Mi (2026-09-28): the 2026-08-03 trim sized this from
+    # p95 working set (~60MB) and missed media peaks. One get_messages call
+    # with fetch_media=true may pull up to 20 MiB of files, which is held
+    # raw, as base64 and serialized several times over (text and
+    # structuredContent both carry it), peaking at ~200MB+ on top of the
+    # baseline; it OOM-killed the pod on 2026-09-28 19:55 UTC. The request
+    # stays at 128Mi, so nothing extra is reserved on the node; the code-side
+    # fix that removes the amplification is tracked in mctl-telegram.
+    memory: 768Mi
 env:
   APP_ENV: production
+  # Soft heap target below the 768Mi limit so the Go GC works harder before
+  # the kernel OOM-kills the container.
+  GOMEMLIMIT: 600MiB
   AUTH_MODE: local-jwt
   AUTH_REQUIRED: "true"
   ALLOW_SEND: "true"
@@ -63,9 +74,30 @@ env:
   # antigravity.google is the addition: the Antigravity CLI registers with a
   # redirect on its own hosted domain, and without it every attempt 400s,
   # leaving a hand-pasted static bearer token as the only way in.
+  # www.cursor.com / cursor.com: Cursor's MCP client registers three redirect
+  # URIs in one DCR request (an http://localhost callback, its hosted
+  # https://www.cursor.com/agents/mcp/oauth/callback, and a legacy cursor://
+  # scheme) and then retries with cursor:// alone. Registration is
+  # all-or-nothing, so without the hosted domain here every attempt is
+  # rejected with invalid_redirect_uri (464 attempts in 48h from one client
+  # on 2026-09-21..23, zero accepted). The cursor:// scheme stays unsupported
+  # (custom schemes are never accepted); this only admits the hosted host.
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,localhost,127.0.0.1
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,www.cursor.com,cursor.com,localhost,127.0.0.1
+  # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
+  # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
+  # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR
+  # client from OAUTH_DCR_REDIRECT_URIS below (mctlhq/mctl-gitops#1363).
+  # Exact redirect URIs a Dynamic Client Registration may claim (0.69.0,
+  # mctlhq/mctl-telegram#691): the Cloudflare portal's two callbacks, so the
+  # `tg` upstream can run in automatic (DCR) mode (mctlhq/.github#137,
+  # mctlhq/mctl-gitops#1363). Byte-exact, separate from the host allowlist
+  # above; a registration whose redirects are all listed gets a pinned client
+  # with a server-assigned name. List the portal's exact callbacks and nothing
+  # else: each entry is a standing pinned client anyone can register
+  # (docs/cloudflare-portal-compat.md in mctl-telegram).
+  OAUTH_DCR_REDIRECT_URIS: "https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/tg"
   # Raised from the 10m default: the in-browser enable_access flow (phone -> SMS
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
   # a human to receive and enter the SMS code -> "sign-in session has expired".
@@ -82,6 +114,16 @@ env:
   # TELEGRAM_OIDC_CLIENT_SECRET is sourced from Vault via the oauth
   # ExternalSecret below.
   TELEGRAM_OIDC_CLIENT_ID: "8568443430"
+  # Public @username of the same bot, used for the t.me/<bot>?start= deep link
+  # that starts the /start onboarding flow (mctl-telegram#679). Not a secret.
+  TELEGRAM_LOGIN_BOT_USERNAME: "MCTL_AI_bot"
+  # BOT_RECEIVER_ENABLED is deliberately absent and must NEVER be set to "true"
+  # here. @MCTL_AI_bot's updates are webhook-owned by mctl-agent
+  # (agent.mctl.ai): long polling from this service would get 409 Conflict, and
+  # "fixing" that with deleteWebhook would cut mctl-agent off. /start reaches
+  # this service through the bot-start bridge instead — mctl-agent forwards a
+  # minimal observation to /internal/bot-start-observations, authenticated with
+  # BOT_START_BRIDGE_TOKEN (see labs-mctl-telegram-bot-start-bridge below).
   # CSV of Telegram user IDs that receive full scopes (admin allowlist).
   # 210408407 = operator (@MashkovD) ONLY. The demo/reviewer account 8745115872
   # (@mctlhq) is intentionally NON-admin (client tier): App-Directory reviewers
@@ -144,6 +186,33 @@ ingress:
       hosts:
         - tg.mctl.ai
         - labs-mctl-telegram.mctl.ai
+# Telegram work-context adapter (mctlhq/mctl-telegram#443, shipped 0.69.0,
+# mctlhq/mctl-gitops#1405). Off by default: the chart's workContext.enabled
+# gate leaves every rendered manifest byte-identical to before this block
+# existed. tokenVaultKey/tokenVaultProperty are set now (they only take
+# effect once enabled: true) so the ExternalSecret's Vault reference is
+# correct the moment it is turned on, matching the surface:telegram token
+# mctl-api reads under the same Vault path (bootstrap/values.yaml
+# surfaceTelegramToken).
+#
+# Owner steps, in this order -- do not skip ahead, `strategy.type: Recreate`
+# plus mctl-telegram refusing to start without a token when
+# WORK_CONTEXT_ENABLED=true is exactly why steps 3 and 4 below are separate:
+#   1. printf '%s' "$(openssl rand -hex 32)" \
+#        | vault kv patch -method=rw secret/platform/mctl-api/surface-tokens telegram-token=-
+#      (same token bootstrap/values.yaml's surfaceTelegramToken step writes;
+#      write it once, both sides read it.)
+#   2. Set tenant below to the real tenant slug this deployment serves.
+#   3. Set enabled: true below and confirm the ExternalSecret's Secret
+#      synced: kubectl -n labs get secret labs-mctl-telegram-work-context.
+#   4. Only then set featureEnabled: true.
+workContext:
+  enabled: false
+  featureEnabled: false
+  tenant: ""
+  tokenVaultKey: platform/mctl-api/surface-tokens
+  tokenVaultProperty: telegram-token
+  apiBaseUrl: ""
 extraContainers: []
 dbSecret:
   vaultPath: "teams/labs/mctl-telegram/database"
@@ -169,6 +238,12 @@ envFrom:
       name: "labs-mctl-telegram-login"
   - secretRef:
       name: "labs-mctl-telegram-demo"
+  # optional: the Vault value is created by hand. Until it exists the Secret is
+  # absent, the pod still starts, and the bridge endpoint stays unmounted
+  # (mctl-telegram only mounts it when BOT_START_BRIDGE_TOKEN is set).
+  - secretRef:
+      name: "labs-mctl-telegram-bot-start-bridge"
+      optional: true
 extraExternalSecrets:
   labs-mctl-telegram-tg-api:
     # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
@@ -259,6 +334,23 @@ extraExternalSecrets:
       - secretKey: TELEGRAM_BOT_TOKEN
         remoteKey: secret/data/platform/mctl-agent/tokens
         property: telegram-bot-token
+  # Shared bearer token for the mctl-agent -> mctl-telegram /start bridge
+  # (mctl-telegram#679). The same Vault value is synced into admins as
+  # mctl-agent's BOT_START_FORWARD_TOKEN. A dedicated random value (64 hex
+  # chars), distinct from every service/admin/surface token; it never appears
+  # in this repo. mctl-telegram refuses to start if it is set but shorter than
+  # 32 chars. Its own ExternalSecret so a missing Vault value only fails this
+  # sync, never the other secrets above.
+  labs-mctl-telegram-bot-start-bridge:
+    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-mctl-telegram-bot-start-bridge
+    data:
+      - secretKey: BOT_START_BRIDGE_TOKEN
+        remoteKey: secret/data/platform/shared/bot-start-bridge
+        property: token
 # Reviewer-session recovery. Narrowed on 2026-08-24: this job used to hold the
 # demo/reviewer row (8745115872) open against both session TTLs, and that half
 # is now redundant — the absolute ceiling is waived for
@@ -447,119 +539,6 @@ extraObjects:
   # Recreate + 1 replica stays.
   # The canary's ServiceAccount, Role and RoleBinding are NOT here. They are
   # platform-owned and live in bootstrap/templates/system/
-  # One-shot: move the pilot account to Local Bridge mode.
-  #
-  # Nothing in the application ever writes telegram_accounts.mode — there is a
-  # GetAccountMode reader and no writer — so enabling the mode is an operator
-  # UPDATE by construction (mctlhq/mctl-telegram#138). This Job is that UPDATE,
-  # done through git so the decision is reviewable rather than typed into a
-  # psql prompt.
-  #
-  # The account is 8745115872 (@mctlhq), the App-Directory demo/reviewer
-  # identity. It is deliberately NOT 924671154: that one is the production
-  # canary, and putting the canary in local mode would point its ten-minute
-  # probe at an operator machine — measuring that machine and its home uplink
-  # instead of the service, and failing every ten minutes whenever the host is
-  # unreachable. A reliable host does not fix that; the canary must keep
-  # exercising the hosted session pool, which is the path real users take.
-  #
-  # 8745115872 is safe to borrow because DEMO_REVIEWER_ENABLED is false, so
-  # both demo CronJobs are pruned and nothing automated runs against it. If
-  # another App-Directory review is scheduled, run the restore Job first — the
-  # hosted session is not destroyed by this, only left unused.
-  #
-  # send_enabled is deliberately NOT touched: proving the routing needs only a
-  # read, and the evidence is an audit_logs row with call_path='local'.
-  #
-  # RETURNING plus an explicit emptiness check makes a no-op UPDATE a failed
-  # Job in ArgoCD rather than a silent "UPDATE 0".
-  - apiVersion: batch/v1
-    kind: Job
-    metadata:
-      name: labs-mctl-telegram-local-mode-flip-1
-      labels:
-        app.kubernetes.io/name: mctl-telegram
-        app.kubernetes.io/part-of: mctl-platform
-        mctl.me/component: local-mode-flip
-    spec:
-      backoffLimit: 2
-      activeDeadlineSeconds: 120
-      ttlSecondsAfterFinished: 86400
-      template:
-        metadata:
-          labels:
-            app.kubernetes.io/name: mctl-telegram
-            mctl.me/component: local-mode-flip
-        spec:
-          restartPolicy: OnFailure
-          # postgres:17-alpine defaults to root. Match the canary's posture so
-          # the Job is not the one workload a Restricted Pod Security Standard
-          # would reject. 70 is the postgres user in the alpine image; psql
-          # with -c needs nothing writable.
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 70
-          # postgres:17-alpine is a public Docker Hub image, so no pull secret.
-          containers:
-            - name: flip
-              image: postgres:17-alpine
-              securityContext:
-                allowPrivilegeEscalation: false
-                capabilities:
-                  drop: ["ALL"]
-              command: ["sh", "-c"]
-              args:
-                # libpq reads PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD from
-                # the environment, so psql is invoked with no connection
-                # argument at all. Passing "$DATABASE_URL" positionally would
-                # place the password in the process argv, where anything
-                # reading /proc — an audit daemon, a node agent — can see it.
-                - |
-                  set -e
-                  TG_ID=8745115872
-                  echo "Flipping telegram id $TG_ID to Local Bridge mode..."
-                  UID_=$(psql -v ON_ERROR_STOP=1 -tA -c "SELECT id FROM users WHERE telegram_login_id = '$TG_ID';")
-                  if [ -z "$UID_" ]; then
-                    echo "ERROR: no users row with telegram_login_id $TG_ID." >&2
-                    exit 1
-                  fi
-                  FLIPPED=$(psql -v ON_ERROR_STOP=1 -tA -c "UPDATE telegram_accounts SET mode = 'local' WHERE user_id = $UID_ AND revoked_at IS NULL RETURNING id;")
-                  if [ -z "$FLIPPED" ]; then
-                    echo "ERROR: no active telegram_accounts row for user $UID_ — nothing was flipped." >&2
-                    echo "A revoked row reports mode='hosted' regardless of this column, and /bridge refuses the daemon." >&2
-                    exit 1
-                  fi
-                  echo "Flipped row id(s): $FLIPPED"
-                  psql -c "SELECT id, mode, send_enabled, revoked_at, last_used_at FROM telegram_accounts WHERE user_id = $UID_ AND revoked_at IS NULL;"
-              env:
-                # The chart's db ExternalSecret publishes these discrete keys
-                # alongside DATABASE_URL (helm-charts/base-service/templates/
-                # externalsecret-db.yaml), so no URL parsing is needed.
-                - name: PGHOST
-                  valueFrom:
-                    secretKeyRef:
-                      name: labs-mctl-telegram-db-creds
-                      key: DB_HOST
-                - name: PGPORT
-                  valueFrom:
-                    secretKeyRef:
-                      name: labs-mctl-telegram-db-creds
-                      key: DB_PORT
-                - name: PGDATABASE
-                  valueFrom:
-                    secretKeyRef:
-                      name: labs-mctl-telegram-db-creds
-                      key: DB_NAME
-                - name: PGUSER
-                  valueFrom:
-                    secretKeyRef:
-                      name: labs-mctl-telegram-db-creds
-                      key: DB_USER
-                - name: PGPASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: labs-mctl-telegram-db-creds
-                      key: DB_PASSWORD
   # labs-mctl-telegram-canary-rbac.yaml, which explains why at length. Short
   # version: the "apps" AppProject does not whitelist RBAC so ArgoCD would
   # drop them silently, and whitelisting it project-wide would let any tenant
@@ -646,3 +625,103 @@ extraObjects:
                     limits:
                       cpu: "100m"
                       memory: "64Mi"
+
+  # Deny /metrics at the edge — mctlhq/mctl-telegram#588. Same two objects as
+  # labs/mctl-telegram-preview, verified there first: after that PR synced,
+  # https://tg-preview.mctl.ai/metrics answered 403 while
+  # up{job="labs-mctl-telegram-preview-base-service"} stayed 1 and
+  # mctl_agent_jobs_total kept receiving samples.
+  #
+  # Production was exposed identically, on BOTH hostnames — 200 anonymously
+  # with 185 mctl_* samples each, verified by curl 2026-09-09. The issue text
+  # says production "is not affected in the same way"; that was wrong, and is
+  # corrected in a comment there. What actually differs is the CONTENT: this
+  # values file sets no AGENT_* variables, so there are no mctl_agent_* series
+  # here. Everything else — session counts, pool capacity, auth failures,
+  # dead-letter counts, OAuth queue depth — was public.
+  #
+  # METRICS_ALLOW_CIDR does NOT close this. The handler compares the real TCP
+  # socket peer from ConnContext rather than r.RemoteAddr, which is correct
+  # against a forged X-Forwarded-For but means that behind traefik the peer is
+  # the ingress controller's own pod, inside the pod CIDR. An allowlist
+  # covering the cluster would admit internet traffic arriving through the
+  # ingress while correctly admitting the scrape, indistinguishable at the
+  # handler.
+  #
+  # One IngressRoute carries BOTH hostnames as separate routes rather than one
+  # rule with an alternation: two rules make each host's coverage visible in
+  # `kubectl get ingressroute -o yaml`, and adding a third host later is an
+  # append rather than an edit to a regex.
+  #
+  # Labels are literal, not `include "base-service.labels"`. A values file must
+  # parse as YAML BEFORE extra-objects.yaml runs tpl over it, so a bare
+  # `{{- include ... | nindent 8 }}` line is a values parse error, not a
+  # template. Only quoted scalars can carry templates here.
+  - apiVersion: traefik.io/v1alpha1
+    kind: Middleware
+    metadata:
+      name: '{{ include "base-service.fullname" . }}-deny-metrics'
+      labels:
+        app.kubernetes.io/name: base-service
+        app.kubernetes.io/instance: labs-mctl-telegram
+        app.kubernetes.io/part-of: mctl-platform
+        app.kubernetes.io/managed-by: Helm
+        mctl.me/component: metrics-edge-deny
+    spec:
+      # traefik v3 has no first-class 403 middleware; an allowlist nothing can
+      # match is how "deny" is spelled. 192.0.2.0/24 is TEST-NET-1 (RFC 5737),
+      # reserved for documentation and not routable. Note the v3 field name —
+      # the installed CRD group is traefik.io (v3.7.10); v2's
+      # traefik.containo.us called this ipWhiteList, which would parse here and
+      # silently do nothing.
+      ipAllowList:
+        sourceRange:
+          - 192.0.2.0/24
+  - apiVersion: traefik.io/v1alpha1
+    kind: IngressRoute
+    metadata:
+      name: '{{ include "base-service.fullname" . }}-metrics-deny'
+      labels:
+        app.kubernetes.io/name: base-service
+        app.kubernetes.io/instance: labs-mctl-telegram
+        app.kubernetes.io/part-of: mctl-platform
+        app.kubernetes.io/managed-by: Helm
+        mctl.me/component: metrics-edge-deny
+    spec:
+      # websecure only, and that is complete rather than a gap. The `web`
+      # entrypoint carries a GLOBAL redirect to https, set in traefik's STATIC
+      # config by the kube-hetzner module rather than anywhere in this repo:
+      #   --entryPoints.web.http.redirections.entryPoint.to=:443
+      # An entrypoint-level redirection is applied before any router matches,
+      # so a plain-HTTP request never reaches a backend — verified:
+      # `curl http://tg.mctl.ai/metrics` answers 301 to the https URL, and the
+      # retried request arrives on websecure where these routes apply.
+      entryPoints:
+        - websecure
+      routes:
+        # Explicit priority rather than trusting traefik's default, which is
+        # derived from rule length. These rules ARE longer than the chart
+        # Ingress's `Host(...) && PathPrefix(/)` and would win on their own,
+        # but that is a router implementation detail and not something to rest
+        # a security control on.
+        - match: Host(`tg.mctl.ai`) && PathPrefix(`/metrics`)
+          kind: Rule
+          priority: 1000
+          middlewares:
+            - name: '{{ include "base-service.fullname" . }}-deny-metrics'
+          services:
+            - name: '{{ include "base-service.fullname" . }}'
+              # Literal: a bare {{ }} would be a values parse error, and a
+              # quoted one would be read as a port NAME. Keep in sync with
+              # service.port above.
+              port: 8080
+        - match: Host(`labs-mctl-telegram.mctl.ai`) && PathPrefix(`/metrics`)
+          kind: Rule
+          priority: 1000
+          middlewares:
+            - name: '{{ include "base-service.fullname" . }}-deny-metrics'
+          services:
+            - name: '{{ include "base-service.fullname" . }}'
+              port: 8080
+      tls:
+        secretName: mctl-telegram-tls

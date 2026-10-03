@@ -1,0 +1,92 @@
+# Unit tests for seerrsense-alerts.yaml (group seerrsense.review).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so
+# promtool can evaluate the very rules the cluster runs.
+rule_files:
+  - generated/seerrsense-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: a flat consent counter stays quiet
+    input_series:
+      - series: 'seerrsense_oauth_consent_total{namespace="labs",app="base-service",pod="labs-seerrsense-base-service-1"}'
+        values: '3x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SeerrSenseNewConnection
+        exp_alerts: []
+
+  - interval: 1m
+    name: one consent POST fires the informational alert
+    input_series:
+      - series: 'seerrsense_oauth_consent_total{namespace="labs",app="base-service",pod="labs-seerrsense-base-service-1"}'
+        values: '3 3 3 3 3 4 4 4 4 4'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: SeerrSenseNewConnection
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              component: seerrsense
+              namespace: labs
+            exp_annotations:
+              summary: "SeerrSense: a new OAuth connection was granted (namespace labs)"
+              description: |
+                Someone completed the SeerrSense sign-in (consent POST) in the
+                last 10 minutes. During the ChatGPT directory review this is most
+                likely the reviewer account mctlhq@gmail.com. Any request they
+                file lands as pending approval on media.mctl.ai (Overseerr user
+                "reviewer", REQUEST only); check the Overseerr request list to
+                see who it was and what they asked for.
+
+  # Another labs service on the same chart must not be mistaken for seerrsense.
+  - interval: 1m
+    name: a consent counter from a different pod is ignored
+    input_series:
+      - series: 'seerrsense_oauth_consent_total{namespace="labs",app="base-service",pod="labs-other-base-service-1"}'
+        values: '0 1 2 3 4 5 6 7 8 9'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: SeerrSenseNewConnection
+        exp_alerts: []
+
+  - interval: 1m
+    name: two pods with failures are summed into one warning
+    input_series:
+      - series: 'seerrsense_tool_failures_total{namespace="labs",app="base-service",pod="labs-seerrsense-base-service-1"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'seerrsense_tool_failures_total{namespace="labs",app="base-service",pod="labs-seerrsense-base-service-2"}'
+        values: '0 0 0 0 0 0 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: SeerrSenseToolFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: seerrsense
+              namespace: labs
+            exp_annotations:
+              summary: "SeerrSense: 3 tool call(s) failed with the generic error (namespace labs)"
+              description: |
+                At least one MCP tool call on seerrsense answered "Something went
+                wrong on SeerrSense's side" in the last 10 minutes. The described
+                error is in the pod log under msg="a tool call failed for a
+                reason the caller was not told". The known cause is the Cloudflare
+                tunnel to media.mctl.ai timing out (AbortError from fetchTrusted);
+                seerrsense 1.10.1 waits 20 s and retries a read once, so a
+                persistent alert means the tunnel or Overseerr itself is down.
+                During the directory review this is exactly what a reviewer
+                would see as a broken tool, so look at it promptly.
+
+  - interval: 1m
+    name: failures older than the 10m window do not keep the warning up
+    input_series:
+      - series: 'seerrsense_tool_failures_total{namespace="labs",app="base-service",pod="labs-seerrsense-base-service-1"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SeerrSenseToolFailures
+        exp_alerts: []

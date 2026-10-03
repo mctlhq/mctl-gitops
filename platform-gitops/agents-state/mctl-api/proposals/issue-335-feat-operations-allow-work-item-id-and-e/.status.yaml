@@ -1,0 +1,21 @@
+status: merged
+updated_at: '2026-09-19T18:24:31Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 335
+  url: https://github.com/mctlhq/mctl-api/issues/335
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-19T15:37:12Z'
+attempt:
+  id: 3eeb555a87976db3ea0dbee62eba4d3a1f58d8993c7cca7fc26b548727d70803
+  started_at: '2026-09-19T17:47:43Z'
+  expires_at: '2026-09-19T19:57:43Z'
+  finished_at: '2026-09-19T18:00:31Z'
+pr: https://github.com/mctlhq/mctl-api/pull/339
+merged_at: '2026-09-19T18:24:31Z'
+merge_commit: 769a7de900e97438892206e5814fbb39c47ec975

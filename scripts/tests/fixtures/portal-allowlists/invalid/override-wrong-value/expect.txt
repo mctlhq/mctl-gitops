@@ -1,0 +1,1 @@
+only 'sensitive-read' is allowed

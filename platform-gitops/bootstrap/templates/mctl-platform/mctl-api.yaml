@@ -15,7 +15,7 @@ spec:
         values: |
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.39.0"
+            tag: "4.58.0"
 
           ingress:
             enabled: true
@@ -28,6 +28,15 @@ spec:
             GITOPS_REPO_URL: https://github.com/mctlhq/mctl-gitops.git
             GITOPS_BRANCH: main
             GITOPS_LOCAL_PATH: /data/mctl-gitops
+            # Restart marker, read by nothing. mctl-api initialises several
+            # stores once at startup and keeps a failed one nil (503) until
+            # the pod restarts (mctlhq/mctl-api#387); the chart has no pod
+            # annotation hook, so changing this value is how gitops restarts
+            # the pod. Last bumped 2026-09-30: load the usage price card
+            # with the claude-opus-5-5 and claude-sonnet-5-5 entries (the
+            # catalog is read once at startup, see
+            # bootstrap/files/usage-pricing/README.md).
+            ROLLOUT_MARKER: "2026-09-30-pricing-5-5-models"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
@@ -61,7 +70,43 @@ spec:
             # can only be used with a hand-pasted static bearer token. Wildcard
             # rather than an exact path because the callback path is not documented
             # and has to survive client updates.
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*"
+            #
+            # *-openclaw.mctl.ai: each OpenClaw tenant panel runs the OAuth
+            # dance from its own hostname. It re-registers via DCR on every
+            # connect attempt, so nothing here is about a stale registration:
+            # /oauth/register validates with IsRedirectURIAllowed("", uri) --
+            # an EMPTY client id, by design, so that registration cannot mint a
+            # client for an arbitrary attacker callback (internal/api/
+            # oauth_handlers.go, SOC hardening 8422446). On that path only this
+            # list and RFC 8252 loopback count; a client's own redirect_uris do
+            # not. A tenant panel is not loopback, so without an entry here it
+            # is refused before it ever receives a client id:
+            # redirect_uri "https://admins-openclaw.mctl.ai/overview?mctl_oauth=1"
+            # is not allowed -- which is what blocks mctlhq/mctl-gitops#571.
+            # Listed per tenant because IsRedirectURIAllowed matches a string
+            # prefix, not a host wildcard -- a general host-suffix rule is
+            # mctlhq/mctl-api#290. The list is the tenants under
+            # platform-gitops/services/; my-team-openclaw.mctl.ai still appears
+            # in docs examples but the tenant was deleted in af03d315, and a
+            # decommissioned host must not stay authorized here.
+            #
+            # Exact URIs, deliberately NOT "<host>/*". The panel builds the
+            # callback deterministically as <origin><basePath>/overview with
+            # ?mctl_oauth=1 (ui/src/ui/controllers/mctl-connect.ts), and no
+            # tenant sets basePath, so the exact string is knowable. A path
+            # wildcard would authorize every path on the panel host, which
+            # turns any open redirect or XSS there into code interception --
+            # and PKCE does not help, because an attacker who starts the flow
+            # holds the verifier. If a tenant ever moves under a basePath this
+            # entry stops matching, which fails loudly and is the safer way to
+            # find out.
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/overview?mctl_oauth=1,https://labs-openclaw.mctl.ai/overview?mctl_oauth=1,https://ovk-openclaw.mctl.ai/overview?mctl_oauth=1,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api"
+            # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
+            # `cloudflare-portal-mcp` (mctlhq/mctl-api#278) was retired on
+            # 2026-09-26 after the `api` upstream moved to automatic (DCR)
+            # mode. The portal now registers itself through /oauth/register,
+            # persisted since mctlhq/mctl-api#400, with the two callbacks
+            # above (mctlhq/mctl-gitops#1363).
             # Browser origins permitted by CORS. Distinct from the redirect URIs
             # above: those govern where the OAuth dance may hand a code back,
             # this governs which page may read an authenticated API response.
@@ -96,6 +141,28 @@ spec:
             # pinning the operator CA; verify-full needs a copied CA secret
             # in this namespace (helm postgresCA) and can wait for CA sync.
             AUDIT_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-api?sslmode=require"
+            # The lifecycle ownership store (ADR-010) gets its OWN database,
+            # not mctl-api's: it is the source of truth for who may act on an
+            # entity, and its neighbours in mctl-api -- the audit log, the
+            # alert store, the agent registry -- are retained, vacuumed and
+            # restored on their own schedules.
+            #
+            # Set in a SEPARATE merge from the Database CR (mctlhq/mctl-gitops#1245)
+            # and deliberately so: shared-pg and admins-mctl-api are two ArgoCD
+            # Applications reconciling independently, so landing both at once
+            # can restart mctl-api before CNPG has created the database. The
+            # store initialises once at startup with a bounded retry budget;
+            # exhaust it and it stays nil, answering 503 long after the
+            # Database goes Ready, until somebody restarts the pod again.
+            #
+            # cmd/api/main.go falls back to AUDIT_DB_URL when this is unset,
+            # which is how the ownership tables ended up in mctl-api in the
+            # first place. That fallback makes a typo HERE silent: the store
+            # would come up healthy against the audit database -- a 200 that
+            # means the wrong thing. Confirm on deploy that the lifecycle list
+            # read answers count: 0; a non-zero count means it is still
+            # talking to mctl-api.
+            LIFECYCLE_DB_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-lifecycle?sslmode=require"
             # Traefik pod IPs (namespace traefik). X-Forwarded-For is trusted
             # for audit client IP only from these peers (SOC F20). Update if
             # Traefik replicas roll to new IPs.
@@ -108,11 +175,76 @@ spec:
             # above for the other optional stores).
             TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
             TEMPORAL_NAMESPACE: mctl-agents
+            # GitHub pull request events (mctlhq/mctl-api#323, 4.49.0+). The
+            # webhook enqueues into the audit database's outbox and a relay
+            # XADDs to mctl:events:github; GITHUB_WEBHOOK_SECRET and
+            # EVENTS_VALKEY_PASSWORD come from the mctl-api-events Secret
+            # (envFromExtraSecret below). Without both the endpoint answers
+            # 401/503 and nothing is published.
+            EVENTS_VALKEY_URL: "redis://github-producer@valkey.platform-events.svc.cluster.local:6379/0"
             # ARGO_WEBHOOK_SECRET is not listed here; envFromSecret below
             # injects it from Vault platform/mctl-api/argo-webhook (SOC F13).
 
+          # One secret, not two. GITOPS_REPO_TOKEN used to arrive through
+          # `envFromExtraSecret: mctl-api-gitops-token`, a Secret applied by
+          # hand in 2026-03 and created by nothing in this repository or in
+          # Vault; it is described in mctl-api-secrets.yaml now.
+          # mctlhq/mctl-gitops#1229, step 2 of 2.
           envFromSecret: mctl-api-secrets
-          envFromExtraSecret: mctl-api-gitops-token
+          # Event producer credentials, in their own ExternalSecret so a
+          # missing key cannot take DB_PASSWORD down with it
+          # (mctl-api-secrets.yaml).
+          envFromExtraSecret: mctl-api-events
+
+          # The GitHub App installation token, mounted as a FILE. mctl-api
+          # reads GITHUB_APP_TOKEN_FILE per use (internal/ghtoken), which is
+          # what lets a token re-minted every 30 minutes be picked up without
+          # a restart -- envFrom would capture it at container start and serve
+          # an expired value within the hour.
+          #
+          # From here GITOPS_REPO_TOKEN and GITOPS_ACTIONS_TOKEN in
+          # mctl-api-secrets become the fallback only: the file wins. They stay
+          # for now so this change is reversible by deleting one line, and are
+          # removed in a follow-up once the pod is observed running on the
+          # file.
+          #
+          # What this token is, measured rather than assumed
+          # (mctlhq/mctl-api#307): one repository (mctl-gitops), contents
+          # read-only, actions write, rotating hourly. GitHub downgrades a
+          # permission you name but does not remove one you do not, so it also
+          # carries issues/pull_requests/workflows write on that one
+          # repository -- a recorded trade, not an oversight.
+          githubAppTokenSecret: mctl-api-github-app
+
+          # The versioned usage price catalog (mctlhq/mctl-gitops#1409,
+          # mctlhq/.github#50 owner decision 3), rendered by root-app from
+          # bootstrap/files/usage-pricing/ as ConfigMap mctl-api-usage-pricing
+          # (mctl-api-usage-pricing.yaml). The chart (mctl-api >= 4.55.0,
+          # mctlhq/mctl-api#403) mounts it optional and sets
+          # USAGE_PRICING_CATALOG to its catalog.json, so a missing or bad
+          # catalog logs one ERROR and usage is still recorded without a
+          # derived cost -- it never blocks the pod.
+          usagePricingConfigMap: mctl-api-usage-pricing
+          {{- if .Values.usageWriter.enabled }}
+
+          # The usage-writer token (mctlhq/.github#50), from the
+          # mctl-api-usage-writer ExternalSecret. Gated with it on
+          # usageWriter.enabled in bootstrap/values.yaml; the chart's
+          # reference is optional, so a Secret that has not synced yet
+          # leaves the principal disabled instead of failing the pod.
+          usageWriterTokenSecret: mctl-api-usage-writer
+          {{- end }}
+          {{- if (default dict .Values.surfaceTelegramToken).enabled }}
+
+          # The surface:telegram bearer token (mctlhq/mctl-telegram#443), from
+          # the mctl-api-surface-telegram ExternalSecret. Gated with it on
+          # surfaceTelegramToken.enabled in bootstrap/values.yaml. Requires
+          # the mctl-api chart (a different repo, helm/ dir) to carry an
+          # optional surfaceTelegramTokenSecret value mirroring
+          # usageWriterTokenSecret -- until that lands, Helm passes this
+          # value and the chart simply ignores the unknown key.
+          surfaceTelegramTokenSecret: mctl-api-surface-telegram
+          {{- end }}
 
           resources:
             requests:

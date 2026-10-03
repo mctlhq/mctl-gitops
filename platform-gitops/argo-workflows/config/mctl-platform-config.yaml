@@ -18,8 +18,11 @@ data:
   # Primary platform domain (auto-generated service hostnames use this)
   PLATFORM_DOMAIN: "mctl.ai"
   # Alternate/mirror domain (optional, leave empty to disable mirroring).
-  # Emptied 2026-08-28: mctl.me is retired — Cloudflare answers 410 Gone for
-  # every host on it. While this was set, tpl-git-commit mirrored each
+  # Emptied 2026-08-28: mctl.me is retired. It does not answer 410 for every
+  # host — the mctl-landing-form worker 301s browsers to the matching .mctl.ai
+  # host and returns 410 only to bot-like User-Agents, so a retirement check
+  # that expects 410 unconditionally will see a 301 and misreport.
+  # While this was set, tpl-git-commit mirrored each
   # service's hostname onto the dead domain and put it in the TLS block, so
   # every deploy re-added a SAN that cert-manager then had to keep renewing.
   # Leave empty unless a replacement mirror domain actually serves traffic.

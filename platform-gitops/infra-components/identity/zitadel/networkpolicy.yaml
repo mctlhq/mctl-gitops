@@ -1,0 +1,149 @@
+# Ingress: default deny, then open only what each component serves.
+#
+#   zitadel (API, Console, OIDC)  :8080 from the ingress controller, from the
+#                                 Login UI (it calls the API in-cluster), and
+#                                 from monitoring (/debug/metrics scrape)
+#   zitadel-login (Login V2 UI)   :3000 from the ingress controller only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: zitadel
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-zitadel-http
+  namespace: zitadel
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zitadel
+      app.kubernetes.io/instance: zitadel
+      app.kubernetes.io/component: start
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: zitadel-login
+              app.kubernetes.io/instance: zitadel
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-zitadel-login-http
+  namespace: zitadel
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zitadel-login
+      app.kubernetes.io/instance: zitadel
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+# Egress allowlist. This namespace answers the public internet and holds the
+# masterkey, so a compromised process should reach nothing it has no reason to.
+#
+#   zitadel (start, init, setup)  DNS + shared-pg only. Phase 1 has no SMTP,
+#                                 no external IdPs and no Actions targets;
+#                                 adding GitHub/Google sign-in (phase 2) adds
+#                                 an internet HTTPS rule here deliberately.
+#   zitadel-login                 DNS + the zitadel Service, in-namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: zitadel
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: zitadel
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Matches the API Deployment and both Sync-hook Jobs (component start / init /
+# setup all carry app.kubernetes.io/name: zitadel).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-zitadel-db-egress
+  namespace: zitadel
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zitadel
+      app.kubernetes.io/instance: zitadel
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform-db
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-login-to-zitadel-egress
+  namespace: zitadel
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zitadel-login
+      app.kubernetes.io/instance: zitadel
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: zitadel
+              app.kubernetes.io/instance: zitadel
+              app.kubernetes.io/component: start
+      ports:
+        - protocol: TCP
+          port: 8080

@@ -1,0 +1,24 @@
+status: rejected
+updated_at: '2026-09-23T15:49:26Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 364
+  url: https://github.com/mctlhq/mctl-agents/issues/364
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-19T09:28:13Z'
+attempt:
+  id: d1224199eae7e474b901f54117b44b6f2f5428759921da5e7a33602685a9ea73
+  started_at: '2026-09-19T11:24:03Z'
+  expires_at: '2026-09-19T13:34:03Z'
+  finished_at: '2026-09-19T11:57:42Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/409
+github:
+  state: closed
+  head_sha: 143312e4858cc1a3a6a5e99f66af5894a0ab85ec
+  observed_at: '2026-09-23T15:49:26Z'
+notes: PR was closed without merging.

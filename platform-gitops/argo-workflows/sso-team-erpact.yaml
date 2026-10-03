@@ -1,0 +1,18 @@
+# SSO RBAC: team erpact — scoped to team namespace only
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sso-team-erpact
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/rbac-rule: "'erpact' in groups"
+    workflows.argoproj.io/rbac-rule-precedence: "104"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sso-team-erpact.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: sso-team-erpact
+type: kubernetes.io/service-account-token

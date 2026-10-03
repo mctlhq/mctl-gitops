@@ -1,0 +1,28 @@
+status: merged
+updated_at: '2026-09-11T16:51:31Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 9
+  url: https://github.com/mctlhq/portfolio/issues/9
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-11T09:47:07Z'
+attempt:
+  id: 7453a15a-3594-45e3-abf9-d8e745ecaaa2
+  started_at: '2026-09-11T09:49:23Z'
+  expires_at: '2026-09-11T11:59:23Z'
+  finished_at: '2026-09-11T10:00:25Z'
+pr: https://github.com/mctlhq/portfolio/pull/34
+notes: Follow-up failed deterministically 3 time(s) (implementer follow-up exited
+  non-zero (42) for portfolio/issue-9-p7-colophon-page-journal-and-adr-routes); human
+  triage required.
+github:
+  state: merged
+  head_sha: f55840d11ed08dd4f1d7d623399ffdb70d9a2044
+  observed_at: '2026-09-11T16:51:31Z'
+merged_at: '2026-09-11T16:51:31Z'
+merge_commit: 9c307a36ad0f8fb0928764494d90e15d098edc6b

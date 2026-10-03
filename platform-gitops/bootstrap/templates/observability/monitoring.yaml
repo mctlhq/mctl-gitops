@@ -58,23 +58,118 @@ spec:
                     # rejected, VM still runs — it drops oldest data at the
                     # disk limit. vmbackup R2 size grows accordingly.
                     storage: 25Gi
-              # vmbackup sidecar — backs up to Cloudflare R2 daily
-              extraContainers:
+              # vmbackup sidecar — backs up VictoriaMetrics to R2 daily.
+              #
+              # This block existed since 2026-03 and had NEVER produced a single
+              # object in R2 (#1071). A full listing of s3://vault-backup on
+              # 2026-09-10 found no victoria-metrics/ prefix and not one key
+              # containing "victoria". Six independent defects, any one of which
+              # was fatal on its own — which is why nothing was ever red:
+              #
+              #   1. the values key was `extraContainers`. VMSingle's CRD field
+              #      is `containers`; the operator silently ignored the block
+              #      and the pod only ever had one container.
+              #   2. `ignoreDifferences` on VMSingle /spec/extraContainers, at
+              #      the bottom of this file, told ArgoCD not to reconcile the
+              #      very field being set. Removed in the same commit.
+              #   3. the binary is /vmbackup-prod, not /vmbackup. Verified by
+              #      running the image: `stat /vmbackup: no such file`.
+              #   4. the flags are -snapshot.createURL / -snapshot.deleteURL.
+              #      -snapshotCreateURL / -snapshotDeleteURL do not exist, and
+              #      Go's flag parser exits non-zero on an unknown flag.
+              #   5. -storageDataPath was /storage. The operator mounts the data
+              #      at /victoria-metrics-data, so vmbackup would have found no
+              #      snapshots directory.
+              #   6. no exit-code check, so any of the above printed "Done" and
+              #      slept 24h. A container that never crashes cannot be caught
+              #      by PodCrashLooping.
+              #   7. the snapshot URLs used `localhost`. This image is Alpine,
+              #      busybox resolves localhost to ::1 first, and vmsingle
+              #      listens on IPv4 only — so every backup would have died on
+              #      `dial tcp [::1]:8428: connect: connection refused`, for
+              #      ever. Found by watching the first real rollout, not by
+              #      reading: 127.0.0.1:8428/health answers OK from the sidecar
+              #      while localhost:8428 is refused. Hence 127.0.0.1 below.
+              #
+              # On why there is still no `set -e` here, which looks like the
+              # obvious fix and is not: this is a SIDECAR. A container in
+              # CrashLoopBackOff is not ready, an unready container makes the
+              # POD unready, and an unready pod is removed from the vmsingle
+              # Service — so a failing backup would take metrics, alerting and
+              # every SLI offline. Crashing on failure trades a backup outage
+              # for a monitoring outage. The failure is made visible instead by
+              # publishing a success timestamp and alerting on its age, which is
+              # what #1071 asked for: "a backup that silently stops is the
+              # failure mode that matters, and container health does not
+              # express it".
+              #
+              # The timestamp is re-published every 5 minutes rather than only
+              # after a backup, because Pushgateway holds it in memory — it runs
+              # without persistence — so a Pushgateway restart would otherwise
+              # drop the series and fire VictoriaMetricsBackupMetricAbsent until
+              # the next daily run. Re-publishing heals that within one cycle.
+              containers:
                 - name: vmbackup
+                  # This tag is Alpine-based and DOES have a shell. Two
+                  # automated reviewers independently flagged the opposite —
+                  # that the default (non -alpine) vmbackup image is built FROM
+                  # scratch, so command: ["/bin/sh", ...] would fail to exec and
+                  # CrashLoopBackOff — which would be a serious finding if it
+                  # were true. It is not, for this image. Measured by running
+                  # the exact tag on this cluster
+                  # (sha256:ba728f716e27b7a4c9a0878f8eb7ed00b5fc0cd5bfd12d81df040580545fe709):
+                  #
+                  #   /bin/sh -> /bin/busybox
+                  #   PRETTY_NAME="Alpine Linux v3.20"
+                  #   /bin/date  /usr/bin/wget  /vmbackup-prod
+                  #
+                  # Do not "fix" this to :v1.106.1-alpine on the strength of the
+                  # general claim. Re-run the check above first.
                   image: victoriametrics/vmbackup:v1.106.1
                   command: ["/bin/sh", "-c"]
                   args:
                     - |
+                      PUSH="http://prometheus-pushgateway.monitoring.svc.cluster.local:9091/metrics/job/vmbackup/instance/vmsingle"
+                      LAST_SUCCESS=0
+                      NEXT_RUN=0
+                      # Wait for vmsingle in the same pod before the first
+                      # backup. Containers start together, so without this the
+                      # first attempt loses the race and the retry is an hour
+                      # away — observed on the very first rollout.
+                      while ! wget -q -O /dev/null "http://127.0.0.1:8428/health"; do
+                        echo "[vmbackup] waiting for vmsingle on 127.0.0.1:8428"
+                        sleep 5
+                      done
                       while true; do
-                        echo "[vmbackup] Starting backup to R2..."
-                        /vmbackup \
-                          -storageDataPath=/storage \
-                          -snapshotCreateURL=http://localhost:8428/snapshot/create \
-                          -snapshotDeleteURL=http://localhost:8428/snapshot/delete \
-                          -dst=s3://vault-backup/victoria-metrics \
-                          -customS3Endpoint=$S3_ENDPOINT
-                        echo "[vmbackup] Done. Next run in 24h."
-                        sleep 86400
+                        NOW=$(date +%s)
+                        if [ "$NOW" -ge "$NEXT_RUN" ]; then
+                          echo "[vmbackup] starting backup to s3://${BUCKET}/victoria-metrics"
+                          /vmbackup-prod \
+                            -storageDataPath=/victoria-metrics-data \
+                            -snapshot.createURL=http://127.0.0.1:8428/snapshot/create \
+                            -snapshot.deleteURL=http://127.0.0.1:8428/snapshot/delete \
+                            -dst="s3://${BUCKET}/victoria-metrics" \
+                            -customS3Endpoint="${S3_ENDPOINT}"
+                          RC=$?
+                          if [ "$RC" -eq 0 ]; then
+                            LAST_SUCCESS=$(date +%s)
+                            NEXT_RUN=$((NOW + 86400))
+                            echo "[vmbackup] backup ok at ${LAST_SUCCESS}"
+                          else
+                            # Retry in an hour, not tomorrow. A blip talking to
+                            # R2 should not cost a whole day of backup age —
+                            # the stale alert would still page at 25h, but by
+                            # then the gap is real rather than transient.
+                            NEXT_RUN=$((NOW + 3600))
+                            echo "[vmbackup] ERROR: backup failed, exit ${RC}. Retrying in 1h; no success timestamp published, so VictoriaMetricsBackupStale fires once the last success is 25h old." >&2
+                          fi
+                        fi
+                        if [ "$LAST_SUCCESS" -gt 0 ]; then
+                          printf 'vmbackup_last_success_timestamp_seconds %s\n' "$LAST_SUCCESS" > /tmp/vmbackup.prom
+                          wget -q -O /dev/null --post-file=/tmp/vmbackup.prom "$PUSH" \
+                            || echo "[vmbackup] WARNING: could not publish the success timestamp to Pushgateway" >&2
+                        fi
+                        sleep 300
                       done
                   env:
                     - name: AWS_ACCESS_KEY_ID
@@ -92,9 +187,16 @@ spec:
                         secretKeyRef:
                           name: victoria-backup-r2
                           key: S3_ENDPOINT
+                    # The bucket was hardcoded above while this key was synced
+                    # and never read. One source now: Vault platform/victoria-backup.
+                    - name: BUCKET
+                      valueFrom:
+                        secretKeyRef:
+                          name: victoria-backup-r2
+                          key: BUCKET
                   volumeMounts:
                     - name: data
-                      mountPath: /storage
+                      mountPath: /victoria-metrics-data
                   resources:
                     requests:
                       cpu: 10m
@@ -388,6 +490,51 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlTelegramCanary.*"
+                  # seerrsense's ChatGPT plugin-directory review: a reviewer
+                  # connecting, or a tool failing on them, is news for the
+                  # operator and nothing mctl-agent can act on — so Telegram
+                  # only, no ticket. Prefix match for the same reason as the
+                  # canary route above. Both alerts live in
+                  # vm-rules/seerrsense-alerts.yaml; remove this route together
+                  # with that file once the listing is published and the
+                  # informational alert has done its job.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "SeerrSense.*"
+                  # The lifecycle ownership rollout (ADR-010 §12,
+                  # mctlhq/.github#57). Telegram only, no ticket, and the
+                  # routing is load-bearing rather than a preference:
+                  # LifecycleShadowDangerousDivergence is the soak's STOP
+                  # condition, and the remedy is a human setting
+                  # LIFECYCLE_ROLLOUT_MODE back to off. Left unrouted these
+                  # fall through to the root mctl-agent receiver — i.e. the
+                  # stop signal for a rollout would be delivered only to the
+                  # system being rolled out, which could open a ticket against
+                  # itself and notify nobody.
+                  #
+                  # Prefix match for the same reason as the two routes above:
+                  # the defect is "a rollout alert defaults to agent-only", not
+                  # "these three alertnames are unrouted", and an enumeration
+                  # would let the next alert added to the VMRule reintroduce it
+                  # silently. Remove this route when the rollout finishes and
+                  # vm-rules/lifecycle-rollout-alerts.yaml goes with it.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "Lifecycle.*"
+                  # Implementation admission (mctl-agents#395, #1285). Telegram
+                  # only, no ticket: the alerts in
+                  # vm-rules/mctl-agents-worker-alerts.yaml's admission group
+                  # each end in a values edit — raising N, restoring the
+                  # single-replica worker, or freeing a wedged slot — which
+                  # mctl-agent cannot make.
+                  # Left unrouted they would fall through to the root
+                  # mctl-agent receiver like the ADR-008 worker alerts do
+                  # today. Prefix match, for the same reason as the routes
+                  # above: the next admission alert must not default to
+                  # agent-only.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "MctlAgentsImplement.*"
                   # Platform/infra Applications (projects default + platform)
                   # also page a human, in ADDITION to mctl-agent — hence
                   # continue: true, which lets the catch-all route below still
@@ -479,6 +626,22 @@ spec:
                   # does not re-enable the root default receiver, which fires
                   # only when no child route matched at all.
                   #
+                  # MctlAgentClaudeUsageLimit joins the two above for the
+                  # same reason and in the same two-part shape: it fires when
+                  # the worker's dedicated Claude credential pool is
+                  # exhausted, and Worker.Loop is sequential, so every
+                  # subsequent job hits the same wall until the quota window
+                  # resets. Leaving it agent-only would ask a stopped pipeline
+                  # to report that it has stopped.
+                  #
+                  # Its two siblings from mctl-telegram#589 —
+                  # MctlAgentPolicyDenialRateHigh and MctlAgentJobCostHigh —
+                  # are deliberately NOT added. A high denial share or an
+                  # expensive job is a condition the agent can still triage:
+                  # jobs keep being claimed and completed, so the pipeline
+                  # reporting the problem is not the problem. That is the same
+                  # criterion applied below, not an oversight.
+                  #
                   # The other four alerts ported in mctl-telegram#555 —
                   # PoolNearCapacity, FloodWaitSpike, OAuthPendingStuck,
                   # BridgeDaemonsFlapping — are deliberately agent-only. They
@@ -495,7 +658,7 @@ spec:
                   - receiver: telegram
                     continue: true
                     matchers:
-                      - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck"
+                      - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
@@ -507,7 +670,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck"
+                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
               receivers:
                 - name: "null"
                 - name: mctl-agent
@@ -574,11 +737,22 @@ spec:
       targetRevision: main
       path: platform-gitops/infra-components/observability/pushgateway
 
+    # blackbox-exporter and the VMProbe objects that use it. This is the only
+    # component here that watches the platform from OUTSIDE its own ingress:
+    # the probes target public hostnames, so the path under test runs out
+    # through Cloudflare and back. Cloudflare cannot do this itself — Health
+    # Checks are Pro-and-up and every zone is on Free.
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/blackbox
+
   ignoreDifferences:
-    - group: operator.victoriametrics.com
-      kind: VMSingle
-      jsonPointers:
-        - /spec/extraContainers
+    # Removed 2026-09-10: an ignoreDifferences entry on VMSingle
+    # /spec/extraContainers. It told ArgoCD not to reconcile the field the
+    # vmbackup sidecar was being set through — so even once the values key was
+    # corrected, the sidecar would have rendered in git and never reached the
+    # cluster. The field does not exist in the CRD either (the container list
+    # is /spec/containers), so the entry protected nothing. See #1071.
     # The victoria-metrics-operator subchart ships a `pre-delete` Helm hook
     # ServiceAccount (cleanup-hook). ArgoCD applies it once but, being a
     # pre-delete hook, never re-applies it on a normal sync — so when the
@@ -621,13 +795,21 @@ spec:
       - ServerSideApply=true
       - RespectIgnoreDifferences=true
       # VictoriaMetrics operator CRDs (VMSingle, VMAlert, ...) declare an
-      # incomplete schema that omits some pass-through fields like
-      # `VMSingle.spec.extraContainers`. Once cluster-wide
-      # `controller.diff.server.side: "true"` is set, ArgoCD's SSA
-      # dry-run rejects the diff with `failed to create typed patch
-      # object: .spec.extraContainers: field not declared in schema` and
-      # the app stays Sync=Unknown. Opt this app out so it falls back to
-      # the legacy client-side diff.
+      # incomplete schema that omits some pass-through fields. Once cluster-wide
+      # `controller.diff.server.side: "true"` is set, ArgoCD's SSA dry-run
+      # rejects the diff with `field not declared in schema` and the app stays
+      # Sync=Unknown. Opt this app out so it falls back to the legacy
+      # client-side diff.
+      #
+      # The field originally named here was `VMSingle.spec.extraContainers`,
+      # and it is gone as of #1071 — it was never a real CRD field, which is
+      # exactly why the SSA dry-run rejected it. So the specific cause this
+      # opt-out was added for no longer exists. It is kept anyway rather than
+      # removed in the same change: whether any OTHER pass-through field in
+      # this app still trips the dry-run can only be established by turning it
+      # back on and watching, and doing that while also rewiring the backup
+      # sidecar would confuse two failures into one. Worth revisiting on its
+      # own.
       - ServerSideDiff=false
     retry:
       limit: 5

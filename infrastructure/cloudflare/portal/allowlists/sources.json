@@ -1,0 +1,47 @@
+{
+  "$comment": "Provenance of each vendored copy. sha is the owning repo's commit the content was read at: for an entry written by .github/workflows/portal-allowlist-vendor.yml that is the dispatching push (the caller's github.sha, on a push that changed docs/portal-allowlist.json); for the initial vendoring (#1380) it was the most recent commit touching that file. scripts/validate-portal-allowlists.py --vendor-check compares the vendored file's CONTENT against this sha and against main nightly in cloudflare-drift.yml, so both definitions check the same thing; the vendor workflow is the only thing that updates an entry.",
+  "servers": {
+    "alice": {
+      "repo": "mctlhq/mctl-alice",
+      "path": "docs/portal-allowlist.json",
+      "ref": "main",
+      "sha": "6ee023f9c1627e9b9a445fa5b02aaf63fff94e5d",
+      "vendored_at": "2026-09-25T17:30:54Z"
+    },
+    "api": {
+      "repo": "mctlhq/mctl-api",
+      "path": "docs/portal-allowlist.json",
+      "ref": "main",
+      "sha": "cdddd5297cad176a65a9f62dffd5cce86f3d64da",
+      "vendored_at": "2026-09-25T12:34:18Z"
+    },
+    "coolify": {
+      "repo": "mctlhq/mctl-coolify-mcp",
+      "path": "docs/portal-allowlist.json",
+      "ref": "main",
+      "sha": "8ed6a1be0ee1d36f2c4d8dcec1e99dd5801fd541",
+      "vendored_at": "2026-09-25T12:35:47Z"
+    },
+    "projects": {
+      "repo": "mctlhq/projects-mcp",
+      "path": "docs/portal-allowlist.json",
+      "ref": "main",
+      "sha": "83ed6ee90027d89cd7bc0792897fe688c45836c1",
+      "vendored_at": "2026-09-25T12:36:43Z"
+    },
+    "seerrsense": {
+      "repo": "mctlhq/seerrsense",
+      "path": "docs/portal-allowlist.json",
+      "ref": "main",
+      "sha": "554d2ee22f04260343abf093d0c83207f390ce6d",
+      "vendored_at": "2026-09-25T12:34:20Z"
+    },
+    "tg": {
+      "repo": "mctlhq/mctl-telegram",
+      "path": "docs/portal-allowlist.json",
+      "ref": "main",
+      "sha": "94981332806ae233ed000f8ce34f703b5499ebde",
+      "vendored_at": "2026-09-25T12:32:15Z"
+    }
+  }
+}

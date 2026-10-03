@@ -1,0 +1,139 @@
+{
+  "_comment": "Deliberately poisoned OTLP/JSON fixture for issue-903 (mctl-gitops). Every value here is fabricated and syntactically shaped to match one pattern in the otel-collector's committed `redaction` processor config (platform-gitops/bootstrap/templates/observability/otel-collector.yaml) -- none of it is a real credential, prompt or tool argument. tests/test_devloop_trace_fixture.py (T4) asserts each of gen_ai.prompt.0.content, mcp.tool.arguments, http.request.header.authorization and mctl.artifact.note is matched by a pattern actually present in the collector config, so this fixture and the block lists cannot silently drift apart. Do not replace the fabricated token with a real one for 'realism' -- that is the one thing this file must never contain.",
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "mctl-agents"
+            }
+          },
+          {
+            "key": "service.namespace",
+            "value": {
+              "stringValue": "argo-workflows"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "mctl.devloop",
+            "version": "1.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "d845d1b21ff147fbad176494c35319a4",
+              "spanId": "d4b4209508849cc9",
+              "name": "devloop.run",
+              "kind": 1,
+              "startTimeUnixNano": "1758264000000000000",
+              "endTimeUnixNano": "1758264002000000000",
+              "attributes": [
+                {
+                  "key": "mctl.execution_id",
+                  "value": {
+                    "stringValue": "exec-poisoned-redaction-fixture"
+                  }
+                },
+                {
+                  "key": "mctl.outcome",
+                  "value": {
+                    "stringValue": "merged"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              }
+            },
+            {
+              "traceId": "d845d1b21ff147fbad176494c35319a4",
+              "spanId": "a380bdd4e8b00c9d",
+              "parentSpanId": "d4b4209508849cc9",
+              "name": "gen_ai.chat",
+              "kind": 3,
+              "startTimeUnixNano": "1758264000100000000",
+              "endTimeUnixNano": "1758264000900000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-sonnet-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt.0.content",
+                  "value": {
+                    "stringValue": "FABRICATED, NOT A REAL PROMPT -- exists only to exercise the redaction processor's gen_ai.prompt.* block pattern."
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "d845d1b21ff147fbad176494c35319a4",
+              "spanId": "f13e5b2b874054be",
+              "parentSpanId": "d4b4209508849cc9",
+              "name": "mcp.tool.call",
+              "kind": 3,
+              "startTimeUnixNano": "1758264000950000000",
+              "endTimeUnixNano": "1758264001200000000",
+              "attributes": [
+                {
+                  "key": "mcp.tool.name",
+                  "value": {
+                    "stringValue": "Bash"
+                  }
+                },
+                {
+                  "key": "mcp.tool.arguments",
+                  "value": {
+                    "stringValue": "FABRICATED, NOT REAL TOOL ARGUMENTS -- exists only to exercise the redaction processor's mcp.tool.arguments block pattern."
+                  }
+                },
+                {
+                  "key": "mctl.artifact.note",
+                  "value": {
+                    "stringValue": "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "d845d1b21ff147fbad176494c35319a4",
+              "spanId": "2546e254bc0a958b",
+              "parentSpanId": "d4b4209508849cc9",
+              "name": "github.request",
+              "kind": 3,
+              "startTimeUnixNano": "1758264001250000000",
+              "endTimeUnixNano": "1758264001500000000",
+              "attributes": [
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "GET"
+                  }
+                },
+                {
+                  "key": "http.request.header.authorization",
+                  "value": {
+                    "stringValue": "FABRICATED, NOT A REAL TOKEN -- Bearer fabricated-not-a-real-token-shape-only"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

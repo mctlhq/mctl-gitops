@@ -1,6 +1,7 @@
 # GitHub-first implementer PR lifecycle
 
-Status: phase A verified; awaiting backlog-decision acceptance
+Status: phase A verified; phase B steps 1-3 done, steps 4-5 superseded
+(see the notes inline). All 12 backlog PRs reached a terminal state.
 
 ## Problem
 
@@ -111,8 +112,17 @@ After the backlog report is accepted:
 2. Rebase and re-review #71 and #584 without re-running Tier 2.
 3. Merge #596 and #598 after rechecking their exact head SHA and required
    checks.
-4. Change only the mctl-gitops steward entry to `merge_mode=when-green`.
-5. Resume the implementer cron with `max_proposals=1`.
+4. ~~Change only the mctl-gitops steward entry to `merge_mode=when-green`.~~
+   **Decided the other way.** `mctl-gitops` sits in
+   `SHEPHERD_FIX_ONLY_SERVICES` (cwft-mctl-agents-shepherd.yaml), which
+   caps it at fix-only; nothing auto-merges this repo.
+5. ~~Resume the implementer cron with `max_proposals=1`.~~ **Superseded.**
+   Temporal took over intake before this step was reached: the DevLoop
+   submits this CWFT on every approved proposal, so a scanning cron would
+   be a second, redundant intake for the same `accepted` proposals — the
+   duplicate work and quota burn named in "Problem" above. The
+   CronWorkflow was suspended and has now been deleted;
+   `max_proposals=1` survives as the CWFT's own default.
 
 The final merge gate is exact head SHA, approved review, green required checks,
 no P1/P2 findings and no conflict. Roll back by returning `merge_mode` to

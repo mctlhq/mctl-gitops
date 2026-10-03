@@ -1,0 +1,24 @@
+status: rejected
+updated_at: '2026-09-22T15:08:37Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-telegram
+  issue: 620
+  url: https://github.com/mctlhq/mctl-telegram/issues/620
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-11T06:31:58Z'
+attempt:
+  id: 69fd41ea-a906-4921-a4b4-1e7cf93b8613
+  started_at: '2026-09-11T07:59:49Z'
+  expires_at: '2026-09-11T10:09:49Z'
+  finished_at: '2026-09-11T08:27:19Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/627
+github:
+  state: closed
+  head_sha: 0a5058299911631cdeb4c2f6c56ab2227a35b229
+  observed_at: '2026-09-22T15:08:37Z'
+notes: PR was closed without merging.

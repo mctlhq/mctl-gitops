@@ -1,0 +1,118 @@
+# Alerts on the otel-collector traces gateway (issue #902).
+#
+# These watch the gateway itself, not any producer: mctlhq/mctl-agent#38 and
+# mctlhq/mctl-agents#195 (the span producers) have not shipped yet, so there is
+# nothing upstream to alert on. What matters here is whether the pipeline this
+# proposal deploys is doing its job -- accepting spans, not refusing them under
+# memory pressure, and successfully exporting them once a backend is
+# configured.
+#
+# Every rule carries mctl_agent_self: "true" so the AlertManager route in
+# bootstrap/templates/observability/monitoring.yaml drops it before it reaches
+# the mctl-agent webhook receiver -- without that label these alerts would open
+# incidents against the platform's own collector.
+#
+# INVARIANT: an `increase(...[W])` lookback must be SHORTER than the rule's
+# `for: H`, never longer. With W > H a single scrape's worth of increase keeps
+# the expression true for the whole window, so the hold is guaranteed to pass
+# and the alert fires for a spike that is already over -- the hold stops being
+# a hold. These rules shipped at W=15m / H=5m and are now W=2m / H=5m, so the
+# condition has to persist across several evaluations before it pages.
+# tests/test_otel_collector_alert_windows.py enforces this for every rule in
+# this file.
+#
+# job="otel-collector" assumes the VictoriaMetrics operator's default
+# behaviour for a VMServiceScrape with no explicit jobLabel: the job label is
+# the scraped Service's metadata.name (infra-components/observability/otel-collector/servicescrape.yaml),
+# which is "otel-collector" (fullnameOverride).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: otel-collector-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  groups:
+    - name: otel-collector.pipeline
+      rules:
+        - alert: OtelCollectorDown
+          # Both halves are needed and they catch different outages. `up == 0`
+          # is a target vmagent can still reach but cannot scrape. `absent(up)`
+          # is the target gone from discovery altogether -- both replicas
+          # failing readiness drops them from the Service's Endpoints, vmagent
+          # stops scraping, and the series goes stale rather than reporting 0,
+          # so `up == 0` alone stays silent through the worst case. It is also
+          # what fires if the metrics port is ever blocked again (see the
+          # second ingress rule in
+          # infra-components/observability/otel-collector/networkpolicy.yaml).
+          #
+          # 5m rides out a single rolling-update pod restart without paging.
+          expr: absent(up{job="otel-collector"}) or up{job="otel-collector"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: "otel-collector is not reporting"
+            description: >-
+              vmagent has had no successful scrape of otel-collector for 5
+              minutes -- either a reachable instance is failing its scrape, or
+              the target has disappeared from discovery entirely. Traces sent to
+              otel-collector.monitoring.svc.cluster.local are being refused or
+              dropped for as long as this fires. Check
+              `kubectl get pods -n monitoring -l app.kubernetes.io/name=opentelemetry-collector`.
+
+        - alert: OtelCollectorRefusedSpans
+          # The memory_limiter backpressure mechanism working as designed still
+          # means spans are being lost, so this is worth knowing about even
+          # though it is not itself a crash. See docs/runbooks/otel-collector.md
+          # for the sizing and how to raise it.
+          expr: increase(otelcol_receiver_refused_spans[2m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: "otel-collector is refusing spans"
+            description: >-
+              otelcol_receiver_refused_spans has been increasing on
+              {{ $labels.instance }} continuously for 5 minutes. This is the
+              memory_limiter processor rejecting incoming spans rather than
+              letting the pod OOM -- see docs/runbooks/otel-collector.md for
+              the current sizing and whether it needs raising.
+
+        - alert: OtelCollectorExportFailures
+          expr: increase(otelcol_exporter_send_failed_spans[2m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: "otel-collector is failing to export spans"
+            description: >-
+              otelcol_exporter_send_failed_spans has been increasing on
+              {{ $labels.instance }} ({{ $labels.exporter }}) continuously for
+              5 minutes. The debug exporter does not fail this way, so a real
+              backend is configured and refusing or unreachable -- check
+              otelCollector.backendEndpoint and the queue via
+              OtelCollectorQueueNearFull.
+
+        - alert: OtelCollectorQueueNearFull
+          # Only meaningful once otelCollector.backendEndpoint is set -- the
+          # otlp/backend exporter (and therefore this queue) does not exist
+          # otherwise, so the expression has no series to evaluate in phase 1.
+          expr: otelcol_exporter_queue_size / otelcol_exporter_queue_capacity > 0.8
+          for: 5m
+          labels:
+            severity: warning
+            mctl_agent_self: "true"
+          annotations:
+            summary: "otel-collector export queue is nearly full"
+            description: >-
+              The {{ $labels.exporter }} sending_queue on
+              {{ $labels.instance }} is over 80% full. Once it fills, new
+              batches are dropped rather than queued (see
+              docs/runbooks/otel-collector.md). This almost always means the
+              backend is slow or unreachable -- check
+              OtelCollectorExportFailures.

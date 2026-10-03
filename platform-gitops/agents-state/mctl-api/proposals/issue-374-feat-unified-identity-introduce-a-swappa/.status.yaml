@@ -1,0 +1,49 @@
+status: merged
+updated_at: '2026-09-27T15:49:40Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-61b8e11d375d92c2
+  trace_id: 4d958c2dd8b9872a1a74247870ff0781
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 374
+  url: https://github.com/mctlhq/mctl-api/issues/374
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-844ccc2b70b0317a
+  content_hash: sha256:844ccc2b70b0317a4a01d2bf6d77b0c4665b03936dd46a41caa10ff5749f5bd5
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-26T23:36:56Z'
+attempt:
+  id: 58deb16bf11c3d0b2232d0e8b824fa98ab8e4c9047ac57b243d9e9130737b2f1
+  started_at: '2026-09-27T00:02:08Z'
+  expires_at: '2026-09-27T02:12:08Z'
+  finished_at: '2026-09-27T00:38:10Z'
+pr: https://github.com/mctlhq/mctl-api/pull/410
+ci_blockers_head: 6870b55ea1c65ee064fbb338a25a7fb1be7d94c8
+ci_blockers:
+- validate / lint
+notes: 'The platform lost the implementer''s work 3 time(s) in a row (implementer
+  follow-up exited non-zero (51) for mctl-api/issue-374-feat-unified-identity-introduce-a-swappa).
+  This is a harness defect, not a problem with the proposal — review_attempts was
+  never charged. Human triage required; see mctl-agents#366. Reason: The implementer
+  sub-agent made uncommitted edits to internal/auth/federation_config.go, internal/auth/provider_oidc.go,
+  internal/auth/federation_test.go, docs/federation.md, and cmd/api/main.go addressing
+  the P1 (admins exemption over-stripped for the documented production canary), P2
+  (docs/federation.md shim-replacement procedure) and P2 (missing BuildFederationRegistry
+  test) findings, and reported go build/go vet/go test ./internal/auth/... passing
+  before it ran out of budget. However, this orchestrator run''s own execution budget
+  was exhausted immediately afterward (denied before even ''git s'
+github:
+  state: merged
+  head_sha: 58d4d3254f0e0e56d1239d28faa158bd0a1056ea
+  observed_at: '2026-09-27T15:49:40Z'
+merged_at: '2026-09-27T15:49:40Z'
+merge_commit: 4ae298cd4cb4574da58ea92837982b7a944d3b39

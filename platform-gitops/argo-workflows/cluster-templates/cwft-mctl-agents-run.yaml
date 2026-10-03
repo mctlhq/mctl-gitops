@@ -73,7 +73,7 @@ spec:
         # Required only when mode=single-service. Validated by the Python
         # orchestrator against config/settings.py SERVICES (exit 1 on mismatch).
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.40.0
+        value: ghcr.io/mctlhq/mctl-agents:1.64.1
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -468,7 +468,7 @@ spec:
           # INCIDENT_RESPONDER_MODEL is deliberately NOT set: with no override
           # run_incident_responder.py:53 falls back to SERVICE_AGENT_MODEL,
           # which model-policy resolves through task `service_agent` ->
-          # profile `balanced` -> claude-sonnet-5. The env hook stays in the
+          # profile `balanced` -> claude-sonnet-5-5. The env hook stays in the
           # code as an escape hatch; putting a value here is what took the
           # responder off policy.
           #

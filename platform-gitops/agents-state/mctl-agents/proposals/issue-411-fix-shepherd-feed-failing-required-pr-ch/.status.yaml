@@ -1,0 +1,25 @@
+status: merged
+updated_at: '2026-09-19T23:49:27Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 411
+  url: https://github.com/mctlhq/mctl-agents/issues/411
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-19T20:53:48Z'
+attempt:
+  id: b048ddd0a52682927a5e97f38f45398971bd66a2a28b56a4e787ff59546775d1
+  started_at: '2026-09-19T21:35:42Z'
+  expires_at: '2026-09-19T23:45:42Z'
+  finished_at: '2026-09-19T22:11:25Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/419
+github:
+  state: merged
+  head_sha: a8bcc3b87f75b1f67dba2bb6775c75e3ecd59fb0
+  observed_at: '2026-09-19T23:49:27Z'
+merged_at: '2026-09-19T23:49:27Z'
+merge_commit: 44af8fb28bc023c28995da1d32a2a482fe8ef660

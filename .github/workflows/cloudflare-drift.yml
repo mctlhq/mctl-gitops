@@ -14,11 +14,9 @@ on:
 
 permissions:
   contents: read
-
-concurrency:
-  # Never race an apply or another drift run for the same state lock.
-  group: cloudflare-tofu
-  cancel-in-progress: false
+  # Read-only: the vendored-allowlist step asks whether a lagging server
+  # already has an open bump PR before paging anyone.
+  pull-requests: read
 
 jobs:
   discover:
@@ -42,16 +40,48 @@ jobs:
           # versions.tf.json is included because OpenTofu loads JSON
           # configuration too, so a root written that way would otherwise be
           # invisible to discovery while the check reported success.
+          # A root on local state has no remote state to compare against: on a
+          # fresh runner its plan is computed from nothing, so it reports the
+          # whole root as pending work every single night. Measured on the first
+          # dispatch after the gate landed — zones/mctl-ru returned
+          # "Plan: 2 to import" and exit 2, which is drift's failure signal.
+          # Watching a root that cannot be watched is not a safety property; it
+          # is a nightly false alarm that trains people to ignore the real one.
+          # These roots are listed, with their reason, in .local-state-roots.
+          .github/scripts/cloudflare-local-state-roots.sh > "$RUNNER_TEMP/local-state-roots"
+          if [ -s "$RUNNER_TEMP/local-state-roots" ]; then
+            echo "not watched (local state, see .local-state-roots):"
+            cat "$RUNNER_TEMP/local-state-roots"
+          fi
           if [ -d infrastructure/cloudflare ]; then
             # The prune pattern has to match BELOW modules/, not modules/
             # itself: -mindepth 2 stops find from applying the expression to
             # depth-1 entries at all, so pruning the directory by name never
             # fires. Measured — the module was still discovered as a root.
-            roots=$(find infrastructure/cloudflare -mindepth 2 \
+            found=$(find infrastructure/cloudflare -mindepth 2 \
                       -path 'infrastructure/cloudflare/modules/*' -prune -o \
                       \( -name versions.tf -o -name versions.tf.json \) -print \
-                    | sed 's#/[^/]*$##' | sort -u \
-                    | jq -R -s -c 'split("\n") | map(select(length > 0))')
+                    | sed 's#/[^/]*$##' | sort -u)
+            # `|| true` on its own line, not inside the pipeline: grep exits 1
+            # when every root is excluded, and under pipefail that would kill
+            # discovery and fail the run — the same shape as find exiting 1 on a
+            # missing directory. Excluding everything is a legitimate state.
+            # An entry that matches no discovered root excepts nothing, and
+            # silently: drift would go on failing every night on the root the
+            # entry was meant to cover. The list is short and hand-edited, so a
+            # non-matching line is either a typo or stale — both worth stopping
+            # for, and both fixed by one edit.
+            while IFS= read -r excluded; do
+              [ -n "$excluded" ] || continue
+              grep -qxF -- "$excluded" <<< "$found" || {
+                echo "::error::.local-state-roots lists '$excluded', which is not a discovered root"
+                echo "discovered roots:"; printf '%s\n' "$found"
+                exit 1
+              }
+            done < "$RUNNER_TEMP/local-state-roots"
+            kept=$(printf '%s\n' "$found" \
+                   | grep -vxF -f "$RUNNER_TEMP/local-state-roots") || true
+            roots=$(printf '%s\n' "$kept" | jq -R -s -c 'split("\n") | map(select(length > 0))')
           else
             roots='[]'
           fi
@@ -67,17 +97,68 @@ jobs:
       fail-fast: false
       matrix:
         root: ${{ fromJson(needs.discover.outputs.roots) }}
+
+    # Per root, and deliberately NOT the group cloudflare-apply.yml uses.
+    #
+    # This was one workflow-level group shared with apply until that workflow
+    # grew a human approval step. A run holds its group while waiting for a
+    # reviewer — up to 30 days — and GitHub replaces whatever is pending behind
+    # it, so each nightly run cancelled the previous pending one and a root
+    # under an unapproved apply got no drift detection at all for the wait.
+    #
+    # So drift and apply no longer serialise against each other. What keeps the
+    # state consistent is OpenTofu's own lock, which apply takes and this job
+    # does not, plus atomic R2 object writes: a plan reading mid-apply sees the
+    # old state or the new one, never a torn one. The cost is a possible
+    # spurious drift alert during the minutes an apply runs, which fails closed.
+    #
+    # Per root here still keeps two drift runs for the same root from overlapping.
+    concurrency:
+      group: cloudflare-tofu-${{ matrix.root }}
+      cancel-in-progress: false
+
     defaults:
       run:
         working-directory: ${{ matrix.root }}
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Per root, because one credential no longer covers them all. The
+      # repository-wide read token is zone-scoped ("read-only across the four
+      # zones", All zones, no account permission -- checked against the live
+      # token list), and infrastructure/cloudflare/portal describes an
+      # account-level surface, so it would answer 10000 Authentication error
+      # there on every run and never once compare anything.
+      #
+      # CF_PORTAL_READ_TOKEN is Account -> MCP Portals -> Read on this account
+      # alone: verified at mint time to read a server, to be refused on a PUT,
+      # and to see zero zones. An expression rather than a lookup because
+      # secrets cannot be indexed by a variable -- same explicit chain as
+      # cloudflare-apply.yml, and it is also the allowlist.
+      #
+      # infrastructure/cloudflare/account is account-level for the same reason
+      # and now holds an Access application, which the zone credential cannot
+      # even read: it answers 1010 auth.forbidden on the refresh, so the root
+      # fails before it can compare anything. CF_ACCOUNT_READ_TOKEN is
+      # Account -> Access: Apps and Policies -> Read on this account alone.
+      # Absent, the chain falls back to the zone credential and that root keeps
+      # failing visibly rather than being skipped.
+      CLOUDFLARE_API_TOKEN: >-
+        ${{ matrix.root == 'infrastructure/cloudflare/portal'
+         && secrets.CF_PORTAL_READ_TOKEN
+         || matrix.root == 'infrastructure/cloudflare/account'
+         && secrets.CF_ACCOUNT_READ_TOKEN
+         || secrets.CLOUDFLARE_API_TOKEN }}
       # Drift only reads. It uses the same Object-Read-only state credential as
       # the plan workflow, which is why it also passes -lock=false: taking the
-      # lock would be a write this credential cannot perform. Safe while nothing
-      # applies from CI — when an apply job exists, it will need the writable
-      # credential and real locking, and this job should be revisited so the two
-      # cannot read a state mid-write.
+      # lock would be a write this credential cannot perform.
+      #
+      # An apply job now exists (cloudflare-apply.yml), and this job was
+      # deliberately NOT changed to exclude it — see the concurrency comment
+      # above. Drift and apply may overlap: apply takes OpenTofu's lock and this
+      # job takes none, and R2 object writes are atomic, so a plan reading
+      # mid-apply sees the old state or the new one, never a torn one. The cost
+      # is a possible spurious drift alert during the minutes an apply runs,
+      # which fails closed. The alternative was blocking the detector for the
+      # length of a human approval, which is worse.
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
     steps:
@@ -137,6 +218,17 @@ jobs:
       # -detailed-exitcode: 0 = no changes, 1 = error, 2 = drift.
       # Both 1 and 2 are failures here, but they mean different things, so the
       # summary says which one happened.
+      #
+      # Exit 0 has two meanings, and only one of them is coverage. OpenTofu
+      # reports drift for resources it has in state, so a root whose state is
+      # empty cannot produce exit 2 no matter what happens in Cloudflare — it
+      # reports "in sync" forever, which is a green check with no subject.
+      # That is not hypothetical: infrastructure/cloudflare/account/ held no
+      # resources while Access changed materially underneath it (an app
+      # repointed, a service token and a non-identity policy added,
+      # allowed_idps pinned from empty to [Google]), and every scheduled run
+      # said success. Exit 0 is therefore split below by whether the root
+      # describes anything.
       - name: Plan
         id: plan
         # Same reason as in cloudflare-plan.yml: never expand a discovered path
@@ -150,8 +242,45 @@ jobs:
           code=${PIPESTATUS[0]}
           set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
+
+          # Counted only for exit 0, where the distinction matters. `tofu state
+          # list` on an empty state prints nothing and exits 0, so an empty
+          # count is the answer rather than an error — but its failure is still
+          # caught, because an unreadable state is not the same as an empty one
+          # and must not be reported as either.
+          # `grep -c .` exits 1 when it counts nothing, so it cannot be the
+          # command whose status decides whether the count succeeded — an empty
+          # state would look like a failed lookup, which is the one distinction
+          # this block exists to make. The lookup's status is taken from
+          # `tofu state list` alone; the counting is separate and always
+          # succeeds.
+          resources=""
+          if [ "$code" = "0" ]; then
+            if state_list=$(tofu state list 2>/dev/null); then
+              resources=$(printf '%s' "$state_list" | grep -c . || true)
+            fi
+          fi
+
           case "$code" in
-            0) echo "### \`$ROOT\` — in sync" >> "$GITHUB_STEP_SUMMARY" ;;
+            0) if [ "$resources" = "0" ]; then
+                 # Deliberately not a failure. account/ will hold zero
+                 # resources until #1088 imports Access, and a scheduled
+                 # workflow that is red every night is one people stop reading
+                 # — which is the same disease as a green check nobody can
+                 # trust. It is loud in the annotations and in the summary, and
+                 # should be tightened to a failure once no root is legitimately
+                 # empty.
+                 echo "::warning title=Cloudflare drift::\`$ROOT\` describes no resources — this run watched nothing"
+                 { echo "### \`$ROOT\` — DESCRIBES NOTHING";
+                   echo;
+                   echo "> [!WARNING]";
+                   echo "> This root's state holds no resources, so drift cannot report on it.";
+                   echo "> \`No changes\` here means the root is empty, not that Cloudflare matches Git."; } >> "$GITHUB_STEP_SUMMARY"
+               elif [ -z "$resources" ]; then
+                 echo "### \`$ROOT\` — in sync (resource count unavailable)" >> "$GITHUB_STEP_SUMMARY"
+               else
+                 echo "### \`$ROOT\` — in sync ($resources resources)" >> "$GITHUB_STEP_SUMMARY"
+               fi ;;
             2) { echo "### \`$ROOT\` — DRIFT";
                  echo; echo '```terraform'; cat plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
             *) { echo "### \`$ROOT\` — plan failed (exit $code)";
@@ -160,6 +289,267 @@ jobs:
                  echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
           esac
           rm -f plan.txt
+          exit "$code"
+
+      # The one field OpenTofu cannot watch. `auth_credentials` is write-only:
+      # the API accepts it and never returns it, so the provider keeps what was
+      # last applied in state and a refresh cannot correct it. Measured against
+      # a throwaway server on 2026-09-12 -- an out-of-band PUT changed the live
+      # scope and `tofu plan` stayed `no-op`. A clean plan above therefore says
+      # nothing about this attribute, which is exactly when it needs checking.
+      #
+      # Runs only when the plan was clean: a drifted or failed plan has already
+      # made this job red, and a second red says nothing new.
+      - name: Check the write-only OAuth registration
+        id: creds
+        if: success() && matrix.root == 'infrastructure/cloudflare/portal'
+        run: |
+          set -uo pipefail
+          # `set +e` explicitly, and it has to be a separate statement.
+          # GitHub Actions runs a `run:` block as `bash -e {0}`, so errexit is
+          # already on before the first line executes, and `set -uo pipefail`
+          # does NOT turn it off -- it only adds -u and pipefail. Written the
+          # short way, a failing selftest would still abort the step before
+          # `code` was written, which is precisely the bug the rest of this
+          # block exists to fix. Measured: under `bash -e`, a script whose
+          # first line is `set -uo pipefail` stops at the next failing
+          # command; with `set +e` after it, it continues.
+          set +e
+          # --selftest first, same reason as every other detector in this
+          # repository: one never seen to fire is not known to work.
+          #
+          # Its status is folded into the same `code`
+          # the rest of this step reports. Under `set -e` a failing selftest
+          # exited the step before `code` was ever written, so the Telegram
+          # alert fell through to the plan's exit code -- 0, since a clean
+          # plan is the only way this step runs at all -- and announced a
+          # drift alert with "exit code 0". A broken detector is reported as
+          # 2, "could not run", which is what it is.
+          "$GITHUB_WORKSPACE/scripts/portal-auth-credentials-drift.py" --selftest
+          selftest=$?
+          if [ "$selftest" -ne 0 ]; then
+            echo "code=2" >> "$GITHUB_OUTPUT"
+            { echo "### \`portal\` — the drift detector itself failed its selftest";
+              echo; echo "> It was not run against Cloudflare. Fix the detector."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 2
+          fi
+          # 2>&1 on the detector, not on the pipeline: every drift line and
+          # every `[2]` diagnosis goes to stderr, so a plain `| tee` captured
+          # an empty file and both failure branches below rendered an empty
+          # code block -- "someone changed it outside Git" without ever saying
+          # what changed.
+          tofu show -json \
+            | { "$GITHUB_WORKSPACE/scripts/portal-auth-credentials-drift.py" 2>&1; } \
+            | tee cred.txt
+          code=${PIPESTATUS[1]}
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) echo "### \`portal\` — OAuth registration in sync" >> "$GITHUB_STEP_SUMMARY" ;;
+            1) { echo "### \`portal\` — OAUTH REGISTRATION DRIFT";
+                 echo; echo '```'; cat cred.txt; echo '```';
+                 echo "> Someone changed it outside Git. \`tofu plan\` cannot see this field."; } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) { echo "### \`portal\` — registration check could not run (exit $code)";
+                 echo; echo '```'; cat cred.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          rm -f cred.txt
+          exit "$code"
+
+      # The portal's tool catalogue is a snapshot the portal never refreshes
+      # for a manual-OAuth upstream (mctlhq/.github#64): a tool added upstream
+      # stays invisible, and a changed output schema is validated by clients
+      # against the stale copy. `tools` is a computed attribute, so the plan
+      # above says nothing about it. This compares the snapshot with the
+      # allowlist each owning repository commits on main -- test-enforced there
+      # to equal what the server registers -- and flags closed stored schemas.
+      # Exit 1 means someone has to re-snapshot (recipe in the portal README).
+      #
+      # Runs after the registration check regardless of its result: the two
+      # fields drift independently, and a red registration must not hide a
+      # stale catalogue. `always()` would also run on a cancelled job, so the
+      # condition is spelled out; `steps.plan.conclusion` is what gates it, the
+      # same clean-plan requirement the registration step expresses via
+      # success().
+      # One upstream, mctlhq/projects-mcp, is private on purpose, so its
+      # allowlist cannot be read from raw.githubusercontent.com the way the
+      # three public ones are. The mctl-agents App is installed on every
+      # repository in the org, and contents:read is all the fetch needs;
+      # GITHUB_TOKEN would not do, being scoped to this repository.
+      - name: Generate a read token for the private upstreams
+        id: allowlist_token
+        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          # The one private upstream in PRIVATE_OWNERS, named rather than
+          # left open. Without `repositories:` the token carries contents
+          # read across every repository the App is installed on, which is
+          # all of them; this step reads one file in one repo. Widen only
+          # when a second private upstream is added there, and add the row
+          # to docs/runbooks/agents-app-secret-exposure.md when you do.
+          repositories: projects-mcp
+          permission-contents: read
+          permission-metadata: read
+
+      - name: Check the tool catalogue against the upstreams
+        id: catalogue
+        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        env:
+          # Read by scripts/portal-catalogue-drift.py for the private
+          # upstreams only; the public three are still fetched anonymously.
+          ALLOWLIST_TOKEN: ${{ steps.allowlist_token.outputs.token }}
+        run: |
+          set -uo pipefail
+          set +e
+          "$GITHUB_WORKSPACE/scripts/portal-catalogue-drift.py" --selftest
+          selftest=$?
+          if [ "$selftest" -ne 0 ]; then
+            echo "code=2" >> "$GITHUB_OUTPUT"
+            { echo "### \`portal\` — the catalogue drift detector itself failed its selftest";
+              echo; echo "> It was not run against Cloudflare. Fix the detector."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 2
+          fi
+          # PYTHONUNBUFFERED, because 2>&1 points both streams at one pipe and
+          # Python block-buffers stdout when it is not a tty: without it every
+          # "known stale:" line -- which the script prints FIRST, deliberately
+          # -- is held until exit and lands at the bottom of the captured
+          # block, detached from the section it qualifies.
+          PYTHONUNBUFFERED=1 tofu show -json \
+            | { PYTHONUNBUFFERED=1 "$GITHUB_WORKSPACE/scripts/portal-catalogue-drift.py" 2>&1; } \
+            | tee catalogue.txt
+          code=${PIPESTATUS[1]}
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) { echo "### \`portal\` — tool catalogue in sync with the upstreams";
+                 # The whole stdout, not a filtered slice. A passing run still
+                 # prints every waived finding — the difference between
+                 # "nothing is stale" and "nothing is stale that we have
+                 # written down" — and its last line carries each snapshot's
+                 # last_synced and tool count, which is the number this check
+                 # exists around and the only place a reader sees it. A
+                 # catalogue whose names match but whose snapshot is months
+                 # old passes by design; this is where that gets noticed.
+                 echo; echo '```'; cat catalogue.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+            1) { echo "### \`portal\` — TOOL CATALOGUE STALE";
+                 echo; echo '```'; cat catalogue.txt; echo '```';
+                 # main() returns 3 for a dead waiver, so this branch always
+                 # means a real finding -- but not always a re-snapshot: a
+                 # closed inputSchema may be deliberate upstream, and then the
+                 # block above says a waiver is the only way out.
+                 echo "> Re-snapshot per the recipe in infrastructure/cloudflare/portal/README.md — unless the block above says otherwise."; } >> "$GITHUB_STEP_SUMMARY" ;;
+            3) { echo "### \`portal\` — a catalogue waiver needs attention";
+                 echo; echo '```'; cat catalogue.txt; echo '```';
+                 # Its own status, not folded into 1. Two chores share it: a
+                 # waiver whose finding is gone, which is good news and a
+                 # deletion, and one that is merely wider than what fires,
+                 # where the finding is NOT gone and the edit is to its tool
+                 # list. Rendered as exit 1 either would have sent the on-call
+                 # through the re-snapshot recipe -- a server down and every
+                 # portal user re-authorizing -- for a text edit.
+                 echo "> Nothing is stale. The block above says whether to delete the waiver in \`scripts/portal-catalogue-drift.py\` or narrow it — deleting one that still covers a live finding sends the next run to the recipe. Do NOT re-snapshot."; } >> "$GITHUB_STEP_SUMMARY" ;;
+            4) { echo "### \`portal\` — AN UPSTREAM IS MISSING FROM THE PORTAL";
+                 echo; echo '```'; cat catalogue.txt; echo '```';
+                 # Not folded into 2. A whole server gone from production is
+                 # the loudest thing this check can find, and "the check could
+                 # not run" is the triage bucket people reach for last.
+                 echo "> A server this check expects is not mapped on the portal at all. Restore the mapping, or retire it from \`OWNERS\`."
+                 # Exit 4 outranks exit 1, so a night with both names only
+                 # this one. The script says in the block above when the
+                 # quieter finding also fired; repeat it under the heading,
+                 # which is what gets read first.
+                 grep -q 'which this exit status does not name' catalogue.txt \
+                   && echo "> Catalogue findings also fired tonight and this status does not name them — read the block above."
+                 true; } >> "$GITHUB_STEP_SUMMARY" ;;
+            5) { echo "### \`portal\` — committed catalogue lags the portal";
+                 echo; echo '```'; cat catalogue.txt; echo '```';
+                 # The portal is fine: a server re-synced and
+                 # allowlists/catalogue.json, which mcp-portal.tf builds
+                 # updated_tools from, was not updated. The portal root's plan
+                 # above is red for the same reason; this names it.
+                 echo "> Update \`infrastructure/cloudflare/portal/allowlists/catalogue.json\` in a PR (and the owning repo's allowlist, if a new tool has no decision yet). Do NOT re-snapshot."
+                 grep -q 'which this exit status does not name' catalogue.txt \
+                   && echo "> Other findings also fired tonight and this status does not name them — read the block above."
+                 true; } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) { echo "### \`portal\` — catalogue check could not run, or a server is serving no tools (exit $code)";
+                 echo; echo '```'; cat catalogue.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          rm -f catalogue.txt
+          exit "$code"
+
+      # The vendored allowlists against the repos that own them
+      # (mctlhq/mctl-gitops#1370 task 12). A bump PR is the only thing that
+      # may change allowlists/<id>.json; this notices a copy edited by hand
+      # here (tampered) and a bump that never arrived (lag). Same token as
+      # the catalogue step: projects-mcp is the one private owner.
+      - name: Check the vendored allowlists against their owning repos
+        id: vendor
+        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        env:
+          ALLOWLIST_TOKEN: ${{ steps.allowlist_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          set +e
+          "$GITHUB_WORKSPACE/scripts/validate-portal-allowlists.py" --vendor-check > vendor.txt 2>&1
+          code=$?
+          set -e
+          # A lag whose bump PR is already open is waiting on review (a
+          # widening sits red there by design until someone edits
+          # baseline.json), so it is reported, not paged -- but only when
+          # that PR carries exactly the owner's current file: its
+          # allowlists/<id>.json blob equals the blob of main's content that
+          # --vendor-check printed. A stale bump PR (the owner has moved on
+          # and the newer dispatch failed) does not silence the lag. Only
+          # when every lagging server has one.
+          waiting=""
+          if [ "$code" = 3 ]; then
+            pending=0; parsed=0
+            while read -r sid blob; do
+              parsed=$((parsed + 1))
+              found=0
+              for br in $(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 500 --json headRefName \
+                            --jq ".[].headRefName | select(test(\"^portal-allowlist/${sid}-[0-9a-f]{7}\$\"))" || true); do
+                pr_blob=$(gh api "repos/${GITHUB_REPOSITORY}/contents/infrastructure/cloudflare/portal/allowlists/${sid}.json?ref=${br}" --jq .sha 2>/dev/null || true)
+                if [ -n "$pr_blob" ] && [ "$pr_blob" = "$blob" ]; then found=1; fi
+              done
+              if [ "$found" = 1 ]; then waiting="$waiting $sid"; else pending=1; fi
+            done < <(sed -n 's/^\([a-z0-9-]*\): lags -- .* (blob \([0-9a-f]\{40\}\)).*/\1 \2/p' vendor.txt)
+            # Every lag line must have been parsed and matched. A server the
+            # check could not compare keeps the step red as undetermined
+            # (exit 2): a long-lived widening PR must not hide it.
+            if [ "$parsed" != "$(grep -c ': lags -- ' vendor.txt)" ]; then pending=1; fi
+            if [ "$pending" = 0 ] && [ -n "$waiting" ]; then
+              # The lag itself is not paged, but an undetermined server
+              # still is (exit 2), so say which of the two this run is.
+              if grep -q 'undetermined' vendor.txt; then
+                code=2
+                echo "bump PR open with the owner's current file for:${waiting}; that lag awaits review, but a server could not be compared (undetermined), so this run is still paged" >> vendor.txt
+              else
+                code=0
+                echo "bump PR open with the owner's current file for:${waiting}; awaiting review, not paged" >> vendor.txt
+              fi
+            else
+              waiting=""
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) if [ -n "$waiting" ]; then heading="a vendored allowlist lags; its bump PR is open, awaiting review"
+               else heading="vendored allowlists match their owning repos"; fi ;;
+            1) heading="A VENDORED ALLOWLIST WAS EDITED HERE (tampered)" ;;
+            3) heading="a vendored allowlist lags its owning repo's main" ;;
+            *) heading="vendored allowlist check could not run (exit $code)" ;;
+          esac
+          { echo "### \`portal\` — ${heading}"; echo; echo '```'; cat vendor.txt; echo '```'
+            case "$code" in
+              1) echo "> Restore the file from the sha in \`sources.json\`, or land the change in the owning repo so its bump PR carries it. Only a bump PR may edit \`allowlists/<id>.json\`." ;;
+              3) echo "> The owning repo's dispatch did not run or its bump PR is not merged. Dispatch \`portal-allowlist-vendor.yml\` by hand if needed." ;;
+            esac; } >> "$GITHUB_STEP_SUMMARY"
+          cat vendor.txt
+          rm -f vendor.txt
           exit "$code"
 
       - name: Notify Telegram
@@ -171,9 +561,26 @@ jobs:
           # HTML, not the default Markdown: root names are directory names, and
           # an unpaired _ in one of them makes Telegram reject the whole message
           # with a 400 — losing the drift alert exactly when it matters.
+          #
+          # One line per check, not a `||` chain picking the first. GitHub
+          # expressions short-circuit on the first truthy operand and a
+          # non-empty string is truthy, so a chain reported the registration
+          # failure and silently dropped the catalogue one whenever both were
+          # red — which is the single case the catalogue step's `!cancelled()`
+          # gating exists to surface. Each line renders its own check or
+          # nothing, and the plan line only when neither check spoke.
           format: html
           message: |
             <b>Cloudflare drift</b> — <code>${{ matrix.root }}</code>
-            Exit code <code>${{ steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion) }}</code> (2 = drift, 1 = plan error)
-            Cloudflare no longer matches Git, or the plan could not run.
+            ${{ steps.creds.outputs.code && steps.creds.outputs.code != '0'
+             && format('OAuth registration check exit <code>{0}</code> (1 = drifted, 2 = could not run). The plan was clean; this field is invisible to it.', steps.creds.outputs.code) || '' }}
+            ${{ steps.catalogue.outputs.code && steps.catalogue.outputs.code != '0'
+             && format('Tool catalogue check exit <code>{0}</code> (1 = stale, re-snapshot; 2 = could not run, or a server holds no tools at all and serves nothing; 3 = a waiver matches nothing or is wider than what fires, delete or narrow it; 4 = an upstream is missing from the portal; 5 = allowlists/catalogue.json lags the portal, update it in a PR). The plan was clean; the catalogue is invisible to it.', steps.catalogue.outputs.code) || '' }}
+            ${{ steps.vendor.outputs.code && steps.vendor.outputs.code != '0'
+             && format('Vendored allowlist check exit <code>{0}</code> (1 = a vendored copy was edited here, tampered; 3 = the owning repo has a newer allowlist not yet vendored; 2 = could not run).', steps.vendor.outputs.code) || '' }}
+            ${{ (steps.creds.outputs.code == '' || steps.creds.outputs.code == '0')
+             && (steps.catalogue.outputs.code == '' || steps.catalogue.outputs.code == '0')
+             && (steps.vendor.outputs.code == '' || steps.vendor.outputs.code == '0')
+             && format('Plan exit code <code>{0}</code> (2 = drift, 1 = plan error)', steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion)) || '' }}
+            Cloudflare no longer matches Git, or a check could not run.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

@@ -1,0 +1,21 @@
+status: merged
+updated_at: '2026-09-13T09:27:28Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 83
+  url: https://github.com/mctlhq/portfolio/issues/83
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-13T08:30:14Z'
+attempt:
+  id: 8af434d8-c4b3-4738-af2b-9bb7f8a8ef73
+  started_at: '2026-09-13T08:31:36Z'
+  expires_at: '2026-09-13T10:41:36Z'
+  finished_at: '2026-09-13T08:50:11Z'
+pr: https://github.com/mctlhq/portfolio/pull/84
+merged_at: '2026-09-13T09:27:28Z'
+merge_commit: e8dd3aa10a496f2f5308a4eb150f860a488a9f7a
