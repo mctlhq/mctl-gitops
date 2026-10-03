@@ -1,0 +1,72 @@
+# Project for tenant erpact: the ERPact copy (Frappe/ERPNext) whose manifests
+# live outside this public repository, in the private Forgejo repository
+# https://git.mctl.ai/erpact/mctl-apps — they carry customer hostnames and
+# are written to by ERPact's site deployer on every new site.
+#
+# That repository is writable by people and a service outside the platform
+# team, so this project is what keeps it from reaching anything but its own
+# namespace:
+#   - one source repository, one destination namespace;
+#   - no cluster-scoped objects;
+#   - an explicit namespaced kind list: no NetworkPolicy (the tenant chart
+#     owns them), no ResourceQuota/LimitRange (the tenant's own budget), no
+#     RBAC, no Applications (an Application in argocd could name another
+#     project and escape this one), no ExternalSecrets (one could name
+#     ClusterSecretStore vault-backend; erpact's own live in
+#     templates/erpact/externalsecrets.yaml);
+#   - Pods may only reference that namespace's own Secrets and run as its
+#     own ServiceAccount (mctl-external-manifests-secret-allowlist, added by
+#     #1517, which merges before this): everything else the
+#     reflector and the tenant chart put there stays out of reach.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: erpact
+  namespace: argocd
+  annotations:
+    # Before the repository secret (wave 1) and the Applications that name it.
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  description: ERPact copy (tenant erpact), manifests from git.mctl.ai/erpact/mctl-apps
+
+  sourceRepos:
+    - https://git.mctl.ai/erpact/mctl-apps.git
+
+  destinations:
+    - server: {{ .Values.spec.destination.server }}
+      namespace: erpact
+
+  clusterResourceWhitelist: []
+
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: apps
+      kind: Deployment
+    - group: apps
+      kind: StatefulSet
+    - group: batch
+      kind: Job
+    - group: batch
+      kind: CronJob
+    - group: networking.k8s.io
+      kind: Ingress
+
+  orphanedResources:
+    warn: true
+    ignore:
+      # Rendered by ESO, by the tenant chart and by templates/erpact/, not by
+      # these Applications.
+      - kind: Secret
+      - kind: ConfigMap
+      - kind: ServiceAccount
+      - group: external-secrets.io
+        kind: ExternalSecret
+      - group: networking.k8s.io
+        kind: NetworkPolicy

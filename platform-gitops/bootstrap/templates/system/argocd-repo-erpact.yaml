@@ -1,0 +1,44 @@
+# Read access for ArgoCD to the private Forgejo repository of the ERPact copy.
+# erpact-argocd is a Forgejo machine account in the org's read-only Readers
+# team, declared by the Forgejo reconciler (Vault platform/forgejo/reconcile).
+# `project: erpact` scopes the credential to that AppProject only.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: argocd-repo-erpact
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: argocd-repo-erpact-mctl-apps
+    creationPolicy: Owner
+    template:
+      metadata:
+        labels:
+          argocd.argoproj.io/secret-type: repository
+      data:
+        type: git
+        url: https://git.mctl.ai/erpact/mctl-apps.git
+        project: erpact
+        username: '{{ `{{ .username }}` }}'
+        password: '{{ `{{ .password }}` }}'
+  data:
+    - secretKey: username
+      remoteRef:
+        key: platform/argocd/erpact-forgejo
+        property: username
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
+    - secretKey: password
+      remoteRef:
+        key: platform/argocd/erpact-forgejo
+        property: password
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None

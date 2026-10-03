@@ -1,0 +1,12 @@
+# expect: may not carry grafana_* labels
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hijack-dashboard
+  namespace: erpact
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Internal
+data:
+  k: v

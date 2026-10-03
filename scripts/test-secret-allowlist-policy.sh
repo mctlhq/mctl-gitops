@@ -24,7 +24,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURES="$ROOT/tests/fixtures/secret-allowlist"
 POLICY=mctl-external-manifests
-POLICIES="mctl-external-manifests-secret-allowlist mctl-external-manifests-ingress-hosts mctl-external-manifests-services mctl-external-manifests-no-traefik"
+POLICIES="mctl-external-manifests-secret-allowlist mctl-external-manifests-ingress-hosts mctl-external-manifests-services mctl-external-manifests-no-traefik mctl-external-manifests-no-grafana-configmaps"
 # Keep in step with the platform cluster and scripts/test-reserved-hosts-policy.sh.
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.33.13-k3s1}"
 TRAEFIK_VERSION="${TRAEFIK_VERSION:-v3.7.13}"
@@ -68,8 +68,8 @@ import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d
         and d.get("kind") in ("ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding")
         and d["metadata"]["name"].startswith(sys.argv[2] + "-")]
-if len(docs) != 8:
-    sys.exit(f"expected four policies and four bindings in the render, found {len(docs)}")
+if len(docs) != 10:
+    sys.exit(f"expected five policies and five bindings in the render, found {len(docs)}")
 print(yaml.safe_dump_all(docs))
 PY
 kubectl apply -f "$WORK/policy.yaml" >/dev/null

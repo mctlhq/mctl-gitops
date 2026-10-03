@@ -632,3 +632,42 @@ spec:
         - key: kubernetes.io/metadata.name
           operator: In
           values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}
+---
+# ConfigMaps in those namespaces may not carry a grafana_* label. The
+# Grafana dashboards sidecar reads labelled ConfigMaps from every namespace
+# (observability/monitoring.yaml, searchNamespace: ALL), and the provisioner
+# keys on uid: one such ConfigMap could replace any platform dashboard or
+# land in the ACL-restricted Internal folder. Platform dashboards all live in
+# namespace monitoring.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-external-manifests-no-grafana-configmaps
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["configmaps"]
+  validations:
+    - expression: >-
+        !has(object.metadata.labels) ||
+        !object.metadata.labels.exists(k, k.startsWith('grafana_'))
+      message: "ConfigMaps in this namespace may not carry grafana_* labels: the Grafana sidecar reads them cluster-wide"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-external-manifests-no-grafana-configmaps
+spec:
+  policyName: mctl-external-manifests-no-grafana-configmaps
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}
