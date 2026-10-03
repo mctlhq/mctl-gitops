@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-03T14:10:34Z'
+updated_at: '2026-10-03T14:25:39Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-0d89498809da74b9
@@ -28,10 +28,10 @@ attempt:
   finished_at: '2026-10-03T13:38:29Z'
 pr: https://github.com/mctlhq/portfolio/pull/131
 review_attempts: 1
-refusals: 1
+refusals: 2
 refusals_head: fb4ba78e2a0460a5e4a1de28b20fe15186a4f61a
-notes: 'implementer declined to act: Both P2 findings affirm the current code rather
-  than report a defect ("the fix itself is right", "the classification is now correct").
-  Verified in scripts/org-drift.mjs: line 192 sets maxRetries = method === GET ||
-  PATCH ? retries : 0, and readEvidence (~line 270) probes GET /repos/{org}/{repo}
-  on a 404 and records unknown when not 200. No change needed.'
+notes: 'implementer declined to act: Both P2 findings confirm the existing code is
+  correct and request no change. scripts/org-drift.mjs:192 already has `const maxRetries
+  = method === GET || method === PATCH ? retries : 0;` so POSTs are not retried; the
+  line 270 repo-probe classification is already correct and maps to drift.unknown/exitCode
+  1. No defect to fix.'
