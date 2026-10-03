@@ -167,7 +167,7 @@ tests:
             exp_annotations:
               summary: Forgejo declarative reconcile has not succeeded in over 2 hours
               description: >-
-                forgejo/forgejo-reconcile has failed its last four runs. Read the
+                forgejo/forgejo-reconcile has not succeeded for 2 hours (runs failed, or were skipped behind a long one). Read the
                 latest Job's log: a FAIL line names the repository and branch
                 (diverged in Forgejo, unreadable source, missing branch); a
                 Terraform error points at the manifest in Vault.

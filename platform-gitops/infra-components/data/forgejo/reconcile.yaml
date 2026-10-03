@@ -282,6 +282,8 @@ data:
         echo "FAIL $repo:$branch: fetch or fast-forward push failed (diverged in Forgejo?)"
         failed=1
       fi
+      # Bound /work to the largest single repository, not the whole seed set.
+      rm -rf "$mirror"
     done < "$WORK/plan.tsv"
 
     terraform apply -no-color -auto-approve
