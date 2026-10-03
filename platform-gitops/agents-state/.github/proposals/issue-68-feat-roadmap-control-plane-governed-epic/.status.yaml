@@ -1,0 +1,25 @@
+status: merged
+updated_at: '2026-09-19T00:03:24Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/.github
+  issue: 68
+  url: https://github.com/mctlhq/.github/issues/68
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-18T12:19:28Z'
+attempt:
+  id: 66ad03ae-a936-45ed-b9ad-4a60b75e4272
+  started_at: '2026-09-18T13:00:41Z'
+  expires_at: '2026-09-18T15:10:41Z'
+  finished_at: '2026-09-18T13:28:34Z'
+pr: https://github.com/mctlhq/.github/pull/94
+github:
+  state: merged
+  head_sha: 0a220d1d93543b7e42e307d9e8db575f6f12481c
+  observed_at: '2026-09-19T00:03:24Z'
+merged_at: '2026-09-19T00:03:24Z'
+merge_commit: cf8d3757cca7762e0683144a5a5b21a609572254

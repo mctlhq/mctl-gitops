@@ -1,0 +1,45 @@
+status: merged
+updated_at: '2026-09-30T07:49:46Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-a837f1f7ea2236ac
+  trace_id: 5cb97c248398f7bf81b6b0c298f384b6
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 421
+  url: https://github.com/mctlhq/mctl-api/issues/421
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-7fc11f817ca63bd7
+  content_hash: sha256:7fc11f817ca63bd7863d3a34bf3badf5206a6db58020f083bc8ab0bee357066f
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-29T22:22:29Z'
+attempt:
+  id: ebbee9dea17eeef44853bcf4d8dbd3e6c1daec413f3217191ec41cc1498e0b21
+  started_at: '2026-09-29T23:37:49Z'
+  expires_at: '2026-09-30T01:47:49Z'
+  finished_at: '2026-09-29T23:49:59Z'
+pr: https://github.com/mctlhq/mctl-api/pull/424
+github:
+  state: merged
+  head_sha: cbdd62879b9472822376c482498e4b4d6aca0cfc
+  observed_at: '2026-09-30T07:49:46Z'
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: The P1 finding text handed to me was only
+  the auto-generated header line of PR #424 comment IC_kwDORfnDZc8AAAABX73-GQ (''Claude
+  finished @mctl-agents[bot]''s task in 1m 6s''). The full comment body, retrieved
+  via gh pr view --json comments, states ''Verdict: Approve'' with no P1/P2 findings,
+  gives a detailed analysis of the helm template diff, and ends ''P1: 0 . P2: 0 .
+  P3: 0''. This is corroborated by the formal PR review (gh api repos/mctlhq/mctl-api/pulls/424/reviews:
+  state APPROVED, body ''No P1/P2 findings (0 P3). Good to merge.''), by a second
+  automated reviewer (Antigravity/agy: ''No significant'
+merged_at: '2026-09-30T07:49:46Z'
+merge_commit: d9414f269f3218fcfc5fde42d82fd213bdb749da

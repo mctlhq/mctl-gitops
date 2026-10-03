@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/mctlhq/mctl-claude-remote
-  tag: "0.10.4"
+  tag: "0.13.3"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -66,15 +66,41 @@ env:
   # pr-steward automation (branch prefix per repo). Per-repo merge_mode
   # (image 0.3.0+): global default is "never" (safe — escalate only); a repo opts
   # into auto-merge explicitly. Ownership is partitioned with the Tier-3 shepherd
-  # via SHEPHERD_SKIP_SERVICES (steward owns ONLY what the shepherd skips):
+  # via SHEPHERD_SKIP_SERVICES / SHEPHERD_FIX_ONLY_SERVICES. For feat/agents-*
+  # entries in the shepherd's fix-only services, "fix_mode": "never" (image
+  # 0.13.3+) makes the shepherd CWFT the only actor that fixes review findings:
+  # the steward runs no model tick until the PR is approved at its current head
+  # and then owns only the merge path (owner decision 2026-10-03, after the
+  # mctl-telegram#730 race). claude/* and fix/* stay steward-owned end to end.
   #   mctl-design   = steward, when-green (gated by branch protection on its public main)
-  #   mctl-telegram = steward, when-green + squash (claude/* and fix/* and feat/agents-*)
+  #   mctl-telegram = steward, when-green + merge (claude/* and fix/* and feat/agents-*;
+  #                   the repo forbids squash — #1340)
   #   mctl-docs     = shepherd-owned (removed from steward — low churn, no strict protection)
   #   mctl-gitops   = steward phase A, never (inventory/escalation only; switch
   #                   to when-green after the existing implementer backlog is triaged)
-  #   mctl-pairdesk = steward, when-green + merge (public + branch-protected; in SHEPHERD_SKIP_SERVICES)
+  #   mctl-pairdesk = steward, when-green + merge (public + branch-protected; in SHEPHERD_FIX_ONLY_SERVICES)
   # Inert in the image until this flag is "true".
   PR_STEWARD_ENABLED: "true"
+  # The harness version is pinned by the image (Dockerfile ARG
+  # CLAUDE_CODE_NPM_VERSION, /usr/local/bin/claude on PATH). Claude Code's
+  # native auto-updater ignores that pin: it keeps downloading releases into
+  # /workspace/.local/share/claude/versions/ (~230 MB each, five of them on
+  # 2026-09-23) and /workspace/.local/bin, which the s3-sync sidecar then
+  # persists to MinIO and restore-state pulls back on every cold start — the
+  # debris that #892/#895/#900 added GC for, and the reason the TUI showed
+  # "Update installed · Restart to update" for a version the pod already ran.
+  # `autoUpdates: false` in .claude.json did not stop it; this env var does.
+  DISABLE_AUTOUPDATER: "1"
+  # Model of the interactive remote-control session (image 0.12.3+; older
+  # images ignore this and keep their built-in haiku pin). This deployment runs
+  # the inbound events Channel, and on Haiku the session never called
+  # mcp__mctl-events__ack_event — it wrote a fake acknowledgement to /tmp with
+  # Bash instead (mctl-claude-remote#66) — so nothing was acknowledged after
+  # the 0.12.1 haiku pin rolled on 2026-09-19 10:13Z, max_inflight saturated
+  # and the adapter stopped reading. Sonnet is the model the round trip was
+  # proven on (docs/claude-channels-spike.md). pr-steward is unaffected: its
+  # ticks pass --model explicitly (PR_STEWARD_MODEL, default sonnet).
+  CLAUDE_REMOTE_MODEL: "sonnet"
   # Built-in scheduler (0.4.0+): fire a headless `claude -p "Run the pr-steward
   # skill"` tick every 20 min so the steward runs without a human prompting the
   # live remote-control session (closes the manual-trigger gap, gitops #276).
@@ -112,6 +138,21 @@ env:
   CLAUDE_CODE_RESUME_THRESHOLD_MINUTES: "2000000000"
   CLAUDE_CODE_RESUME_TOKEN_THRESHOLD: "2000000000"
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: "140000"
+  # Inbound events Channel (mctlhq/.github#87, image 0.11.0+). Wakes the live
+  # remote-control session on platform Valkey events; inert on older images,
+  # which do not read these variables. Streams, sources, types and subjects the
+  # session may be woken for are in the mctl-events-policy ConfigMap below --
+  # deny by default. Both credentials arrive as FILES from the
+  # claude-remote-events ExternalSecret, never as env.
+  MCTL_EVENTS_ENABLED: "true"
+  MCTL_EVENTS_VALKEY_URL: "redis://claude-remote@valkey.platform-events.svc.cluster.local:6379/0"
+  MCTL_EVENTS_VALKEY_PASSWORD_FILE: "/etc/mctl-events/secrets/valkey-password"
+  MCTL_EVENTS_POLICY: "/etc/mctl-events/policy.json"
+  # Hydration of telegram.message.* refs through the preview mctl-telegram MCP
+  # (the account's live traffic is on preview). The worker token is read-only;
+  # its expiry is tracked in Vault platform/mctl-claude-remote/telegram-mcp.
+  MCTL_EVENTS_TELEGRAM_MCP_URL: "https://tg-preview.mctl.ai/mcp"
+  MCTL_EVENTS_TELEGRAM_MCP_TOKEN_FILE: "/etc/mctl-events/secrets/telegram-mcp-token"
 # Intentionally NO envFrom / no CLAUDE_CODE_OAUTH_TOKEN in env:
 #
 # `claude --remote-control` needs a full-scope claude.ai login (from
@@ -152,6 +193,19 @@ extraExternalSecrets:
       - secretKey: private-key.pem
         remoteKey: platform/mctl-claude-remote/github-app
         property: private-key
+  # Inbound events: the claude-remote Valkey ACL user's password and the
+  # read-only mctl-telegram worker token. Mounted as files (0440), not env.
+  mctl-claude-remote-events:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    targetSecret: claude-remote-events
+    data:
+      - secretKey: valkey-password
+        remoteKey: platform/valkey
+        property: claude-remote-password
+      - secretKey: telegram-mcp-token
+        remoteKey: platform/mctl-claude-remote/telegram-mcp
+        property: worker-token
 # Workspace lives in emptyDir, persisted to MinIO by s3-sync sidecar
 extraVolumes:
   - name: workspace
@@ -183,6 +237,14 @@ extraVolumes:
   - name: steward-logs
     emptyDir:
       sizeLimit: 100Mi
+  # Inbound events: routing policy and credentials (see env MCTL_EVENTS_*).
+  - name: events-policy
+    configMap:
+      name: mctl-events-policy
+  - name: events-secrets
+    secret:
+      secretName: claude-remote-events
+      defaultMode: 0440
 extraVolumeMounts:
   - name: workspace
     mountPath: /workspace
@@ -200,10 +262,17 @@ extraVolumeMounts:
     readOnly: true
   - name: steward-logs
     mountPath: /var/log/steward
+  - name: events-policy
+    mountPath: /etc/mctl-events/policy.json
+    subPath: policy.json
+    readOnly: true
+  - name: events-secrets
+    mountPath: /etc/mctl-events/secrets
+    readOnly: true
 # Restore workspace from MinIO before claude starts
 initContainers:
   - name: restore-state
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: ghcr.io/mctlhq/mc@sha256:b641ac54685b6dd7b21d680de7bae6160ae09b54c2ed32c42b383b95614b6b31
     resources:
       requests:
         cpu: 25m
@@ -268,7 +337,7 @@ initContainers:
 # handles relay-TLS-drop via cheap in-pod --resume instead of pod restarts.
 extraContainers:
   - name: s3-sync
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: ghcr.io/mctlhq/mc@sha256:b641ac54685b6dd7b21d680de7bae6160ae09b54c2ed32c42b383b95614b6b31
     resources:
       requests:
         cpu: 25m
@@ -313,8 +382,9 @@ extraContainers:
         # logged out for a day on 2026-08-23 while /healthz, the in-pod watchdog
         # and ArgoCD all reported healthy. See mctl-claude-remote#40.
         #
-        # minio/mc has no jq/grep/sed/awk, but /bin/sh here IS bash, so the check
-        # is pure shell: strip whitespace, then look for the empty-token markers.
+        # The check is pure shell: strip whitespace, then look for the
+        # empty-token markers. ghcr.io/mctlhq/mc's busybox sh supports `local`,
+        # ${var//pat/} and $'...' (verified when the image replaced minio/mc).
         CRED=/workspace/.claude/.credentials.json
         cred_is_valid() {
           [ -s "$CRED" ] || return 1
@@ -615,7 +685,7 @@ extraContainers:
   # stdout is unreadable: claude --remote-control renders a TUI and needs a PTY,
   # so its output can't be ANSI-stripped without dropping it to --print mode.
   - name: steward-log
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: ghcr.io/mctlhq/mc@sha256:b641ac54685b6dd7b21d680de7bae6160ae09b54c2ed32c42b383b95614b6b31
     resources:
       requests:
         cpu: 10m
@@ -679,6 +749,32 @@ backstage:
   kubernetesId: claude-remote
 # pr-steward overlay ConfigMaps
 configMaps:
+  # Deny-by-default routing for the inbound events Channel. The session is
+  # woken only for new or edited private messages to the operator's own
+  # Telegram account (210408407, the account the worker token reads) and for
+  # pull request events in mctlhq repositories. The consumer name is fixed, so a restarted pod re-reads its
+  # own pending entries instead of leaving them to a dead consumer.
+  mctl-events-policy:
+    policy.json: |
+      {
+        "group": "claude-remote",
+        "consumer": "claude-remote-0",
+        "max_inflight": 5,
+        "routes": [
+          {
+            "stream": "mctl:events:telegram",
+            "sources": ["mctl-telegram"],
+            "types": ["telegram.message.created", "telegram.message.edited"],
+            "subject": {"account_id": ["210408407"]}
+          },
+          {
+            "stream": "mctl:events:github",
+            "sources": ["mctl-api"],
+            "types": ["github.pull_request.*", "github.pull_request_review.submitted"],
+            "subject": {"repository": ["mctlhq/*"]}
+          }
+        ]
+      }
   pr-steward-config:
     pr-steward.config.json: |
       {
@@ -697,6 +793,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "when-green"
           },
           {
@@ -704,6 +801,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "never",
             "merge_method": "merge"
           },
@@ -713,7 +811,7 @@ configMaps:
               "head_prefix": "claude/"
             },
             "merge_mode": "when-green",
-            "merge_method": "squash"
+            "merge_method": "merge"
           },
           {
             "name": "mctlhq/mctl-telegram",
@@ -721,21 +819,23 @@ configMaps:
               "head_prefix": "fix/"
             },
             "merge_mode": "when-green",
-            "merge_method": "squash"
+            "merge_method": "merge"
           },
           {
             "name": "mctlhq/mctl-telegram",
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "when-green",
-            "merge_method": "squash"
+            "merge_method": "merge"
           },
           {
             "name": "mctlhq/mctl-pairdesk",
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "when-green",
             "merge_method": "merge"
           }

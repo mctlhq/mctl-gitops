@@ -1,0 +1,233 @@
+# Unit tests for forgejo-alerts.yaml (group mctl.forgejo).
+# rule_files is resolved relative to this file; generated/ is produced by
+# scripts/check-vm-rules.sh.
+rule_files:
+  - generated/forgejo-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: a healthy forgejo is quiet
+    input_series:
+      - series: 'probe_success{job="forgejo-healthz",instance="https://git.mctl.ai/api/healthz"}'
+        values: '1x30'
+      - series: 'up{namespace="forgejo",service="forgejo-http"}'
+        values: '1x30'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="forgejo",persistentvolumeclaim="forgejo-data"}'
+        values: '5x30'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="forgejo",persistentvolumeclaim="forgejo-data"}'
+        values: '10x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ForgejoDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ForgejoProbeAbsent
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ForgejoMetricsScrapeFailing
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ForgejoVolumeFillingUp
+        exp_alerts: []
+
+  - interval: 1m
+    name: a failing health probe fires after 5m
+    input_series:
+      - series: 'probe_success{job="forgejo-healthz",instance="https://git.mctl.ai/api/healthz"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ForgejoDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ForgejoDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              job: forgejo-healthz
+              instance: https://git.mctl.ai/api/healthz
+            exp_annotations:
+              summary: git.mctl.ai has failed its health check for 5 minutes
+              description: >-
+                blackbox-exporter has had no 2xx from https://git.mctl.ai/api/healthz for
+                5 minutes. /api/healthz also fails when Forgejo cannot reach
+                shared-pg, so check `kubectl -n forgejo logs deploy/forgejo` for
+                database errors before the ingress.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a missing probe series fires after 15m
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoProbeAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              job: forgejo-healthz
+            exp_annotations:
+              summary: No probe_success series for job=forgejo-healthz
+              description: >-
+                The forgejo-healthz VMProbe produces no data, so ForgejoDown
+                cannot fire and Forgejo availability is unmonitored. Check the
+                VMProbe in observability/blackbox/vmprobes.yaml and vmagent targets.
+
+  - interval: 1m
+    name: a refused metrics scrape fires after 15m
+    input_series:
+      - series: 'up{namespace="forgejo",service="forgejo-http"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoMetricsScrapeFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              # The rule's own service label replaces the series' forgejo-http.
+              service: forgejo
+              namespace: forgejo
+            exp_annotations:
+              summary: vmagent cannot scrape Forgejo /metrics
+              description: >-
+                The forgejo-http scrape target has been down for 15 minutes. If
+                ForgejoDown is quiet, Forgejo is serving and the scrape is being
+                refused — usually a metrics token rotated in Vault while the pod
+                still runs with the old one. Restart the deployment to reload it.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a volume over 80% fires
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="forgejo",persistentvolumeclaim="forgejo-data"}'
+        values: '9x30'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="forgejo",persistentvolumeclaim="forgejo-data"}'
+        values: '10x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoVolumeFillingUp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              persistentvolumeclaim: forgejo-data
+            exp_annotations:
+              summary: Forgejo repository volume is over 80% full
+              description: >-
+                forgejo-data is 90% full. A full
+                volume rejects pushes. hcloud-volumes expands online: raise
+                persistence.size in bootstrap/templates/data/forgejo.yaml.
+                Mind the backup's emptyDir sizeLimit (data/forgejo/backup.yaml)
+                too — the compressed archive has to fit in it.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  # ---------------------------------------------------------------------
+  # Declarative reconcile (forgejo/forgejo-reconcile)
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a reconcile that succeeded an hour ago stays quiet
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-3600x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoReconcileStale
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoReconcileNeverSucceeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoReconcileMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: a reconcile without success for over 2h fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-7300x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoReconcileStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-reconcile
+            exp_annotations:
+              summary: Forgejo declarative reconcile has not succeeded in over 2 hours
+              description: >-
+                forgejo/forgejo-reconcile has not succeeded for 2 hours (runs failed, or were skipped behind a long one). Read the
+                latest Job's log: a FAIL line names the repository and branch
+                (diverged in Forgejo, unreadable source, missing branch); a
+                Terraform error points at the manifest in Vault.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a fresh reconcile cronjob without a success is not yet an alert
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-3600x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoReconcileNeverSucceeded
+        exp_alerts: []
+
+  - interval: 1m
+    name: a reconcile cronjob older than 2h without any success fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-reconcile"}'
+        values: '-7300x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoReconcileNeverSucceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-reconcile
+            exp_annotations:
+              summary: Forgejo declarative reconcile has never succeeded
+              description: >-
+                forgejo/forgejo-reconcile has existed for over 2 hours without one
+                successful run, so ForgejoReconcileStale cannot fire for it. A
+                pod stuck in CreateContainerConfigError means the
+                forgejo-reconcile Secret is missing: the Vault secret
+                platform/forgejo/reconcile was never written.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a missing reconcile cronjob fires after 30m
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ForgejoReconcileMetricAbsent
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ForgejoReconcileMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-reconcile
+            exp_annotations:
+              summary: forgejo-reconcile CronJob is not visible to kube-state-metrics
+              description: >-
+                No kube_cronjob_created series for forgejo/forgejo-reconcile. The
+                CronJob was removed or is not scraped, and the other reconcile
+                alerts are blind while this lasts.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md

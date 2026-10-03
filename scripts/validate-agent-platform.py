@@ -48,6 +48,11 @@ CATALOG = ROOT / "platform-gitops" / "agent-platform"
 SCHEMAS = CATALOG / "schemas"
 FIXTURES_ROOT = ROOT / "scripts" / "tests" / "fixtures" / "agent-platform"
 
+# mctl-agents orchestrator/capability.py MCTL_API_PROVIDER_ID and
+# orchestrator/resolver.py _MCTL_API_REQUIRED_ALIAS.
+MCTL_API_PROVIDER_ID = "mctl-api"
+MCTL_API_REQUIRED_ALIAS = "mctl"
+
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$")
 COMPAT_RE = re.compile(r"(>=|<=|==|>|<)\s*([0-9]+(?:\.[0-9]+)*)")
 
@@ -218,6 +223,36 @@ def validate_profile_file(path: pathlib.Path, schema: dict, policy: Policy, erro
     except CatalogValidationError as exc:
         errors.append(f"{path}: modelPolicyRef.compatibility: {exc}")
 
+    # -- capabilityDiscovery (mctl-agents#242 slice 4): the cross-entry rules
+    # JSON Schema cannot express. Mirrors mctl-agents' resolver
+    # (_parse_capability_discovery), which is authoritative and re-checks all
+    # of this at load time; checking here makes a bad entry fail this repo's
+    # CI instead of the first resolved run.
+    discovery = spec.get("capabilityDiscovery")
+    if discovery is not None:
+        seen_aliases: set = set()
+        seen_ids: set = set()
+        for index, provider in enumerate(discovery.get("providers", [])):
+            where = f"spec.capabilityDiscovery.providers[{index}]"
+            if provider["alias"] in seen_aliases:
+                errors.append(f"{path}: {where}: duplicate alias {provider['alias']!r}")
+            seen_aliases.add(provider["alias"])
+            key = (provider["type"], provider["id"])
+            if key in seen_ids:
+                errors.append(f"{path}: {where}: duplicate provider {provider['type']}/{provider['id']}")
+            seen_ids.add(key)
+            if provider["id"] == MCTL_API_PROVIDER_ID and provider["alias"] != MCTL_API_REQUIRED_ALIAS:
+                errors.append(
+                    f"{path}: {where}: provider {MCTL_API_PROVIDER_ID!r} must use alias "
+                    f"{MCTL_API_REQUIRED_ALIAS!r} so SDK-visible names stay mcp__mctl__<tool>,"
+                    f" got {provider['alias']!r}"
+                )
+        if discovery["enabled"] and "mcp__mctl__*" not in spec["tools"]:
+            errors.append(
+                f"{path}: spec.capabilityDiscovery.enabled is true but spec.tools does not"
+                " declare 'mcp__mctl__*', so discovery has no mctl tools to serve"
+            )
+
     for kind in spec["evidence"]["required"]:
         if kind not in policy.known_evidence_kinds:
             errors.append(f"{path}: unknown evidence kind {kind!r} (not in policy.yaml knownEvidenceKinds)")
@@ -288,6 +323,24 @@ CWFT_DIR = ROOT / "platform-gitops" / "argo-workflows" / "cluster-templates"
 BUDGET_ENV_SUFFIX = "_BUDGET_USD"
 TIMEOUT_ENV_SUFFIX = "_TIMEOUT_SECONDS"
 
+# Not every *_TIMEOUT_SECONDS is the run's wall-clock budget. A
+# *_DRAIN_TIMEOUT_SECONDS is a sub-deadline INSIDE one run -- how long a
+# driver waits for an asynchronously launched sub-agent to reach a terminal
+# status before giving up (mctl-agents#366) -- and a profile's
+# timeoutSeconds never pins it. Matching it here would break the check in
+# both directions, and both are live cases:
+#
+#   - cwft-mctl-agents-implement.yaml already pins IMPLEMENTER_TIMEOUT_SECONDS,
+#     so a drain variable beside it makes the suffix ambiguous and aborts the
+#     whole file with "cannot tell which one a profile pins".
+#   - cwft-mctl-agents-shepherd.yaml pins no wall-clock override at all, so a
+#     drain variable would become the only match and silently redefine the
+#     effective timeout from spec.activeDeadlineSeconds (7200) to 300.
+#
+# Ignored suffixes are matched before the plain suffix, so ordering inside the
+# CWFT does not matter.
+TIMEOUT_ENV_IGNORED_SUFFIXES = ("_DRAIN_TIMEOUT_SECONDS",)
+
 
 def _iter_env_vars(node):
     """Yield every (name, value) under any `env:` list anywhere in the doc.
@@ -328,9 +381,16 @@ def _unique_env_by_suffix(doc, suffix: str, path: pathlib.Path):
 
     Repeats with the SAME value are fine and normal — that is what the
     duplicates above actually are.
+
+    Names ending in a TIMEOUT_ENV_IGNORED_SUFFIXES entry are skipped for the
+    timeout suffix: they are sub-deadlines inside a run, not the run's budget,
+    and no profile field pins them. See that constant for why.
     """
+    ignored = TIMEOUT_ENV_IGNORED_SUFFIXES if suffix == TIMEOUT_ENV_SUFFIX else ()
     found: dict[str, set] = {}
     for name, value in _iter_env_vars(doc):
+        if name.endswith(ignored):
+            continue
         if name.endswith(suffix):
             found.setdefault(name, set()).add(str(value))
     if len(found) > 1:

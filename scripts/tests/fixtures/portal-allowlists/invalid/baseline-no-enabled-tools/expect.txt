@@ -1,0 +1,1 @@
+enabled_tools is not a list of non-empty strings

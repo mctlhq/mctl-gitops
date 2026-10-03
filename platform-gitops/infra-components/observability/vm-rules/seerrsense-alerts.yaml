@@ -1,0 +1,67 @@
+# Alerts for the seerrsense ChatGPT plugin-directory review (labs/seerrsense).
+#
+# Both counters are produced by the Promtail metrics stage in
+# bootstrap/templates/observability/loki.yaml from seerrsense log lines; the
+# server itself exposes no /metrics. They carry the log stream's labels
+# (namespace, app, team, component, pod), nothing per-event. `instance` and
+# `job` on these series belong to the Promtail scrape target, not to
+# seerrsense, so the service is selected by namespace and pod name prefix.
+#
+# SeerrSenseNewConnection is informational and deliberately noisy per event: a
+# consent POST is the last hop of every sign-in, so during the review window it
+# means "someone — most likely the reviewer — just connected". The server logs
+# no identity, so the alert cannot say who; the Overseerr request list can.
+# Both alerts are routed straight to Telegram in monitoring.yaml, since
+# mctl-agent has nothing to remediate here.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: seerrsense-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: seerrsense
+spec:
+  groups:
+    - name: seerrsense.review
+      rules:
+        - alert: SeerrSenseNewConnection
+          expr: |
+            sum by (namespace) (
+              increase(seerrsense_oauth_consent_total{namespace="labs", pod=~"labs-seerrsense-.*"}[10m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: info
+            component: seerrsense
+          annotations:
+            summary: "SeerrSense: a new OAuth connection was granted (namespace {{ $labels.namespace }})"
+            description: |
+              Someone completed the SeerrSense sign-in (consent POST) in the
+              last 10 minutes. During the ChatGPT directory review this is most
+              likely the reviewer account mctlhq@gmail.com. Any request they
+              file lands as pending approval on media.mctl.ai (Overseerr user
+              "reviewer", REQUEST only); check the Overseerr request list to
+              see who it was and what they asked for.
+
+        - alert: SeerrSenseToolFailures
+          expr: |
+            sum by (namespace) (
+              increase(seerrsense_tool_failures_total{namespace="labs", pod=~"labs-seerrsense-.*"}[10m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+            component: seerrsense
+          annotations:
+            summary: "SeerrSense: {{ $value | humanize }} tool call(s) failed with the generic error (namespace {{ $labels.namespace }})"
+            description: |
+              At least one MCP tool call on seerrsense answered "Something went
+              wrong on SeerrSense's side" in the last 10 minutes. The described
+              error is in the pod log under msg="a tool call failed for a
+              reason the caller was not told". The known cause is the Cloudflare
+              tunnel to media.mctl.ai timing out (AbortError from fetchTrusted);
+              seerrsense 1.10.1 waits 20 s and retries a read once, so a
+              persistent alert means the tunnel or Overseerr itself is down.
+              During the directory review this is exactly what a reviewer
+              would see as a broken tool, so look at it promptly.

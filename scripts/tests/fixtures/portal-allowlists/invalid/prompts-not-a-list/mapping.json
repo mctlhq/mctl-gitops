@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "widget": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": "all"
+    }
+  }
+}

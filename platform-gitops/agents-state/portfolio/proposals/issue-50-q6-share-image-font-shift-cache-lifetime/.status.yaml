@@ -1,0 +1,24 @@
+status: rejected
+updated_at: '2026-09-12T11:36:07Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 50
+  url: https://github.com/mctlhq/portfolio/issues/50
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-12T08:14:22Z'
+attempt:
+  id: 1013918a-bbf8-4f69-bc5e-da2405065438
+  started_at: '2026-09-12T08:15:27Z'
+  expires_at: '2026-09-12T10:25:27Z'
+  finished_at: '2026-09-12T08:43:47Z'
+pr: https://github.com/mctlhq/portfolio/pull/64
+github:
+  state: closed
+  head_sha: 2a37d4bac6b3f81c2f57def4c0779bf779a3cc05
+  observed_at: '2026-09-12T11:36:07Z'
+notes: PR was closed without merging.

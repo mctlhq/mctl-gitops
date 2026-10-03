@@ -1,0 +1,166 @@
+# blackbox-exporter — synthetic availability probes from inside the cluster,
+# out through Cloudflare and back.
+#
+# Why this exists. Until now nothing checked whether the platform was reachable
+# from outside. The mctl-telegram canary (services/labs/mctl-telegram, extraObjects)
+# is the only synthetic signal and it runs in-cluster against the Service, so a
+# healthy pod behind a broken ingress or a refused origin looks fine to it.
+# Cloudflare cannot fill the gap either: Health Checks are a Pro-and-up feature
+# and all four zones are on Free, where the entitlement is literally zero checks.
+#
+# The gap has already cost an incident. On 2026-09-08 the origin refused
+# connections for roughly three hours — 1 793 responses with status 521 across
+# the week — and nothing alerted, because no one was looking from outside.
+#
+# Probes deliberately go to the PUBLIC hostname, not the in-cluster Service.
+# That is the whole point: the path under test is client → Cloudflare edge →
+# origin → Traefik → pod, and a failure anywhere along it should be visible.
+#
+# No NetworkPolicy, deliberately. The monitoring namespace has none at all —
+# `kubectl get networkpolicy -n monitoring` returns nothing — so there is no
+# default-deny posture for one to lift. Adding a policy that selects only this
+# pod would not harden the namespace; it would flip this single pod to
+# deny-by-default while every neighbour stays open, and the allow list it needs
+# is DNS plus outbound 443 to the entire internet, which is close to no
+# restriction anyway. The cost is a new way for the probes to fail silently.
+# Namespace-wide network policy is a real gap and a separate decision.
+#
+# What this does NOT cover, and it matters. The probe runs inside the cluster
+# it is checking. So it cannot tell "the platform is unreachable" from "this
+# cluster lost egress", and if the cluster is gone entirely there is nothing
+# left to probe, evaluate the alert, or send it. That is the residual gap a
+# genuinely external monitor would close; this closes the much larger one of
+# having no outside-in check at all. Treat PublicEndpointDown as "the path is
+# broken somewhere", not as proof of where.
+#
+# One quirk worth knowing before adding targets: hosts under *.mctl.me and
+# *.mctl.ru are served by the mctl-landing-form worker, whose bot filter
+# answers 410 to non-browser User-Agents. A default blackbox probe against
+# platform.mctl.me gets 410, not 200. The apexes are probed for their 301
+# instead (module http_redirect), which is both the honest expectation and a
+# direct check that the redirect ruleset still works.
+#
+# The ConfigMap name carries a version suffix on purpose. blackbox-exporter
+# reads blackbox.yml at startup and on SIGHUP, and nothing here sends SIGHUP —
+# so editing a ConfigMap in place would leave ArgoCD reporting Synced while the
+# running process still held the old modules. Bumping the suffix instead makes
+# the change declarative end to end: ArgoCD creates the new ConfigMap, the
+# Deployment's volume reference changes, the pod rolls, and the old ConfigMap
+# is pruned. **When you edit modules below, bump -1 to -2 here and in the
+# volume reference at the bottom of the Deployment.**
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blackbox-exporter-modules-1
+  namespace: monitoring
+  labels:
+    app: blackbox-exporter
+data:
+  blackbox.yml: |
+    modules:
+      # Plain availability: follow redirects, insist on a 2xx at the end.
+      http_2xx:
+        prober: http
+        timeout: 10s
+        http:
+          method: GET
+          valid_http_versions: [ "HTTP/1.1", "HTTP/2.0" ]
+          valid_status_codes: []          # empty means 2xx
+          follow_redirects: true
+          preferred_ip_protocol: ip4
+          ip_protocol_fallback: false
+      # The redirect zones. mctl.me and mctl.ru exist to 301 to mctl.ai; a 200
+      # here would mean the apex redirect ruleset stopped firing, so redirects
+      # are NOT followed and 301 is the success condition.
+      http_redirect:
+        prober: http
+        timeout: 10s
+        http:
+          method: GET
+          valid_http_versions: [ "HTTP/1.1", "HTTP/2.0" ]
+          valid_status_codes: [ 301 ]
+          follow_redirects: false
+          preferred_ip_protocol: ip4
+          ip_protocol_fallback: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app: blackbox-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blackbox-exporter
+  template:
+    metadata:
+      labels:
+        app: blackbox-exporter
+    spec:
+      # Nothing here talks to the Kubernetes API — the probes are outbound HTTP
+      # and vmagent scrapes in. So the pod gets no ServiceAccount token.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: blackbox-exporter
+          image: prom/blackbox-exporter:v0.25.0
+          args:
+            - --config.file=/etc/blackbox/blackbox.yml
+          ports:
+            - name: http
+              containerPort: 9115
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ "ALL" ]
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/blackbox
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            # Bump in lockstep with the ConfigMap name above.
+            name: blackbox-exporter-modules-1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app: blackbox-exporter
+spec:
+  type: ClusterIP
+  selector:
+    app: blackbox-exporter
+  ports:
+    - name: http
+      port: 9115
+      targetPort: http
+      protocol: TCP

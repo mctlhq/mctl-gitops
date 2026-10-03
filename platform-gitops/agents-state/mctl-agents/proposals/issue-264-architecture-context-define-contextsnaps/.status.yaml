@@ -1,0 +1,25 @@
+status: merged
+updated_at: '2026-09-11T21:19:08Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 264
+  url: https://github.com/mctlhq/mctl-agents/issues/264
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-11T06:28:31Z'
+attempt:
+  id: 209bf2f8-718a-4107-baa3-970e3b7e07d6
+  started_at: '2026-09-11T06:39:26Z'
+  expires_at: '2026-09-11T08:49:26Z'
+  finished_at: '2026-09-11T06:55:03Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/340
+github:
+  state: merged
+  head_sha: 86f21b485e7703245cf43afd50cbf98c88d190b0
+  observed_at: '2026-09-11T21:19:08Z'
+merged_at: '2026-09-11T21:19:08Z'
+merge_commit: f9efb074a4c41919b2312d5d80c5047a5db87a62

@@ -1,0 +1,59 @@
+# Cloudflare Origin CA certificate for Traefik's default TLS store.
+#
+# Why this exists (#1153). The origin presented `CN=TRAEFIK DEFAULT CERT` —
+# Traefik's self-signed placeholder — for every hostname except the mctl.ai and
+# mctl.me apexes, because cert-manager only issues for Ingresses that ask for
+# TLS and everything else fell through to that placeholder. Cloudflare's SSL
+# mode was therefore stuck on `full`, which encrypts the edge-to-origin hop but
+# validates nothing, so that hop was opaque rather than authenticated. Raising
+# it to `strict` would have answered 526 for platform.mctl.me and every tenant
+# subdomain under the wildcards.
+#
+# A Cloudflare Origin CA certificate is the right shape here rather than more
+# Let's Encrypt: it is issued by a CA that ONLY Cloudflare trusts, which is
+# exactly the trust boundary being closed, it covers the wildcards in one
+# certificate, and it is valid until 2041 so it cannot lapse into the same
+# failure quietly. It is worthless to anyone who is not Cloudflare, which is
+# the point — it authenticates the origin to the edge and to nobody else.
+#
+# The private key was generated locally, never written to this repository, and
+# lives only in Vault at platform/traefik/origin-ca. Rotation: issue a new
+# certificate against a fresh CSR, overwrite that Vault path, and ESO rolls the
+# Secret within refreshInterval; the old certificate is revoked through the
+# Cloudflare API by its cert_id, which is stored alongside for that purpose.
+#
+# The namespace is `traefik` and not one of the platform namespaces because
+# Traefik reads its default certificate from its own namespace, and Traefik is
+# deployed by k3s's helm-controller from
+# infrastructure/k3s-preview/extra-manifests/traefik-helmchartconfig.yaml.tpl —
+# a different control plane from ArgoCD. This object is the seam: ArgoCD owns
+# the Secret, Terraform owns the reference to it. The Secret must exist BEFORE
+# that reference lands, or Traefik falls back to the placeholder certificate it
+# is replacing — fail-soft, unlike the Middleware reference in the same file,
+# which fails closed and takes every router with it.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: traefik-origin-ca
+  namespace: traefik
+spec:
+  refreshInterval: 24h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: traefik-origin-ca
+    creationPolicy: Owner
+    # kubernetes.io/tls is required: Traefik's tlsStore reads tls.crt and
+    # tls.key from a Secret of this type and ignores an Opaque one.
+    template:
+      type: kubernetes.io/tls
+  data:
+    - secretKey: tls.crt
+      remoteRef:
+        key: platform/traefik/origin-ca
+        property: tls.crt
+    - secretKey: tls.key
+      remoteRef:
+        key: platform/traefik/origin-ca
+        property: tls.key

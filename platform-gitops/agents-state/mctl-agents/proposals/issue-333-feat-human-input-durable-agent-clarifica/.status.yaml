@@ -1,0 +1,24 @@
+status: rejected
+updated_at: '2026-09-22T23:04:40Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 333
+  url: https://github.com/mctlhq/mctl-agents/issues/333
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-19T00:28:21Z'
+attempt:
+  id: 0d20ca0d-550d-47b9-9403-c8151f4f2c1e
+  started_at: '2026-09-19T07:49:18Z'
+  expires_at: '2026-09-19T09:59:18Z'
+  finished_at: '2026-09-19T08:35:44Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/400
+github:
+  state: closed
+  head_sha: 2874c233dc4e0f731dc08ece1eba4aef226d3645
+  observed_at: '2026-09-22T23:04:40Z'
+notes: PR was closed without merging.

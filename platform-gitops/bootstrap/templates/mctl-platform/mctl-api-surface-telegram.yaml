@@ -1,0 +1,32 @@
+{{- if (default dict .Values.surfaceTelegramToken).enabled }}
+# Bearer token of the surface:telegram principal (mctlhq/mctl-telegram#443,
+# mctlhq/mctl-gitops#1405): mctl-api authenticates it from
+# MCTL_SURFACE_TELEGRAM_TOKEN (internal/auth/oidc.go). Rendered only when
+# surfaceTelegramToken.enabled is true in bootstrap/values.yaml, where the
+# owner steps are written down.
+#
+# Its own ExternalSecret, for the same reason as mctl-api-usage-writer.yaml:
+# a missing Vault property must disable only this principal, not take
+# DB_PASSWORD down with it. Its own FILE because the whole body sits inside
+# the gate, and a file that leads with a template directive is not YAML to
+# yamllint (listed in .github/workflows/yamllint.yml's ignore, like the
+# usage-writer ExternalSecret).
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-api-surface-telegram
+  namespace: mctl-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-api-surface-telegram
+    creationPolicy: Owner
+  data:
+    - secretKey: MCTL_SURFACE_TELEGRAM_TOKEN
+      remoteRef:
+        key: platform/mctl-api/surface-tokens
+        property: telegram-token
+{{- end }}

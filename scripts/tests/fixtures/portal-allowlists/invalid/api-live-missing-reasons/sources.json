@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "api": {
+      "repo": "mctlhq/mctl-api",
+      "path": "docs/portal-allowlist.json",
+      "ref": "main",
+      "sha": "be13e0c87de1eb2c2876c27e35aa8b86a26b3fb6",
+      "vendored_at": "2026-09-25T00:29:52Z"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "$comment": "fixture",
+  "portal": "mcp",
+  "server": "widget",
+  "default_disabled": true,
+  "tools": {
+    "alpha": true
+  }
+}

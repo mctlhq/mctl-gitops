@@ -1,0 +1,54 @@
+# Default deny, then open 6379 only to the event producers and consumer and 9121
+# only to monitoring. Per-client authorization is the ACL's job (externalsecret.yaml);
+# this bounds who can even try.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: platform-events
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-valkey-clients
+  namespace: platform-events
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: valkey
+  policyTypes:
+    - Ingress
+  ingress:
+    # mctl-telegram (producer) and claude-remote (consumer) both run in labs.
+    # The communication-agent listener that ingests real messages runs on the
+    # preview deployment, so both telegram instances may publish.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: labs
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  - labs-mctl-telegram
+                  - labs-mctl-telegram-preview
+                  - labs-claude-remote
+        # GitHub webhook producer.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+      ports:
+        - protocol: TCP
+          port: 6379
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9121

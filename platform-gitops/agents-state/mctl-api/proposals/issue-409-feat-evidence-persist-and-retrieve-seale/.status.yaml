@@ -1,0 +1,43 @@
+status: merged
+updated_at: '2026-09-30T07:49:44Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-37b00e9d27957569
+  trace_id: b391f291b2645c524250b2374c3427da
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 409
+  url: https://github.com/mctlhq/mctl-api/issues/409
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-543164f9e9c213b5
+  content_hash: sha256:543164f9e9c213b54e38c29d26328b26d9bd46c0eff3df4437838909a6b39d33
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-29T20:48:39Z'
+attempt:
+  id: 6e8780628574779e68548948412ec113b89a978717d44f4cf68b9a43c0e1011c
+  started_at: '2026-09-29T20:50:43Z'
+  expires_at: '2026-09-29T23:00:43Z'
+  finished_at: '2026-09-29T21:20:31Z'
+pr: https://github.com/mctlhq/mctl-api/pull/420
+ci_blockers_head: 0af2306e3db1f917572d0ec5af113cd2acde2fc4
+ci_blockers:
+- validate / lint
+- validate / test
+notes: The platform lost the implementer's work 3 time(s) in a row (implementer follow-up
+  exited non-zero (46) for mctl-api/issue-409-feat-evidence-persist-and-retrieve-seale).
+  This is a harness defect, not a problem with the proposal — review_attempts was
+  never charged. Human triage required; see mctl-agents#366.
+github:
+  state: merged
+  head_sha: 94bfb0903421cdeefc8393ac2c6b28319ce92411
+  observed_at: '2026-09-30T07:49:44Z'
+merged_at: '2026-09-30T07:49:44Z'
+merge_commit: c5bc7f388a5399a9bc2035d62d05d6eba52f2827

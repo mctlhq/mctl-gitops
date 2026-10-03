@@ -1,0 +1,28 @@
+{
+  "servers": {
+    "widget": {
+      "tools_total": 3,
+      "tools_enabled": 2,
+      "enabled_tools": [
+        "alpha",
+        "beta"
+      ],
+      "prompts_total": 2,
+      "prompts_enabled": 1,
+      "recorded": "2026-09-25",
+      "enabled_prompts": [
+        "p"
+      ]
+    },
+    "unvendored": {
+      "tools_total": 2,
+      "tools_enabled": 1,
+      "enabled_tools": [
+        "a"
+      ],
+      "prompts_total": 0,
+      "prompts_enabled": 0,
+      "recorded": "2026-09-25"
+    }
+  }
+}

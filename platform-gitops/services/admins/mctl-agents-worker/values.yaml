@@ -24,7 +24,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.40.0"
+  tag: "1.64.1"
 imagePullSecrets:
   - name: ghcr-credentials
 # --role control since the queue split (ADR-008): this process runs every
@@ -67,10 +67,10 @@ resources:
   # accurate again — which is why 256Mi stays.
   requests:
     cpu: 50m
-    memory: 128Mi
+    memory: 192Mi
   limits:
     cpu: 500m
-    memory: 256Mi
+    memory: 384Mi
 automountServiceAccountToken: false
 # 1.28.0 is the first tag with USER app (uid 1000) in the image.
 podSecurityContext:
@@ -89,6 +89,23 @@ env:
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents
   LOG_LEVEL: info
+  # The lifecycle rollout stage (ADR-010 §12, mctlhq/.github#57).
+  #
+  # This worker runs DevLoopWorkflow, the only WRITER. It flips FIRST, ahead of
+  # the shepherd CWFT and ahead of the ownership bootstrap, and the order is
+  # not cosmetic: below `observe` the ownership activity short-circuits before
+  # any HTTP call, so a row the bootstrap wrote for a devloop-workflow owner
+  # would never be heartbeated, progressed or released by the workflow it
+  # names. It would sit `active` until its liveness bound expired, held by an
+  # owner that does not know it holds anything.
+  #
+  # Writer live -> bootstrap -> shepherd flips and the comparison starts
+  # against a populated store.
+  #
+  # The gate is in ACTIVITY code, not workflow code, so this does not change
+  # which commands the workflow issues: a history recorded under one mode
+  # replays under another.
+  LIFECYCLE_ROLLOUT_MODE: observe
   # GitHub App installation tokens expire after 60 min. rotate-github-app-tokens
   # mints a fresh one every 30 min into Vault, but env vars are frozen at
   # container start, so a long-lived pod like this one is authenticated for at
@@ -99,6 +116,15 @@ env:
   # run "fits inside one token's TTL"; that stopped being true when issue-poll
   # moved into this permanent Temporal worker.
   GITHUB_TOKEN_FILE: /var/run/secrets/github/GITHUB_TOKEN
+  # The execution-request dispatcher (mctl-agents#461 option A, #487): claims
+  # pending mctl-api execution requests and delivers each to the issue's
+  # DevLoop with Update-with-Start. Code default is off; only this worker
+  # (the role that owns the schedules) runs it, and the exec/implement
+  # workers ignore the flag. It claims, fulfils and rejects as MCTL_TOKEN,
+  # the mctl-agent service principal mctl-api requires for those routes.
+  # Live proof: mctl-agents#490. Set to "false" to turn it off again; a
+  # request left claimed is re-claimable once its lease lapses.
+  EXECUTION_REQUEST_DISPATCHER: "true"
 envFrom:
   - secretRef:
       name: mctl-agents-worker-secrets

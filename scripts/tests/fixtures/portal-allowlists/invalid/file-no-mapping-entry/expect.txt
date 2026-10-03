@@ -1,0 +1,1 @@
+mapping.json has no vendored entry named 'widget'

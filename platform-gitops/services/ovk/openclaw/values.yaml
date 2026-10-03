@@ -5,6 +5,25 @@
 
 # Chart: base-service
 
+# STOPPED 2026-09-12 on the tenant owner's request.
+#
+# replicaCount, not autoscaling.minReplicas: base-service renders the
+# Deployment as `replicas: {{ .Values.replicaCount }}`, and minReplicas feeds
+# only the HPA — which this service does not have, since it carries no
+# `autoscaling:` block. Scaling through mctl_scale_service would have appended
+# one with minReplicas: 0, a value the API server rejects without the
+# HPAScaleToZero alpha gate, and left replicaCount at its default 1 with the
+# pod still running.
+#
+# Reversible: set this back to 1. Nothing else is removed — the database,
+# the MinIO state, the Vault paths, the ingress and the TLS certificate all
+# stay. ovk-openclaw.mctl.ai will answer 503 while this is 0.
+#
+# The s3-sync sidecar's preStop hook runs a synchronous `mc mirror` with a
+# 60s terminationGracePeriodSeconds, so the shutdown is not instant and must
+# not be interrupted: that window is what gets the last state into MinIO.
+replicaCount: 0
+
 image:
   repository: ghcr.io/mctlhq/mctl-openclaw
   # release-drift: ignore -- upstream mirror, pinned by hand to a vetted
@@ -121,7 +140,7 @@ envFrom:
 initContainers:
   # 1. Restore state from MinIO (no-op for new tenants, preserves OAuth credentials on restart)
   - name: restore-state
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     command: ["sh", "-c"]
     args:
       - |
@@ -185,7 +204,7 @@ initContainers:
         mountPath: /home/node/.openclaw
   # 2. Build whisper-cli (cached in MinIO platform-cache bucket)
   - name: install-whisper-cli
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
         cpu: 50m
@@ -503,7 +522,7 @@ extraVolumeMounts:
     mountPath: /home/node/.openclaw
 extraContainers:
   - name: s3-sync
-    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     resources:
       requests:
         cpu: 25m

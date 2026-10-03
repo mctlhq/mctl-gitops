@@ -1,5 +1,5 @@
-status: needs-triage
-updated_at: '2026-09-05T14:23:45Z'
+status: merged
+updated_at: '2026-09-25T18:23:11Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -10,14 +10,21 @@ control:
   requires_human_approval: true
 approval:
   approved_by: mashkovd
-  approved_at: '2026-09-05T13:25:26Z'
+  approved_at: '2026-09-24T10:15:02Z'
 attempt:
-  id: a2cbbd71-56ca-4678-8978-2fd313f26427
-  started_at: '2026-09-05T14:18:28Z'
-  expires_at: '2026-09-05T16:28:28Z'
-  finished_at: '2026-09-05T14:23:45Z'
-failure:
-  code: no-commits
-  stage: agent
-  message: implementer produced no commits
-notes: 'agent: implementer produced no commits'
+  id: 4030f43f4ff0fe9641fa9a664922e2438ade619be35e69e4c284841b919cde0d
+  started_at: '2026-09-24T11:49:39Z'
+  expires_at: '2026-09-24T13:59:39Z'
+  finished_at: '2026-09-24T12:24:44Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/686
+execution:
+  context_id: ex-f850fcf40765bf91
+  trace_id: 9b532fe92ec2bcc84514e6cfe8a634bf
+  agent: implementer
+  version: ''
+github:
+  state: merged
+  head_sha: f3bbbd383ffffe4d4ea25e5f1cbf8c70e8af115c
+  observed_at: '2026-09-25T18:23:11Z'
+merged_at: '2026-09-25T18:23:11Z'
+merge_commit: 4bfde728402d23223a7e15f31039b5adbd254e2f

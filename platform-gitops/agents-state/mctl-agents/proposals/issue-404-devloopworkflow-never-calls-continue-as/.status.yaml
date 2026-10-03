@@ -1,0 +1,19 @@
+status: rejected
+updated_at: '2026-09-21T16:19:49Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 404
+  url: https://github.com/mctlhq/mctl-agents/issues/404
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-20T21:52:58Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/437
+github:
+  state: closed
+  observed_at: '2026-09-21T07:00:07Z'
+  head_sha: 9981bcb4cb29aab3a9624bfc38a8846fcc332a54
+notes: PR was closed without merging.

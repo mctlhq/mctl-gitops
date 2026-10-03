@@ -1,0 +1,28 @@
+status: merged
+updated_at: '2026-09-11T06:44:27Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 7
+  url: https://github.com/mctlhq/portfolio/issues/7
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-11T05:20:48Z'
+attempt:
+  id: 714e56e1-6fd3-4771-950e-c6c671bc92f9
+  started_at: '2026-09-11T05:23:32Z'
+  expires_at: '2026-09-11T07:33:32Z'
+  finished_at: '2026-09-11T05:36:00Z'
+pr: https://github.com/mctlhq/portfolio/pull/28
+notes: Follow-up failed deterministically 3 time(s) (implementer follow-up exited
+  non-zero (42) for portfolio/issue-7-p5-work-page-with-project-entries); human triage
+  required.
+github:
+  state: merged
+  head_sha: be62cce9bdb7e07b70e4cf34ad01557f99c60cc6
+  observed_at: '2026-09-11T06:44:27Z'
+merged_at: '2026-09-11T06:44:27Z'
+merge_commit: 5534ddebe3370eef536de211c84d4415d3c64b72

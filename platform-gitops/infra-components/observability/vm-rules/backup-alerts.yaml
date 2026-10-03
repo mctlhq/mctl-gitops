@@ -88,3 +88,166 @@ spec:
               snapshots. A suspended CronJob keeps its last lastSuccessfulTime,
               so this is the only signal until VaultBackupStale trips 25h later.
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+        # VictoriaMetrics. Deliberately not modelled on the CronJob rules
+        # above: vmbackup cannot be a CronJob. It needs the VMSingle data
+        # directory, that PVC is ReadWriteOnce and already mounted by the
+        # vmsingle pod, so a second pod would stall on Multi-Attach. It runs as
+        # a sidecar in that pod instead, which means there is no
+        # kube_cronjob_status_last_successful_time to watch — the sidecar
+        # publishes its own success timestamp to Pushgateway.
+        #
+        # And it is not modelled on container health either. A sidecar that
+        # crashes makes the pod unready, an unready pod leaves the vmsingle
+        # Service, and metrics go dark — so the sidecar never exits on a failed
+        # backup. These two rules are the only thing standing between a broken
+        # backup and silence, which is exactly the state #1071 found: the
+        # sidecar had never run once since 2026-03 and nothing said so.
+        - alert: VictoriaMetricsBackupStale
+          # Daily loop, so 25h tolerates one slow run and never a missed day.
+          # Same threshold as VaultBackupStale, for the same reason.
+          expr: time() - vmbackup_last_success_timestamp_seconds{job="vmbackup"} > 90000
+          for: 10m
+          labels:
+            severity: critical
+            service: monitoring
+          annotations:
+            summary: "VictoriaMetrics backup has not succeeded in over 25 hours"
+            description: >-
+              The vmbackup sidecar in the vmsingle pod has had no successful run
+              in 25 hours, so there is no fresh copy of the metrics database in
+              R2. This covers every SLI the error-budget merge-freeze policy
+              reads and the evaluation history behind every alert. The sidecar
+              does not crash on failure by design, so its container will look
+              healthy — read its logs instead:
+              `kubectl -n monitoring logs deploy/vmsingle-monitoring-victoria-metrics-k8s-stack -c vmbackup`.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+        - alert: VictoriaMetricsBackupMetricAbsent
+          # The failure the staleness rule cannot see. If the sidecar stops
+          # publishing — deleted, never started, Pushgateway unreachable — the
+          # series vanishes and `time() - <absent>` never evaluates, so
+          # VictoriaMetricsBackupStale silently stops firing forever. That is
+          # the shape of the original bug and it gets its own alert.
+          #
+          # 2h, not the 30m used for the Vault CronJob: this series only appears
+          # after the sidecar's first successful backup, and a first backup of
+          # the whole database on a cold start takes appreciably longer than a
+          # 165 KiB Vault snapshot.
+          expr: absent(vmbackup_last_success_timestamp_seconds{job="vmbackup"})
+          for: 2h
+          labels:
+            severity: warning
+            service: monitoring
+          annotations:
+            summary: "VictoriaMetrics backup has never reported success"
+            description: >-
+              No vmbackup_last_success_timestamp_seconds series for 2 hours.
+              Either the vmbackup sidecar is not running, it has not completed a
+              successful backup since it started, or it cannot reach
+              Pushgateway. While this is absent VictoriaMetricsBackupStale
+              cannot fire, so the metrics backup is unmonitored — which is the
+              state that went unnoticed from 2026-03 to 2026-09 (#1071).
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+        # Forgejo volume archive (data/forgejo/backup.yaml). Same CronJob
+        # signal as Vault, one difference: the absence case is split in two.
+        # kube_cronjob_status_last_successful_time only exists after a first
+        # success, so absent() on it would page every time the CronJob is
+        # freshly created and has simply not reached 03:30 yet. Instead:
+        # NeverSucceeded keys on the CronJob's age, MetricAbsent on its
+        # existence. Warning, not critical: phase 1 Forgejo is not on any
+        # platform request path (see forgejo-alerts.yaml).
+        - alert: ForgejoBackupStale
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{
+              namespace="forgejo", cronjob="forgejo-backup"
+            } > 90000
+          for: 10m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "Forgejo volume backup has not succeeded in over 25 hours"
+            description: >-
+              forgejo/forgejo-backup has no successful run in 25 hours. The Job
+              pod is pinned to Forgejo's node, so a Forgejo outage also stops
+              backups — check ForgejoDown first.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        - alert: ForgejoBackupNeverSucceeded
+          # 26h after creation is one full daily cycle plus the 03:30 offset
+          # slack; before that a missing first success is just "not yet".
+          expr: |
+            (time() - kube_cronjob_created{namespace="forgejo", cronjob="forgejo-backup"} > 93600)
+            unless on(namespace, cronjob)
+            kube_cronjob_status_last_successful_time{namespace="forgejo", cronjob="forgejo-backup"}
+          for: 10m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "Forgejo volume backup has never succeeded"
+            description: >-
+              forgejo/forgejo-backup has existed for over 26 hours without one
+              successful run, so ForgejoBackupStale cannot fire for it.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        - alert: ForgejoBackupMetricAbsent
+          expr: absent(kube_cronjob_created{namespace="forgejo", cronjob="forgejo-backup"})
+          for: 30m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "forgejo-backup CronJob is not visible to kube-state-metrics"
+            description: >-
+              No kube_cronjob_created series for forgejo/forgejo-backup. The
+              CronJob was removed or is not scraped, and every other Forgejo
+              backup alert is blind while this lasts.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        # Daily restore drill of the Forgejo archive (data/forgejo/restore-drill.yaml).
+        # One failed run is enough to alert on: it means the newest archive
+        # does not restore, or does not match the database.
+        - alert: ForgejoRestoreDrillStale
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{
+              namespace="forgejo", cronjob="forgejo-restore-drill"
+            } > 93600
+          for: 10m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "Forgejo restore drill has not passed in over 26 hours"
+            description: >-
+              forgejo/forgejo-restore-drill has not succeeded since its last
+              daily slot. Read the failed Job's log: a FAIL line in the restore
+              container is a damaged archive or repository (fsck), in the
+              verify container a repository the database has but the archive
+              lacks. Until it passes, treat the newest backup as unproven.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        - alert: ForgejoRestoreDrillNeverSucceeded
+          # 30h: one daily cycle plus the 05:00 offset slack.
+          expr: |
+            (time() - kube_cronjob_created{namespace="forgejo", cronjob="forgejo-restore-drill"} > 108000)
+            unless on(namespace, cronjob)
+            kube_cronjob_status_last_successful_time{namespace="forgejo", cronjob="forgejo-restore-drill"}
+          for: 10m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "Forgejo restore drill has never succeeded"
+            description: >-
+              forgejo/forgejo-restore-drill has existed for over 30 hours without
+              one successful run, so ForgejoRestoreDrillStale cannot fire for it.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        - alert: ForgejoRestoreDrillMetricAbsent
+          expr: absent(kube_cronjob_created{namespace="forgejo", cronjob="forgejo-restore-drill"})
+          for: 30m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "forgejo-restore-drill CronJob is not visible to kube-state-metrics"
+            description: >-
+              No kube_cronjob_created series for forgejo/forgejo-restore-drill.
+              The CronJob was removed or is not scraped, and the other drill
+              alerts are blind while this lasts.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md

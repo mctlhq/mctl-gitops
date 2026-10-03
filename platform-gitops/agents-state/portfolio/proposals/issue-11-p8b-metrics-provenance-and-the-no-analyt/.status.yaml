@@ -1,0 +1,28 @@
+status: merged
+updated_at: '2026-09-11T16:51:30Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 11
+  url: https://github.com/mctlhq/portfolio/issues/11
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-11T11:15:37Z'
+attempt:
+  id: 5dc903c8-2d3a-4932-be1d-d62f78979561
+  started_at: '2026-09-11T11:18:20Z'
+  expires_at: '2026-09-11T13:28:20Z'
+  finished_at: '2026-09-11T11:40:16Z'
+pr: https://github.com/mctlhq/portfolio/pull/36
+notes: Follow-up failed deterministically 3 time(s) (implementer follow-up exited
+  non-zero (42) for portfolio/issue-11-p8b-metrics-provenance-and-the-no-analyt);
+  human triage required.
+github:
+  state: merged
+  head_sha: 763970307fba33d1dea46d228e33ee079aef5481
+  observed_at: '2026-09-11T16:51:30Z'
+merged_at: '2026-09-11T16:51:30Z'
+merge_commit: 3e9fac63088491debc1c2b6e317cab9ea4f9379b

@@ -1,0 +1,25 @@
+status: merged
+updated_at: '2026-09-12T04:21:11Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 55
+  url: https://github.com/mctlhq/portfolio/issues/55
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-12T00:19:43Z'
+attempt:
+  id: f0abdcd2-8535-497c-9707-3a022c047e7b
+  started_at: '2026-09-12T00:21:03Z'
+  expires_at: '2026-09-12T02:31:03Z'
+  finished_at: '2026-09-12T00:41:01Z'
+pr: https://github.com/mctlhq/portfolio/pull/56
+github:
+  state: merged
+  head_sha: f7b35fb697b1b915e40a43879d08d20a46ce49bb
+  observed_at: '2026-09-12T04:21:11Z'
+merged_at: '2026-09-12T04:21:11Z'
+merge_commit: c6f32cd288bdee548de6e1ebb28e5704c772e98e

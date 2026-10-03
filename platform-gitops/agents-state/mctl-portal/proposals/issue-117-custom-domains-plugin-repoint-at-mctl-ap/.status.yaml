@@ -1,0 +1,25 @@
+status: merged
+updated_at: '2026-09-09T17:20:47Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-portal
+  issue: 117
+  url: https://github.com/mctlhq/mctl-portal/issues/117
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-09T13:57:50Z'
+attempt:
+  id: 9d90089c-3166-4526-9d5b-2a5178ce83aa
+  started_at: '2026-09-09T14:00:15Z'
+  expires_at: '2026-09-09T16:10:15Z'
+  finished_at: '2026-09-09T14:17:01Z'
+pr: https://github.com/mctlhq/mctl-portal/pull/118
+github:
+  state: merged
+  head_sha: ec45d4a0558331990379bffa333fbc6af65e154e
+  observed_at: '2026-09-09T17:20:47Z'
+merged_at: '2026-09-09T17:20:47Z'
+merge_commit: 5d875293f197371c2d3020c08262ef381153773c

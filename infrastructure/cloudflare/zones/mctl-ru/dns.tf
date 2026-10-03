@@ -1,32 +1,26 @@
-# DNS records for mctl.ru.
+# mctl.ru — a redirect-only zone, the same shape as mctl.me.
 #
-# Derived from `tofu plan -generate-config-out`, then reduced: the generator
-# emits every optional attribute as an explicit null, which is noise rather
-# than intent. Only attributes that carry real configuration are kept — the
-# zero-diff plan is what proves the reduction is safe.
+# The apex, the wildcard, the apex redirect and the .php block all moved into
+# ../../modules/zone-baseline with #1103. What was here before was the pilot's
+# hand-reduced copy of the first two; keeping a second copy of the same four
+# resources is what the module exists to prevent.
 
 locals {
-  # Shared origin for the platform zones. Every tenant host resolves through
-  # the wildcard below.
+  # Shared origin for the platform zones. Every host resolves through the
+  # wildcard in the module below.
   origin_ip = "91.98.10.188"
 }
 
-resource "cloudflare_dns_record" "apex" {
-  zone_id = local.zone_id
-  name    = "mctl.ru"
-  type    = "A"
-  content = local.origin_ip
-  proxied = true
-  ttl     = 1 # 1 = automatic
-}
+module "baseline" {
+  source = "../../modules/zone-baseline"
 
-resource "cloudflare_dns_record" "wildcard" {
-  zone_id = local.zone_id
-  name    = "*.mctl.ru"
-  type    = "A"
-  content = local.origin_ip
-  proxied = true
-  ttl     = 1
+  zone_id         = local.zone_id
+  zone_name       = "mctl.ru"
+  origin_ip       = local.origin_ip
+  redirect_target = "https://mctl.ai"
+
+  redirect_rule_ref = "37cc4b9b960f4879acbe822e985d36d0"
+  firewall_rule_ref = "298f62f070b54b489d10370595afa99b"
 }
 
 # Deliberately NOT managed here: TXT _acme-challenge.mctl.ru

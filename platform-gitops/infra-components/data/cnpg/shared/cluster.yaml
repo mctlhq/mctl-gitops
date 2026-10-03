@@ -117,6 +117,13 @@ spec:
     pg_hba:
       - host all mctl-agent all scram-sha-256
       - host mctl-api mctl-api all scram-sha-256
+      # The lifecycle ownership store, same role, its own database. This rule
+      # is REQUIRED, not decorative: the mctl-api entry above is scoped to the
+      # mctl-api database (unlike mctl-agent's wildcard on the line before), so
+      # without it a connection to mctl-lifecycle falls through to the
+      # reject-all at the bottom of this list and Postgres refuses it at auth
+      # time -- the store never initialises, and its routes answer 503 forever.
+      - host mctl-lifecycle mctl-api all scram-sha-256
       # Backstage — access to own db + postgres db (assertDatabaseExists check)
       - host backstage backstage all scram-sha-256
       - host postgres backstage all scram-sha-256
@@ -145,6 +152,12 @@ spec:
       # mctl-academy migration 1755100000000_academy_readonly_role.mjs.
       - host labs-mctl-academy academy_readonly all scram-sha-256
       - host labs-seerrsense labs-seerrsense all scram-sha-256
+      - host labs-mctl-alice labs-mctl-alice all scram-sha-256
+      - host karabu-draw-with-friends karabu-draw-with-friends all scram-sha-256
+      # Forgejo (platform git, bootstrap/templates/data/forgejo.yaml)
+      - host forgejo forgejo all scram-sha-256
+      # ZITADEL (platform identity provider, bootstrap/templates/core-infra/zitadel.yaml)
+      - host zitadel zitadel all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -173,17 +186,36 @@ spec:
       - name: mctl-api
         login: true
         inherit: true
-        connectionLimit: 20
+        # 40, not 20: mctl-api opens one pool per store and initialises every
+        # store once at startup under a shared deadline. During a rolling
+        # update the old pod still holds its connections while the new one
+        # initialises, and at 20 the new pod hit "too many connections for
+        # role" (2026-09-24 11:20Z); the agent registry, surface identities,
+        # event outbox and domains stores then stayed disabled (503) until
+        # the next restart. Steady state is ~8; 40 covers two pods at init.
+        connectionLimit: 40
         ensure: present
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
+      - name: karabu-draw-with-friends
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: karabu-draw-with-friends-db-creds
       - name: labs-seerrsense
         login: true
         connectionLimit: 10
         ensure: present
         passwordSecret:
           name: labs-seerrsense-db-creds
+      - name: labs-mctl-alice
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: labs-mctl-alice-db-creds
       - name: labs-mctl-academy
         login: true
         connectionLimit: 10
@@ -274,6 +306,27 @@ spec:
         ensure: present
         passwordSecret:
           name: temporal-db-creds
+      # Forgejo (bootstrap/templates/data/forgejo.yaml): one replica, Go's
+      # database/sql pool defaults to MAX_OPEN_CONNS=0 (unbounded) but idles at
+      # a handful; 30 leaves room for migrations on upgrade.
+      - name: forgejo
+        login: true
+        connectionLimit: 30
+        ensure: present
+        passwordSecret:
+          name: forgejo-db-creds
+      # ZITADEL (bootstrap/templates/core-infra/zitadel.yaml): one API replica
+      # capped at MaxOpenConns 15, plus the init/setup Sync-hook Jobs that run
+      # while the old pod is still up during an upgrade. Kept tight because
+      # the per-role limits here already sum past max_connections (200). The
+      # role owns the zitadel database, so ZITADEL's `init zitadel` creates
+      # its schemas without any superuser credential.
+      - name: zitadel
+        login: true
+        connectionLimit: 25
+        ensure: present
+        passwordSecret:
+          name: zitadel-db-creds
       #   passwordSecret:
       #     name: team1-app1-db-creds
 

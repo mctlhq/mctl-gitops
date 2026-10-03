@@ -67,7 +67,22 @@ jobs:
           # SIGPIPE, and 141 becomes the pipeline status. Inside `if` that reads
           # as "no match", so a Cloudflare change would be recorded as
           # changed=false and the required job would pass without planning it.
-          if grep -qE '^(infrastructure/cloudflare/|\.github/workflows/cloudflare-plan\.yml$)' <<< "$files"; then
+          # The gate has to watch everything it is made of, not just the
+          # configuration it inspects. .github/scripts/cloudflare-local-state-roots.sh
+          # decides which roots are excused from the backend requirement, so a
+          # pull request editing only that file could otherwise excuse a root
+          # without a single check running. cloudflare-drift.yml is here for the
+          # same reason: it shares the discovery and the exception list.
+          #
+          # The projects-mcp grants list used to be here too: the account root
+          # read it out of that service's values.yaml with file(), so adding an
+          # address changed who could reach projects.mctl.ai while touching
+          # nothing under infrastructure/cloudflare/ (#1272 went green with
+          # this job skipped for exactly that reason). It is not an input to
+          # any root any more — the Access policy admits any Google account and
+          # the server alone decides what each address sees — so watching that
+          # path would now only wake the gate for a file it does not read.
+          if grep -qE '^(infrastructure/cloudflare/|\.github/scripts/cloudflare-local-state-roots\.sh$|\.github/workflows/cloudflare-(plan|drift)\.yml$)' <<< "$files"; then
             changed=true
           else
             changed=false
@@ -158,7 +173,7 @@ jobs:
           # form exits 128.
           base_paths=$(tree_paths "$BASE")
           head_paths=$(tree_paths HEAD)
-          local_state_roots=$(grep -v '^\s*\(#.*\)\?$' infrastructure/cloudflare/.local-state-roots || true)
+          local_state_roots=$(.github/scripts/cloudflare-local-state-roots.sh)
 
           # OpenTofu loads JSON configuration too, so versions.tf.json marks a root
           # exactly as versions.tf does; discovery accepts both for the same
@@ -230,6 +245,21 @@ jobs:
             grep -qxF -- "$(dirname "$f")" <<< "$head_roots" \
               || problems="${problems}configuration in no root's own directory: $f\n"
           done <<< "$head_paths"
+
+          # Checked in the other direction too, and NOT through $problems: an
+          # entry naming no root excuses nothing, and the only place that used
+          # to notice was drift — on a schedule, after the merge, on main. That
+          # is the very shape this list exists to remove, moved up one level
+          # into the list itself. It is also not something the removal label
+          # should be able to wave through: the label says "this root loses
+          # coverage deliberately", not "this line is a typo".
+          while IFS= read -r excluded; do
+            [ -n "$excluded" ] || continue
+            grep -qxF -- "$excluded" <<< "$head_roots" && continue
+            echo "::error::.local-state-roots lists '$excluded', which is not a discovered root"
+            echo "discovered roots:"; printf '%s\n' "$head_roots"
+            exit 1
+          done <<< "$local_state_roots"
 
           [ -n "$problems" ] || { echo "every root at $BASE is still discovered, backed and complete"; exit 0; }
 
@@ -338,7 +368,29 @@ jobs:
     # program, the http data source) fail at init before plan is reached.
 
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # Per root: the repository-wide read credential is zone-scoped (All
+      # zones, zone permissions only -- checked against the live token list)
+      # and infrastructure/cloudflare/portal is account-level, so planning it
+      # with that token answers 10000 Authentication error rather than a plan.
+      # CF_PORTAL_READ_TOKEN is Account -> MCP Portals -> Read on this account
+      # alone, which keeps the reasoning above intact: what a branch can do
+      # with it is read the portal's own registration, and nothing else.
+      # An explicit chain because secrets cannot be indexed by a variable; a
+      # root with no entry falls back to the zone credential.
+      #
+      # infrastructure/cloudflare/account is account-level for the same reason
+      # and now holds an Access application, which the zone credential cannot
+      # even read: it answers 1010 auth.forbidden on the refresh, so the root
+      # fails before it can compare anything. CF_ACCOUNT_READ_TOKEN is
+      # Account -> Access: Apps and Policies -> Read on this account alone.
+      # Absent, the chain falls back to the zone credential and that root keeps
+      # failing visibly rather than being skipped.
+      CLOUDFLARE_API_TOKEN: >-
+        ${{ matrix.root == 'infrastructure/cloudflare/portal'
+         && secrets.CF_PORTAL_READ_TOKEN
+         || matrix.root == 'infrastructure/cloudflare/account'
+         && secrets.CF_ACCOUNT_READ_TOKEN
+         || secrets.CLOUDFLARE_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
 
@@ -410,11 +462,36 @@ jobs:
           ROOT: ${{ matrix.root }}
         run: |
           set -euo pipefail
-          if grep -qxF -- "$ROOT" "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots"; then
+          record="${TF_DATA_DIR:-.terraform}/terraform.tfstate"
+          # Into a variable, then a here-string. `script | grep -q` lets grep
+          # close the pipe at the first match, and with pipefail a SIGPIPE'd
+          # producer makes the whole pipeline 141 — read as "no match" inside
+          # `if`, which would send a legitimately excepted root down the failure
+          # path. It needs an output larger than the pipe buffer to bite (~2000
+          # entries here; five do not), so this list will never reach it — but
+          # the same shape has already produced one real false negative in this
+          # file, and the correct form costs a line.
+          excepted=$("$GITHUB_WORKSPACE/.github/scripts/cloudflare-local-state-roots.sh" \
+                       "$GITHUB_WORKSPACE/infrastructure/cloudflare/.local-state-roots")
+          if grep -qxF -- "$ROOT" <<< "$excepted"; then
+            # The list means "this root has no remote state". Anything init
+            # actually resolved has to agree, so the test is on local, not on
+            # s3: a listed root moved to any other remote backend — http,
+            # anything — is watchable again while drift goes on skipping it,
+            # and naming only s3 would let that through. Local state leaves no
+            # record at all, which is why an absent one is the other pass.
+            # This is the last step of #1103, so the check exists to name it
+            # rather than let it pass.
+            if [ -f "$record" ]; then
+              resolved=$(jq -r '.backend.type // "none"' "$record")
+              if [ "$resolved" != "local" ]; then
+                echo "::error::$ROOT resolved the '$resolved' backend but is still listed in .local-state-roots — remove the entry so drift watches it again"
+                exit 1
+              fi
+            fi
             echo "::warning::$ROOT is on local state by exception; its plan does not reflect live Cloudflare"
             exit 0
           fi
-          record="${TF_DATA_DIR:-.terraform}/terraform.tfstate"
           [ -f "$record" ] \
             || { echo "::error::$ROOT resolved no remote backend — it is planning against empty local state"; exit 1; }
           type=$(jq -r '.backend.type // "none"' "$record")
@@ -479,12 +556,40 @@ jobs:
         if: always()
         run: rm -f tfplan plan.json plan.txt
 
+  # The apply workflow's guards are the only code in this directory whose
+  # failure mode is ACCEPTANCE, and until this job existed nothing ever ran
+  # them: cloudflare-apply.yml is workflow_dispatch-only, so their first
+  # execution would have been a real dispatch on main with the per-root write
+  # token and the writable R2 credential in scope. Five defects in those two
+  # files were found by reading them and none by running them.
+  #
+  # Deliberately unconditional and outside the `changes` gate. Adding these
+  # paths there would drag a full per-root `tofu plan` along with every edit to
+  # the apply workflow, which is not what that gate is for; and a check that
+  # only runs on some pull requests cannot vouch for the others. It costs
+  # seconds and needs no credentials.
+  assert-scripts:
+    name: self-test the apply guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Root guard
+        env:
+          CLOUDFLARE_GUARD_SELF_TEST: '1'
+        run: .github/scripts/cloudflare-assert-applyable-root.sh
+      - name: Backend assertion
+        env:
+          CLOUDFLARE_GUARD_SELF_TEST: '1'
+        run: .github/scripts/cloudflare-assert-backend.sh
+
   # The single stable context to mark required in the branch ruleset. It runs on
   # every pull request, including ones that touch nothing here, so it always has
   # a verdict to publish.
   cloudflare-plan:
     name: cloudflare-plan
-    needs: [changes, discover, plan]
+    needs: [changes, discover, plan, assert-scripts]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -498,6 +603,14 @@ jobs:
 
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::change detection itself failed — cannot vouch for this PR"
+            exit 1
+          fi
+
+          # Checked before the `changed` short-circuit below: the guards are
+          # not Cloudflare configuration, so a pull request that touches
+          # nothing here must still not be able to break them.
+          if [ "${{ needs.assert-scripts.result }}" != "success" ]; then
+            echo "::error::the apply guards failed their self-test"
             exit 1
           fi
 

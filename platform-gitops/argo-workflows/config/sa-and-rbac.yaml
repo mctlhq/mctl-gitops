@@ -103,6 +103,40 @@ roleRef:
   name: argo-workflow-rotate-github-token
   apiGroup: rbac.authorization.k8s.io
 ---
+# The rotation also force-syncs mctl-api's own ExternalSecret, which lives in
+# the mctl-api namespace rather than here. Without this the PATCH 403s after
+# the Vault write, so every rotation run ends failed — and a permanently red
+# rotation hides the next real failure, which is the whole reason the workflow
+# reports per-target.
+#
+# Same shape as the argo-workflows grant above: one namespace, one resource
+# name, patch only. Not a ClusterRole — the SA has no business touching any
+# other ExternalSecret in that namespace, least of all mctl-api-secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-rotate-github-token
+  namespace: mctl-api
+rules:
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    resourceNames: ["mctl-api-github-app"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-rotate-github-token
+  namespace: mctl-api
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: argo-workflow-rotate-github-token
+  apiGroup: rbac.authorization.k8s.io
+---
 # Allow workflow SA to trigger ArgoCD sync (annotate apps for hard refresh)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

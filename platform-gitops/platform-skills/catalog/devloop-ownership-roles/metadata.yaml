@@ -1,0 +1,10 @@
+name: devloop-ownership-roles
+title: DevLoop Ownership Roles
+description: Four-role ownership model for the MCTL DevLoop reliability closure loop — who owns product decisions, implementation, lifecycle governance, and automated execution, and where the boundaries are
+visibility: admin
+status: active
+owner: platform
+runtimes:
+  - claude
+  - codex
+  - mcp

@@ -1,0 +1,348 @@
+# Unit tests for backup-alerts.yaml (group mctl.backups).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so promtool
+# can evaluate the very rules the cluster runs.
+#
+# Scoped to the VictoriaMetrics pair added with #1071. promtool's clock starts
+# at unix 0, so a "last success" in the past is expressed as a negative
+# timestamp: at eval_time 20m, time() is 1200, and a series holding -90000
+# means the last success was 91200s ago.
+rule_files:
+  - generated/backup-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------
+  # VictoriaMetricsBackupStale
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a backup that succeeded moments ago stays quiet
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: VictoriaMetricsBackupStale
+        exp_alerts: []
+
+  # 24h old is the normal steady state for a daily backup and must not fire —
+  # this is what pins the threshold above one full cycle.
+  - interval: 1m
+    name: a backup 24h old stays quiet
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '-86400x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: VictoriaMetricsBackupStale
+        exp_alerts: []
+
+  # Pins the `for` window. Without this, dropping `for: 10m` altogether would
+  # still pass every other test in this file.
+  - interval: 1m
+    name: a backup older than 25h is only pending in the first 10 minutes
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '-90000x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: VictoriaMetricsBackupStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: a backup older than 25h fires critical
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '-90000x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: VictoriaMetricsBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: monitoring
+              job: vmbackup
+              instance: vmsingle
+            exp_annotations:
+              summary: VictoriaMetrics backup has not succeeded in over 25 hours
+              description: >-
+                The vmbackup sidecar in the vmsingle pod has had no successful
+                run in 25 hours, so there is no fresh copy of the metrics
+                database in R2. This covers every SLI the error-budget
+                merge-freeze policy reads and the evaluation history behind
+                every alert. The sidecar does not crash on failure by design, so
+                its container will look healthy — read its logs instead:
+                `kubectl -n monitoring logs deploy/vmsingle-monitoring-victoria-metrics-k8s-stack -c vmbackup`.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+
+  # ---------------------------------------------------------------------
+  # VictoriaMetricsBackupMetricAbsent — the guard on the guard
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a reporting sidecar keeps the absence alert quiet
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: VictoriaMetricsBackupMetricAbsent
+        exp_alerts: []
+
+  # A stale backup still publishes a timestamp. If these two were written so
+  # that staleness also read as absence, the operator would get two alerts for
+  # one fault and the absence alert would stop meaning what it says.
+  - interval: 1m
+    name: a stale backup is not an absent backup
+    input_series:
+      - series: 'vmbackup_last_success_timestamp_seconds{job="vmbackup",instance="vmsingle"}'
+        values: '-90000x200'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: VictoriaMetricsBackupMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: no timestamp at all fires after 2h
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x200'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: VictoriaMetricsBackupMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: monitoring
+              # absent() synthesises the labels named in the matcher.
+              job: vmbackup
+            exp_annotations:
+              summary: VictoriaMetrics backup has never reported success
+              description: >-
+                No vmbackup_last_success_timestamp_seconds series for 2 hours.
+                Either the vmbackup sidecar is not running, it has not completed
+                a successful backup since it started, or it cannot reach
+                Pushgateway. While this is absent VictoriaMetricsBackupStale
+                cannot fire, so the metrics backup is unmonitored — which is the
+                state that went unnoticed from 2026-03 to 2026-09 (#1071).
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/restore.md
+
+  # Under 2h must not fire yet, or a normal cold start pages someone.
+  - interval: 1m
+    name: no timestamp for 90 minutes is still within the startup window
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x200'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: VictoriaMetricsBackupMetricAbsent
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # Forgejo volume backup (forgejo/forgejo-backup)
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a forgejo backup 24h old stays quiet
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-86400x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoBackupStale
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoBackupNeverSucceeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoBackupMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: a forgejo backup older than 25h fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-90000x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-backup
+            exp_annotations:
+              summary: Forgejo volume backup has not succeeded in over 25 hours
+              description: >-
+                forgejo/forgejo-backup has no successful run in 25 hours. The Job
+                pod is pinned to Forgejo's node, so a Forgejo outage also stops
+                backups — check ForgejoDown first.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  # The first-day case: created hours ago, no success yet, must stay quiet.
+  - interval: 1m
+    name: a freshly created forgejo cronjob without a success is not yet an alert
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-36000x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoBackupNeverSucceeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoBackupMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: a forgejo cronjob older than 26h without any success fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-backup"}'
+        values: '-100000x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoBackupNeverSucceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-backup
+            exp_annotations:
+              summary: Forgejo volume backup has never succeeded
+              description: >-
+                forgejo/forgejo-backup has existed for over 26 hours without one
+                successful run, so ForgejoBackupStale cannot fire for it.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a missing forgejo cronjob fires after 30m
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ForgejoBackupMetricAbsent
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ForgejoBackupMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-backup
+            exp_annotations:
+              summary: forgejo-backup CronJob is not visible to kube-state-metrics
+              description: >-
+                No kube_cronjob_created series for forgejo/forgejo-backup. The
+                CronJob was removed or is not scraped, and every other Forgejo
+                backup alert is blind while this lasts.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  # ---------------------------------------------------------------------
+  # Forgejo restore drill (forgejo/forgejo-restore-drill)
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: a restore drill that passed 24h ago stays quiet
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-restore-drill"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-restore-drill"}'
+        values: '-86400x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoRestoreDrillStale
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoRestoreDrillNeverSucceeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ForgejoRestoreDrillMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: a restore drill without a pass for over 26h fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-restore-drill"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="forgejo",cronjob="forgejo-restore-drill"}'
+        values: '-94000x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoRestoreDrillStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-restore-drill
+            exp_annotations:
+              summary: Forgejo restore drill has not passed in over 26 hours
+              description: >-
+                forgejo/forgejo-restore-drill has not succeeded since its last
+                daily slot. Read the failed Job's log: a FAIL line in the restore
+                container is a damaged archive or repository (fsck), in the
+                verify container a repository the database has but the archive
+                lacks. Until it passes, treat the newest backup as unproven.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a fresh restore drill cronjob without a pass is not yet an alert
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-restore-drill"}'
+        values: '-90000x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ForgejoRestoreDrillNeverSucceeded
+        exp_alerts: []
+
+  - interval: 1m
+    name: a restore drill cronjob older than 30h without any pass fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="forgejo",cronjob="forgejo-restore-drill"}'
+        values: '-108500x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ForgejoRestoreDrillNeverSucceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-restore-drill
+            exp_annotations:
+              summary: Forgejo restore drill has never succeeded
+              description: >-
+                forgejo/forgejo-restore-drill has existed for over 30 hours without
+                one successful run, so ForgejoRestoreDrillStale cannot fire for it.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+
+  - interval: 1m
+    name: a missing restore drill cronjob fires after 30m
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ForgejoRestoreDrillMetricAbsent
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ForgejoRestoreDrillMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: forgejo
+              namespace: forgejo
+              cronjob: forgejo-restore-drill
+            exp_annotations:
+              summary: forgejo-restore-drill CronJob is not visible to kube-state-metrics
+              description: >-
+                No kube_cronjob_created series for forgejo/forgejo-restore-drill.
+                The CronJob was removed or is not scraped, and the other drill
+                alerts are blind while this lasts.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md

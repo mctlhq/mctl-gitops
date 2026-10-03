@@ -1,0 +1,35 @@
+# Scrape config for otel-collector.
+#
+# This is the ONLY scrape of the collector, deliberately. The chart's own
+# serviceMonitor/podMonitor presets are explicitly disabled in
+# bootstrap/templates/observability/otel-collector.yaml because vmagent runs
+# selectAllByDefault: true (bootstrap/templates/observability/monitoring.yaml:287)
+# and would discover a chart-rendered ServiceMonitor too, doubling every
+# series and every alert over it -- the same #1159 failure documented in
+# pushgateway/servicescrape.yaml, one directory over.
+#
+# Selector matches the Service's chart-generated labels. The chart's
+# selectorLabels helper keys off .Chart.Name (opentelemetry-collector), NOT
+# fullnameOverride -- fullnameOverride only renames the Service object itself
+# (to otel-collector). app.kubernetes.io/instance is the Helm release name,
+# which ArgoCD sets to the Application name (otel-collector) for this
+# multi-source Application. The endpoint references the port by NAME, not
+# number -- see pushgateway/servicescrape.yaml for the two failure modes a raw
+# port number or an unlabelled Service selector would hit. If this pool ever
+# selects zero targets, fix the Service (labels/port name); do not add a
+# second scrape.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: otel-collector
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  endpoints:
+    - port: metrics

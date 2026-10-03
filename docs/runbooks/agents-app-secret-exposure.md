@@ -50,13 +50,14 @@ the App's settings page.
 ## In-repo consumers (verified from this clone)
 
 Grep for `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY` across
-`.github/workflows/` in this clone finds exactly three call sites.
+`.github/workflows/` in this clone finds exactly four call sites.
 
 | Consumer | Mints for | `repositories:` | `permission-*` scoping (after this proposal) |
 |---|---|---|---|
 | `.github/workflows/gitops-bump.yaml:64-72` (`Generate GitHub App token` step, `bump` job) | Pushes a tag-bump commit directly to `main`, bypassing the `main-protection` ruleset (the App is on its `bypass_actors` list) | `mctl-gitops` | `permission-contents: write` (added by this proposal's task 1; previously unset, so the minted token carried the App's full installed set: `actions:write`, `pull_requests:write`, `issues:write`, `workflows:write`, `checks:read`) |
 | `.github/workflows/release-deploy.yaml:120-128` (`Generate GitHub App token` step, `bump` job) | Same as above — pushes an image-tag bump to `main` after a build succeeds | `mctl-gitops` | `permission-contents: write` (added by this proposal's task 2; same prior state as `gitops-bump.yaml`) |
 | `.github/workflows/release-drift.yml:43-52` (`Generate read token` step, `check` job) | Reads release/tag/compare state across every mctlhq source repository via `.github/scripts/release-drift.sh` | none (deliberately unset — needs org-wide read) | `permission-contents: read`, `permission-actions: read`, `permission-metadata: read` — already correctly scoped before this proposal; left untouched |
+| `.github/workflows/cloudflare-drift.yml:375-391` (`Generate a read token for the private upstreams` step, `plan` job, portal root only) | Reads `docs/portal-allowlist.json` from the one private upstream in `PRIVATE_OWNERS` (`mctlhq/projects-mcp`), which `raw.githubusercontent.com` cannot serve without a token | `projects-mcp` | `permission-contents: read`, `permission-metadata: read` |
 
 `release-drift.yml`'s no-`repositories:`, multi-permission, cross-repo-read
 shape is the one call site in this repo that a future single-repo-scoped

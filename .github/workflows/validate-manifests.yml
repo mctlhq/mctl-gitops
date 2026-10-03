@@ -90,6 +90,83 @@ jobs:
           kubeconform -strict -summary -schema-location default \
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap.yaml" "$tmpdir/argocd.yaml"
+          # A platform NetworkPolicy placed in a tenant namespace must also be
+          # on mctl-tenant-networkpolicy-allowlist, or the API server rejects
+          # it at sync while every check above stays green (gitops#1484).
+          # --selftest first: a detector never seen to fire is not known to work.
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-tenant-networkpolicy-allowlist.py --selftest "$tmpdir/bootstrap.yaml"
+
+      # issue-903: otelCollector.eval.enabled is false by default, so this
+      # overlay is the only place the eval-namespace/eval-candidates
+      # templates and a multi-backend fan-out ever render in CI. Proves the
+      # manifests mctlhq/mctl-gitops#1280 will flip on are schema-valid
+      # before that PR exists, not after.
+      - name: Render and validate the otel-collector eval overlay (issue-903)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            -f tests/fixtures/otel-eval-candidates.example-values.yaml \
+            > "$tmpdir/bootstrap-eval.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" \
+            "$tmpdir/bootstrap-eval.yaml"
+
+      # .github#50: both flag states are rendered explicitly with --set, so
+      # the assertion does not depend on the committed default (enabled
+      # since the owner-approved rollout). On: the usage-writer ExternalSecret
+      # and the chart value appear and are schema-valid. Off: neither does.
+      - name: Render and validate the usage-writer overlay (.github#50)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            --set usageWriter.enabled=false > "$tmpdir/off.yaml"
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            --set usageWriter.enabled=true > "$tmpdir/on.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" "$tmpdir/on.yaml"
+          for marker in 'name: mctl-api-usage-writer' 'usageWriterTokenSecret: mctl-api-usage-writer' 'property: usage-writer-token'; do
+            grep -qF "$marker" "$tmpdir/on.yaml" || { echo "::error::flag on: missing '$marker'"; exit 1; }
+            if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
+          done
+
+      # mctlhq/mctl-gitops#1405: same both-states shape as the usage-writer
+      # overlay above. On: the mctl-api-surface-telegram ExternalSecret and
+      # the chart value appear and are schema-valid. Off: neither does.
+      - name: Render and validate the surface-telegram overlay (issue-1405)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            --set surfaceTelegramToken.enabled=false > "$tmpdir/off.yaml"
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            --set surfaceTelegramToken.enabled=true > "$tmpdir/on.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" "$tmpdir/on.yaml"
+          for marker in 'name: mctl-api-surface-telegram' 'surfaceTelegramTokenSecret: mctl-api-surface-telegram' 'property: telegram-token'; do
+            grep -qF "$marker" "$tmpdir/on.yaml" || { echo "::error::flag on: missing '$marker'"; exit 1; }
+            if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
+          done
+
+      # issue-1409: the usage pricing ConfigMap renders unconditionally (no
+      # flag, unlike the two overlays above) since it is inert until a
+      # companion mctl-api chart change (cross-repo, tracked separately)
+      # wires a mount to it. This validates the committed rate card itself
+      # (mirroring usage.NewCatalog's own checks, mctlhq/mctl-api) and that
+      # the rendered ConfigMap's catalog.json is byte-identical to it.
+      - name: Validate the usage pricing catalog (issue-1409)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/validate-usage-pricing-catalog.py --selftest
+          python3 scripts/validate-usage-pricing-catalog.py
 
       - name: Validate platform skill registry
         run: |
@@ -133,8 +210,32 @@ jobs:
           scripts/validate-openclaw-version-pin.py --selftest
           scripts/validate-openclaw-version-pin.py
 
+      - name: Check the implementation admission worker stays a single replica
+        run: |
+          set -euo pipefail
+          # --selftest first, as for every detector in this job. The
+          # invariant (mctl-agents#395, #1285): max_concurrent_activities is
+          # a per-process limit, so capacity on mctl-dev-loop-implement is
+          # replicas × N. One replica is what makes N mean N; this fails the
+          # PR that scales it instead of raising N.
+          scripts/validate-implement-worker-singleton.py --selftest
+          scripts/validate-implement-worker-singleton.py
+
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
+
+      # A proposal committed as `accepted` while demanding an approval it does
+      # not carry is unrunnable by every supported path, and nothing fails on
+      # it: the approve operation and the implementer both exit 0. One sat in
+      # agents-state for five weeks (mctl-agents#349). mctl-agents#358 guards
+      # its own writers; only a gate here can refuse YAML committed straight
+      # into this repo. --selftest first, same reason as the other detectors:
+      # a guard never seen to fail is not known to work.
+      - name: Validate agents-state approval records
+        run: |
+          set -euo pipefail
+          scripts/validate-agents-state-approval.py --selftest
+          scripts/validate-agents-state-approval.py
 
       - name: Check for shell interpolation of workflow parameters
         run: |
@@ -155,6 +256,40 @@ jobs:
           scripts/validate-yq-interpolation.py --selftest
           scripts/validate-yq-interpolation.py
 
+      - name: Tenant workflow templates only write tenant-scoped paths
+        run: |
+          set -euo pipefail
+          # A tenant workflow template that writes a shared file breaks the
+          # "concurrent tenant ops touch disjoint git paths" guarantee and
+          # reintroduces the merge-conflict-then-set-e-abort failure mode
+          # that orphaned Vault policies on 2026-09-27 (gitops#1431).
+          # --selftest first, same reason as the detectors above.
+          scripts/validate-tenant-workflow-shared-writes.py --selftest
+          scripts/validate-tenant-workflow-shared-writes.py
+
+      - name: ArgoCD tenant RBAC fragments match the canonical policy
+        run: |
+          set -euo pipefail
+          # Machine-checks the SOC F4 "no tenant exec" control instead of
+          # relying on a values.yaml comment: a hand-edited fragment that
+          # widens a glob or adds a verb now fails CI (gitops#1431).
+          scripts/validate-argocd-tenant-rbac.py --selftest
+          scripts/validate-argocd-tenant-rbac.py
+
+      - name: Origin mTLS is still enforced
+        run: |
+          set -euo pipefail
+          # Traefik refuses any TLS handshake without this account's Cloudflare
+          # client certificate, which is what closes the "another Cloudflare
+          # customer" gap in infrastructure/cloudflare/README.md (#1153). The
+          # whole enforcement is two objects; delete either and the origin goes
+          # back to accepting any Cloudflare address with nothing failing, no
+          # probe going red and no line in any log. Exactly the shape of the
+          # VMPodScrape that sat unnoticed in vm-rules/ for three months
+          # (#1159). --selftest first, same reason as the detectors above.
+          scripts/validate-origin-mtls.py --selftest
+          scripts/validate-origin-mtls.py
+
       - name: Install promtool
         env:
           PROMETHEUS_VERSION: "3.5.0"
@@ -171,7 +306,15 @@ jobs:
       # service, and no gate in this repo had anything to say about it for
       # months. The unit tests are the part that closes that.
       - name: Check and unit-test alerting rules
-        run: scripts/check-vm-rules.sh
+        # --selftest first, same reason as the other detectors in this job: the
+        # kind guard added with #1159 refuses a non-VMRule object under
+        # vm-rules/, and a guard never seen to fail is not known to work. It
+        # runs the script against a throwaway fixture directory, so it asserts
+        # on the real code path rather than a copy of it.
+        run: |
+          set -euo pipefail
+          scripts/check-vm-rules.sh --selftest
+          scripts/check-vm-rules.sh
 
       - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
         run: |
@@ -196,6 +339,27 @@ jobs:
               -ignore-filename-pattern '.*/vm-rules/tests/generated/.*' \
               -schema-location "$CRD_SCHEMA_LOCATION"
 
+      - name: Unit-test the investigate CWFT's optional work-context argv
+        # The omit-both argv is a cross-repo compatibility contract, not a
+        # style preference: mctl_trigger_issue, a hand-submitted Workflow,
+        # and the DevLoopWorkflow all submit without work_item_id or
+        # execution_id today, and the command line they get must stay
+        # byte-identical to what run-investigator built before these two
+        # optional parameters existed (gitops#1279). Also proves the `set --`
+        # construction resists a value carrying shell metacharacters.
+        run: python3 tests/test_cwft_investigate_work_context_argv.py
+
+      - name: Unit-test the implement/shepherd CWFTs' optional work-context env
+        # gitops#1408, mirroring gitops#1279 above onto cwft-mctl-agents-implement.yaml
+        # and cwft-mctl-agents-shepherd.yaml. The implement/shepherd argv is a
+        # cross-repo compatibility contract for the cron sweep,
+        # mctl_trigger_implementer and the shepherd cron: run_implementer.py and
+        # run_shepherd.py have no --work-item-id-style flags, so the five
+        # correlation values travel through env only, and env-only is what
+        # keeps a hostile identifier out of a root pod holding the gitops
+        # deploy key.
+        run: python3 tests/test_cwft_implement_shepherd_work_context_env.py
+
       - name: Unit-test the release-deploy bump script
         # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
         # it only ever runs during a real release — a bug in it is found by
@@ -206,6 +370,16 @@ jobs:
         # of them forever.
         run: python3 tests/test_release_deploy_bump.py
 
+      - name: Unit-test the App-token scope validation
+        # rotate-github-app-tokens narrows mctl-api's installation token to one
+        # repository and two permissions, then checks GitHub's response against
+        # what it asked for. That check is the only thing standing between a
+        # narrowing that silently did not apply and a token carrying the
+        # installation's full write grant across every repository — which
+        # works, and logs identically. It runs every 30 minutes in a workflow
+        # nobody watches, so it is tested here instead.
+        run: python3 tests/test_rotate_github_token_scope.py
+
       - name: Unit-test tpl-git-commit's yq handling
         # The static check above proves no yq expression interpolates a shell
         # variable. This proves the shape that replaced it actually resists
@@ -214,6 +388,54 @@ jobs:
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
 
+      - name: Unit-test the shepherd's commit-and-push staging
+        # commit-and-push is the only step that writes agents-state back to
+        # git, and it stages through `git add` pathspecs. A pathspec that
+        # matches nothing exits 128, so under `set -e` a mis-chosen pathspec
+        # does not skip one file — it loses the whole durable write. That has
+        # now happened twice in this script (the `:(literal)` P1 on
+        # gitops#1046, then a staged deletion still being handed to `git add`,
+        # gitops#1295), and both reproduce against real git in a scratch repo,
+        # so the block's own text is replayed here.
+        run: python3 tests/test_cwft_shepherd_commit_pathspecs.py
+
+      - name: Unit-test the portal OAuth registration drift detector
+        # The MCP server's `auth_credentials` is write-only: the API accepts it
+        # and never returns it, so OpenTofu keeps what was last applied in
+        # state and a refresh cannot correct it -- measured against a throwaway
+        # server, an out-of-band change left `tofu plan` at `no-op`. That one
+        # attribute is therefore checked by a script instead, and this is its
+        # selftest: a detector never seen to fire is not known to work.
+        run: scripts/portal-auth-credentials-drift.py --selftest
+
+      - name: Unit-test the portal tool catalogue drift detector
+        # Its sibling above. The portal never refreshes a manual-OAuth server's
+        # tool snapshot, so a tool added upstream stays invisible and a changed
+        # output schema is validated by clients against the stale copy. Same
+        # reason for running it here rather than only nightly: a refactor that
+        # breaks compare() or the waiver table would merge green, and the first
+        # anyone heard of it would be a nightly run reporting that the detector
+        # could not run — with the catalogue unchecked meanwhile.
+        run: scripts/portal-catalogue-drift.py --selftest
+
+      - name: Validate the vendored MCP portal allowlists
+        # mctlhq/mctl-gitops#1370 PR A: each owning repo's docs/portal-allowlist.json
+        # is pinned here byte-identical as allowlists/<server>.json, so the
+        # decision "this tool is safe to expose" still lands in the same diff
+        # as the tool, one repository away. This checks the vendored copies'
+        # shape, that allowlists/*.json, mapping.json and sources.json all
+        # agree on which servers are vendored, that every mapped server has a
+        # literal resource block in mcp-servers.tf (or is on the commented
+        # UNMANAGED list), and that no vendored file's own tool count exceeds
+        # allowlists/baseline.json -- a widening bump fails here until a
+        # human edits baseline.json in the same PR. It does not, and cannot,
+        # compare against the live Cloudflare catalogue: CI holds no
+        # credential for this root (#1111), same reason as its siblings
+        # above.
+        run: |
+          scripts/validate-portal-allowlists.py --selftest
+          scripts/validate-portal-allowlists.py
+
       - name: Unit-test wft-provision-database's values.yaml patch
         # The provisioner commits straight to main, so no PR check sees the
         # file it writes, and `helm template` above accepts duplicate keys
@@ -221,3 +443,138 @@ jobs:
         # values file that already declares envFrom — the shape that lost
         # every application secret in gitops#1102.
         run: python3 tests/test_wft_provision_database_values.py
+
+      - name: Unit-test base-service's OTEL env on both workload kinds
+        # The chart renders a Deployment OR a Rollout, never both, so an env
+        # block added to one template is invisible in the other's output and
+        # fails silently — which is how the OTEL opt-in first shipped working
+        # only for non-blueGreen services. This renders both from the same
+        # values and compares them, and covers a service with no `env:` key.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_otel_env.py
+
+      - name: Unit-test base-service's work-context env on both workload kinds
+        # mctlhq/mctl-gitops#1405, same defect class as the OTEL test above:
+        # gate off must change nothing, gate on must render the ExternalSecret
+        # and all 4 env vars identically on Deployment and Rollout, a
+        # service's own env/envValueFrom must win, and an empty
+        # tokenVaultKey/tokenVaultProperty must fail the render loudly.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_work_context_env.py
+
+      - name: Check the otel-collector alert lookbacks against their holds
+        # `increase(...[W]) > 0` with W longer than `for: H` pages for a spike
+        # that is already over: the expression stays true for the whole window,
+        # so the hold is passed on the way through. promtool proves it for
+        # today's two rules; this states the invariant for any rule added next.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_otel_collector_alert_windows.py
+
+      - name: Unit-test the otel-collector backends/eval render (issue-903)
+        # T1/T2/T5: the default render must stay byte-identical to the
+        # committed golden file, the fan-out must render N independent
+        # otlp/<name> exporters plus the legacy scalar, and the gated eval
+        # manifests must render nothing by default and a correct
+        # Namespace/NetworkPolicy/Application set under the example overlay.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_otel_collector_backends_render.py
+
+      - name: Unit-test the ArgoCD tenant RBAC render (gitops#1431)
+        # The per-tenant rbac/tenants/*.csv fragments plus the base policy
+        # must render the same effective policy.csv as the pre-migration
+        # single-file version, minus the two intentionally dropped orphan
+        # tenants (yyy, xxxx); create: false must hold so the argo-cd
+        # subchart never also tries to own argocd-rbac-cm.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_argocd_rbac_policy_render.py
+
+      - name: Unit-test the DevLoop trace fixtures (issue-903)
+        # T3/T4: the representative fixture has one root span per execution,
+        # no orphaned parentSpanId, every correlation attribute, and at least
+        # one ERROR-status outcome; the poisoned fixture's four attributes are
+        # each matched by a pattern actually present in the committed
+        # redaction config, so the fixture and the block lists cannot
+        # silently drift apart.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_devloop_trace_fixture.py
+
+      - name: Check the ADR rubric stays frozen and Stage A honest (issue-903)
+        # T6/T7: weights sum to 100 and agree with the ADR's Markdown table,
+        # every score cell is null before any candidate is deployed, and no
+        # Stage A row whose evidence is only the issue text is promoted to
+        # SURVIVES on a load-bearing deployment claim.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_adr_rubric_frozen.py
+
+      - name: Check the otel-trace-fixture ConfigMap is up to date (issue-903)
+        # --selftest first, same reason as the other detectors in this job: a
+        # drift detector that has never been seen to fire is not known to
+        # work. tests/fixtures/devloop-trace*.json is the source of truth;
+        # this catches a hand edit to either file that left the in-cluster
+        # ConfigMap copy stale.
+        run: |
+          scripts/materialize-otel-trace-fixture.py --selftest
+          scripts/materialize-otel-trace-fixture.py --check
+
+      - name: Check the observability-eval sandbox teardown date (issue-1355)
+        # --selftest first, same reason as every other detector in this job:
+        # a checker never seen to fire is not known to work. Proves all five
+        # branches (disabled+empty passes; enabled+within-14d passes;
+        # enabled+empty/expired/beyond-14d all fail), then runs for real
+        # against the committed platform-gitops/bootstrap/values.yaml. Also
+        # runs on push: [main] (this workflow's own trigger, see the header
+        # comment above), so an expired sandbox turns main red even with no
+        # open PR -- a two-week spike namespace must not become silently
+        # permanent.
+        run: |
+          scripts/validate-eval-teardown-date.py --selftest
+          scripts/validate-eval-teardown-date.py
+
+      - name: Unit-test the otel-collector redaction processor (issue-1355)
+        # gen_ai.usage.*_tokens (the AI/agent-observability rubric
+        # dimension's evidence) are currently caught by the bare `token`
+        # alternative in blocked_key_patterns[0] -- mctlhq/mctl-gitops#1332.
+        # This makes that status a CI-visible fact (an expected failure that
+        # names the issue and exits 0) instead of a claim in a comment, while
+        # still hard-failing on the credential block list every run, marker
+        # or no marker.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_otel_collector_redaction.py
+
+      - name: Validate storage & finops Grafana dashboards
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_storage_finops_dashboard.py
+
+  # mctl-reserved-platform-hosts-{ingress,ingressroute} (#1503) are CEL that
+  # only an API server can evaluate: a policy that never denies, or one that
+  # denies every Ingress, renders and lints clean. This runs them in k3s at the
+  # cluster's version against deny/admit fixtures and every Ingress /
+  # IngressRoute the GitOps services render, so a service that claims another
+  # namespace's reserved host fails here instead of at sync. Its own job: it
+  # needs Docker and takes about a minute.
+  reserved-hosts:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Prove the reserved-host admission policies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          scripts/test-reserved-hosts-policy.sh --services --platform

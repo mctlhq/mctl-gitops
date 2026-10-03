@@ -1,0 +1,54 @@
+{
+  "$comment": "Everything about a server's portal membership that is NOT the owning repo's decision: default_disabled, on_behalf and updated_prompts, copied from the live portal (live-snapshot-2026-09-25.json in the #1370 proposal). All six members are vendored; updated_tools appears only on a server with vendored: false, the escape hatch for an owning repo whose file fails the shape rules (api used it until mctlhq/mctl-api#396 gave every entry a reason). Not to be confused with the vendored files' own default_disabled: true (the owning repo's \"an unlisted tool is disabled\"): the default_disabled here is the portal object's per-server \"off by default for connecting clients\" switch, false on every member today. mcp-portal.tf reads the portal one from this file only.",
+  "servers": {
+    "alice": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": null
+    },
+    "api": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": null
+    },
+    "coolify": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": [
+        {
+          "name": "troubleshoot_application",
+          "enabled": false
+        },
+        {
+          "name": "explain_failed_deploy",
+          "enabled": false
+        },
+        {
+          "name": "estate_health",
+          "enabled": false
+        }
+      ]
+    },
+    "projects": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": null
+    },
+    "seerrsense": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": null
+    },
+    "tg": {
+      "vendored": true,
+      "default_disabled": false,
+      "on_behalf": true,
+      "updated_prompts": null
+    }
+  }
+}
