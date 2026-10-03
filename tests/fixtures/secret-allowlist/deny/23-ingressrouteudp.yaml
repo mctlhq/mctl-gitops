@@ -1,0 +1,12 @@
+# expect: Traefik objects are not allowed
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteUDP
+metadata:
+  name: claim-udp
+  namespace: erpact
+spec:
+  entryPoints: [udp]
+  routes:
+    - services:
+        - name: web
+          port: 53

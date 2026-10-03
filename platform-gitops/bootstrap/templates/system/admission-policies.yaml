@@ -376,3 +376,259 @@ spec:
   validationActions: [Deny]
   matchResources:
     namespaceSelector: {}
+---
+# Pods in a namespace whose manifests the platform does not review may only
+# use the Secrets and ServiceAccounts that namespace was given (values.yaml
+# externalManifestNamespaces explains why). Ephemeral containers are checked
+# too: kubectl debug goes through pods/ephemeralcontainers.
+#
+# Pods only: a Deployment or Job naming a forbidden Secret is admitted and
+# syncs, and the refusal shows in its ReplicaSet/Job events. The policy also
+# relies on the namespace's AppProject keeping RBAC and Secrets out of the
+# external repository (project erpact, added by #1516): it pins Pods to a
+# ServiceAccount, and that ServiceAccount must stay without Secret access.
+# Every volume source that can name a Secret is listed, in-tree plugins
+# whose drivers are gone included: the API still accepts their fields.
+#
+# Proven both ways against a real API server by
+# scripts/test-secret-allowlist-policy.sh (fixtures in
+# tests/fixtures/secret-allowlist).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-external-manifests-secret-allowlist
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods", "pods/ephemeralcontainers"]
+  variables:
+    # The binding matches only these namespaces, so the lookup cannot miss.
+    # One map per field, each value dyn(): CEL refuses map literals whose
+    # values differ in type. The 'none.invalid' entry (no namespace can
+    # have that name) keeps each literal non-empty, so it always
+    # type-checks. A namespace entry missing a list allows nothing of that
+    # kind and still gets the Forbidden messages below.
+    - name: allowed
+      expression: >-
+        {
+          'none.invalid': dyn([]),
+        {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
+          {{ $n | squote }}: dyn({{ if hasKey $v "secrets" }}{{ index $v "secrets" | toJson }}{{ else }}[]{{ end }}),
+        {{- end }}
+        }[request.namespace]
+    - name: serviceAccounts
+      expression: >-
+        {
+          'none.invalid': dyn([]),
+        {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
+          {{ $n | squote }}: dyn({{ if hasKey $v "serviceAccounts" }}{{ index $v "serviceAccounts" | toJson }}{{ else }}[]{{ end }}),
+        {{- end }}
+        }[request.namespace]
+    - name: containers
+      expression: >-
+        object.spec.containers +
+        (has(object.spec.initContainers) ? object.spec.initContainers : []) +
+        (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
+  validations:
+    - expression: >-
+        (has(object.spec.serviceAccountName) ? object.spec.serviceAccountName : 'default')
+        in variables.serviceAccounts
+      messageExpression: >-
+        "serviceAccountName must be one of: " + variables.serviceAccounts.join(", ") +
+        " (bootstrap values externalManifestNamespaces)"
+      reason: Forbidden
+    - expression: >-
+        !has(object.spec.volumes) || object.spec.volumes.all(v,
+          (!has(v.secret) || (has(v.secret.secretName) && v.secret.secretName in variables.allowed)) &&
+          (!has(v.projected) || !has(v.projected.sources) || v.projected.sources.all(s,
+            !has(s.secret) || (has(s.secret.name) && s.secret.name in variables.allowed))) &&
+          (!has(v.csi) || !has(v.csi.nodePublishSecretRef) ||
+            (has(v.csi.nodePublishSecretRef.name) && v.csi.nodePublishSecretRef.name in variables.allowed)) &&
+          (!has(v.iscsi) || !has(v.iscsi.secretRef) ||
+            (has(v.iscsi.secretRef.name) && v.iscsi.secretRef.name in variables.allowed)) &&
+          (!has(v.flexVolume) || !has(v.flexVolume.secretRef) ||
+            (has(v.flexVolume.secretRef.name) && v.flexVolume.secretRef.name in variables.allowed)) &&
+          (!has(v.azureFile) || v.azureFile.secretName in variables.allowed) &&
+          (!has(v.cephfs) || !has(v.cephfs.secretRef) ||
+            (has(v.cephfs.secretRef.name) && v.cephfs.secretRef.name in variables.allowed)) &&
+          (!has(v.rbd) || !has(v.rbd.secretRef) ||
+            (has(v.rbd.secretRef.name) && v.rbd.secretRef.name in variables.allowed)) &&
+          (!has(v.scaleIO) || (has(v.scaleIO.secretRef.name) && v.scaleIO.secretRef.name in variables.allowed)) &&
+          (!has(v.storageos) || !has(v.storageos.secretRef) ||
+            (has(v.storageos.secretRef.name) && v.storageos.secretRef.name in variables.allowed)) &&
+          (!has(v.cinder) || !has(v.cinder.secretRef) ||
+            (has(v.cinder.secretRef.name) && v.cinder.secretRef.name in variables.allowed)))
+      messageExpression: >-
+        "a volume names a Secret outside this namespace's allowlist: " + variables.allowed.join(", ") +
+        " (bootstrap values externalManifestNamespaces)"
+      reason: Forbidden
+    - expression: >-
+        variables.containers.all(c,
+          (!has(c.env) || c.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.secretKeyRef) ||
+            (has(e.valueFrom.secretKeyRef.name) && e.valueFrom.secretKeyRef.name in variables.allowed))) &&
+          (!has(c.envFrom) || c.envFrom.all(e, !has(e.secretRef) ||
+            (has(e.secretRef.name) && e.secretRef.name in variables.allowed))))
+      messageExpression: >-
+        "a container (init and ephemeral included) env/envFrom names a Secret outside this namespace's allowlist: " + variables.allowed.join(", ") +
+        " (bootstrap values externalManifestNamespaces)"
+      reason: Forbidden
+    # Checked after the ServiceAccount admission plugin has copied the
+    # ServiceAccount's imagePullSecrets into the Pod, so those count too.
+    - expression: >-
+        !has(object.spec.imagePullSecrets) || object.spec.imagePullSecrets.all(s,
+          has(s.name) && s.name in variables.allowed)
+      messageExpression: >-
+        "an imagePullSecret is outside this namespace's allowlist: " + variables.allowed.join(", ")
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-external-manifests-secret-allowlist
+spec:
+  policyName: mctl-external-manifests-secret-allowlist
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          # An empty map must not render `values: []`, which In refuses;
+          # namespace names cannot contain dots, so "none.invalid" matches nothing.
+          values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}
+---
+# Ingress hosts in those namespaces must match the namespace's hostPattern
+# (values.yaml externalManifestNamespaces): the reserved-host policies above
+# protect platform names, this keeps the repository off every other
+# tenant's names too. A missing pattern allows no host.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-external-manifests-ingress-hosts
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ingresses"]
+  variables:
+    # matches() is a search, so the anchors are added here rather than
+    # trusted to the value; the value must therefore be one self-contained
+    # RE2 expression. A missing pattern ('a^': nothing, not even the empty
+    # string) matches no host.
+    - name: pattern
+      expression: >-
+        '^(?:' + {
+          'none.invalid': dyn('a^'),
+        {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
+          {{ $n | squote }}: dyn({{ if hasKey $v "hostPattern" }}{{ index $v "hostPattern" | toJson }}{{ else }}'a^'{{ end }}),
+        {{- end }}
+        }[request.namespace] + ')$'
+  validations:
+    - expression: "!has(object.spec.defaultBackend)"
+      message: "Ingress in this namespace may not set spec.defaultBackend: it catches every host no other rule claims"
+      reason: Forbidden
+    - expression: >-
+        has(object.spec.rules) && size(object.spec.rules) > 0 &&
+        object.spec.rules.all(r, has(r.host) && r.host.matches(variables.pattern))
+      messageExpression: >-
+        "every Ingress rule host in this namespace must match " + variables.pattern +
+        " (bootstrap values externalManifestNamespaces)"
+      reason: Forbidden
+    - expression: >-
+        !has(object.spec.tls) || object.spec.tls.all(t, has(t.hosts) && size(t.hosts) > 0 &&
+          t.hosts.all(h, h.matches(variables.pattern)))
+      messageExpression: >-
+        "every Ingress TLS entry in this namespace must list hosts matching " + variables.pattern
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-external-manifests-ingress-hosts
+spec:
+  policyName: mctl-external-manifests-ingress-hosts
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}
+---
+# Services in those namespaces stay inside the cluster.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-external-manifests-services
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["services"]
+  validations:
+    - expression: >-
+        (!has(object.spec.type) || object.spec.type == 'ClusterIP') &&
+        (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)
+      message: "Services in this namespace must be ClusterIP without externalIPs (no NodePort, LoadBalancer or ExternalName)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-external-manifests-services
+spec:
+  policyName: mctl-external-manifests-services
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}
+---
+# Every Traefik kind is refused in those namespaces. Routes would reach the
+# hosts the pattern above guards, around it; and a TLSOption or TLSStore
+# named "default" in ANY namespace becomes Traefik's global default, which
+# would drop the Cloudflare origin-pull client-certificate check or replace
+# the origin certificate for every host. Project erpact (#1516) admits no
+# traefik.io kind either; this keeps the containment from resting on that.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-external-manifests-no-traefik
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["traefik.io", "traefik.containo.us"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["*"]
+  validations:
+    - expression: "false"
+      message: "Traefik objects are not allowed in this namespace; use an Ingress whose hosts match its hostPattern"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-external-manifests-no-traefik
+spec:
+  policyName: mctl-external-manifests-no-traefik
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}

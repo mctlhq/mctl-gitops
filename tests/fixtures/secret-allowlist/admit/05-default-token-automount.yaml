@@ -1,0 +1,12 @@
+# The shape every real Pod has: automount on, so the ServiceAccount admission
+# plugin adds the kube-api-access projected volume (serviceAccountToken,
+# configMap kube-root-ca.crt, downwardAPI) before this policy runs.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: token-automount
+  namespace: erpact
+spec:
+  containers:
+    - name: c
+      image: busybox

@@ -1,0 +1,10 @@
+# expect: must be ClusterIP
+apiVersion: v1
+kind: Service
+metadata:
+  name: np
+  namespace: erpact
+spec:
+  type: NodePort
+  ports:
+    - port: 80

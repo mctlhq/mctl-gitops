@@ -1,0 +1,21 @@
+# expect: every Ingress TLS entry in this namespace must list hosts matching
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hostless-tls
+  namespace: erpact
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: erpact-11112025.mctl.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80
+  tls:
+    - secretName: whatever

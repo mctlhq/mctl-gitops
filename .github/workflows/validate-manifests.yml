@@ -560,7 +560,8 @@ jobs:
   # cluster's version against deny/admit fixtures and every Ingress /
   # IngressRoute the GitOps services render, so a service that claims another
   # namespace's reserved host fails here instead of at sync. Its own job: it
-  # needs Docker and takes about a minute.
+  # needs Docker and takes about a minute. The second step proves the
+  # external-manifests Secret allowlist policy the same way.
   reserved-hosts:
     timeout-minutes: 15
     runs-on: ubuntu-latest
@@ -578,6 +579,13 @@ jobs:
           set -euo pipefail
           python3 -m pip install --quiet pyyaml
           scripts/test-reserved-hosts-policy.sh --services --platform
+
+      # Same toolchain, its own k3s: the Secret allowlist for namespaces whose
+      # manifests come from outside the platform (externalManifestNamespaces).
+      - name: Prove the external-manifests Secret allowlist policy
+        run: |
+          set -euo pipefail
+          scripts/test-secret-allowlist-policy.sh
 
   # The declarative ZITADEL root (#1520). The in-cluster Job applies it after
   # merge, so formatting, provider schema errors and a lock file that does not

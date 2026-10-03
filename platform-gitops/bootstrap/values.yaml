@@ -224,6 +224,52 @@ usageWriter:
 surfaceTelegramToken:
   enabled: false
 
+# Namespaces whose workloads are written outside the platform team's review
+# (a tenant's own Git repository, a service of theirs that pushes to it),
+# each with the only Secrets and ServiceAccounts its Pods may use. Enforced by
+# the mctl-external-manifests-secret-allowlist admission policy in
+# templates/system/admission-policies.yaml.
+#
+# Every namespace also holds Secrets it never asked for: the reflector copies
+# argo-workflows/github-actions-pat, argo-workflows/mctl-gitops-deploy-key and
+# the database/* credentials into all of them (#1230), and the tenant chart
+# adds ghcr and MinIO credentials. It also creates argo-workflow-sa, whose
+# Roles read every Secret in the namespace through the API. In a reviewed
+# namespace that is a latent risk; where someone outside the platform writes
+# the Pod specs, mounting a Secret or running as that ServiceAccount is one
+# commit away. So in these namespaces a Pod may name only the Secrets listed
+# here (volumes of every kind, env, envFrom, imagePullSecrets) and run only as
+# a listed ServiceAccount. Add a Secret in the same change that adds the
+# ExternalSecret producing it.
+#
+# Three more policies hold what reaches outside the namespace: Ingress hosts
+# must match hostPattern, every Traefik kind is refused, and Services
+# must be ClusterIP without externalIPs (no NodePort, no LoadBalancer: those
+# open node ports or buy a Hetzner load balancer).
+#
+# Platform workflows cannot run in these namespaces as a consequence
+# (argo-workflow-sa, minio-artifact-credentials): that is intended.
+externalManifestNamespaces:
+  # git.mctl.ai/erpact/mctl-apps. Its ExternalSecrets will live in this
+  # chart, templates/erpact/externalsecrets.yaml, added by the erpact wiring
+  # (#1516) together with project erpact; never in that repository.
+  erpact:
+    secrets:
+      - clo-s3
+      - deployer-git
+      - deployer-secret
+      - mariadb-root
+    # No RBAC is bound to default in erpact. Project erpact (#1516) admits
+    # no Secret and no RBAC kind from the tenant's repository, so that
+    # repository can neither bind a Role to default nor mint a
+    # service-account-token Secret under an allowed name.
+    serviceAccounts:
+      - default
+    # Ingress hosts (rules and TLS) must match this RE2 pattern in full (the
+    # policy anchors it), so the repository cannot claim another tenant's
+    # unreserved *.mctl.ai name. Traefik kinds of any sort are refused outright.
+    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai'
+
 # Platform hostnames and the namespaces allowed to serve them (#1503),
 # enforced by the mctl-reserved-platform-hosts-* admission policies in
 # templates/system/admission-policies.yaml. A host that is not listed is
