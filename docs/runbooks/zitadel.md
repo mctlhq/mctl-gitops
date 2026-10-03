@@ -112,21 +112,25 @@ enrol again.
 
 ### Tenant organizations and users (#1520 S3)
 
-- **Source.** Vault `secret/platform/zitadel/users`, one field per tenant,
-  each a JSON list of `{"user_name", "email", "first_name", "last_name"}`.
-  This repository is public, so the list is never in git. ExternalSecret
-  `zitadel-iac-users` folds it into `users.json` for the pod.
-- **Result.** One organization per tenant field, named after the tenant, and
-  its users. `for_each` keys are `tenant/user_name`; email and names are
-  sensitive, so the Job log shows neither.
+- **Source.** One Vault secret per tenant, `secret/platform/zitadel/users/<tenant>`.
+  Each field is one user: the field name is the user name, the value a JSON
+  object `{"email", "first_name", "last_name", "preferred_language"}`
+  (`preferred_language` is optional, default `en`). This repository is public,
+  so the list is never in git. ExternalSecret `zitadel-iac-users` finds every
+  secret under the path and folds them into `users.json` for the pod.
+- **Result.** One organization per tenant secret, named after the tenant, and
+  its users. `for_each` keys are `tenant/user_name`. Email and names, display
+  name included, are sensitive, so the Job log shows neither.
 - **Invitation.** A user is created without a password and with an unverified
-  e-mail. ZITADEL mails a code (Resend, `noreply@mctl.ai`). The link opens
-  Login V2 `/verify`, then "Choose authentication method", where the user
-  picks Passkeys. Verified end to end on a local v4.19.2 with Login V2 and a
-  mail catcher.
-- **Adding a user.** Add them to the tenant's field in Vault. The hourly
-  CronJob `zitadel-iac` (or the next sync) creates them. No PR is needed:
-  only data changes, not the declaration.
+  e-mail, so ZITADEL mails a code (Resend, `noreply@mctl.ai`). The text is
+  declared in `iac/messages.tf`, in English and Russian, and goes out in the
+  user's `preferred_language`. The button opens Login V2 `/verify`, then
+  "Choose authentication method", where the user picks Passkeys. Verified end
+  to end on a local v4.19.2 with Login V2 and a mail catcher.
+- **Adding a user.** Add a field to the tenant's secret, e.g.
+  `vault kv patch secret/platform/zitadel/users/<tenant> <user_name>='{"email": ...}'`.
+  **Adding a tenant** is a new secret. The hourly CronJob `zitadel-iac` (or
+  the next sync) creates them. No PR is needed, because only data changes.
 - **Removing a user or a tenant** plans a `delete`, which `allowedActions`
   refuses, so the run fails with the plan in its log. Widen it in a PR for
   that one change, then narrow it again.

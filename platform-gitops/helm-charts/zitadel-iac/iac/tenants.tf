@@ -9,13 +9,19 @@
 # useless anyway.
 
 locals {
+  # { tenant => { user_name => { email, first_name, last_name, ... } } }
   tenants = {
-    for tenant, users in jsondecode(var.tenant_users) : tenant => jsondecode(users)
+    for tenant, fields in jsondecode(var.tenant_users) : tenant => {
+      for user_name, attrs in jsondecode(fields) : user_name => jsondecode(attrs)
+    }
   }
 
   users = merge([
     for tenant, users in local.tenants : {
-      for u in users : "${tenant}/${u.user_name}" => merge(u, { tenant = tenant })
+      for user_name, u in users : "${tenant}/${user_name}" => merge(u, {
+        tenant    = tenant
+        user_name = user_name
+      })
     }
   ]...)
 }
@@ -29,16 +35,25 @@ resource "zitadel_org" "tenant" {
 resource "zitadel_human_user" "tenant" {
   for_each = local.users
 
-  org_id            = zitadel_org.tenant[each.value.tenant].id
-  user_name         = each.value.user_name
-  email             = sensitive(each.value.email)
-  first_name        = sensitive(each.value.first_name)
-  last_name         = sensitive(each.value.last_name)
+  org_id     = zitadel_org.tenant[each.value.tenant].id
+  user_name  = each.value.user_name
+  email      = sensitive(each.value.email)
+  first_name = sensitive(each.value.first_name)
+  last_name  = sensitive(each.value.last_name)
+  # Set explicitly: left to the provider, it is computed from the names and
+  # printed in clear in the plan.
+  display_name      = sensitive("${each.value.first_name} ${each.value.last_name}")
   is_email_verified = false
+  # The language of the invitation mail and of Login V2 for this user.
+  preferred_language = try(each.value.preferred_language, "en")
 
-  # The invitation goes out when the user is created, so mail must work by
-  # then.
-  depends_on = [zitadel_email_provider_smtp.resend]
+  # The invitation goes out when the user is created, so mail and its text
+  # must be in place by then.
+  depends_on = [
+    zitadel_email_provider_smtp.resend,
+    zitadel_default_verify_email_message_text.en,
+    zitadel_default_verify_email_message_text.ru,
+  ]
 
   lifecycle {
     # Set once at creation; the user verifies it by redeeming the invite,

@@ -4,10 +4,11 @@
 
 variable "tenant_users" {
   description = <<-EOT
-    JSON object, one key per platform tenant, each value a JSON-encoded list
-    of {user_name, email, first_name, last_name}. Read from Vault
-    secret/platform/zitadel/users, one field per tenant. This repository is
-    public, so personal data never appears in it.
+    JSON object, one key per platform tenant. Each value is the tenant's
+    Vault secret secret/platform/zitadel/users/<tenant> as JSON: one field
+    per user name, each a JSON-encoded {email, first_name, last_name,
+    preferred_language}. This repository is public, so personal data never
+    appears in it.
   EOT
   type        = string
 }
