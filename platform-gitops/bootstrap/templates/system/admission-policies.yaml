@@ -380,7 +380,13 @@ spec:
 # Pods in a namespace whose manifests the platform does not review may only
 # use the Secrets and ServiceAccounts that namespace was given (values.yaml
 # externalManifestNamespaces explains why). Ephemeral containers are checked
-# too: kubectl debug goes through pods/ephemeralcontainers. Every volume
+# too: kubectl debug goes through pods/ephemeralcontainers.
+#
+# Pods only: a Deployment or Job naming a forbidden Secret is admitted and
+# syncs, and the refusal shows in its ReplicaSet/Job events. The policy also
+# relies on the namespace's AppProject keeping RBAC out of the external
+# repository (project-erpact.yaml): it pins Pods to a ServiceAccount, and
+# that ServiceAccount must stay without Secret access. Every volume
 # source that can name a Secret is listed, in-tree plugins whose drivers are
 # gone included: the API still accepts their fields.
 #
@@ -404,8 +410,14 @@ spec:
     - name: ns
       expression: >-
         {{ .Values.externalManifestNamespaces | toJson }}[request.namespace]
+    # A namespace entry missing either list allows nothing of that kind and
+    # still gets the Forbidden messages below, not a CEL evaluation error.
     - name: allowed
-      expression: variables.ns.secrets
+      expression: >-
+        has(variables.ns.secrets) ? variables.ns.secrets : []
+    - name: serviceAccounts
+      expression: >-
+        has(variables.ns.serviceAccounts) ? variables.ns.serviceAccounts : []
     - name: containers
       expression: >-
         object.spec.containers +
@@ -414,9 +426,9 @@ spec:
   validations:
     - expression: >-
         (has(object.spec.serviceAccountName) ? object.spec.serviceAccountName : 'default')
-        in variables.ns.serviceAccounts
+        in variables.serviceAccounts
       messageExpression: >-
-        "serviceAccountName must be one of: " + variables.ns.serviceAccounts.join(", ") +
+        "serviceAccountName must be one of: " + variables.serviceAccounts.join(", ") +
         " (bootstrap values externalManifestNamespaces)"
       reason: Forbidden
     - expression: >-

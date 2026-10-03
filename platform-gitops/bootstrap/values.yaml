@@ -245,14 +245,17 @@ surfaceTelegramToken:
 # Platform workflows cannot run in these namespaces as a consequence
 # (argo-workflow-sa, minio-artifact-credentials): that is intended.
 externalManifestNamespaces:
-  # git.mctl.ai/erpact/mctl-apps; its ExternalSecrets are in templates/erpact/.
+  # git.mctl.ai/erpact/mctl-apps. Its ExternalSecrets live in this chart,
+  # templates/erpact/externalsecrets.yaml (added with the erpact wiring,
+  # #1516), never in that repository: project erpact does not admit them.
   erpact:
     secrets:
       - clo-s3
       - deployer-git
       - deployer-secret
       - mariadb-root
-    # No RBAC is bound to default in erpact.
+    # No RBAC is bound to default in erpact, and project erpact admits no
+    # Role/RoleBinding from the tenant's repository.
     serviceAccounts:
       - default
 
