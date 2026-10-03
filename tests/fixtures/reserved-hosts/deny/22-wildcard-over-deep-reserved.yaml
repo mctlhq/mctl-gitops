@@ -1,0 +1,21 @@
+# Fixture for scripts/test-reserved-hosts-policy.sh (mctl-reserved-platform-hosts, #1503).
+# deep.probe.mctl.ai is reserved for admins by values-test.yaml; a tenant
+# wildcard one level above it would shadow it without naming it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: x
+  namespace: karabu
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: '*.probe.mctl.ai'
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svc
+            port:
+              number: 80

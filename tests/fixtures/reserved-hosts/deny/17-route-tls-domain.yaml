@@ -1,0 +1,20 @@
+# Fixture for scripts/test-reserved-hosts-policy.sh (mctl-reserved-platform-hosts, #1503).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: x
+  namespace: karabu
+spec:
+  entryPoints:
+  - websecure
+  routes:
+  - match: Host(`karabu-x.mctl.ai`)
+    kind: Rule
+    services:
+    - name: svc
+      port: 80
+  tls:
+    domains:
+    - main: karabu-x.mctl.ai
+      sans:
+      - auth.mctl.ai

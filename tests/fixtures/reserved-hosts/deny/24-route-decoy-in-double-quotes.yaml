@@ -1,0 +1,16 @@
+# Fixture for scripts/test-reserved-hosts-policy.sh (mctl-reserved-platform-hosts, #1503).
+# Review of #1509: a Host literal hidden in a double-quoted PathRegexp argument; the router itself has no host constraint and matches every path.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: x
+  namespace: karabu
+spec:
+  entryPoints:
+  - websecure
+  routes:
+  - match: 'PathPrefix(`/`) && PathRegexp("Host(`z`)|")'
+    kind: Rule
+    services:
+    - name: svc
+      port: 80

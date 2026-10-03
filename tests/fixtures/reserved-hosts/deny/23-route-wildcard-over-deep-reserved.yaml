@@ -1,0 +1,16 @@
+# Fixture for scripts/test-reserved-hosts-policy.sh (mctl-reserved-platform-hosts, #1503).
+# The IngressRoute side of deny/22.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: x
+  namespace: karabu
+spec:
+  entryPoints:
+  - websecure
+  routes:
+  - match: Host(`*.probe.mctl.ai`)
+    kind: Rule
+    services:
+    - name: svc
+      port: 80

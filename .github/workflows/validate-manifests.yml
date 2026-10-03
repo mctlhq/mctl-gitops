@@ -553,3 +553,28 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_storage_finops_dashboard.py
+
+  # mctl-reserved-platform-hosts-{ingress,ingressroute} (#1503) are CEL that
+  # only an API server can evaluate: a policy that never denies, or one that
+  # denies every Ingress, renders and lints clean. This runs them in k3s at the
+  # cluster's version against deny/admit fixtures and every Ingress /
+  # IngressRoute the GitOps services render, so a service that claims another
+  # namespace's reserved host fails here instead of at sync. Its own job: it
+  # needs Docker and takes about a minute.
+  reserved-hosts:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Prove the reserved-host admission policies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          scripts/test-reserved-hosts-policy.sh --services --platform
