@@ -113,6 +113,25 @@ module "kube-hetzner" {
   # Pods reaching a node's public IP bypass this firewall entirely; that path is
   # closed by tenant.networking.nodePublicCIDRs in the tenant chart.
 
+  # Outbound is an allowlist: once a firewall has any outbound rule, Hetzner
+  # drops everything else, and the module's own rules cover only DNS, NTP,
+  # ICMP, HTTP and HTTPS. Anything else leaving the cluster needs a rule here.
+  extra_firewall_rules = [
+    {
+      # ZITADEL's invitation and verification mail through Resend SMTP with
+      # implicit TLS (mctl-gitops#1520 S3). 2465, not 465: Hetzner blocks
+      # outgoing 25 and 465 for cloud servers independently of this firewall.
+      # In-cluster, the zitadel NetworkPolicy narrows this port to the
+      # ZITADEL API pod.
+      description     = "Allow Outbound SMTP (Resend, implicit TLS) for ZITADEL"
+      direction       = "out"
+      protocol        = "tcp"
+      port            = "2465"
+      source_ips      = []
+      destination_ips = ["0.0.0.0/0", "::/0"]
+    },
+  ]
+
   # Network
   network_region = "eu-central"
 
