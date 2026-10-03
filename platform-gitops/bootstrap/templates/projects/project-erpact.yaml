@@ -1,0 +1,62 @@
+# Project for tenant erpact: the ERPact copy (Frappe/ERPNext) whose manifests
+# live outside this public repository, in the private Forgejo repository
+# https://git.mctl.ai/erpact/mctl-apps — they carry customer hostnames and
+# are written to by ERPact's site deployer on every new site.
+#
+# That repository is writable by people and a service outside the platform
+# team, so this project is what keeps it from reaching anything but its own
+# namespace:
+#   - one source repository, one destination namespace;
+#   - no cluster-scoped objects;
+#   - an explicit namespaced kind list: no NetworkPolicy (the tenant chart
+#     owns them), no ResourceQuota/LimitRange (the tenant's own budget), no
+#     RBAC, no Applications (an Application in argocd could name another
+#     project and escape this one).
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: erpact
+  namespace: argocd
+spec:
+  description: ERPact copy (tenant erpact), manifests from git.mctl.ai/erpact/mctl-apps
+
+  sourceRepos:
+    - https://git.mctl.ai/erpact/mctl-apps.git
+
+  destinations:
+    - server: {{ .Values.spec.destination.server }}
+      namespace: erpact
+
+  clusterResourceWhitelist: []
+
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: apps
+      kind: Deployment
+    - group: apps
+      kind: StatefulSet
+    - group: batch
+      kind: Job
+    - group: batch
+      kind: CronJob
+    - group: networking.k8s.io
+      kind: Ingress
+    - group: external-secrets.io
+      kind: ExternalSecret
+
+  orphanedResources:
+    warn: true
+    ignore:
+      # Rendered by ESO and by the tenant chart, not by these Applications.
+      - kind: Secret
+      - kind: ConfigMap
+      - kind: ServiceAccount
+      - group: networking.k8s.io
+        kind: NetworkPolicy

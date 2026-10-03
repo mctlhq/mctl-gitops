@@ -9,14 +9,19 @@ tenant:
   members:
     - userId: mashkovd
       role: owner
+  # Sized for two Frappe benches + MariaDB + Valkey + the site deployer
+  # (requests ~550m/2.5Gi steady, ~840m/4.1Gi with every Job running at
+  # once: two configure, two restore, one new-site). Limits sit well above
+  # requests on purpose: Frappe idles low and bursts on page loads and
+  # background jobs. One PVC in practice (erpact-data, 20Gi).
   quotas:
     requests.cpu: "1500m"
-    requests.memory: "4Gi"
-    limits.cpu: "3"
-    limits.memory: "4Gi"
-    pods: "25"
-    persistentvolumeclaims: "5"
-    services: "10"
+    requests.memory: "5Gi"
+    limits.cpu: "12"
+    limits.memory: "9Gi"
+    pods: "30"
+    persistentvolumeclaims: "3"
+    services: "20"
   limitRange:
     enabled: true
     default:
