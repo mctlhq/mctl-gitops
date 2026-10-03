@@ -163,7 +163,7 @@ The desired state is in Vault, not here (this repository is public):
 
 What a run does to existing data:
 
-- Users get `must_change_password`; Terraform never resets a changed
+- Users other than bots get `must_change_password`; Terraform never resets a changed
   password. Removing a user from the manifest deactivates the account.
   It does not delete the account.
 - Removing a repository archives it. Removing a branch stops syncing it,
