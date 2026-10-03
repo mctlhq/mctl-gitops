@@ -20,6 +20,7 @@ metadata:
     zitadel-iac/image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
 data:
   allowed-actions: {{ .Values.allowedActions | quote }}
+  allowed-deletes: {{ .Values.allowedDeletes | default "" | quote }}
   {{- range $path, $_ := .Files.Glob "iac/*.tf" }}
   {{ base $path }}: |
     {{- $.Files.Get $path | nindent 4 }}

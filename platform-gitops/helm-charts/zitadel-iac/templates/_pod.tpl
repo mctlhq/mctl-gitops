@@ -29,6 +29,11 @@ containers:
           configMapKeyRef:
             name: zitadel-iac-inputs
             key: allowed-actions
+      - name: ALLOWED_DELETES
+        valueFrom:
+          configMapKeyRef:
+            name: zitadel-iac-inputs
+            key: allowed-deletes
       # Tenant users and the SMTP password come from Vault through the
       # ExternalSecrets in infra-components/identity/zitadel. Neither is
       # optional: a missing Secret fails the pod rather than planning an
@@ -61,11 +66,29 @@ containers:
         actions="$(grep -o '"actions":\[[^]]*\]' plan.json | sed 's/^"actions"://' | grep -o '"[a-z-]*"' | tr -d '"' | sort -u)"
         if [ -z "$actions" ]; then echo "zitadel-iac: could not read the plan's actions; refusing"; exit 1; fi
         for a in $actions; do
+          [ "$a" = delete ] && continue
           case " $ALLOWED_ACTIONS " in
             *" $a "*) ;;
             *) echo "zitadel-iac: plan contains '$a', allowed: $ALLOWED_ACTIONS; refusing to apply"; exit 1 ;;
           esac
         done
+        # A delete is allowed per resource address, never as an action class:
+        # every address the plan destroys or replaces must be listed in
+        # ALLOWED_DELETES. The count must match the JSON plan's deletes, so a
+        # destroy this text parse misses is refused, not let through.
+        if printf '%s\n' $actions | grep -qx delete; then
+          tofu show -no-color tfplan > plan.txt
+          deletes="$(sed -n -E 's/^  # ([^ ]+) (will be destroyed|must be replaced|is tainted, so must be replaced|will be replaced, as requested)$/\1/p' plan.txt | sort -u)"
+          want="$(grep -o '"actions":\[[^]]*"delete"[^]]*\]' plan.json | wc -l | tr -d ' ')"
+          got="$(printf '%s' "$deletes" | grep -c . || true)"
+          if [ "$got" != "$want" ]; then echo "zitadel-iac: plan deletes $want resource(s) but $got address(es) were read; refusing"; exit 1; fi
+          for d in $deletes; do
+            case " $ALLOWED_DELETES " in
+              *" $d "*) echo "zitadel-iac: delete of $d is allowed" ;;
+              *) echo "zitadel-iac: plan deletes $d, allowed deletes: '$ALLOWED_DELETES'; refusing to apply"; exit 1 ;;
+            esac
+          done
+        fi
         tofu apply -no-color tfplan
     securityContext:
       allowPrivilegeEscalation: false

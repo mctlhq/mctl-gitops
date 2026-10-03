@@ -15,7 +15,7 @@
 # success, the event is skipped after five retries, and ZITADEL keeps sending
 # with the old settings while every later plan shows the same diff.
 # Creation projects fine, so a change is a new resource name (a delete plus a
-# create), with "delete" allowed for that one PR. The resource name carries
+# create), with the old address in allowedDeletes for that one PR. The resource name carries
 # the port so the next change is a rename by construction.
 resource "zitadel_email_provider_smtp" "resend_2465" {
   sender_address   = "noreply@mctl.ai"
