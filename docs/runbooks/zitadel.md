@@ -62,7 +62,11 @@ and applied by OpenTofu, not clicked in the Console. A change made only in the
 Console is drift: the next apply either reports it or reverts it.
 
 - **Who applies.** The `zitadel-iac` Job, a PostSync hook of the `zitadel`
-  Application, so it runs after every sync. Its image
+  Application, so it runs after every sync. Its inputs (the root, the
+  allowed actions, the image) are the regular ConfigMap `zitadel-iac-inputs`,
+  so changing any of them makes the Application OutOfSync and auto-sync
+  runs the Job. A hook is never diffed, so an input kept only in a hook would
+  merge without ever being applied. Its image
   (`platform-gitops/images/zitadel-iac`) carries OpenTofu and the pinned
   provider. It never downloads anything at run time.
 - **Credential.** The ZITADEL System API user `iac`. It is declared in the
