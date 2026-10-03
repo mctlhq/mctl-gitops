@@ -2,19 +2,24 @@
   The OpenTofu root lives as real files under iac/ so CI can fmt and validate
   it; this ConfigMap carries it into the Job. The lock file is named
   explicitly: a dotfile is not matched by the glob.
+
+  It is a regular resource, not a hook. ArgoCD does not diff hooks, so while
+  it was one (#1522) a change under iac/ left the Application Synced, no sync
+  ran, and the PostSync Job never applied it (#1524 sat unapplied). Every
+  input of a run is therefore in here: the root, the allowed plan actions and
+  the image. Changing any of them makes the Application OutOfSync, auto-sync
+  runs, and the Job follows as PostSync.
 */ -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: zitadel-iac-root
+  name: zitadel-iac-inputs
   labels:
     app.kubernetes.io/name: zitadel-iac
   annotations:
-    # Before the Job (PostSync) and replaced on every sync like it.
-    argocd.argoproj.io/hook: PostSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
-    argocd.argoproj.io/sync-wave: "-1"
+    zitadel-iac/image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
 data:
+  allowed-actions: {{ .Values.allowedActions | quote }}
   {{- range $path, $_ := .Files.Glob "iac/*.tf" }}
   {{ base $path }}: |
     {{- $.Files.Get $path | nindent 4 }}
