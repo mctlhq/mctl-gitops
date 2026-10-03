@@ -21,6 +21,9 @@ FROM ghcr.io/opentofu/opentofu:1.13.1-minimal@sha256:dfbc3f0a8bed0adfa2cf49ff418
 
 FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS mirror
 ARG ZITADEL_PROVIDER_VERSION
+# The base already carries ca-certificates-bundle; installing the package
+# makes the TLS trust this stage's HTTPS download relies on explicit.
+RUN apk add --no-cache ca-certificates
 COPY --from=tofu /usr/local/bin/tofu /usr/local/bin/tofu
 WORKDIR /mirror-src
 RUN printf 'terraform {\n  required_providers {\n    zitadel = {\n      source  = "zitadel/zitadel"\n      version = "%s"\n    }\n  }\n}\n' "${ZITADEL_PROVIDER_VERSION}" > versions.tf \
