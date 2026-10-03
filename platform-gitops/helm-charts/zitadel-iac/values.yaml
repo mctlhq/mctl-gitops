@@ -16,9 +16,16 @@ image:
 #   S3 (SMTP, tenant orgs and users): adds "create".
 #   S4 (Forgejo OIDC application): no new action; its project, application
 #   and the data of forgejo/forgejo-oidc-zitadel are creates.
-# Widen deliberately, in the PR that needs it; "delete" never belongs here
-# without a reviewed reason.
+# Widen deliberately, in the PR that needs it. "delete" is never an action
+# class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
+
+# Resource addresses the Job may destroy or replace, space-separated. Any
+# other delete in a plan fails the Job. Name the exact address, in the PR
+# that needs it, and empty the list once it has applied.
+#   SMTP port fix: ZITADEL cannot update an SMTP provider (see iac/smtp.tf),
+#   so the move to port 2465 replaces it under a new name.
+allowedDeletes: "zitadel_email_provider_smtp.resend"
 
 # The CronJob's schedule. Users come from Vault, which no sync observes, so
 # this is how a user added there reaches ZITADEL.

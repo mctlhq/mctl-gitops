@@ -78,9 +78,12 @@ Console is drift: the next apply either reports it or reverts it.
   Secret `tfstate-default-zitadel-iac`, locked by Lease
   `lock-tfstate-default-zitadel-iac`.
 - **Guard.** The Job plans, then applies only if every planned action is in
-  `allowedActions` (`helm-charts/zitadel-iac/values.yaml`). Otherwise it fails
-  before apply, and the plan is in its log. Widen the list in the PR that needs
-  it. A plan with no changes exits without applying.
+  `allowedActions` (`helm-charts/zitadel-iac/values.yaml`). Deletes are never an
+  action class there: every address the plan destroys or replaces must be
+  listed in `allowedDeletes`, and the count of addresses read must match the
+  JSON plan's deletes. Otherwise it fails before apply, and the plan is in its
+  log. Widen either list in the PR that needs it, naming exact addresses. A
+  plan with no changes exits without applying.
 - **Reading a run.** `kubectl -n zitadel logs job/zitadel-iac`. The Job is
   replaced on the next sync.
 - **Break-glass.** If every human admin loses their passkey, the `iac` key
@@ -131,14 +134,21 @@ enrol again.
   `vault kv patch secret/platform/zitadel/users/<tenant> <user_name>='{"email": ...}'`.
   **Adding a tenant** is a new secret. The hourly CronJob `zitadel-iac` (or
   the next sync) creates them. No PR is needed, because only data changes.
-- **Removing a user or a tenant** plans a `delete`, which `allowedActions`
-  refuses, so the run fails with the plan in its log. Widen it in a PR for
-  that one change, then narrow it again.
-- **SMTP.** `zitadel_email_provider_smtp.resend`, `smtp.resend.com:2465`
+- **Removing a user or a tenant** plans a `delete`, which the guard refuses
+  unless that address (e.g. `zitadel_human_user.tenant["erpact/alice"]`) is in
+  `allowedDeletes`. Add it in a PR for that one change, and empty the list
+  again afterwards.
+- **SMTP.** `zitadel_email_provider_smtp.resend_2465`, `smtp.resend.com:2465`
   (implicit TLS). Not 465: Hetzner Cloud blocks outgoing 25 and 465. The
   password is a sending-only Resend key in Vault
   `secret/platform/zitadel/smtp` (`password`). Egress is the
   `allow-zitadel-smtp-egress` NetworkPolicy, port 2465 only.
+  **Never change the SMTP provider in place:** ZITADEL v4.19.2 cannot project
+  an SMTP update (the password column is written twice), so the apply
+  "succeeds" while ZITADEL keeps the old settings. Change it by renaming the
+  resource (a delete plus a create), with the old address in `allowedDeletes`.
+  The cloud firewall (`infrastructure/k3s-preview/kube.tf`,
+  `extra_firewall_rules`) must allow the port as well.
 
 ## Sync hooks instead of Helm hooks
 
