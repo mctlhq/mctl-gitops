@@ -408,11 +408,13 @@ spec:
   variables:
     # The binding matches only these namespaces, so the lookup cannot miss.
     # One map per field, each value dyn(): CEL refuses map literals whose
-    # values differ in type. A namespace entry missing a list allows nothing
+    # values differ in type. The 'none.invalid' entry (no namespace can have
+    # that name) keeps each literal non-empty, so it always type-checks. A namespace entry missing a list allows nothing
     # of that kind and still gets the Forbidden messages below.
     - name: allowed
       expression: >-
         {
+          'none.invalid': dyn([]),
         {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
           {{ $n | squote }}: dyn({{ if hasKey $v "secrets" }}{{ index $v "secrets" | toJson }}{{ else }}[]{{ end }}),
         {{- end }}
@@ -420,6 +422,7 @@ spec:
     - name: serviceAccounts
       expression: >-
         {
+          'none.invalid': dyn([]),
         {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
           {{ $n | squote }}: dyn({{ if hasKey $v "serviceAccounts" }}{{ index $v "serviceAccounts" | toJson }}{{ else }}[]{{ end }}),
         {{- end }}
@@ -520,16 +523,20 @@ spec:
     - name: pattern
       expression: >-
         '^(?:' + {
+          'none.invalid': dyn('a^'),
         {{- range $n, $v := (.Values.externalManifestNamespaces | default dict) }}
           {{ $n | squote }}: dyn({{ if hasKey $v "hostPattern" }}{{ index $v "hostPattern" | toJson }}{{ else }}'a^'{{ end }}),
         {{- end }}
         }[request.namespace] + ')$'
   validations:
     - expression: >-
-        (!has(object.spec.rules) || object.spec.rules.all(r, has(r.host) && r.host.matches(variables.pattern))) &&
-        (!has(object.spec.tls) || object.spec.tls.all(t, !has(t.hosts) || t.hosts.all(h, h.matches(variables.pattern))))
+        !has(object.spec.defaultBackend) &&
+        has(object.spec.rules) && size(object.spec.rules) > 0 &&
+        object.spec.rules.all(r, has(r.host) && r.host.matches(variables.pattern)) &&
+        (!has(object.spec.tls) || object.spec.tls.all(t, has(t.hosts) && size(t.hosts) > 0 &&
+          t.hosts.all(h, h.matches(variables.pattern))))
       messageExpression: >-
-        "Ingress hosts in this namespace must match " + variables.pattern +
+        "Ingress in this namespace needs rules (no defaultBackend), and every rule and TLS host must match " + variables.pattern +
         " (bootstrap values externalManifestNamespaces)"
       reason: Forbidden
 ---

@@ -1,0 +1,13 @@
+# expect: needs rules (no defaultBackend)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: catch-all
+  namespace: erpact
+spec:
+  ingressClassName: traefik
+  defaultBackend:
+    service:
+      name: web
+      port:
+        number: 80
