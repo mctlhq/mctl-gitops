@@ -386,9 +386,9 @@ spec:
 # syncs, and the refusal shows in its ReplicaSet/Job events. The policy also
 # relies on the namespace's AppProject keeping RBAC and Secrets out of the
 # external repository (project erpact, added by #1516): it pins Pods to a
-# ServiceAccount, and that ServiceAccount must stay without Secret access. Every volume
-# source that can name a Secret is listed, in-tree plugins whose drivers are
-# gone included: the API still accepts their fields.
+# ServiceAccount, and that ServiceAccount must stay without Secret access.
+# Every volume source that can name a Secret is listed, in-tree plugins
+# whose drivers are gone included: the API still accepts their fields.
 #
 # Proven both ways against a real API server by
 # scripts/test-secret-allowlist-policy.sh (fixtures in
@@ -408,9 +408,10 @@ spec:
   variables:
     # The binding matches only these namespaces, so the lookup cannot miss.
     # One map per field, each value dyn(): CEL refuses map literals whose
-    # values differ in type. The 'none.invalid' entry (no namespace can have
-    # that name) keeps each literal non-empty, so it always type-checks. A namespace entry missing a list allows nothing
-    # of that kind and still gets the Forbidden messages below.
+    # values differ in type. The 'none.invalid' entry (no namespace can
+    # have that name) keeps each literal non-empty, so it always
+    # type-checks. A namespace entry missing a list allows nothing of that
+    # kind and still gets the Forbidden messages below.
     - name: allowed
       expression: >-
         {
@@ -517,9 +518,10 @@ spec:
         operations: ["CREATE", "UPDATE"]
         resources: ["ingresses"]
   variables:
-    # A missing pattern ('a^': nothing, not even the empty string) matches no
-    # host. matches() is a search, so the
-    # anchors are added here rather than trusted to the value.
+    # matches() is a search, so the anchors are added here rather than
+    # trusted to the value; the value must therefore be one self-contained
+    # RE2 expression. A missing pattern ('a^': nothing, not even the empty
+    # string) matches no host.
     - name: pattern
       expression: >-
         '^(?:' + {
@@ -529,15 +531,21 @@ spec:
         {{- end }}
         }[request.namespace] + ')$'
   validations:
+    - expression: "!has(object.spec.defaultBackend)"
+      message: "Ingress in this namespace may not set spec.defaultBackend: it catches every host no other rule claims"
+      reason: Forbidden
     - expression: >-
-        !has(object.spec.defaultBackend) &&
         has(object.spec.rules) && size(object.spec.rules) > 0 &&
-        object.spec.rules.all(r, has(r.host) && r.host.matches(variables.pattern)) &&
-        (!has(object.spec.tls) || object.spec.tls.all(t, has(t.hosts) && size(t.hosts) > 0 &&
-          t.hosts.all(h, h.matches(variables.pattern))))
+        object.spec.rules.all(r, has(r.host) && r.host.matches(variables.pattern))
       messageExpression: >-
-        "Ingress in this namespace needs rules (no defaultBackend), and every rule and TLS host must match " + variables.pattern +
+        "every Ingress rule host in this namespace must match " + variables.pattern +
         " (bootstrap values externalManifestNamespaces)"
+      reason: Forbidden
+    - expression: >-
+        !has(object.spec.tls) || object.spec.tls.all(t, has(t.hosts) && size(t.hosts) > 0 &&
+          t.hosts.all(h, h.matches(variables.pattern)))
+      messageExpression: >-
+        "every Ingress TLS entry in this namespace must list hosts matching " + variables.pattern
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

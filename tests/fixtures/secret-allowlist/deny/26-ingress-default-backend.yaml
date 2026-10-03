@@ -1,4 +1,6 @@
-# expect: needs rules (no defaultBackend)
+# expect: may not set spec.defaultBackend
+# A rule that passes the pattern, plus a catch-all for every other host:
+# only the defaultBackend check refuses this.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -11,3 +13,14 @@ spec:
       name: web
       port:
         number: 80
+  rules:
+    - host: erpact-11112025.mctl.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80

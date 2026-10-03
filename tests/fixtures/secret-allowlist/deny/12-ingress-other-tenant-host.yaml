@@ -1,4 +1,4 @@
-# expect: every rule and TLS host must match
+# expect: every Ingress rule host in this namespace must match
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

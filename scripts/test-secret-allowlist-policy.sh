@@ -57,7 +57,8 @@ echo "== Traefik CRDs $TRAEFIK_VERSION"
 curl -fsSL --retry 3 --retry-delay 2 "$TRAEFIK_CRDS" -o "$WORK/traefik-crds.yaml"
 kubectl apply --server-side -f "$WORK/traefik-crds.yaml" >/dev/null
 kubectl wait --for=condition=Established --timeout=60s \
-  crd/ingressroutes.traefik.io crd/ingressroutetcps.traefik.io >/dev/null
+  crd/ingressroutes.traefik.io crd/ingressroutetcps.traefik.io crd/ingressrouteudps.traefik.io \
+  crd/tlsoptions.traefik.io crd/tlsstores.traefik.io >/dev/null
 
 echo "== policies from the rendered bootstrap chart"
 helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/bootstrap/values.yaml" \
