@@ -615,8 +615,9 @@ jobs:
           set -euo pipefail
           curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
             | tar xz kubeconform
-          # Without a digest the chart must refuse to render.
-          if helm template t platform-gitops/helm-charts/zitadel-iac >/dev/null 2>&1; then
+          # Without a digest the chart must refuse to render. The chart's own
+          # values.yaml always loads, so the digest is unset explicitly.
+          if helm template t platform-gitops/helm-charts/zitadel-iac --set image.digest=null >/dev/null 2>&1; then
             echo "::error::zitadel-iac rendered without image.digest"; exit 1
           fi
           helm template t platform-gitops/helm-charts/zitadel-iac -f platform-gitops/helm-charts/zitadel-iac/values.yaml \
