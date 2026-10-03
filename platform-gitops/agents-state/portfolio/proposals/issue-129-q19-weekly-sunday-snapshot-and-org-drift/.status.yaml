@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-10-03T14:40:38Z'
+status: merged
+updated_at: '2026-10-03T18:24:23Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-0d89498809da74b9
@@ -27,9 +27,6 @@ attempt:
   expires_at: '2026-10-03T15:44:40Z'
   finished_at: '2026-10-03T13:38:29Z'
 pr: https://github.com/mctlhq/portfolio/pull/131
-review_attempts: 1
-refusals: 3
-refusals_head: fb4ba78e2a0460a5e4a1de28b20fe15186a4f61a
 notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
   was never charged — the proposal is not at fault; a human must reconcile the review
   with the operator decision. Last reason: Both P2 findings (scripts/org-drift.mjs:192
@@ -37,3 +34,9 @@ notes: 'The implementer declined to act 3 time(s) and the findings still stand. 
   POST /issues and comments, and the 404/403 classification into drift.unknown, are
   correct and that earlier holes are closed. They request no change, so there is nothing
   to fix and no commit was made.'
+github:
+  state: merged
+  head_sha: c286fc9f2b1f5635cdce6321d2a2fcab6812494c
+  observed_at: '2026-10-03T18:24:23Z'
+merged_at: '2026-10-03T18:24:23Z'
+merge_commit: 82798d497290c7fbd244ecc0241dcbe6f6609d48
