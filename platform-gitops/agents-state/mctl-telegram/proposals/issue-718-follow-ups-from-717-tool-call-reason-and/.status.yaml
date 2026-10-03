@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-03T01:25:00Z'
+updated_at: '2026-10-03T12:34:29Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-998d830ca8f2cdef
@@ -28,3 +28,4 @@ attempt:
   finished_at: '2026-10-03T00:31:42Z'
 pr: https://github.com/mctlhq/mctl-telegram/pull/730
 review_attempts: 2
+merge_owner: pr-steward
