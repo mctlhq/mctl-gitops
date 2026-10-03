@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # Prove mctl-external-manifests-secret-allowlist
 # (bootstrap/templates/system/admission-policies.yaml, allowlists in bootstrap
-# values.yaml externalManifestSecrets) against a real API server, both ways.
+# values.yaml externalManifestNamespaces) against a real API server, both ways.
 #
 # k3s at the cluster's version in Docker, the policy exactly as the bootstrap
 # chart renders it, then server-side dry-runs:
 #
-#   tests/fixtures/secret-allowlist/deny/*.yaml   each must be REFUSED by the policy
+#   tests/fixtures/secret-allowlist/deny/*.yaml   each must be REFUSED by the policy,
+#                                                 with the message its `# expect:` line names
 #   tests/fixtures/secret-allowlist/admit/*.yaml  each must be ADMITTED
 #   an ephemeral container naming a non-allowed Secret, added through the
 #   pods/ephemeralcontainers subresource (kubectl debug's path), must be REFUSED
 #
-# tests/fixtures/secret-allowlist/setup.yaml is created for real first.
+# tests/fixtures/secret-allowlist/setup.yaml is created for real first, and
+# values-test.yaml is layered over the bootstrap values.
 #
 # Requires: docker, kubectl, helm, python3 with PyYAML.
 set -euo pipefail
@@ -46,7 +48,8 @@ done
 kubectl get --raw /readyz >/dev/null
 
 echo "== policy from the rendered bootstrap chart"
-helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/bootstrap/values.yaml" > "$WORK/bootstrap.yaml"
+helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/bootstrap/values.yaml" \
+  -f "$FIXTURES/values-test.yaml" > "$WORK/bootstrap.yaml"
 python3 - "$WORK/bootstrap.yaml" "$POLICY" > "$WORK/policy.yaml" <<'PY'
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d
@@ -93,10 +96,13 @@ kubectl apply -f "$FIXTURES/setup.yaml" >/dev/null
 
 fail=0
 for f in "$FIXTURES"/deny/*.yaml; do
+  grep -q '^# expect: .' "$f" || { echo "FAIL deny  $(basename "$f"): no '# expect:' line"; fail=1; continue; }
   if kubectl apply --dry-run=server -f "$f" >/dev/null 2>"$WORK/err"; then
     echo "FAIL deny  $(basename "$f"): admitted"; fail=1
   elif ! grep -q "$POLICY" "$WORK/err"; then
     echo "FAIL deny  $(basename "$f"): refused, but not by $POLICY: $(cat "$WORK/err")"; fail=1
+  elif ! grep -qF "$(sed -n 's/^# expect: //p' "$f")" "$WORK/err"; then
+    echo "FAIL deny  $(basename "$f"): refused for another reason than '$(sed -n 's/^# expect: //p' "$f")': $(cat "$WORK/err")"; fail=1
   else
     echo "ok   deny  $(basename "$f")"
   fi

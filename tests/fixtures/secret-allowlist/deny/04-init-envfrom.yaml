@@ -1,3 +1,4 @@
+# expect: env/envFrom
 apiVersion: v1
 kind: Pod
 metadata:

@@ -1,0 +1,7 @@
+# Test-only overlay: puller (setup.yaml) is an allowed ServiceAccount here, so
+# deny/06 can only be refused for the pull secret it injects, not for itself.
+externalManifestNamespaces:
+  erpact:
+    serviceAccounts:
+      - default
+      - puller

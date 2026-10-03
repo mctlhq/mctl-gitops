@@ -18,3 +18,10 @@ spec:
   containers:
     - name: c
       image: busybox
+---
+# Stands in for the tenant chart's argo-workflow-sa (Roles that read Secrets).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflow-sa
+  namespace: erpact

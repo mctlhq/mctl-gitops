@@ -226,26 +226,35 @@ surfaceTelegramToken:
 
 # Namespaces whose workloads are written outside the platform team's review
 # (a tenant's own Git repository, a service of theirs that pushes to it),
-# each with the only Secrets its Pods may reference. Enforced by the
-# mctl-external-manifests-secret-allowlist admission policy in
+# each with the only Secrets and ServiceAccounts its Pods may use. Enforced by
+# the mctl-external-manifests-secret-allowlist admission policy in
 # templates/system/admission-policies.yaml.
 #
 # Every namespace also holds Secrets it never asked for: the reflector copies
 # argo-workflows/github-actions-pat, argo-workflows/mctl-gitops-deploy-key and
 # the database/* credentials into all of them (#1230), and the tenant chart
-# adds ghcr and MinIO credentials. In a reviewed namespace that is a latent
-# risk; where someone outside the platform writes the Pod specs, mounting one
-# is a single commit away. So in these namespaces a Pod may name only the
-# Secrets listed here: volumes, projected sources, env, envFrom and
-# imagePullSecrets alike. Add a name in the same change that adds the
+# adds ghcr and MinIO credentials. It also creates argo-workflow-sa, whose
+# Roles read every Secret in the namespace through the API. In a reviewed
+# namespace that is a latent risk; where someone outside the platform writes
+# the Pod specs, mounting a Secret or running as that ServiceAccount is one
+# commit away. So in these namespaces a Pod may name only the Secrets listed
+# here (volumes of every kind, env, envFrom, imagePullSecrets) and run only as
+# a listed ServiceAccount. Add a Secret in the same change that adds the
 # ExternalSecret producing it.
-externalManifestSecrets:
-  # git.mctl.ai/erpact/mctl-apps; ExternalSecrets in templates/erpact/.
+#
+# Platform workflows cannot run in these namespaces as a consequence
+# (argo-workflow-sa, minio-artifact-credentials): that is intended.
+externalManifestNamespaces:
+  # git.mctl.ai/erpact/mctl-apps; its ExternalSecrets are in templates/erpact/.
   erpact:
-    - clo-s3
-    - deployer-git
-    - deployer-secret
-    - mariadb-root
+    secrets:
+      - clo-s3
+      - deployer-git
+      - deployer-secret
+      - mariadb-root
+    # No RBAC is bound to default in erpact.
+    serviceAccounts:
+      - default
 
 # Platform hostnames and the namespaces allowed to serve them (#1503),
 # enforced by the mctl-reserved-platform-hosts-* admission policies in
