@@ -88,6 +88,24 @@ Console is drift: the next apply either reports it or reverts it.
   bump changes `iac/versions.tf`, `iac/.terraform.lock.hcl` and the image
   together.
 
+### Sign-in policy (#1520 S2)
+
+Every sign-in needs a WebAuthn authenticator (a passkey or a security key):
+
+- A passkey sign-in works on its own.
+- A password sign-in must add a U2F second factor (WebAuthn, not TOTP). A
+  user with none enrolled is sent to enrol one, with no skip.
+- Self-registration is off and the password-reset link is hidden. Accounts
+  are declared here (S3), not signed up for.
+
+Login V2 has no "passkeys only" switch: `user_login = false` also disables
+passkeys, leaving only external IdPs, and no API removes an existing password.
+So passwords remain but never suffice alone.
+
+Recovery if an admin loses every authenticator: the `iac` break-glass key
+above. Remove their WebAuthn registrations through the API with it, so they can
+enrol again.
+
 ## Sync hooks instead of Helm hooks
 
 The chart ships `zitadel-init` and `zitadel-setup` as Helm pre-install hooks.
