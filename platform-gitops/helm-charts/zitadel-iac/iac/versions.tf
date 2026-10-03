@@ -8,6 +8,10 @@ terraform {
       source  = "zitadel/zitadel"
       version = "3.8.7"
     }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "3.3.0"
+    }
   }
 
   # State lives next to ZITADEL, in the zitadel namespace: a Secret holds it

@@ -186,6 +186,11 @@ spec:
         - .metadata.annotations
         - .spec.target.deletionPolicy
         - .status
+    # Written by the zitadel-iac Job, not by Argo CD (oidc-zitadel.yaml).
+    - kind: Secret
+      name: forgejo-oidc-zitadel
+      jsonPointers:
+        - /data
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: forgejo
