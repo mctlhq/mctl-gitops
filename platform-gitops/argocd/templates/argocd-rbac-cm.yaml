@@ -1,0 +1,33 @@
+{{- /*
+  argocd-rbac-cm is rendered here, not by the argo-cd subchart
+  (configs.rbac.create: false), so that each tenant's policy lines can live in
+  its own file — rbac/tenants/<tenant>.csv — instead of in this chart's shared
+  values.yaml. Two concurrent wft-create-tenant runs then write disjoint paths
+  and never conflict in git (issue 1431).
+  Fragments are concatenated into the single policy.csv key rather than emitted
+  as separate policy.<tenant>.csv keys: Argo CD merges extra policy keys, but a
+  single key keeps the rendered policy byte-comparable with the pre-migration
+  one and independent of that feature.
+*/ -}}
+{{- $rbac := index .Values "argo-cd" "configs" "rbac" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: argocd-rbac-cm
+    app.kubernetes.io/part-of: argocd
+    app.kubernetes.io/component: rbac-cm
+data:
+  {{- /* Every configs.rbac key except create/annotations, like the subchart
+       (reviewer amendment 2026-09-27); policy.csv is emitted below, extended. */}}
+  {{- range $k, $v := omit $rbac "create" "annotations" "policy.csv" }}
+  {{ $k }}: {{ $v | toString | quote }}
+  {{- end }}
+  policy.csv: |
+    {{- index $rbac "policy.csv" | trim | nindent 4 }}
+    {{- range $path, $content := .Files.Glob "rbac/tenants/*.csv" }}
+    {{ printf "# %s" $path }}
+    {{- $content | toString | trim | nindent 4 }}
+    {{- end }}

@@ -10,9 +10,8 @@
 #     subdomains as the mctl-landing-form worker route and never fired,
 #     because the worker runs first and returns.
 #
-# Also absent: the worker routes mctl.me/* and *.mctl.me/* . #1089 item 9
-# settled that routes belong in OpenTofu and the script stays in Wrangler, but
-# they are their own slice — see README.md.
+# The worker routes mctl.me/* and *.mctl.me/* arrived later, with #1179: see
+# the end of this file and workers.tf.
 
 locals {
   zone_id = "b0a1f8992b5d4221faf4541a9f75a329" # mctl.me
@@ -89,4 +88,16 @@ import {
 import {
   to = module.baseline.cloudflare_zone_setting.ssl
   id = "${local.zone_id}/ssl"
+}
+
+# Worker routes (#1179), ids from a read-only GET /zones/{zone_id}/workers/routes
+# on 2026-09-25. Resources in workers.tf.
+import {
+  to = cloudflare_workers_route.landing_form_apex
+  id = "${local.zone_id}/7bf2b7ffb1d3435a94edbf59805d833e"
+}
+
+import {
+  to = cloudflare_workers_route.landing_form_subdomains
+  id = "${local.zone_id}/3f599d649dd04f1b8729529075297bbd"
 }

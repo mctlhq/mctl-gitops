@@ -1,0 +1,33 @@
+status: merged
+updated_at: '2026-09-23T17:53:09Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-telegram
+  issue: 668
+  url: https://github.com/mctlhq/mctl-telegram/issues/668
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-23T15:13:42Z'
+attempt:
+  id: a2b0d7c082d2e4e3aa6ea3d882fbe60315bcdf3dc9ce0f188e8b764388afea80
+  started_at: '2026-09-23T15:15:18Z'
+  expires_at: '2026-09-23T17:25:18Z'
+  finished_at: '2026-09-23T15:54:22Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/674
+github:
+  state: merged
+  head_sha: bcb7408b22deb78365e3cab4dbd22eeaad181ff9
+  observed_at: '2026-09-23T17:53:09Z'
+notes: 'implementer declined to act: The listed ''finding'' (Severity P2) is ''Claude
+  finished @mashkovd''s task in 6m 56s'' linking to https://github.com/mctlhq/mctl-telegram/actions/runs/35889653918.
+  Inspected that run: it is the claude-review GitHub Actions job''s own completion/status
+  output for PR #674 (feat/agents-issue-668-feat-observability-audit-rejected-client),
+  not a code review comment. Cross-checked the PR''s actual review threads (gh api
+  pulls/674/comments and pulls/674/reviews): the review job at commit 1f285eb left
+  a real verdict with 1 P2 and 2 P3 findings (SweepIdleSessions/SweepAbsoluteSessions
+  not stamping revoked_re'
+merged_at: '2026-09-23T17:53:09Z'
+merge_commit: e77d16aa3de07dd0947d2c2f3a8ed6b354e86c63

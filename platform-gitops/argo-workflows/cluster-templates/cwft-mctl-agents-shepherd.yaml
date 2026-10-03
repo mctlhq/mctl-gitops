@@ -39,8 +39,12 @@ metadata:
         3. commit-and-push — commits any .status.yaml transitions back
            to gitops main (implemented → review-fixing, review-fixing
            → implemented after followup, → merged on successful merge,
-           → rejected on closed-unmerged). Same `:(glob)` filter as
-           the implementer template.
+           → rejected on closed-unmerged), plus any adopted-prs/pr-<n>/
+           .prref.yaml records the run wrote. The `:(glob)` filter is
+           deliberately wider than the implementer template's — see
+           mctlhq/mctl-agents#334 (shepherd PR-adoption) and this
+           issue (mctl-gitops#1278) for why adoption records needed
+           the same durable-handoff path as .status.yaml.
         4. post-deploy-verify — sleeps 300s, then lists ArgoCD
            Applications that flipped to Health=Degraded since the run
            started. A non-empty result fails the workflow, which
@@ -117,7 +121,7 @@ spec:
         # subprocess and does NOT call `gh pr merge`. Useful for
         # operator dry runs and local smoke tests.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.46.0
+        value: ghcr.io/mctlhq/mctl-agents:1.64.1
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -126,6 +130,37 @@ spec:
         # Registry version string, carried for the record only — not
         # consumed by run-shepherd. Left blank by any caller not yet
         # using the registry.
+      - name: work_item_id
+        value: ""
+        # Optional. Canonical WorkItem id, minted by the caller (the
+        # dev-loop control plane). Correlation only — carried to the runner
+        # as env and NOT forwarded as a CLI flag: unlike
+        # cwft-mctl-agents-investigate.yaml, run_shepherd.py has no
+        # --work-item-id flag, so appending one would make argparse exit
+        # non-zero on every run, including the cron sweep. Empty means
+        # absent; no value is ever derived. Read by the usage producer
+        # (mctl-agents orchestrator/usage_ledger.py) beside the existing
+        # WORKFLOW_NAME join key. Mirrors gitops#1279; owner decision 4 of
+        # mctlhq/.github#50.
+      - name: execution_id
+        value: ""
+        # Optional. Execution identity for THIS attempt, minted by the same
+        # caller alongside work_item_id. Same correlation-only, env-not-argv,
+        # empty-means-absent rules as work_item_id above.
+      - name: temporal_workflow_id
+        value: ""
+        # Optional. Id of the DevLoopWorkflow that submitted this tick. Same
+        # correlation-only, env-not-argv, empty-means-absent rules as
+        # work_item_id above.
+      - name: temporal_run_id
+        value: ""
+        # Optional. Run id of that same DevLoopWorkflow. Same rules as
+        # temporal_workflow_id.
+      - name: execution_request_id
+        value: ""
+        # Optional. The mctl-api execution request (xr_...) this run
+        # fulfils, for correlation only: the execution identity is still
+        # execution_id. Same rules as work_item_id.
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # Was an 8Gi `volumeClaimTemplates` entry — and Hetzner rounds any request up
@@ -283,10 +318,11 @@ spec:
     - name: run-shepherd
       outputs:
         artifacts:
-          # The `.status.yaml` flips THIS attempt made, at repo-relative paths.
-          # Fixed workflow-scoped key, read literally by commit-and-push — one
-          # of the primary/fallback pair is always skipped and a step reference
-          # would not resolve (mctl-gitops#1042).
+          # The `.status.yaml` flips and adopted-prs/pr-<n>/.prref.yaml records
+          # THIS attempt made, at repo-relative paths (mctlhq/mctl-agents#334,
+          # mctl-gitops#1278). Fixed workflow-scoped key, read literally by
+          # commit-and-push — one of the primary/fallback pair is always
+          # skipped and a step reference would not resolve (mctl-gitops#1042).
           - name: changes
             path: /tmp/state-out
             optional: true
@@ -490,8 +526,17 @@ spec:
             OUT = "/tmp/state-out"
             TREE = os.path.join(OUT, "tree")
             DELETED = os.path.join(OUT, "deleted.lst")
-            ALLOWED = re.compile(r"^platform-gitops/agents-state/.+/\.status\.yaml$")
-            PATHSPEC = ":(glob)platform-gitops/agents-state/**/.status.yaml"
+            # Widened for mctl-agents#334 (shepherd PR-adoption) / mctl-gitops#1278:
+            # an adoption record at agents-state/<svc>/adopted-prs/pr-<n>/.prref.yaml
+            # is now as legitimate a handoff as a .status.yaml flip.
+            ALLOWED = re.compile(
+                r"^platform-gitops/agents-state/(?:.+/\.status\.yaml"
+                r"|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$"
+            )
+            PATHSPECS = [
+                ":(glob)platform-gitops/agents-state/**/.status.yaml",
+                ":(glob)platform-gitops/agents-state/*/adopted-prs/*/**",
+            ]
             rc = int(sys.argv[1])
 
             # Cleared HERE, after the agent has exited, and owned by this script alone.
@@ -501,7 +546,7 @@ spec:
             shutil.rmtree(OUT, ignore_errors=True)
 
             raw = subprocess.run(
-                ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--", PATHSPEC],
+                ["git", "-C", ROOT, "status", "--porcelain=v1", "-z", "-uall", "--", *PATHSPECS],
                 capture_output=True, check=True).stdout
 
 
@@ -652,6 +697,43 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Usage-writer token (mctlhq/.github#50): the only credential the
+          # usage producer may use to append this run's model-usage records
+          # to mctl-api. It may do nothing else there. Optional: absent (the
+          # default until the owner provisions it) the producer logs once and
+          # records nothing; the run itself is unaffected.
+          - name: MCTL_USAGE_WRITER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: usage-writer-token
+                optional: true
+          # The Argo run name, the join key of this run's usage records to
+          # its agent_executions row (argo_workflow_name). Read by nothing
+          # else in this runner.
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          # Optional Temporal / WorkItem correlation (gitops#1408, mirroring
+          # gitops#1279 on cwft-mctl-agents-investigate.yaml). Read by the
+          # usage producer (mctl-agents orchestrator/usage_ledger.py) next to
+          # WORKFLOW_NAME above; NOT consumed by run_shepherd's argv, which
+          # has no such flags. The shepherd's in-pod implementer subprocess
+          # (review-fixing path) inherits this env too, so no separate
+          # threading is needed there. Empty for every caller that does not
+          # set them. Enforced by
+          # scripts/validate-shell-param-interpolation.py: these names are in
+          # neither its BASELINE nor its CONSTRAINED set, so interpolating
+          # them into the script body instead of env would fail CI.
+          - name: WORKFLOW_WORK_ITEM_ID
+            value: "{{workflow.parameters.work_item_id}}"
+          - name: WORKFLOW_EXECUTION_ID
+            value: "{{workflow.parameters.execution_id}}"
+          - name: WORKFLOW_TEMPORAL_WORKFLOW_ID
+            value: "{{workflow.parameters.temporal_workflow_id}}"
+          - name: WORKFLOW_TEMPORAL_RUN_ID
+            value: "{{workflow.parameters.temporal_run_id}}"
+          - name: WORKFLOW_EXECUTION_REQUEST_ID
+            value: "{{workflow.parameters.execution_request_id}}"
           # Per-tick budget cap. Tier 3 spec sets the default to
           # $1.00 per tick; we bump to $5.00 here to absorb worst-case
           # ticks that drive multiple proposals through the
@@ -752,9 +834,10 @@ spec:
             readOnly: true
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
-    # Only .status.yaml files should change in agents-state/
-    # (run_shepherd writes them after each proposal transition).
-    # Defensive: stage only that subtree.
+    # .status.yaml files (run_shepherd writes them after each proposal
+    # transition) and adopted-prs/pr-<n>/.prref.yaml adoption records
+    # (mctlhq/mctl-agents#334, mctl-gitops#1278) are the only things that
+    # should change in agents-state/. Defensive: stage only that subtree.
     - name: commit-and-push
       inputs:
         artifacts:
@@ -894,13 +977,27 @@ spec:
           git config user.name "mctl-agents[bot]"
           git config user.email "mctl-agents[bot]@users.noreply.github.com"
 
+          # The two pathspecs this step will ever stage or exclude, plus the
+          # equivalent regex for validating a handoff's file list — kept as
+          # single named values so each expression appears exactly once in
+          # this script. Widened for mctlhq/mctl-agents#334 (shepherd
+          # PR-adoption) / mctl-gitops#1278: an adopted-prs/pr-<n>/.prref.yaml
+          # record is as legitimate a commit target as a .status.yaml flip.
+          PATH_STATUS='platform-gitops/agents-state/**/.status.yaml'
+          PATH_ADOPTED='platform-gitops/agents-state/*/adopted-prs/*/**'
+          SPEC_STATUS=":(glob)${PATH_STATUS}"
+          SPEC_ADOPTED=":(glob)${PATH_ADOPTED}"
+          EXCL_STATUS=":(exclude,glob)${PATH_STATUS}"
+          EXCL_ADOPTED=":(exclude,glob)${PATH_ADOPTED}"
+          ALLOWED_RE='^platform-gitops/agents-state/(.+/\.status\.yaml|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$'
+
           # /tmp/onexit is the onExit channel, collected as an optional artifact.
           mkdir -p /tmp/onexit
 
           if [ ! -d /artifact ] \
              || { [ -z "$(find /artifact/tree -type f -print -quit 2>/dev/null)" ] \
                   && [ ! -s /artifact/deleted.lst ]; }; then
-            echo "ℹ️  No .status.yaml updates handed off — nothing to commit."
+            echo "ℹ️  No agents-state updates handed off — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
             exit 0
           fi
@@ -915,16 +1012,16 @@ spec:
             find /artifact -mindepth 1 ! -type d ! -type f >&2
             exit 1
           fi
-          BAD="$(cd /artifact/tree 2>/dev/null && find . -type f | sed 's|^\./||' | grep -vE '^platform-gitops/agents-state/.+/\.status\.yaml$' || true)"
+          BAD="$(cd /artifact/tree 2>/dev/null && find . -type f | sed 's|^\./||' | grep -vE "$ALLOWED_RE" || true)"
           if [ -n "$BAD" ]; then
-            echo "❌ Refusing a handoff with paths that are not .status.yaml under agents-state:" >&2
+            echo "❌ Refusing a handoff with paths outside the allowed agents-state subtree:" >&2
             printf '%s\n' "$BAD" >&2
             exit 1
           fi
           if [ -s /artifact/deleted.lst ]; then
-            BAD_DEL="$(grep -vE '^platform-gitops/agents-state/.+/\.status\.yaml$' /artifact/deleted.lst || true)"
+            BAD_DEL="$(grep -vE "$ALLOWED_RE" /artifact/deleted.lst || true)"
             if [ -n "$BAD_DEL" ]; then
-              echo "❌ Refusing a deletion list with paths that are not .status.yaml under agents-state:" >&2
+              echo "❌ Refusing a deletion list with paths outside the allowed agents-state subtree:" >&2
               printf '%s\n' "$BAD_DEL" >&2
               exit 1
             fi
@@ -945,25 +1042,54 @@ spec:
             done < /artifact/deleted.lst
           fi
 
-          # Second layer, on the checkout: the same expression the PVC era used, now
-          # against a pristine clone holding only what the copy above laid down.
-          NON_STATUS_CHANGES="$(git status --porcelain -z -uall -- ':(exclude,glob)platform-gitops/agents-state/**/.status.yaml' | tr '\0' '\n' | cut -c4-)"
+          # Second layer, on the checkout: the same expressions the PVC era used, now
+          # against a pristine clone holding only what the copy above laid down. Both
+          # exclude pathspecs must be passed together — without SPEC_ADOPTED here, a
+          # .prref.yaml the copy above laid down would trip this guard as an
+          # unexpected change and fail the whole commit step.
+          NON_STATUS_CHANGES="$(git status --porcelain -z -uall -- "$EXCL_STATUS" "$EXCL_ADOPTED" | tr '\0' '\n' | cut -c4-)"
           if [ -n "$NON_STATUS_CHANGES" ]; then
-            echo "❌ Refusing to commit changes outside .status.yaml files under platform-gitops/agents-state/:" >&2
+            echo "❌ Refusing to commit changes outside the allowed agents-state subtree:" >&2
             printf '%s\n' "$NON_STATUS_CHANGES" >&2
             exit 1
           fi
 
-          STATUS_CHANGES="$(git status --porcelain -z -uall -- ':(glob)platform-gitops/agents-state/**/.status.yaml' | tr '\0' '\n' | cut -c4-)"
-          if [ -z "$STATUS_CHANGES" ]; then
-            echo "ℹ️  No .status.yaml updates — nothing to commit."
+          AGENT_STATE_CHANGES="$(git status --porcelain -z -uall -- "$SPEC_STATUS" "$SPEC_ADOPTED" | tr '\0' '\n' | cut -c4-)"
+          if [ -z "$AGENT_STATE_CHANGES" ]; then
+            echo "ℹ️  No agents-state updates — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
             exit 0
           fi
-          git add -- ':(glob)platform-gitops/agents-state/**/.status.yaml'
+
+          # `git add` with a pathspec that matches nothing exits 128 under `set -e`,
+          # so only pass the pathspecs that actually have something left to add.
+          #
+          # "has changes" is NOT the same test: the `git rm` loop above has
+          # already staged its deletions, and `git status` keeps reporting them
+          # (`D `) while the paths are gone from both the index and the worktree.
+          # Handing such a pathspec to `git add` therefore matches nothing and
+          # exits 128, killing commit-and-push under `set -e` — losing the whole
+          # durable write, not just the deletion (agy P2 on gitops#1295). A
+          # deletion staged by `git rm` needs no `git add` at all, so a pathspec
+          # is only worth passing when something that is not an already-staged
+          # deletion is waiting for it.
+          needs_add() {
+            git status --porcelain -z -uall -- "$1" | tr '\0' '\n' | grep -qv '^D '
+          }
+
+          set --
+          if needs_add "$SPEC_STATUS"; then
+            set -- "$@" "$SPEC_STATUS"
+          fi
+          if needs_add "$SPEC_ADOPTED"; then
+            set -- "$@" "$SPEC_ADOPTED"
+          fi
+          if [ "$#" -gt 0 ]; then
+            git add -- "$@"
+          fi
 
           if git diff --cached --quiet; then
-            # Defensive: STATUS_CHANGES already proved there are
+            # Defensive: AGENT_STATE_CHANGES already proved there are
             # matches, but keep this guard in case `git add` ever
             # ends up staging an empty diff (e.g. a permissions-only
             # change git ignores).

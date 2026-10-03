@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-09-09T17:30:00Z'
-updated_by: mashkovd
+status: needs-triage
+updated_at: '2026-09-20T14:38:33Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-telegram
@@ -11,8 +11,11 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-09-09T17:30:00Z'
-notes: >-
-  Accepted after implementation. Scope grew during review of
-  mctlhq/mctl-telegram#593 to four metric families / 118 series; see
-  requirements.md "Scope expanded during implementation". Already implemented —
-  do not schedule an implementer attempt against this proposal.
+notes: 'reconcile: no canonical GitHub PR found, source issue closed (source-resolved)'
+failure:
+  code: source-resolved
+  stage: reconcile
+  message: No canonical PR exists for the deterministic result branch, and the source
+    issue mctlhq/mctl-telegram#591 is closed as completed. The branch is missing because
+    this proposal was abandoned, not because a PR was lost. Retire it with a terminal
+    status (agents-state/OPERATOR.md) or reopen the issue.

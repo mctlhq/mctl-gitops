@@ -1,0 +1,262 @@
+# Daily restore drill for the Forgejo volume archive (backup.yaml).
+#
+# An untested backup counts as no backup (docs/runbooks/restore.md). This Job
+# does a real restore of the newest archive in R2, without touching
+# production: no PVC, no write to Forgejo, nothing but a read of the bucket and
+# of the API. It runs on any node, into pod-local storage that dies with it.
+#
+#   fetch    newest object under forgejo-backups/, downloaded (aws-cli image)
+#   restore  gzip -t, untar, app.ini with SECRET_KEY/INTERNAL_TOKEN present,
+#            full `git fsck` of every bare repository (Forgejo image: same git
+#            that will serve the restored repositories)
+#   verify   every repository the database lists that existed when the
+#            archive was taken is in it, with its default branch
+#
+# Out of scope: the database itself. shared-pg restores from barman
+# (restore.md section 1); this drill checks the volume half and that it
+# matches the database the platform runs today.
+#
+# 05:00 UTC, after the 03:30 backup, so each run checks the newest archive.
+# A failed run is the signal; ForgejoRestoreDrillStale (backup-alerts.yaml)
+# reports it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forgejo-restore-drill
+  namespace: forgejo
+data:
+  fetch.sh: |
+    #!/bin/sh
+    # Step 1 (aws-cli image): pick the newest archive in R2 and download it.
+    # A failed listing fails the step; an empty one is reported as such, never
+    # treated as "nothing to verify".
+    set -eu
+    # shellcheck disable=SC2016  # JMESPath backticks, not shell
+    aws s3api list-objects-v2 --bucket "$BUCKET" --prefix forgejo-backups/ \
+      --endpoint-url "$ENDPOINT" --region auto \
+      --query 'sort_by(Contents || `[]`, &LastModified)[-1].[Key, LastModified]' \
+      --output text > /drill/latest
+    read -r key taken < /drill/latest
+    if [ -z "$key" ] || [ "$key" = "None" ]; then
+      echo "FAIL no archive under s3://$BUCKET/forgejo-backups/"
+      exit 1
+    fi
+    echo "archive $key (uploaded $taken)"
+    aws s3 cp "s3://$BUCKET/$key" /drill/archive.tar.gz \
+      --endpoint-url "$ENDPOINT" --region auto --only-show-errors
+    ls -l /drill/archive.tar.gz
+  restore.sh: |
+    #!/bin/sh
+    # Step 2 (Forgejo image): unpack the archive the way a real restore would and
+    # check what Forgejo needs from it: app.ini with its secrets, and every bare
+    # repository passing a full git fsck.
+    set -eu
+    gzip -t /drill/archive.tar.gz
+    mkdir -p /drill/data
+    tar -xzf /drill/archive.tar.gz -C /drill/data
+    rm /drill/archive.tar.gz
+
+    ini=/drill/data/gitea/conf/app.ini
+    [ -s "$ini" ] || { echo "FAIL archive has no gitea/conf/app.ini"; exit 1; }
+    for k in SECRET_KEY INTERNAL_TOKEN; do
+      # Checked for presence only; the value is never printed.
+      grep -Eq "^$k *= *[^ ]+" "$ini" || { echo "FAIL app.ini has no $k"; exit 1; }
+    done
+    echo "OK   app.ini with SECRET_KEY and INTERNAL_TOKEN"
+
+    root=/drill/data/git/gitea-repositories
+    [ -d "$root" ] || { echo "FAIL archive has no git/gitea-repositories"; exit 1; }
+    : > /drill/inventory
+    failed=0
+    for repo in "$root"/*/*.git; do
+      [ -d "$repo" ] || continue
+      name=${repo#"$root"/}
+      name=${name%.git}
+      # The restored tree is not owned by whoever runs the drill on every
+      # runtime; trust exactly this repository, nothing wider.
+      g() { git -c "safe.directory=$repo" -C "$repo" "$@"; }
+      if g fsck --no-progress --no-dangling > /drill/fsck.log 2>&1; then
+        echo "OK   fsck $name"
+      else
+        echo "FAIL fsck $name"
+        tail -n 5 /drill/fsck.log
+        failed=1
+      fi
+      printf '%s\t%s\n' "$name" \
+        "$(g for-each-ref --format='%(refname:short)' refs/heads | tr '\n' ' ')" \
+        >> /drill/inventory
+    done
+    echo "$(wc -l < /drill/inventory) repositories in the archive"
+    exit "$failed"
+  verify.py: |
+    """Step 3: compare the restored repositories with what Forgejo's database
+    lists. A repository created before the archive was taken must be in it, and
+    a non-empty one must carry its default branch. A failed or partial API read
+    fails the drill; it never shrinks the list being checked against."""
+    import base64
+    import json
+    import os
+    import sys
+    import urllib.request
+    from datetime import datetime
+
+    host = os.environ["FORGEJO_HOST"].rstrip("/")
+    cred = f"{os.environ['FORGEJO_USERNAME']}:{os.environ['FORGEJO_PASSWORD']}"
+    auth = "Basic " + base64.b64encode(cred.encode()).decode()
+
+    key, taken = open("/drill/latest").read().split()
+    taken = datetime.fromisoformat(taken)
+
+    inventory = {}
+    for line in open("/drill/inventory"):
+        name, branches = line.rstrip("\n").split("\t")
+        inventory[name.lower()] = set(branches.split())
+
+    repos, page, total = [], 1, None
+    while True:
+        req = urllib.request.Request(
+            f"{host}/api/v1/repos/search?limit=50&page={page}",
+            headers={"Authorization": auth, "User-Agent": "forgejo-restore-drill"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = json.load(resp)
+            total = int(resp.headers["X-Total-Count"])
+        if not body.get("ok"):
+            sys.exit("FAIL repository search returned ok=false")
+        repos += body["data"]
+        if not body["data"] or len(repos) >= total:
+            break
+        page += 1
+    if len(repos) != total:
+        sys.exit(f"FAIL repository search returned {len(repos)} of {total}")
+
+    failed = False
+    for r in repos:
+        name = r["full_name"].lower()
+        created = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
+        if created >= taken:
+            print(f"NEW  {name} (created after the archive)")
+        elif name not in inventory:
+            print(f"FAIL {name} is in the database but not in the archive")
+            failed = True
+        elif not r["empty"] and r["default_branch"] not in inventory[name]:
+            print(f"FAIL {name} has no branch {r['default_branch']} in the archive")
+            failed = True
+        else:
+            print(f"OK   {name}")
+
+    live = {r["full_name"].lower() for r in repos}
+    for name in sorted(set(inventory) - live):
+        print(f"GONE {name} (in the archive, deleted since)")
+
+    print(f"{key}: {len(repos)} repositories checked against the archive")
+    sys.exit(1 if failed else 0)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: forgejo-restore-drill
+  namespace: forgejo
+spec:
+  schedule: "0 5 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 7200
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: forgejo-restore-drill
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+          volumes:
+            - name: scripts
+              configMap:
+                name: forgejo-restore-drill
+            # Archive and unpacked tree side by side for a moment: about twice
+            # the repository size (1.8 GB as of 2026-10-03).
+            - name: drill
+              emptyDir:
+                sizeLimit: 10Gi
+          initContainers:
+            - name: fetch
+              image: amazon/aws-cli:2.22.35
+              command: ["sh", "/scripts/fetch.sh"]
+              envFrom:
+                - secretRef:
+                    name: forgejo-backup-r2
+              env:
+                - name: HOME
+                  value: /tmp
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: drill
+                  mountPath: /drill
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+            - name: restore
+              image: code.forgejo.org/forgejo/forgejo:15.0.9-rootless
+              command: ["sh", "/scripts/restore.sh"]
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: drill
+                  mountPath: /drill
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  # git fsck of the largest pack (~1 GB) holds its index and
+                  # delta base cache in memory.
+                  memory: 3Gi
+          containers:
+            - name: verify
+              image: python:3.13.16-alpine
+              command: ["python", "/scripts/verify.py"]
+              env:
+                - name: FORGEJO_HOST
+                  value: http://forgejo-http.forgejo.svc.cluster.local:3000
+                - name: FORGEJO_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: forgejo-admin
+                      key: username
+                - name: FORGEJO_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: forgejo-admin
+                      key: password
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: drill
+                  mountPath: /drill
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi

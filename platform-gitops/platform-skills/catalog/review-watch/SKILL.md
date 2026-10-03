@@ -1,11 +1,13 @@
 ---
 name: review-watch
-description: 'Monitor a GitHub PR in the background for a review-bot response. Watches claude[bot] (claude-review.yml), chatgpt-codex-connector[bot] (@codex review), and — on repos that have it wired up — the agy reviewer, which posts as github-actions[bot] with an `<!-- agy-review -->` marker. Launches a detached shell process that polls until a bot posts a review (line-anchored comments or top-level review body), a top-level issue comment (clean/"no findings"), or reacts with a thumbs-up, then writes a result file you can read at any time. Use whenever the user has just posted "@codex review" or "@claude review" on a PR — or asks you to "watch / monitor / wait for / babysit the review" on a specific PR — and they want hands-off notification instead of manual `gh api` polling. Also use when they queue several PRs at once: launch one watcher per PR, in parallel.'
+description: 'Monitor a GitHub PR in the background for a review-bot response. Watches claude[bot] (claude-review.yml) and — on repos that have it wired up — the agy reviewer, which posts as github-actions[bot] with an `<!-- agy-review -->` marker. Launches a detached shell process that polls until a bot posts a review (line-anchored comments or top-level review body), a top-level issue comment (clean/"no findings"), or reacts with a thumbs-up, then writes a result file you can read at any time. Use whenever the user has just posted "@claude review" on a PR — or asks you to "watch / monitor / wait for / babysit the review" on a specific PR — and they want hands-off notification instead of manual `gh api` polling. Also use when they queue several PRs at once: launch one watcher per PR, in parallel.'
 ---
 
 # review-watch — background PR-review monitor (detached shell)
 
-The user has set this up so they don't have to manually re-run `gh api` to check whether a review bot has finished reviewing — claude[bot], chatgpt-codex-connector[bot], and (on repos where it's wired up) the agy pilot reviewer.
+The user has set this up so they don't have to manually re-run `gh api` to check whether a review bot has finished reviewing — claude[bot] and (on repos where it's wired up) the agy reviewer.
+
+Codex (`chatgpt-codex-connector[bot]`) is not watched: its GitHub App was uninstalled from the org on 2026-09-23, so it can no longer post. Copilot is not watched either (see global CLAUDE.md) — the unfiltered pre-merge sweep is what catches both.
 
 ## When to invoke
 
@@ -15,7 +17,7 @@ Also invoke this **proactively** (without being asked) whenever you have just po
 
 ## Implementation — detached shell, NOT subagent
 
-Use the script at `~/.claude/tmp/review-watch.sh` (lazily ensure it exists; see "Bootstrap" below). Launch one **detached background shell** per PR via `nohup ... &` + `disown`. The shell process survives across Claude Code sessions and writes a result file when codex responds or after a timeout.
+Use the script at `~/.claude/tmp/review-watch.sh` (lazily ensure it exists; see "Bootstrap" below). Launch one **detached background shell** per PR via `nohup ... &` + `disown`. The shell process survives across Claude Code sessions and writes a result file when a reviewer responds or after a timeout.
 
 Do NOT spawn an `Agent` for this. Sub-agent runtime has a strong bias toward the `Monitor` tool, which does not block the agent's completion — agents thinking they're "watching" Monitor exit in seconds without ever waiting. Two empirical attempts at agent-based watchers (with explicit "do not use Monitor" instructions) both failed in 26–39 seconds. The detached shell pattern below is what actually works.
 
@@ -26,7 +28,7 @@ in place AND current:
 
 ```bash
 mkdir -p ~/.claude/tmp && chmod 700 ~/.claude/tmp
-grep -qF 'QUOTA_RE=' ~/.claude/tmp/review-watch.sh
+grep -qF 'BOTFILTER='"'"'select(.user.login == "claude[bot]")'"'"'' ~/.claude/tmp/review-watch.sh
 ```
 
 If the file is missing or the grep fails, (re)write it via Bash heredoc (the
@@ -52,8 +54,11 @@ with every change to the script body. Two regressions taught this:
   that silently missed every agy response until someone deleted the file by
   hand. Fixed by matching the marker's value instead.
 - On 2026-08-30 the predicate was still the AGY_MARKER value, so it happily
-  accepted a script with no quota handling at all — see below. It is now
-  `QUOTA_RE=`, which only the current body defines.
+  accepted a script with no quota handling at all — see below. It became
+  `QUOTA_RE=`, which only that body defined.
+- On 2026-09-23 Codex was dropped from `BOTFILTER`. Every older body defines
+  `QUOTA_RE=` too, so the predicate is now the claude-only `BOTFILTER` line
+  itself.
 
 (The 2026-09-01 move out of `/tmp` did not need a new predicate: nothing has
 ever been written to the new path, so the first bootstrap there writes a fresh
@@ -62,9 +67,9 @@ copy regardless of what the grep would have said.)
 ```bash
 #!/bin/bash
 # Detached PR-review watcher with macOS notification on completion.
-# Watches BOTH review bots — claude[bot] (claude-review.yml GH Action) and
-# chatgpt-codex-connector[bot] (@codex review) — so it works whichever
-# reviewer the repo / trigger uses.
+# Watches claude[bot] (claude-review.yml GH Action) and the agy reviewer.
+# chatgpt-codex-connector[bot] was dropped 2026-09-23: its GitHub App was
+# uninstalled from the org, so it can no longer post.
 # Args: <repo>           e.g. mctlhq/mctl-openclaw
 #       <pr>             e.g. 5
 #       <result-file>    e.g. ~/.claude/tmp/review-watch-mctl-openclaw-5.result
@@ -76,10 +81,10 @@ REPO="$1"; PR="$2"; RESULT="$3"; LOG="$4"; BASE_TS="${5:-}"
 exec >"$LOG" 2>&1
 echo "[$(date -u +%FT%TZ)] watcher start repo=$REPO pr=$PR pid=$$"
 
-# jq predicate matching either review bot. Expanded inside the double-quoted
+# jq predicate matching the review bot(s). Expanded inside the double-quoted
 # --jq strings below; its inner double-quotes survive because shell variable
 # expansion happens after quote parsing. Add more bots here if needed.
-BOTFILTER='select(.user.login == "claude[bot]" or .user.login == "chatgpt-codex-connector[bot]")'
+BOTFILTER='select(.user.login == "claude[bot]")'
 
 # agy (Antigravity reviewer) posts via
 # `gh pr comment` using the workflow's GITHUB_TOKEN, so its login is the
@@ -105,14 +110,15 @@ AGY_MARKER='<!-- agy-review -->'
 #    identity. That login is NOT in BOTFILTER, so the notice was invisible and
 #    the watcher polled out the full 30 min reporting "in progress" while the
 #    real (non-blocking) answer had already landed — mctl-api#115, 2026-07-30.
-#  - Codex posts "You have reached your Codex usage limits for code reviews"
-#    under its OWN login, which IS in BOTFILTER. That counts as a top-level
+#  - Codex (removed 2026-09-23, kept as history) posted "You have reached
+#    your Codex usage limits for code reviews" under its OWN login, then in
+#    BOTFILTER. That counts as a top-level
 #    issue comment, trips the hit gate, and — having no line-anchored findings
 #    — is then classified CLEAN. On mctl-agents#243 the watcher exited 14
 #    seconds after PR open reporting a clean review, while claude and agy had
 #    not started. The in-progress guard cannot help: quota text carries no
 #    "- [ ]" checkbox and no "Claude Code is working" marker.
-QUOTA_RE='hit (your|the shared) (usage )?limit|usage limit|rate.?limit|overloaded|insufficient.*quota|credit balance|reached your Codex usage limits'
+QUOTA_RE='hit (your|the shared) (usage )?limit|usage limit|rate.?limit|overloaded|insufficient.*quota|credit balance'
 
 notify() {
   local title="$1" body="$2" sound="${3:-Glass}"
@@ -122,7 +128,7 @@ notify() {
   osascript -e "display notification \"$body\" with title \"$title\" sound name \"$sound\"" >/dev/null 2>&1 || true
 }
 
-# Trigger baseline: prefer the latest @claude/@codex review comment if one
+# Trigger baseline: prefer the latest @claude review comment if one
 # exists. But across every mctlhq repo, claude-review.yml's base trigger is
 # `pull_request: [opened, reopened, synchronize, ready_for_review]` — i.e. the
 # FIRST review always auto-fires on PR open, and re-reviews after a fix-up
@@ -146,8 +152,8 @@ if [ -n "$BASE_TS" ]; then
   ID=""
   echo "[$(date -u +%FT%TZ)] using explicit baseline from arg"
 else
-  TS=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@(claude|codex) review"; "i"))] | last | .created_at')
-  ID=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@(claude|codex) review"; "i"))] | last | .id')
+  TS=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@claude review"; "i"))] | last | .created_at')
+  ID=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '[.[] | select(.body | test("@claude review"; "i"))] | last | .id')
   if [ -z "$TS" ] || [ "$TS" = "null" ]; then
     TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     ID=""
@@ -158,12 +164,10 @@ echo "[$(date -u +%FT%TZ)] baseline trigger_ts=$TS trigger_id=${ID:-<none>}"
 for i in $(seq 1 10); do
   R=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq "[.[] | $BOTFILTER | select(.submitted_at > \"$TS\")] | length" 2>/dev/null || echo 0)
   C=$(gh api --paginate "repos/$REPO/pulls/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
-  # Top-level issue comments — codex posts "no findings" results here
-  # ("Codex Review: Didn't find any major issues. Swish!") instead of as
-  # a PR review when there is nothing line-anchored to flag. Without this
-  # check the watcher times out at 30 min while codex has already
-  # responded clean within minutes (regression observed on
-  # mctlhq/mctl-gitops#91, 2026-05-01).
+  # Top-level issue comments — a bot with nothing line-anchored to flag posts
+  # its verdict here instead of as a PR review. Without this check the
+  # watcher timed out at 30 min while the (then) Codex reviewer had already
+  # responded clean within minutes (mctlhq/mctl-gitops#91, 2026-05-01).
   I=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\")] | length" 2>/dev/null || echo 0)
   # agy pilot reviewer — see AGY_MARKER note above. Independent of BOTFILTER
   # since its login collides with unrelated github-actions[bot] comments.
@@ -172,17 +176,16 @@ for i in $(seq 1 10); do
   # gate and the CLEAN heuristic use; $I is kept only for the log line, so a
   # reader can see the difference at a glance.
   IREAL=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | select((.body | test(\"$QUOTA_RE\"; \"i\")) | not)] | length" 2>/dev/null || echo 0)
-  # Quota notices from ANY login — deliberately unfiltered, because the two
-  # known emitters are a BOTFILTER bot (codex) and a non-BOTFILTER one
-  # (github-actions[bot], i.e. claude-review.yml itself).
+  # Quota notices from ANY login — deliberately unfiltered: the known emitter
+  # is a non-BOTFILTER login (github-actions[bot], i.e. claude-review.yml
+  # itself), and any future bot's notice should surface the same way.
   Q=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq "[.[] | select(.created_at > \"$TS\") | select(.body | test(\"$QUOTA_RE\"; \"i\"))] | length" 2>/dev/null || echo 0)
   E=""
   [ -n "$ID" ] && E=$(gh api --paginate "repos/$REPO/issues/comments/$ID/reactions" --jq "[.[] | $BOTFILTER | select(.created_at > \"$TS\") | .content] | last" 2>/dev/null || echo "")
   echo "[$(date -u +%FT%TZ)] tick $i: reviews=$R comments=$C issue_comments=$I (real=$IREAL) agy_comments=$A quota_notices=$Q reaction=$E"
   # Fetch the latest bot issue-comment body up front so the hit gate can tell
   # claude-review.yml's in-progress checklist from a real verdict. The checklist
-  # has UNCHECKED boxes ("- [ ]"); a finished verdict has only "- [x]", and codex
-  # posts no checklist at all. An issue-comment-only signal that is still a
+  # has UNCHECKED boxes ("- [ ]"); a finished verdict has only "- [x]". An issue-comment-only signal that is still a
   # checklist is NOT a response yet -> keep polling (regression: false "clean"
   # on the progress comment, mctlhq/mctl-gitops#267, 2026-05-22).
   # claude[bot]'s FIRST progress comment ("Claude Code is working…") has no
@@ -247,8 +250,8 @@ done
 #
 # Note it does NOT short-circuit the polling loop. An earlier design exited on
 # the first quota tick; on mctl-agents#244 that would have quit at second ~15
-# and missed codex's real review — two P2 findings — posted 5 minutes AFTER its
-# own quota notice, plus claude and agy, which had not started. Waiting out the
+# and missed a real review — two P2 findings — posted 5 minutes AFTER that
+# bot's own quota notice, plus claude and agy, which had not started. Waiting out the
 # window costs 30 min of background polling and nothing else.
 if [ "${Q:-0}" -gt 0 ]; then
   {
@@ -273,7 +276,7 @@ notify "review-watch [$REPO#$PR]" "timeout after ~30 min, no review response" "B
 > issue comment seconds after the trigger, then edits it as it works. The hit
 > gate guards against this: an issue-comment-only signal whose body still has an
 > unchecked `- [ ]` box is treated as in-progress and the watcher keeps polling
-> (a finished verdict has only `- [x]`, and codex posts no checklist). This
+> (a finished verdict has only `- [x]`). This
 > matters for automated readers (e.g. pr-steward) that parse the result file
 > rather than eyeballing it — without the guard every tick would misread the
 > checklist as a clean review.
@@ -305,7 +308,7 @@ echo "watcher pid=$PID"
 
 ## Reading results
 
-When the user later asks "did codex respond yet?" or similar, just `Read` the `.result` file:
+When the user later asks "did claude respond yet?" or similar, just `Read` the `.result` file:
 
 - If the file does not exist yet → watcher still polling. `Read ~/.claude/tmp/review-watch-<stem>-<N>.log` for current tick number to estimate.
 - If file contents start with `status=responded` → parse and report findings (Format A).
@@ -381,24 +384,24 @@ If args are ambiguous, ask which PRs in one short AskUserQuestion before launchi
 ## Operational notes
 
 - The detached shell uses `nohup` + `disown` + stdout/stderr redirection — it survives Claude Code session boundaries. A future session can read the result file and report.
-- Codex usually responds within 1–5 minutes of `@claude review`. The 180s tick cadence catches it within the next tick. Sometimes codex takes 5–15 min when busy.
+- claude[bot] usually finishes within 3–5 minutes of the trigger. The 180s tick cadence catches it within the next tick.
 - Result-file path convention: `~/.claude/tmp/review-watch-<repo-stem>-<N>.result` — keep this stable so future sessions can find it without args. It moved out of `/tmp` on 2026-09-01 together with the script (mctl-gitops#959): the result file is what a later session reads to decide whether a PR is clean, so a world-writable location for it is the same trust problem as for the executable. Watchers launched before the move still write to `/tmp/review-watch-*.result`; check there too if a result is missing and the PR predates it.
 - If `gh api` returns 403/404, the watcher writes a status-error result and exits. No retries — auth/permission issues won't fix themselves.
 - The first `@claude review` issue comment is the trigger baseline. If the user re-triggers (posts `@claude review` again after a fix-up), launch a new watcher — the script's baseline-detection `last` filter picks up the latest trigger automatically. For push-triggered re-reviews (no fresh comment), always pass the explicit `baseline-ts` arg instead.
 
 ## What this skill is NOT for
 
-- One-shot "check codex now" — for that, just call `gh api` directly. This skill is for the wait-and-notify case.
-- Reviews from bots other than `claude[bot]` / `chatgpt-codex-connector[bot]` / agy (marker-matched, see `AGY_MARKER`) — add the login (and a body marker, if the bot shares a generic login like `github-actions[bot]`) to the script. For an entirely different review surface, write a sibling skill.
+- One-shot "check the review now" — for that, just call `gh api` directly. This skill is for the wait-and-notify case.
+- Reviews from bots other than `claude[bot]` / agy (marker-matched, see `AGY_MARKER`) — add the login (and a body marker, if the bot shares a generic login like `github-actions[bot]`) to the script. For an entirely different review surface, write a sibling skill.
 - Long-term watching across multiple `@claude review` retries — re-launch after each new trigger.
-- Treating agy findings as a merge blocker — the pilot is explicitly non-blocking (see [[project_agy_reviewer_pilot]] memory); only claude[bot] / codex P1-P2 gate a merge.
+- Treating agy findings as a merge blocker — the merge gate is defined in global CLAUDE.md, not by this watcher.
 
 ## Anti-patterns (do not regress)
 
 1. **`Agent` + `Monitor` tool**: sub-agent runtime treats Monitor as fire-and-forget and exits in seconds without waiting. Always use detached shell instead.
 2. **Synchronous Bash in foreground**: blocks the user's session for up to 30 min, defeats the "background" goal. Always `nohup ... &` + `disown`.
-3. **Polling without baseline timestamp**: if you check `pulls/<N>/reviews` without filtering by `> $TRIGGER_TS`, you'll match codex's previous (pre-fixup) review and falsely report "responded" immediately. Always filter by the latest `@claude review` issue-comment timestamp.
-4. **Counting a quota notice as a review**: see `QUOTA_RE`. Codex's notice comes from its own login and otherwise sails straight through the hit gate and out the CLEAN branch. A quota notice is an answer about capacity, not about the diff.
-5. **Exiting on the first quota tick**: a bot that just reported a usage limit can still review minutes later — observed on mctl-agents#244, where codex posted the notice and then delivered two real P2s five minutes on. Keep polling; classify at the end.
+3. **Polling without baseline timestamp**: if you check `pulls/<N>/reviews` without filtering by `> $TRIGGER_TS`, you'll match the bot's previous (pre-fixup) review and falsely report "responded" immediately. Always filter by the latest `@claude review` issue-comment timestamp.
+4. **Counting a quota notice as a review**: see `QUOTA_RE`. A notice from a BOTFILTER login would otherwise sail straight through the hit gate and out the CLEAN branch (it did, from Codex, on mctl-agents#243). A quota notice is an answer about capacity, not about the diff.
+5. **Exiting on the first quota tick**: a bot that just reported a usage limit can still review minutes later — observed on mctl-agents#244, where a bot posted the notice and then delivered two real P2s five minutes on. Keep polling; classify at the end.
 6. **Trusting the result file as the complete account of a PR's reviews**: the watcher exits at its first hit, so anything a second bot posts afterwards never appears in any result file. Before merging, always sweep `gh api repos/<owner>/<repo>/pulls/<N>/comments` and `.../issues/<N>/comments` unfiltered, full history.
 7. **Putting the watcher or its result files in `/tmp`**: mode `1777` means another local user can plant a `review-watch.sh` that passes the content-grep and gets executed, and the sticky bit then blocks replacing it. Keep both under `~/.claude/tmp` (mode 700) — mctl-gitops#959.

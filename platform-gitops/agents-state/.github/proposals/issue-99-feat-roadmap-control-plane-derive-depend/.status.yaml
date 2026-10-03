@@ -1,0 +1,25 @@
+status: merged
+updated_at: '2026-09-21T23:18:37Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/.github
+  issue: 99
+  url: https://github.com/mctlhq/.github/issues/99
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-19T15:37:12Z'
+attempt:
+  id: 78c06d4caecb5bcbe4f6960e24375f6f8e36b1f4588b41115de40756114b6eff
+  started_at: '2026-09-19T18:05:24Z'
+  expires_at: '2026-09-19T20:15:24Z'
+  finished_at: '2026-09-19T18:19:50Z'
+pr: https://github.com/mctlhq/.github/pull/107
+github:
+  state: merged
+  head_sha: ce34071bf44ba4ed7000b516ee860995b94e04a8
+  observed_at: '2026-09-21T23:18:37Z'
+merged_at: '2026-09-21T23:18:37Z'
+merge_commit: c5aad29107de7e204c1abe4e90a88112092212da

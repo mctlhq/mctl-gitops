@@ -41,7 +41,9 @@ spec:
     {{- end }}
   {{- else }}
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    {{- /* A host-less rule is refused at admission (mctl-reserved-platform-hosts):
+    fail at render time instead, where the error names the missing value. */}}
+    - host: {{ required "ingress.enabled needs ingress.host or ingress.hosts" .Values.ingress.host | quote }}
       http:
         paths:
           - path: {{ .Values.ingress.path }}
@@ -80,6 +82,7 @@ spec:
     {{- toYaml $ing.tls | nindent 4 }}
   {{- end }}
   rules:
+    {{- if not $ing.hosts }}{{ fail (printf "extraIngresses[%d] needs hosts" $idx) }}{{- end }}
     {{- range $host := $ing.hosts }}
     - host: {{ $host | quote }}
       http:

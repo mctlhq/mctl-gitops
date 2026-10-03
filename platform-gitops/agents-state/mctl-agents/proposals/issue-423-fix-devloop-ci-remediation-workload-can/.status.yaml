@@ -1,0 +1,25 @@
+status: merged
+updated_at: '2026-09-20T12:39:11Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 423
+  url: https://github.com/mctlhq/mctl-agents/issues/423
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-20T09:58:08Z'
+attempt:
+  id: 34c335d3914837d4671a5348c4a34fabb063930a38378faa840f9b353e89e930
+  started_at: '2026-09-20T09:59:29Z'
+  expires_at: '2026-09-20T12:09:29Z'
+  finished_at: '2026-09-20T10:37:12Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/425
+github:
+  state: open
+  head_sha: e6b3aca4572316e3dbc2a70962b8c1c1f7981e7f
+  observed_at: '2026-09-20T12:21:53Z'
+merged_at: '2026-09-20T12:39:11Z'
+merge_commit: 3ba6190cf0dfcf162aceeaf1e313d5e72cfdda0f

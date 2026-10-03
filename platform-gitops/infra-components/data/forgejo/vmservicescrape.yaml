@@ -1,0 +1,26 @@
+# Forgejo's built-in Prometheus endpoint (gitea.metrics.enabled). /metrics
+# requires the bearer token from forgejo-metrics; without it Forgejo answers 401
+# and the target shows down rather than silently empty.
+# Native VMOperator kind, same reasoning as data/valkey/vmservicescrape.yaml.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: forgejo
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: forgejo
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: forgejo
+      app.kubernetes.io/instance: forgejo
+  endpoints:
+    # Only forgejo-http exposes a port named http; forgejo-ssh matches the
+    # selector but contributes no endpoint.
+    - port: http
+      interval: 60s
+      path: /metrics
+      scheme: http
+      bearerTokenSecret:
+        name: forgejo-metrics
+        key: token

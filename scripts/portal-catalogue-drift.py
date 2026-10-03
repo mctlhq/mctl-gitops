@@ -14,9 +14,9 @@ mctlhq/.github#64). Two things then go wrong silently:
     OLD schema. With `additionalProperties: false` in the snapshot, every
     added field is a failed call (mctlhq/mctl-telegram#637).
 
-Neither is visible to `tofu plan` (`tools` is a computed attribute) nor to
-the allowlist apply scripts, which hold back entries the portal has not
-synced rather than failing on them. This compares the live snapshot with
+Neither is visible to `tofu plan`: `tools` is a computed attribute, and
+mcp-portal.tf builds the mapping from the committed allowlists/catalogue.json,
+not from the live catalogue. This compares the live snapshot with
 the allowlist each owning repository commits on `main` -- that file is
 test-enforced there to equal the set of tools the server registers, so it
 is the honest statement of which tools the upstream advertises -- and
@@ -57,6 +57,10 @@ things:
        here; do NOT re-snapshot for either
     4  an upstream this script expects is not mapped on the portal at all --
        restore the mapping, or retire it from OWNERS
+    5  the portal is fine, but the catalogue committed in
+       infrastructure/cloudflare/portal/allowlists/catalogue.json no longer
+       matches it (a server re-synced) -- update that file in a PR, which is
+       what mcp-portal.tf builds updated_tools from. Do NOT re-snapshot
 
 Every non-zero status is a failure a caller must surface. The numbers say
 which one happened, never that any of them is ignorable.
@@ -68,6 +72,7 @@ import datetime as _dt
 import http.client
 import json
 import os
+import pathlib
 import sys
 import urllib.error
 import urllib.request
@@ -80,26 +85,70 @@ RAW = "https://raw.githubusercontent.com"
 # named here is reported as undetermined, not skipped: an unchecked upstream
 # is how this class of drift stays invisible.
 #
-# The allowlists are fetched from raw.githubusercontent.com WITHOUT a token,
-# which works because all three repositories are public -- measured
-# 2026-09-13, `gh repo view --json isPrivate` is false for each. If one is
-# ever made private the fetch answers 404 and this check exits 2, "could not
-# be determined", which is loud rather than silently green; the fix then is
-# an App token with contents:read, the way release-drift.yml mints one.
+# Every allowlist here except `projects`'s is fetched from
+# raw.githubusercontent.com WITHOUT a token, which works because those
+# repositories are public -- measured 2026-09-13 for the first three,
+# 2026-09-24 for `mctl-alice` and `mctl-coolify-mcp`, `gh repo view --json
+# isPrivate` is false for each.
+#
+# `alice` and `coolify` are both mapped here even though only `coolify` gets a
+# Terraform resource in this change (mctlhq/mctl-gitops#1363): `alice` was
+# already a live DCR resource in mcp-servers.tf with no OWNERS entry, so
+# `expected_missing` could never see it and a mapped-but-forgotten server
+# stayed invisible to this check.
 OWNERS = {
     "tg": "mctlhq/mctl-telegram",
     "api": "mctlhq/mctl-api",
     "seerrsense": "mctlhq/seerrsense",
+    "projects": "mctlhq/projects-mcp",
+    "alice": "mctlhq/mctl-alice",
+    "coolify": "mctlhq/mctl-coolify-mcp",
 }
+
+# `projects-mcp` is the case that comment anticipated: it is private on
+# purpose -- it holds the grants, the customers' contact details and the
+# deploy keys to other people's documentation repositories -- so the
+# unauthenticated raw fetch answers 404 for it and always will. It goes
+# through the contents API with a token instead.
+#
+# Named here rather than probed. A repository that quietly turns private
+# should have to change this file; discovering it at runtime would let the
+# fetch path change under a check whose whole job is noticing changes.
+PRIVATE_OWNERS = {"projects"}
+
+# Read by the fetch below. `ALLOWLIST_TOKEN` is set by cloudflare-drift.yml
+# from a mctl-agents App token with contents:read, the way release-drift.yml
+# mints one; GITHUB_TOKEN would not do, being scoped to this repository.
+TOKEN_ENV = "ALLOWLIST_TOKEN"
+GITHUB_API = "https://api.github.com"
 PORTAL = "mcp"
+
+# What mcp-portal.tf builds `servers[].updated_tools` from, because provider
+# 5.24 cannot read the catalogue itself (mctlhq/mctl-gitops#1382). Compared
+# here with the live catalogue, names and order both: the attribute is a list.
+CATALOGUE_FILE = (pathlib.Path(__file__).resolve().parents[1]
+                  / "infrastructure/cloudflare/portal/allowlists/catalogue.json")
 
 
 class Undetermined(Exception):
     """The check could not be computed. Distinct from drift; exits 2."""
 
 
-def _get(url: str, token: str | None, what: str) -> dict:
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+# GitHub's REST API asks every caller to identify itself, and urllib's
+# default `Python-urllib/3.x` identifies nobody. Sent on the Cloudflare calls
+# too: one header, and a rate-limit conversation with either provider starts
+# from a name rather than from a packet capture.
+USER_AGENT = "mctl-gitops-portal-catalogue-drift"
+
+
+def _get(url: str, token: str | None, what: str, accept: str | None = None) -> dict:
+    headers = {"User-Agent": USER_AGENT}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if accept:
+        # The GitHub contents API answers base64 metadata by default and the
+        # file itself under this Accept. json.load below wants the file.
+        headers["Accept"] = accept
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
@@ -136,6 +185,32 @@ def account_from_state(state: dict) -> str:
     return found.pop()
 
 
+def server_ids_from_state(state: dict) -> set[str]:
+    """The MCP server ids OpenTofu has actually applied.
+
+    An entry in OWNERS is a statement about a server that exists. Between the
+    merge that adds one and the apply that creates it, it exists in neither
+    state nor the portal, and comparing OWNERS against the portal alone
+    reported that gap as the loudest finding this file has -- a whole upstream
+    vanished from production -- every night until somebody clicked apply.
+
+    The cost is small and worth naming: a server removed from state AND from
+    the portal out of band goes quiet here. It does not go unnoticed, because
+    the plan step this check runs behind then wants to create it back.
+    """
+    out: set[str] = set()
+    stack = [state.get("values", {}).get("root_module", {})]
+    while stack:
+        mod = stack.pop()
+        for res in mod.get("resources", []) or []:
+            if res.get("type") == "cloudflare_zero_trust_access_ai_controls_mcp_server":
+                sid = (res.get("values") or {}).get("id")
+                if sid:
+                    out.add(sid)
+        stack.extend(mod.get("child_modules", []) or [])
+    return out
+
+
 def portal_servers(account: str, token: str) -> list[str]:
     body = _get(f"{API}/accounts/{account}/access/ai-controls/mcp/portals/{PORTAL}", token, "portal")
     if not body.get("success"):
@@ -159,11 +234,33 @@ def live_snapshot(account: str, server: str, token: str) -> dict:
     return body.get("result") or {}
 
 
+def allowlist_source(server: str, repo: str, token: str | None) -> tuple[str, str | None, str | None]:
+    """(url, token, accept) for this server's allowlist.
+
+    Split out from the fetch so the choice is testable without a network: a
+    public repository reached with a token would work and still be wrong, and
+    a private one reached without one 404s in the nightly rather than here.
+    """
+    if server not in PRIVATE_OWNERS:
+        return (f"{RAW}/{repo}/main/docs/portal-allowlist.json", None, None)
+    if not token:
+        raise Undetermined(
+            f"{server}: {repo} is private and ${TOKEN_ENV} is not set; "
+            "the allowlist cannot be read"
+        )
+    return (
+        f"{GITHUB_API}/repos/{repo}/contents/docs/portal-allowlist.json?ref=main",
+        token,
+        "application/vnd.github.raw",
+    )
+
+
 def owner_allowlist(server: str) -> dict:
     repo = OWNERS.get(server)
     if not repo:
         raise Undetermined(f"{server}: no owning repository known; add it to OWNERS")
-    body = _get(f"{RAW}/{repo}/main/docs/portal-allowlist.json", None, f"{server}: {repo} allowlist")
+    url, token, accept = allowlist_source(server, repo, os.environ.get(TOKEN_ENV))
+    body = _get(url, token, f"{server}: {repo} allowlist", accept)
     if body.get("server") != server:
         raise Undetermined(f"{server}: {repo} allowlist names server {body.get('server')!r}")
     return body
@@ -216,6 +313,30 @@ def closed_objects(schema, path: str = "") -> list[str]:
 # in selftest(), so a waiver naming a kind this file cannot produce fails on a
 # pull request instead of at night, where it would arrive as a stale catalogue
 # and a destructive instruction that fixes nothing.
+def catalogue_file_lag(server: str, snapshot: dict, committed: dict) -> str | None:
+    """One line when catalogue.json disagrees with the live catalogue, else None.
+
+    Not a KINDS finding: nothing about the portal is wrong, and a waiver is
+    not the remedy -- a one-file PR is. A server whose live side cannot be
+    read is left to compare(), which already reports it as undetermined.
+    """
+    live = [t.get("name") for t in (snapshot.get("tools") or []) if isinstance(t, dict)]
+    if not live:
+        return None
+    want = committed.get(server)
+    if want is None:
+        return f"{server}: not in catalogue.json; add its {len(live)} tool(s) in portal order"
+    if want == live:
+        return None
+    added = [n for n in live if n not in want]
+    gone = [n for n in want if n not in live]
+    if added or gone:
+        return (f"{server}: catalogue.json differs from the live catalogue "
+                f"(last_synced {snapshot.get('last_synced')}) -- synced but not "
+                f"committed: {added or 'none'}; committed but not synced: {gone or 'none'}")
+    return f"{server}: catalogue.json has the live tools in a different order; copy the portal's order"
+
+
 KINDS = ("missing-tool", "extra-tool",
          "closed-output-schemas", "closed-input-schemas")
 
@@ -343,19 +464,18 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
 # stopped firing is itself an error, so the file cannot quietly accumulate
 # excuses for things that were fixed months ago.
 KNOWN_STALE = {
-    ("seerrsense", "closed-output-schemas"): {
-        "until": "2026-10-15",
-        # The tools the waiver was written against. A finding is excused only
-        # if every tool it names is in here, so a SIXTH seerrsense tool
-        # acquiring a closed schema still fails -- without this the waiver
-        # would cover the regression as well as the five known schemas, since
-        # a side's finding arrives as one aggregated line. The kind pins the
-        # side: the same five tools going closed on the INPUT side is a
-        # different kind and is not excused here.
-        "tools": ["get_media", "request_media", "resolve_media",
-                  "search_media", "whoami"],
-        "why": "seerrsense publishes closed output schemas in code (zod); the fix "
-               "waits on its review freeze -- mctlhq/seerrsense#70, mctlhq/.github#64",
+    ("tg", "missing-tool"): {
+        "until": "2026-12-31",
+        # Not stale and never will be while the flag is off: mctl-telegram
+        # registers prepare_send_message only with MCP_APPS_ENABLED=true (the
+        # MCP Apps prototype, mctlhq/mctl-telegram#569), which production does
+        # not set. Its allowlist entry is `enabled: false` for that reason.
+        # Confirmed after tg moved to DCR: the catalogue synced on 2026-09-26
+        # 07:19 and the tool is still absent, so re-snapshotting (what this
+        # finding tells the on-call to do) would change nothing.
+        "tools": ["prepare_send_message"],
+        "why": "flag-gated (MCP_APPS_ENABLED) and disabled in the allowlist; "
+               "never registered in production -- mctlhq/mctl-telegram#569",
     },
 }
 
@@ -471,17 +591,24 @@ def waiver_is_wellformed(key, w) -> bool:
         return False
 
 
-def expected_missing(servers) -> list[str]:
+def expected_missing(servers, applied: set[str] | None = None) -> list[str]:
     """Upstreams OWNERS expects that the portal does not map at all.
 
     A function rather than a set expression inline in main() so the loudest
     branch in this file is reachable from selftest() like every other one.
+
+    `applied` is the set of server ids in OpenTofu state. An OWNERS entry for
+    a server that has not been applied yet is a plan, not a missing upstream;
+    see server_ids_from_state. None means state was not available -- the
+    --account path -- and then OWNERS is taken at its word, which is the
+    behaviour this check had before.
     """
+    expected = set(OWNERS) if applied is None else set(OWNERS) & applied
     return [
         f"{missing}: expected on portal {PORTAL} and not mapped there at all "
         "-- restore the mapping, or drop it from OWNERS in this script if it "
         "was retired on purpose"
-        for missing in sorted(set(OWNERS) - set(servers))
+        for missing in sorted(expected - set(servers))
     ]
 
 
@@ -791,6 +918,88 @@ def selftest() -> int:
         if got != want:
             failures.append(name)
 
+    # The same branch once state has a say. Between a merge that adds an
+    # OWNERS entry and the apply that creates the server, "not on the portal"
+    # is the expected state of the world and not a production outage.
+    for name, servers, applied, want in [
+        ("an OWNERS entry not applied yet is not missing",
+         set(OWNERS) - {"projects"}, set(OWNERS) - {"projects"}, 0),
+        ("an applied entry missing from the portal still fires",
+         set(OWNERS) - {"projects"}, set(OWNERS), 1),
+        ("state is not consulted when it was not piped in",
+         set(OWNERS) - {"projects"}, None, 1),
+    ]:
+        got = 1 if expected_missing(servers, applied) else 0
+        print(f"{'ok  ' if got == want else 'FAIL'} {name}")
+        if got != want:
+            failures.append(name)
+
+    # server_ids_from_state reads the same shape account_from_state does, and
+    # a typo in the attribute name would silently return an empty set --
+    # which reads as "nothing is applied" and disables the branch above.
+    ids = server_ids_from_state({"values": {"root_module": {
+        "resources": [
+            {"type": "cloudflare_zero_trust_access_ai_controls_mcp_server",
+             "values": {"id": "tg"}},
+            {"type": "cloudflare_dns_record", "values": {"id": "not-a-server"}},
+        ],
+        "child_modules": [{"resources": [
+            {"type": "cloudflare_zero_trust_access_ai_controls_mcp_server",
+             "values": {"id": "projects"}}]}],
+    }}})
+    ok = ids == {"tg", "projects"}
+    print(f"{'ok  ' if ok else 'FAIL'} state ids are read from every module and nothing else")
+    if not ok:
+        failures.append("state ids")
+
+    # Which host an allowlist is fetched from. A public repository reached
+    # with a token would work and still be wrong; a private one reached
+    # without one 404s in the nightly, hours later, as "could not run".
+    url, tok, accept = allowlist_source("tg", OWNERS["tg"], "t")
+    ok = url.startswith(RAW) and tok is None and accept is None
+    print(f"{'ok  ' if ok else 'FAIL'} a public allowlist is fetched raw, with no token")
+    if not ok:
+        failures.append("public fetch")
+
+    url, tok, accept = allowlist_source("projects", OWNERS["projects"], "t")
+    ok = url.startswith(GITHUB_API) and tok == "t" and accept == "application/vnd.github.raw"
+    print(f"{'ok  ' if ok else 'FAIL'} a private allowlist goes through the contents API with the token")
+    if not ok:
+        failures.append("private fetch")
+
+    try:
+        allowlist_source("projects", OWNERS["projects"], None)
+        ok = False
+    except Undetermined:
+        ok = True
+    print(f"{'ok  ' if ok else 'FAIL'} a private allowlist with no token is undetermined, not a 404 later")
+    if not ok:
+        failures.append("private fetch no token")
+
+    # catalogue.json against the live catalogue: quiet when equal, and each
+    # way it can disagree is named -- a list attribute diffs on order alone.
+    live3 = snap(["a", "b", "c"])
+    for label, committed_cat, server, want_fire in (
+        ("an identical committed catalogue is quiet", {"s": ["a", "b", "c"]}, "s", False),
+        ("a tool synced but not committed fires", {"s": ["a", "b"]}, "s", True),
+        ("a tool committed but no longer synced fires", {"s": ["a", "b", "c", "d"]}, "s", True),
+        ("the same tools in another order fire", {"s": ["c", "b", "a"]}, "s", True),
+        ("a server absent from the file fires", {}, "s", True),
+    ):
+        ok = (catalogue_file_lag(server, live3, committed_cat) is not None) == want_fire
+        print(f"{'ok  ' if ok else 'FAIL'} {label}")
+        if not ok:
+            failures.append(label)
+    ok = catalogue_file_lag("s", {"tools": None}, {}) is None
+    print(f"{'ok  ' if ok else 'FAIL'} a server with no readable catalogue is left to compare()")
+    if not ok:
+        failures.append("lag unreadable")
+    real = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8")).get("servers")
+    ok = isinstance(real, dict) and set(real) == set(OWNERS)
+    print(f"{'ok  ' if ok else 'FAIL'} the committed catalogue.json names exactly the OWNERS servers")
+    if not ok:
+        failures.append("catalogue owners")
+
     if failures:
         print(f"\n{len(failures)} failing: {', '.join(map(str, failures))}")
         return 1
@@ -811,13 +1020,22 @@ def main() -> int:
         print("[2] CLOUDFLARE_API_TOKEN is not set", file=sys.stderr)
         return 2
     account = args.account or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
-    if not account and not sys.stdin.isatty():
+    applied: set[str] | None = None
+    # State is read whenever it is piped in, not only when the account id has
+    # to come out of it. Those are two different questions, and reading it for
+    # one of them only means setting CLOUDFLARE_ACCOUNT_ID -- which looks like
+    # a harmless speed-up -- would silently stop `applied` being computed and
+    # take the not-applied-yet allowance in expected_missing() with it.
+    if not sys.stdin.isatty():
         # Broad on purpose, like the server loop below: state that parses as
         # JSON but is not the shape account_from_state walks raises
         # AttributeError or TypeError, and an uncaught one exits 1 -- the
         # status that sends someone through the re-snapshot recipe.
         try:
-            account = account_from_state(json.load(sys.stdin))
+            state = json.load(sys.stdin)
+            if not account:
+                account = account_from_state(state)
+            applied = server_ids_from_state(state)
         except Undetermined as e:
             print(f"[2] {e}", file=sys.stderr)
             return 2
@@ -849,16 +1067,31 @@ def main() -> int:
     # announced as "the catalogue check could not run", which is the triage
     # bucket people reach for last -- for the one finding here that means a
     # whole upstream has disappeared from production.
-    vanished = expected_missing(servers)
+    vanished = expected_missing(servers, applied)
 
     # Per server, so one unreachable upstream does not discard the drift
     # already found on the others. A read timeout on the last repository used
     # to cost the whole night's comparison: the run was red either way, but
     # the real finding waited until someone opened the raw step log.
     compared: set[str] = set()
+    lagging: list[str] = []
+    committed: dict | None = None
+    try:
+        committed = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8"))["servers"]
+        if not isinstance(committed, dict):
+            raise ValueError("'servers' is not an object")
+    except Exception as e:  # noqa: BLE001 - the exit code is the point
+        undetermined.append(f"{CATALOGUE_FILE.name}: could not be read, so it was not compared: {e!r}")
     for server in servers:
         try:
             snapshot = live_snapshot(account, server, token)
+            # Before the owner's allowlist is fetched: the lag check needs only
+            # the portal and the committed file, so a GitHub read failure for
+            # this server must not hide it.
+            if committed is not None:
+                lag = catalogue_file_lag(server, snapshot, committed)
+                if lag:
+                    lagging.append(lag)
             allowlist = owner_allowlist(server)
             findings += compare(server, snapshot, allowlist)
             checked.append(f"{server}={len(snapshot.get('tools') or [])}@{snapshot.get('last_synced')}")
@@ -885,10 +1118,11 @@ def main() -> int:
         # purpose. Say here that the quieter one also fired, so the heading and
         # the alert -- which are what get read first -- do not imply the
         # catalogues are otherwise in sync.
-        others = len(failing) + len(undetermined) + len(maintenance)
+        others = len(failing) + len(lagging) + len(undetermined) + len(maintenance)
         if others:
             print(f"  (and {others} other finding(s) below -- stale catalogues, "
-                  "servers that could not be compared, waivers to fix -- which "
+                  "a committed catalogue.json that lags the portal, servers "
+                  "that could not be compared, waivers to fix -- which "
                   "this exit status does not name)", file=sys.stderr)
     if undetermined:
         print("these servers were not compared:", file=sys.stderr)
@@ -899,6 +1133,21 @@ def main() -> int:
               "(re-snapshot per infrastructure/cloudflare/portal/README.md):", file=sys.stderr)
         for line in failing:
             print(f"  {line}", file=sys.stderr)
+    if lagging:
+        # Its own heading and exit status: the portal is fine, and the remedy
+        # is a PR to one committed file, not the re-snapshot recipe.
+        print("the committed catalogue no longer matches the portal (update "
+              "infrastructure/cloudflare/portal/allowlists/catalogue.json; do "
+              "NOT re-snapshot):", file=sys.stderr)
+        for line in lagging:
+            print(f"  {line}", file=sys.stderr)
+        # Exit 5 outranks 2 and 3, so say when they also fired -- the same
+        # line exit 4 prints, and the same phrase cloudflare-drift.yml greps.
+        quieter = len(undetermined) + len(maintenance)
+        if quieter and not (vanished or failing):
+            print(f"  (and {quieter} other finding(s) in this output -- servers that could "
+                  "not be compared, waivers to fix -- which this exit status "
+                  "does not name)", file=sys.stderr)
     if maintenance:
         # Its own heading and its own exit status: this one is fixed in this
         # file, not on the portal.
@@ -916,12 +1165,16 @@ def main() -> int:
         print(f"compared: {', '.join(checked)}")
 
     # Ordered by how loud the finding is, not by exit number: a whole upstream
-    # gone outranks a stale catalogue, which outranks a server that could not
-    # be read, which outranks a waiver needing a delete.
+    # gone outranks a stale catalogue, which outranks a committed catalogue
+    # that lags the portal (the nightly plan is red for the same reason, and
+    # this names it), which outranks a server that could not be read, which
+    # outranks a waiver needing a delete.
     if vanished:
         return 4
     if failing:
         return 1
+    if lagging:
+        return 5
     if undetermined:
         return 2
     if maintenance:

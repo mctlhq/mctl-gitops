@@ -1,0 +1,67 @@
+# Availability of platform ZITADEL (auth.mctl.ai), the human identity provider.
+#
+# Severity is warning in phase 1: nothing signs in through ZITADEL yet. When
+# mctl-api registers it as a federation provider (mctl-api#434) and the
+# platform sign-in moves to it, ZitadelDown becomes critical — an outage then
+# locks humans out of the platform.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-zitadel-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: zitadel
+spec:
+  groups:
+    - name: mctl.zitadel
+      interval: 60s
+      rules:
+        - alert: ZitadelDown
+          # The probe goes out through Cloudflare and back. One series per
+          # target: the OIDC discovery document (API + shared-pg) and the
+          # Login V2 UI's health endpoint.
+          expr: probe_success{job="zitadel-public"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: zitadel
+          annotations:
+            summary: "auth.mctl.ai has failed its health check for 5 minutes"
+            description: >-
+              blackbox-exporter has had no 2xx from {{ $labels.instance }} for
+              5 minutes. If it is the openid-configuration target, check
+              `kubectl -n zitadel logs deploy/zitadel` for database errors
+              before the ingress; if only the /ui/v2/login target fails, the
+              Login UI is down or cannot reach the API
+              (`kubectl -n zitadel logs deploy/zitadel-login`).
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/zitadel.md
+        - alert: ZitadelProbeAbsent
+          # Without the series ZitadelDown can never fire — same reasoning as
+          # BlackboxProbeMetricAbsent in blackbox-alerts.yaml.
+          expr: absent(probe_success{job="zitadel-public"})
+          for: 15m
+          labels:
+            severity: warning
+            service: zitadel
+          annotations:
+            summary: "No probe_success series for job=zitadel-public"
+            description: >-
+              The zitadel-public VMProbe produces no data, so ZitadelDown
+              cannot fire and ZITADEL availability is unmonitored. Check the
+              VMProbe in observability/blackbox/vmprobes.yaml and vmagent targets.
+        - alert: ZitadelMetricsScrapeFailing
+          expr: up{namespace="zitadel", service="zitadel"} == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: zitadel
+          annotations:
+            summary: "vmagent cannot scrape ZITADEL /debug/metrics"
+            description: >-
+              The zitadel scrape target has been down for 15 minutes. If
+              ZitadelDown is quiet, ZITADEL is serving and the scrape is
+              failing in-cluster: check the allow-zitadel-http NetworkPolicy
+              still admits the monitoring namespace, and the VMServiceScrape
+              in identity/zitadel/vmservicescrape.yaml.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/zitadel.md

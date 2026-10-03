@@ -1,0 +1,41 @@
+# Admits mctl-agent (admins) to mctl-telegram (labs) for the /start bridge
+# (mctl-telegram#679): mctl-agent owns @MCTL_AI_bot's webhook and forwards
+# /start observations to http://labs-mctl-telegram-base-service.labs.svc:8080/
+# internal/bot-start-observations.
+#
+# labs runs the tenant chart's default-deny-all, whose ingress allowances cover
+# only intra-namespace, Traefik and monitoring, so this cross-namespace call is
+# dropped without it. The egress side needs nothing: admins has
+# allowClusterEgress, which opens the pod and Service CIDRs.
+#
+# NetworkPolicies are additive, so this only widens ingress to the one
+# mctl-telegram instance, on 8080, from the one mctl-agent instance. It does
+# not admit the labs-mctl-telegram-preview instance or any other admins pod.
+# Platform-owned, so it lives in the bootstrap chart (applied by root-app)
+# rather than in base-service extraObjects, which refuses NetworkPolicy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mctl-agent-to-mctl-telegram-bot-start
+  namespace: labs
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: labs-mctl-telegram
+      app.kubernetes.io/name: base-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # namespaceSelector and podSelector in ONE element: an AND (mctl-agent
+        # pods in admins), not an OR across two elements.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: admins
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: admins-mctl-agent
+              app.kubernetes.io/name: base-service
+      ports:
+        - protocol: TCP
+          port: 8080

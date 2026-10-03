@@ -1,0 +1,1 @@
+# no widget resource here

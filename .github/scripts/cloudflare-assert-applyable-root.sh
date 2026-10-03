@@ -55,16 +55,21 @@ if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   expect() { expect_from "$repo" "$@"; }
 
   expect accept "infrastructure/cloudflare/account"          "a real root on the remote backend"
-  # The root on .local-state-roots — the case that list exists to refuse.
-  expect reject "infrastructure/cloudflare/zones/mctl-ru"    "root listed in .local-state-roots"
+  # .local-state-roots is empty as of #1178 — there is no real root left to
+  # assert "listed, rejected" against. That property is asserted further down,
+  # against a fixture tree built for the purpose.
   # Non-canonical spellings the whole-line list match would not recognise.
   expect reject "infrastructure/cloudflare/account/"         "trailing slash"
   expect reject "infrastructure/cloudflare/account/."        "trailing /."
   expect reject "infrastructure/cloudflare//account"         "doubled separator"
   expect reject "./infrastructure/cloudflare/account"        "leading ./"
-  expect reject "infrastructure/cloudflare/zones/mctl-ru/"   "listed root, trailing slash"
-  expect reject "infrastructure/cloudflare/zones/mctl-ru/."  "listed root, trailing /."
-  expect reject "infrastructure/cloudflare//zones/mctl-ru"   "listed root, doubled separator"
+  # These three used to be rejected because zones/mctl-ru was listed in
+  # .local-state-roots; #1178 emptied that list, so today the canonical-form
+  # arm above is what rejects them, before the list is ever consulted. Kept as
+  # cases so a canonical-form regression on a nested root is still caught.
+  expect reject "infrastructure/cloudflare/zones/mctl-ru/"   "canonical form: trailing slash, nested root"
+  expect reject "infrastructure/cloudflare/zones/mctl-ru/."  "canonical form: trailing /., nested root"
+  expect reject "infrastructure/cloudflare//zones/mctl-ru"   "canonical form: doubled separator, nested root"
   # Outside the tree, parent traversal, a module rather than a root.
   expect reject "../etc"                                     "outside infrastructure/cloudflare"
   expect reject "infrastructure/cloudflare/../../etc"        "parent traversal"
@@ -127,20 +132,53 @@ if [ "${CLOUDFLARE_GUARD_SELF_TEST:-}" = "1" ]; then
   fi
   rm -rf "$stub"; stub=""
 
-  # From a foreign cwd — the case the first version of this suite was missing.
-  #
-  # DO NOT DELETE THE `reject` CASE WHEN .local-state-roots EMPTIES. Only that
-  # half can fail on the cwd defect: with the list path resolved against the
-  # caller, an unresolvable list yields empty output and exit 0, so the paired
-  # `accept` passes either way. It is the one case whose expected verdict comes
-  # from the list, and #1103 exists to take `zones/mctl-ru` off that list. When
-  # it goes, replace this case against whatever root is listed then — or, if
-  # none is, with a fixture tree like the failing-helper case above.
-  # Every check ran from the repository root, which is the one directory where
-  # the caller-relative list path resolved correctly, so the suite could not
-  # fail on the cwd defect it names above.
-  expect_from /tmp reject "infrastructure/cloudflare/zones/mctl-ru" "listed root, foreign cwd"
-  expect_from /tmp accept "infrastructure/cloudflare/account"       "real root, foreign cwd"
+  # #1178 emptied .local-state-roots, so there is no real listed root left to
+  # assert "listed, rejected, from any cwd" against. Per the instruction that
+  # used to sit here, replaced with a fixture tree — same shape as the
+  # failing-helper fixture above: a stub root, this guard and the real helper
+  # copied alongside it, and a .local-state-roots naming the stub.
+  stub="$(mktemp -d)"
+  fixture_root="infrastructure/cloudflare/zones/self-test-stub"
+  mkdir -p "$stub/.github/scripts" "$stub/$fixture_root"
+  cp "$self" "$stub/.github/scripts/"
+  cp "$SCRIPT_DIR/cloudflare-local-state-roots.sh" "$stub/.github/scripts/"
+  : > "$stub/$fixture_root/versions.tf"
+  stub_guard="$stub/.github/scripts/$(basename "$self")"
+
+  echo "$fixture_root" > "$stub/infrastructure/cloudflare/.local-state-roots"
+
+  # DO NOT DELETE THIS CASE WHEN .local-state-roots GAINS A REAL ENTRY AGAIN —
+  # replace the fixture with the real listed root instead, the same swap this
+  # case itself is. Run from the fixture tree's own root, pinning "a listed
+  # root is rejected" as a baseline before the foreign-cwd case below adds cwd
+  # into the mix.
+  rc=0
+  ( cd "$stub" && CLOUDFLARE_GUARD_SELF_TEST= "$stub_guard" "$fixture_root" ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "self-test FAILED: listed root, fixture tree — expected reject, was ACCEPTED" >&2; fail=1
+  fi
+
+  # From a foreign cwd — the case the first version of this suite was missing,
+  # and the one that can fail on the cwd defect: with the list path resolved
+  # against the caller instead of BASH_SOURCE, an unresolvable list yields
+  # empty output and exit 0, so a reverted guard would wrongly accept this.
+  rc=0
+  ( cd /tmp && CLOUDFLARE_GUARD_SELF_TEST= "$stub_guard" "$fixture_root" ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "self-test FAILED: listed root, fixture tree, foreign cwd — expected reject, was ACCEPTED" >&2; fail=1
+  fi
+
+  # Control: same fixture root, empty list — must accept, or the two rejects
+  # above would pass for the wrong reason.
+  : > "$stub/infrastructure/cloudflare/.local-state-roots"
+  rc=0
+  ( cd "$stub" && CLOUDFLARE_GUARD_SELF_TEST= "$stub_guard" "$fixture_root" ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "self-test FAILED: fixture root, empty list — expected accept, got exit $rc" >&2; fail=1
+  fi
+  rm -rf "$stub"; stub=""
+
+  expect_from /tmp accept "infrastructure/cloudflare/account" "real root, foreign cwd"
 
   [ "$fail" -eq 0 ] || exit 1
   echo "self-test OK"

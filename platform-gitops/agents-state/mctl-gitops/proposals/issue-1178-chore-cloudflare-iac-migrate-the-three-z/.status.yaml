@@ -1,0 +1,25 @@
+status: merged
+updated_at: '2026-09-19T15:39:22Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-gitops
+  issue: 1178
+  url: https://github.com/mctlhq/mctl-gitops/issues/1178
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-19T00:28:28Z'
+attempt:
+  id: 8f523601-6a16-495b-9a61-ac2266538e26
+  started_at: '2026-09-19T06:45:59Z'
+  expires_at: '2026-09-19T08:55:59Z'
+  finished_at: '2026-09-19T06:51:42Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/1284
+github:
+  state: open
+  head_sha: 18a7c1e6e85647b3bfd28dc14aac8210e2db6f2e
+  observed_at: '2026-09-19T11:21:33Z'
+merged_at: '2026-09-19T15:39:22Z'
+merge_commit: 5a6f318556bed4f600759276f8e6596f8065af47

@@ -1,0 +1,31 @@
+status: merged
+updated_at: '2026-09-28T22:02:43Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-b1526ba28b06cf20
+  trace_id: aa013725264e5627335a6d9a2ca19a13
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/newton-mcp-gateway
+  issue: 6
+  url: https://github.com/mctlhq/newton-mcp-gateway/issues/6
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-8039d8edd089b6d6
+  content_hash: sha256:8039d8edd089b6d6b4030bfb32028c24ffd4743d31729a7143b7efa9f6840672
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-28T21:27:18Z'
+attempt:
+  id: a12f23b8abccf1ac4db70b07f6145ce41c92a4a4f29f0d54b6a2caccea337ff1
+  started_at: '2026-09-28T21:34:53Z'
+  expires_at: '2026-09-28T23:44:53Z'
+  finished_at: '2026-09-28T21:45:45Z'
+pr: https://github.com/mctlhq/newton-mcp-gateway/pull/25
+merged_at: '2026-09-28T22:02:43Z'
+merge_commit: 9ae4466cd5e3fbd87162264df71d61364d77eb6b

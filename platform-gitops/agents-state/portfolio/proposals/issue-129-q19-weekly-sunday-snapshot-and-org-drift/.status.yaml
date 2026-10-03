@@ -1,0 +1,42 @@
+status: merged
+updated_at: '2026-10-03T18:24:23Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-0d89498809da74b9
+  trace_id: 9b6d5441d06e991a9d6720962223a9d6
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 129
+  url: https://github.com/mctlhq/portfolio/issues/129
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-4960a2efa9fc7f2d
+  content_hash: sha256:4960a2efa9fc7f2dd18f6a120668a25d35026dd3984b3c20ae07071ed2832a13
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-03T13:33:17Z'
+attempt:
+  id: ec569646a1f68a9adf58c128e135d5c18a619891bb3f3b54511a8bf65a7c86c5
+  started_at: '2026-10-03T13:34:40Z'
+  expires_at: '2026-10-03T15:44:40Z'
+  finished_at: '2026-10-03T13:38:29Z'
+pr: https://github.com/mctlhq/portfolio/pull/131
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: Both P2 findings (scripts/org-drift.mjs:192
+  and :270) are affirmations, not defects: they state the maxRetries=0 handling for
+  POST /issues and comments, and the 404/403 classification into drift.unknown, are
+  correct and that earlier holes are closed. They request no change, so there is nothing
+  to fix and no commit was made.'
+github:
+  state: merged
+  head_sha: c286fc9f2b1f5635cdce6321d2a2fcab6812494c
+  observed_at: '2026-10-03T18:24:23Z'
+merged_at: '2026-10-03T18:24:23Z'
+merge_commit: 82798d497290c7fbd244ecc0241dcbe6f6609d48

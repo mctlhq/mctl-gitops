@@ -15,6 +15,7 @@
 | Метрики | VMSingle (28d retention) | vmbackup daily (сайдкар) | R2 `s3://vault-backup/victoria-metrics` | инкрементальная копия последнего снапшота | да |
 | Логи | Loki | хранение сразу в R2 | R2 | 7d | да |
 | Terraform state | R2 `mctl-terraform-state` | версионирование R2 | — | — | да |
+| Forgejo (git.mctl.ai): репозитории, app.ini с SECRET_KEY | PVC `forgejo-data` | CronJob `forgejo-backup` 03:30; **ежедневный автоматический restore drill 05:00** (`forgejo-restore-drill`) | R2 `s3://forgejo-backup/forgejo-backups/` | 14 копий | да (БД — как Postgres) |
 | mctl-agent tickets/webhooks/metrics | Postgres `mctl-agent` DB в shared-pg (`DATABASE_URL`) | через CNPG | — | 14d | как Postgres |
 
 ### Закрытый gap: бэкапы Postgres переведены с in-cluster MinIO на R2
@@ -200,6 +201,10 @@ vmbackup не отработал ни разу с момента появлен�
 5. Прогнать smoke: mctl-api `/healthz`, деплой тестового сервиса.
 
 ## Журнал drill'ов
+
+Forgejo-том сюда не пишется: его drill идёт каждый день CronJob'ом
+`forgejo/forgejo-restore-drill`, результат — `kube_cronjob_status_last_successful_time`
+и алерты `ForgejoRestoreDrill*` (`backup-alerts.yaml`), подробности в `forgejo.md`.
 
 | Дата | Что проверяли | Результат | Заметки |
 |---|---|---|---|

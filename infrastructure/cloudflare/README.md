@@ -4,6 +4,8 @@ Git is the desired state for Cloudflare configuration; OpenTofu applies it; the
 state lives in an mctl-owned R2 bucket and never in this repository.
 
 Roadmap: `mctlhq/.github#47`. Inventory and the zero-diff proof: `mctl-gitops#1083`.
+The `mcp_portal` provider-support verdict lives in `portal/README.md`'s
+"Provider support" section.
 
 ## Engine
 
@@ -145,6 +147,15 @@ bindings plus `TURNSTILE_SECRET_KEY`, added 2026-08-31. OpenTofu does not deploy
 code, so owning the script here would split one deployable across two owners.
 The route patterns are part of the worker's contract — change them in one place.
 
+The five routes are declared in `zones/mctl-ai/workers.tf` (`mctl.ai/api/*`),
+`zones/mctl-me/workers.tf` and `zones/mctl-ru/workers.tf` (`<zone>/*` and
+`*.<zone>/*`) since #1179. The worker's `wrangler.toml` (`mctlhq/mctl-web`,
+`cloudflare-worker/`) must not declare `routes`: `wrangler deploy` publishes
+them with `PUT /workers/scripts/<name>/routes`, which replaces every route of
+the script, so a second declaration there would silently overwrite this one.
+Not representable in provider 5.24, and left at its default: the API's
+`request_limit_fail_open` (false on all five).
+
 ### Redirects: what actually serves them
 
 Worth stating because the wrong answer is the intuitive one. `mctl.me` and
@@ -179,12 +190,16 @@ create.
 
 The values were applied through the API before the configuration landed — the
 same order used for the Google Search Console TXT record on mctl.ai, and for
-the same reason. All three zone roots keep local state and cannot apply from CI
-while they are listed in `.local-state-roots` (#1111), and their verification
-runs on the read-only plan identity. Declaring a value the configuration cannot
-reach would leave `cloudflare-drift.yml`, which fails closed, red on every
-scheduled run until someone applied by hand. Import first, mutate never: each
-root's README records the zero-diff plan it should print.
+the same reason: all three zone roots kept local state and could not apply
+from CI while they were listed in `.local-state-roots` (#1111), and their
+verification ran on the read-only plan identity. Declaring a value the
+configuration could not reach would have left `cloudflare-drift.yml`, which
+fails closed, red on every scheduled run until someone applied by hand. #1178
+removed that constraint: the three zone roots are on the shared R2 backend
+now, so a zone-setting change is a plan reviewed through `cloudflare-apply.yml`
+like any other change to these roots, applied by dispatching the workflow on
+`main` rather than by hand. Import first, mutate never: each root's README
+records the zero-diff plan it should print.
 
 `ssl` joined them on 2026-09-10 and is `strict` on all three managed zones.
 It was `full` because the origin presented `TRAEFIK DEFAULT CERT` for every
@@ -311,6 +326,23 @@ Nothing is committed. CI reads:
   `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
   `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
   record is rejected. It is never given to `cloudflare-apply.yml`.
+  Its `Access: Apps and Policies` is **zone**-scoped, which is not the same
+  permission as the account-level one: reading an Access application in the
+  account answers `1010 auth.forbidden` with this token.
+- `CF_ACCOUNT_READ_TOKEN` — read identity for
+  `infrastructure/cloudflare/account` alone, `Account -> Access: Apps and
+  Policies -> Read` on this account and nothing else. Without it that root
+  cannot refresh the Access application it now holds, and every plan of it
+  fails on the refresh rather than reporting a diff. Absent, the chain in
+  `cloudflare-plan.yml` and `cloudflare-drift.yml` falls back to the zone
+  credential, so the gap shows up as a failing root rather than a silent skip.
+
+  **Three workflows, not two.** `cloudflare-apply.yml` has a read-only `plan`
+  job of its own, and it needs this token for the same reason. That was missed
+  when the token was introduced and the account root became unappliable on its
+  second change: the first apply had nothing to refresh, so the gap only
+  appeared once the application existed. A new per-root read credential belongs
+  in all three chains at once.
 
 Everything above is a **repository** secret. `R2_CF_STATE_*` should not be:
 it has exactly one consumer, `opentofu-state-backup.yml`, whose `state-backup`
@@ -372,8 +404,8 @@ for it.
 
 | Workflow | Trigger | Behaviour |
 | --- | --- | --- |
-| `cloudflare-plan.yml` | `pull_request` | fmt, validate, plan per root. A failure fails the check — there is no `continue-on-error`. Destructive changes are called out in the summary. The `cloudflare-plan` job is the stable context to mark required: it runs on every pull request, including ones that touch nothing here. Losing root coverage is blocked, in all three shapes that reach it: a root that stops being discovered; a root with no `s3` backend, which silently plans against empty local state; and configuration that sits in no root's own directory — a subdirectory of a root included, since OpenTofu loads only the files directly in the working directory. `versions.tf.json` counts as a root marker exactly as `versions.tf` does, and `modules/` is exempt on both sides: a shared module is not a root and its files are not orphans. Which backend a root actually uses is not decided by reading `backend.tf` — a comment mentioning `backend "s3"` next to a live `backend "local"` would satisfy any text match — but by what `tofu init` resolved: the plan job reads `backend.type` out of the data directory it wrote. Roots knowingly off the shared backend are listed in `infrastructure/cloudflare/.local-state-roots`, which both checks read; today that is `zones/mctl-ru`, left on local state by the import pilot, whose migration belongs to #1103. In each case the resources stay live in Cloudflare while leaving both plan and drift. Fix the root, or label the pull request `cloudflare-root-removal` to hand ownership over deliberately — labelling re-runs the check, which is why the trigger lists `labeled`/`unlabeled`. |
-| `cloudflare-drift.yml` | schedule | plan per root; any difference from Git fails the run and notifies. It never applies. Roots listed in `.local-state-roots` are skipped: with no remote state to compare against, such a root reports its whole content as pending every night — a false alarm that would train everyone to ignore the real one. Skipping it is not coverage; it is the absence of coverage, stated out loud. |
+| `cloudflare-plan.yml` | `pull_request` | fmt, validate, plan per root. A failure fails the check — there is no `continue-on-error`. Destructive changes are called out in the summary. The `cloudflare-plan` job is the stable context to mark required: it runs on every pull request, including ones that touch nothing here. Losing root coverage is blocked, in all three shapes that reach it: a root that stops being discovered; a root with no `s3` backend, which silently plans against empty local state; and configuration that sits in no root's own directory — a subdirectory of a root included, since OpenTofu loads only the files directly in the working directory. `versions.tf.json` counts as a root marker exactly as `versions.tf` does, and `modules/` is exempt on both sides: a shared module is not a root and its files are not orphans. Which backend a root actually uses is not decided by reading `backend.tf` — a comment mentioning `backend "s3"` next to a live `backend "local"` would satisfy any text match — but by what `tofu init` resolved: the plan job reads `backend.type` out of the data directory it wrote. Roots knowingly off the shared backend are listed in `infrastructure/cloudflare/.local-state-roots`, which both checks read; the list is empty as of #1178, which moved the last three roots it named (the zone roots) onto the shared backend. In each case the resources stay live in Cloudflare while leaving both plan and drift. Fix the root, or label the pull request `cloudflare-root-removal` to hand ownership over deliberately — labelling re-runs the check, which is why the trigger lists `labeled`/`unlabeled`. |
+| `cloudflare-drift.yml` | schedule | plan per root; any difference from Git fails the run and notifies. It never applies. Roots listed in `.local-state-roots` are skipped: with no remote state to compare against, such a root reports its whole content as pending every night — a false alarm that would train everyone to ignore the real one. Skipping it is not coverage; it is the absence of coverage, stated out loud. No root is skipped today, the list being empty as of #1178. |
 | `cloudflare-apply.yml` | `workflow_dispatch` | the only workflow here that writes to Cloudflare. Two jobs. `plan` runs unprivileged with the read-only credentials and publishes the import/create/update/destroy table plus the full plan; `apply` waits on the `cloudflare-apply` environment's required reviewer, who is therefore approving a plan they can read rather than an intention. What crosses between them is a **digest** of the change set, not the plan — persisting `tfplan` as an artifact would leave a full description of the account downloadable afterwards, so `apply` re-plans and refuses if the digest no longer matches, which is what out-of-band drift between the two jobs looks like. Both jobs refuse a root that is not discovered, is listed in `.local-state-roots` (no remote state here, so its plan proposes creating everything it describes), or whose backend did not resolve to `s3`; `apply` additionally refuses a root with no write token mapped, since that mapping is the allowlist. A destroying plan is refused unless the run was dispatched with `allow_destroy` — asked for before its contents were known — checked once before the approval is spent and again on the plan actually being applied. Unlike plan and drift, `apply` never passes `-lock=false`: taking the state lock is itself a write, which is precisely why the other two cannot. Restricted to `main` by the environment's branch policy and by an `if` on the job, for the same reason as the backup workflow: `workflow_dispatch` accepts a ref. |
 | `opentofu-state-backup.yml` | schedule | copies every state object in both state buckets to a dated prefix under `_backups/` in the same bucket — see the limitation noted above. Restricted to `main` by the `state-backup` environment's branch policy, since `workflow_dispatch` would otherwise run a rewritten copy of this file from any branch with the writable credential. |
 
@@ -426,7 +458,7 @@ job are chosen to be worth stealing as little as possible.
 
 ## Break-glass
 
-A dashboard change is permitted only to recover from an outage. It must be
-followed by a PR that either imports the change or reverts it — an unreconciled
-dashboard edit will surface as a drift failure and stay failing until someone
-resolves it.
+A dashboard change is permitted only to recover from an outage. What to record,
+the follow-up that imports or reverts it, drift reconciliation, apply and the
+state restore drill are in
+[`docs/runbooks/cloudflare-operations.md`](../../docs/runbooks/cloudflare-operations.md).

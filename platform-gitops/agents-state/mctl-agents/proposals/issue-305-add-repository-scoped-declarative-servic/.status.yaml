@@ -1,0 +1,26 @@
+status: merged
+updated_at: '2026-09-22T23:04:39Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 305
+  url: https://github.com/mctlhq/mctl-agents/issues/305
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-19T09:28:06Z'
+attempt:
+  id: f6873d3c8021f77f8196fdae4006f1bf28b7b0213f02b659079d5a830451cb5b
+  started_at: '2026-09-19T10:02:50Z'
+  expires_at: '2026-09-19T12:12:50Z'
+  finished_at: '2026-09-19T10:42:51Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/407
+github:
+  state: merged
+  head_sha: 754f263c2273ca57bde4d8f2622120f66e582ec1
+  observed_at: '2026-09-22T23:04:39Z'
+notes: 'reconcile: open PR has a merge conflict'
+merged_at: '2026-09-22T23:04:39Z'
+merge_commit: ee1f5ad7837eb654ad9e9ed9545068e995f55d8f

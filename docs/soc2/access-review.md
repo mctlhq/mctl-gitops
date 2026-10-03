@@ -12,8 +12,10 @@ Output: dated notes under `docs/soc2/evidence/access-review-YYYY-QN.md`.
 2. GitHub Apps and Actions secrets: no extra org secrets; `gitops-bump`
    token still least-privilege.
 3. Vault: list policies and Kubernetes/JWT roles. Remove unused.
-4. Argo CD `policy.csv` in `platform-gitops/argocd/values.yaml`. Tenant
-   roles must not have `exec`.
+4. Argo CD tenant RBAC in `platform-gitops/argocd/rbac/tenants/*.csv` (base
+   policy stays in `platform-gitops/argocd/values.yaml`). Tenant roles must
+   not have `exec` — machine-checked by
+   `scripts/validate-argocd-tenant-rbac.py`.
 5. Backstage / portal admins (`isAdmin`, `ADMIN_USERS`).
 6. Cluster: kubeconfig holders (operator laptop + CI). No standing
    cluster-admin for agents.

@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "widget": [
+      "alpha",
+      "beta",
+      "gamma"
+    ],
+    "ghost": [
+      "placeholder"
+    ]
+  }
+}

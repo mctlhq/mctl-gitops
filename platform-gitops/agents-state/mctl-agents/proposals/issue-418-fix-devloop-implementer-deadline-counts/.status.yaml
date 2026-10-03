@@ -1,0 +1,24 @@
+status: rejected
+updated_at: '2026-09-23T16:04:34Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 418
+  url: https://github.com/mctlhq/mctl-agents/issues/418
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-19T22:51:24Z'
+attempt:
+  id: 309abad665f323b95ecf605098a27f5ee94feaaf628ac6249f7c19596eaa12e9
+  started_at: '2026-09-19T23:31:55Z'
+  expires_at: '2026-09-20T01:41:55Z'
+  finished_at: '2026-09-20T00:06:40Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/422
+github:
+  state: closed
+  head_sha: d96e227f00aae195de29401e47dfa30253d1f95c
+  observed_at: '2026-09-23T16:04:34Z'
+notes: PR was closed without merging.
