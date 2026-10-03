@@ -10,9 +10,9 @@ The background — layout, ownership boundary, credentials, what CI trusts — i
 `infrastructure/cloudflare/README.md`; this page is only the procedures and does
 not repeat it.
 
-Statements marked **Proposed** are policy the code does not determine. They are
-drafts for review, not rules yet — confirm or change them in the pull request
-that lands this page.
+Statements marked **Policy** are rules the code does not enforce. They were
+drafted as proposals with this page and confirmed by the owner on 2026-10-03
+(mctlhq/mctl-gitops#1180).
 
 ## The model in four lines
 
@@ -57,10 +57,10 @@ longer a reason to go around it.
 An API call made with a personal or ad-hoc token is the same thing as a
 dashboard click for the purposes of this section.
 
-**Proposed:** who may perform a break-glass mutation — an operator who holds
+**Policy:** who may perform a break-glass mutation — an operator who holds
 Cloudflare dashboard access to the account and is responding to the outage. A
 second person is informed at the time, not asked for approval, since approval
-is what the outage does not leave time for. — confirm in review.
+is what the outage does not leave time for.
 
 ### What to record, at the time
 
@@ -75,10 +75,9 @@ Before or immediately after the change — not reconstructed afterwards:
 | Timestamp | UTC, to the minute |
 | Reason | the outage, with a link |
 
-**Proposed:** where the record lives — a new issue in `mctlhq/mctl-gitops`,
+**Policy:** where the record lives — a new issue in `mctlhq/mctl-gitops`,
 titled `break-glass: <root> <object>`, opened by the operator who made the
-change. The follow-up PR or apply run links to it and closes it. — confirm in
-review.
+change. The follow-up PR or apply run links to it and closes it.
 
 This repository is **public**. The record names objects and values that are
 already visible in `infrastructure/cloudflare/**`; it never carries a token, a
@@ -86,9 +85,9 @@ secret, a client secret or a personal address.
 
 ### The mandatory follow-up
 
-**Proposed:** window — the follow-up PR (or, for a revert, the approved apply
+**Policy:** window — the follow-up PR (or, for a revert, the approved apply
 run) is opened within one working day of the mutation, and the break-glass issue
-stays open until drift is green on that root. — confirm in review.
+stays open until drift is green on that root.
 
 The follow-up is exactly one of two things.
 
@@ -246,14 +245,14 @@ yet been exercised in this repository; treat the first use as a walkthrough and
 record it. The precedent for "intentionally unmanaged" as a decision is
 `dmitriimashkov.com` (#1089 decision 10).
 
-**Proposed:** who decides — the operator who picks up the red run triages it
+**Policy:** who decides — the operator who picks up the red run triages it
 and names the branch; accepting into Git or declaring an object unmanaged goes
 through an ordinary PR review, and a revert is decided by the `cloudflare-apply`
-required reviewer when approving the plan. — confirm in review.
+required reviewer when approving the plan.
 
-**Proposed:** response time — a red drift run is triaged the same working day,
+**Policy:** response time — a red drift run is triaged the same working day,
 and a root is not left red for more than two consecutive scheduled runs without
-a comment on an issue saying why. — confirm in review.
+a comment on an issue saying why.
 
 ### How the run goes green
 
@@ -331,10 +330,10 @@ Environment configuration as read on 2026-09-24
 required-reviewers rule, a custom branch policy of exactly `main`, and
 self-review **not** prevented — the person who dispatched a run can approve it.
 
-**Proposed:** the approver reads the full plan in the `plan` job summary before
+**Policy:** the approver reads the full plan in the `plan` job summary before
 approving even when they dispatched the run themselves, and a destroying plan
 (`allow_destroy`) is approved by someone other than the dispatcher where a
-second reviewer is available. — confirm in review.
+second reviewer is available.
 
 ### When a check refuses
 
@@ -377,21 +376,20 @@ here. The two points operators most often need from it:
 - The verification after a restore is a plan reading `No changes.` — nothing
   else counts.
 
-The last drill — 2026-09-09, full restore on a scratch key
-`_drill/mctl-ru/terraform.tfstate`, **passed** — and every later one are
+The last drill — 2026-10-03, restore of the live `zones/mctl-ru` snapshot onto a
+scratch key, **passed** — and every later one are
 recorded in the "Drill" table at the end of `opentofu-state-restore.md`. That
 table is the one place drill results go; this page does not keep a second copy.
 
-**Proposed:** cadence — re-run the drill once per quarter, and additionally
+**Policy:** cadence — re-run the drill once per quarter, and additionally
 after any change to `opentofu-state-backup.yml`, to a root's `backend.tf`, or
-to the state credentials. The next one is due by 2026-12-09. — confirm in
-review.
+to the state credentials. The next one is due by 2027-01-03.
 
-Worth knowing when planning the next drill: the 2026-09-09 drill predates the
-migration of the zone roots onto R2 (#1178) and predates `cloudflare-apply.yml`
-writing shared state, so it exercised the snapshot and restore mechanics but not
-a restore of a state object that CI applies against. Use the same scratch-key
-approach so a failed drill cannot damage live state.
+Use the scratch-key approach for every drill, so a failed drill cannot damage
+live state: copy the snapshot to `_drill/<live key>`, point `tofu init
+-reconfigure -backend-config="key=_drill/<live key>"` at it, plan, and delete
+the scratch key. The 2026-10-03 drill was the first to restore a state object
+that `cloudflare-apply.yml` applies against; the 2026-09-09 one predates #1178.
 
 ## 5. Roots off the shared backend — `.local-state-roots`
 
@@ -428,24 +426,17 @@ remove its line from `.local-state-roots` in the same PR, then run its
 import-only apply through `cloudflare-apply.yml` and confirm drift reads
 `in sync`. #1178 and #1281 are the precedent.
 
-## Current state (2026-09-25)
+## Current state (2026-10-03)
 
 - mctlhq/mctl-gitops#1111 (the apply identity) is closed; every root has a
   write token mapped, and `cloudflare-apply.yml` has applied every root.
-- The three zone roots' import-only applies ran on 2026-09-25, together with
-  the five `mctl-landing-form` worker routes (#1179):
-  [36190874599](https://github.com/mctlhq/mctl-gitops/actions/runs/36190874599)
-  `zones/mctl-ru` 9 imported,
-  [36191930779](https://github.com/mctlhq/mctl-gitops/actions/runs/36191930779)
-  `zones/mctl-me` 16 imported,
-  [36191967052](https://github.com/mctlhq/mctl-gitops/actions/runs/36191967052)
-  `zones/mctl-ai` 27 imported, each `0 added, 0 changed, 0 destroyed`. The
-  next drift run,
-  [36195820674](https://github.com/mctlhq/mctl-gitops/actions/runs/36195820674),
-  read `No changes` on all three. The runs dispatched on 2026-09-22 were
-  cancelled unapproved: they had been planned on an older commit.
-  mctlhq/mctl-gitops#1281 still wants one *scheduled* drift run and one
-  scheduled backup run observed against this state.
+- The three zone roots' import-only applies ran on 2026-09-25 with #1179
+  ([36190874599](https://github.com/mctlhq/mctl-gitops/actions/runs/36190874599),
+  [36191930779](https://github.com/mctlhq/mctl-gitops/actions/runs/36191930779),
+  [36191967052](https://github.com/mctlhq/mctl-gitops/actions/runs/36191967052)),
+  and #1281 is closed with scheduled drift and backup runs observed against
+  that state.
+- All three procedures on this page have been walked through once (below).
 
 ## Walkthrough record
 
@@ -456,9 +447,9 @@ that turned out wrong.
 
 | Procedure | Date | Operator (role) | Outcome |
 | --- | --- | --- | --- |
-| Break-glass (section 1) | — | — | not yet walked through |
-| Drift reconciliation (section 2) | — | — | not yet walked through |
-| State restore (section 4) | — | — | not yet walked through |
+| Break-glass (section 1) | 2026-10-03 | owner (operator), dashboard | **Passed.** Drill mutation, not an outage: `comment` set on `module.baseline.cloudflare_dns_record.apex` in `zones/mctl-ru` at 08:42Z; recorded at the time in #1494 with every field of the table in section 1. Closed by the revert below, 34 minutes later. |
+| Drift reconciliation (section 2) | 2026-10-03 | owner (operator and `cloudflare-apply` reviewer) | **Passed, REVERT branch** — the first time it was exercised. Drift [37110606340](https://github.com/mctlhq/mctl-gitops/actions/runs/37110606340) red on `zones/mctl-ru` only (exit 2, `0 to add, 1 to change, 0 to destroy`, `comment … -> null`); apply [37110674893](https://github.com/mctlhq/mctl-gitops/actions/runs/37110674893) planned the same single in-place update, approved after reading the plan, `plan digest matches the approved one`, `1 changed`; drift [37117852889](https://github.com/mctlhq/mctl-gitops/actions/runs/37117852889) green on all five roots. Nothing on this page turned out wrong. |
+| State restore (section 4) | 2026-10-03 | owner (operator) | **Passed** on a scratch key; details in the Drill table of `opentofu-state-restore.md`. One correction to "The model in four lines": the backup cron `30 3 * * *` actually starts hours late — the last three scheduled runs began at 10:22Z, 09:58Z and 09:21Z — so "the most recent snapshot" is usually from mid-morning UTC, not 03:30. |
 
 ## Git-only operations proof
 
