@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: other-tenant
+  namespace: labs
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: labs-app.mctl.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80

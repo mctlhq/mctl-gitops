@@ -4,6 +4,7 @@
 # - partial lists only serviceAccounts and partial-sa only secrets: an entry
 #   missing a list must deny with the Forbidden message, not a CEL error, and
 #   allow nothing of that kind (deny/10, deny/11, deny/14).
+# - loose has an unanchored hostPattern (deny/20).
 externalManifestNamespaces:
   erpact:
     serviceAccounts:
@@ -15,3 +16,8 @@ externalManifestNamespaces:
   partial-sa:
     secrets:
       - anything
+  # An unanchored pattern: the policy must anchor it itself (deny/20).
+  loose:
+    serviceAccounts:
+      - default
+    hostPattern: 'erpact-[a-z0-9]+\.mctl\.ai'

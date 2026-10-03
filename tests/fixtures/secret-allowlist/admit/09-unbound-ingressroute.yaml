@@ -1,0 +1,13 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: claim
+  namespace: labs
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`labs-app.mctl.ai`)
+      kind: Rule
+      services:
+        - name: web
+          port: 80

@@ -17,15 +17,18 @@
 # tests/fixtures/secret-allowlist/setup.yaml is created for real first, and
 # values-test.yaml is layered over the bootstrap values.
 #
-# Requires: docker, kubectl, helm, python3 with PyYAML.
+# Requires: docker, kubectl, helm, python3 with PyYAML, network access to
+# pull rancher/k3s and the pinned Traefik CRD definition.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURES="$ROOT/tests/fixtures/secret-allowlist"
 POLICY=mctl-external-manifests
-POLICIES="mctl-external-manifests-secret-allowlist mctl-external-manifests-ingress-hosts mctl-external-manifests-services"
+POLICIES="mctl-external-manifests-secret-allowlist mctl-external-manifests-ingress-hosts mctl-external-manifests-services mctl-external-manifests-no-traefik-routes"
 # Keep in step with the platform cluster and scripts/test-reserved-hosts-policy.sh.
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.33.13-k3s1}"
+TRAEFIK_VERSION="${TRAEFIK_VERSION:-v3.7.13}"
+TRAEFIK_CRDS="https://raw.githubusercontent.com/traefik/traefik/${TRAEFIK_VERSION}/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml"
 
 WORK="$(mktemp -d)"
 NAME="mctl-vap-secrets-$$"
@@ -50,7 +53,13 @@ for _ in $(seq 1 60); do
 done
 kubectl get --raw /readyz >/dev/null
 
-echo "== policy from the rendered bootstrap chart"
+echo "== Traefik CRDs $TRAEFIK_VERSION"
+curl -fsSL --retry 3 --retry-delay 2 "$TRAEFIK_CRDS" -o "$WORK/traefik-crds.yaml"
+kubectl apply --server-side -f "$WORK/traefik-crds.yaml" >/dev/null
+kubectl wait --for=condition=Established --timeout=60s \
+  crd/ingressroutes.traefik.io crd/ingressroutetcps.traefik.io >/dev/null
+
+echo "== policies from the rendered bootstrap chart"
 helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/bootstrap/values.yaml" \
   -f "$FIXTURES/values-test.yaml" > "$WORK/bootstrap.yaml"
 python3 - "$WORK/bootstrap.yaml" "$POLICY" > "$WORK/policy.yaml" <<'PY'
@@ -58,8 +67,8 @@ import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d
         and d.get("kind") in ("ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding")
         and d["metadata"]["name"].startswith(sys.argv[2] + "-")]
-if len(docs) != 6:
-    sys.exit(f"expected three policies and three bindings in the render, found {len(docs)}")
+if len(docs) != 8:
+    sys.exit(f"expected four policies and four bindings in the render, found {len(docs)}")
 print(yaml.safe_dump_all(docs))
 PY
 kubectl apply -f "$WORK/policy.yaml" >/dev/null
