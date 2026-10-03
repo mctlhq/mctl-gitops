@@ -80,7 +80,7 @@ spec:
         # https://github.com/mctlhq/mctl-telegram/issues/123
         # run-investigator fails fast with a clear message if empty.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.46.0
+        value: ghcr.io/mctlhq/mctl-agents:1.64.1
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -89,6 +89,44 @@ spec:
         # Registry version string (e.g. issue-investigator@1.2.0), carried
         # for the record only — not consumed by run-investigator. Left blank
         # by any caller not yet using the registry.
+      - name: work_item_id
+        value: ""
+        # Optional. Canonical WorkItem id, minted by the caller (the dev-loop
+        # control plane). Forwarded verbatim to run_issue_investigator.py as
+        # --work-item-id and omitted entirely when empty. NOT defaulted to a
+        # generated value: an invented id would bind the run to a WorkItem
+        # that does not exist. Consumed by mctl-agents#267 — requires an
+        # agent_image containing that change; an earlier pin does not
+        # recognise the flag and exits non-zero.
+      - name: execution_id
+        value: ""
+        # Optional. Execution identity for THIS attempt, minted by the same
+        # caller alongside work_item_id. Same omit-when-empty rule, and the
+        # same agent_image requirement as work_item_id above.
+      - name: temporal_workflow_id
+        value: ""
+        # Optional. Id of the DevLoopWorkflow that submitted this run,
+        # forwarded as --temporal-workflow-id. A loop started by the
+        # execution-request dispatcher is `dev-loop-xr_<id>`, not the
+        # issue-keyed `dev-loop-<owner>-<repo>-<n>` the investigator derives
+        # from issue_url today, so without this the approve instructions and
+        # the sealed correlation name a loop that does not exist
+        # (mctl-agents#461, #451). Same omit-when-empty rule and agent_image
+        # requirement as work_item_id; empty means "not submitted by a
+        # loop", never "derive one".
+      - name: temporal_run_id
+        value: ""
+        # Optional. Run id of that same DevLoopWorkflow, forwarded as
+        # --temporal-run-id, so a record this run seals can be told apart
+        # from a leftover of an earlier run of the same workflow id
+        # (mctl-agents#451). Same rules as temporal_workflow_id.
+      - name: execution_request_id
+        value: ""
+        # Optional. The mctl-api execution request (xr_...) this run
+        # fulfils, forwarded as --execution-request-id for correlation only:
+        # the execution identity is still execution_id. Set only by the
+        # execution-request dispatcher path (mctl-agents#461). Same rules as
+        # work_item_id.
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # This used to be a `volumeClaimTemplates` entry requesting 4Gi, which Argo
@@ -337,6 +375,28 @@ spec:
             # the shell command. `set --` keeps it a single quoted token.
             set -- python -m orchestrator.run_issue_investigator \
               --issue-url "$WORKFLOW_ISSUE_URL"
+            # Optional work-context identifiers (gitops#1279). Appended only
+            # when the caller supplied them, so a submit that omits both
+            # produces the exact argv this template produced before they
+            # existed. No default is invented for either: an empty value
+            # means absent, not "derive one".
+            if [ -n "$WORKFLOW_WORK_ITEM_ID" ]; then
+              set -- "$@" --work-item-id "$WORKFLOW_WORK_ITEM_ID"
+            fi
+            if [ -n "$WORKFLOW_EXECUTION_ID" ]; then
+              set -- "$@" --execution-id "$WORKFLOW_EXECUTION_ID"
+            fi
+            # DevLoop and execution-request correlation (mctl-agents#461,
+            # #451). Same omit-when-empty rule as the two above.
+            if [ -n "$WORKFLOW_TEMPORAL_WORKFLOW_ID" ]; then
+              set -- "$@" --temporal-workflow-id "$WORKFLOW_TEMPORAL_WORKFLOW_ID"
+            fi
+            if [ -n "$WORKFLOW_TEMPORAL_RUN_ID" ]; then
+              set -- "$@" --temporal-run-id "$WORKFLOW_TEMPORAL_RUN_ID"
+            fi
+            if [ -n "$WORKFLOW_EXECUTION_REQUEST_ID" ]; then
+              set -- "$@" --execution-request-id "$WORKFLOW_EXECUTION_REQUEST_ID"
+            fi
             printf '→'
             printf ' %s' "$@"
             printf '\n'
@@ -488,11 +548,73 @@ spec:
             sys.exit(rc)
             COLLECT
         env:
+          # Work-context rollout stage (mctl-agents orchestrator/work_context/
+          # rollout.py; the investigator is its only reader). `observe`: the
+          # investigator resolves the WorkItem, takes the store's `we_` id as
+          # its execution identity and seals its ContextSnapshot in mctl-api,
+          # but the issue URL still decides and a store failure never blocks
+          # (that starts at `enforce`). Gated on mctlhq/mctl-agents#455 (closed
+          # by #492, released in 1.57.0); live proof is mctlhq/mctl-agents#490.
+          # Roll back by setting "off".
+          - name: WORK_CONTEXT_ROLLOUT_MODE
+            value: "observe"
+          # Context-assembly pilot stage (mctlhq/mctl-agents#265,
+          # run_issue_investigator._context_mode: off|shadow|on). `shadow`:
+          # assemble, seal and log the investigation's ContextSnapshot and,
+          # with WORK_CONTEXT_ROLLOUT_MODE=observe above, persist it in
+          # mctl-api under the store execution -- the prompt is left
+          # byte-identical, and any assembly/seal/persist error is caught and
+          # logged, never failing the investigation. At `off` the snapshot
+          # path returns before persisting anything, which is why #490 needs
+          # this. Do NOT set `on` here (it changes the prompt): a separate
+          # owner decision. Roll back by setting "off".
+          - name: ISSUE_INVESTIGATOR_CONTEXT_MODE
+            value: "shadow"
+          # WorkItem intents as a ContextSnapshot source (mctlhq/mctl-agents#542
+          # tasks 12-18, orchestrator/work_context/intents.py; released in
+          # mctl-agents 1.63.0). `on`: the investigator reads the WorkItem's
+          # canonical intents from mctl-api (GET /api/v1/work-items/{id}/intents,
+          # mctl-api 4.58.0) and seals them into the ContextSnapshot, including
+          # the resume intent named by the execution request's `intent_id`; a
+          # referenced intent it cannot resolve fails the run
+          # (`intent-unresolved`) rather than proceeding without it. Intents are
+          # provenance and input only, never authorization. Only this template
+          # reads it: the Temporal workers run no context assembly. Roll back by
+          # setting "off" (the default, byte-neutral).
+          - name: WORK_ITEM_INTENT_SOURCE
+            value: "on"
           # Workflow param injected as an env var so the shell layer can
           # quote it safely. Direct workflow.parameters.* interpolation in
           # the script body is a shell-injection vector.
           - name: WORKFLOW_ISSUE_URL
             value: "{{workflow.parameters.issue_url}}"
+          # Same reasoning as WORKFLOW_ISSUE_URL above, and enforced by
+          # scripts/validate-shell-param-interpolation.py: these names are in
+          # neither its BASELINE nor its CONSTRAINED set, so interpolating
+          # them into the script body above fails CI rather than merely
+          # being discouraged.
+          - name: WORKFLOW_WORK_ITEM_ID
+            value: "{{workflow.parameters.work_item_id}}"
+          - name: WORKFLOW_EXECUTION_ID
+            value: "{{workflow.parameters.execution_id}}"
+          - name: WORKFLOW_TEMPORAL_WORKFLOW_ID
+            value: "{{workflow.parameters.temporal_workflow_id}}"
+          - name: WORKFLOW_TEMPORAL_RUN_ID
+            value: "{{workflow.parameters.temporal_run_id}}"
+          - name: WORKFLOW_EXECUTION_REQUEST_ID
+            value: "{{workflow.parameters.execution_request_id}}"
+          # The engine run this attempt belongs to (mctl-agents#455): the
+          # investigator attaches it to the work item as (argo, workflow name)
+          # and takes the store's `we_` id as its execution identity. The
+          # primary and the fallback share the workflow name, so a retry keeps
+          # the same execution. Read only past WORK_CONTEXT_ROLLOUT_MODE=off.
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          # The primary attempt is not final: the fallback always runs after
+          # it fails, and the store never reopens an ended execution, so only
+          # the fallback may mark it Failed.
+          - name: MCTL_ENGINE_FINAL_ATTEMPT
+            value: "{{inputs.parameters.is-fallback}}"
           # entrypoint.sh symlinks <state>/<svc>/proposals onto the baked-in
           # agents/<svc>/; run_issue_investigator reads STATE_DIR directly.
           - name: STATE_DIR
@@ -554,6 +676,17 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Usage-writer token (mctlhq/.github#50): the only credential the
+          # usage producer may use to append this run's model-usage records
+          # to mctl-api. It may do nothing else there. Optional: absent (the
+          # default until the owner provisions it) the producer logs once and
+          # records nothing; the run itself is unaffected.
+          - name: MCTL_USAGE_WRITER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: usage-writer-token
+                optional: true
           # The investigator authors the requirements/design/tasks triplet the
           # implementer then treats as its specification, so its output quality
           # compounds through every downstream step. Pinned to Opus here rather
@@ -561,13 +694,13 @@ spec:
           # run_issue_investigator.py reads this env var directly as its
           # highest-priority override -- so the change needs no mctl-agents
           # release and no agent_image bump, and reverting this PR restores
-          # claude-sonnet-5 from the `service_agent` task's `balanced` profile.
+          # claude-sonnet-5-5 from the `service_agent` task's `balanced` profile.
           # The implementer deliberately stays on Sonnet for now: its recent
           # failures were infrastructural (a missing platform contract, a cold
           # Go toolchain exhausting the cap), not model quality, and changing
           # both at once would make the next run unattributable.
           - name: ISSUE_INVESTIGATOR_MODEL
-            value: "claude-opus-5"
+            value: "claude-opus-5-5"
           # Raised 3.00 -> 8.00 alongside the model above: $3 was already tight
           # on Sonnet (see the 8Gi memory bump below, same class of headroom
           # problem on the largest repos) and Opus spends more per equivalent

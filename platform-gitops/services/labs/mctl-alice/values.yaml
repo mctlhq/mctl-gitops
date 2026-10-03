@@ -1,0 +1,84 @@
+# Service: mctl-alice
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-alice
+  tag: "2.2.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: mctl-alice
+replicaCount: 1
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+env:
+  PORT: "8080"
+  NODE_ENV: production
+  PUBLIC_BASE_URL: https://alice.mctl.ai
+  AUTH_REQUIRED: "true"
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 30
+    periodSeconds: 15
+ingress:
+  enabled: true
+  hosts:
+    - alice.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-alice-tls
+      hosts:
+        - alice.mctl.ai
+envFrom:
+  - secretRef:
+      name: mctl-alice-secrets
+  - secretRef:
+      name: labs-mctl-alice-db-creds
+# PostgreSQL storage backend: SQLite data (oauth.db & telemetry.db) from the
+# dedicated 10Gi PVC was backed up out-of-band prior to cutover. Dedicated
+# volume persistence is removed in favor of shared-pg in platform-db.
+dbSecret:
+  vaultPath: teams/labs/mctl-alice/database
+  secretName: labs-mctl-alice-db-creds
+externalSecret:
+  targetSecret: mctl-alice-secrets
+  data:
+    - secretKey: ENCRYPTION_KEY
+      remoteKey: teams/labs/mctl-alice
+      property: ENCRYPTION_KEY
+    - secretKey: YANDEX_COOKIE
+      remoteKey: teams/labs/mctl-alice
+      property: YANDEX_COOKIE
+    - secretKey: YANDEX_OAUTH_TOKEN
+      remoteKey: teams/labs/mctl-alice
+      property: YANDEX_OAUTH_TOKEN
+    - secretKey: YANDEX_CLIENT_ID
+      remoteKey: teams/labs/mctl-alice
+      property: YANDEX_CLIENT_ID
+    - secretKey: YANDEX_CLIENT_SECRET
+      remoteKey: teams/labs/mctl-alice
+      property: YANDEX_CLIENT_SECRET
+extraContainers: []

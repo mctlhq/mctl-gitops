@@ -13,16 +13,8 @@
 # That is a gap, not a configuration style; the list exists so the gap is
 # visible in the gate rather than absent from it.
 #
-# zones/mctl-ru — the import pilot (#1096) deliberately kept local state.
-#                 Moving it to R2 is a state migration and belongs to #1103.
-infrastructure/cloudflare/zones/mctl-ru
-# zones/mctl-me arrives with #1103 on local state for the same reason the pilot
-# did: proving zero diff needs no write access, and moving either zone onto R2
-# is a state migration that needs an apply identity. That identity does not
-# exist yet (#1111), so the migration is that issue's follow-on rather than
-# this one's.
-infrastructure/cloudflare/zones/mctl-me
-
-# zones/mctl-ai arrives with #1115 on local state, same reason as the others:
-# the zero-diff proof needs only read access, the R2 migration needs #1111.
-infrastructure/cloudflare/zones/mctl-ai
+# Empty as of #1178: mctl-ru, mctl-me and mctl-ai all moved onto the shared R2
+# backend, which is the last of the exceptions this list ever named. An empty
+# list is this file's normal end state, not a sign it should be deleted — the
+# three consumers named above still read it, so the next exception, if any, is
+# declared here rather than worked around.

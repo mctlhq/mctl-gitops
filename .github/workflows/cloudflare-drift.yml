@@ -14,6 +14,9 @@ on:
 
 permissions:
   contents: read
+  # Read-only: the vendored-allowlist step asks whether a lagging server
+  # already has an open bump PR before paging anyone.
+  pull-requests: read
 
 jobs:
   discover:
@@ -130,9 +133,19 @@ jobs:
       # and to see zero zones. An expression rather than a lookup because
       # secrets cannot be indexed by a variable -- same explicit chain as
       # cloudflare-apply.yml, and it is also the allowlist.
+      #
+      # infrastructure/cloudflare/account is account-level for the same reason
+      # and now holds an Access application, which the zone credential cannot
+      # even read: it answers 1010 auth.forbidden on the refresh, so the root
+      # fails before it can compare anything. CF_ACCOUNT_READ_TOKEN is
+      # Account -> Access: Apps and Policies -> Read on this account alone.
+      # Absent, the chain falls back to the zone credential and that root keeps
+      # failing visibly rather than being skipped.
       CLOUDFLARE_API_TOKEN: >-
         ${{ matrix.root == 'infrastructure/cloudflare/portal'
          && secrets.CF_PORTAL_READ_TOKEN
+         || matrix.root == 'infrastructure/cloudflare/account'
+         && secrets.CF_ACCOUNT_READ_TOKEN
          || secrets.CLOUDFLARE_API_TOKEN }}
       # Drift only reads. It uses the same Object-Read-only state credential as
       # the plan workflow, which is why it also passes -lock=false: taking the
@@ -357,9 +370,36 @@ jobs:
       # condition is spelled out; `steps.plan.conclusion` is what gates it, the
       # same clean-plan requirement the registration step expresses via
       # success().
+      # One upstream, mctlhq/projects-mcp, is private on purpose, so its
+      # allowlist cannot be read from raw.githubusercontent.com the way the
+      # three public ones are. The mctl-agents App is installed on every
+      # repository in the org, and contents:read is all the fetch needs;
+      # GITHUB_TOKEN would not do, being scoped to this repository.
+      - name: Generate a read token for the private upstreams
+        id: allowlist_token
+        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.AGENTS_APP_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          # The one private upstream in PRIVATE_OWNERS, named rather than
+          # left open. Without `repositories:` the token carries contents
+          # read across every repository the App is installed on, which is
+          # all of them; this step reads one file in one repo. Widen only
+          # when a second private upstream is added there, and add the row
+          # to docs/runbooks/agents-app-secret-exposure.md when you do.
+          repositories: projects-mcp
+          permission-contents: read
+          permission-metadata: read
+
       - name: Check the tool catalogue against the upstreams
         id: catalogue
         if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        env:
+          # Read by scripts/portal-catalogue-drift.py for the private
+          # upstreams only; the public three are still fetched anonymously.
+          ALLOWLIST_TOKEN: ${{ steps.allowlist_token.outputs.token }}
         run: |
           set -uo pipefail
           set +e
@@ -423,10 +463,93 @@ jobs:
                  grep -q 'which this exit status does not name' catalogue.txt \
                    && echo "> Catalogue findings also fired tonight and this status does not name them — read the block above."
                  true; } >> "$GITHUB_STEP_SUMMARY" ;;
+            5) { echo "### \`portal\` — committed catalogue lags the portal";
+                 echo; echo '```'; cat catalogue.txt; echo '```';
+                 # The portal is fine: a server re-synced and
+                 # allowlists/catalogue.json, which mcp-portal.tf builds
+                 # updated_tools from, was not updated. The portal root's plan
+                 # above is red for the same reason; this names it.
+                 echo "> Update \`infrastructure/cloudflare/portal/allowlists/catalogue.json\` in a PR (and the owning repo's allowlist, if a new tool has no decision yet). Do NOT re-snapshot."
+                 grep -q 'which this exit status does not name' catalogue.txt \
+                   && echo "> Other findings also fired tonight and this status does not name them — read the block above."
+                 true; } >> "$GITHUB_STEP_SUMMARY" ;;
             *) { echo "### \`portal\` — catalogue check could not run, or a server is serving no tools (exit $code)";
                  echo; echo '```'; cat catalogue.txt 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
           esac
           rm -f catalogue.txt
+          exit "$code"
+
+      # The vendored allowlists against the repos that own them
+      # (mctlhq/mctl-gitops#1370 task 12). A bump PR is the only thing that
+      # may change allowlists/<id>.json; this notices a copy edited by hand
+      # here (tampered) and a bump that never arrived (lag). Same token as
+      # the catalogue step: projects-mcp is the one private owner.
+      - name: Check the vendored allowlists against their owning repos
+        id: vendor
+        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        env:
+          ALLOWLIST_TOKEN: ${{ steps.allowlist_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          set +e
+          "$GITHUB_WORKSPACE/scripts/validate-portal-allowlists.py" --vendor-check > vendor.txt 2>&1
+          code=$?
+          set -e
+          # A lag whose bump PR is already open is waiting on review (a
+          # widening sits red there by design until someone edits
+          # baseline.json), so it is reported, not paged -- but only when
+          # that PR carries exactly the owner's current file: its
+          # allowlists/<id>.json blob equals the blob of main's content that
+          # --vendor-check printed. A stale bump PR (the owner has moved on
+          # and the newer dispatch failed) does not silence the lag. Only
+          # when every lagging server has one.
+          waiting=""
+          if [ "$code" = 3 ]; then
+            pending=0; parsed=0
+            while read -r sid blob; do
+              parsed=$((parsed + 1))
+              found=0
+              for br in $(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 500 --json headRefName \
+                            --jq ".[].headRefName | select(test(\"^portal-allowlist/${sid}-[0-9a-f]{7}\$\"))" || true); do
+                pr_blob=$(gh api "repos/${GITHUB_REPOSITORY}/contents/infrastructure/cloudflare/portal/allowlists/${sid}.json?ref=${br}" --jq .sha 2>/dev/null || true)
+                if [ -n "$pr_blob" ] && [ "$pr_blob" = "$blob" ]; then found=1; fi
+              done
+              if [ "$found" = 1 ]; then waiting="$waiting $sid"; else pending=1; fi
+            done < <(sed -n 's/^\([a-z0-9-]*\): lags -- .* (blob \([0-9a-f]\{40\}\)).*/\1 \2/p' vendor.txt)
+            # Every lag line must have been parsed and matched. A server the
+            # check could not compare keeps the step red as undetermined
+            # (exit 2): a long-lived widening PR must not hide it.
+            if [ "$parsed" != "$(grep -c ': lags -- ' vendor.txt)" ]; then pending=1; fi
+            if [ "$pending" = 0 ] && [ -n "$waiting" ]; then
+              # The lag itself is not paged, but an undetermined server
+              # still is (exit 2), so say which of the two this run is.
+              if grep -q 'undetermined' vendor.txt; then
+                code=2
+                echo "bump PR open with the owner's current file for:${waiting}; that lag awaits review, but a server could not be compared (undetermined), so this run is still paged" >> vendor.txt
+              else
+                code=0
+                echo "bump PR open with the owner's current file for:${waiting}; awaiting review, not paged" >> vendor.txt
+              fi
+            else
+              waiting=""
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) if [ -n "$waiting" ]; then heading="a vendored allowlist lags; its bump PR is open, awaiting review"
+               else heading="vendored allowlists match their owning repos"; fi ;;
+            1) heading="A VENDORED ALLOWLIST WAS EDITED HERE (tampered)" ;;
+            3) heading="a vendored allowlist lags its owning repo's main" ;;
+            *) heading="vendored allowlist check could not run (exit $code)" ;;
+          esac
+          { echo "### \`portal\` — ${heading}"; echo; echo '```'; cat vendor.txt; echo '```'
+            case "$code" in
+              1) echo "> Restore the file from the sha in \`sources.json\`, or land the change in the owning repo so its bump PR carries it. Only a bump PR may edit \`allowlists/<id>.json\`." ;;
+              3) echo "> The owning repo's dispatch did not run or its bump PR is not merged. Dispatch \`portal-allowlist-vendor.yml\` by hand if needed." ;;
+            esac; } >> "$GITHUB_STEP_SUMMARY"
+          cat vendor.txt
+          rm -f vendor.txt
           exit "$code"
 
       - name: Notify Telegram
@@ -452,9 +575,12 @@ jobs:
             ${{ steps.creds.outputs.code && steps.creds.outputs.code != '0'
              && format('OAuth registration check exit <code>{0}</code> (1 = drifted, 2 = could not run). The plan was clean; this field is invisible to it.', steps.creds.outputs.code) || '' }}
             ${{ steps.catalogue.outputs.code && steps.catalogue.outputs.code != '0'
-             && format('Tool catalogue check exit <code>{0}</code> (1 = stale, re-snapshot; 2 = could not run, or a server holds no tools at all and serves nothing; 3 = a waiver matches nothing or is wider than what fires, delete or narrow it; 4 = an upstream is missing from the portal). The plan was clean; the catalogue is invisible to it.', steps.catalogue.outputs.code) || '' }}
+             && format('Tool catalogue check exit <code>{0}</code> (1 = stale, re-snapshot; 2 = could not run, or a server holds no tools at all and serves nothing; 3 = a waiver matches nothing or is wider than what fires, delete or narrow it; 4 = an upstream is missing from the portal; 5 = allowlists/catalogue.json lags the portal, update it in a PR). The plan was clean; the catalogue is invisible to it.', steps.catalogue.outputs.code) || '' }}
+            ${{ steps.vendor.outputs.code && steps.vendor.outputs.code != '0'
+             && format('Vendored allowlist check exit <code>{0}</code> (1 = a vendored copy was edited here, tampered; 3 = the owning repo has a newer allowlist not yet vendored; 2 = could not run).', steps.vendor.outputs.code) || '' }}
             ${{ (steps.creds.outputs.code == '' || steps.creds.outputs.code == '0')
              && (steps.catalogue.outputs.code == '' || steps.catalogue.outputs.code == '0')
+             && (steps.vendor.outputs.code == '' || steps.vendor.outputs.code == '0')
              && format('Plan exit code <code>{0}</code> (2 = drift, 1 = plan error)', steps.plan.outputs.code || format('none — plan {0}', steps.plan.conclusion)) || '' }}
             Cloudflare no longer matches Git, or a check could not run.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

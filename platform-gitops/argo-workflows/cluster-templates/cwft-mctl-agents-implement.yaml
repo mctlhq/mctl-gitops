@@ -52,11 +52,34 @@ spec:
     secondsAfterCompletion: 86400
   # volumeClaimGC is gone with the PVC — there is no claim left to reclaim.
   #
-  # One proposal may still need clone + bounded SDK work + push + PR, so keep
-  # a hard 2h safety ceiling. Do not raise this to accommodate an unlimited
-  # batch: max_proposals=1 below is the quota and runtime boundary introduced
-  # after incident-0f3b9ea3.
-  activeDeadlineSeconds: 7200
+  # This is a RUNAWAY GUARD, not the work budget. The work budget is 7200s on
+  # the run-implementer template, where it belongs.
+  #
+  # It used to be 7200 here, and a spec-level deadline runs from SUBMIT, not
+  # from the moment the mutex below is acquired — so time spent queueing was
+  # charged to the implementer's own budget. mctl-agents-proposal-claims is a
+  # mutex (capacity 1) and one proposal takes 30-70 min, so only the first
+  # two or three submissions of a batch could ever start inside 2h. Everything
+  # behind them died Pending, having never created a pod.
+  #
+  # Worse than losing the attempt: the deadline is workflow-wide, so once
+  # `implement` had consumed it, `implement-fallback` AND `commit-and-push`
+  # were failed instantly with "Step exceeded its deadline" — and
+  # commit-and-push is the only step that writes `.status.yaml` back. The
+  # proposal stayed `accepted` with no branch, no PR and no failure recorded
+  # anywhere, which is exactly the state the `assert-produced` truthful-status
+  # design exists to prevent.
+  #
+  # 2026-09-19: six of nine implement runs lost this way in one night
+  # (mctl-agents#333 #334, mctl-telegram#438 #569, mctl-gitops#903 #1178).
+  #
+  # 8h = worst-case work (7200 primary + 7200 fallback + a bounded
+  # commit-and-push) plus room to queue behind two or three other runs. A
+  # deeper queue can still expire here, but it now expires having attempted
+  # nothing, instead of throwing away a finished attempt. Narrowing the mutex
+  # to the discovery+claim critical section is the real fix for the queue and
+  # is tracked separately.
+  activeDeadlineSeconds: 28800
   entrypoint: implement-proposals
   onExit: notify-telegram
   # NB: mctl-gitops-main-writes lives on the commit-and-push template, not
@@ -82,7 +105,7 @@ spec:
         # Bound subscription usage and blast radius. Set explicitly to 0 only
         # for an operator-reviewed manual batch.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.46.0
+        value: ghcr.io/mctlhq/mctl-agents:1.64.1
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -91,6 +114,37 @@ spec:
         # Registry version string, carried for the record only — not
         # consumed by run-implementer. Left blank by any caller not yet
         # using the registry.
+      - name: work_item_id
+        value: ""
+        # Optional. Canonical WorkItem id, minted by the caller (the
+        # dev-loop control plane). Correlation only — carried to the runner
+        # as env and NOT forwarded as a CLI flag: unlike
+        # cwft-mctl-agents-investigate.yaml, run_implementer.py has no
+        # --work-item-id flag, so appending one would make argparse exit
+        # non-zero on every run. Empty means absent; no value is ever
+        # derived. Read by the usage producer
+        # (mctl-agents orchestrator/usage_ledger.py) beside the existing
+        # WORKFLOW_NAME join key. Mirrors gitops#1279; owner decision 4 of
+        # mctlhq/.github#50.
+      - name: execution_id
+        value: ""
+        # Optional. Execution identity for THIS attempt, minted by the same
+        # caller alongside work_item_id. Same correlation-only, env-not-argv,
+        # empty-means-absent rules as work_item_id above.
+      - name: temporal_workflow_id
+        value: ""
+        # Optional. Id of the DevLoopWorkflow that submitted this run. Same
+        # correlation-only, env-not-argv, empty-means-absent rules as
+        # work_item_id above.
+      - name: temporal_run_id
+        value: ""
+        # Optional. Run id of that same DevLoopWorkflow. Same rules as
+        # temporal_workflow_id.
+      - name: execution_request_id
+        value: ""
+        # Optional. The mctl-api execution request (xr_...) this run
+        # fulfils, for correlation only: the execution identity is still
+        # execution_id. Same rules as work_item_id.
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # Was a 10Gi `volumeClaimTemplates` entry — the LAST one in the agent fleet
@@ -332,6 +386,18 @@ spec:
       synchronization:
         mutex:
           name: mctl-agents-proposal-claims
+      # The real work budget, and the reason the spec-level ceiling above is
+      # only a runaway guard. A template deadline is applied to the POD, so it
+      # runs from the pod's start — after the mutex above is acquired. Queue
+      # time is no longer charged to the attempt.
+      #
+      # 7200 is the same ceiling this template has always had, kept as the
+      # outer net around the 5400s IMPLEMENTER_TIMEOUT_SECONDS below; it bounds
+      # a hung model stream that the inner `anyio.fail_after` fails to unwind.
+      # It applies to `implement` and `implement-fallback` alike — both are
+      # this one template — so a primary that burns its full budget no longer
+      # leaves the fallback nothing to run in.
+      activeDeadlineSeconds: 7200
       container:
         image: "{{workflow.parameters.agent_image}}"
         imagePullPolicy: IfNotPresent
@@ -606,6 +672,41 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Usage-writer token (mctlhq/.github#50): the only credential the
+          # usage producer may use to append this run's model-usage records
+          # to mctl-api. It may do nothing else there. Optional: absent (the
+          # default until the owner provisions it) the producer logs once and
+          # records nothing; the run itself is unaffected.
+          - name: MCTL_USAGE_WRITER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: usage-writer-token
+                optional: true
+          # The Argo run name, the join key of this run's usage records to
+          # its agent_executions row (argo_workflow_name). Read by nothing
+          # else in this runner.
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          # Optional Temporal / WorkItem correlation (gitops#1408, mirroring
+          # gitops#1279 on cwft-mctl-agents-investigate.yaml). Read by the
+          # usage producer (mctl-agents orchestrator/usage_ledger.py) next to
+          # WORKFLOW_NAME above; NOT consumed by run_implementer's argv,
+          # which has no such flags. Empty for every caller that does not
+          # set them. Enforced by
+          # scripts/validate-shell-param-interpolation.py: these names are in
+          # neither its BASELINE nor its CONSTRAINED set, so interpolating
+          # them into the script body instead of env would fail CI.
+          - name: WORKFLOW_WORK_ITEM_ID
+            value: "{{workflow.parameters.work_item_id}}"
+          - name: WORKFLOW_EXECUTION_ID
+            value: "{{workflow.parameters.execution_id}}"
+          - name: WORKFLOW_TEMPORAL_WORKFLOW_ID
+            value: "{{workflow.parameters.temporal_workflow_id}}"
+          - name: WORKFLOW_TEMPORAL_RUN_ID
+            value: "{{workflow.parameters.temporal_run_id}}"
+          - name: WORKFLOW_EXECUTION_REQUEST_ID
+            value: "{{workflow.parameters.execution_request_id}}"
           # Soft cap per proposal. Raised 3.00 -> 10.00: large issue-driven
           # proposals (e.g. a full observability layer) blew the $3 cap and
           # the SDK raised error_max_budget_usd before opening a PR. Small
@@ -731,6 +832,11 @@ spec:
       synchronization:
         mutex:
           name: mctl-gitops-main-writes
+      # Bounded on its own now that the spec-level ceiling is 8h: this is a
+      # clone plus a rebase/push loop, so 15 min is already generous, and the
+      # step that records the outcome must not be the one that hangs. Per
+      # attempt — the retryStrategy below may spend it up to 3 times.
+      activeDeadlineSeconds: 900
       # The workflow mutex does not cover direct GitHub Actions image bumps.
       # Retry this bounded write step when one races the in-script rebase/push
       # loop (incident-17841555). Same policy as cwft-mctl-agents-run.

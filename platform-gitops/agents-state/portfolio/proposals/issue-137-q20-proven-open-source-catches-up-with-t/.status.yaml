@@ -1,0 +1,35 @@
+status: merged
+updated_at: '2026-10-03T18:24:25Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-8b61d8bb8886ac6f
+  trace_id: f8705488372018aed31c784c48d78d92
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 137
+  url: https://github.com/mctlhq/portfolio/issues/137
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-3f1ff76a94fb3a78
+  content_hash: sha256:3f1ff76a94fb3a78ff78c04bb40e796735917b0bf6db361ad9de277167d6ad0f
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-03T16:49:55Z'
+attempt:
+  id: 333b71fa1d3b2a1d1d5bf9fa169623b53bf742b64402eedb8c997102fec8dcd8
+  started_at: '2026-10-03T16:51:15Z'
+  expires_at: '2026-10-03T19:01:15Z'
+  finished_at: '2026-10-03T16:54:58Z'
+pr: https://github.com/mctlhq/portfolio/pull/138
+github:
+  state: merged
+  head_sha: bc8792f8b6830130a83ee590b5b7f239b82802e3
+  observed_at: '2026-10-03T18:24:25Z'
+merged_at: '2026-10-03T18:24:25Z'
+merge_commit: 59fc7a96673a0192b73a3e0a74e14d94ccac57a6

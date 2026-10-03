@@ -1,5 +1,5 @@
-status: needs-triage
-updated_at: '2026-09-12T11:36:02Z'
+status: rejected
+updated_at: '2026-09-22T15:08:37Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -18,13 +18,7 @@ attempt:
   finished_at: '2026-09-11T08:27:19Z'
 pr: https://github.com/mctlhq/mctl-telegram/pull/627
 github:
-  state: open
+  state: closed
   head_sha: 0a5058299911631cdeb4c2f6c56ab2227a35b229
-  blocking_reason: conflict
-  observed_at: '2026-09-12T11:36:02Z'
-review_attempts: 2
-failure:
-  code: merge-conflict
-  stage: reconcile
-  message: GitHub reports a merge conflict with the base branch.
-notes: 'reconcile: open PR has a merge conflict'
+  observed_at: '2026-09-22T15:08:37Z'
+notes: PR was closed without merging.

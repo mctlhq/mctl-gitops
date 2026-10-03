@@ -1,0 +1,55 @@
+# Service: draw-with-friends
+# Team: karabu
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/draw-with-friends
+  tag: "0.2.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: draw-with-friends
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  NODE_ENV: production
+  INVITE_HINT: "true"
+ingress:
+  enabled: true
+  hosts:
+    - karabu-draw-with-friends.mctl.ai
+    - draw-with-friends.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: draw-with-friends-tls
+      hosts:
+        - karabu-draw-with-friends.mctl.ai
+        - draw-with-friends.mctl.ai
+envFrom:
+  - secretRef:
+      name: karabu-draw-with-friends-db-creds
+  - secretRef:
+      name: draw-with-friends-secrets
+dbSecret:
+  vaultPath: teams/karabu/draw-with-friends/database
+  secretName: karabu-draw-with-friends-db-creds
+externalSecret:
+  targetSecret: draw-with-friends-secrets
+  data:
+    - secretKey: SESSION_SECRET
+      remoteKey: teams/karabu/draw-with-friends
+      property: SESSION_SECRET
+    - secretKey: INVITE_CODE
+      remoteKey: teams/karabu/draw-with-friends
+      property: INVITE_CODE
+extraContainers: []

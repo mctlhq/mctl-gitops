@@ -1,0 +1,1 @@
+vendored is not a boolean ('true')

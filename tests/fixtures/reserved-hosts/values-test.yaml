@@ -1,0 +1,6 @@
+# Test-only overlay for scripts/test-reserved-hosts-policy.sh, merged over
+# bootstrap values.yaml. It adds one reserved name deeper than any in the real
+# map, so the map-derived wildcard refusal (deny/22, deny/23, admit/08) is
+# exercised; the real map has no such name yet. Not used by any deployment.
+reservedPlatformHosts:
+  deep.probe.mctl.ai: [admins]

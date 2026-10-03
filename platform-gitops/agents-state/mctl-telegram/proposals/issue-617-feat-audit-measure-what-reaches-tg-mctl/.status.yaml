@@ -1,0 +1,25 @@
+status: merged
+updated_at: '2026-09-18T15:21:35Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-telegram
+  issue: 617
+  url: https://github.com/mctlhq/mctl-telegram/issues/617
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-09-18T12:06:12Z'
+attempt:
+  id: bcef3c3d-bc53-4ed7-876c-6fe7c4142b68
+  started_at: '2026-09-18T12:07:34Z'
+  expires_at: '2026-09-18T14:17:34Z'
+  finished_at: '2026-09-18T12:18:30Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/649
+github:
+  state: merged
+  head_sha: d0bfb8d7e8ce26468330e7afcac9affa0b1f98a9
+  observed_at: '2026-09-18T15:21:35Z'
+merged_at: '2026-09-18T15:21:35Z'
+merge_commit: 0896685d60c399be9b6670ba996dfd5a8d601685

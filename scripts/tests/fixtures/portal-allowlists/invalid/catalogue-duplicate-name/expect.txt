@@ -1,0 +1,1 @@
+allowlists/catalogue.json: 'widget': lists ['alpha'] more than once

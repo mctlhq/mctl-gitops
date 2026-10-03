@@ -132,3 +132,10 @@ import {
   to = cloudflare_zone_setting.ssl
   id = "${local.zone_id}/ssl"
 }
+
+# Worker routes (#1179), ids from a read-only GET /zones/{zone_id}/workers/routes
+# on 2026-09-25. Resources in workers.tf.
+import {
+  to = cloudflare_workers_route.landing_form_api
+  id = "${local.zone_id}/762bd90950394fdc963c12028a8caca0"
+}

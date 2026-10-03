@@ -9,9 +9,9 @@
 #   * page rule *.mctl.ru/* — deleted as #1089 item 5. It matched the same
 #     subdomains as the mctl-landing-form worker route and never fired, because
 #     the worker runs first and returns.
-#   * worker routes mctl.ru/* and *.mctl.ru/* — #1089 item 9 put routes in
-#     OpenTofu and the script in Wrangler, but both zones point at one shared
-#     worker, so the routes are their own slice rather than per-zone baseline.
+#
+# The worker routes mctl.ru/* and *.mctl.ru/* arrived later, with #1179: see
+# the end of this file and workers.tf.
 
 locals {
   zone_id = "a7ec983a32a4b15097fbb80b1f5f6924" # mctl.ru
@@ -53,4 +53,16 @@ import {
 import {
   to = module.baseline.cloudflare_zone_setting.ssl
   id = "${local.zone_id}/ssl"
+}
+
+# Worker routes (#1179), ids from a read-only GET /zones/{zone_id}/workers/routes
+# on 2026-09-25. Resources in workers.tf.
+import {
+  to = cloudflare_workers_route.landing_form_apex
+  id = "${local.zone_id}/8a4944f8e5844dd898269b663a7a1766"
+}
+
+import {
+  to = cloudflare_workers_route.landing_form_subdomains
+  id = "${local.zone_id}/b8df8f07796e4ae9b3554fcb9d99c36a"
 }

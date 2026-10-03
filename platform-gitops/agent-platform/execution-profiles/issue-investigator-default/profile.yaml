@@ -29,7 +29,7 @@ metadata:
   name: issue-investigator-default
   owner: platform
 spec:
-  version: "1.2.0"
+  version: "1.5.1"
   modelPolicyRef:
     # The task key config/model-policy.yaml in mctl-agents actually defines.
     # This said `issue_investigator` until 2026-09-03, which is not a task
@@ -48,10 +48,10 @@ spec:
     # checks this name against a real os.getenv() call in the driver.
     legacyEnvOverride: ISSUE_INVESTIGATOR_MODEL
     # And it IS set: cwft-mctl-agents-investigate.yaml pins
-    # ISSUE_INVESTIGATOR_MODEL=claude-opus-5, so the `task` above describes the
+    # ISSUE_INVESTIGATOR_MODEL=claude-opus-5-5, so the `task` above describes the
     # fallback this agent no longer takes, not the model it runs on. Recorded
     # here because a reader who trusts `task: service_agent` alone would
-    # conclude claude-sonnet-5, which is what the implementer runs, not this
+    # conclude claude-sonnet-5-5, which is what the implementer runs, not this
     # agent. Unset the CWFT env var and the task's `balanced` profile applies
     # again.
     compatibility: ">=1.0.0 <2.0.0"
@@ -66,6 +66,14 @@ spec:
     - WebFetch
     - Bash
     - "mcp__mctl__*"
+    # Not an SDK tool: the durable human-clarification capability
+    # (mctl-agents#333, ADR 013). mctl-agents grants it only as the literal
+    # `"human.request_input" in plan.tools` (options.plan_grants_human_input)
+    # and filters it out of allowed_tools, so the model never sees it as a
+    # callable tool. Kill switch: delete this entry and bump spec.version
+    # plus the shadow binding's profile.version -- see "Kill switch:
+    # human.request_input" in this catalog's README (mctl-gitops#1277).
+    - human.request_input
   # Renamed from read-only-investigation: a profile granting Write, Edit and
   # Bash cannot carry a policy name asserting the opposite. The scope that IS
   # read-only -- the target repository -- is stated by permissions below,
@@ -97,3 +105,29 @@ spec:
   evidence:
     required:
       - proposal
+  # mctl-agents#242 slice 4: the catalog PERMITS capability discovery, the
+  # ISSUE_INVESTIGATOR_CAPABILITY_MODE env var ACTIVATES it, and it runs only
+  # when both agree. `enabled: false` forbids it for this profile whatever the
+  # env var says -- a CWFT asking for `discovery` then fails closed with a
+  # named SystemExit rather than falling back to eager. Turning it on is the
+  # benchmark step (part C): a reviewed PR flipping this to `true` with a
+  # version bump and a re-pinned shadow binding.
+  #
+  # `true` since 1.5.0, for the part C measurement. This only PERMITS
+  # discovery: cwft-mctl-agents-investigate.yaml sets neither
+  # ISSUE_INVESTIGATOR_RESOLVER_MODE nor ISSUE_INVESTIGATOR_CAPABILITY_MODE,
+  # so every production run stays legacy/eager. Forbid it again with
+  # `enabled: false`, a version bump and a re-pinned shadow binding.
+  #
+  # `endpoint` is a symbolic name mctl-agents resolves in code
+  # (mctl-api-mcp -> MCTL_MCP_URL), never a URL, so this file cannot point the
+  # gateway or its bearer token at another host. mctl-api keeps alias `mctl`
+  # so the gateway's SDK-visible names stay mcp__mctl__<tool> and still match
+  # the `mcp__mctl__*` entry in spec.tools above.
+  capabilityDiscovery:
+    enabled: true
+    providers:
+      - type: mcp-remote
+        id: mctl-api
+        alias: mctl
+        endpoint: mctl-api-mcp

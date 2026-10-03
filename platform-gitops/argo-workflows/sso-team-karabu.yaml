@@ -1,0 +1,18 @@
+# SSO RBAC: team karabu — scoped to team namespace only
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sso-team-karabu
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/rbac-rule: "'karabu' in groups"
+    workflows.argoproj.io/rbac-rule-precedence: "103"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sso-team-karabu.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: sso-team-karabu
+type: kubernetes.io/service-account-token

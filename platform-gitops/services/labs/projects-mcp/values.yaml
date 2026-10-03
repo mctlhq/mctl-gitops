@@ -1,0 +1,175 @@
+# Service: projects-mcp
+# Team: labs
+
+# Chart: base-service
+
+# The MCP connector customers use to ask about their own product. Source
+# mctlhq/projects-mcp (private). Cloudflare Access is the OAuth authorization
+# server in front of it (infrastructure/cloudflare/account/projects-mcp.tf);
+# this pod only verifies the assertion Access forwards, so it holds no client
+# secret, no signing key and no credential for anybody's documentation.
+
+image:
+  repository: ghcr.io/mctlhq/projects-mcp
+  tag: "0.1.12"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8787
+backstage:
+  kubernetesId: projects-mcp
+# One replica on purpose. Grants are re-read from a mounted file on a timer and
+# the documentation is baked into the image, so two pods would answer alike —
+# but there is nothing here to make two of them worth the memory yet.
+replicaCount: 1
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+env:
+  PORT: "8787"
+  # Baked into every metadata document this server publishes, so it cannot move
+  # without invalidating what clients have already fetched.
+  PUBLIC_URL: https://projects.mctl.ai
+  # mbank.cloudflareaccess.com — the team this account's Access belongs to. The
+  # server builds the JWKS URL and the expected issuer from it.
+  ACCESS_TEAM_DOMAIN: mbank
+  # The AUD tag of the Access application, and the reason this value has no
+  # default in the server: an assertion minted for a different application would
+  # otherwise verify here.
+  ACCESS_AUD: dd49dee99fcb6d80c0ed1748524b9ad6a720d9faa0171581742dae08c3143ffa
+  GRANTS_FILE: /etc/projects-mcp/grants.yaml
+  # The copy committed in the image. Changing the corpus is a sync, a commit and
+  # a build; nothing is fetched at run time.
+  PROJECTS_ROOT: /app/projects
+# /healthz is the one route that answers without an Access assertion, which is
+# what lets the kubelet reach it at all; Access still covers it from outside.
+# It answers only once the corpus has been read, which is the slow part of
+# startup, so readiness here means the pod can actually answer a question.
+# One replica means a restart is a short outage — that is the argument for the
+# startup and readiness probes, not against the liveness one.
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 30
+    periodSeconds: 15
+ingress:
+  enabled: true
+  # projects.mctl.ai is what the Access application secures and what a customer
+  # types into their client. The generated labs- name is deliberately NOT here:
+  # it resolves to the same origin and is not covered by the Access application,
+  # which would make it a way around the whole authorization path.
+  hosts:
+    - projects.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: projects-mcp-tls
+      hosts:
+        - projects.mctl.ai
+# Who may reach this server, and what each person sees in each project.
+#
+# This is the only place access is decided. Cloudflare Access authenticates —
+# it admits any Google account and forwards a verified address — and the server
+# decides from this list what that address may see, which for an address that
+# is not here is nothing at all, indistinguishably from projects that do not
+# exist.
+#
+# The list itself is NOT in this repository. It carries every customer's
+# sign-in address and a note about each of them, and mctl-gitops is public: a
+# values file committed here is readable by anyone, with no account and no
+# clone. It lives in Vault at secret/teams/labs/projects-mcp, field
+# `grants_yaml`, and reaches the pod as a Secret through the tenant ESO store.
+#
+# Handing somebody a project is therefore one edit and no deploy:
+#
+#   vault kv patch secret/teams/labs/projects-mcp grants_yaml=@-
+#
+# refreshInterval below plus GRANTS_TTL_MS is the whole delay before the server
+# sees it. There is no apply and no second list to keep in step; that used to
+# be the Access policy, and removing it is what made this the only place.
+externalSecret:
+  targetSecret: projects-mcp-grants
+  # Five minutes, not the chart's hour. Handing somebody access should not be a
+  # thing you start and come back to; an hour of waiting is how a person ends up
+  # editing the list a second time because they think the first edit did not
+  # take.
+  refreshInterval: 5m
+  data:
+    # The Vault field is `grants_yaml` and the file is `grants.yaml`: ESO reads
+    # `property` as a gjson path, where a dot descends into an object, so a
+    # field actually named `grants.yaml` would be looked up as `yaml` inside
+    # `grants` and come back empty. The secretKey is what names the file on
+    # disk, and that keeps its dot.
+    - secretKey: grants.yaml
+      remoteKey: teams/labs/projects-mcp
+      property: grants_yaml
+# Who may read the whole grants table.
+#
+# A separate ExternalSecret rather than another key on the one above, because
+# this one is consumed as environment and that one as a file: envFrom injects
+# every key in a Secret, and `grants.yaml` is not a name an environment
+# variable can have. The Vault path is the same, so there is still one place to
+# edit.
+#
+# Deliberately not a tier. `internal` says how much of a project's
+# documentation somebody may read; it must not also decide who gets to see
+# every customer's address and what each of them was granted. Empty means
+# nobody, and nobody is the right default for a surface that would otherwise
+# appear because a value was forgotten.
+#
+# Empty, though — not deleted. Take somebody's admin rights away by setting
+#
+#   vault kv patch secret/teams/labs/projects-mcp ADMIN_EMAILS=
+#
+# and never by removing the field. ESO does not read a missing property as an
+# empty one: the read errors, the ExternalSecret stops syncing, and it leaves
+# the Secret it already wrote exactly as it was. The person you meant to remove
+# stays an admin, for as long as nobody looks. It is not silent — the
+# ExternalSecret goes Ready: False and the Application turns Degraded — but a
+# revocation that announces itself as an infrastructure fault and then does not
+# revoke anything is worse than one that fails outright. The same is true of
+# `grants_yaml` above: both fields are emptied, never deleted.
+extraExternalSecrets:
+  projects-mcp-admins:
+    targetSecret: projects-mcp-admins
+    refreshInterval: 5m
+    data:
+      - secretKey: ADMIN_EMAILS
+        remoteKey: teams/labs/projects-mcp
+        property: ADMIN_EMAILS
+envFrom:
+  - secretRef:
+      name: projects-mcp-admins
+      # For the case the note above does not cover: the field having never
+      # been there at all. Then ESO's first read errors too, but there is no
+      # Secret yet to leave behind, and an envFrom that requires one stops the
+      # container with CreateContainerConfigError. A service that will not
+      # start because nobody has been made an admin yet is the wrong failure.
+      # Optional, the variable is unset, the server defaults ADMIN_EMAILS to ""
+      # and registers the admin tools for no one.
+      optional: true
+extraVolumes:
+  - name: grants
+    secret:
+      secretName: projects-mcp-grants
+extraVolumeMounts:
+  - name: grants
+    mountPath: /etc/projects-mcp
+    readOnly: true
+extraContainers: []

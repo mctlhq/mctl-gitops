@@ -1,0 +1,80 @@
+# Service: coolify-mcp
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-coolify-mcp
+  tag: "3.8.1"
+imagePullSecrets:
+  - name: ghcr-credentials
+# The image's default CMD (dist/index.js) is the stdio single-tenant
+# server, which requires COOLIFY_ACCESS_TOKEN and crash-loops without it.
+# This deployment needs the HTTP multi-tenant server instead.
+args:
+  - dist/http.js
+service:
+  port: 8080
+backstage:
+  kubernetesId: coolify-mcp
+serviceAccount:
+  create: true
+# The server only implements /healthz, not the chart's default /readyz —
+# readiness probed /readyz and 404'd, keeping the pod Running but never Ready.
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 30
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  MCP_TENANCY: multi
+  MCP_PUBLIC_URL: https://coolify.mctl.ai
+  VAULT_ADDR: https://secrets.mctl.ai
+  VAULT_KV_MOUNT: coolify-mcp-users
+  VAULT_ROLE: coolify-mcp
+  GITHUB_CLIENT_ID: Ov23liWO82B73sZxpZ4o
+  GOOGLE_CLIENT_ID: 195020011949-athrd44imdetadugqqumo233fhka7d53.apps.googleusercontent.com
+ingress:
+  enabled: true
+  hosts:
+    - coolify.mctl.ai
+    - labs-coolify-mcp.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: coolify-mcp-tls
+      hosts:
+        - coolify.mctl.ai
+        - labs-coolify-mcp.mctl.ai
+externalSecret:
+  targetSecret: coolify-mcp-secrets
+  data:
+    - secretKey: GITHUB_CLIENT_SECRET
+      remoteKey: teams/labs/coolify-mcp
+      property: GITHUB_CLIENT_SECRET
+    - secretKey: GOOGLE_CLIENT_SECRET
+      remoteKey: teams/labs/coolify-mcp
+      property: GOOGLE_CLIENT_SECRET
+envFrom:
+  - secretRef:
+      name: coolify-mcp-secrets
+extraContainers: []

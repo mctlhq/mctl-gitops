@@ -122,7 +122,30 @@ data:
               "custom": { "lineWidth": 2 }
             }
           },
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 14 },
+          "id": 5,
+          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+          "title": "Node CPU %",
+          "type": "timeseries",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+              "legendFormat": "{{instance}}"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "unit": "percent",
+              "max": 100,
+              "custom": { "lineWidth": 2 }
+            }
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
           "id": 4,
           "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
           "title": "Node Memory %",
@@ -142,18 +165,33 @@ data:
               "color": { "mode": "palette-classic" },
               "unit": "percent",
               "max": 100,
-              "custom": { "lineWidth": 2 }
+              "custom": { "lineWidth": 2 },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 80 },
+                  { "color": "red", "value": 90 }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Storage & FinOps Dashboard",
+                  "url": "/d/mctl-finops-storage",
+                  "targetBlank": true
+                }
+              ]
             }
           },
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
-          "id": 5,
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
+          "id": 16,
           "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-          "title": "Node CPU %",
+          "title": "Node Disk %",
           "type": "timeseries",
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+              "expr": "(1 - (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})) * 100",
               "legendFormat": "{{instance}}"
             }
           ]

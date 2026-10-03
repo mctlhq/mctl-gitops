@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  namespace: platform-events
+  labels:
+    app.kubernetes.io/name: valkey
+spec:
+  selector:
+    app.kubernetes.io/name: valkey
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: valkey
+    - name: metrics
+      port: 9121
+      targetPort: metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey-headless
+  namespace: platform-events
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: valkey
+  ports:
+    - name: valkey
+      port: 6379

@@ -1,0 +1,2 @@
+# Design
+Update `docs/security/authorization.md`: add section "When membership changes take effect". Add a short cross-referenced note in `docs/security/authentication.md` (refresh tokens). No new page. Evidence: commit 51c2533 message (groupsForSession policy, resolveGroupsChecked). Do not document defaults of env vars beyond what the commit states; the 30s memo is stated. Confirm shipped version before applying (unverified).

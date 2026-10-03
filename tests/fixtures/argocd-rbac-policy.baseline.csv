@@ -1,0 +1,45 @@
+g, admins, role:admin
+g, erpact, role:team-erpact
+g, karabu, role:team-karabu
+g, labs, role:team-labs
+g, ovk, role:team-ovk
+g, xxxx, role:team-xxxx
+g, yyy, role:team-yyy
+p, ci-freshness, applications, get, */*, allow
+p, mctl-api, applications, get, */*, allow
+p, role:admin, applications, *, */*, allow
+p, role:admin, clusters, get, */*, allow
+p, role:admin, exec, create, */*, allow
+p, role:admin, logs, get, */*, allow
+p, role:admin, projects, *, */*, allow
+p, role:admin, repositories, *, */*, allow
+p, role:team-erpact, applications, get, apps/erpact-*, allow
+p, role:team-erpact, applications, list, apps/erpact-*, allow
+p, role:team-erpact, applications, override, apps/erpact-*, allow
+p, role:team-erpact, applications, sync, apps/erpact-*, allow
+p, role:team-erpact, logs, get, apps/erpact-*, allow
+p, role:team-karabu, applications, get, apps/karabu-*, allow
+p, role:team-karabu, applications, list, apps/karabu-*, allow
+p, role:team-karabu, applications, override, apps/karabu-*, allow
+p, role:team-karabu, applications, sync, apps/karabu-*, allow
+p, role:team-karabu, logs, get, apps/karabu-*, allow
+p, role:team-labs, applications, get, apps/labs-*, allow
+p, role:team-labs, applications, list, apps/labs-*, allow
+p, role:team-labs, applications, override, apps/labs-*, allow
+p, role:team-labs, applications, sync, apps/labs-*, allow
+p, role:team-labs, logs, get, apps/labs-*, allow
+p, role:team-ovk, applications, get, apps/ovk-*, allow
+p, role:team-ovk, applications, list, apps/ovk-*, allow
+p, role:team-ovk, applications, override, apps/ovk-*, allow
+p, role:team-ovk, applications, sync, apps/ovk-*, allow
+p, role:team-ovk, logs, get, apps/ovk-*, allow
+p, role:team-xxxx, applications, get, apps/xxxx-*, allow
+p, role:team-xxxx, applications, list, apps/xxxx-*, allow
+p, role:team-xxxx, applications, override, apps/xxxx-*, allow
+p, role:team-xxxx, applications, sync, apps/xxxx-*, allow
+p, role:team-xxxx, logs, get, apps/xxxx-*, allow
+p, role:team-yyy, applications, get, apps/yyy-*, allow
+p, role:team-yyy, applications, list, apps/yyy-*, allow
+p, role:team-yyy, applications, override, apps/yyy-*, allow
+p, role:team-yyy, applications, sync, apps/yyy-*, allow
+p, role:team-yyy, logs, get, apps/yyy-*, allow
