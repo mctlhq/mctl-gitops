@@ -1,0 +1,20 @@
+# Fixture for scripts/test-reserved-hosts-policy.sh (mctl-reserved-platform-hosts, #1503).
+# The owner of every reserved name under probe.mctl.ai may serve its wildcard.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: x
+  namespace: admins
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: '*.probe.mctl.ai'
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svc
+            port:
+              number: 80

@@ -576,4 +576,4 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --quiet pyyaml
-          scripts/test-reserved-hosts-policy.sh --services
+          scripts/test-reserved-hosts-policy.sh --services --platform

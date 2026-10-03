@@ -18,7 +18,9 @@ In every namespace, for `networking.k8s.io/v1 Ingress` and
 
 - a host (rule, TLS host, or `tls.domains`) listed in the map whose owner list
   does not contain the object's namespace;
-- a wildcard over a platform domain (`*.mctl.ai`, `*.mctl.ru`, `*.mctl.me`);
+- a wildcard over a platform domain (`*.mctl.ai`, `*.mctl.ru`, `*.mctl.me`),
+  or over any reserved host owned by another namespace (reserving
+  `x.id.mctl.ai` also refuses a tenant `*.id.mctl.ai`);
 - an Ingress rule without a host, or `spec.defaultBackend`;
 - an IngressRoute match that is not a plain `&&` conjunction with at least one
   literal `Host(...)` / `HostSNI(...)`: `||`, `!`, `HostRegexp`,
@@ -43,17 +45,26 @@ Hosts not in the map are unrestricted.
    export KUBECONFIG=~/.kube/mctl-preview-config.yaml
    kubectl get ingress,ingressroute,ingressroutetcp -A -o yaml > /tmp/live-routes.yaml
    unset KUBECONFIG
-   scripts/test-reserved-hosts-policy.sh --services --admit /tmp/live-routes.yaml
+   scripts/test-reserved-hosts-policy.sh --services --platform --admit /tmp/live-routes.yaml
    ```
 
    Needs Docker, kubectl, helm and Python with PyYAML. It starts k3s at the
    cluster's version, installs the policies as the bootstrap chart renders
-   them, and server-side dry-runs every fixture, every GitOps service's routes
-   and every live object. Exit 0 = everything admitted that should be and
+   them, and server-side dry-runs every fixture, every GitOps service's routes,
+   every platform route (below) and every live object. Exit 0 = everything admitted that should be and
    everything refused that should be.
 
-CI runs the same script with `--services` (no live dump; CI has no cluster
-access).
+CI runs the same script with `--services --platform` (no live dump; CI has
+no cluster access). `--platform` covers the hosts the platform serves itself:
+for every Application the bootstrap chart renders (plus `argocd-self-managed`),
+each reserved host under an `ingress` key of its Helm values becomes an
+Ingress in the Application's destination namespace, and raw Ingress /
+IngressRoute manifests in its `infra-components` paths are taken as they are.
+Upstream charts are not pulled, so a host an upstream chart serves under some
+other key is not seen; the script prints a `note:` for every reserved host no
+platform route serves, and those are only covered by the live dump.
+`tests/fixtures/reserved-hosts/values-test.yaml` adds one test-only reserved
+name to exercise the wildcard rule; it never reaches a deployment.
 
 ## When a sync is refused
 
@@ -62,6 +73,15 @@ host. Either the object is wrong (a tenant used a platform name: pick another
 host) or the map is (a platform component moved namespace: fix the owner in
 `reservedPlatformHosts`). Never delete the binding to get a sync through — the
 binding is the control.
+
+Not every refusal is a sync. traefik itself is installed by the kube-hetzner
+module through a k3s `HelmChart`, outside ArgoCD: if a traefik bump enables
+the dashboard, its stock IngressRoute (`Host(...) && (PathPrefix(/api) ||
+PathPrefix(/dashboard))`) is refused for `||`, and the failure shows up as a
+failing `helm-install-traefik` job in `kube-system`, not as an OutOfSync
+Application. Split it into two routes in the HelmChart values. Likewise,
+`base-service` now fails at render time (`ingress.enabled needs ingress.host or
+ingress.hosts`) rather than emitting a host-less rule the policy would refuse.
 
 ## Bumping the cluster or traefik
 

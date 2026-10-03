@@ -209,8 +209,10 @@ spec:
 # the policies also refuse, in every namespace: Ingress rules without a host,
 # spec.defaultBackend, wildcards over a platform domain, and IngressRoute
 # matches that are not a plain conjunction of literal Host/HostSNI matchers
-# (HostRegexp, negation, `||`, v2 multi-host syntax, HostSNI(`*`)). No live
-# object uses any of these. A platform route that genuinely needs one gets a
+# (HostRegexp, negation, `||`, v2 multi-host syntax, HostSNI(`*`)). A
+# wildcard is refused when it covers a platform apex or any reserved host
+# owned by another namespace, so reserving a deeper name (x.id.mctl.ai) also
+# reserves it against *.id.mctl.ai. No live object uses any of these. A platform route that genuinely needs one gets a
 # reviewed exemption here, not a quiet carve-out.
 #
 # Cluster-wide bindings: a platform namespace is no more entitled to another
@@ -257,18 +259,18 @@ spec:
         !has(object.spec.rules) ||
         object.spec.rules.all(r, !has(r.host) ||
           ((!(r.host in variables.owners) || variables.ns in variables.owners[r.host]) &&
-           !(r.host.startsWith('*.') && r.host.substring(2) in variables.platformDomains)))
+           !(r.host.startsWith('*.') && (r.host.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + r.host.substring(2)) && !(variables.ns in variables.owners[k]))))))
       messageExpression: >-
         'Ingress host reserved for the platform and owned by another namespace (mctl-reserved-platform-hosts): ' +
         object.spec.rules.filter(r, has(r.host) &&
           ((r.host in variables.owners && !(variables.ns in variables.owners[r.host])) ||
-           (r.host.startsWith('*.') && r.host.substring(2) in variables.platformDomains))).map(r, r.host).join(', ')
+           (r.host.startsWith('*.') && (r.host.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + r.host.substring(2)) && !(variables.ns in variables.owners[k])))))).map(r, r.host).join(', ')
       reason: Forbidden
     - expression: >-
         !has(object.spec.tls) ||
         object.spec.tls.all(t, !has(t.hosts) || t.hosts.all(h,
           (!(h in variables.owners) || variables.ns in variables.owners[h]) &&
-          !(h.startsWith('*.') && h.substring(2) in variables.platformDomains)))
+          !(h.startsWith('*.') && (h.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2)) && !(variables.ns in variables.owners[k]))))))
       message: "Ingress spec.tls lists a host reserved for the platform and owned by another namespace; a tenant certificate must not be offered for it"
       reason: Forbidden
 ---
@@ -292,7 +294,9 @@ spec:
   matchConstraints:
     resourceRules:
       - apiGroups: ["traefik.io"]
-        apiVersions: ["v1alpha1"]
+        # Every version: matchConstraints match the request version, so a
+        # pinned list would stop applying the day traefik serves a second one.
+        apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
         resources: ["ingressroutes", "ingressroutetcps"]
   variables:
@@ -336,7 +340,7 @@ spec:
           .all(h,
             h != '*' && h != '' &&
             (!(h in variables.owners) || variables.ns in variables.owners[h]) &&
-            !(h.startsWith('*.') && h.substring(2) in variables.platformDomains)))
+            !(h.startsWith('*.') && (h.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2)) && !(variables.ns in variables.owners[k]))))))
       message: "IngressRoute names a host reserved for the platform and owned by another namespace (mctl-reserved-platform-hosts), or HostSNI(`*`)"
       reason: Forbidden
     - expression: >-
@@ -344,7 +348,7 @@ spec:
         object.spec.tls.domains.all(d,
           ((has(d.main) ? [d.main] : []) + (has(d.sans) ? d.sans : [])).all(h,
             (!(h.lowerAscii() in variables.owners) || variables.ns in variables.owners[h.lowerAscii()]) &&
-            !(h.startsWith('*.') && h.substring(2).lowerAscii() in variables.platformDomains)))
+            !(h.startsWith('*.') && (h.substring(2).lowerAscii() in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2).lowerAscii()) && !(variables.ns in variables.owners[k]))))))
       message: "IngressRoute spec.tls.domains lists a host reserved for the platform and owned by another namespace"
       reason: Forbidden
 ---

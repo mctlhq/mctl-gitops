@@ -16,6 +16,10 @@
 #   --services                                  every Ingress / IngressRoute that
 #                                               platform-gitops/services/*/* renders
 #                                               through base-service must be ADMITTED
+#   --platform                                  every reserved host the bootstrap
+#                                               Applications serve, in their destination
+#                                               namespace, and every raw route in their
+#                                               paths must be ADMITTED
 #
 # --admit is how the map is proven against reality before it can block a
 # sync: dump the live Ingress / IngressRoute / IngressRouteTCP objects of the
@@ -36,11 +40,13 @@ TRAEFIK_CRDS="https://raw.githubusercontent.com/traefik/traefik/${TRAEFIK_VERSIO
 
 EXTRA_ADMIT=()
 SERVICES=0
+PLATFORM=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --admit) EXTRA_ADMIT+=("$2"); shift 2 ;;
     --services) SERVICES=1; shift ;;
-    *) echo "usage: $0 [--services] [--admit FILE]..." >&2; exit 2 ;;
+    --platform) PLATFORM=1; shift ;;
+    *) echo "usage: $0 [--services] [--platform] [--admit FILE]..." >&2; exit 2 ;;
   esac
 done
 
@@ -62,6 +68,7 @@ for _ in $(seq 1 60); do
 done
 PORT="$(docker port "$NAME" 6443/tcp | head -1 | sed 's/.*://')"
 docker exec "$NAME" cat /etc/rancher/k3s/k3s.yaml | sed "s#https://127.0.0.1:6443#https://127.0.0.1:${PORT}#" > "$WORK/kubeconfig"
+chmod 600 "$WORK/kubeconfig"
 export KUBECONFIG="$WORK/kubeconfig"
 
 # Render every GitOps service the way applicationset-apps.yaml deploys it:
@@ -86,6 +93,96 @@ PY
   done
   EXTRA_ADMIT+=("$WORK/services.yaml")
 fi
+
+# The platform's own hosts are not served from services/: they come from the
+# Applications the bootstrap chart renders (inline Helm values or valueFiles of
+# an upstream chart) and from raw manifests in their infra-components paths.
+# Upstream charts are not pulled, so each reserved host found under an
+# `ingress` key of an Application's values becomes a minimal Ingress in that
+# Application's destination namespace, and raw Ingress / IngressRoute
+# manifests in its path sources are taken as they are. Both are admitted like
+# an --admit file: an owner map that disagrees with where the platform serves
+# a host fails here, at PR time, instead of as a refused sync. Hosts that
+# merely appear in values (issuer URLs, env vars) are references, not routes,
+# and are not checked. A reserved host that no Application serves under an
+# `ingress` key is reported, because it is then only covered by --admit.
+if [ "$PLATFORM" = 1 ]; then
+  helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/bootstrap/values.yaml" > "$WORK/platform-apps.yaml"
+  python3 - "$ROOT" "$WORK/platform-apps.yaml" > "$WORK/platform.yaml" <<'PY'
+import glob, os, sys, yaml
+root, rendered = sys.argv[1], sys.argv[2]
+owners = yaml.safe_load(open(os.path.join(root, "platform-gitops/bootstrap/values.yaml")))["reservedPlatformHosts"]
+ROUTES = ("Ingress", "IngressRoute", "IngressRouteTCP")
+
+def strings(o, path):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            yield from strings(v, path + [str(k)])
+    elif isinstance(o, list):
+        for v in o:
+            yield from strings(v, path)
+    elif isinstance(o, str):
+        yield path, o
+
+def values_of(src):
+    helm = src.get("helm") or {}
+    if helm.get("valuesObject"):
+        yield helm["valuesObject"]
+    if helm.get("values"):
+        yield yaml.safe_load(helm["values"])
+    for f in helm.get("valueFiles") or []:
+        if f.startswith("$"):
+            continue  # ApplicationSet data; tenant/service values, not platform
+        yield yaml.safe_load(open(os.path.join(root, src["path"], f)))
+
+out, served = [], set()
+apps = [d for d in yaml.safe_load_all(open(rendered)) if d and d.get("kind") == "Application"]
+# argocd-self-managed (ops.mctl.ai) lives in the argocd wrapper chart, whose
+# upstream dependency is not vendored; its Application template is plain YAML.
+# A templated file there that declares an Application cannot be read this way
+# and is an error, not a skip.
+for f in sorted(glob.glob(os.path.join(root, "platform-gitops/argocd/templates/*.yaml"))):
+    text = open(f).read()
+    if "kind: Application\n" not in text:
+        continue
+    try:
+        apps += [d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Application"]
+    except yaml.YAMLError as e:
+        sys.exit(f"{f} declares an Application but is templated; extend --platform to render it: {e}")
+if not apps:
+    sys.exit("no Applications in the bootstrap render")
+for app in apps:
+    ns = app["spec"]["destination"].get("namespace")
+    name = app["metadata"]["name"]
+    for src in app["spec"].get("sources") or [app["spec"]["source"]]:
+        for values in values_of(src):
+            hosts = set()
+            for path, s in strings(values or {}, []):
+                if not any("ingress" in p.lower() for p in path):
+                    continue
+                hosts |= {h for h in owners if h == s or s.endswith("://" + h) or s.startswith(h + "/")}
+            for h in sorted(hosts):
+                served.add(h)
+                out.append({"apiVersion": "networking.k8s.io/v1", "kind": "Ingress",
+                            "metadata": {"name": f"{name}-{len(out)}", "namespace": ns},
+                            "spec": {"rules": [{"host": h}], "tls": [{"hosts": [h]}]}})
+        path = src.get("path")
+        if not path or path == "platform-gitops/bootstrap" or os.path.exists(os.path.join(root, path, "Chart.yaml")):
+            continue
+        for f in sorted(glob.glob(os.path.join(root, path, "**", "*.yaml"), recursive=True)):
+            for d in yaml.safe_load_all(open(f)):
+                if d and d.get("kind") in ROUTES:
+                    d["metadata"]["namespace"] = d["metadata"].get("namespace") or ns
+                    served |= {h for h in owners if h in yaml.safe_dump(d)}
+                    out.append(d)
+for h in sorted(set(owners) - served):
+    print(f"note: {h} is reserved but served by no bootstrap Application route; only --admit covers it", file=sys.stderr)
+if not out:
+    sys.exit("no platform routes found: the extraction is broken, not the map")
+print(yaml.safe_dump_all(out))
+PY
+  EXTRA_ADMIT+=("$WORK/platform.yaml")
+fi
 for _ in $(seq 1 60); do
   kubectl get --raw /readyz >/dev/null 2>&1 && break
   sleep 2
@@ -99,7 +196,9 @@ kubectl wait --for=condition=Established --timeout=60s \
   crd/ingressroutes.traefik.io crd/ingressroutetcps.traefik.io >/dev/null
 
 echo "== policy from the rendered bootstrap chart"
-helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/bootstrap/values.yaml" > "$WORK/bootstrap.yaml"
+# values-test.yaml only adds a deeper reserved name for the wildcard fixtures.
+helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/bootstrap/values.yaml" \
+  -f "$FIXTURES/values-test.yaml" > "$WORK/bootstrap.yaml"
 python3 - "$WORK/bootstrap.yaml" "$POLICY" > "$WORK/policy.yaml" <<'PY'
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d
