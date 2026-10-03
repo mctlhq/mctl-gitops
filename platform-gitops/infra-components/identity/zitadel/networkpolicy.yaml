@@ -1,8 +1,9 @@
 # Ingress: default deny, then open only what each component serves.
 #
 #   zitadel (API, Console, OIDC)  :8080 from the ingress controller, from the
-#                                 Login UI (it calls the API in-cluster), and
-#                                 from monitoring (/debug/metrics scrape)
+#                                 Login UI (it calls the API in-cluster), from
+#                                 monitoring (/debug/metrics scrape) and from
+#                                 the zitadel-iac Job (#1520)
 #   zitadel-login (Login V2 UI)   :3000 from the ingress controller only
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -39,6 +40,9 @@ spec:
             matchLabels:
               app.kubernetes.io/name: zitadel-login
               app.kubernetes.io/instance: zitadel
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: zitadel-iac
       ports:
         - protocol: TCP
           port: 8080
@@ -147,3 +151,36 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+---
+# zitadel-iac Job (#1520): the ZITADEL API in-namespace, and the Kubernetes
+# API for its state (a Secret plus a Lease, the kubernetes backend). Service
+# DNAT happens before egress filtering on this datapath, so kubernetes.default
+# (10.43.0.1:443) is evaluated as the control-plane endpoint on 6443; same
+# rule and reasoning as helm-charts/tenant/templates/networkpolicy.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-zitadel-iac-egress
+  namespace: zitadel
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zitadel-iac
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: zitadel
+              app.kubernetes.io/instance: zitadel
+              app.kubernetes.io/component: start
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - ipBlock:
+            cidr: 10.255.0.0/24
+      ports:
+        - protocol: TCP
+          port: 6443

@@ -1,0 +1,29 @@
+# Key pair of the ZITADEL System API user `iac` (#1520): ZITADEL mounts the
+# certificate (SystemAPIUsers in bootstrap/templates/core-infra/zitadel.yaml),
+# the zitadel-iac Job mounts the private key (helm-charts/zitadel-iac). Issued
+# in-cluster, so no one ever handles it and nothing to seed in Vault.
+#
+# rotationPolicy Never: a renewal keeps the key, so ZITADEL, which reads the
+# certificate's public key at start, never ends up holding a stale one. To
+# rotate deliberately, delete the Secret and restart the zitadel Deployment.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: zitadel-iac-key
+  namespace: zitadel
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  secretName: zitadel-iac-key
+  commonName: iac
+  duration: 87600h
+  renewBefore: 720h
+  privateKey:
+    algorithm: RSA
+    size: 2048
+    rotationPolicy: Never
+  usages:
+    - digital signature
+  issuerRef:
+    kind: Issuer
+    name: zitadel-selfsigned
