@@ -72,7 +72,7 @@ spec:
 # masterkey, so a compromised process should reach nothing it has no reason to.
 #
 #   zitadel (start, init, setup)  DNS + shared-pg, and SMTP over implicit TLS
-#                                 (TCP 465) to the internet for invitation
+#                                 (TCP 2465) to the internet for invitation
 #                                 mail through Resend (#1520 S3). No external
 #                                 IdPs or Actions targets; adding GitHub/Google
 #                                 sign-in adds an HTTPS rule here deliberately.
@@ -186,7 +186,8 @@ spec:
         - protocol: TCP
           port: 6443
 ---
-# Invitation and verification mail (#1520 S3): smtp.resend.com:465. Resend's
+# Invitation and verification mail (#1520 S3): smtp.resend.com:2465 (Hetzner
+# Cloud blocks outgoing 465 and 25, so Resend's alternate port). Resend's
 # addresses are not fixed, so the rule is the port, with the cluster's own
 # ranges and node addresses excluded, as in the other internet egress rules.
 apiVersion: networking.k8s.io/v1
@@ -216,4 +217,4 @@ spec:
               - 91.99.112.66/32
       ports:
         - protocol: TCP
-          port: 465
+          port: 2465
