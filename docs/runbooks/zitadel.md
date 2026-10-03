@@ -54,6 +54,40 @@ first created**. Changing it in Vault later does nothing to the account:
 change it in the Console, then write the new value to Vault so the two agree.
 Keep this account for emergencies; day-to-day admins get their own users.
 
+## Declarative configuration (#1520)
+
+ZITADEL's own configuration (login policies, organizations, projects, OIDC
+applications, users) is declared in `platform-gitops/helm-charts/zitadel-iac/iac/`
+and applied by OpenTofu, not clicked in the Console. A change made only in the
+Console is drift: the next apply either reports it or reverts it.
+
+- **Who applies.** The `zitadel-iac` Job, a PostSync hook of the `zitadel`
+  Application, so it runs after every sync. Its image
+  (`platform-gitops/images/zitadel-iac`) carries OpenTofu and the pinned
+  provider. It never downloads anything at run time.
+- **Credential.** The ZITADEL System API user `iac`. It is declared in the
+  runtime config (`SystemAPIUsers`) by the certificate of the cert-manager key
+  pair `zitadel-iac-key`, with System membership `IAM_OWNER` and `ORG_OWNER`.
+  ZITADEL mounts only the certificate; only the Job mounts the private key.
+  No console-created service user exists.
+- **State.** The OpenTofu `kubernetes` backend, in the `zitadel` namespace:
+  Secret `tfstate-default-zitadel-iac`, locked by Lease
+  `lock-tfstate-default-zitadel-iac`.
+- **Guard.** The Job plans, then applies only if every planned action is in
+  `allowedActions` (`helm-charts/zitadel-iac/values.yaml`). Otherwise it fails
+  before apply, and the plan is in its log. Widen the list in the PR that needs
+  it. A plan with no changes exits without applying.
+- **Reading a run.** `kubectl -n zitadel logs job/zitadel-iac`. The Job is
+  replaced on the next sync.
+- **Break-glass.** If every human admin loses their passkey, the `iac` key
+  can still change any policy. Declare the fix in `iac/`, or run the image by
+  hand with the key mounted. Rotating the key: delete Secret `zitadel-iac-key`,
+  let cert-manager reissue it, restart the `zitadel` Deployment.
+- **CI.** `validate-manifests.yml`, job `zitadel-iac`, runs `fmt -check`,
+  `init -lockfile=readonly` and `validate`, and renders the chart. A provider
+  bump changes `iac/versions.tf`, `iac/.terraform.lock.hcl` and the image
+  together.
+
 ## Sync hooks instead of Helm hooks
 
 The chart ships `zitadel-init` and `zitadel-setup` as Helm pre-install hooks.

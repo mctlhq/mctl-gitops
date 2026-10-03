@@ -1,0 +1,23 @@
+{{- /*
+  The OpenTofu root lives as real files under iac/ so CI can fmt and validate
+  it; this ConfigMap carries it into the Job. The lock file is named
+  explicitly: a dotfile is not matched by the glob.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zitadel-iac-root
+  labels:
+    app.kubernetes.io/name: zitadel-iac
+  annotations:
+    # Before the Job (PostSync) and replaced on every sync like it.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
+data:
+  {{- range $path, $_ := .Files.Glob "iac/*.tf" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+  terraform.lock.hcl: |
+    {{- .Files.Get "iac/.terraform.lock.hcl" | required "iac/.terraform.lock.hcl is missing" | nindent 4 }}

@@ -48,6 +48,23 @@ spec:
             configSecretKey: config-yaml
 
             configmapConfig:
+              # The automation's credential: a System API user declared here by
+              # its public key, so no console-created service user exists. The
+              # key pair is cert-manager's zitadel-iac-key (infra-components/
+              # identity/zitadel/iac-key.yaml); this file only ever sees the
+              # certificate, the private key is mounted into the zitadel-iac
+              # Job alone (helm-charts/zitadel-iac). IAM_OWNER + ORG_OWNER is
+              # what declaring the instance's policies, orgs and apps needs.
+              # It is also the break-glass path if every human admin loses
+              # their passkey (docs/runbooks/zitadel.md). #1520.
+              SystemAPIUsers:
+                - iac:
+                    Path: /system-api/iac.crt
+                    Memberships:
+                      - MemberType: System
+                        Roles:
+                          - IAM_OWNER
+                          - ORG_OWNER
               ExternalDomain: auth.mctl.ai
               # Without it the chart derives AUDIENCE for the Login UI from
               # service.port and adds ":8080" to every public URL.
@@ -183,6 +200,21 @@ spec:
           cleanupJob:
             enabled: false
 
+          # The System API user's certificate (see SystemAPIUsers above). The
+          # chart adds these to the Deployment and the init/setup Jobs alike,
+          # so every process that reads the config can resolve the Path.
+          extraVolumes:
+            - name: iac-system-api-cert
+              secret:
+                secretName: zitadel-iac-key
+                items:
+                  - key: tls.crt
+                    path: iac.crt
+          extraVolumeMounts:
+            - name: iac-system-api-cert
+              mountPath: /system-api
+              readOnly: true
+
           # Scraped by VMServiceScrape (infra-components/identity/zitadel); the
           # chart's ServiceMonitor is a Prometheus Operator kind.
           metrics:
@@ -193,6 +225,15 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/identity/zitadel
+
+    # Declarative ZITADEL configuration: an OpenTofu Job that runs after every
+    # sync (PostSync) and refuses any plan action outside its allowlist.
+    # #1520; runbook docs/runbooks/zitadel.md.
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/helm-charts/zitadel-iac
+      helm:
+        releaseName: zitadel-iac
 
   ignoreDifferences:
     # Same ESO handling as forgejo.yaml / minio.yaml: admission-injected

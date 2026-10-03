@@ -1,0 +1,5 @@
+apiVersion: v2
+name: zitadel-iac
+description: In-cluster OpenTofu Job that applies the declarative ZITADEL configuration (mctlhq/mctl-gitops#1520)
+type: application
+version: 0.1.0
