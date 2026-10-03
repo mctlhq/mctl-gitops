@@ -19,7 +19,8 @@ data "zitadel_orgs" "mctl" {
 locals {
   # The instance's first organization (FirstInstance.Org in
   # bootstrap/templates/core-infra/zitadel.yaml). Platform applications live
-  # there; tenant organizations (tenants.tf) only hold their users.
+  # there; tenant organizations (tenants.tf) only hold their users. one()
+  # fails on several matches; zitadel_project's precondition covers none.
   mctl_org_id = one(data.zitadel_orgs.mctl.ids)
 
   forgejo_url = "https://git.mctl.ai"
@@ -31,6 +32,16 @@ locals {
 resource "zitadel_project" "platform" {
   org_id = local.mctl_org_id
   name   = "MCTL platform"
+
+  lifecycle {
+    # org_id is optional on this resource, so a missing organization would
+    # not fail the plan by itself: one() yields null for zero matches and the
+    # project would land wherever the API defaults to.
+    precondition {
+      condition     = length(data.zitadel_orgs.mctl.ids) == 1
+      error_message = "Expected exactly one ZITADEL organization named \"MCTL\"."
+    }
+  }
 }
 
 resource "zitadel_application_oidc" "forgejo" {
