@@ -71,10 +71,11 @@ spec:
 # Egress allowlist. This namespace answers the public internet and holds the
 # masterkey, so a compromised process should reach nothing it has no reason to.
 #
-#   zitadel (start, init, setup)  DNS + shared-pg only. Phase 1 has no SMTP,
-#                                 no external IdPs and no Actions targets;
-#                                 adding GitHub/Google sign-in (phase 2) adds
-#                                 an internet HTTPS rule here deliberately.
+#   zitadel (start, init, setup)  DNS + shared-pg, and SMTP over implicit TLS
+#                                 (TCP 465) to the internet for invitation
+#                                 mail through Resend (#1520 S3). No external
+#                                 IdPs or Actions targets; adding GitHub/Google
+#                                 sign-in adds an HTTPS rule here deliberately.
 #   zitadel-login                 DNS + the zitadel Service, in-namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -184,3 +185,35 @@ spec:
       ports:
         - protocol: TCP
           port: 6443
+---
+# Invitation and verification mail (#1520 S3): smtp.resend.com:465. Resend's
+# addresses are not fixed, so the rule is the port, with the cluster's own
+# ranges and node addresses excluded, as in the other internet egress rules.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-zitadel-smtp-egress
+  namespace: zitadel
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zitadel
+      app.kubernetes.io/instance: zitadel
+      app.kubernetes.io/component: start
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 78.47.58.237/32
+              - 91.99.127.137/32
+              - 91.99.152.207/32
+              - 91.99.112.66/32
+      ports:
+        - protocol: TCP
+          port: 465
