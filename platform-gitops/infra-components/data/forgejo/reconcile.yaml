@@ -33,6 +33,12 @@ data:
           source  = "svalabs/forgejo"
           version = "1.6.1"
         }
+        # 2.x, not 3.0.0: 3.0.0 fails the plan once the object is gone (404)
+        # instead of planning to recreate it, so it cannot detect drift.
+        restapi = {
+          source  = "Mastercard/restapi"
+          version = "2.0.1"
+        }
       }
       # Bucket, key, endpoint and credentials are passed by reconcile.sh with
       # -backend-config / AWS_* env, from the forgejo-backup-r2 secret.
@@ -55,6 +61,28 @@ data:
     variable "manifest" {
       description = "JSON desired state: {users: [...], orgs: [...]}."
       type        = string
+    }
+
+    # For what svalabs/forgejo has no resource for. Same admin account.
+    provider "restapi" {
+      uri                  = "${trimsuffix(var.forgejo_host, "/")}/api/v1"
+      username             = var.forgejo_username
+      password             = var.forgejo_password
+      write_returns_object = false
+    }
+
+    variable "forgejo_host" {
+      description = "Forgejo base URL (FORGEJO_HOST), for the API calls the provider lacks."
+      type        = string
+    }
+
+    variable "forgejo_username" {
+      type = string
+    }
+
+    variable "forgejo_password" {
+      type      = string
+      sensitive = true
     }
 
     variable "user_passwords" {
@@ -196,6 +224,39 @@ data:
       user    = forgejo_user.this[each.value.login].login
     }
 
+    # Every repository of the org in every team that claims "all repositories".
+    # Forgejo only adds a repository to such a team at the moment one of the two
+    # is created, and the two race when one apply creates both: on 2026-10-03
+    # Readers came up without erpact/mctl-apps and Developers without
+    # erpact/site-deployer. svalabs/forgejo has no team-repository resource;
+    # this one reads GET /teams/{id}/repos/{owner}/{repo} on every run (404 =
+    # missing, so it is planned again) and adds with the idempotent PUT.
+    # Removing it (repository dropped from the manifest) sends DELETE, which
+    # Forgejo ignores for an all-repositories team.
+    locals {
+      team_repos = merge([
+        for kind, teams in { developers = forgejo_team.developers, readers = forgejo_team.readers } : merge([
+          for org, t in teams : {
+            for rk, r in local.repos : "${kind}/${rk}" => { team_id = t.id, repo = rk } if r.org == org
+          }
+        ]...)
+      ]...)
+    }
+
+    resource "restapi_object" "team_repo" {
+      for_each = local.team_repos
+
+      path                      = "/teams/${each.value.team_id}/repos"
+      object_id                 = each.value.repo
+      data                      = "{}"
+      create_method             = "PUT"
+      create_path               = "/teams/${each.value.team_id}/repos/{id}"
+      destroy_method            = "DELETE"
+      ignore_all_server_changes = true
+
+      depends_on = [forgejo_repository.this]
+    }
+
     resource "forgejo_repository" "this" {
       for_each = local.repos
 
@@ -238,7 +299,8 @@ data:
     #!/bin/sh
     # Reconcile Forgejo organisations to the manifest in Vault.
     #
-    #   1. terraform apply  users, orgs, teams, repositories (main.tf)
+    #   1. terraform apply  users, orgs, teams, repositories, and every repository
+    #                       into the teams that cover all of them (main.tf)
     #   2. branch sync      every branch listed in the manifest is fetched from its
     #                       source and pushed to Forgejo, fast-forward only
     #   3. terraform apply  again: Forgejo makes the first branch pushed into an
@@ -262,6 +324,8 @@ data:
 
     export TF_IN_AUTOMATION=1 TF_INPUT=0
     export TF_VAR_manifest="$MANIFEST" TF_VAR_user_passwords="$USER_PASSWORDS"
+    export TF_VAR_forgejo_host="$FORGEJO_HOST" TF_VAR_forgejo_username="$FORGEJO_USERNAME" \
+      TF_VAR_forgejo_password="$FORGEJO_PASSWORD"
 
     terraform init -no-color \
       -backend-config="bucket=$BUCKET" \
