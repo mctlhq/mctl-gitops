@@ -78,7 +78,7 @@ env:
   #   mctl-docs     = shepherd-owned (removed from steward — low churn, no strict protection)
   #   mctl-gitops   = steward phase A, never (inventory/escalation only; switch
   #                   to when-green after the existing implementer backlog is triaged)
-  #   mctl-pairdesk = steward, when-green + merge (public + branch-protected; in SHEPHERD_SKIP_SERVICES)
+  #   mctl-pairdesk = steward, when-green + merge (public + branch-protected; in SHEPHERD_FIX_ONLY_SERVICES)
   # Inert in the image until this flag is "true".
   PR_STEWARD_ENABLED: "true"
   # The harness version is pinned by the image (Dockerfile ARG
