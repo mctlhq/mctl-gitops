@@ -139,6 +139,12 @@ enrol again.
   password is a sending-only Resend key in Vault
   `secret/platform/zitadel/smtp` (`password`). Egress is the
   `allow-zitadel-smtp-egress` NetworkPolicy, port 2465 only.
+  **Never change the SMTP provider in place:** ZITADEL v4.19.2 cannot project
+  an SMTP update (the password column is written twice), so the apply
+  "succeeds" while ZITADEL keeps the old settings. Change it by renaming the
+  resource (a delete plus a create), with `delete` allowed for that one PR.
+  The cloud firewall (`infrastructure/k3s-preview/kube.tf`,
+  `extra_firewall_rules`) must allow the port as well.
 
 ## Sync hooks instead of Helm hooks
 

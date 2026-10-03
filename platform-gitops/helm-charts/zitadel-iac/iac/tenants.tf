@@ -50,7 +50,7 @@ resource "zitadel_human_user" "tenant" {
   # The invitation goes out when the user is created, so mail and its text
   # must be in place by then.
   depends_on = [
-    zitadel_email_provider_smtp.resend,
+    zitadel_email_provider_smtp.resend_2465,
     zitadel_default_verify_email_message_text.en,
     zitadel_default_verify_email_message_text.ru,
   ]
