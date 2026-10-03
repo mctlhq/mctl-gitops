@@ -66,7 +66,12 @@ env:
   # pr-steward automation (branch prefix per repo). Per-repo merge_mode
   # (image 0.3.0+): global default is "never" (safe — escalate only); a repo opts
   # into auto-merge explicitly. Ownership is partitioned with the Tier-3 shepherd
-  # via SHEPHERD_SKIP_SERVICES (steward owns ONLY what the shepherd skips):
+  # via SHEPHERD_SKIP_SERVICES / SHEPHERD_FIX_ONLY_SERVICES. For feat/agents-*
+  # entries in the shepherd's fix-only services, "fix_mode": "never" (image
+  # 0.13.3+) makes the shepherd CWFT the only actor that fixes review findings:
+  # the steward runs no model tick until the PR is approved at its current head
+  # and then owns only the merge path (owner decision 2026-10-03, after the
+  # mctl-telegram#730 race). claude/* and fix/* stay steward-owned end to end.
   #   mctl-design   = steward, when-green (gated by branch protection on its public main)
   #   mctl-telegram = steward, when-green + merge (claude/* and fix/* and feat/agents-*;
   #                   the repo forbids squash — #1340)
@@ -788,6 +793,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "when-green"
           },
           {
@@ -795,6 +801,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "never",
             "merge_method": "merge"
           },
@@ -819,6 +826,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "when-green",
             "merge_method": "merge"
           },
@@ -827,6 +835,7 @@ configMaps:
             "pr_filter": {
               "head_prefix": "feat/agents-"
             },
+            "fix_mode": "never",
             "merge_mode": "when-green",
             "merge_method": "merge"
           }
