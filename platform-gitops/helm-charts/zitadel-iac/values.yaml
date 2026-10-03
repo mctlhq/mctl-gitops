@@ -12,6 +12,7 @@ image:
 # The plan actions the Job may apply, space-separated. A plan containing any
 # other action fails the Job before apply, with the plan in its log.
 #   S1 (import only): "no-op read". Imports are planned as no-op.
+#   S2 (passkey-only login policy): adds "update".
 # Widen deliberately, in the PR that needs it; "delete" never belongs here
 # without a reviewed reason.
-allowedActions: "no-op read"
+allowedActions: "no-op read update"
