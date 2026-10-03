@@ -34,6 +34,19 @@ spec:
       helm:
         values: |
           replicaCount: 1
+
+          # The nodes run SELinux (openSUSE MicroOS) and every pod gets its own
+          # random MCS level, relabelling a volume to it on mount. The backup
+          # Job mounts forgejo-data too, and on 2026-10-03 its mount relabelled
+          # the volume and locked the running Forgejo out of /data
+          # ("permission denied" on every repository) although the modes and
+          # owners were fine. Pinning one level here and the same level in
+          # infra-components/data/forgejo/backup.yaml keeps the label stable
+          # across both pods; container_t confinement is unchanged.
+          podSecurityContext:
+            fsGroup: 1000
+            seLinuxOptions:
+              level: "s0:c731,c732"
           # The chart's own warning: RollingUpdate on a RWO volume deadlocks.
           strategy:
             type: Recreate
