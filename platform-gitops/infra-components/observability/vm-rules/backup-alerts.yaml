@@ -201,3 +201,53 @@ spec:
               CronJob was removed or is not scraped, and every other Forgejo
               backup alert is blind while this lasts.
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        # Daily restore drill of the Forgejo archive (data/forgejo/restore-drill.yaml).
+        # One failed run is enough to alert on: it means the newest archive
+        # does not restore, or does not match the database.
+        - alert: ForgejoRestoreDrillStale
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{
+              namespace="forgejo", cronjob="forgejo-restore-drill"
+            } > 93600
+          for: 10m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "Forgejo restore drill has not passed in over 26 hours"
+            description: >-
+              forgejo/forgejo-restore-drill has not succeeded since its last
+              daily slot. Read the failed Job's log: a FAIL line in the restore
+              container is a damaged archive or repository (fsck), in the
+              verify container a repository the database has but the archive
+              lacks. Until it passes, treat the newest backup as unproven.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        - alert: ForgejoRestoreDrillNeverSucceeded
+          # 30h: one daily cycle plus the 05:00 offset slack.
+          expr: |
+            (time() - kube_cronjob_created{namespace="forgejo", cronjob="forgejo-restore-drill"} > 108000)
+            unless on(namespace, cronjob)
+            kube_cronjob_status_last_successful_time{namespace="forgejo", cronjob="forgejo-restore-drill"}
+          for: 10m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "Forgejo restore drill has never succeeded"
+            description: >-
+              forgejo/forgejo-restore-drill has existed for over 30 hours without
+              one successful run, so ForgejoRestoreDrillStale cannot fire for it.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        - alert: ForgejoRestoreDrillMetricAbsent
+          expr: absent(kube_cronjob_created{namespace="forgejo", cronjob="forgejo-restore-drill"})
+          for: 30m
+          labels:
+            severity: warning
+            service: forgejo
+          annotations:
+            summary: "forgejo-restore-drill CronJob is not visible to kube-state-metrics"
+            description: >-
+              No kube_cronjob_created series for forgejo/forgejo-restore-drill.
+              The CronJob was removed or is not scraped, and the other drill
+              alerts are blind while this lasts.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
