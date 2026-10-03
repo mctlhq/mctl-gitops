@@ -1,0 +1,8 @@
+name: roadmap-intake
+title: Roadmap Intake
+description: Normalize a raw roadmap idea into a typed RoadmapIntent (POC/SPIKE/EPIC/IMPLEMENTATION)
+visibility: admin
+status: active
+owner: platform
+runtimes:
+- mcp
