@@ -134,10 +134,11 @@ enrol again.
 - **Removing a user or a tenant** plans a `delete`, which `allowedActions`
   refuses, so the run fails with the plan in its log. Widen it in a PR for
   that one change, then narrow it again.
-- **SMTP.** `zitadel_email_provider_smtp.resend`, `smtp.resend.com:465`
-  (implicit TLS). The password is a sending-only Resend key in Vault
+- **SMTP.** `zitadel_email_provider_smtp.resend`, `smtp.resend.com:2465`
+  (implicit TLS). Not 465: Hetzner Cloud blocks outgoing 25 and 465. The
+  password is a sending-only Resend key in Vault
   `secret/platform/zitadel/smtp` (`password`). Egress is the
-  `allow-zitadel-smtp-egress` NetworkPolicy, port 465 only.
+  `allow-zitadel-smtp-egress` NetworkPolicy, port 2465 only.
 
 ## Sync hooks instead of Helm hooks
 
