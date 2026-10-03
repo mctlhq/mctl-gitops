@@ -154,6 +154,8 @@ spec:
       - host labs-seerrsense labs-seerrsense all scram-sha-256
       - host labs-mctl-alice labs-mctl-alice all scram-sha-256
       - host karabu-draw-with-friends karabu-draw-with-friends all scram-sha-256
+      # Forgejo (platform git, bootstrap/templates/data/forgejo.yaml)
+      - host forgejo forgejo all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -302,6 +304,15 @@ spec:
         ensure: present
         passwordSecret:
           name: temporal-db-creds
+      # Forgejo (bootstrap/templates/data/forgejo.yaml): one replica, Go's
+      # database/sql pool defaults to MAX_OPEN_CONNS=0 (unbounded) but idles at
+      # a handful; 30 leaves room for migrations on upgrade.
+      - name: forgejo
+        login: true
+        connectionLimit: 30
+        ensure: present
+        passwordSecret:
+          name: forgejo-db-creds
       #   passwordSecret:
       #     name: team1-app1-db-creds
 
