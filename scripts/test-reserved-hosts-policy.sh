@@ -13,7 +13,7 @@
 #   tests/fixtures/reserved-hosts/deny/*.yaml   each must be REFUSED by these policies
 #   tests/fixtures/reserved-hosts/admit/*.yaml  each must be ADMITTED
 #   tests/fixtures/reserved-hosts/invalid/*.yaml  each must be REFUSED by API
-#                                               server validation (RFC 1123) before
+#                                               server field validation of the host before
 #                                               admission: the premise that lets the
 #                                               Ingress policy skip case/dot normalising
 #   every file given with --admit FILE          each object must be ADMITTED
@@ -39,8 +39,13 @@ POLICY=mctl-reserved-platform-hosts
 POLICIES="mctl-reserved-platform-hosts-ingress mctl-reserved-platform-hosts-ingressroute"
 # Keep in step with the platform cluster (kubectl version) and its traefik image.
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.33.13-k3s1}"
+# The CRDs are fetched by the commit the tag pointed to, not by the tag (a
+# tag can be moved), and checked against a digest. Bumping traefik means
+# updating all three: git ls-remote https://github.com/traefik/traefik refs/tags/<tag>
 TRAEFIK_VERSION="${TRAEFIK_VERSION:-v3.7.13}"
-TRAEFIK_CRDS="https://raw.githubusercontent.com/traefik/traefik/${TRAEFIK_VERSION}/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml"
+TRAEFIK_COMMIT="${TRAEFIK_COMMIT:-fc92cc118a0557a029c7019d5ee06665127b0f13}"
+TRAEFIK_CRDS_SHA256="${TRAEFIK_CRDS_SHA256:-1d5e8558803804562238b0d4a57174aadd6d87c36e3c4c55199ebcc356a9406c}"
+TRAEFIK_CRDS="https://raw.githubusercontent.com/traefik/traefik/${TRAEFIK_COMMIT}/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml"
 
 EXTRA_ADMIT=()
 SERVICES=0
@@ -193,8 +198,10 @@ for _ in $(seq 1 60); do
 done
 kubectl get --raw /readyz >/dev/null
 
-echo "== Traefik CRDs $TRAEFIK_VERSION"
+echo "== Traefik CRDs $TRAEFIK_VERSION (${TRAEFIK_COMMIT:0:8})"
 curl -fsSL --retry 3 --retry-delay 2 "$TRAEFIK_CRDS" -o "$WORK/traefik-crds.yaml"
+got="$( (command -v sha256sum >/dev/null && sha256sum || shasum -a 256) < "$WORK/traefik-crds.yaml" | awk '{print $1}')"
+[ "$got" = "$TRAEFIK_CRDS_SHA256" ] || { echo "FAIL: traefik CRD digest $got, expected $TRAEFIK_CRDS_SHA256"; exit 1; }
 kubectl apply --server-side -f "$WORK/traefik-crds.yaml" >/dev/null
 kubectl wait --for=condition=Established --timeout=60s \
   crd/ingressroutes.traefik.io crd/ingressroutetcps.traefik.io >/dev/null
@@ -265,7 +272,12 @@ done
 for f in "$FIXTURES"/invalid/*.yaml; do
   if kubectl apply --dry-run=server -f "$f" >/dev/null 2>"$WORK/err"; then
     echo "FAIL invalid $(basename "$f"): admitted"; fail=1
-  elif ! grep -q "RFC 1123" "$WORK/err"; then
+  # Identified by structure, not by the upstream message text: a field
+  # validation error ("is invalid:") on a host field path, and no admission
+  # policy involved.
+  elif ! grep -q ' is invalid: ' "$WORK/err" \
+       || ! grep -qE 'spec\.(rules|tls)\[[0-9]+\]\.host' "$WORK/err" \
+       || grep -q 'ValidatingAdmissionPolicy' "$WORK/err"; then
     echo "FAIL invalid $(basename "$f"): refused, but not by API server host validation: $(cat "$WORK/err")"; fail=1
   else
     echo "ok   invalid $(basename "$f")"
