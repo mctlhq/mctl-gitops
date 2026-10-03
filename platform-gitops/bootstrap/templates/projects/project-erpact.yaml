@@ -14,8 +14,9 @@
 #     project and escape this one), no ExternalSecrets (one could name
 #     ClusterSecretStore vault-backend; erpact's own live in
 #     templates/erpact/externalsecrets.yaml);
-#   - Pods may only reference that namespace's own Secrets
-#     (mctl-external-manifests-secret-allowlist): everything else the
+#   - Pods may only reference that namespace's own Secrets and run as its
+#     own ServiceAccount (mctl-external-manifests-secret-allowlist, added by
+#     #1517, which merges before this): everything else the
 #     reflector and the tenant chart put there stays out of reach.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject

@@ -129,7 +129,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum(kube_pod_status_ready{namespace=\"erpact\",condition=\"false\"}) or vector(0)",
+              "expr": "sum((kube_pod_status_ready{namespace=\"erpact\",condition=\"false\"} == 1) and on(namespace,pod) (kube_pod_status_phase{namespace=\"erpact\",phase=~\"Running|Pending\"} == 1)) or vector(0)",
               "legendFormat": "",
               "datasource": {
                 "type": "prometheus",
