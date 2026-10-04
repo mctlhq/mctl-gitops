@@ -34,6 +34,24 @@
 # The three pre-existing sibling applications (tg, seerrsense, api), created
 # by hand on 2026-09-10, are adopted import-only in portal-mcp-apps-adopted.tf
 # under mctlhq/mctl-gitops#1416, at their live values.
+# The "Phase 0 pilot users" policy of each application below names two
+# personal addresses. This repository is public, so those policies are
+# referenced by id, exactly as the adopted siblings reference theirs
+# (portal-mcp-apps-adopted.tf), and their include list lives only in
+# Cloudflare. They were written inline until 2026-10-04; the addresses remain
+# in git history, which is not rewritten. Referencing by id changes nothing
+# live: the plan for this change is empty. What it gives up is drift on the
+# include list itself, the same trade the adopted applications made.
+# Ids read on 2026-10-04 from GET /accounts/{account_id}/access/apps; they
+# identify objects in this account and are not secrets.
+locals {
+  pilot_policy_ids = {
+    projects = "3ebfad92-25da-467b-8acd-deb2523c0fd8"
+    alice    = "232e04f8-b124-42b0-bf1a-0f7001eebc2e"
+    coolify  = "33e844e9-11d9-496a-a015-0870ba0e4045"
+  }
+}
+
 resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
   account_id = var.account_id
   name       = "MCP server: projects (via portal mcp.mctl.ai)"
@@ -67,14 +85,8 @@ resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
   # be a wider grant than it looks, sitting behind a narrower one.
   policies = [
     {
-      name       = "Phase 0 pilot users"
-      decision   = "allow"
+      id         = local.pilot_policy_ids.projects
       precedence = 1
-
-      include = [
-        { email = { email = "mashkoffdmitry@gmail.com" } },
-        { email = { email = "mashkovdm.dm@gmail.com" } },
-      ]
     },
     {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
@@ -108,14 +120,8 @@ resource "cloudflare_zero_trust_access_application" "portal_member_alice" {
   # still the owner's private aggregate view, not a customer-facing door.
   policies = [
     {
-      name       = "Phase 0 pilot users"
-      decision   = "allow"
+      id         = local.pilot_policy_ids.alice
       precedence = 1
-
-      include = [
-        { email = { email = "mashkoffdmitry@gmail.com" } },
-        { email = { email = "mashkovdm.dm@gmail.com" } },
-      ]
     },
     {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
@@ -149,14 +155,8 @@ resource "cloudflare_zero_trust_access_application" "portal_member_coolify" {
   # the owner's.
   policies = [
     {
-      name       = "Phase 0 pilot users"
-      decision   = "allow"
+      id         = local.pilot_policy_ids.coolify
       precedence = 1
-
-      include = [
-        { email = { email = "mashkoffdmitry@gmail.com" } },
-        { email = { email = "mashkovdm.dm@gmail.com" } },
-      ]
     },
     {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
