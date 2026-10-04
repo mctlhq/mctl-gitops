@@ -6,6 +6,9 @@ metadata:
     workflows.argoproj.io/description: |
       Reusable template: validates tenant and service naming conventions,
       checks team exists in Git tenants/ directory.
+      `image-name` checks only that a team may use a component name as its
+      image name (config/image-names.txt), for workflows that build without
+      running `validate`.
 spec:
   templates:
     - name: validate
@@ -111,6 +114,16 @@ spec:
           git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
+          # ── 3b. Image name: the component name is the image name ───────────
+          # Services run, and builds push, ghcr.io/<org>/<component_name>, so
+          # a team may only use a name it owns. Rule and reviewed grants:
+          # config/image-names.txt. Any non-zero exit (refused, or could not
+          # decide) stops here, for every action.
+          if ! sh platform-gitops/argo-workflows/scripts/check-image-name.sh . "$TEAM" "$SERVICE"; then
+            echo "❌ component_name '${SERVICE}' is not available to team '${TEAM}'"
+            exit 1
+          fi
+
           # ── 4. Verify service exists for deploy/update-config ────────────────
           if [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update-config" ]; then
             if [ ! -d "platform-gitops/services/${TEAM}/${SERVICE}" ]; then
@@ -163,3 +176,37 @@ spec:
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
+
+    # Image-name check alone, for preview-deploy (which builds without
+    # running `validate`). mctl-gitops is public, so an anonymous HTTPS clone
+    # of main is enough: no deploy key in this pod. Parameters arrive as env,
+    # never interpolated into the script text.
+    - name: image-name
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+        source: |
+          set -e
+          git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          if ! sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/check-image-name.sh \
+              /tmp/mctl-gitops "$PARAM_TEAM_NAME" "$PARAM_COMPONENT_NAME"; then
+            echo "❌ component_name '${PARAM_COMPONENT_NAME}' is not available to team '${PARAM_TEAM_NAME}'"
+            exit 1
+          fi
+          echo "✅ image name ${PARAM_COMPONENT_NAME} is available to ${PARAM_TEAM_NAME}"
+        resources:
+          requests:
+            memory: 32Mi
+            cpu: 10m

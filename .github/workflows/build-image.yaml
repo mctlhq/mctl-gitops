@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       image_name:
-        description: "Full image name (e.g. ghcr.io/mctlhq/openclaw)"
+        description: "Full image name; for a direct dispatch it must be ghcr.io/mctlhq/<component_name>"
         required: true
         type: string
       image_tag:
@@ -100,6 +100,63 @@ jobs:
       # OIDC JWT for Vault JWT auth (ROADMAP 3.3). No long-lived VAULT_TOKEN.
       id-token: write
     steps:
+      # --- Image name: build only names owned by the requesting team ---
+      # A direct dispatch is how tenant builds arrive (Argo's deploy-service
+      # and preview-deploy) and how platform images under platform-gitops/
+      # images/ are built by hand. For those the pushed name must be exactly
+      # ghcr.io/mctlhq/<component_name>, and that name must be one the team
+      # may use (platform-gitops/argo-workflows/config/image-names.txt, read
+      # from main, not from anything the caller chose). Argo's validation
+      # checks the same rule first; this is the second layer, at the push.
+      #
+      # A workflow_call (release-deploy.yaml) is not checked here: release
+      # images are named by their release and may differ from the component
+      # name, and release-deploy is dispatched by the release bots and
+      # operators, never by a tenant workflow. GITHUB_WORKFLOW_REF names the
+      # caller's workflow in a called run, so it tells the two apart.
+      - name: Classify caller
+        id: caller
+        run: |
+          case "$GITHUB_WORKFLOW_REF" in
+            "${GITHUB_REPOSITORY}/.github/workflows/build-image.yaml@"*) direct=true ;;
+            *) direct=false ;;
+          esac
+          echo "direct=${direct}" >> "$GITHUB_OUTPUT"
+          echo "direct dispatch: ${direct} (${GITHUB_WORKFLOW_REF})"
+
+      - name: Check out image-name policy
+        if: steps.caller.outputs.direct == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.repository }}
+          ref: main
+          path: .image-name-policy
+          persist-credentials: false
+          sparse-checkout: |
+            platform-gitops/services
+            platform-gitops/argo-workflows/config
+            platform-gitops/argo-workflows/scripts
+
+      - name: Check image name
+        if: steps.caller.outputs.direct == 'true'
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_TEAM_NAME: ${{ inputs.team_name }}
+          INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
+        run: |
+          set -euo pipefail
+          expected="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${INPUT_COMPONENT_NAME}"
+          if [ "$INPUT_IMAGE_NAME" != "$expected" ]; then
+            echo "::error::image_name must be ${expected} for a direct dispatch, got: ${INPUT_IMAGE_NAME}"
+            exit 1
+          fi
+          if ! sh .image-name-policy/platform-gitops/argo-workflows/scripts/check-image-name.sh \
+              .image-name-policy "$INPUT_TEAM_NAME" "$INPUT_COMPONENT_NAME"; then
+            echo "::error::component_name ${INPUT_COMPONENT_NAME} is not available to team ${INPUT_TEAM_NAME}"
+            exit 1
+          fi
+          rm -rf .image-name-policy
+
       # --- Tier 1: Vault PAT via GitHub OIDC -> Vault JWT ---
       - name: Fetch Vault PAT
         id: vault_pat
@@ -302,9 +359,12 @@ jobs:
           # the PAT.
           secrets: |
             github_token=${{ contains(fromJSON('["mctlhq/mctl-web","mctlhq/mctl-docs","mctlhq/mctl-academy"]'), inputs.repo) && secrets.GH_PACKAGES_TOKEN || '' }}
+          # :latest only for release builds. Nothing in this repository or the
+          # cluster pulls ghcr.io/mctlhq/*:latest, and a direct dispatch moving
+          # it would repoint the tag at whatever was built last.
           tags: |
             ${{ inputs.image_name }}:${{ inputs.image_tag }}
-            ${{ inputs.image_name }}:latest
+            ${{ steps.caller.outputs.direct != 'true' && format('{0}:latest', inputs.image_name) || '' }}
 
       - name: Summary
         # Same reason as the Vault step: these land in a shell command, so
