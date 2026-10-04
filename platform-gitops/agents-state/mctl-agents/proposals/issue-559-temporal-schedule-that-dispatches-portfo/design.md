@@ -39,8 +39,8 @@ class DispatchTarget:
     workflow_file: str   # "weekly-refresh.yml"
     ref: str             # "main"
     weekday: int         # 6 = Sunday (datetime.weekday())
-    hour: int            # 8   (UTC)
-    minute: int          # 41
+    hour: int            # 9   (UTC)
+    minute: int          # 1
 
     @property
     def schedule_id(self) -> str: ...   # "dispatch-mctlhq-portfolio-weekly-refresh-schedule"
@@ -50,11 +50,11 @@ class DispatchTarget:
     def interval(self) -> ScheduleIntervalSpec  # every=7d, offset computed
 
 WEEKLY_DISPATCH_TARGETS: tuple[DispatchTarget, ...] = (
-    DispatchTarget("mctlhq/portfolio", "weekly-refresh.yml", "main", weekday=6, hour=8, minute=41),
+    DispatchTarget("mctlhq/portfolio", "weekly-refresh.yml", "main", weekday=6, hour=9, minute=1),
 )
 ```
 
-`interval()` returns `ScheduleIntervalSpec(every=timedelta(days=7), offset=timedelta(days=(weekday - 3) % 7, hours=hour, minutes=minute))`. Temporal interval schedules are aligned to the Unix epoch, and 1970-01-01 was a Thursday (`weekday()==3`), so Sunday gives an offset of 3 days 08:41.
+`interval()` returns `ScheduleIntervalSpec(every=timedelta(days=7), offset=timedelta(days=(weekday - 3) % 7, hours=hour, minutes=minute))`. Temporal interval schedules are aligned to the Unix epoch, and 1970-01-01 was a Thursday (`weekday()==3`), so Sunday gives an offset of 3 days 09:01. The slot is the owner's (11:00 CEST, 2026-10-04), moved to :01 because :00 is an Argo cron minute that `test_no_schedule_lands_on_an_argo_cron_minute` forbids.
 
 The cadence is an interval rather than a cron or calendar spec for two reasons, both found in the code:
 - `_converge_spec` converges only `intervals`, so a calendar spec would never be updated on redeploy.
@@ -66,7 +66,7 @@ With the interval form, the new schedule converges and is collision-checked thro
 
 ### 2. Minute check
 
-The new schedule fires at :41. That clears:
+The new schedule fires at :01. That clears:
 - reconcile (:03/:18/:33/:48)
 - issue-poll (:07/:22/:37/:52)
 - incidents (:11)
@@ -127,17 +127,31 @@ class ScheduledDispatchWorkflow:
     @workflow.run
     async def run(self, target: ScheduledDispatchInput) -> DispatchResult:
         not_before = workflow.now()          # deterministic, fixed for this fire
-        return await workflow.execute_activity(
-            dispatch_and_observe,
-            DispatchInput(target.repo, target.workflow_file, target.ref, not_before),
-            start_to_close_timeout=timedelta(minutes=8),
-            heartbeat_timeout=timedelta(minutes=1),
-            retry_policy=RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=30),
-                                     non_retryable_error_types=["DispatchRejected", "RunNotObserved", "NoGitHubToken"]),
-        )
+        try:
+            return await workflow.execute_activity(
+                dispatch_and_observe,
+                DispatchInput(target.repo, target.workflow_file, target.ref, not_before),
+                start_to_close_timeout=timedelta(minutes=8),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=30),
+                                         non_retryable_error_types=["DispatchRejected", "RunNotObserved", "NoGitHubToken"]),
+            )
+        except ActivityError as original:    # owner correction: a Failed workflow alone alerts nobody
+            try:
+                await workflow.execute_activity(
+                    report_dispatch_failure,
+                    FailureReport(target.repo, target.workflow_file, workflow.info().workflow_id,
+                                  _error_type(original), str(original.cause or original)),
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=3,
+                                             non_retryable_error_types=["AlertReportRejected", "NoGitHubToken"]),
+                )
+            except ActivityError:
+                workflow.logger.exception("failure report could not be filed")
+            raise original                   # the ORIGINAL error fails the execution
 ```
 
-`ScheduledDispatchInput` holds `repo`, `workflow_file` and `ref`, so the schedule action's arguments stay plain data. The workflow does not catch the activity error: an `ActivityError` propagates and the workflow execution is marked **Failed**. That failed execution is the visible signal, and it appears in Temporal visibility and in the worker's Prometheus metrics (`telemetry_config`).
+`ScheduledDispatchInput` holds `repo`, `workflow_file` and `ref`, so the schedule action's arguments stay plain data. **[Owner correction 2026-10-04]** On a terminal `ActivityError` the workflow first calls the `report_dispatch_failure` activity (bounded retry; it opens or comments on one `scheduled-dispatch-failed` issue in the target repo with the workflow id, error type and message), then re-raises the ORIGINAL error so the execution is marked **Failed**. If reporting itself fails, that is logged and the original error is still what propagates. See requirements.md, tasks.md task 2a (the activity) and task 3 (the call site). That failed execution is the visible signal, and it appears in Temporal visibility and in the worker's Prometheus metrics (`telemetry_config`).
 
 Why this is bounded to one dispatch per fire:
 - Every attempt runs the pre-check first.
@@ -159,8 +173,8 @@ Why this is bounded to one dispatch per fire:
       ), f"ScheduledDispatchWorkflow[{target.repo}:{target.workflow_file}]")
   ```
 
-  Add a comment block explaining the :41 choice and the epoch-Thursday offset, in the style of the existing comments.
-- Add `dispatch_and_observe` to `short_activities`, because it makes bounded HTTP calls and does no Argo or mutex wait. Add `ScheduledDispatchWorkflow` to `workflows`. Both land on the control queue only.
+  Add a comment block explaining the :01 choice and the epoch-Thursday offset, in the style of the existing comments.
+- Add `dispatch_and_observe` and `report_dispatch_failure` to `short_activities`, because both make bounded HTTP calls and do no Argo or mutex wait. Add `ScheduledDispatchWorkflow` to `workflows`. Both land on the control queue only.
 - Update the module docstring's workflow list.
 
 ### 6. Post-deploy verification
@@ -169,7 +183,7 @@ Run `temporal schedule trigger --schedule-id dispatch-mctlhq-portfolio-weekly-re
 
 ## Alternatives
 
-1. **Calendar or cron spec (`ScheduleSpec(cron_expressions=["41 8 * * 0"])` or `ScheduleCalendarSpec`).** This is closest to the issue's wording. It was dropped because `_converge_spec` and both collision tests understand only `intervals`. Supporting it would mean widening convergence logic that already has subtle, hard-won rules (the field-only assignment and the retry-verdict handling in `TestConvergenceRetries`), plus extending the tests. The interval form is exactly equivalent for a UTC weekly fire. Recorded as Open question 2.
+1. **Calendar or cron spec (`ScheduleSpec(cron_expressions=["1 9 * * 0"])` or `ScheduleCalendarSpec`).** This is closest to the issue's wording. It was dropped because `_converge_spec` and both collision tests understand only `intervals`. Supporting it would mean widening convergence logic that already has subtle, hard-won rules (the field-only assignment and the retry-verdict handling in `TestConvergenceRetries`), plus extending the tests. The interval form is exactly equivalent for a UTC weekly fire. Recorded as Open question 2.
 2. **Fire-and-forget dispatch (POST, then return on 204).** This is simpler, but it repeats the original defect: a 204 is not evidence that a run started. The issue explicitly requires observing the run.
 3. **Argo CronWorkflow in mctl-gitops that runs `gh workflow run`.** This would keep the trigger in a second cron system with no retry or observation semantics and no Temporal visibility. It would also add a cross-repo change for a feature the issue places in the Temporal control plane.
 4. **A dedicated `PortfolioWeeklyRefreshWorkflow` class.** This was rejected in favour of the target list, per the issue, so that the next weekly job is one tuple entry.
