@@ -81,6 +81,9 @@ grant ovk mctl-academy
 # template. The image named openclaw itself was built only by mctl-openclaw's
 # upstream-sync workflow; that repository is archived and nothing in this
 # repository runs the image. Shared, so the service name stays available to
-# every team, and with no grant no team may build it. A successor sync that
-# builds it again needs a reviewed grant line here.
+# every team, and with no grant no team may build it. That includes an
+# onboard or a preview with a git_ref that would push openclaw itself:
+# preview-deploy checks in build mode whenever it builds, so such a preview
+# is refused for every team. A successor sync that builds the image again
+# needs a reviewed grant line here.
 shared openclaw

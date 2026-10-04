@@ -102,8 +102,7 @@ jobs:
     steps:
       # --- Image name: build only names owned by the requesting team ---
       # A direct dispatch is how tenant builds arrive (Argo's deploy-service
-      # and preview-deploy), how mctl-openclaw's upstream sync builds the
-      # openclaw image (team labs), and how platform images under
+      # and preview-deploy) and how platform images under
       # platform-gitops/images/ are built by hand (team platform). Every
       # other dispatcher in the organisation calls release-deploy.yaml. For a
       # direct dispatch the pushed name must be exactly
