@@ -194,9 +194,9 @@ resource "kubernetes_secret_v1_data" "erpact_frappe_users" {
     precondition {
       condition = alltrue([
         for u in local.erpact_frappe_users :
-        try(length(u.roles) > 0 && alltrue([for r in u.roles : can(regex("^[A-Za-z]([A-Za-z0-9 _-]*[A-Za-z0-9_-])?$", r))]), false)
+        try(length(u.roles) > 0 && alltrue([for r in u.roles : can(regex("^[A-Za-z]([A-Za-z0-9 _-]*[A-Za-z0-9_-])?$", r)) && !contains(["administrator", "guest", "all"], lower(r))]), false)
       ])
-      error_message = "Every frappe.roles must be a non-empty list of Frappe role names; check users: ${join(", ", [for u in local.erpact_frappe_users : u.user_name])}."
+      error_message = "Every frappe.roles must be a non-empty list of Frappe role names, never Administrator, Guest or All; check users: ${join(", ", [for u in local.erpact_frappe_users : u.user_name])}."
     }
   }
 }
