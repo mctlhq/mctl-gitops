@@ -44,6 +44,8 @@ image:
 #   secret/platform/zitadel/admins, and their Argo CD, Vault and Cloudflare
 #   Access grants): no new action; all creates. Removing an admin from Vault
 #   plans deletes, which allowedDeletes refuses until the addresses are listed.
+#   mctl-api#435 (identity link web client in the MCTL API project): a
+#   create, plus an in-place update of the data of mctl-api/mctl-api-oidc-zitadel.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
