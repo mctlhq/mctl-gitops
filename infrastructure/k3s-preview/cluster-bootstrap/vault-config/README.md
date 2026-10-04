@@ -283,8 +283,9 @@ The only hand-applied part is the Job's own identity: the policy
 `vault-human-auth-iac` and the Kubernetes auth role that hands it out. The
 policy covers `sys/auth/mctl` (no delete), `sys/mounts/auth/mctl` (+`tune`),
 `auth/mctl/{config,role/*}`, `identity/group*`,
-`identity/group-alias*` and `sys/policies/acl/human-tenant-*`, and no secret
-data. It cannot write the `admin` policy, create tokens, or touch any other
+`identity/group-alias*`, `sys/policies/acl/human-tenant-*`, and the audit
+device at `sys/audit/stdout` (plus listing `sys/audit`; no delete), and no
+secret data. It cannot write the `admin` policy, create tokens, or touch any other
 auth mount. It is still admin-equivalent in effect, since it decides which
 identity lands in which policy group; read the header of the `.hcl`.
 
@@ -317,6 +318,14 @@ all refused (403). Each grant was checked by removing it: without
 `sys/mounts/auth/mctl` the apply fails, while `read` on `sys/auth/mctl`,
 `sudo` on `sys/mounts/auth/mctl`, `list` anywhere and `create` on the
 `identity/*/id` paths turned out unneeded and are not granted.
+
+**The audit device** (`iac/audit.tf`, docs/runbooks/vault-audit.md) added
+`read`+`sudo` on `sys/audit` and `update`+`sudo` on `sys/audit/stdout`.
+Proven the same way on a local Vault 1.17.2 with a token holding only this
+policy: the root enables the device, re-plans clean, and re-enables it after
+root disables it; removing any one of the four capabilities makes the apply
+fail with 403; disabling `stdout`, enabling any other audit path, and
+re-enabling `stdout` with other options (`log_raw=true`) are all refused.
 
 **The move from `auth/oidc` to `auth/mctl`** (docs/runbooks/vault-human-auth.md)
 needed a temporary `sys/remount` grant, limited by `allowed_parameters` to
