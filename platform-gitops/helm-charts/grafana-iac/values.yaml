@@ -7,7 +7,8 @@ image:
   # by digest, so a re-pushed tag can never change what configures Grafana.
   repository: ghcr.io/mctlhq/grafana-iac
   tag: "1.13.1-4.47.0"
-  digest: ""
+  # build-image.yaml run 37212669451, from 38e89abd.
+  digest: "sha256:68e3a0537b1beeb9ae6cc7be4559bc486d2a972f221314d6e86b837ad361f4a8"
 
 # The plan actions the Job may apply, space-separated. A plan containing any
 # other action fails the Job before apply, with the plan in its log.
