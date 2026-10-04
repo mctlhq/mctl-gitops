@@ -104,3 +104,38 @@ spec:
               No kube_cronjob_created series for erpact/erpact-backup. The
               CronJob was removed from mctl-apps or is not scraped, and the
               other erpact backup alerts are blind while this lasts.
+
+        # Daily restore drill of that backup (mctl-apps infra/restore-drill.yaml,
+        # 05:15 UTC). One failed run is enough: the newest backup does not
+        # restore. Same 26h/NeverSucceeded split as the backup itself.
+        - alert: ErpactRestoreDrillStale
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{
+              namespace="erpact", cronjob="erpact-restore-drill"
+            } > 93600
+          for: 10m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact restore drill has not passed in over 26 hours"
+            description: >-
+              erpact/erpact-restore-drill has no successful run in 26 hours, so
+              the newest backup in R2 bucket erpact-backups is not known to
+              restore. The failed Job's restore container log names the site
+              and the check that failed.
+
+        - alert: ErpactRestoreDrillNeverSucceeded
+          expr: |
+            (time() - kube_cronjob_created{namespace="erpact", cronjob="erpact-restore-drill"} > 93600)
+            unless on(namespace, cronjob)
+            kube_cronjob_status_last_successful_time{namespace="erpact", cronjob="erpact-restore-drill"}
+          for: 10m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact restore drill has never passed"
+            description: >-
+              erpact/erpact-restore-drill has existed for over 26 hours without
+              one successful run, so ErpactRestoreDrillStale cannot fire for it.
