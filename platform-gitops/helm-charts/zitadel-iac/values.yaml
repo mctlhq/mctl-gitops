@@ -53,6 +53,12 @@ image:
 #   language, 15): no new action; all creates. Removing a language from
 #   login_texts.json plans a destroy, which allowedDeletes refuses until the
 #   address is listed.
+#   ERPact access for platform admins (erpact.tf: Frappe role, project grant
+#   to MCTL, user grants, the verified e-mail action in the MCTL
+#   organization): no new action; creates, plus in-place updates of the
+#   erpact-frappe redirect URIs, of erpact/erpact-oidc-zitadel and of the
+#   MCTL organization's userinfo trigger. The action's address move is a
+#   no-op.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"

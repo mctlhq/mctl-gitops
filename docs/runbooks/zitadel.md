@@ -415,8 +415,20 @@ restart both Deployments.
 the copy only) sign their users in through ZITADEL:
 
 - **Project `ERPact`** owned by organization `erpact`, with
-  `has_project_check`, no roles and no grants: only users of `erpact` get a
-  token, and the path confers no Argo CD, mctl-api or tenant-admin rights.
+  `has_project_check` and one role, `frappe`, granted to the MCTL
+  organization (project grant) for platform admins: only users of `erpact`
+  and of MCTL get a token, and the path confers no Argo CD, mctl-api or
+  tenant-admin rights. Every `erpact` user holds `frappe`; an admin holds it
+  only with a `frappe` field in `secret/platform/zitadel/admins`. The role
+  gates sign-in once `project_role_check` is on, a separate change made
+  after the grants exist.
+- **Admins sign in with a second key.** The `mctl` key's
+  `urn:zitadel:iam:org:id:<erpact>` scope makes ZITADEL refuse any user of
+  another organization, grant or not, so admins use the Social Login Key
+  `mctl_admin` ("Login with MCTL (admin)"), scoped to the MCTL organization
+  (`admin_org_id` in `erpact/erpact-oidc-zitadel`; a second redirect URI per
+  site, `.../custom/mctl_admin`). Their Frappe user is the one under the MCTL
+  account's e-mail.
 - **Application `erpact-frappe`**: web, `client_secret_post` (what Frappe's
   rauth client sends), opaque access token read at userinfo; one redirect URI
   per site, `https://<site>/api/method/frappe.integrations.oauth2_logins.custom/mctl`.
@@ -424,10 +436,11 @@ the copy only) sign their users in through ZITADEL:
   `erpact/erpact-oidc-zitadel` (`infra-components/erpact/oidc-zitadel.yaml`).
 - **Verified e-mail only.** Frappe matches users by the `email` claim alone,
   without `email_verified` and without the stored `sub`. The action
-  `erpactVerifiedEmail` (`erpact` organization, `PRE_USERINFO_CREATION`,
-  first in the same trigger as `argocdGroups`, not allowed to fail) refuses
-  userinfo for this client unless the user's e-mail is verified. It returns
-  at once for every other client.
+  `erpactVerifiedEmail` (`PRE_USERINFO_CREATION`, first in the same trigger
+  as `argocdGroups`, not allowed to fail) refuses userinfo for this client
+  unless the user's e-mail is verified. It returns at once for every other
+  client. It is declared in both `erpact` and MCTL: an action only runs for
+  users of its own organization.
 - **Frappe side** (git.mctl.ai/erpact/mctl-apps, the restore Jobs' `sso`
   step): Social Login Key `mctl` per site, sign-up of unknown users disabled
   (v15 `sign_ups = Deny`; v14 Website Settings `disable_signup`), users
