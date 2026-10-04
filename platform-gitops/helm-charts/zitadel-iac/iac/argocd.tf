@@ -181,13 +181,19 @@ resource "zitadel_action" "argocd_groups" {
 }
 
 # Userinfo, and with id_token_userinfo_assertion the ID token Argo CD reads.
+# One trigger per organization and flow holds every action of it, so the
+# erpact organization's also runs the Frappe sites' verified e-mail check
+# (erpact.tf), first; that action returns at once for any other client.
 resource "zitadel_trigger_actions" "argocd_groups" {
   for_each = local.argocd_claim_orgs
 
   org_id       = each.value
   flow_type    = "FLOW_TYPE_CUSTOMISE_TOKEN"
   trigger_type = "TRIGGER_TYPE_PRE_USERINFO_CREATION"
-  action_ids   = [zitadel_action.argocd_groups[each.key].id]
+  action_ids = concat(
+    each.key == local.erpact_tenant ? [zitadel_action.erpact_verified_email.id] : [],
+    [zitadel_action.argocd_groups[each.key].id],
+  )
 }
 
 resource "zitadel_application_oidc" "argocd" {
