@@ -82,6 +82,29 @@ resource "zitadel_application_oidc" "mctl_cli" {
   skip_native_app_success_page = false
 }
 
+# Explicit identity linking (mctl-api#435): mctl-api signs a person in to
+# ZITADEL itself, right after GitHub, to attach that ZITADEL identity to the
+# principal they already have. A confidential web client (owner decision B
+# on #435): client secret plus PKCE, redirect only to api.mctl.ai. mctl-api
+# reads the ID token only, so the access token type does not matter here;
+# the userinfo assertion puts preferred_username into the ID token for the
+# confirmation page. has_project_check on the project limits it to MCTL
+# users, like the CLI.
+resource "zitadel_application_oidc" "mctl_api_link" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.mctl_api.id
+  name       = "mctl-api-link"
+
+  app_type                    = "OIDC_APP_TYPE_WEB"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["https://api.mctl.ai/identity/link/zitadel/callback"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = false
+  id_token_userinfo_assertion = true
+}
+
 resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   metadata {
     name      = "mctl-api-oidc-zitadel"
@@ -105,6 +128,10 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
     # client_id sensitive, so this Secret is where an operator reads it to
     # set the CLI default (cli/mctl/internal/auth/zitadel.go).
     MCTL_CLI_ZITADEL_CLIENT_ID = zitadel_application_oidc.mctl_cli.client_id
+    # The link client (mctl-api#435), read through the chart's optional
+    # zitadelLinkSecret. The secret never leaves this Secret and the state.
+    ZITADEL_LINK_CLIENT_ID     = zitadel_application_oidc.mctl_api_link.client_id
+    ZITADEL_LINK_CLIENT_SECRET = zitadel_application_oidc.mctl_api_link.client_secret
   }
 
   field_manager = "zitadel-iac"

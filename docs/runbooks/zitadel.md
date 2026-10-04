@@ -319,6 +319,13 @@ on ZITADEL tokens:
   CLI's ephemeral port needs no entry and `dev_mode` stays off. The project
   sets `has_project_check`: only `MCTL` users obtain a token; tenant
   organizations are not granted the project.
+- **Client `mctl-api-link`** (mctl-api#435, owner decision B): confidential
+  web app, client secret plus PKCE, redirect
+  `https://api.mctl.ai/identity/link/zitadel/callback` only. mctl-api signs a
+  person in with it right after GitHub to link that ZITADEL identity to the
+  principal they already have; it reads the ID token only. Its id and secret
+  go into the same Secret as `ZITADEL_LINK_CLIENT_ID` /
+  `ZITADEL_LINK_CLIENT_SECRET` (chart value `zitadelLinkSecret`).
 - **Output.** The Job writes the complete `MCTL_OIDC_PROVIDERS` JSON (name
   `zitadel`, issuer `https://auth.mctl.ai`, audience = that client id) into
   `mctl-api/mctl-api-oidc-zitadel`, plus `MCTL_CLI_ZITADEL_CLIENT_ID`, which
