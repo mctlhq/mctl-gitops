@@ -50,6 +50,16 @@
 #
 # The addresses were written inline until 2026-10-04 and remain in git
 # history, which is not rewritten.
+#
+# Why the pilot policies still exist (owner decision, 2026-10-04): since
+# mcp.mctl.ai dropped Google (#1610) its door offers ZITADEL and the one-time
+# PIN only. A ZITADEL login carries the owner's ZITADEL address and is
+# admitted by the shared ZITADEL policy (portal-zitadel.tf), not by these.
+# These policies are the break-glass: if ZITADEL is down, the owner signs in
+# by one-time PIN with one of these addresses. That only works end to end if
+# the portal AND every member application keep a pilot policy, so remove
+# them together, and the PIN from the portal's allowed_idps, once ZITADEL is
+# no longer a single point of failure.
 variable "portal_pilot_emails" {
   description = "Addresses admitted by the Phase 0 pilot policies of the portal member applications."
   type        = list(string)
