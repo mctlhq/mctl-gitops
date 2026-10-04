@@ -52,6 +52,15 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+        # The vault-human-auth-iac Job (auth/kubernetes login, then the
+        # auth/oidc mount, identity groups and human-tenant-* policies). Its
+        # namespace runs nothing else; the pod label narrows it to the Job.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault-human-auth-iac
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault-human-auth-iac
         # admins hosts platform workloads, not tenant apps, and is named in the
         # mctl-api and argo-workflows policies for the same reason. No container
         # there addresses Vault today, so this is for consistency rather than a

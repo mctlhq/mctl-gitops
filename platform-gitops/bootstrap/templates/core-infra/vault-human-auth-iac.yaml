@@ -9,10 +9,11 @@
 # Vault through auth/kubernetes with the narrow policy vault-human-auth-iac,
 # which the owner applies once by hand (cluster-bootstrap/vault-config).
 #
-# infra-components/identity/vault-human-auth-iac holds the Secret the
-# zitadel-iac Job fills with the OIDC client and the tenant list, and the Role
-# that lets it. The Job itself (helm-charts/vault-human-auth-iac) is added as
-# a second source once its image exists.
+# Sources: infra-components/identity/vault-human-auth-iac holds the Secret
+# the zitadel-iac Job fills with the OIDC client and the tenant list (and the
+# Role that lets it), the image pull credentials and the NetworkPolicies;
+# helm-charts/vault-human-auth-iac is the Job: PostSync after every sync and
+# hourly, refusing any plan action outside its allowlist.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -26,7 +27,20 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/identity/vault-human-auth-iac
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/helm-charts/vault-human-auth-iac
+      helm:
+        releaseName: vault-human-auth-iac
   ignoreDifferences:
+    # Same ESO handling as zitadel.yaml: admission-injected annotations and
+    # status only; never jq paths that index into spec arrays (#789).
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .metadata.annotations
+        - .spec.target.deletionPolicy
+        - .status
     # Written by the zitadel-iac Job, not by Argo CD (oidc-zitadel.yaml).
     - kind: Secret
       name: vault-oidc-zitadel

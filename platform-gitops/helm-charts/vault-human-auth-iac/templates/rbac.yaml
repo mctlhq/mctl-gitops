@@ -1,0 +1,43 @@
+{{- /*
+  The kubernetes state backend lists Secrets and Leases by label, and list
+  cannot be narrowed by resourceNames, so this Role can read every Secret in
+  this namespace. That is the reason the Job has a namespace of its own: the
+  only other Secrets here are the OIDC client it already reads and the image
+  pull credentials. Its Vault access comes from auth/kubernetes, not from
+  anything stored here.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-human-auth-iac
+  labels:
+    app.kubernetes.io/name: vault-human-auth-iac
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vault-human-auth-iac-state
+  labels:
+    app.kubernetes.io/name: vault-human-auth-iac
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vault-human-auth-iac-state
+  labels:
+    app.kubernetes.io/name: vault-human-auth-iac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vault-human-auth-iac-state
+subjects:
+  - kind: ServiceAccount
+    name: vault-human-auth-iac
+    namespace: {{ .Release.Namespace }}
