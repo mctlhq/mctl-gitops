@@ -25,10 +25,9 @@ argo-cd:
   configs:
     cm:
       url: https://ops.mctl.ai
-      # Local admin is disabled. UI login is Backstage OIDC via Dex
-      # (dex.config below). Confirm SSO at https://ops.mctl.ai/auth/login
-      # before syncing this change: the login page must 303 to
-      # /api/dex/auth?client_id=argo-cd. Break-glass is `argocd --core`
+      # Local admin is disabled. UI and CLI login is ZITADEL (oidc.config
+      # below): https://ops.mctl.ai/auth/login must 303 to
+      # https://auth.mctl.ai/oauth/v2/authorize. Break-glass is `argocd --core`
       # against the cluster kubeconfig (see infrastructure/k3s-preview/README.md).
       # Bootstrap helm-values/argocd.yaml already ships admin.enabled: false;
       # this aligns the self-managed live release with that.
@@ -94,58 +93,27 @@ argo-cd:
         - .metadata.annotations
         - .status
 
-      # Dex connector for Backstage OIDC. Dex itself no longer reads this
-      # key: it runs from templates/dex.yaml with its own copy of this config
-      # in templates/dex-config.yaml (#1500), and the two must change
-      # together until Argo CD's own login leaves Dex. argocd-server still
-      # reads it, to know that it signs in through Dex at <url>/api/dex, to
-      # label the login button, and to render it on every settings load:
-      # a connector without `config` there makes argocd-server exit
-      # ("malformed Dex configuration found", the #1545 outage).
-      dex.config: |
-        logger:
-          level: info
-          format: json
-        connectors:
-        - type: oidc
-          id: backstage
-          name: mctl.ai
-          config:
-            issuer: https://app.mctl.ai/api/oidc-provider
-            clientID: "$backstage-oidc-client-id"
-            clientSecret: "$backstage-oidc-client-secret"
-            scopes:
-              - openid
-              - profile
-              - email
-              - groups
-            getUserInfo: true
-            insecureEnableGroups: true
-            userNameKey: preferred_username
-            claimMapping:
-              groups: groups
-        staticClients:
-        - id: argo-workflows
-          name: Argo Workflows
-          # Single entry on purpose: argo-workflows presents exactly one
-          # redirect_uri, set in bootstrap/templates/core-infra/
-          # argo-workflows.yaml (sso.redirectUrl). The mctl.me twin that used
-          # to sit here went dead when the domain was retired — Cloudflare
-          # answers 410 Gone — and a redirect URI no client can ever present
-          # is config that looks load-bearing without being reachable.
-          redirectURIs:
-            - https://workflows.mctl.ai/oauth2/callback
-          secret: "$argo-workflows-sso-client-secret"
-        - id: mctl-api
-          name: mctl-api
-          redirectURIs:
-            - https://api.mctl.ai/oauth2/callback
-          secret: "$argo-workflows-sso-client-secret"
-        - id: grafana
-          name: Grafana
-          redirectURIs:
-            - https://grafana.mctl.ai/login/generic_oauth
-          secret: "$argo-workflows-sso-client-secret"
+      # Argo CD signs in through ZITADEL (#1500). Who may sign in and with
+      # which groups is declared in helm-charts/zitadel-iac/iac/argocd.tf: a
+      # user with no role on the ZITADEL project "Argo CD" gets no token at
+      # all, and `groups` carries only that project's roles, which are the
+      # group names this policy binds (admins, and <tenant> for
+      # rbac/tenants/<tenant>.csv). The zitadel-iac Job writes the client
+      # credentials into argocd-oidc-zitadel (templates/oidc-zitadel.yaml).
+      #
+      # No dex.config any more: Argo CD itself no longer signs in through
+      # Dex. Dex keeps running for Argo Workflows, Grafana and mctl-api
+      # (templates/dex.yaml), and argocd-server still proxies /api/dex to it.
+      oidc.config: |
+        name: ZITADEL
+        issuer: https://auth.mctl.ai
+        clientID: $argocd-oidc-zitadel:clientID
+        clientSecret: $argocd-oidc-zitadel:clientSecret
+        cliClientID: $argocd-oidc-zitadel:cliClientID
+        requestedScopes:
+          - openid
+          - profile
+          - email
 
     params:
       # Dex runs as Deployment `dex` (templates/dex.yaml) and serves plain
