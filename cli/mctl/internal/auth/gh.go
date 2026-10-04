@@ -7,11 +7,15 @@ import (
 	"strings"
 )
 
-// GetToken returns a GitHub token from env vars or the gh CLI.
-// Resolution order: MCTL_TOKEN, GITHUB_TOKEN, gh auth token.
+// GetToken returns the bearer token for the mctl API.
+// Resolution order: MCTL_TOKEN; then, only with MCTL_AUTH=zitadel, the stored
+// ZITADEL login (zitadel.go); otherwise GITHUB_TOKEN, gh auth token.
 func GetToken() (string, error) {
 	if t := os.Getenv("MCTL_TOKEN"); t != "" {
 		return t, nil
+	}
+	if UseZitadel() {
+		return ZitadelToken()
 	}
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
 		return t, nil

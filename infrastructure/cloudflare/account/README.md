@@ -67,9 +67,16 @@ read-only plan identity cannot see the account's identity configuration and
 returned an empty list instead of an error — a plan that proposed an application
 with no providers at all.
 
-The apply identity for this root needs `Access: Apps and Policies Write`; the
-plan identity is `CF_ACCOUNT_READ_TOKEN`, because the repository-wide read token
-is zone-scoped and answers 1010 on an account-level application.
+The apply identity for this root (`CF_APPLY_TOKEN_ACCOUNT`, an account token)
+carries `Access: Apps and Policies Write` and
+`Access: Organizations, Identity Providers, and Groups Write`. The plan
+identity is `CF_ACCOUNT_READ_TOKEN`, because the repository-wide read token is
+zone-scoped and answers 1010 on an account-level application. It carries
+`Access: Apps and Policies Read` and, since 2026-10-04 (#1500),
+`Access: Identity Providers Read`. Without the second, an identity-provider
+listing comes back empty rather than refused; `access-idps-read.tf` fails
+every plan of this root if the Google and one-time PIN providers are missing
+from it, so a lost scope is an error, not an empty account.
 
 Every input to this root is now inside `infrastructure/cloudflare/`, so
 `cloudflare-plan.yml`'s change filter no longer needs to name anything else.
