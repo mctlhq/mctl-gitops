@@ -94,26 +94,53 @@ argo-cd:
         - .metadata.annotations
         - .status
 
-      # Dex itself runs from this chart as plain `dex serve`
-      # (templates/dex.yaml, config in templates/dex-config.yaml), not from
-      # the subchart's `rundex`, which derives Dex's issuer from Argo CD's
-      # own sign-in (#1500). argocd-server reads this key only to know that
-      # it signs in through Dex at <url>/api/dex and to label the login
-      # button, so the connector's identity is all it needs; its secrets
-      # and the static clients live with Dex.
+      # Dex connector for Backstage OIDC
       dex.config: |
+        logger:
+          level: info
+          format: json
         connectors:
         - type: oidc
           id: backstage
           name: mctl.ai
+          config:
+            issuer: https://app.mctl.ai/api/oidc-provider
+            clientID: "$backstage-oidc-client-id"
+            clientSecret: "$backstage-oidc-client-secret"
+            scopes:
+              - openid
+              - profile
+              - email
+              - groups
+            getUserInfo: true
+            insecureEnableGroups: true
+            userNameKey: preferred_username
+            claimMapping:
+              groups: groups
+        staticClients:
+        - id: argo-workflows
+          name: Argo Workflows
+          # Single entry on purpose: argo-workflows presents exactly one
+          # redirect_uri, set in bootstrap/templates/core-infra/
+          # argo-workflows.yaml (sso.redirectUrl). The mctl.me twin that used
+          # to sit here went dead when the domain was retired — Cloudflare
+          # answers 410 Gone — and a redirect URI no client can ever present
+          # is config that looks load-bearing without being reachable.
+          redirectURIs:
+            - https://workflows.mctl.ai/oauth2/callback
+          secret: "$argo-workflows-sso-client-secret"
+        - id: mctl-api
+          name: mctl-api
+          redirectURIs:
+            - https://api.mctl.ai/oauth2/callback
+          secret: "$argo-workflows-sso-client-secret"
+        - id: grafana
+          name: Grafana
+          redirectURIs:
+            - https://grafana.mctl.ai/login/generic_oauth
+          secret: "$argo-workflows-sso-client-secret"
 
     params:
-      # The Dex Deployment in templates/dex.yaml serves plain HTTP inside the
-      # cluster, as Argo CD's own Dex did not (self-signed TLS, strict off,
-      # so it authenticated nothing). /api/dex is still proxied by
-      # argocd-server and TLS still terminates at the Traefik Ingress.
-      server.dex.server: http://argocd-dex-server:5556
-      server.dex.server.plaintext: "true"
       # HTTP inside the cluster. TLS terminates at the Traefik Ingress
       # (server.ingress.tls + cert-manager letsencrypt-prod, secret argocd-tls,
       # hostname ops.mctl.ai). This is the standard Argo CD behind-ingress
@@ -257,10 +284,32 @@ argo-cd:
         # platform-gitops/argo-workflows/config/servicemonitor.yaml.
         interval: 30s
 
-  # Dex runs from templates/dex.yaml (resources and probes there), not from
-  # the subchart; see the dex.config comment above.
+  # Dex server probes — auto-restart when OIDC provider is temporarily unavailable
+  # Without these, dex stays "Running" but broken after failed initialization
   dex:
-    enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 192Mi
+    livenessProbe:
+      enabled: true
+      httpGet:
+        path: /healthz/live
+        port: 5558
+      initialDelaySeconds: 15
+      periodSeconds: 30
+      failureThreshold: 3
+    readinessProbe:
+      enabled: true
+      httpGet:
+        path: /healthz/ready
+        port: 5558
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      failureThreshold: 3
 
   repoServer:
     # SOC F11: singleton repo-server. Same drain protection as server.pdb.
