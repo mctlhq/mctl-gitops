@@ -65,6 +65,10 @@ image:
 #   organization's userinfo trigger; adding or changing a login later updates
 #   the metadata and the action in place. Dropping a user's github_login plans a
 #   delete of its metadata, which allowedDeletes refuses until listed.
+#   Tenant access to MCTL API (mctl-api.tf: one project grant per tenant
+#   organization, no role keys): no new action; all creates. Removing a
+#   tenant plans a destroy of its grant, which allowedDeletes refuses until
+#   the address is listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
