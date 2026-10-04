@@ -505,3 +505,125 @@ tests:
                 temporal_worker_task_slots_used{task_queue="mctl-dev-loop-implement"}
                 against N and the running mctl-agents-implement-* workflows in
                 Argo before raising N. Context: mctl-agents#395.
+
+  # ---------------------------------------------------------------------
+  # Scheduled dispatch (mctl-agents#559-561, issue #1593)
+  # ---------------------------------------------------------------------
+
+  - interval: 1m
+    name: undelivered counter born at 1 fires (scheduled_dispatch_alert_undelivered)
+    input_series:
+      - series: 'scheduled_dispatch_alert_undelivered{repo="mctlhq/portfolio",workflow_file="weekly-refresh.yml"}'
+        values: '_x10 1x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentsScheduledDispatchAlertUndelivered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+              repo: mctlhq/portfolio
+              workflow_file: weekly-refresh.yml
+            exp_annotations:
+              summary: scheduled dispatch failed and its GitHub alert issue was not filed
+              description: |
+                A scheduled dispatch of weekly-refresh.yml in mctlhq/portfolio
+                failed, and the scheduled-dispatch-failed issue could not be filed.
+                This alert is the only remaining channel. Grep the
+                admins-mctl-agents-worker logs for scheduled_dispatch_alert_undelivered,
+                check the GitHub App token, and re-run the dispatch by hand.
+
+  - interval: 1m
+    name: undelivered counter born at 1 fires (temporal_scheduled_dispatch_alert_undelivered)
+    input_series:
+      - series: 'temporal_scheduled_dispatch_alert_undelivered{repo="mctlhq/portfolio",workflow_file="weekly-refresh.yml"}'
+        values: '_x10 1x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentsScheduledDispatchAlertUndelivered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+              repo: mctlhq/portfolio
+              workflow_file: weekly-refresh.yml
+            exp_annotations:
+              summary: scheduled dispatch failed and its GitHub alert issue was not filed
+              description: |
+                A scheduled dispatch of weekly-refresh.yml in mctlhq/portfolio
+                failed, and the scheduled-dispatch-failed issue could not be filed.
+                This alert is the only remaining channel. Grep the
+                admins-mctl-agents-worker logs for scheduled_dispatch_alert_undelivered,
+                check the GitHub App token, and re-run the dispatch by hand.
+
+  - interval: 1m
+    name: undelivered counter 1 to 2 fires through the increase arm
+    input_series:
+      - series: 'temporal_scheduled_dispatch_alert_undelivered{repo="mctlhq/portfolio",workflow_file="weekly-refresh.yml"}'
+        values: '1x200 2x200'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: MctlAgentsScheduledDispatchAlertUndelivered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+              repo: mctlhq/portfolio
+              workflow_file: weekly-refresh.yml
+            exp_annotations:
+              summary: scheduled dispatch failed and its GitHub alert issue was not filed
+              description: |
+                A scheduled dispatch of weekly-refresh.yml in mctlhq/portfolio
+                failed, and the scheduled-dispatch-failed issue could not be filed.
+                This alert is the only remaining channel. Grep the
+                admins-mctl-agents-worker logs for scheduled_dispatch_alert_undelivered,
+                check the GitHub App token, and re-run the dispatch by hand.
+
+  - interval: 1m
+    name: undelivered counter flat at 1 for over 2h is quiet
+    input_series:
+      - series: 'temporal_scheduled_dispatch_alert_undelivered{repo="mctlhq/portfolio",workflow_file="weekly-refresh.yml"}'
+        values: '1x300'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: MctlAgentsScheduledDispatchAlertUndelivered
+        exp_alerts: []
+
+  - interval: 1m
+    name: failed counter born at 1 fires
+    input_series:
+      - series: 'temporal_workflow_failed{workflow_type="ScheduledDispatchWorkflow",task_queue="mctl-dev-loop",namespace="mctl-agents"}'
+        values: '_x10 1x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlAgentsScheduledDispatchFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+            exp_annotations:
+              summary: a ScheduledDispatchWorkflow execution failed
+              description: |
+                A ScheduledDispatchWorkflow execution on mctl-dev-loop failed in
+                the last hour. Look for the scheduled-dispatch-failed issue in the
+                target repo and the failed execution in the Temporal UI.
+
+  - interval: 1m
+    name: failed counter flat for over 2h is quiet
+    input_series:
+      - series: 'temporal_workflow_failed{workflow_type="ScheduledDispatchWorkflow",task_queue="mctl-dev-loop",namespace="mctl-agents"}'
+        values: '1x300'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: MctlAgentsScheduledDispatchFailed
+        exp_alerts: []
+
+  - interval: 1m
+    name: failed increase on another workflow type is quiet
+    input_series:
+      - series: 'temporal_workflow_failed{workflow_type="DevLoopWorkflow",task_queue="mctl-dev-loop",namespace="mctl-agents"}'
+        values: '0x100 1x100'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: MctlAgentsScheduledDispatchFailed
+        exp_alerts: []

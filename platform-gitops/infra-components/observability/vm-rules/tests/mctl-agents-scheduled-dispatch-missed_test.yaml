@@ -1,0 +1,109 @@
+# Unit tests for MctlAgentsScheduledDispatchMissed (mctl-agents-worker-alerts.yaml).
+#
+# Kept apart from mctl-agents-worker-alerts_test.yaml because the rule looks
+# back 8 days: evaluating it every minute over a 9 day test is far too slow.
+# An hourly evaluation_interval still fires after for: 1h, and every sample
+# interval here is 1h, which divides the 8d window.
+rule_files:
+  - generated/mctl-agents-worker-alerts.yaml
+
+evaluation_interval: 1h
+
+tests:
+  - interval: 1h
+    name: silent miss, worker observed 9d and no completion fires
+    input_series:
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker",service_name="temporal-core-sdk",namespace="mctl-agents",instance="a"}'
+        values: '1x216'
+      - series: 'temporal_workflow_completed{workflow_type="ScheduledDispatchWorkflow",task_queue="mctl-dev-loop",namespace="mctl-agents",instance="a"}'
+        values: '1x216'
+    alert_rule_test:
+      - eval_time: 9d
+        alertname: MctlAgentsScheduledDispatchMissed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+            exp_annotations:
+              summary: no scheduled dispatch has completed in 8 days
+              description: |
+                The worker was observed for the last 8 days and no
+                ScheduledDispatchWorkflow completed in that time. The Temporal
+                schedule was probably deleted, paused or never created. Check the
+                schedule in the Temporal UI. If the pause is deliberate, silence
+                this alert. It can also fire before the first recorded run.
+
+  - interval: 1h
+    name: silent miss, a completion on day 5 keeps it quiet
+    input_series:
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker",service_name="temporal-core-sdk",namespace="mctl-agents",instance="a"}'
+        values: '1x216'
+      - series: 'temporal_workflow_completed{workflow_type="ScheduledDispatchWorkflow",task_queue="mctl-dev-loop",namespace="mctl-agents",instance="a"}'
+        values: '1x120 2x96'
+    alert_rule_test:
+      - eval_time: 9d
+        alertname: MctlAgentsScheduledDispatchMissed
+        exp_alerts: []
+
+  - interval: 1h
+    name: silent miss, restarted worker whose completed counter is born at 1 is quiet
+    input_series:
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker",service_name="temporal-core-sdk",namespace="mctl-agents",instance="a"}'
+        values: '1x72 _x144'
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker",service_name="temporal-core-sdk",namespace="mctl-agents",instance="b"}'
+        values: '_x72 1x144'
+      - series: 'temporal_workflow_completed{workflow_type="ScheduledDispatchWorkflow",task_queue="mctl-dev-loop",namespace="mctl-agents",instance="a"}'
+        values: '1x48 _x168'
+      - series: 'temporal_workflow_completed{workflow_type="ScheduledDispatchWorkflow",task_queue="mctl-dev-loop",namespace="mctl-agents",instance="b"}'
+        values: '_x144 1x72'
+    alert_rule_test:
+      - eval_time: 9d
+        alertname: MctlAgentsScheduledDispatchMissed
+        exp_alerts: []
+
+  - interval: 1h
+    name: silent miss, gate split across three consecutive pods still fires
+    input_series:
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker",service_name="temporal-core-sdk",namespace="mctl-agents",instance="a"}'
+        values: '1x72 _x144'
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker",service_name="temporal-core-sdk",namespace="mctl-agents",instance="b"}'
+        values: '_x72 1x72 _x72'
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker",service_name="temporal-core-sdk",namespace="mctl-agents",instance="c"}'
+        values: '_x144 1x72'
+      - series: 'temporal_workflow_completed{workflow_type="ScheduledDispatchWorkflow",task_queue="mctl-dev-loop",namespace="mctl-agents",instance="a"}'
+        values: '1x72 _x144'
+    alert_rule_test:
+      - eval_time: 9d
+        alertname: MctlAgentsScheduledDispatchMissed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+            exp_annotations:
+              summary: no scheduled dispatch has completed in 8 days
+              description: |
+                The worker was observed for the last 8 days and no
+                ScheduledDispatchWorkflow completed in that time. The Temporal
+                schedule was probably deleted, paused or never created. Check the
+                schedule in the Temporal UI. If the pause is deliberate, silence
+                this alert. It can also fire before the first recorded run.
+
+  - interval: 1h
+    name: silent miss, no worker series and no completed series is unknown and quiet
+    input_series:
+      - series: 'up{job="other"}'
+        values: '1x216'
+    alert_rule_test:
+      - eval_time: 9d
+        alertname: MctlAgentsScheduledDispatchMissed
+        exp_alerts: []
+
+  - interval: 1h
+    name: silent miss, a scrape gap over most of the window is unknown and quiet
+    input_series:
+      - series: 'temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker",service_name="temporal-core-sdk",namespace="mctl-agents",instance="a"}'
+        values: '_x100 1x116'
+    alert_rule_test:
+      - eval_time: 9d
+        alertname: MctlAgentsScheduledDispatchMissed
+        exp_alerts: []
