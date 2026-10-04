@@ -397,7 +397,7 @@ check("platform" in reserved_names,
 # Direct dispatchers of build-image.yaml outside Argo, as found on each
 # repository's default branch (all other organisation workflows call
 # release-deploy.yaml): each must keep passing the push-time check.
-for team, name in (("labs", "openclaw"),          # mctl-openclaw upstream-sync-release.yml
+for team, name in (("labs", "openclaw"),          # mctl-openclaw upstream-sync-release.yml (repo archived)
                    ("platform", "grafana-iac"),  # platform-gitops/images/*, by hand
                    ("platform", "mc"),
                    ("platform", "vault-iac"),
@@ -472,6 +472,27 @@ check(len(caller) == 1
       and 'case "$CALLER_WORKFLOW_REF" in' in caller[0]["run"]
       and "GITHUB_WORKFLOW_REF" not in caller[0]["run"],
       "build-image must classify its caller from an explicitly bound github.workflow_ref")
+# Every release dispatcher in the organisation (release-please.yml in
+# mctl-academy, -agent, -agents, -api, -docs, -portal, -telegram, -web,
+# portfolio, seerrsense; mctl-alice release-deploy.yml; mctl-design
+# deploy.yml; mctl-telegram preview-deploy.yml) runs release-deploy.yaml,
+# which reaches build-image.yaml as a workflow_call. There the caller is
+# classified as not direct, so the image-name pin does not apply and
+# release names that differ from the component (mctl-telegram-preview ->
+# mctl-telegram) keep building. Run the classification for both refs.
+rd = yaml.safe_load((REPO / ".github/workflows/release-deploy.yaml").read_text())
+check(any(j.get("uses") == "./.github/workflows/build-image.yaml" for j in rd["jobs"].values()),
+      "release-deploy.yaml must call build-image.yaml as a reusable workflow")
+if len(caller) == 1:
+    for ref, want in (("mctlhq/mctl-gitops/.github/workflows/release-deploy.yaml@refs/heads/main", "false"),
+                      ("mctlhq/mctl-gitops/.github/workflows/build-image.yaml@refs/heads/main", "true")):
+        with tempfile.TemporaryDirectory() as out:
+            r = subprocess.run(["bash", "-c", caller[0]["run"]], capture_output=True, text=True,
+                               env={"PATH": "/usr/bin:/bin", "CALLER_WORKFLOW_REF": ref,
+                                    "GITHUB_REPOSITORY": "mctlhq/mctl-gitops",
+                                    "GITHUB_OUTPUT": f"{out}/o"})
+            got = (pathlib.Path(out) / "o").read_text().strip() if r.returncode == 0 else r.stderr
+            check(got == f"direct={want}", f"caller classification for {ref}: {got!r}")
 push = [s for s in steps if s.get("name") == "Build and push"][0]["with"]["tags"]
 latest = [ln for ln in push.splitlines() if "latest" in ln]
 check(len(latest) == 1 and "steps.caller.outputs.direct != 'true'" in latest[0],
