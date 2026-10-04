@@ -841,6 +841,13 @@ spec:
       targetRevision: main
       path: platform-gitops/infra-components/observability/grafana-access
 
+    # Per-tenant metrics access for Grafana tenant orgs (#1601, step 2): a
+    # vmauth that adds each tenant's namespace filter to every query, and its
+    # VMUsers. Nothing reads through it until the tenant orgs exist (step 4).
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/grafana-tenants
+
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/observability/vm-rules

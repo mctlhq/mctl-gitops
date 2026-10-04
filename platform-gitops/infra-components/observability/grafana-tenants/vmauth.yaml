@@ -1,0 +1,43 @@
+# Per-tenant read access to VictoriaMetrics for Grafana tenant orgs (#1601,
+# step 2 of the tenant design). Each tenant org's Prometheus datasource will
+# point here (step 4) with that tenant's VMUser credentials, never at VMSingle
+# directly. vmauth adds the tenant's namespace filter to every request
+# (vmuser-erpact.yaml), so isolation does not depend on what query a user
+# types in Grafana.
+#
+# - Only VMUsers labelled for this proxy, in this namespace, are loaded.
+# - Requests without valid credentials get 401 (no unauthorized access spec).
+# - internalListenPort moves /metrics, /-/reload and pprof off the proxy port,
+#   so a datasource proxied through Grafana can reach only the user's routes.
+# - No Ingress: in-cluster only, and networkpolicy.yaml admits only Grafana
+#   on the proxy port.
+#
+# Rollback: delete this directory's source from bootstrap/templates/
+# observability/monitoring.yaml. Nothing reads through it until step 4.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMAuth
+metadata:
+  name: grafana-tenants
+  namespace: monitoring
+spec:
+  replicaCount: 1
+  image:
+    repository: victoriametrics/vmauth
+    # Same release as VMSingle and vmagent.
+    tag: v1.138.0
+  port: "8427"
+  internalListenPort: "8426"
+  selectAllByDefault: false
+  userSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: grafana-tenants
+  userNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: monitoring
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
