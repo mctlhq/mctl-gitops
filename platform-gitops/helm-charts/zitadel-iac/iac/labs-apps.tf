@@ -89,6 +89,6 @@ resource "kubernetes_secret_v1_data" "labs_apps_oidc" {
 
   field_manager = "zitadel-iac"
   # Created by Argo CD with no data
-  # (infra-components/labs-zitadel-oidc/oidc-zitadel.yaml); see forgejo.tf.
+  # (infra-components/labs/oidc-zitadel.yaml); see forgejo.tf.
   force = true
 }
