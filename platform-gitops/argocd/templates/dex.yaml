@@ -65,6 +65,11 @@ spec:
         app.kubernetes.io/name: dex
         app.kubernetes.io/part-of: argocd
         app.kubernetes.io/component: dex-server
+      # Only the config is checksummed. Unlike `rundex`, which watched
+      # argocd-secret, plain Dex reads its secrets once at start: after a
+      # rotation of server.secretkey, backstage-oidc-client-* or
+      # argo-workflows-sso-client-secret, run
+      # `kubectl -n argocd rollout restart deploy/dex`.
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/dex-config.yaml") . | sha256sum }}
     spec:
