@@ -126,10 +126,13 @@ ZITADEL roles yet.
   by its login name. It is not created by this root.
 - **Personal accounts.** These come from Vault
   `secret/platform/zitadel/admins`, one field per person. The field name is
-  the user name in `MCTL`, a plain handle matching `^[a-z0-9][a-z0-9._-]*$`
-  (no `@`, never `mctl-admin`). The value is a JSON object
-  `{"email", "first_name", "last_name", "preferred_language"}`, where
-  `preferred_language` is optional and defaults to `en`. ExternalSecret
+  the account's stable key, a plain handle matching `^[a-z0-9][a-z0-9._-]*$`
+  (no `@`, never `mctl-admin`): it addresses the user and its grants. The
+  value is a JSON object
+  `{"email", "first_name", "last_name", "preferred_language", "username"}`,
+  where `preferred_language` is optional and defaults to `en`, and
+  `username`, optional, is the login name when it should differ from the key
+  (same pattern; login names must be unique). ExternalSecret
   `zitadel-iac-admins` extracts the secret into `admins.json`, and the pod
   passes it on as `TF_VAR_platform_admins`. The owner writes the secret;
   it is never in git:
@@ -150,6 +153,15 @@ ZITADEL roles yet.
   (`deletionPolicy: Retain`). OpenTofu refuses an empty or malformed object
   (variable validation). In none of these cases does a plan remove an admin
   or a grant.
+- **Renaming a personal admin's login** is `username` on the existing entry,
+  never a new field name: a new key is a new user with a new ID, and the ID
+  is the `sub` that Argo CD, Vault, Cloudflare Access, mctl-api and the
+  passkeys know. The plan is an in-place update of `user_name` (proven on
+  v4.19.2 with provider 3.8.7 before `username` was added); nothing that
+  matches on the ID changes. What does follow the login name is display
+  only: mctl-api's `User.ID` for ZITADEL callers (audit and whoami), the
+  `username` metadata Vault maps from `preferred_username`, and Grafana's
+  login (it finds the user by its OAuth id and updates the login).
 - **Removing a personal admin** from Vault plans deletes of
   `zitadel_human_user.platform_admin["<user_name>"]` and of its
   `zitadel_user_grant.{argocd_admin,vault_admin,cloudflare_access}["<user_name>"]`.

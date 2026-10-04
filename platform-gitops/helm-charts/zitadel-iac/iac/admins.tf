@@ -22,13 +22,22 @@
 locals {
   break_glass_admins = toset(["mctl-admin@mctl.auth.mctl.ai"])
 
-  # { user_name => { email, first_name, last_name, preferred_language } }
+  # { key => { email, first_name, last_name, preferred_language, username? } }
+  #
+  # The key addresses the user resource and its grants, so it never changes
+  # once the user exists: a new key is a new user, with a new ID. The login
+  # name is `username` when set, the key otherwise, so a rename is an
+  # in-place update of user_name on the same user (same ID, the `sub` that
+  # Argo CD, Vault, Cloudflare Access and passkeys know).
   platform_admins = {
-    for user_name, attrs in jsondecode(var.platform_admins) : user_name => jsondecode(attrs)
+    for key, attrs in jsondecode(var.platform_admins) : key => jsondecode(attrs)
+  }
+  platform_admin_user_names = {
+    for key, attrs in local.platform_admins : key => coalesce(try(attrs.username, null), key)
   }
 
   # { key => user id } for every platform admin: the login name for a
-  # break-glass admin, the user name for a personal one. The keys stay
+  # break-glass admin, the Vault key for a personal one. The keys stay
   # apart, since a user name carries no "@" (variable validation), and they
   # address the grants, so mctl-admin's grants keep their existing keys.
   platform_admin_user_ids = merge(
@@ -60,7 +69,7 @@ resource "zitadel_human_user" "platform_admin" {
   for_each = local.platform_admins
 
   org_id     = local.mctl_org_id
-  user_name  = each.key
+  user_name  = local.platform_admin_user_names[each.key]
   email      = sensitive(each.value.email)
   first_name = sensitive(each.value.first_name)
   last_name  = sensitive(each.value.last_name)
