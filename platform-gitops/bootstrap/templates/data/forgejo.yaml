@@ -172,6 +172,12 @@ spec:
                 START_SSH_SERVER: false
                 LFS_START_SERVER: true
                 OFFLINE_MODE: true
+                # Anonymous visitors land on the sign-in page, which offers
+                # only "Sign in with MCTL" (ENABLE_INTERNAL_SIGNIN below);
+                # the default home page hid it. Signed-in users still get
+                # their dashboard. A setting rather than a custom home.tmpl,
+                # which would need maintaining across Forgejo upgrades.
+                LANDING_PAGE: login
               database:
                 DB_TYPE: postgres
                 HOST: shared-pg-rw.platform-db.svc.cluster.local:5432
