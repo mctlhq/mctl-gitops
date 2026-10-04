@@ -47,9 +47,11 @@ spec:
 # the web UI) and holds an R2 credential for the backup, so a compromised
 # process should not get to reach anything it has no reason to.
 #
-#   Forgejo         DNS + shared-pg only. Phase 1 runs with OFFLINE_MODE, no
-#                   mirrors, no Actions, mailer and webhooks unused; phase 2
-#                   (mirrors) adds an internet rule here deliberately.
+#   Forgejo         DNS + shared-pg, plus HTTPS to Cloudflare's IPv4 ranges for
+#                   sign-in through ZITADEL (auth.mctl.ai is only reachable
+#                   through Cloudflare; allow-forgejo-oidc-egress below).
+#                   OFFLINE_MODE, no mirrors, no Actions, mailer and webhooks
+#                   unused; mirrors would add an internet rule deliberately.
 #   forgejo-backup  DNS + HTTPS to the internet (R2), never to cluster or node
 #                   addresses — same except-list as the tenant
 #                   allow-internet-egress policy.

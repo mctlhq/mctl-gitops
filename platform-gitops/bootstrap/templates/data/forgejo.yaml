@@ -173,6 +173,13 @@ spec:
                 SSL_MODE: disable
               service:
                 DISABLE_REGISTRATION: true
+                # ZITADEL is the only interactive sign-in (#1520 S5): the web
+                # password form is hidden and a password POST to /user/login
+                # is refused. Only the web form: git and API basic auth (the
+                # bots, the reconcile Job, Argo CD) are unaffected, and the
+                # link-account page still takes a password, so a user can link
+                # an existing account to their ZITADEL identity once.
+                ENABLE_INTERNAL_SIGNIN: false
                 REQUIRE_SIGNIN_VIEW: true
                 DEFAULT_KEEP_EMAIL_PRIVATE: true
               repository:
