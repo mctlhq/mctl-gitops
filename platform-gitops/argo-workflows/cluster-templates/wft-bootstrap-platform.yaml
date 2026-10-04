@@ -19,6 +19,7 @@ metadata:
         secret/platform/forgejo                 → admin-username, admin-password, metrics-token
         secret/platform/zitadel/database        → username, password
         secret/platform/zitadel                 → masterkey, admin-password, login-session-secret
+        secret/platform/grafana/database        → username, password
 
       Run once after initial cluster setup:
         argo submit --from clusterworkflowtemplate/bootstrap-platform -n argo-workflows
@@ -142,6 +143,12 @@ spec:
 
           write_if_missing "platform/zitadel" \
             "{\"masterkey\":\"$(openssl rand -hex 16)\",\"admin-password\":\"$(zitadel_admin_pw)\",\"login-session-secret\":\"$(gen)\"}"
+
+          # Grafana's own database (bootstrap/templates/observability/monitoring.yaml).
+          # The DB username must equal the CNPG managed role name in
+          # cnpg/shared/cluster.yaml.
+          write_if_missing "platform/grafana/database" \
+            "{\"username\":\"grafana\",\"password\":\"$(gen)\"}"
 
           echo ""
           echo "Bootstrap complete. ExternalSecrets will refresh within 1h."

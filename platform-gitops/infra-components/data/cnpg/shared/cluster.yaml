@@ -158,6 +158,8 @@ spec:
       - host forgejo forgejo all scram-sha-256
       # ZITADEL (platform identity provider, bootstrap/templates/core-infra/zitadel.yaml)
       - host zitadel zitadel all scram-sha-256
+      # Grafana's own database (bootstrap/templates/observability/monitoring.yaml)
+      - host grafana grafana all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -327,6 +329,15 @@ spec:
         ensure: present
         passwordSecret:
           name: zitadel-db-creds
+      # Grafana (bootstrap/templates/observability/monitoring.yaml): one
+      # replica; Grafana's pool defaults to max_open_conn unlimited but idles
+      # at 2, and its migrations run on one connection. 10 leaves headroom.
+      - name: grafana
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: grafana-db-creds
       #   passwordSecret:
       #     name: team1-app1-db-creds
 
