@@ -223,6 +223,21 @@ ingress:
     - secretName: mctl-telegram-preview-tls
       hosts:
         - tg-preview.mctl.ai
+# Telegram work-context adapter (mctlhq/mctl-telegram#443). The owner's
+# Saved Messages are served by THIS instance's communication agent
+# (AGENT_ENABLED, polled by agent-worker-preview), not by production, so the
+# /mctl link + /mctl work live session needs the adapter here too. Same
+# surface:telegram token as production (one principal, one Vault property).
+# Same two-step order as production: enabled first so the Secret syncs, then
+# featureEnabled in a follow-up -- the server refuses to start with the
+# feature on and no token, and strategy is Recreate.
+workContext:
+  enabled: true
+  featureEnabled: false
+  tenant: admins
+  tokenVaultKey: platform/mctl-api/surface-tokens
+  tokenVaultProperty: telegram-token
+  apiBaseUrl: ""
 extraContainers: []
 
 # Deny /metrics at the edge — mctlhq/mctl-telegram#588.
