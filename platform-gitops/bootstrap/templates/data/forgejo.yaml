@@ -239,6 +239,11 @@ spec:
       name: forgejo-oidc-zitadel
       jsonPointers:
         - /data
+    # Written by the zitadel-iac Job, not by Argo CD (identities-zitadel.yaml).
+    - kind: Secret
+      name: forgejo-identities
+      jsonPointers:
+        - /data
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: forgejo
