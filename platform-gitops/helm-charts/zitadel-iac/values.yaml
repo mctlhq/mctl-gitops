@@ -49,6 +49,10 @@ image:
 #   plans deletes, which allowedDeletes refuses until the addresses are listed.
 #   mctl-api#435 (identity link web client in the MCTL API project): a
 #   create, plus an in-place update of the data of mctl-api/mctl-api-oidc-zitadel.
+#   Login V2 texts (login_texts.tf: one default hosted login translation per
+#   language, 15): no new action; all creates. Removing a language from
+#   login_texts.json plans a destroy, which allowedDeletes refuses until the
+#   address is listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"

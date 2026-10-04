@@ -14,8 +14,9 @@
 # scripts/check-zitadel-login-texts.py (CI, zitadel-iac root) reads the
 # locale files of the release the zitadel chart pin deploys and fails when
 # one of their values names Zitadel and login_texts.json does not override
-# it, when an override names Zitadel itself, or when it overrides a key that
-# release does not have.
+# it, when an override is not exactly that release's text with Zitadel
+# replaced by MCTL (or one of the listed grammar fixes), or when it overrides
+# a key that release does not have. --selftest proves each of those fires.
 #
 # The provider has no delete for these (ZITADEL has no API to remove
 # translations): dropping a language here leaves its last texts in place.
