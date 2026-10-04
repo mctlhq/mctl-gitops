@@ -23,6 +23,9 @@ image:
 #   mctl-api#434 `mctl` CLI client: a create, plus in-place updates of the
 #   MCTL API project (has_project_check) and of the data of
 #   mctl-api/mctl-api-oidc-zitadel.
+#   #1500 step 3 (Cloudflare Access public client, its project, role, grant
+#   and zitadel/cloudflare-access-oidc): no new action; all creates, plus a
+#   read of the user lookup.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
