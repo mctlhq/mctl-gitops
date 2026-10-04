@@ -32,6 +32,10 @@ spec:
       name: erpact-oidc-zitadel
       jsonPointers:
         - /data
+    - kind: Secret
+      name: erpact-frappe-users
+      jsonPointers:
+        - /data
   syncPolicy:
     automated:
       prune: true

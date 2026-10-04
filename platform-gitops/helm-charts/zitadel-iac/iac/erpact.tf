@@ -118,3 +118,85 @@ resource "kubernetes_secret_v1_data" "erpact_oidc" {
   # Created by Argo CD with no data; see forgejo.tf.
   force = true
 }
+
+# Which tenant users each Frappe site of the copy must have, for the sign-in
+# above to find them: Frappe refuses a ZITADEL user it has no User for
+# (sign-up is off), and the copy's database comes from production, which
+# does not know MCTL people. A user opts in with a `frappe` field in their
+# Vault entry (secret/platform/zitadel/users/erpact):
+#
+#   "frappe": {"sites": ["erpact-control.mctl.ai"], "roles": ["System Manager"]}
+#
+# Only those users are written, as {version, users: [{email, first_name,
+# last_name, sites, roles}]}: the namespace gets the e-mail of a listed user
+# and of nobody else. The restore Jobs and the users CronJob of
+# git.mctl.ai/erpact/mctl-apps create or update each listed User; the
+# manifest grants roles and never revokes them.
+locals {
+  erpact_frappe_users = [
+    for key, u in local.users : {
+      user_name  = u.user_name
+      email      = lower(u.email)
+      first_name = u.first_name
+      last_name  = u.last_name
+      sites      = try(u.frappe.sites, null)
+      roles      = try(u.frappe.roles, null)
+    } if u.tenant == local.erpact_tenant && try(u.frappe, null) != null
+  ]
+
+  # A `frappe` field anywhere else is a mistake (no other tenant has Frappe
+  # sites); refused rather than ignored.
+  frappe_outside_erpact = sort([
+    for key, u in local.users : key if u.tenant != local.erpact_tenant && try(u.frappe, null) != null
+  ])
+}
+
+resource "kubernetes_secret_v1_data" "erpact_frappe_users" {
+  metadata {
+    name      = "erpact-frappe-users"
+    namespace = "erpact"
+  }
+
+  data = {
+    "users.json" = jsonencode({
+      version = 1
+      users = [
+        for u in local.erpact_frappe_users : {
+          email      = u.email
+          first_name = u.first_name
+          last_name  = u.last_name
+          # try(): a malformed list is reported by the preconditions below,
+          # not by sort().
+          sites = try(sort(u.sites), [])
+          roles = try(sort(u.roles), [])
+        }
+      ]
+    })
+  }
+
+  field_manager = "zitadel-iac"
+  # Created by Argo CD with no data; see forgejo.tf.
+  force = true
+
+  lifecycle {
+    # Error messages name users by user name only, never by e-mail.
+    precondition {
+      condition     = length(local.frappe_outside_erpact) == 0
+      error_message = "A frappe field is only valid for tenant ${local.erpact_tenant}; found on: ${join(", ", local.frappe_outside_erpact)}."
+    }
+    precondition {
+      condition = alltrue([
+        for u in local.erpact_frappe_users :
+        try(length(u.sites) > 0 && alltrue([for s in u.sites : contains(local.erpact_frappe_sites, s)]), false)
+      ])
+      error_message = "Every frappe.sites must be a non-empty list of the copy's sites (local.erpact_frappe_sites); check users: ${join(", ", [for u in local.erpact_frappe_users : u.user_name])}."
+    }
+    precondition {
+      condition = alltrue([
+        for u in local.erpact_frappe_users :
+        try(length(u.roles) > 0 && alltrue([for r in u.roles : can(regex("^[A-Za-z][A-Za-z0-9 _-]*$", r))]), false)
+      ])
+      error_message = "Every frappe.roles must be a non-empty list of Frappe role names; check users: ${join(", ", [for u in local.erpact_frappe_users : u.user_name])}."
+    }
+  }
+}

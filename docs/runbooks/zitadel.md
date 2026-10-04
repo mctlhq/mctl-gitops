@@ -420,6 +420,18 @@ the copy only) sign their users in through ZITADEL:
   step): Social Login Key `mctl` per site, sign-up of unknown users disabled
   (v15 `sign_ups = Deny`; v14 Website Settings `disable_signup`), users
   matched by e-mail to the users each site already has.
+- **Users the sites must have.** The copy's databases come from production,
+  which has no MCTL people, so such a user would get the 403. A user's Vault
+  entry (`secret/platform/zitadel/users/erpact`) may carry
+  `"frappe": {"sites": ["erpact-control.mctl.ai"], "roles": ["System Manager"]}`.
+  The Job writes every such user, and only those, into
+  `erpact/erpact-frappe-users` (`users.json`: `{version, users: [{email,
+  first_name, last_name, sites, roles}]}`). The restore Jobs and the users
+  CronJob of mctl-apps then create the User (named by e-mail, enabled,
+  System User) or add the missing roles. The manifest grants roles and never
+  revokes them. A site outside `local.erpact_frappe_sites`, an empty or
+  malformed `sites`/`roles`, or a `frappe` field on another tenant's user
+  fails the run before anything is written.
 
 Not yet verified with a real sign-in. The owner's first sign-in on the copy
 checks it both ways before anyone else is pointed at it:

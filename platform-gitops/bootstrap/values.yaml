@@ -275,6 +275,9 @@ externalManifestNamespaces:
       # OIDC client of the sites in ZITADEL, filled by the zitadel-iac Job;
       # declared in infra-components/erpact/oidc-zitadel.yaml (#1501).
       - erpact-oidc-zitadel
+      # Tenant users each Frappe site must have (e-mail, names, sites,
+      # roles; only users opted in with "frappe"), also from zitadel-iac.
+      - erpact-frappe-users
       - mariadb-root
     # No RBAC is bound to default in erpact. Project erpact (#1516) admits
     # no Secret and no RBAC kind from the tenant's repository, so that
