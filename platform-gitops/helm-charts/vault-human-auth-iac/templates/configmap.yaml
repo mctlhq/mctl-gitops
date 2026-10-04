@@ -1,0 +1,30 @@
+{{- /*
+  The OpenTofu root lives as real files under iac/ so CI can fmt and validate
+  it; this ConfigMap carries it into the Job. The lock file is named
+  explicitly because the glob takes only *.tf, and it gets a key without the
+  leading dot; the Job copies it back to .terraform.lock.hcl.
+
+  It is a regular resource, not a hook. ArgoCD does not diff hooks, so while
+  it was one (#1522) a change under iac/ left the Application Synced, no sync
+  ran, and the PostSync Job never applied it (#1524 sat unapplied). Every
+  input of a run is therefore in here: the root, the allowed plan actions and
+  the image. Changing any of them makes the Application OutOfSync, auto-sync
+  runs, and the Job follows as PostSync.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-human-auth-iac-inputs
+  labels:
+    app.kubernetes.io/name: vault-human-auth-iac
+  annotations:
+    vault-human-auth-iac/image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+data:
+  allowed-actions: {{ .Values.allowedActions | quote }}
+  allowed-deletes: {{ .Values.allowedDeletes | default "" | quote }}
+  {{- range $path, $_ := .Files.Glob "iac/*.tf" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+  terraform.lock.hcl: |
+    {{- .Files.Get "iac/.terraform.lock.hcl" | required "iac/.terraform.lock.hcl is missing" | nindent 4 }}

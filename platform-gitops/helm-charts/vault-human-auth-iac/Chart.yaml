@@ -1,0 +1,5 @@
+apiVersion: v2
+name: vault-human-auth-iac
+description: In-cluster OpenTofu Job that declares human sign-in to Vault through ZITADEL
+type: application
+version: 0.1.0
