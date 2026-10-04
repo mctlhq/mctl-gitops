@@ -101,7 +101,8 @@ spec:
           args:
             - |
               set -eu
-              ARGOCD_DEX_CLIENT_SECRET="$(printf %s "$ARGOCD_SERVER_SECRETKEY" | sha256sum | cut -d' ' -f1 | xxd -r -p | base64 | tr '+/' '-_' | cut -c1-40)"
+              digest="$(printf %s "$ARGOCD_SERVER_SECRETKEY" | sha256sum | cut -d' ' -f1 | sed 's/\(..\)/\\x\1/g')"
+              ARGOCD_DEX_CLIENT_SECRET="$(printf '%b' "$digest" | base64 | tr '+/' '-_' | cut -c1-40)"
               # Fail closed: a broken pipeline must not start Dex with an
               # empty secret for this client.
               if [ "${#ARGOCD_DEX_CLIENT_SECRET}" -ne 40 ]; then
