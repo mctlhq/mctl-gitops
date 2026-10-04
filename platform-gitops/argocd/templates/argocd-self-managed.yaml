@@ -37,6 +37,12 @@ spec:
       jsonPointers:
         - /data
         - /metadata/annotations
+    # Written by the zitadel-iac Job, not by Argo CD (oidc-zitadel.yaml).
+    - group: ""
+      kind: Secret
+      name: argocd-oidc-zitadel
+      jsonPointers:
+        - /data
     - group: external-secrets.io
       kind: ExternalSecret
       # Only scalar paths here, deliberately. The three

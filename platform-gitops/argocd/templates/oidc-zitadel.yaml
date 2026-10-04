@@ -1,0 +1,50 @@
+# Argo CD's OIDC client in ZITADEL (#1500). ZITADEL generates the client
+# secret, and the zitadel-iac Job (helm-charts/zitadel-iac/iac/argocd.tf)
+# writes clientID, clientSecret and cliClientID here with server-side apply as
+# field manager `zitadel-iac`.
+#
+# The part-of label is what lets argocd-cm reference these keys as
+# $argocd-oidc-zitadel:<key>. Argo CD creates the Secret without data and
+# never owns `.data` (ignoreDifferences in argocd-self-managed.yaml), so a
+# sync does not wipe what the Job wrote. The Job may only read and patch this
+# one Secret by name: no create, no list, nothing else in this namespace.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argocd-oidc-zitadel
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: argocd
+    app.kubernetes.io/component: oidc-zitadel
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-iac-oidc-client
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: argocd
+    app.kubernetes.io/component: oidc-zitadel
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["argocd-oidc-zitadel"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-iac-oidc-client
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: argocd
+    app.kubernetes.io/component: oidc-zitadel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-iac-oidc-client
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-iac
+    namespace: zitadel
