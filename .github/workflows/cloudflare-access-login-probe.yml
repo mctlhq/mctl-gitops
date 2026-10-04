@@ -1,0 +1,122 @@
+name: Cloudflare Access login probe
+
+# Says when a Cloudflare Access login can no longer reach a working identity
+# provider (#1329). On 2026-09-21 Google sign-in to every Access application
+# had been broken for an unknown time, found only by a person failing to log
+# in: the upstream OAuth client was deleted while Access kept serving its
+# login page, so every endpoint check stayed green.
+#
+# scripts/access-login-probe.py follows a browser's first steps anonymously:
+# the application must redirect to the Access login page, the page must link
+# to the IdP with the client id Git declares and an S256 PKCE challenge, and
+# the IdP must answer that link by starting a login rather than with an
+# error. It needs no credential at all.
+#
+# Today it watches ZITADEL through access-zitadel-test.mctl.ai (#1500); add a
+# target in the script for each IdP an application offers.
+#
+# Telegram is told once per distinct problem per UTC day, as in
+# cloudflare-portal-health.yml. "Could not determine" (exit 2) is reported as
+# its own message, never as healthy.
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/cloudflare-access-login-probe.yml'
+      - 'scripts/access-login-probe.py'
+      - 'infrastructure/cloudflare/account/zitadel-idp.tf'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-access-login-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: every Access IdP starts a login
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Selftest
+        run: python3 scripts/access-login-probe.py --selftest
+
+      - name: Probe
+        id: probe
+        run: |
+          set -uo pipefail
+          python3 scripts/access-login-probe.py | tee probe.txt
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          # Signature: which targets, in which state, with which reason, so
+          # an hour passing is not a new problem.
+          echo "sig=$(grep -v '^ok ' probe.txt | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Access login probe (exit $code)"
+            echo '```'; cat probe.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$code" in
+            0) ;;
+            1) echo "::error::an Access IdP is broken"; exit 1 ;;
+            *) echo "::error::the probe could not determine every target"; exit 1 ;;
+          esac
+
+      - name: Already said today?
+        id: seen
+        if: failure() && github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          echo "key=access-login-probe-${{ steps.probe.outputs.code }}-${{ steps.probe.outputs.sig }}-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          mkdir -p .said && date -u > .said/at
+
+      - name: Look up the key
+        id: cache
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .said
+          key: ${{ steps.seen.outputs.key }}
+          lookup-only: true
+
+      - name: Compose the message
+        if: failure() && github.event_name == 'schedule' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.probe.outputs.code }}" = "1" ]; then
+            title="🚨 <b>Cloudflare Access: an identity provider cannot start a login</b>"
+          else
+            title="🔧 <b>Cloudflare Access login probe could not determine the state</b>"
+          fi
+          {
+            echo "$title"
+            echo
+            # @html: the probe output carries IdP error text verbatim.
+            python3 -c 'import html,sys; print(html.escape(sys.stdin.read()))' < probe.txt 2>/dev/null \
+              || echo "(no probe output)"
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > message.txt
+
+      - name: Notify Telegram
+        id: notify
+        if: failure() && github.event_name == 'schedule' && steps.cache.outputs.cache-hit != 'true'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: html
+          message_file: message.txt
+
+      # Only once Telegram has taken it: a failed send is retried next hour.
+      - name: Remember it was said
+        if: >-
+          failure() && github.event_name == 'schedule' && steps.cache.outputs.cache-hit != 'true'
+          && steps.notify.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .said
+          key: ${{ steps.seen.outputs.key }}
