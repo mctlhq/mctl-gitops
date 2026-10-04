@@ -270,6 +270,8 @@ externalManifestNamespaces:
       - clo-s3
       - deployer-git
       - deployer-secret
+      # R2 token for the copy's backups (bucket erpact-backups only).
+      - erpact-backup-r2
       - mariadb-root
     # No RBAC is bound to default in erpact. Project erpact (#1516) admits
     # no Secret and no RBAC kind from the tenant's repository, so that
