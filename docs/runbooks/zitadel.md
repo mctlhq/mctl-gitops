@@ -172,7 +172,7 @@ ZITADEL roles yet.
      good idea.
   2. Argo CD: sign in at `https://ops.mctl.ai` via ZITADEL. **User Info**
      must show `groups: [admins]`.
-  3. Vault: run `vault login -method=oidc` (or use the UI at
+  3. Vault: run `vault login -method=oidc -path=mctl` (or use the UI at
      `https://secrets.mctl.ai`). `vault token lookup` must show
      `identity_policies` `[admin]`.
   4. Cloudflare Access: open the test application behind the ZITADEL
@@ -268,7 +268,7 @@ no `groups` claim.
 ### Vault sign-in
 
 `iac/vault.tf` declares who may sign in to Vault (`secrets.mctl.ai`), and as
-what. Vault's own side (the `auth/oidc` mount, groups, policies) is the
+what. Vault's own side (the `auth/mctl` mount, groups, policies) is the
 `vault-human-auth-iac` Job; see `docs/runbooks/vault-human-auth.md`.
 
 - **Project `Vault`** in `MCTL`. It has the same three flags as `Argo CD`

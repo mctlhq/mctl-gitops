@@ -1,7 +1,7 @@
 # Logs in through auth/kubernetes as role vault-human-auth-iac, with the
 # projected token of the Job's own ServiceAccount. The role and its policy
 # (cluster-bootstrap/vault-config/vault-policy-vault-human-auth-iac.hcl) are
-# applied once by the owner: they allow the auth/oidc mount, identity groups
+# applied once by the owner: they allow the auth/mctl mount, identity groups
 # and human-tenant-* policies, and no secret data at all.
 #
 # auth_login_jwt, because the provider has no kubernetes login block, and

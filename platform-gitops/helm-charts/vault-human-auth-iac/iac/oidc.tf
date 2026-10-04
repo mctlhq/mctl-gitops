@@ -1,4 +1,4 @@
-# Vault's auth/oidc mount, signing humans in through ZITADEL. The client is
+# Vault's auth/mctl mount (an OIDC auth method), signing humans in through ZITADEL. The client is
 # the `vault` application of ZITADEL's "Vault" project (zitadel-iac vault.tf):
 # a project of its own, so the tokens Vault accepts carry no other
 # application's audience, and only users holding a role on it can obtain one
@@ -14,18 +14,23 @@ locals {
 }
 
 resource "vault_jwt_auth_backend" "oidc" {
-  path = "oidc"
+  # The UI labels the login tab with the path, so it is `mctl`. It was
+  # `oidc` until the owner-approved move: changing it remounts in place
+  # (sys/remount keeps the accessor, so entity and group aliases carry over)
+  # and revokes every token the mount had issued. The path is part of the UI
+  # redirect URI registered in ZITADEL (zitadel-iac vault.tf). The resource
+  # address stays `oidc`, so the state does not move.
+  path = "mctl"
   type = "oidc"
-  # What the UI shows next to the mount; users sign in to "MCTL", ZITADEL
-  # is the identity provider behind it. The path stays `oidc`: it is part of
-  # the redirect URI registered in ZITADEL (zitadel-iac vault.tf).
+  # What the UI shows under the tab; users sign in to "MCTL", ZITADEL is the
+  # identity provider behind it.
   description = "MCTL login (auth.mctl.ai)"
 
   oidc_discovery_url = local.issuer
   bound_issuer       = local.issuer
   oidc_client_id     = var.oidc_client_id
   oidc_client_secret = var.oidc_client_secret
-  # `vault login -method=oidc` and the UI need no role name.
+  # `vault login -method=oidc -path=mctl` and the UI need no role name.
   default_role = "zitadel"
 
   tune {
@@ -60,7 +65,7 @@ resource "vault_jwt_auth_backend_role" "zitadel" {
 
   allowed_redirect_uris = [
     "${local.vault_url}/ui/vault/auth/${vault_jwt_auth_backend.oidc.path}/oidc/callback",
-    # `vault login -method=oidc` listens here.
+    # `vault login -method=oidc -path=mctl` listens here.
     "http://localhost:8250/oidc/callback",
   ]
 
