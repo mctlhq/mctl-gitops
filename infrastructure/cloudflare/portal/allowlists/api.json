@@ -287,7 +287,7 @@
     {
       "name": "mctl_list_tenant_skill_bindings",
       "enabled": true,
-      "reason": "Skill bindings per tenant; admins see all, members their own \u2014 the upstream applies that filter, the tool exposes only binding names."
+      "reason": "Skill bindings per tenant; admins see all, members their own — the upstream applies that filter, the tool exposes only binding names."
     },
     {
       "name": "mctl_list_tenants",
@@ -467,7 +467,32 @@
     {
       "name": "mctl_whoami",
       "enabled": true,
-      "reason": "Returns only the caller's own user id, admin flag, teams and namespaces \u2014 the identity probe the aggregate portal's A\u2260B check calls; nothing about anyone else."
+      "reason": "Returns only the caller's own user id, admin flag, teams and namespaces — the identity probe the aggregate portal's A≠B check calls; nothing about anyone else."
+    },
+    {
+      "name": "mctl_get_work_item",
+      "enabled": true,
+      "reason": "Read-only canonical WorkItem (state, state_version, tenant, latest execution and snapshot ids). Enabled on the shared portal by owner decision 2026-10-04: the portal switch is user-blind, so the mctl API's tenant check on the caller's own token (canSeeWorkItem) is the access control; an item outside the caller's tenants answers 404 like an unknown id."
+    },
+    {
+      "name": "mctl_list_work_item_executions",
+      "enabled": true,
+      "reason": "Read-only executions of a WorkItem (engine identity the platform recorded, phases). Enabled by owner decision 2026-10-04 under the same per-call tenant check as mctl_get_work_item."
+    },
+    {
+      "name": "mctl_list_work_item_snapshots",
+      "enabled": true,
+      "reason": "Read-only immutable ContextSnapshots of a WorkItem; a full snapshot can carry investigation context (issue text, repo refs). Enabled by owner decision 2026-10-04 under the same per-call tenant check as mctl_get_work_item."
+    },
+    {
+      "name": "mctl_list_work_item_execution_requests",
+      "enabled": true,
+      "reason": "Read-only execution requests of a WorkItem (kind, state, requested_by, surface). Enabled by owner decision 2026-10-04 under the same per-call tenant check as mctl_get_work_item."
+    },
+    {
+      "name": "mctl_request_work_item_execution",
+      "enabled": false,
+      "reason": "Records an execution request that the dispatcher turns into a DevLoop/investigator run on an existing WorkItem; consumes agent budget. Requester is the caller's token, the service principal is refused. Mutating: enabling it here also needs an entry in mutatingOnPortal. Not yet enabled on the shared portal: that is an owner decision, not part of mctl-api#341."
     }
   ]
 }
