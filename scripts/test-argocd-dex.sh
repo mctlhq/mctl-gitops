@@ -19,7 +19,8 @@
 #
 # After step 4, argocd-server must be Ready without restarts, /api/dex served
 # through argocd-server must answer with issuer <url>/api/dex, and /auth/login
-# must redirect to /api/dex/auth. Then a mutation run: Deployment `dex` scaled
+# must redirect to /api/dex/auth, or to the ZITADEL authorize endpoint when
+# argocd-cm carries oidc.config instead of dex.config. Then a mutation run: Deployment `dex` scaled
 # to 0 must make /api/dex fail, proving argocd-server proxies to that Dex and
 # not to a leftover one; scaled back, it must recover.
 #
@@ -90,6 +91,15 @@ helm install argocd argo-cd --repo https://argoproj.github.io/argo-helm \
 kubectl -n argocd patch secret argocd-secret --type merge -p \
   '{"stringData":{"backstage-oidc-client-id":"dummy","backstage-oidc-client-secret":"dummy","argo-workflows-sso-client-secret":"dummy","webhook.github.secret":"dummy"}}' >/dev/null
 
+# What the zitadel-iac Job writes into argocd-oidc-zitadel in the cluster;
+# dummies here, filled in once the Secret exists (see fill_oidc).
+OIDC_DUMMY_CLIENT_ID=111111111111111111
+fill_oidc() {
+  kubectl -n argocd get secret argocd-oidc-zitadel >/dev/null 2>&1 || return 0
+  kubectl -n argocd patch secret argocd-oidc-zitadel --type merge -p \
+    "{\"stringData\":{\"clientID\":\"$OIDC_DUMMY_CLIENT_ID\",\"clientSecret\":\"dummy\",\"cliClientID\":\"222222222222222222\"}}" >/dev/null
+}
+
 render() { # <chart dir> <out>
   helm template argocd "$1" -n argocd > "$WORK/raw.yaml"
   python3 - "$WORK/raw.yaml" > "$2" <<'PY'
@@ -121,6 +131,7 @@ echo "== $BASE_REF of platform-gitops/argocd, as Argo CD applies it"
 git -C "$ROOT" archive "$BASE_REF" platform-gitops/argocd | tar -x -C "$WORK"
 render "$WORK/platform-gitops/argocd" "$WORK/base.yaml"
 apply "$WORK/base.yaml"
+fill_oidc
 settle
 
 if [ -n "$CANDIDATE_REF" ]; then
@@ -133,6 +144,7 @@ else
   render "$CHART_DIR" "$WORK/head.yaml"
 fi
 apply "$WORK/head.yaml"
+fill_oidc
 settle
 sleep 20
 
@@ -156,10 +168,18 @@ issuer="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["issue
 [ "$issuer" = "$URL/api/dex" ] || fail "issuer is $issuer, want $URL/api/dex"
 echo "   issuer $issuer"
 
-echo "== /auth/login redirects to Dex"
+# Where Argo CD's own login must send the browser: Dex while argocd-cm has
+# dex.config, the oidc.config issuer once it has that instead.
+OIDC_ISSUER="$(kubectl -n argocd get cm argocd-cm -o jsonpath='{.data.oidc\.config}' | sed -n 's/^issuer: *//p')"
+if [ -n "$OIDC_ISSUER" ]; then
+  EXPECT_LOGIN="$OIDC_ISSUER/oauth/v2/authorize?client_id=$OIDC_DUMMY_CLIENT_ID&"
+else
+  EXPECT_LOGIN="$URL/api/dex/auth?"
+fi
+echo "== /auth/login redirects to $EXPECT_LOGIN"
 loc="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: ${URL#https://}" http://127.0.0.1:18080/auth/login)"
 case "$loc" in
-  "303 $URL/api/dex/auth?"*) echo "   $loc" | cut -c1-120 ;;
+  "303 $EXPECT_LOGIN"*) echo "   $loc" | cut -c1-120 ;;
   *) fail "/auth/login answered: $loc" ;;
 esac
 
