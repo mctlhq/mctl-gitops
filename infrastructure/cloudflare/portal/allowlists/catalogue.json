@@ -16,6 +16,7 @@
       "alice_get_home_summary"
     ],
     "api": [
+      "mctl_abandon_dev_loop",
       "mctl_acknowledge_incident",
       "mctl_add_custom_domain",
       "mctl_apply_openclaw_resource_profile",
