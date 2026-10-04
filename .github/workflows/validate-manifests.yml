@@ -531,6 +531,14 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_argocd_rbac_policy_render.py
 
+      - name: Forgejo reconcile keeps user e-mail and name out of the plan log
+        # svalabs/forgejo marks only forgejo_user.password sensitive; without
+        # sensitive() in main.tf every user created or changed prints its
+        # address and name in the Job log and in Loki.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_forgejo_reconcile_pii.py
+
       - name: Unit-test the DevLoop trace fixtures (issue-903)
         # T3/T4: the representative fixture has one root span per execution,
         # no orphaned parentSpanId, every correlation attribute, and at least
