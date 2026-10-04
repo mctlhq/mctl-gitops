@@ -26,21 +26,31 @@ spec:
             - sso
             - client
           extraArgs: []
+          # Signs in through ZITADEL. Who gets in, and as which SSO RBAC
+          # ServiceAccount, is declared in helm-charts/zitadel-iac/iac/workflows.tf:
+          # `groups` carries only the user's roles on the "Argo Workflows"
+          # project (admins, or the user's tenant on the "workflows" flag),
+          # and ZITADEL refuses a token to anyone without one. The client
+          # credentials are written by the zitadel-iac Job into
+          # argo-workflows-sso-zitadel (argo-workflows/config/sso-zitadel.yaml).
+          # Rollback: issuer https://ops.mctl.ai/api/dex with the Secret
+          # argo-workflows-sso and the `groups` scope, until Dex is removed.
           sso:
             enabled: true
-            issuer: https://ops.mctl.ai/api/dex
+            issuer: https://auth.mctl.ai
             clientId:
-              name: argo-workflows-sso
+              name: argo-workflows-sso-zitadel
               key: client-id
             clientSecret:
-              name: argo-workflows-sso
+              name: argo-workflows-sso-zitadel
               key: client-secret
             redirectUrl: https://workflows.mctl.ai/oauth2/callback
+            # No `groups` scope: ZITADEL sets the claim from the groups
+            # action, not from a scope.
             scopes:
               - openid
               - profile
               - email
-              - groups
             rbac:
               enabled: true
             customGroupClaimName: groups
