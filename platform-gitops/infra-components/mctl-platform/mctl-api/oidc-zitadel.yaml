@@ -1,0 +1,50 @@
+# mctl-api's ZITADEL federation entry (mctlhq/mctl-api#434). ZITADEL generates
+# the client id of the mctl-api application, so it is not written in git: the
+# zitadel-iac Job (helm-charts/zitadel-iac/iac/mctl-api.tf) builds the whole
+# MCTL_OIDC_PROVIDERS value from it and writes it here with server-side apply
+# as field manager `zitadel-iac`.
+#
+# Argo CD creates the Secret without data and never owns `.data`
+# (ignoreDifferences in bootstrap/templates/mctl-platform/mctl-api.yaml), so a
+# sync does not wipe what the Job wrote. The Job may only read and patch this
+# one Secret by name: no create, no list, nothing else in this namespace.
+#
+# Nothing reads this Secret until the Deployment references it, in a separate
+# change made after the Job has filled it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mctl-api-oidc-zitadel
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: oidc-zitadel
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: oidc-zitadel
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["mctl-api-oidc-zitadel"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/name: mctl-api
+    app.kubernetes.io/component: oidc-zitadel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-iac-oidc-client
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-iac
+    namespace: zitadel
