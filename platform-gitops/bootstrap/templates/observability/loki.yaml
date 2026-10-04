@@ -298,6 +298,44 @@ spec:
                             config:
                               match_all: false
                               action: inc
+                # Vault's audit log (vault-human-auth-iac iac/audit.tf): the
+                # `stdout` file device writes one JSON entry per request and
+                # one per response to the vault container's stdout; Vault's
+                # own log is on stderr. Two counters, read by
+                # vm-rules/vault-audit-alerts.yaml, so a disabled device or a
+                # failing one pages instead of leaving a silent gap.
+                #
+                # The entry pattern is the entry's last key, `type`, with the
+                # closing brace: an entry over containerd's 16 KiB line limit
+                # arrives split, and only its final piece carries it. Key
+                # names are never HMAC'd and values here are, so a response
+                # body cannot fake it with a value of "request".
+                - match:
+                    selector: '{namespace="vault", container="vault"}'
+                    stages:
+                      - regex:
+                          expression: '(?P<vault_audit_entry>"type":"(request|response)"\})'
+                      - metrics:
+                          vault_audit_entries_total:
+                            type: Counter
+                            description: "Vault audit entries (request and response) written to stdout"
+                            source: vault_audit_entry
+                            config:
+                              match_all: false
+                              action: inc
+                      # vault/request_handling.go (1.17): logged when no
+                      # audit device took the entry, and the request is then
+                      # refused.
+                      - regex:
+                          expression: '(?P<vault_audit_failure>core: failed to audit (request|response))'
+                      - metrics:
+                          vault_audit_failures_total:
+                            type: Counter
+                            description: "Vault requests or responses no audit device could log"
+                            source: vault_audit_failure
+                            config:
+                              match_all: false
+                              action: inc
               extraRelabelConfigs:
                 # Pods that opt out of scraping opt out of log collection too,
                 # as before.

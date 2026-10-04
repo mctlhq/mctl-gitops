@@ -537,6 +537,12 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "VaultBackupStale|VaultBackupMetricAbsent|VaultBackupSuspended"
+                  # The same for the audit trail (vm-rules/vault-audit-alerts.yaml):
+                  # re-enabling an audit device or replacing a Vault pod that
+                  # cannot write one is an operator's job.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "VaultAudit.*"
                   # A stale agents pipeline usually means its own model/auth
                   # path is unavailable, so route directly to an operator.
                   - receiver: telegram

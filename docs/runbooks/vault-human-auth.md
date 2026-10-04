@@ -15,6 +15,7 @@ else.
 | Hand-off Secret, NetworkPolicies, pull secret | `platform-gitops/infra-components/identity/vault-human-auth-iac/` |
 | The Job's own Vault identity (applied once by hand) | `infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-vault-human-auth-iac.hcl`, README "vault-human-auth-iac" |
 | Image | `platform-gitops/images/vault-iac/Dockerfile` |
+| Audit log (the same Job enables the `stdout` audit device) | `iac/audit.tf`; queries and failure modes in [vault-audit.md](vault-audit.md) |
 
 ## How it fits together
 
