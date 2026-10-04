@@ -143,7 +143,8 @@ class ScheduledDispatchWorkflow:
                     FailureReport(target.repo, target.workflow_file, workflow.info().workflow_id,
                                   _error_type(original), str(original.cause or original)),
                     start_to_close_timeout=timedelta(minutes=2),
-                    retry_policy=RetryPolicy(maximum_attempts=3),
+                    retry_policy=RetryPolicy(maximum_attempts=3,
+                                             non_retryable_error_types=["AlertReportRejected", "NoGitHubToken"]),
                 )
             except ActivityError:
                 workflow.logger.exception("failure report could not be filed")
