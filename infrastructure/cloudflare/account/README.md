@@ -9,7 +9,10 @@ device settings, and eventually the MCP Portal and its servers.
 It now also holds the MCP portal's own application (`portal-app.tf`, adopted)
 and all six portal member applications: `projects`, `alice` and `coolify`
 created in `portal-mcp-apps.tf`, and `tg`, `seerrsense` and `api` adopted in
-`portal-mcp-apps-adopted.tf` (#1416). Every policy on these applications is
+`portal-mcp-apps-adopted.tf` (#1416). `zitadel-idp.tf` (#1500) declares the
+first identity provider here, ZITADEL as a public PKCE client with no
+secret, offered only by a throwaway test application
+(`access-zitadel-test.mctl.ai`) until the owner's test login passes. Every policy on these applications is
 app-scoped, so none has a standalone resource; each is either written inline
 or referenced by id from its application. Everything else in `#1088` is still
 to be imported.
