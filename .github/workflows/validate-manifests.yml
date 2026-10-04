@@ -387,6 +387,17 @@ jobs:
         # plane, so it is exercised here against synthetic plans.
         run: python3 tests/test_k3s_plan_guard.py
 
+      - name: Check the in-cluster Access login probe against its sources
+        # The CronJob in infra-components/observability/blackbox carries two
+        # copies it cannot read at run time: scripts/access-login-probe.py as
+        # a ConfigMap, and the ZITADEL client id from
+        # infrastructure/cloudflare/account/zitadel-idp.tf as an argument. A
+        # drifted copy would probe for a client that no longer exists, or run
+        # an old script, and stay green doing it (#1329).
+        run: |
+          python3 scripts/access-login-probe.py --selftest
+          python3 tests/test_access_login_probe_cronjob.py
+
       - name: Unit-test the release-deploy bump script
         # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
         # it only ever runs during a real release — a bug in it is found by

@@ -1,0 +1,113 @@
+# Alerts on the Cloudflare Access login probe (#1329).
+#
+# Fed by the access-login-probe CronJob (infra-components/observability/
+# blackbox/access-login-probe.yaml), which runs every 15 minutes and pushes
+# job="access_login_probe" to the cluster Pushgateway, scraped by vmagent:
+#
+#   access_login_probe_status                        0 healthy, 1 broken,
+#                                                    2 could not be determined
+#   access_login_probe_last_run_timestamp_seconds    every run
+#   access_login_probe_last_success_timestamp_seconds  only runs that were 0
+#
+# The Pushgateway keeps the last pushed value until the next push, so a
+# status holds steady between runs and a CronJob that stops running leaves
+# its last status in place forever. That is why staleness is judged on the
+# success timestamp and not on the status: a probe that last said "healthy"
+# and then died must not keep reading as healthy.
+#
+# "Could not determine" (2) never counts as healthy here. It has its own
+# alert, and it does not advance the success timestamp, so a probe stuck on
+# unknown also trips AccessLoginProbeStale.
+#
+# Routing: alertnames all start with AccessLogin so one alertmanager route
+# can send them to a human (bootstrap/templates/observability/monitoring.yaml).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: access-login-probe
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: access-login
+spec:
+  groups:
+    - name: access-login-probe
+      interval: 60s
+      rules:
+        - alert: AccessLoginBroken
+          # Held for 20m against a 15m schedule: one broken run that the next
+          # run contradicts stays quiet, two in a row fire. Filtered before
+          # aggregating, so that with more than one series (a second pusher,
+          # an instance label) a broken one is never outranked by an unknown
+          # one -- the same order run() gives: broken outranks unknown.
+          expr: max by (job) (access_login_probe_status{job="access_login_probe"} == 1)
+          for: 20m
+          labels:
+            severity: critical
+            component: access-login
+          annotations:
+            summary: "Cloudflare Access sign-in through ZITADEL is broken"
+            description: >-
+              The Access login probe has found sign-in broken on two
+              consecutive runs: Access no longer intercepts the test
+              application, offers the IdP with a client id or callback Git does
+              not declare, or the IdP refuses the authorization request. Every
+              Access application offering ZITADEL is affected. The reason is in
+              the probe Job's log:
+              kubectl -n monitoring logs job/<latest access-login-probe-*>.
+              Re-check by hand: dispatch cloudflare-access-login-probe.yml.
+
+        - alert: AccessLoginUnknown
+          # Three runs in a row that could not tell. Not healthy, and not
+          # proof of an outage either: the probe could not reach Access or
+          # the IdP, or the login page changed under the scraper.
+          expr: |
+            max by (job) (access_login_probe_status{job="access_login_probe"} == 2)
+            unless on (job)
+            max by (job) (access_login_probe_status{job="access_login_probe"} == 1)
+          for: 45m
+          labels:
+            severity: warning
+            component: access-login
+          annotations:
+            summary: "Cloudflare Access login probe cannot tell whether sign-in works"
+            description: >-
+              The Access login probe has reported "could not be determined" for
+              45 minutes. Sign-in may be fine or broken; nothing is known. The
+              probe Job's log names the step that failed.
+
+        - alert: AccessLoginProbeStale
+          # No successful probe in 2h, whatever the reason: broken, unknown,
+          # a CronJob that stopped running, or a push that never arrives. The
+          # absent_over_time half covers a success timestamp that does not
+          # exist at all (never pushed, or the Pushgateway restarted and
+          # every run since has failed). `for` absorbs the first run after a
+          # fresh deploy.
+          expr: |
+            (time() - max by (job) (access_login_probe_last_success_timestamp_seconds{job="access_login_probe"}) > 7200)
+            or
+            absent_over_time(access_login_probe_last_success_timestamp_seconds{job="access_login_probe"}[2h])
+          for: 30m
+          labels:
+            severity: critical
+            component: access-login
+          annotations:
+            summary: "No successful Cloudflare Access login probe for over 2 hours"
+            description: >-
+              Nothing has confirmed that Access sign-in works for more than two
+              hours. Check the access-login-probe CronJob in monitoring (last
+              schedule, failed Jobs, pod logs) and the Pushgateway. If the probe
+              itself is fine, AccessLoginBroken or AccessLoginUnknown says why.
+
+        - alert: AccessLoginProbeAbsent
+          expr: absent_over_time(access_login_probe_status{job="access_login_probe"}[1h])
+          for: 15m
+          labels:
+            severity: warning
+            component: access-login
+          annotations:
+            summary: "The Cloudflare Access login probe has pushed nothing for over an hour"
+            description: >-
+              No access_login_probe_status sample in over an hour. The CronJob is
+              not running or cannot reach the Pushgateway, or the Pushgateway
+              lost its groups on a restart and no run has pushed since.
