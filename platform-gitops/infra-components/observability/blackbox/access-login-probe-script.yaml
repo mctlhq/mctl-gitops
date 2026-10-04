@@ -353,6 +353,12 @@ data:
         if a.client_id is not None and not a.client_id.isdigit():
             print(f"UNKNOWN --client-id {a.client_id!r} is not a numeric client id")
             code = 2
+        elif a.client_id and len(TARGETS) != 1:
+            # One override cannot serve several IdPs: each target declares its own
+            # client id source. Refuse rather than probe a second IdP with the
+            # first one's id and call it broken.
+            print(f"UNKNOWN --client-id names one client id, but there are {len(TARGETS)} targets")
+            code = 2
         else:
             check = (lambda t, root: probe(t, root, a.client_id)) if a.client_id else probe
             code = run(a.repo_root, check=check)

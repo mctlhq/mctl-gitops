@@ -36,8 +36,11 @@ spec:
       rules:
         - alert: AccessLoginBroken
           # Held for 20m against a 15m schedule: one broken run that the next
-          # run contradicts stays quiet, two in a row fire.
-          expr: max by (job) (access_login_probe_status{job="access_login_probe"}) == 1
+          # run contradicts stays quiet, two in a row fire. Filtered before
+          # aggregating, so that with more than one series (a second pusher,
+          # an instance label) a broken one is never outranked by an unknown
+          # one -- the same order run() gives: broken outranks unknown.
+          expr: max by (job) (access_login_probe_status{job="access_login_probe"} == 1)
           for: 20m
           labels:
             severity: critical
@@ -58,7 +61,10 @@ spec:
           # Three runs in a row that could not tell. Not healthy, and not
           # proof of an outage either: the probe could not reach Access or
           # the IdP, or the login page changed under the scraper.
-          expr: max by (job) (access_login_probe_status{job="access_login_probe"}) == 2
+          expr: |
+            max by (job) (access_login_probe_status{job="access_login_probe"} == 2)
+            unless on (job)
+            max by (job) (access_login_probe_status{job="access_login_probe"} == 1)
           for: 45m
           labels:
             severity: warning

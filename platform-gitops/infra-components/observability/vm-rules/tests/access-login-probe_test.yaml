@@ -68,6 +68,28 @@ tests:
               description: "The Access login probe has found sign-in broken on two consecutive runs: Access no longer intercepts the test application, offers the IdP with a client id or callback Git does not declare, or the IdP refuses the authorization request. Every Access application offering ZITADEL is affected. The reason is in the probe Job's log: kubectl -n monitoring logs job/<latest access-login-probe-*>. Re-check by hand: dispatch cloudflare-access-login-probe.yml."
 
   - interval: 1m
+    name: broken never reads as unknown, and outranks an unknown second series
+    input_series:
+      - series: 'access_login_probe_status{job="access_login_probe",instance="a"}'
+        values: '1x60'
+      - series: 'access_login_probe_status{job="access_login_probe",instance="b"}'
+        values: '2x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: AccessLoginUnknown
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: AccessLoginBroken
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: access-login
+              job: access_login_probe
+            exp_annotations:
+              summary: "Cloudflare Access sign-in through ZITADEL is broken"
+              description: "The Access login probe has found sign-in broken on two consecutive runs: Access no longer intercepts the test application, offers the IdP with a client id or callback Git does not declare, or the IdP refuses the authorization request. Every Access application offering ZITADEL is affected. The reason is in the probe Job's log: kubectl -n monitoring logs job/<latest access-login-probe-*>. Re-check by hand: dispatch cloudflare-access-login-probe.yml."
+
+  - interval: 1m
     name: unknown fires its own alert and never reads as broken
     input_series:
       - series: 'access_login_probe_status{job="access_login_probe"}'
@@ -185,4 +207,13 @@ tests:
     alert_rule_test:
       - eval_time: 59m
         alertname: AccessLoginBroken
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: AccessLoginUnknown
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: AccessLoginProbeStale
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: AccessLoginProbeAbsent
         exp_alerts: []

@@ -51,9 +51,13 @@ spec:
     spec:
       # One attempt. A retry would hide a flapping IdP behind a later green
       # run; the alert rules already wait for repeated failures instead.
+      # 180s covers four 20s socket timeouts plus scheduling and an uncached
+      # image pull. A short TTL keeps a failed Job (a lost push) from holding
+      # KubeJobFailed for a day after the next run recovered; the history
+      # limits do the retention.
       backoffLimit: 0
-      activeDeadlineSeconds: 120
-      ttlSecondsAfterFinished: 86400
+      activeDeadlineSeconds: 180
+      ttlSecondsAfterFinished: 3600
       template:
         metadata:
           labels:
@@ -123,8 +127,8 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
-      activeDeadlineSeconds: 120
-      ttlSecondsAfterFinished: 86400
+      activeDeadlineSeconds: 180
+      ttlSecondsAfterFinished: 3600
       template:
         metadata:
           labels:
