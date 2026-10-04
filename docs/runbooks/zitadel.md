@@ -194,6 +194,51 @@ no grant is refused, and
 Forgejo (another project) still signs in users without any Argo CD role, with
 no `groups` claim.
 
+### Vault sign-in
+
+`iac/vault.tf` declares who may sign in to Vault (`secrets.mctl.ai`), and as
+what. Vault's own side (the `auth/oidc` mount, groups, policies) is the
+`vault-human-auth-iac` Job; see `docs/runbooks/vault-human-auth.md`.
+
+- **Project `Vault`** in `MCTL`. It has the same three flags as `Argo CD`
+  (`project_role_check`, `has_project_check`, `project_role_assertion`), and
+  it is a project of its own so that no other application's tokens carry
+  Vault's audience.
+- **Roles.**
+  - `admins` is held by the same `argocd_admin_users`. Vault maps it to the
+    `admin` policy.
+  - One role per tenant, held by a tenant user **only if** their Vault entry
+    carries `"vault": true`. This works like `"argocd"`: the same users list
+    and the same opt-in, and a revoke plans a delete of
+    `zitadel_user_grant.vault_tenant["<tenant>/<user>"]`.
+- **`groups` claim.** The `argocdGroups` action copies the user's roles on the
+  Argo CD **or** the Vault project. Each token still carries only its own
+  application's roles, because the grants the action sees are loaded for the
+  requesting client's project only (see the comment in `argocd.tf`).
+- **Client `vault`.** A web client with a client secret and code flow. Vault
+  adds PKCE S256 itself. The same client serves both:
+  - the UI, at `https://secrets.mctl.ai/ui/vault/auth/oidc/oidc/callback`;
+  - the CLI, at `http://localhost:8250/oidc/callback`. ZITADEL accepts this
+    plain-http loopback redirect for a confidential code-flow client without
+    dev mode, matched exactly.
+
+  The client id, the secret and the tenant list (JSON) go into
+  `vault-human-auth-iac/vault-oidc-zitadel`.
+
+Verified on a local v4.19.2 with Vault 1.17.2 and the real OpenTofu roots, by
+a full code flow through the session API (`/v2/sessions`,
+`/v2/oidc/auth_requests/<id>`) and Vault's own `auth_url` and `callback`
+endpoints, for both redirects:
+
+- A flagged tenant user gets `identity_policies ["human-tenant-<tenant>"]`. It
+  reads its own tenant's paths, and another tenant's path returns 403.
+- An admin gets `["admin"]`.
+- A tenant user flagged for Argo CD only, or not flagged at all, is refused
+  with `Errors.User.GrantRequired` before reaching Vault.
+- Vault's authorize URL carries `code_challenge_method=S256`.
+- A user holding `t1` on the Argo CD project and `admins` on the Vault project
+  gets `groups: ["t1"]` from Argo CD's client and `["admins"]` from Vault's.
+
 ### mctl-api audience (mctl-api#434)
 
 `iac/mctl-api.tf` gives mctl-api, a resource server, the audience it enforces

@@ -26,6 +26,9 @@ image:
 #   #1500 step 3 (Cloudflare Access public client, its project, role, grant
 #   and zitadel/cloudflare-access-oidc): no new action; all creates, plus a
 #   read of the user lookup.
+#   Vault human sign-in (Vault project, roles, grants, OIDC application, the
+#   data of vault-human-auth-iac/vault-oidc-zitadel): no new action; all
+#   creates, plus an in-place update of the groups action's script.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
