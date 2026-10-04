@@ -1,0 +1,49 @@
+{{- if (default dict .Values.surfacePortalToken).enabled }}
+# Bearer token of the surface:portal principal (mctlhq/mctl-portal#126):
+# mctl-api authenticates it from MCTL_SURFACE_PORTAL_TOKEN
+# (internal/auth/oidc.go), and the portal's work-items-backend sends it on
+# every relay call. Both sides read the same Vault property. Rendered only
+# when surfacePortalToken.enabled is true in bootstrap/values.yaml.
+#
+# Own ExternalSecrets and own file for the same reasons as
+# mctl-api-surface-telegram.yaml: a missing Vault property disables only this
+# principal, and a file that leads with a template directive is listed in
+# .github/workflows/yamllint.yml's ignore.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-api-surface-portal
+  namespace: mctl-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-api-surface-portal
+    creationPolicy: Owner
+  data:
+    - secretKey: MCTL_SURFACE_PORTAL_TOKEN
+      remoteRef:
+        key: platform/mctl-api/surface-tokens
+        property: portal-token
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: backstage-surface-portal
+  namespace: backstage
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: backstage-surface-portal
+    creationPolicy: Owner
+  data:
+    - secretKey: MCTL_SURFACE_PORTAL_TOKEN
+      remoteRef:
+        key: platform/mctl-api/surface-tokens
+        property: portal-token
+{{- end }}

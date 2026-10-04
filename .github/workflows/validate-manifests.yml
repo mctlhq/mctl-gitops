@@ -155,6 +155,26 @@ jobs:
             if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
           done
 
+      # mctlhq/mctl-portal#126: same both-states shape. On: both
+      # surface-portal ExternalSecrets, the mctl-api chart value and the
+      # backstage env appear and are schema-valid. Off: none does.
+      - name: Render and validate the surface-portal overlay (portal#126)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            --set surfacePortalToken.enabled=false > "$tmpdir/off.yaml"
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            --set surfacePortalToken.enabled=true > "$tmpdir/on.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" "$tmpdir/on.yaml"
+          for marker in 'name: mctl-api-surface-portal' 'name: backstage-surface-portal' 'surfacePortalTokenSecret: mctl-api-surface-portal' 'property: portal-token' 'name: MCTL_SURFACE_PORTAL_TOKEN'; do
+            grep -qF "$marker" "$tmpdir/on.yaml" || { echo "::error::flag on: missing '$marker'"; exit 1; }
+            if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
+          done
+
       # issue-1409: the usage pricing ConfigMap renders unconditionally (no
       # flag, unlike the two overlays above) since it is inert until a
       # companion mctl-api chart change (cross-repo, tracked separately)

@@ -271,6 +271,18 @@ spec:
               memory: 768Mi
           extraEnvVarsSecrets:
             - backstage-secrets
+          {{- if (default dict .Values.surfacePortalToken).enabled }}
+          # surface:portal token for plugins/work-items-backend
+          # (workItems.surfaceToken). optional: a Secret that has not synced
+          # yet leaves the plugin answering 503 instead of failing the pod.
+          extraEnvVars:
+            - name: MCTL_SURFACE_PORTAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backstage-surface-portal
+                  key: MCTL_SURFACE_PORTAL_TOKEN
+                  optional: true
+          {{- end }}
           startupProbe:
             httpGet:
               path: /.backstage/health/v1/readiness

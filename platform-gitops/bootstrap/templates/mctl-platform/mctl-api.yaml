@@ -245,6 +245,14 @@ spec:
           # value and the chart simply ignores the unknown key.
           surfaceTelegramTokenSecret: mctl-api-surface-telegram
           {{- end }}
+          {{- if (default dict .Values.surfacePortalToken).enabled }}
+
+          # The surface:portal bearer token (mctlhq/mctl-portal#126), from the
+          # mctl-api-surface-portal ExternalSecret. Needs the mctl-api chart's
+          # optional surfacePortalTokenSecret (mctlhq/mctl-api#439); until it
+          # lands the chart ignores the unknown key.
+          surfacePortalTokenSecret: mctl-api-surface-portal
+          {{- end }}
 
           resources:
             requests:
