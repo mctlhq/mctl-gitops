@@ -117,6 +117,28 @@ Restore:
   the Forgejo log on any repository operation.
 - The backup Job pod must land on Forgejo's node; if Forgejo is down the
   backup cannot run and `ForgejoBackupStale` fires the next day.
+- The chart's values and the manifests next to it arrive in **two separate
+  syncs**. The values live in the Application spec
+  (`bootstrap/templates/data/forgejo.yaml`), which root-app applies. The
+  directory `infra-components/data/forgejo` is a source that the forgejo
+  Application reads itself. One merge that touches both lands in two
+  separate syncs, minutes apart, and either may go first. Sync waves and
+  hooks order resources **within** one sync only. They cannot make a hook
+  in this directory run "just before" a chart value change from the same
+  PR.
+
+  Seen on 2026-10-04 (#1599, renaming the OAuth source to MCTL). The rename
+  hook ran in the first sync, while the running pod still had the provider
+  registered under the old name. Sign-in was broken for about 4 minutes,
+  until root-app delivered `name: MCTL` and the pod restarted. A pod restart
+  in that window would also have re-added the old source.
+
+  When a change needs both halves in one step, choose one of these:
+  - put the hook where the value lives (the Application spec), so they land
+    in the same sync;
+  - split the change into two PRs and merge the second only once the first
+    is live;
+  - make the in-between state work on its own.
 
 ## Declarative organisations
 
