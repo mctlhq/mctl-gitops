@@ -339,6 +339,16 @@ spec:
                 secretKeyRef:
                   name: grafana-oidc-zitadel
                   key: signout-redirect-url
+              # Grafana's own database on shared-pg (grafana.ini [database]
+              # below; role and Database in infra-components/data/cnpg/shared).
+              GF_DATABASE_USER:
+                secretKeyRef:
+                  name: grafana-db-creds
+                  key: username
+              GF_DATABASE_PASSWORD:
+                secretKeyRef:
+                  name: grafana-db-creds
+                  key: password
               # Consumed via the $__env{} macro in the mctl-academy
               # read-only Postgres datasource (academy-postgres-datasource
               # ConfigMap) instead of a plaintext password in provisioning
@@ -355,6 +365,22 @@ spec:
             grafana.ini:
               server:
                 root_url: https://grafana.mctl.ai
+              # State (users, orgs, folder permissions, service accounts,
+              # UI-made alert rules and dashboards) lives in shared-pg, not in
+              # SQLite on the pod's emptyDir, so a restart no longer drops it
+              # (#1601). Credentials come from env (envValueFrom above).
+              # ssl_mode require as mctl-api and the academy datasource use
+              # it: CNPG serves TLS with its own CA, which is not verified.
+              # max_open_conn stays under the role's connectionLimit (10).
+              # Rollback: drop this section and the two GF_DATABASE_* env
+              # entries; Grafana starts on an empty SQLite again.
+              database:
+                type: postgres
+                host: shared-pg-rw.platform-db.svc.cluster.local:5432
+                name: grafana
+                ssl_mode: require
+                max_open_conn: 8
+                max_idle_conn: 2
               # #1560: Secure on every cookie, and a __Host- session cookie a
               # tenant host on *.mctl.ai cannot shadow (it would need
               # Domain=.mctl.ai, which the prefix forbids).
