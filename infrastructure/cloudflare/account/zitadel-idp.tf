@@ -25,7 +25,8 @@
 variable "zitadel_access_client_id" {
   description = "client_id of zitadel_application_oidc.cloudflare_access (public PKCE client)."
   type        = string
-  default     = "TODO-from-zitadel-cloudflare-access-oidc"
+  # Read from zitadel/cloudflare-access-oidc after #1575 applied (2026-10-04).
+  default = "393612693447116501"
 
   validation {
     condition     = can(regex("^[0-9]+$", var.zitadel_access_client_id))
