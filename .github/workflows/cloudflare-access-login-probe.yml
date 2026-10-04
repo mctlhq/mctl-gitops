@@ -23,11 +23,13 @@ on:
   schedule:
     - cron: '23 * * * *'
   workflow_dispatch:
+  # Not on zitadel-idp.tf: a pull request changing the client id is applied
+  # only after merge, so probing live Access against the branch's value would
+  # hold it red until then. The hourly run checks it once applied.
   pull_request:
     paths:
       - '.github/workflows/cloudflare-access-login-probe.yml'
       - 'scripts/access-login-probe.py'
-      - 'infrastructure/cloudflare/account/zitadel-idp.tf'
 
 permissions:
   contents: read
