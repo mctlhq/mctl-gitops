@@ -595,6 +595,14 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "MctlAgentsImplement.*"
+                  # Scheduled dispatch (mctl-agents#559-561, #1593). Telegram only:
+                  # the remedy is a human action (fix the GitHub App token,
+                  # re-create or unpause the Temporal schedule, re-run the
+                  # dispatch), which mctl-agent cannot take. Prefix match so the
+                  # next dispatch alert does not default to agent-only.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "MctlAgentsScheduledDispatch.*"
                   # Platform/infra Applications (projects default + platform)
                   # also page a human, in ADDITION to mctl-agent — hence
                   # continue: true, which lets the catch-all route below still

@@ -29,6 +29,11 @@
 # below (MctlAgentsImplement*) are routed to a human by an explicit
 # alertname matcher in monitoring.yaml, because the remedy for each is a
 # values edit (N, or the pod) that only a person can make.
+#
+# The scheduled-dispatch group (mctl-agents#559/#560/#561, issue #1593) is
+# routed to a human the same way, by the MctlAgentsScheduledDispatch.* prefix
+# matcher: the remedy is a person fixing the GitHub App token, or re-creating
+# or unpausing the Temporal schedule and re-running the dispatch.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
 metadata:
@@ -347,3 +352,105 @@ spec:
               IMPLEMENTATION_MAX_CONCURRENT_ACTIVITIES in
               platform-gitops/services/admins/mctl-agents-worker-implement/values.yaml
               and terminating the stuck run. Context: mctl-agents#395.
+
+    # Weekly GitHub workflow dispatch run by ScheduledDispatchWorkflow on the
+    # control queue (mctl-agents#559/#560). Names read off a live worker
+    # (mctl-agents 1.67.0): temporal_workflow_completed with labels namespace,
+    # service_name, task_queue, workflow_type; no _total suffix. The failed
+    # counter is the same family. The undelivered counter had no series yet,
+    # so rule 1 matches it with and without the temporal_ prefix.
+    #
+    # Counters in a long-lived worker are born at 1, and increase() cannot
+    # see the first sample of a new series. Rules 1 and 2 therefore use the
+    # two-arm shape of LifecycleClaimAbandoned in lifecycle-rollout-alerts.yaml.
+    - name: mctl-agents.scheduled-dispatch
+      rules:
+        # A dispatch failed AND its scheduled-dispatch-failed issue could not
+        # be filed (mctl-agents#561). Last remaining channel for the failure.
+        - alert: MctlAgentsScheduledDispatchAlertUndelivered
+          expr: |
+            sum by (repo, workflow_file) (increase({__name__=~"(temporal_)?scheduled_dispatch_alert_undelivered"}[1h])) > 0
+            or
+            (
+              sum by (repo, workflow_file) (max_over_time({__name__=~"(temporal_)?scheduled_dispatch_alert_undelivered"}[1h])) > 0
+              unless
+              sum by (repo, workflow_file) (max_over_time({__name__=~"(temporal_)?scheduled_dispatch_alert_undelivered"}[1h] offset 1h)) > 0
+            )
+          labels:
+            severity: warning
+            namespace: admins
+          annotations:
+            summary: scheduled dispatch failed and its GitHub alert issue was not filed
+            description: |
+              A scheduled dispatch of {{ $labels.workflow_file }} in {{ $labels.repo }}
+              failed, and the scheduled-dispatch-failed issue could not be filed.
+              This alert is the only remaining channel. Grep the
+              admins-mctl-agents-worker logs for scheduled_dispatch_alert_undelivered,
+              check the GitHub App token, and re-run the dispatch by hand.
+
+        # Backstop: the workflow execution itself failed. Fires even when the
+        # GitHub issue was filed but nobody watches the target repo. The SDK
+        # metric has no repo label, hence the plain sum.
+        - alert: MctlAgentsScheduledDispatchFailed
+          expr: |
+            sum(increase(temporal_workflow_failed{workflow_type="ScheduledDispatchWorkflow", task_queue="mctl-dev-loop"}[1h])) > 0
+            or
+            (
+              sum(max_over_time(temporal_workflow_failed{workflow_type="ScheduledDispatchWorkflow", task_queue="mctl-dev-loop"}[1h])) > 0
+              unless
+              sum(max_over_time(temporal_workflow_failed{workflow_type="ScheduledDispatchWorkflow", task_queue="mctl-dev-loop"}[1h] offset 1h)) > 0
+            )
+          labels:
+            severity: warning
+            namespace: admins
+          annotations:
+            summary: a ScheduledDispatchWorkflow execution failed
+            description: |
+              A ScheduledDispatchWorkflow execution on mctl-dev-loop failed in
+              the last hour. Look for the scheduled-dispatch-failed issue in the
+              target repo and the failed execution in the Temporal UI.
+
+        # Silent miss: no ScheduledDispatchWorkflow completed in 8 days (one
+        # weekly period plus a day of slack).
+        #
+        #  - Arm A, increase(): an existing completed series grew in the window.
+        #  - Arm B, last_over_time unless offset 8d: a series that exists in the
+        #    window but did not exist 8d ago. After a worker restart the counter
+        #    returns only when a workflow completes, born at 1, which arm A
+        #    cannot see. So a restart after a good run still reads as OK.
+        #  - absent() turns "no evidence of a completion" into 1.
+        #  - The gate makes this an OBSERVED absence only: the worker's own
+        #    always-exported gauge must have been present in at least 173 of the
+        #    192 hourly steps of the window. It is summed across series, because
+        #    every deploy replaces the pod and so starts a new series; a
+        #    per-series sample count would almost never pass. A scrape gap or a
+        #    down worker is unknown, not a miss, and
+        #    MctlAgentsWorkerMetricsMissing covers it.
+        #
+        # The completed counter has no repo label, so with more than one weekly
+        # target a healthy one hides a missing one. Acceptable for one target.
+        - alert: MctlAgentsScheduledDispatchMissed
+          expr: |
+            absent(
+              sum(increase(temporal_workflow_completed{workflow_type="ScheduledDispatchWorkflow", task_queue="mctl-dev-loop"}[8d])) > 0
+              or
+              sum(
+                last_over_time(temporal_workflow_completed{workflow_type="ScheduledDispatchWorkflow", task_queue="mctl-dev-loop"}[8d])
+                unless
+                temporal_workflow_completed{workflow_type="ScheduledDispatchWorkflow", task_queue="mctl-dev-loop"} offset 8d
+              ) > 0
+            )
+            and on()
+            count_over_time(sum(temporal_worker_task_slots_available{task_queue="mctl-dev-loop", worker_type="WorkflowWorker"})[8d:1h]) > 172
+          for: 1h
+          labels:
+            severity: warning
+            namespace: admins
+          annotations:
+            summary: no scheduled dispatch has completed in 8 days
+            description: |
+              The worker was observed for the last 8 days and no
+              ScheduledDispatchWorkflow completed in that time. The Temporal
+              schedule was probably deleted, paused or never created. Check the
+              schedule in the Temporal UI. If the pause is deliberate, silence
+              this alert. It can also fire before the first recorded run.
