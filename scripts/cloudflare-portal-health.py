@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""Report whether every upstream server of the MCP portal (mcp.mctl.ai) is ready.
+
+The failure this watches for is the one infrastructure/cloudflare/portal/README.md
+leaves to "whatever watches the portal": the admin credential a server syncs
+with expires on the upstream's schedule, the server goes `stale` with
+`Authorization failed: needs_reauth`, and its tools go on being served from an
+old snapshot, or not at all, with nobody told. On 2026-09-23 `projects` had
+been in that state for two days.
+
+It lists every server through the Cloudflare API (MCP Portals -> Read, nothing
+more), so a server added later is watched without an edit here. A server is
+ready when its status is `ready` and it carries no error.
+
+Reading is all or nothing. A failed request, an error envelope, a body that is
+not the expected shape, a later page failing after earlier ones succeeded, or
+an empty list all mean the servers could not be observed -- never that they
+are all ready, and never that there are none.
+
+With --pushgateway the outcome is pushed as metrics (job
+cloudflare_portal_health) for infra-components/observability/vm-rules/
+cloudflare-portal-health.yaml, and the exit status says only whether the push
+got through: 0 pushed, otherwise not. Without it: 0 every server ready, 1 a
+server is not ready, 2 could not be determined.
+
+The token comes from CLOUDFLARE_API_TOKEN and is sent only in the
+Authorization header.
+
+Usage:
+    cloudflare-portal-health.py --account ID [--pushgateway URL [--push-job NAME]]
+    cloudflare-portal-health.py --selftest
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+API = "https://api.cloudflare.com/client/v4/accounts/{account}/access/ai-controls/mcp/servers"
+PER_PAGE = 100
+MAX_PAGES = 20
+
+
+class Unknown(Exception):
+    """The servers could not be observed; nothing is known about them."""
+
+
+def http_get(url: str, token: str) -> bytes:
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "mctl-cloudflare-portal-health",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        raise Unknown(f"the API answered HTTP {e.code}") from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise Unknown(f"the API could not be reached: {e}") from e
+
+
+def read_servers(account: str, token: str, get=http_get) -> list[dict]:
+    if not token:
+        raise Unknown("CLOUDFLARE_API_TOKEN is not set")
+    servers: list[dict] = []
+    for page in range(1, MAX_PAGES + 1):
+        url = API.format(account=account) + f"?per_page={PER_PAGE}&page={page}"
+        try:
+            body = json.loads(get(url, token))
+        except ValueError as e:
+            raise Unknown(f"page {page} is not JSON") from e
+        if not isinstance(body, dict) or body.get("success") is not True:
+            errors = body.get("errors") if isinstance(body, dict) else None
+            raise Unknown(f"page {page} did not return success=true: {errors!r}")
+        result = body.get("result")
+        if not isinstance(result, list) or not all(isinstance(s, dict) and s.get("id") for s in result):
+            raise Unknown(f"page {page} has no list of servers with ids")
+        servers += result
+        # This endpoint reports total_count, not total_pages (observed
+        # 2026-10-04: count, page, per_page, total_count).
+        info = body.get("result_info") or {}
+        total = info.get("total_count")
+        if isinstance(total, int) and not isinstance(total, bool):
+            if len(servers) > total:
+                raise Unknown(f"read {len(servers)} servers, but the API counts {total}")
+            if len(servers) == total:
+                break
+            if not result:
+                raise Unknown(f"page {page} is empty with {total - len(servers)} servers unread")
+        elif len(result) < PER_PAGE:
+            break
+        else:
+            # A full page and no paging information: whether more exist is
+            # unknown, and a shorter list is not an answer.
+            raise Unknown(f"page {page} is full and says nothing about further pages")
+    else:
+        raise Unknown(f"more than {MAX_PAGES} pages of servers")
+    if not servers:
+        raise Unknown("the API returned no servers")
+    return servers
+
+
+def is_ready(server: dict) -> bool:
+    return server.get("status") == "ready" and not (server.get("error") or "")
+
+
+def label(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
+def render_metrics(servers: list[dict] | None, now: float) -> str:
+    """The Pushgateway body for one run. `servers` is None when the read failed.
+
+    The push is a POST, which replaces only the metrics it names. A failed
+    read therefore names only read_ok and the run time, and leaves the last
+    observed per-server values and the last success time alone: an unknown
+    run must not make a server look ready, nor erase a not-ready one.
+    """
+    lines = [
+        "# HELP cloudflare_portal_health_read_ok 1 when every server could be read, 0 when not.",
+        "# TYPE cloudflare_portal_health_read_ok gauge",
+        f"cloudflare_portal_health_read_ok {0 if servers is None else 1}",
+        "# TYPE cloudflare_portal_health_last_run_timestamp_seconds gauge",
+        f"cloudflare_portal_health_last_run_timestamp_seconds {now:.0f}",
+    ]
+    if servers is not None:
+        lines += [
+            "# TYPE cloudflare_portal_health_last_read_success_timestamp_seconds gauge",
+            f"cloudflare_portal_health_last_read_success_timestamp_seconds {now:.0f}",
+            "# TYPE cloudflare_portal_servers gauge",
+            f"cloudflare_portal_servers {len(servers)}",
+            "# HELP cloudflare_portal_server_ready 1 when the server's status is ready with no error.",
+            "# TYPE cloudflare_portal_server_ready gauge",
+        ]
+        lines += [
+            f'cloudflare_portal_server_ready{{server="{label(s["id"])}"}} {1 if is_ready(s) else 0}'
+            for s in sorted(servers, key=lambda s: str(s["id"]))
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def push(url: str, job: str, body: str) -> None:
+    req = urllib.request.Request(
+        f"{url.rstrip('/')}/metrics/job/{urllib.parse.quote(job, safe='')}",
+        data=body.encode(), method="POST",
+        headers={"Content-Type": "text/plain; version=0.0.4"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        if resp.status // 100 != 2:
+            raise OSError(f"Pushgateway answered HTTP {resp.status}")
+
+
+def report(servers: list[dict]) -> int:
+    bad = [s for s in servers if not is_ready(s)]
+    for s in sorted(servers, key=lambda s: str(s["id"])):
+        err = s.get("error") or ""
+        print(f"{'ok    ' if is_ready(s) else 'NOT OK'} {s['id']}: {s.get('status')}, "
+              f"last successful sync {s.get('last_successful_sync') or 'never'}{', error: ' + err if err else ''}")
+    return 1 if bad else 0
+
+
+def selftest() -> int:
+    cases: list[bool] = []
+
+    def check(name: str, ok: bool) -> None:
+        cases.append(ok)
+        print(f"{'ok  ' if ok else 'FAIL'} {name}")
+
+    def pages(*bodies):
+        def get(url, token):
+            page = int(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["page"][0])
+            b = bodies[page - 1]
+            if isinstance(b, Exception):
+                raise b
+            return b if isinstance(b, bytes) else json.dumps(b).encode()
+        return get
+
+    def outcome(get, token="t"):
+        try:
+            return read_servers("acct", token, get)
+        except Unknown:
+            return Unknown
+
+    ready = {"id": "a", "status": "ready"}
+    stale = {"id": "b", "status": "stale", "error": "Authorization failed: needs_reauth"}
+    one = {"success": True, "result": [ready, stale],
+           "result_info": {"count": 2, "page": 1, "per_page": PER_PAGE, "total_count": 2}}
+
+    check("one page is read whole", outcome(pages(one)) == [ready, stale])
+    check("a missing token is unknown", outcome(pages(one), token="") is Unknown)
+    check("success=false is unknown",
+          outcome(pages({"success": False, "errors": [{"code": 10000}], "result": []})) is Unknown)
+    check("a body that is not JSON is unknown", outcome(pages(b"<html>")) is Unknown)
+    check("a result that is not a list is unknown", outcome(pages({"success": True, "result": {}})) is Unknown)
+    check("a server without an id is unknown",
+          outcome(pages({"success": True, "result": [{"status": "ready"}]})) is Unknown)
+    check("an empty list is unknown, not all ready",
+          outcome(pages({"success": True, "result": [], "result_info": {"total_count": 0}})) is Unknown)
+    check("an HTTP failure is unknown", outcome(pages(Unknown("HTTP 500"))) is Unknown)
+    two = [{"success": True, "result": [ready], "result_info": {"page": 1, "total_count": 2}},
+           {"success": True, "result": [stale], "result_info": {"page": 2, "total_count": 2}}]
+    check("two pages are both read", outcome(pages(*two)) == [ready, stale])
+    check("a second page failing is unknown, not a shorter list",
+          outcome(pages(two[0], Unknown("HTTP 502"))) is Unknown)
+    check("a page that comes back empty before total_count is reached is unknown",
+          outcome(pages(two[0], {"success": True, "result": [], "result_info": {"total_count": 2}})) is Unknown)
+    check("more servers than total_count is unknown",
+          outcome(pages({"success": True, "result": [ready, stale], "result_info": {"total_count": 1}})) is Unknown)
+    full = {"success": True, "result": [{"id": f"s{i}", "status": "ready"} for i in range(PER_PAGE)]}
+    check("a full page with no paging information is unknown", outcome(pages(full)) is Unknown)
+    check("a short page with no paging information is complete",
+          outcome(pages({"success": True, "result": [ready]})) == [ready])
+
+    check("ready with no error is ready", is_ready(ready))
+    check("stale is not ready", not is_ready(stale))
+    check("ready carrying an error is not ready", not is_ready({"id": "c", "status": "ready", "error": "x"}))
+
+    ok_body = render_metrics([ready, stale], 1700000000)
+    check("a read pushes read_ok 1, a success time and every server",
+          "cloudflare_portal_health_read_ok 1\n" in ok_body
+          and "cloudflare_portal_health_last_read_success_timestamp_seconds 1700000000\n" in ok_body
+          and 'cloudflare_portal_server_ready{server="a"} 1\n' in ok_body
+          and 'cloudflare_portal_server_ready{server="b"} 0\n' in ok_body
+          and "cloudflare_portal_servers 2\n" in ok_body)
+    bad_body = render_metrics(None, 1700000000)
+    check("a failed read pushes read_ok 0 and nothing about servers or success",
+          "cloudflare_portal_health_read_ok 0\n" in bad_body
+          and "server_ready" not in bad_body and "last_read_success" not in bad_body
+          and "cloudflare_portal_servers" not in bad_body)
+    check("label values are escaped", label('a"b\\c\nd') == 'a\\"b\\\\c\\nd')
+    check("report exits 1 when a server is not ready", report([ready, stale]) == 1)
+    check("report exits 0 when every server is ready", report([ready]) == 0)
+    return 0 if all(cases) else 1
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    ap.add_argument("--account")
+    ap.add_argument("--pushgateway", help="push the outcome to this Pushgateway base URL")
+    ap.add_argument("--push-job", default="cloudflare_portal_health")
+    ap.add_argument("--selftest", action="store_true")
+    a = ap.parse_args()
+    if a.selftest:
+        return selftest()
+    if not a.account:
+        ap.error("--account is required")
+    try:
+        servers: list[dict] | None = read_servers(a.account, os.environ.get("CLOUDFLARE_API_TOKEN", ""))
+        code = report(servers)
+    except Unknown as e:
+        print(f"UNKNOWN the servers could not be read: {e}")
+        servers, code = None, 2
+    except Exception as e:  # a crash here proves nothing about the servers
+        print(f"UNKNOWN the check failed: {type(e).__name__}: {e}")
+        servers, code = None, 2
+    if a.pushgateway:
+        # Same reasoning as access-login-probe.py: once pushed, the metric
+        # reports the outcome, and a failed Job means only that it never got
+        # out.
+        try:
+            push(a.pushgateway, a.push_job, render_metrics(servers, time.time()))
+        except Exception as e:  # noqa: BLE001
+            print(f"UNKNOWN could not push to {a.pushgateway}: {type(e).__name__}: {e}")
+            return 2 if code == 0 else code
+        print(f"pushed to job {a.push_job}")
+        return 0
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
