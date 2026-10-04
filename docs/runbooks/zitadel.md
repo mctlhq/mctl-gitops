@@ -437,8 +437,9 @@ the copy only) sign their users in through ZITADEL:
   `erpact/erpact-oidc-zitadel` (`infra-components/erpact/oidc-zitadel.yaml`).
 - **Verified e-mail only.** Frappe matches users by the `email` claim alone,
   without `email_verified` and without the stored `sub`. The action
-  `erpactVerifiedEmail` (`PRE_USERINFO_CREATION`, first in the same trigger
-  as `argocdGroups`, not allowed to fail) refuses userinfo for this client
+  `erpactVerifiedEmail` (`PRE_USERINFO_CREATION`, in the same trigger as
+  `argocdGroups`, not allowed to fail, so it aborts userinfo wherever it runs
+  in the trigger) refuses userinfo for this client
   unless the user's e-mail is verified. It returns at once for every other
   client. It is declared in both `erpact` and MCTL: an action only runs for
   users of its own organization.

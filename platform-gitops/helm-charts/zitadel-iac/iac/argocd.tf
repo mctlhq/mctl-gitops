@@ -167,8 +167,10 @@ resource "zitadel_action" "argocd_groups" {
 # Userinfo, and with id_token_userinfo_assertion the ID token Argo CD reads.
 # One trigger per organization and flow holds every action of it, so the
 # triggers of the organizations whose users can sign in to the Frappe sites
-# (erpact and MCTL, erpact.tf) also run their verified e-mail check, first;
-# that action returns at once for any other client.
+# (erpact and MCTL, erpact.tf) also run their verified e-mail check; that
+# action returns at once for any other client. action_ids is a set, so the
+# order is not ours to choose, and need not be: an action that may not fail
+# aborts userinfo wherever it runs (runUserinfoActionFlows, v4.19.2).
 resource "zitadel_trigger_actions" "argocd_groups" {
   for_each = local.argocd_claim_orgs
 
