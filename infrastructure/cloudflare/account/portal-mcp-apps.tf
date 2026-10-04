@@ -34,6 +34,46 @@
 # The three pre-existing sibling applications (tg, seerrsense, api), created
 # by hand on 2026-09-10, are adopted import-only in portal-mcp-apps-adopted.tf
 # under mctlhq/mctl-gitops#1416, at their live values.
+# The two addresses the "Phase 0 pilot users" policies below admit are
+# personal, and this repository is public, so they are not written here.
+# They arrive at plan and apply time from the repository secret
+# CF_PORTAL_PILOT_EMAILS (a JSON list, in the order the policies have always
+# listed them), passed as TF_VAR_portal_pilot_emails by cloudflare-plan.yml,
+# cloudflare-apply.yml and cloudflare-drift.yml for this root only.
+#
+# Fail closed: there is no default. An unset or unreadable secret reaches
+# OpenTofu as an empty string, which is not a list, and the plan fails
+# instead of planning an empty include that would lock everyone out (or,
+# worse, be read as "no restriction"). An empty or malformed list fails the
+# validation below. Sensitive, so plans print "(sensitive value)", never an
+# address, in a public repository's Actions logs.
+#
+# The addresses were written inline until 2026-10-04 and remain in git
+# history, which is not rewritten.
+#
+# Why the pilot policies still exist (owner decision, 2026-10-04): since
+# mcp.mctl.ai dropped Google (#1610) its door offers ZITADEL and the one-time
+# PIN only. A ZITADEL login carries the owner's ZITADEL address and is
+# admitted by the shared ZITADEL policy (portal-zitadel.tf), not by these.
+# These policies are the break-glass: if ZITADEL is down, the owner signs in
+# by one-time PIN with one of these addresses. That only works end to end if
+# the portal AND every member application keep a pilot policy, so remove
+# them together, and the PIN from the portal's allowed_idps, once ZITADEL is
+# no longer a single point of failure.
+variable "portal_pilot_emails" {
+  description = "Addresses admitted by the Phase 0 pilot policies of the portal member applications."
+  type        = list(string)
+  sensitive   = true
+  nullable    = false
+
+  validation {
+    condition = length(var.portal_pilot_emails) > 0 && alltrue([
+      for e in var.portal_pilot_emails : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", e))
+    ])
+    error_message = "portal_pilot_emails must be a non-empty list of well-formed e-mail addresses (CF_PORTAL_PILOT_EMAILS)."
+  }
+}
+
 resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
   account_id = var.account_id
   name       = "MCP server: projects (via portal mcp.mctl.ai)"
@@ -71,10 +111,9 @@ resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
       decision   = "allow"
       precedence = 1
 
-      include = [
-        { email = { email = "mashkoffdmitry@gmail.com" } },
-        { email = { email = "mashkovdm.dm@gmail.com" } },
-      ]
+      # The addresses come from var.portal_pilot_emails (see the top of this
+      # file); this repository is public.
+      include = [for e in var.portal_pilot_emails : { email = { email = e } }]
     },
     {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
@@ -112,10 +151,9 @@ resource "cloudflare_zero_trust_access_application" "portal_member_alice" {
       decision   = "allow"
       precedence = 1
 
-      include = [
-        { email = { email = "mashkoffdmitry@gmail.com" } },
-        { email = { email = "mashkovdm.dm@gmail.com" } },
-      ]
+      # The addresses come from var.portal_pilot_emails (see the top of this
+      # file); this repository is public.
+      include = [for e in var.portal_pilot_emails : { email = { email = e } }]
     },
     {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
@@ -153,10 +191,9 @@ resource "cloudflare_zero_trust_access_application" "portal_member_coolify" {
       decision   = "allow"
       precedence = 1
 
-      include = [
-        { email = { email = "mashkoffdmitry@gmail.com" } },
-        { email = { email = "mashkovdm.dm@gmail.com" } },
-      ]
+      # The addresses come from var.portal_pilot_emails (see the top of this
+      # file); this repository is public.
+      include = [for e in var.portal_pilot_emails : { email = { email = e } }]
     },
     {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id

@@ -395,6 +395,11 @@ jobs:
          || secrets.CLOUDFLARE_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
+      # The account root's pilot addresses, kept out of this public
+      # repository (account/portal-mcp-apps.tf). Empty for every other root,
+      # and an unset secret leaves the account root without a value, which
+      # fails the plan rather than planning an empty policy.
+      TF_VAR_portal_pilot_emails: ${{ matrix.root == 'infrastructure/cloudflare/account' && secrets.CF_PORTAL_PILOT_EMAILS || '' }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
