@@ -177,6 +177,14 @@ env:
 
   AGENT_ENABLED: "true"
   AGENT_KILL_SWITCH: "false"
+  # Human-input adapter (mctl-telegram#571, 0.79.0+): polls mctl-api for
+  # clarification questions addressed to linked operators and posts them to
+  # Saved Messages; /mctl input answers. Enabled on THIS instance only, the
+  # one that serves the owner's Saved Messages (see workContext below);
+  # enabling production too would deliver every question twice. Requires
+  # WORK_CONTEXT_ENABLED, which workContext.featureEnabled sets. Rollback:
+  # set "false" (docs/runbook.md, "Human-input adapter").
+  HUMAN_INPUT_ENABLED: "true"
   # Absolute-TTL exemptions (mctl-telegram#410, 0.51.0+). Preview had none,
   # which meant the soak identity acquired expires_at = connected_at + 90d the
   # moment it logged in: 2026-11-25 for the @mctlhq session created on
