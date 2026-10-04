@@ -6,7 +6,8 @@
 # forgejo-reconcile Secret (dataFrom), whose keys become the Job's environment:
 #
 #   MANIFEST        JSON {sources, users, orgs}; see docs/runbooks/forgejo.md
-#   USER_PASSWORDS  JSON login -> initial password (changed on first login)
+#   USER_PASSWORDS  JSON login -> initial password (a git/API credential only;
+#                   web sign-in is through ZITADEL)
 #   <TOKEN_ENV>     one read-only token per source, named by the manifest's
 #                   sources.<name>.token_env
 #
@@ -166,18 +167,25 @@ data:
       # provider's own default); the provider sends both on every update.
       login_name = try(each.value.oauth.subject, null)
       source_id  = try(each.value.oauth.source_id, null)
-      # Machine accounts ("bot": true) authenticate with this password from a
-      # Secret; a forced change would lock them out of git and the API.
-      must_change_password      = !try(each.value.bot, false)
+      # Never forced, for anyone. The provider treats this as write-only: it
+      # never reads it back, so state keeps the value from creation and every
+      # later update of the user sends it again. With `true` that re-armed the
+      # forced change on any unrelated update (the oauth binding did, on
+      # 2026-10-04), after which Forgejo answers basic auth with 403 even for
+      # the user's correct password. Web sign-in is through ZITADEL only
+      # (ENABLE_INTERNAL_SIGNIN false), so the password is a git/API
+      # credential; machine accounts read theirs from a Secret.
+      must_change_password      = false
       visibility                = "private"
       allow_create_organization = false
       # A wrong entry in the manifest must not delete a person's account.
       deactivate_on_destroy = true
 
       lifecycle {
-        # The user changes the initial password on first login; Terraform must
-        # not reset it on every run.
-        ignore_changes = [password, must_change_password]
+        # A password the user set must survive every run. The provider only
+        # sends the password when it differs from state, which this keeps
+        # equal. must_change_password is deliberately not ignored (above).
+        ignore_changes = [password]
 
         # Forgejo refuses one without the other (422), and a source id of 0
         # would silently make the account local again.

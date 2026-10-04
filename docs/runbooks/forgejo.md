@@ -209,8 +209,7 @@ The desired state is in Vault, not here (this repository is public):
   the old link still worked, password basic auth still worked, re-plan was
   clean, and removing `oauth` sent the new identity back to the link page.
 - `"bot": true` marks a machine account (a CD system cloning, a service
-  pushing): it is created without `must_change_password`, which would
-  otherwise lock it out of git and the API with 403.
+  pushing).
 - `username` defaults to `oauth2` (GitLab). GitHub accepts any user name with a
   token. `insecure_skip_tls` exists for a source whose certificate expired;
   every run logs a WARN while it is on.
@@ -219,8 +218,14 @@ The desired state is in Vault, not here (this repository is public):
 
 What a run does to existing data:
 
-- Users other than bots get `must_change_password`; Terraform never resets a changed
-  password. Removing a user from the manifest deactivates the account.
+- No user gets `must_change_password`. The svalabs provider never reads it
+  back and sends the value from creation on every later update, so `true`
+  re-armed the forced change whenever the reconcile touched a user (seen
+  2026-10-04 after the `oauth` binding; basic auth then answers 403 even with
+  the right password). Web sign-in is ZITADEL-only, so the Forgejo password
+  is a git/API credential; prefer a token or SSH key. Terraform never resets
+  a password the user set. Removing a user from the manifest deactivates the
+  account.
   It does not delete the account.
 - Removing a repository archives it. Removing a branch stops syncing it,
   and the copy in Forgejo stays.
