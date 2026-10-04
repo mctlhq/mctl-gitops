@@ -112,13 +112,13 @@ resource "zitadel_user_grant" "argocd_admin" {
 
 # Argo CD reads groups from a flat list of strings; ZITADEL's own role claim
 # is a map, which Argo CD ignores. This action copies the user's roles on the
-# Argo CD project and on the Vault project (vault.tf), and only those, into
-# `groups`. allowed_to_fail: a failure leaves the claim out, which grants
+# Argo CD project, the Vault project (vault.tf) and the Argo Workflows project
+# (workflows.tf), and only those, into `groups`. allowed_to_fail: a failure leaves the claim out, which grants
 # nothing, rather than breaking sign-in to every other application of the
 # organization.
 #
-# One action for both, because a trigger holds one list of actions and both
-# would set the same claim. The two never mix in one token: ctx.v1.user.grants
+# One action for all, because a trigger holds one list of actions and each
+# would set the same claim. They never mix in one token: ctx.v1.user.grants
 # is not every grant the user holds. It is built from the same query as the
 # token's own role claim (runUserinfoActions passes qu.UserGrants, which
 # GetOIDCUserInfo loads for the role audience prepareRoles computes, i.e. the
@@ -141,7 +141,11 @@ resource "zitadel_action" "argocd_groups" {
       if (!grants || !grants.grants) {
         return;
       }
-      var projects = ['${zitadel_project.argocd.id}', '${zitadel_project.vault.id}'];
+      var projects = [
+        '${zitadel_project.argocd.id}',
+        '${zitadel_project.vault.id}',
+        '${zitadel_project.workflows.id}'
+      ];
       var groups = [];
       grants.grants.forEach(function (grant) {
         if (projects.indexOf(grant.projectId) < 0) {
