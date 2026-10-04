@@ -49,6 +49,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  wrong-ref:
+    name: wrong-ref
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse a run outside main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::k3s-preview plans and applies run from refs/heads/main only, not $REF"
+          exit 1
+
   plan:
     name: plan
     runs-on: ubuntu-latest
@@ -60,9 +72,13 @@ jobs:
     # Plans need that credential because it is part of local.k3s-config; a
     # plan without it proposes rewriting the control-plane k3s config.
     #
-    # No `if` on the branch here: a dispatch from another branch is refused by
-    # the environment's branch policy, loudly, instead of finishing as a green
-    # run with every job skipped.
+    # Two layers, as for apply. The k3s-plan environment's branch policy
+    # refuses another branch, but GitHub silently creates a referenced
+    # environment UNPROTECTED if it is ever deleted or renamed, and this job
+    # holds the etcd credential. So the job also requires main itself; the
+    # `wrong-ref` job below makes a dispatch from elsewhere fail loudly rather
+    # than finish green with every job skipped.
+    if: github.ref == 'refs/heads/main'
     environment: k3s-plan
 
     defaults:

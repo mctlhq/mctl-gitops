@@ -80,7 +80,7 @@ this root from CI (#1534). Merging applies nothing.
 
 1. **`plan`** runs on every push to `infrastructure/k3s-preview/**` and on every
    dispatch, on environment `k3s-plan` (branch `main`, no reviewer; a dispatch
-   from another branch fails on that policy). It needs no approval and publishes the plan, its counts and a digest in the run summary.
+   from another branch fails in the `wrong-ref` job). It needs no approval and publishes the plan, its counts and a digest in the run summary.
 2. **`apply`** runs only on a dispatch with `apply: true`, on environment
    `k3s-apply` (branch `main`, required reviewer). It re-plans with the deploy
    key and refuses unless its plan has the digest `plan` published, then applies

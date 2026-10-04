@@ -79,5 +79,7 @@ if [ -n "$reprovision" ]; then
     fail=1
   fi
 fi
-[ "$fail" = 0 ] && echo "guard: no destroy, no reprovision"
+if [ -z "$destroy" ] && [ -z "$reprovision" ]; then
+  echo "guard: no destroy, no reprovision"
+fi
 exit "$fail"
