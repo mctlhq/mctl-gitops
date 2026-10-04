@@ -198,12 +198,13 @@ owner applies the temporary remount grant to the Job's policy
 (cluster-bootstrap/vault-config/README.md) and it is diffed byte-identical
 against the file; (c) the root sets `path = "mctl"`, with the role listed in
 `allowedDeletes`; (d) cleanup drops the old redirect, empties
-`allowedDeletes`, and removes the remount grant.
+`allowedDeletes`, removes the remount grant and renames the policy's `oidc`
+paths to `mctl` (the owner re-applies the policy file).
 
-**Recovery, if (c) ever applies without the grant.** The Job destroys the role
-first and the remount then fails with a 403: the mount stays at `auth/oidc`
-with no login role, and later runs refuse to plan. Finish the move by hand
-(owner, admin token), after applying the grant:
+**Recovery, if (c) ever applies without the grant** (only before (d)). The Job
+destroys the role first and the remount then fails with a 403: the mount stays
+at `auth/oidc` with no login role, and later runs refuse to plan. Finish the
+move by hand (owner, admin token), after applying the grant:
 
 ```bash
 vault write sys/remount from=auth/oidc to=auth/mctl
@@ -211,11 +212,23 @@ vault write sys/remount from=auth/oidc to=auth/mctl
 
 The next Job run then creates the role and converges (verified locally).
 
-**Rolling the move back is owner-only.** The grant allows exactly
-`auth/oidc` to `auth/mctl`, so the Job is refused the reverse (403). To go
-back, the owner moves the mount by hand with an admin token
-(`vault write sys/remount from=auth/mctl to=auth/oidc`) and reverts (c) in
-git. Every human signs in again, as with the move itself. This path is not
+**Rolling the move back is owner-only.** After (d) the Job has no remount
+grant at all, and before it the grant allowed exactly `auth/oidc` to
+`auth/mctl`, so the Job is refused the reverse (403). To go back:
+
+1. Suspend the CronJob and set `allowedActions: "no-op read"`, so no run
+   plans against a mount that is moving under it.
+2. The owner moves the mount by hand with an admin token
+   (`vault write sys/remount from=auth/mctl to=auth/oidc`).
+3. Revert (c) and (d) in git; the policy then needs the `oidc` paths again,
+   re-applied by the owner.
+4. Expect a state fix-up before that run plans clean: the provider tracks
+   the mount by its path, so `tofu state rm vault_jwt_auth_backend.oidc`
+   and an import at `oidc` may be needed (not verified; rehearse it).
+5. Resume the CronJob and widen `allowedActions` again once a run re-plans
+   clean.
+
+Every human signs in again, as with the move itself. This path is not
 rehearsed: plan it on a local Vault first.
 
 ## Break-glass

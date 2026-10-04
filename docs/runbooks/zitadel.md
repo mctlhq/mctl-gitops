@@ -288,9 +288,9 @@ what. Vault's own side (the `auth/mctl` mount, groups, policies) is the
   requesting client's project only (see the comment in `argocd.tf`).
 - **Client `vault`.** A web client with a client secret and code flow. Vault
   adds PKCE S256 itself. The same client serves both:
-  - the UI, at `https://secrets.mctl.ai/ui/vault/auth/oidc/oidc/callback`,
-    and at `.../ui/vault/auth/mctl/oidc/callback` while the Vault mount moves
-    from `auth/oidc` to `auth/mctl` (the old one is removed after the move);
+  - the UI, at `https://secrets.mctl.ai/ui/vault/auth/mctl/oidc/callback`
+    (the Vault mount path; it was `auth/oidc` before the move, and that
+    callback is removed);
   - the CLI, at `http://localhost:8250/oidc/callback`. ZITADEL accepts this
     plain-http loopback redirect for a confidential code-flow client without
     dev mode, matched exactly.

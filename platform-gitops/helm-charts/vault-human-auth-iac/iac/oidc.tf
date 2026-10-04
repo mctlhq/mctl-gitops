@@ -19,7 +19,8 @@ resource "vault_jwt_auth_backend" "oidc" {
   # (sys/remount keeps the accessor, so entity and group aliases carry over)
   # and revokes every token the mount had issued. The path is part of the UI
   # redirect URI registered in ZITADEL (zitadel-iac vault.tf). The resource
-  # address stays `oidc`, so the state does not move.
+  # address stays `oidc`, so the state does not move. The Job has no remount
+  # grant any more: another move repeats the runbook's (a)-(d) sequence.
   path = "mctl"
   type = "oidc"
   # What the UI shows under the tab; users sign in to "MCTL", ZITADEL is the

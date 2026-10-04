@@ -25,15 +25,7 @@ allowedActions: "no-op read create update"
 # other delete in a plan fails the Job. Name the exact address (a retired
 # tenant's group, alias and policy), in the PR that needs it, and empty the
 # list once it has applied.
-#   The auth/oidc -> auth/mctl move: the role is ForceNew on its backend path,
-#   so the move replaces vault_jwt_auth_backend_role.zitadel (destroyed before
-#   the remount, created right after; logins fail for about a second). It
-#   must NOT merge before the owner has applied the remount grant to the Job's
-#   policy and it was diffed byte-identical against vault-policy-vault-human-
-#   auth-iac.hcl: without it the role is destroyed, the remount gets a 403,
-#   and the mount is left with no login role (recovery in the runbook). The
-#   cleanup step empties the list again.
-allowedDeletes: "vault_jwt_auth_backend_role.zitadel"
+allowedDeletes: ""
 
 # The CronJob's schedule. The tenant list and the OIDC client arrive through
 # the Secret zitadel-iac writes, which no sync observes; this is how a new

@@ -269,7 +269,7 @@ until fixed live, then backported to the `.hcl` file above.
 
 ### vault-human-auth-iac (human sign-in through ZITADEL)
 
-Humans sign in to Vault through ZITADEL (`auth.mctl.ai`) on the `auth/oidc`
+Humans sign in to Vault through ZITADEL (`auth.mctl.ai`) on the `auth/mctl`
 mount, and get access from the `groups` claim: `admins` maps to the `admin`
 policy, a tenant name to `human-tenant-<tenant>`: read and write on
 `secret/teams/<tenant>/*`. That policy grants no destroy and no metadata
@@ -281,7 +281,8 @@ their aliases and the tenant policies with OpenTofu, and re-applies hourly.
 
 The only hand-applied part is the Job's own identity: the policy
 `vault-human-auth-iac` and the Kubernetes auth role that hands it out. The
-policy covers `sys/auth/oidc` (no delete), `auth/oidc/{config,role/*}`, `identity/group*`,
+policy covers `sys/auth/mctl` (no delete), `sys/mounts/auth/mctl` (+`tune`),
+`auth/mctl/{config,role/*}`, `identity/group*`,
 `identity/group-alias*` and `sys/policies/acl/human-tenant-*`, and no secret
 data. It cannot write the `admin` policy, create tokens, or touch any other
 auth mount. It is still admin-equivalent in effect, since it decides which
@@ -313,34 +314,18 @@ removes a tenant, and rotates the client; reading any `secret/` path, reading
 or writing any other policy (`admin` included), disabling the mount, enabling
 another auth method, writing a Kubernetes auth role and creating a token are
 all refused (403). Each grant was checked by removing it: without
-`sys/mounts/auth/oidc` the apply fails, while `read` on `sys/auth/oidc`,
-`sudo` on `sys/mounts/auth/oidc`, `list` anywhere and `create` on the
+`sys/mounts/auth/mctl` the apply fails, while `read` on `sys/auth/mctl`,
+`sudo` on `sys/mounts/auth/mctl`, `list` anywhere and `create` on the
 `identity/*/id` paths turned out unneeded and are not granted.
 
-**Temporary: the move from `auth/oidc` to `auth/mctl`.** The Vault UI labels
-the login tab with the mount path, so the owner approved moving the mount.
-The policy carries, for the move only, `sys/remount` (`update`, `sudo`, with
-`allowed_parameters` limited to `from=auth/oidc`, `to=auth/mctl`),
-`sys/remount/status/*` (read), and `sys/mounts/auth/mctl` (read),
-`sys/mounts/auth/mctl/tune`, `auth/mctl/config` and `auth/mctl/role/*` on the
-new path. Proven on a local Vault 1.17.2 with the Job's image and guard: with
-exactly these blocks the move applies (role replaced, mount moved, accessor
-kept, re-plan clean), and without any one of them it fails with a 403
-mid-apply. `sys/auth/mctl` turned out unneeded for the move. Any other
-remount (`auth/mctl` to `auth/oidc`, `auth/token` to `auth/mctl`) is refused.
-The cleanup step removes `sys/remount*` and replaces the `oidc` paths with
-`mctl`, so the Job keeps no standing remount ability.
-
-Apply (owner, admin token), **before** the vault-human-auth-iac change that
-sets `path = "mctl"` merges:
-
-```bash
-vault policy write vault-human-auth-iac \
-  infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-vault-human-auth-iac.hcl
-```
-
-Then check that `vault policy read vault-human-auth-iac` is byte-identical to
-the file.
+**The move from `auth/oidc` to `auth/mctl`** (docs/runbooks/vault-human-auth.md)
+needed a temporary `sys/remount` grant, limited by `allowed_parameters` to
+`from=auth/oidc`, `to=auth/mctl`. The cleanup step removed it and renamed the
+`oidc` paths to `mctl`, so the Job keeps no remount ability. The owner
+applied that file before the cleanup change merged, as above, and it was
+diffed byte-identical (the Job touches only `mctl` paths by then). The end
+state was proven on a local Vault 1.17.2: the root re-plans clean, and
+`sys/remount` gets a 403.
 
 **Rollback:** `vault delete auth/kubernetes/role/vault-human-auth-iac` and
 `vault policy delete vault-human-auth-iac`. The Job then fails at login and
