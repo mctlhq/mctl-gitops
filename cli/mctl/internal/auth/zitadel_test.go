@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -390,13 +391,59 @@ func TestStaleLockIsTakenOver(t *testing.T) {
 	if err := os.Chtimes(lock, old, old); err != nil {
 		t.Fatal(err)
 	}
-	unlock, err := lockZitadelToken()
-	if err != nil {
-		t.Fatalf("stale lock not taken over: %v", err)
+	// Several acquirers race for one leftover lock: the takeover must hand
+	// it to one of them at a time.
+	var held, maxHeld, acquired int32
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			unlock, err := lockZitadelToken()
+			if err != nil {
+				t.Errorf("stale lock not taken over: %v", err)
+				return
+			}
+			atomic.AddInt32(&acquired, 1)
+			n := atomic.AddInt32(&held, 1)
+			for {
+				m := atomic.LoadInt32(&maxHeld)
+				if n <= m || atomic.CompareAndSwapInt32(&maxHeld, m, n) {
+					break
+				}
+			}
+			time.Sleep(20 * time.Millisecond)
+			atomic.AddInt32(&held, -1)
+			unlock()
+		}()
 	}
-	unlock()
+	wg.Wait()
+	if acquired != 5 || maxHeld != 1 {
+		t.Errorf("acquired = %d, max simultaneous holders = %d; want 5 and 1", acquired, maxHeld)
+	}
 	if _, err := os.Stat(lock); !os.IsNotExist(err) {
 		t.Errorf("lock left behind after unlock: %v", err)
+	}
+}
+
+// Unlocking must not delete a lock another process took over meanwhile.
+func TestUnlockLeavesAnotherHoldersLock(t *testing.T) {
+	f := newFakeZitadel(t)
+	tokenFile := useFake(t, f)
+	if err := os.MkdirAll(filepath.Dir(tokenFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockZitadelToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a takeover: the path now holds someone else's lock.
+	if err := os.WriteFile(tokenFile+".lock", []byte("someone-else"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	if _, err := os.Stat(tokenFile + ".lock"); err != nil {
+		t.Errorf("unlock removed another holder's lock: %v", err)
 	}
 }
 
@@ -445,7 +492,7 @@ func TestCallbackResult(t *testing.T) {
 		{name: "missing state", code: "c", wantErr: "state", wantForeign: true},
 		{name: "provider error", state: "s", errCode: "access_denied", errMsg: "no", wantErr: "access_denied"},
 		{name: "no code", state: "s", wantErr: "no authorization code"},
-		{name: "provider error without state", errCode: "access_denied", wantErr: "access_denied"},
+		{name: "provider error without state", errCode: "access_denied", wantErr: "state", wantForeign: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

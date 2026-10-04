@@ -115,7 +115,7 @@ func readZitadelToken() (*storedZitadelToken, error) {
 		return nil, fmt.Errorf("reading %s: %w", p, err)
 	}
 	if st.Token == nil || st.Token.AccessToken == "" {
-		return nil, fmt.Errorf("%s holds no access token: run 'mctl auth login --zitadel'", p)
+		return nil, fmt.Errorf("%s holds no access token: %w", p, ErrNoZitadelLogin)
 	}
 	return &st, nil
 }
@@ -190,7 +190,7 @@ func ZitadelToken() (string, error) {
 		return "", err
 	}
 	if st.Issuer != s.issuer || st.ClientID != s.clientID {
-		return "", fmt.Errorf("stored ZITADEL login is for %s (client %s): run 'mctl auth login --zitadel'", st.Issuer, st.ClientID)
+		return "", fmt.Errorf("stored ZITADEL login is for %s (client %s): %w", st.Issuer, st.ClientID, ErrNoZitadelLogin)
 	}
 	if st.Token.Valid() {
 		return st.Token.AccessToken, nil
@@ -214,7 +214,7 @@ func refreshZitadelToken(s zitadelSettings) (string, error) {
 		return "", err
 	}
 	if st.Issuer != s.issuer || st.ClientID != s.clientID {
-		return "", fmt.Errorf("stored ZITADEL login is for %s (client %s): run 'mctl auth login --zitadel'", st.Issuer, st.ClientID)
+		return "", fmt.Errorf("stored ZITADEL login is for %s (client %s): %w", st.Issuer, st.ClientID, ErrNoZitadelLogin)
 	}
 	if st.Token.Valid() {
 		return st.Token.AccessToken, nil
@@ -257,12 +257,27 @@ func lockZitadelToken() (func(), error) {
 		return nil, err
 	}
 	lock := p + ".lock"
+	owner, err := randomToken()
+	if err != nil {
+		return nil, err
+	}
 	deadline := time.Now().Add(zitadelLockWait)
 	for {
 		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
-			f.Close()                              //nolint:errcheck
-			return func() { os.Remove(lock) }, nil //nolint:errcheck
+			_, werr := f.WriteString(owner)
+			f.Close() //nolint:errcheck
+			if werr != nil {
+				os.Remove(lock) //nolint:errcheck
+				return nil, fmt.Errorf("locking %s: %w", p, werr)
+			}
+			// Remove only our own lock: after a stale takeover the path may
+			// hold another process's lock by the time we unlock.
+			return func() {
+				if b, err := os.ReadFile(lock); err == nil && string(b) == owner {
+					os.Remove(lock) //nolint:errcheck
+				}
+			}, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
 			return nil, fmt.Errorf("locking %s: %w", p, err)
@@ -417,11 +432,6 @@ type callbackOutcome struct {
 // callbackResult validates one loopback callback: the state must be the one
 // this login sent (constant-time), and an error from ZITADEL wins over a code.
 func callbackResult(gotState, wantState, code, errCode, errDesc string) callbackOutcome {
-	// An error without any state cannot be a forged code, and dropping it
-	// would leave the user waiting for the timeout; surface it.
-	if gotState == "" && errCode != "" {
-		return callbackOutcome{err: fmt.Errorf("ZITADEL refused the sign-in: %s", errCode)}
-	}
 	if subtle.ConstantTimeCompare([]byte(gotState), []byte(wantState)) != 1 {
 		return callbackOutcome{err: errors.New("state does not match this sign-in"), foreign: true}
 	}
