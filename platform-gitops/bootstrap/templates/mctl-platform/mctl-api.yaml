@@ -255,6 +255,15 @@ spec:
           # leaves the principal disabled instead of failing the pod.
           usageWriterTokenSecret: mctl-api-usage-writer
           {{- end }}
+          {{- if (default dict .Values.evidenceWriter).enabled }}
+
+          # The evidence-writer token (mctlhq/mctl-agents#199), from the
+          # mctl-api-evidence-writer ExternalSecret. Gated with it on
+          # evidenceWriter.enabled in bootstrap/values.yaml; the chart's
+          # reference is optional, so a Secret that has not synced yet leaves
+          # the principal disabled instead of failing the pod.
+          evidenceWriterTokenSecret: mctl-api-evidence-writer
+          {{- end }}
           {{- if (default dict .Values.surfaceTelegramToken).enabled }}
 
           # The surface:telegram bearer token (mctlhq/mctl-telegram#443), from
