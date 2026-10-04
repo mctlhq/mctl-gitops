@@ -42,6 +42,12 @@ spec:
         # 3.6 — we run 3.3.8). They ignored ESO's own CRD defaults, which are now
         # written out explicitly in the ExternalSecrets instead, so git matches live.
         - .status
+    # Written by the zitadel-iac Job, not by Argo CD (argo-workflows/config/sso-zitadel.yaml).
+    - kind: Secret
+      name: argo-workflows-sso-zitadel
+      namespace: argo-workflows
+      jsonPointers:
+        - /data
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: argo-workflows

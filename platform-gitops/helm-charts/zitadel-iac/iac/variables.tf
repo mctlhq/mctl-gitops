@@ -7,10 +7,11 @@ variable "tenant_users" {
     JSON object, one key per platform tenant. Each value is the tenant's
     Vault secret secret/platform/zitadel/users/<tenant> as JSON: one field
     per user name, each a JSON-encoded {email, first_name, last_name,
-    preferred_language, argocd, vault}; argocd and vault (optional, default
-    false) grant the tenant's Argo CD role (argocd.tf) and Vault role
-    (vault.tf). This repository is public, so personal data never appears in
-    it.
+    preferred_language, argocd, vault, workflows}; argocd, vault and
+    workflows (optional, default false) grant the tenant's Argo CD role
+    (argocd.tf), Vault role (vault.tf) and Argo Workflows role
+    (workflows.tf). This repository is public, so personal data never
+    appears in it.
   EOT
   type        = string
 
