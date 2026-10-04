@@ -331,6 +331,14 @@ spec:
                 secretKeyRef:
                   name: grafana-oidc-zitadel
                   key: client-secret
+              # ZITADEL end_session, so "Sign out" ends the ZITADEL session
+              # too and auto-login cannot sign straight back in (grafana.tf).
+              # Rollback: drop this entry; sign-out then only ends Grafana's
+              # own session.
+              GF_AUTH_GENERIC_OAUTH_SIGNOUT_REDIRECT_URL:
+                secretKeyRef:
+                  name: grafana-oidc-zitadel
+                  key: signout-redirect-url
               # Consumed via the $__env{} macro in the mctl-academy
               # read-only Postgres datasource (academy-postgres-datasource
               # ConfigMap) instead of a plaintext password in provisioning
