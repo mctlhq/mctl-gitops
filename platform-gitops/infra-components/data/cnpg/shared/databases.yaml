@@ -290,3 +290,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: grafana-db
+spec:
+  name: "grafana"
+  owner: "grafana"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
