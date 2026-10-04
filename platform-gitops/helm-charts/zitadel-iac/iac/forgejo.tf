@@ -5,7 +5,7 @@
 # forgejo/forgejo-oidc-zitadel, which the forgejo Application pre-creates and
 # lets this Job's service account read and patch by name, nothing else
 # (infra-components/data/forgejo/oidc-zitadel.yaml). The forgejo chart's
-# init container registers it as the authentication source "ZITADEL".
+# init container registers it as the authentication source "MCTL".
 #
 # Who may sign in is decided by Forgejo, not here: registration stays
 # disabled there, so a ZITADEL identity can only be linked to an existing
@@ -26,11 +26,9 @@ locals {
   forgejo_url = "https://git.mctl.ai"
   # Forgejo's callback path carries the authentication source name, so this
   # must match the name in the forgejo chart's gitea.oauth entry.
-  forgejo_auth_source = "ZITADEL"
-  # The source is being renamed in place to MCTL, so the button reads "Sign
-  # in with MCTL". Both callbacks stay registered until Forgejo serves only
-  # the new name; a follow-up drops the old one.
-  forgejo_auth_source_next = "MCTL"
+  # It is also the button label, "Sign in with MCTL". Renamed from ZITADEL
+  # in place on 2026-10-04 (#1599), keeping the source ID and account links.
+  forgejo_auth_source = "MCTL"
 }
 
 resource "zitadel_project" "platform" {
@@ -53,14 +51,11 @@ resource "zitadel_application_oidc" "forgejo" {
   project_id = zitadel_project.platform.id
   name       = "forgejo"
 
-  app_type         = "OIDC_APP_TYPE_WEB"
-  auth_method_type = "OIDC_AUTH_METHOD_TYPE_BASIC"
-  grant_types      = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
-  response_types   = ["OIDC_RESPONSE_TYPE_CODE"]
-  redirect_uris = [
-    "${local.forgejo_url}/user/oauth2/${local.forgejo_auth_source}/callback",
-    "${local.forgejo_url}/user/oauth2/${local.forgejo_auth_source_next}/callback",
-  ]
+  app_type                  = "OIDC_APP_TYPE_WEB"
+  auth_method_type          = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types               = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types            = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris             = ["${local.forgejo_url}/user/oauth2/${local.forgejo_auth_source}/callback"]
   post_logout_redirect_uris = ["${local.forgejo_url}/"]
   access_token_type         = "OIDC_TOKEN_TYPE_BEARER"
   dev_mode                  = false
