@@ -235,7 +235,7 @@ ingress:
 workContext:
   enabled: true
   featureEnabled: true
-  tenant: admins
+  tenant: mctl
   tokenVaultKey: platform/mctl-api/surface-tokens
   tokenVaultProperty: telegram-token
   apiBaseUrl: ""
