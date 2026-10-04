@@ -69,5 +69,9 @@ resource "cloudflare_zero_trust_access_application" "mcp_portal" {
       id         = "5f0102c7-fd88-499c-9b15-9167633d6c63"
       precedence = 1
     },
+    {
+      id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
+      precedence = 2
+    },
   ]
 }

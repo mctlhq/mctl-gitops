@@ -76,6 +76,10 @@ resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
         { email = { email = "mashkovdm.dm@gmail.com" } },
       ]
     },
+    {
+      id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
+      precedence = 2
+    },
   ]
 }
 
@@ -113,6 +117,10 @@ resource "cloudflare_zero_trust_access_application" "portal_member_alice" {
         { email = { email = "mashkovdm.dm@gmail.com" } },
       ]
     },
+    {
+      id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
+      precedence = 2
+    },
   ]
 }
 
@@ -149,6 +157,10 @@ resource "cloudflare_zero_trust_access_application" "portal_member_coolify" {
         { email = { email = "mashkoffdmitry@gmail.com" } },
         { email = { email = "mashkovdm.dm@gmail.com" } },
       ]
+    },
+    {
+      id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
+      precedence = 2
     },
   ]
 }
