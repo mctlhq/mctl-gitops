@@ -86,9 +86,11 @@ resource "zitadel_application_oidc" "mctl_cli" {
 # ZITADEL itself, right after GitHub, to attach that ZITADEL identity to the
 # principal they already have. A confidential web client (owner decision B
 # on #435): client secret plus PKCE, redirect only to api.mctl.ai. mctl-api
-# reads the ID token only, so the access token type does not matter here;
-# the userinfo assertion puts preferred_username into the ID token for the
-# confirmation page. has_project_check on the project limits it to MCTL
+# reads the ID token only. The access token stays opaque (BEARER) on
+# purpose: every app in this project shares the project audience, so a JWT
+# access token of this client would pass mctl-api's JWT bearer check. Do not
+# switch it to JWT. The userinfo assertion puts preferred_username into the
+# ID token for the confirmation page. has_project_check on the project limits it to MCTL
 # users, like the CLI.
 resource "zitadel_application_oidc" "mctl_api_link" {
   org_id     = local.mctl_org_id
