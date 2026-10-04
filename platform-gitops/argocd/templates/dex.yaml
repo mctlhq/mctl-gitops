@@ -13,9 +13,8 @@
 # apply, because the bootstrap Helm release co-owns their fields. argocd-server
 # proxies /api/dex here (server.dex.server in values.yaml) over plain HTTP.
 #
-# argocd-cm keeps its full dex.config: argocd-server renders it on every
-# settings load and exits on a connector without `config`. The copy there is
-# read by argocd-server only; Dex reads dex-config.yaml.
+# argocd-cm has no dex.config: Argo CD signs in through ZITADEL (oidc.config),
+# and with no dex.config argocd-server renders no Dex config at all.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -72,7 +71,7 @@ spec:
         app.kubernetes.io/component: dex-server
       # Only the config is checksummed. Unlike `rundex`, which watched
       # argocd-secret, plain Dex reads its secrets once at start: after a
-      # rotation of server.secretkey, backstage-oidc-client-* or
+      # rotation of backstage-oidc-client-* or
       # argo-workflows-sso-client-secret, run
       # `kubectl -n argocd rollout restart deploy/dex`.
       annotations:
@@ -88,43 +87,8 @@ spec:
       containers:
         - name: dex
           image: ghcr.io/dexidp/dex:v2.45.1
-          command: ["/bin/sh", "-c"]
-          # argocd-server authenticates to Dex as `argo-cd` with
-          # base64url(sha256(server.secretkey))[:40] (DexOAuth2ClientSecret
-          # in argo-cd util/settings). The key itself does not stay in the
-          # environment Dex runs with.
-          args:
-            - |
-              set -eu
-              # Known answer first: the hex-to-byte decode below must
-              # reproduce Go's base64url(sha256("probe-258"))[:40] in this
-              # image, or a wrong but well-formed secret would pass the
-              # length check. That digest has a 0x00 at byte 28, the one
-              # place where a printf that stopped at NUL would still yield
-              # 40 characters. Re-measure on a Dex image bump.
-              probe="$(printf %s probe-258 | sha256sum | cut -d' ' -f1 | sed 's/\(..\)/\\x\1/g')"
-              probe="$(printf '%b' "$probe" | base64 | tr '+/' '-_' | cut -c1-40)"
-              if [ "$probe" != "J6u6Fj-FBYcXaPTdNO9jebYDsqMlYQwCUUCy2QD9" ]; then
-                echo "hex-to-byte decoding in this image does not match Go" >&2
-                exit 1
-              fi
-              digest="$(printf %s "$ARGOCD_SERVER_SECRETKEY" | sha256sum | cut -d' ' -f1 | sed 's/\(..\)/\\x\1/g')"
-              ARGOCD_DEX_CLIENT_SECRET="$(printf '%b' "$digest" | base64 | tr '+/' '-_' | cut -c1-40)"
-              # Fail closed: a broken pipeline must not start Dex with an
-              # empty secret for this client.
-              if [ "${#ARGOCD_DEX_CLIENT_SECRET}" -ne 40 ]; then
-                echo "could not derive the argo-cd client secret" >&2
-                exit 1
-              fi
-              export ARGOCD_DEX_CLIENT_SECRET
-              unset ARGOCD_SERVER_SECRETKEY
-              exec dex serve /etc/dex/config.yaml
+          command: ["dex", "serve", "/etc/dex/config.yaml"]
           env:
-            - name: ARGOCD_SERVER_SECRETKEY
-              valueFrom:
-                secretKeyRef:
-                  name: argocd-secret
-                  key: server.secretkey
             # Written into argocd-secret by ExternalSecret argocd-github-oauth.
             - name: BACKSTAGE_OIDC_CLIENT_ID
               valueFrom:
