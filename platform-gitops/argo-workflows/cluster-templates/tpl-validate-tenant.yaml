@@ -34,6 +34,10 @@ spec:
           - name: service_template
             default: "default"
             # when not "default", dockerfile_repo is not required
+          - name: container_registry
+            default: "ghcr.io/mctlhq"
+            # where deploy-service pushes and services pull; must be the
+            # registry config/image-names.txt governs
       outputs:
         parameters:
           - name: service_dir
@@ -51,6 +55,9 @@ spec:
         envFrom:
           - configMapRef:
               name: mctl-platform-config
+        env:
+          - name: PARAM_CONTAINER_REGISTRY
+            value: "{{inputs.parameters.container_registry}}"
         source: |
           set -e
 
@@ -115,11 +122,25 @@ spec:
           cd /tmp/mctl-gitops
 
           # ── 3b. Image name: the component name is the image name ───────────
-          # Services run, and builds push, ghcr.io/<org>/<component_name>, so
-          # a team may only use a name it owns. Rule and reviewed grants:
-          # config/image-names.txt. Any non-zero exit (refused, or could not
-          # decide) stops here, for every action.
-          if ! sh platform-gitops/argo-workflows/scripts/check-image-name.sh . "$TEAM" "$SERVICE"; then
+          # Services run, and builds push, <registry>/<component_name>, so a
+          # team may only use a name it owns. Rule and reviewed grants:
+          # config/image-names.txt. --tenant: TEAM is requester-supplied here,
+          # so it must be an existing tenant (never "platform"). --build when
+          # deploy-service will build (its build-image `when`, kept in step
+          # by tests/test_check_image_name.py). Any non-zero exit (refused,
+          # or could not decide) stops here, for every action.
+          #
+          # This is check-then-act: two teams onboarding the same free name
+          # at the same moment can both pass. The build-image.yaml check at
+          # the push sees the first team's services/ commit only once it has
+          # landed; closing the window fully needs the claim and the check
+          # in one commit.
+          BUILD_FLAG=""
+          if [ "$ACTION" != "update-config" ] && [ -n "$REPO" ] && [ "$SERVICE_TEMPLATE" != "openclaw" ]; then
+            BUILD_FLAG="--build"
+          fi
+          if ! sh platform-gitops/argo-workflows/scripts/check-image-name.sh --tenant $BUILD_FLAG \
+              . "$PARAM_CONTAINER_REGISTRY" "$TEAM" "$SERVICE"; then
             echo "❌ component_name '${SERVICE}' is not available to team '${TEAM}'"
             exit 1
           fi
@@ -169,6 +190,13 @@ spec:
             echo "latest" > /tmp/image_tag
           fi
           echo "🏷 Image tag: $(cat /tmp/image_tag)"
+        resources:
+          requests:
+            memory: 32Mi
+            cpu: 10m
+          limits:
+            memory: 128Mi
+            cpu: 200m
         volumeMounts:
           - name: deploy-key
             mountPath: /secrets/deploy-key
@@ -186,6 +214,9 @@ spec:
         parameters:
           - name: team_name
           - name: component_name
+          - name: git_ref
+            default: ""
+            # non-empty: preview-deploy will build, so the check is --build
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -197,11 +228,16 @@ spec:
             value: "{{inputs.parameters.team_name}}"
           - name: PARAM_COMPONENT_NAME
             value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_GIT_REF
+            value: "{{inputs.parameters.git_ref}}"
         source: |
           set -e
           git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
-          if ! sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/check-image-name.sh \
-              /tmp/mctl-gitops "$PARAM_TEAM_NAME" "$PARAM_COMPONENT_NAME"; then
+          BUILD_FLAG=""
+          [ -n "$PARAM_GIT_REF" ] && BUILD_FLAG="--build"
+          # preview-deploy builds ghcr.io/<org>/<component_name>.
+          if ! sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/check-image-name.sh --tenant $BUILD_FLAG \
+              /tmp/mctl-gitops "ghcr.io/${GITOPS_ORG}" "$PARAM_TEAM_NAME" "$PARAM_COMPONENT_NAME"; then
             echo "❌ component_name '${PARAM_COMPONENT_NAME}' is not available to team '${PARAM_TEAM_NAME}'"
             exit 1
           fi
@@ -210,3 +246,6 @@ spec:
           requests:
             memory: 32Mi
             cpu: 10m
+          limits:
+            memory: 128Mi
+            cpu: 200m

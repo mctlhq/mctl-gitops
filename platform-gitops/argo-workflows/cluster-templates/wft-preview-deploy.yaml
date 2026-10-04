@@ -69,6 +69,8 @@ spec:
                   value: "{{workflow.parameters.team_name}}"
                 - name: component_name
                   value: "{{workflow.parameters.component_name}}"
+                - name: git_ref
+                  value: "{{workflow.parameters.git_ref}}"
 
           - name: build-image
             template: trigger-github-build
@@ -91,6 +93,9 @@ spec:
 
           - name: deploy-preview
             template: deploy
+            # `dependencies` (not `depends`) treats a Skipped build — no
+            # git_ref, deploying an existing image_tag — as satisfied, as it
+            # did before this task existed; a Failed image-name stops it.
             dependencies: [image-name, build-image]
             arguments:
               parameters:

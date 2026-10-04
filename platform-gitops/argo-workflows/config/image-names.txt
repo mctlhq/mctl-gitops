@@ -1,23 +1,29 @@
-# Image names under ghcr.io/mctlhq that a team may build into and run.
+# Image names under the registry below that a team may build into and run.
 #
-# Tenant builds push ghcr.io/mctlhq/<component_name>, and tenant services run
-# ghcr.io/mctlhq/<component_name>, so the component name IS the image name.
+# Tenant builds push <registry>/<component_name>, and tenant services run
+# <registry>/<component_name>, so the component name IS the image name.
 # platform-gitops/argo-workflows/scripts/check-image-name.sh decides, for a
 # team T and a name N, in this order:
 #
-#   1. `grant T N` or `grant * N` below      -> allowed
-#   2. `reserved N`, or N starts with a      -> refused
-#      `reserved-prefix`
-#   3. another team already has services/<other>/N, or a values.yaml under
-#      services/<other>/ runs ghcr.io/mctlhq/N -> refused
-#   4. otherwise                            -> allowed
+#   0. tenant callers (Argo) only: T must be an existing tenant
+#      (platform-gitops/tenants/T/) and not "platform"   else refused
+#   1. `grant T N`                                       -> allowed
+#   2. `reserved N`, or N starts with a `reserved-prefix` -> refused
+#   3. `shared N`: allowed to run; refused to build (only a granted team
+#      may push to a shared name)
+#   4. another team already has services/<other>/N, or a values.yaml under
+#      services/<other>/ runs <registry>/N             -> refused
+#   5. otherwise                                         -> allowed
 #
 # Read by the deploy-service and preview-deploy validation (Argo) and by
-# .github/workflows/build-image.yaml before it pushes. A line this script does
-# not understand makes every check refuse, so keep to the three forms below.
+# .github/workflows/build-image.yaml before it pushes. A line the script does
+# not understand, a wildcard grant, or a registry other than the caller's
+# makes every check refuse, so keep to the forms below.
 # tests/test_check_image_name.py keeps this file complete: every image the
 # platform references outside platform-gitops/services/ must be reserved here,
 # and every service that exists today must pass.
+
+registry ghcr.io/mctlhq
 
 # --- Platform images: built by release-deploy or by hand, never by a tenant.
 reserved-prefix mctl-
@@ -36,7 +42,10 @@ reserved zitadel-iac
 # --- above or shared between teams; add a line here only in review.
 
 # Platform images built from platform-gitops/images/ and dispatched by hand
-# with team "platform" (not a tenant; wft-create-tenant refuses the name).
+# to build-image.yaml with team "platform". Unreachable from tenant workflows:
+# their check runs with --tenant, which refuses "platform" and any team
+# without platform-gitops/tenants/<team>/ (and wft-create-tenant refuses to
+# create a tenant of that name).
 grant platform grafana-iac
 grant platform mc
 grant platform mctl-agent
@@ -66,8 +75,12 @@ grant labs seerrsense
 # ovk: runs mctl-academy from the same source repository as labs.
 grant ovk mctl-academy
 
-# openclaw services run the fixed image mctl-openclaw (service-templates/
-# openclaw), never an image named after the component, and their build input is pinned
-# to mctlhq/mctl-openclaw by mctl-api. The name is shared by every team that
-# deploys one.
-grant * openclaw
+# openclaw: several teams hold a service of that name (labs, ovk, admins);
+# each runs the fixed image mctl-openclaw (service-templates/openclaw), which
+# the mctl- prefix reserves, and deploy-service does not build for that
+# template. The image named openclaw itself is built only by mctl-openclaw's
+# upstream-sync workflow, dispatched as team labs; nothing in this repository
+# runs it. Shared, so the service name stays available to every team, with
+# builds limited to the grant.
+shared openclaw
+grant labs openclaw

@@ -145,9 +145,12 @@ spec:
           fi
 
           # Reserved names
-          # platform: the team name image-names.txt grants the platform's own
-          # images to; a tenant of that name would inherit those grants.
-          for reserved in argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring platform; do
+          # platform, admins: the teams image-names.txt grants the platform's
+          # own images to. "platform" is never a tenant; "admins" exists and
+          # must not be created again by someone else (this workflow continues
+          # on an existing tenant directory); wft-delete-tenant-safe likewise
+          # refuses admins.
+          for reserved in argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring platform admins; do
             if [ "$TENANT" = "$reserved" ]; then
               echo "ERROR: '$TENANT' is a reserved namespace name."
               exit 1

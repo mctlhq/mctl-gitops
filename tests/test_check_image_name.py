@@ -34,14 +34,19 @@ def check(cond, msg):
         failures.append(msg)
 
 
-def run(root, team, name):
-    return subprocess.run(["sh", str(SCRIPT), str(root), team, name],
+REG = "ghcr.io/mctlhq"
+
+
+def run(root, team, name, *flags, registry=REG):
+    return subprocess.run(["sh", str(SCRIPT), *flags, str(root), registry, team, name],
                           capture_output=True, text=True).returncode
 
 
-def fixture(list_text, services):
+def fixture(list_text, services, tenants=("labs", "ovk", "karabu", "admins")):
     """services: {"team/name": values.yaml text or None}"""
     d = pathlib.Path(tempfile.mkdtemp())
+    for t in tenants:
+        (d / "platform-gitops/tenants" / t).mkdir(parents=True)
     cfg = d / "platform-gitops/argo-workflows/config"
     cfg.mkdir(parents=True)
     if list_text is not None:
@@ -57,12 +62,14 @@ def fixture(list_text, services):
 
 
 LIST_TEXT = """# comment
+registry ghcr.io/mctlhq
 reserved-prefix mctl-
 reserved grafana-iac
 grant platform grafana-iac
 grant labs mctl-academy
 grant ovk mctl-academy
-grant * openclaw
+shared openclaw
+grant labs openclaw
 """
 SERVICES = {
     "labs/kuptsi-app": "image:\n  repository: ghcr.io/mctlhq/kuptsi-app\n",
@@ -72,11 +79,12 @@ SERVICES = {
     "labs/fresh-svc": None,
     "ovk/mctl-academy": None,
     "admins/openclaw": "image:\n  repository: ghcr.io/mctlhq/mctl-openclaw\n",
+    "labs/openclaw": None,
 }
 root = fixture(LIST_TEXT, SERVICES)
 
 CASES = [
-    # (team, name, expected exit, why)
+    # (team, name, expected exit, why[, flags])
     ("karabu", "brand-new", 0, "an unused name is free"),
     ("labs", "kuptsi-app", 0, "a team keeps its own service name"),
     ("karabu", "kuptsi-app", 1, "another team's service name"),
@@ -90,15 +98,39 @@ CASES = [
     ("labs", "mctl-academy", 0, "explicit grant"),
     ("ovk", "mctl-academy", 0, "explicit grant for a second team"),
     ("karabu", "mctl-academy", 1, "a grant is for its team only"),
-    ("karabu", "openclaw", 0, "wildcard grant"),
+    ("karabu", "openclaw", 0, "a shared name may be run by any team"),
+    ("karabu", "openclaw", 1, "only a granted team may build a shared name", "--build"),
+    ("labs", "openclaw", 0, "the granted team may build a shared name", "--build"),
+    ("karabu", "brand-new", 0, "build mode does not change a free name", "--build"),
+    ("karabu", "brand-new", 0, "an existing tenant", "--tenant"),
+    ("platform", "grafana-iac", 1, "a tenant workflow can never act as team platform", "--tenant"),
+    ("platform", "brand-new", 1, "nor use team platform for anything", "--tenant"),
+    ("nosuch", "brand-new", 1, "a tenant workflow's team must exist", "--tenant"),
+    ("labs", "mctl-academy", 0, "a grant still applies to a real tenant", "--tenant", "--build"),
     ("Karabu", "x", 2, "team outside the name grammar"),
     ("karabu", "x/../y", 2, "name outside the name grammar"),
     ("karabu", "ok\nmctl-api", 2, "multi-line name"),
     ("karabu", "", 2, "empty name"),
 ]
-for team, name, want, why in CASES:
-    got = run(root, team, name)
-    check(got == want, f"fixture {team}/{name!r}: exit {got}, want {want} ({why})")
+for team, name, want, why, *flags in CASES:
+    got = run(root, team, name, *flags)
+    check(got == want, f"fixture {flags} {team}/{name!r}: exit {got}, want {want} ({why})")
+
+# The registry is part of the decision: a caller deriving another one is
+# refused, not checked against names it does not use.
+check(run(root, "karabu", "kuptsi-app", registry="ghcr.io/otherorg") == 2,
+      "a registry other than the list's must refuse (exit 2)")
+check(run(fixture(LIST_TEXT.replace("registry ghcr.io/mctlhq\n", ""), SERVICES),
+          "karabu", "brand-new") == 2,
+      "a list without a registry line must refuse (exit 2)")
+check(run(fixture(LIST_TEXT + "grant * mctl-api\n", SERVICES), "karabu", "brand-new") == 2,
+      "a wildcard grant must make the list unusable (exit 2)")
+check(run(root, "karabu", "brand-new", "--bogus") == 2, "unknown option must refuse (exit 2)")
+# Even if a tenants/platform directory appeared, a tenant workflow may not act
+# as team platform.
+check(run(fixture(LIST_TEXT, SERVICES, tenants=("platform",)), "platform", "grafana-iac",
+          "--tenant") == 1,
+      "--tenant must refuse team platform even with a tenants/platform directory")
 
 # Fail closed: no list, a list line the script does not understand.
 check(run(fixture(None, SERVICES), "karabu", "brand-new") == 2,
@@ -113,7 +145,8 @@ check(run(fixture(LIST_TEXT + "grant karabu\n", SERVICES),
 # This repository: every existing service passes.
 for d in sorted((REPO / "platform-gitops/services").glob("*/*/")):
     team, name = d.parent.name, d.name
-    got = run(REPO, team, name)
+    flags = ["--tenant"] if (REPO / "platform-gitops/tenants" / team).is_dir() else []
+    got = run(REPO, team, name, *flags)
     check(got == 0, f"existing service {team}/{name} is refused (exit {got}); "
                     "add a reviewed grant to image-names.txt")
 
@@ -152,12 +185,58 @@ tpl = yaml.safe_load((REPO / "platform-gitops/argo-workflows/cluster-templates/"
                       "tpl-validate-tenant.yaml").read_text())
 by_name = {t["name"]: t for t in tpl["spec"]["templates"]}
 src = by_name["validate"]["script"]["source"]
-call = 'check-image-name.sh . "$TEAM" "$SERVICE"'
-check(call in src, "validate does not run check-image-name.sh")
+call = ('\nif ! sh platform-gitops/argo-workflows/scripts/check-image-name.sh --tenant $BUILD_FLAG \\\n'
+        '    . "$PARAM_CONTAINER_REGISTRY" "$TEAM" "$SERVICE"')
+check(call in src, "validate does not run check-image-name.sh --tenant with its registry")
 check(call in src and src.index(call) < src.index("# ── 4."),
       "validate must check the image name before the action-specific checks")
-check("check-image-name.sh" in by_name.get("image-name", {}).get("script", {}).get("source", ""),
-      "tpl-validate-tenant has no image-name template running the script")
+build_cond = ('if [ "$ACTION" != "update-config" ] && [ -n "$REPO" ] && '
+              '[ "$SERVICE_TEMPLATE" != "openclaw" ]; then\n  BUILD_FLAG="--build"')
+check(build_cond in src, "validate must pass --build exactly when deploy-service builds")
+env = {e["name"]: e["value"] for e in by_name["validate"]["script"].get("env", [])}
+check(env.get("PARAM_CONTAINER_REGISTRY") == "{{inputs.parameters.container_registry}}",
+      "validate must take the registry as a bound env value")
+img = by_name.get("image-name", {}).get("script", {}).get("source", "")
+check('\nif ! sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/check-image-name.sh --tenant $BUILD_FLAG' in img and '"ghcr.io/${GITOPS_ORG}"' in img,
+      "image-name template must run the script with --tenant and the org's registry")
+check('[ -n "$PARAM_GIT_REF" ] && BUILD_FLAG="--build"' in img,
+      "image-name template must check in build mode when preview-deploy builds")
+for t in ("validate", "image-name"):
+    lim = by_name.get(t, {}).get("script", {}).get("resources", {}).get("limits", {})
+    check(lim.get("memory") and lim.get("cpu"), f"{t} must declare resource limits")
+
+ds = yaml.safe_load((REPO / "platform-gitops/argo-workflows/cluster-templates/"
+                     "wft-deploy-service.yaml").read_text())
+dtasks = {t["name"]: t for t in
+          [t for t in ds["spec"]["templates"] if t["name"] == "deploy-pipeline"][0]["dag"]["tasks"]}
+vparams = {p["name"]: p["value"] for p in dtasks["validate"]["arguments"]["parameters"]}
+check(vparams.get("container_registry") == "{{workflow.parameters.container_registry}}",
+      "deploy-service must hand validate the registry it builds into")
+when = dtasks["build-image"]["when"]
+for part in ('"{{workflow.parameters.action}}\" != \"update-config\"',
+             '"{{workflow.parameters.dockerfile_repo}}\" != \"\"',
+             '"{{workflow.parameters.service_template}}\" != \"openclaw\"'):
+    check(part.replace('\\"', '"') in when.replace('\\"', '"'),
+          f"deploy-service build condition changed; keep validate's --build in step ({part})")
+
+ct = (REPO / "platform-gitops/argo-workflows/cluster-templates/wft-create-tenant.yaml").read_text()
+reserved_line = [ln for ln in ct.splitlines() if "for reserved in" in ln][0]
+reserved_names = reserved_line.split("for reserved in", 1)[1].split(";")[0].split()
+for t in ("platform", "admins"):
+    check(t in reserved_names,
+          f"wft-create-tenant must reserve the tenant name '{t}' (image-names.txt grants to it)")
+
+# Direct dispatchers of build-image.yaml outside Argo, as found on each
+# repository's default branch (all other organisation workflows call
+# release-deploy.yaml): each must keep passing the push-time check.
+for team, name in (("labs", "openclaw"),          # mctl-openclaw upstream-sync-release.yml
+                   ("platform", "grafana-iac"),  # platform-gitops/images/*, by hand
+                   ("platform", "mc"),
+                   ("platform", "vault-iac"),
+                   ("platform", "zitadel-iac"),
+                   ("platform", "mctl-agent")):
+    check(run(REPO, team, name, "--build") == 0,
+          f"direct build-image dispatcher {team}/{name} would be refused")
 
 pv = yaml.safe_load((REPO / "platform-gitops/argo-workflows/cluster-templates/"
                      "wft-preview-deploy.yaml").read_text())
@@ -183,6 +262,9 @@ if "Check image name" in names:
     check("check-image-name.sh" in run_src, "build-image's check does not run the script")
     check('"$INPUT_IMAGE_NAME" != "$expected"' in run_src,
           "build-image must pin image_name to ghcr.io/<org>/<component_name>")
+    check('\nif ! sh .image-name-policy/platform-gitops/argo-workflows/scripts/check-image-name.sh --build' in run_src
+          and '"${REGISTRY}/${GITHUB_REPOSITORY_OWNER}"' in run_src,
+          "build-image must check in build mode against its own registry")
 push = [s for s in steps if s.get("name") == "Build and push"][0]["with"]["tags"]
 latest = [ln for ln in push.splitlines() if "latest" in ln]
 check(len(latest) == 1 and "steps.caller.outputs.direct != 'true'" in latest[0],
@@ -191,6 +273,6 @@ check(len(latest) == 1 and "steps.caller.outputs.direct != 'true'" in latest[0],
 if failures:
     print("\n".join(f"FAIL: {f}" for f in failures))
     sys.exit(1)
-print(f"OK: {len(CASES) + 3} fixture cases, "
+print(f"OK: {len(CASES) + 7} fixture cases, "
       f"{len(list((REPO / 'platform-gitops/services').glob('*/*/')))} existing services, "
       f"{len(referenced)} referenced platform images")
