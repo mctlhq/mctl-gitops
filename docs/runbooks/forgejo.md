@@ -30,9 +30,17 @@ registration closed, nothing visible without signing in.
 
 ## Admin login
 
+People sign in to the web UI only through ZITADEL ("Sign in with ZITADEL";
+`ENABLE_INTERNAL_SIGNIN: false`, #1520 S5). The first ZITADEL sign-in of an
+existing user lands on the link-account page, which still takes that
+account's Forgejo password once.
+
 User `mctl-admin`, password in Vault `secret/platform/forgejo` →
 `admin-password`. The chart runs with `passwordMode: keepUpdated`, so the
-password in Vault is the one that works after the next pod restart.
+password in Vault is the one that works after the next pod restart. Since S5
+it is for the API and git over HTTPS (basic auth) and break-glass only:
+`kubectl -n forgejo exec deploy/forgejo -- forgejo admin ...` works without
+any web login, and setting `ENABLE_INTERNAL_SIGNIN: true` restores the form.
 
 ## Secrets
 
