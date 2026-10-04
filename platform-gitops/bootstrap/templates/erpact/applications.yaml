@@ -3,9 +3,9 @@
 # projects/project-erpact.yaml for why and for what they may create).
 #
 # Automated sync with prune: the site deployer adds a site by pushing to
-# mctl-apps, and the next poll (about 3 minutes) applies it. Names start with
-# erpact- so the tenant's ArgoCD role (rbac/tenants/erpact.csv) can see them
-# once that role is extended to project erpact.
+# mctl-apps, and the next poll (about 3 minutes) applies it. The tenant's
+# ArgoCD role sees and syncs them through its erpact/* grant
+# (rbac/tenants/erpact.csv, derived from projects/project-erpact.yaml).
 #
 # No sync wave: everything erpact sits in wave 0, the last wave of this
 # chart, so nothing waits on its health. Positive waves deadlocked root-app

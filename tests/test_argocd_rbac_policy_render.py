@@ -21,7 +21,11 @@ T2. Every tenant directory under `platform-gitops/tenants/` has exactly one
 T3. Every fragment equals what `wft-create-tenant` writes for that tenant:
     the heredoc is read from the workflow itself, so a hand-edited fragment
     (an extra `exec` line, another tenant's apps) or a changed template
-    without regenerated fragments fails here.
+    without regenerated fragments fails here. A tenant with an AppProject of
+    its own (bootstrap/templates/projects/project-<tenant>.yaml, confined to
+    its namespace; decided by scripts/validate-argocd-tenant-rbac.py) also
+    carries the heredoc's `p` lines with `apps/<tenant>-*` replaced by
+    `<tenant>/*`, and nothing else.
 T4. If `helm` is on PATH (it is in the validate job), a real render of
     argocd-rbac-cm must equal the base policy plus the fragments.
 T5. `argo-cd.configs.rbac.create` is false, `policy.default` is "" and
@@ -41,6 +45,8 @@ import tempfile
 import textwrap
 from pathlib import Path
 
+import importlib.util
+
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +56,13 @@ FRAGMENTS_DIR = CHART / "rbac" / "tenants"
 TENANTS_DIR = ROOT / "platform-gitops" / "tenants"
 CREATE_TENANT = ROOT / "platform-gitops" / "argo-workflows" / "cluster-templates" / "wft-create-tenant.yaml"
 BASELINE_FILE = ROOT / "tests" / "fixtures" / "argocd-rbac-policy.baseline.csv"
+PROJECTS_DIR = ROOT / "platform-gitops" / "bootstrap" / "templates" / "projects"
+
+_spec = importlib.util.spec_from_file_location(
+    "validate_argocd_tenant_rbac", ROOT / "scripts" / "validate-argocd-tenant-rbac.py"
+)
+_validator = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_validator)
 
 failures: list[str] = []
 
@@ -113,7 +126,16 @@ if m:
     template = textwrap.dedent(m.group(1))
     check("${TENANT}" in template, "the RBAC heredoc in wft-create-tenant no longer uses ${TENANT}")
     for p in fragment_paths:
-        want = normalize(template.replace("${TENANT}", p.stem))
+        rendered = template.replace("${TENANT}", p.stem)
+        has_project, project_problem = _validator.own_project(p.stem, PROJECTS_DIR)
+        check(project_problem is None, f"{p.relative_to(ROOT)}: {project_problem}")
+        if has_project:
+            own_lines = [l for l in normalize(rendered) if l.startswith("p,")]
+            check(len(own_lines) > 0, f"no p lines in the wft-create-tenant heredoc for {p.stem!r}")
+            rendered += "\n" + "\n".join(
+                l.replace(f"apps/{p.stem}-*", f"{p.stem}/*") for l in own_lines
+            )
+        want = normalize(rendered)
         got = normalize(p.read_text())
         check(
             got == want,
