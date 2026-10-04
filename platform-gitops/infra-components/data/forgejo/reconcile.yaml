@@ -151,9 +151,12 @@ data:
     resource "forgejo_user" "this" {
       for_each = local.users
 
-      login     = each.key
-      email     = each.value.email
-      full_name = try(each.value.full_name, null)
+      login = each.key
+      # sensitive(): the provider does not mark these, so the plan in the
+      # Job log (and in Loki) would print every new or changed user's address
+      # and name. The manifest keeps personal data out of git for a reason.
+      email     = sensitive(each.value.email)
+      full_name = sensitive(try(each.value.full_name, null))
       password  = local.passwords[each.key]
       # Binds the account to one identity of an authentication source:
       # Forgejo's OAuth callback looks a user up by (source, login_name = the
