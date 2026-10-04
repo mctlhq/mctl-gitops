@@ -99,12 +99,15 @@ jobs:
          || secrets.CLOUDFLARE_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
-      # The account root's pilot addresses, kept out of this public
-      # repository (account/portal-mcp-apps.tf). Empty for every other root,
-      # and an unset secret leaves the account root without a value, which
-      # fails the plan rather than planning an empty policy. Both jobs need
+      # Personal addresses kept out of this public repository, each scoped to
+      # the one root that declares it: the account root's pilot addresses
+      # (account/portal-mcp-apps.tf) and the mctl.ai forward destination
+      # (zones/mctl-ai/email.tf). Empty for every other root, and an unset
+      # secret leaves its root without a value, which fails the plan rather
+      # than planning an empty policy or a forward to nowhere. Both jobs need
       # it: apply re-plans and compares digests.
       TF_VAR_portal_pilot_emails: ${{ inputs.root == 'infrastructure/cloudflare/account' && secrets.CF_PORTAL_PILOT_EMAILS || '' }}
+      TF_VAR_email_routing_destination: ${{ inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' && secrets.CF_MCTL_AI_EMAIL_DESTINATION || '' }}
       TF_IN_AUTOMATION: '1'
       # Two copies, one per job, because Actions cannot share an env value
       # across jobs — no YAML anchors in workflows, and `env` at workflow level
@@ -314,12 +317,15 @@ jobs:
       # between two jobs.
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_APPLY_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APPLY_SECRET_ACCESS_KEY }}
-      # The account root's pilot addresses, kept out of this public
-      # repository (account/portal-mcp-apps.tf). Empty for every other root,
-      # and an unset secret leaves the account root without a value, which
-      # fails the plan rather than planning an empty policy. Both jobs need
+      # Personal addresses kept out of this public repository, each scoped to
+      # the one root that declares it: the account root's pilot addresses
+      # (account/portal-mcp-apps.tf) and the mctl.ai forward destination
+      # (zones/mctl-ai/email.tf). Empty for every other root, and an unset
+      # secret leaves its root without a value, which fails the plan rather
+      # than planning an empty policy or a forward to nowhere. Both jobs need
       # it: apply re-plans and compares digests.
       TF_VAR_portal_pilot_emails: ${{ inputs.root == 'infrastructure/cloudflare/account' && secrets.CF_PORTAL_PILOT_EMAILS || '' }}
+      TF_VAR_email_routing_destination: ${{ inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' && secrets.CF_MCTL_AI_EMAIL_DESTINATION || '' }}
       TF_IN_AUTOMATION: '1'
       # Two copies, one per job, because Actions cannot share an env value
       # across jobs — no YAML anchors in workflows, and `env` at workflow level
