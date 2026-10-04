@@ -157,8 +157,10 @@ resource "kubernetes_secret_v1_data" "erpact_frappe_users" {
     namespace = "erpact"
   }
 
+  # sensitive(): the provider does not mark `data` sensitive, and the Job
+  # log must not print names or addresses (as for users in tenants.tf).
   data = {
-    "users.json" = jsonencode({
+    "users.json" = sensitive(jsonencode({
       version = 1
       users = [
         for u in local.erpact_frappe_users : {
@@ -171,7 +173,7 @@ resource "kubernetes_secret_v1_data" "erpact_frappe_users" {
           roles = try(sort(u.roles), [])
         }
       ]
-    })
+    }))
   }
 
   field_manager = "zitadel-iac"
