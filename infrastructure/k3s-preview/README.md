@@ -86,8 +86,9 @@ this root from CI (#1534). Merging applies nothing.
    key and refuses unless its plan has the digest `plan` published, then applies
    exactly that plan.
 
-Both jobs run `.github/scripts/k3s-plan-guard.sh` (tested by
-`tests/test_k3s_plan_guard.py`), which refuses:
+Both jobs run `.github/scripts/k3s-plan-guard.sh` on every plan, the
+push-to-main plan included, so a merge that would restart k3s turns the `plan`
+job red right away (tested by `tests/test_k3s_plan_guard.py`). It refuses:
 
 - any destroy or replace of real infrastructure (servers, network, firewall,
   load balancer, the Hetzner SSH key) unless dispatched with `allow_destroy`;

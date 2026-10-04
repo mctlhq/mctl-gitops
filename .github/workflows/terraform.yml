@@ -193,10 +193,15 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      # The same guard as in the apply job, run here so an unintended plan is
-      # refused before anyone is asked to approve it.
+      # The same guard as in the apply job, on EVERY plan, push included. The
+      # push-to-main plan is this root's drift alarm: a merge that would
+      # replace control_plane_config (rewrite the k3s config, restart k3s on
+      # the single control plane) turns this job red at merge time instead of
+      # listing the address among the other "#" lines of a green run, which is
+      # how 2026-09-09 went unnoticed. An intended change of that kind is
+      # dispatched with the matching allow_* input. On a push, inputs are
+      # empty, so nothing is allowed.
       - name: Guard the plan
-        if: inputs.apply == true
         env:
           ALLOW_DESTROY: ${{ inputs.allow_destroy }}
           ALLOW_REPROVISION: ${{ inputs.allow_reprovision }}
