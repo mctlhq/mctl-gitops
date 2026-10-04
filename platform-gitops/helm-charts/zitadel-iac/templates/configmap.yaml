@@ -25,8 +25,13 @@ data:
   {{ base $path }}: |
     {{- $.Files.Get $path | nindent 4 }}
   {{- end }}
-  {{- /* Branding assets uploaded by branding.tf. */}}
+  {{- /* Branding assets (branding.tf) and Login V2 texts (login_texts.tf).
+    CI checks that these keys render. */}}
   {{- range $path, $_ := .Files.Glob "iac/*.svg" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+  {{- range $path, $_ := .Files.Glob "iac/*.json" }}
   {{ base $path }}: |
     {{- $.Files.Get $path | nindent 4 }}
   {{- end }}

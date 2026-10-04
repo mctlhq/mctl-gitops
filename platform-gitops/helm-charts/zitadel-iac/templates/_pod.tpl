@@ -60,6 +60,7 @@ containers:
         set -eu
         cp /iac-root/*.tf /work/
         cp /iac-root/*.svg /work/
+        cp /iac-root/*.json /work/
         cp /iac-root/terraform.lock.hcl /work/.terraform.lock.hcl
         cd /work
         tofu init -lockfile=readonly -no-color

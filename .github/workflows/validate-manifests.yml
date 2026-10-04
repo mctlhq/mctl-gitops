@@ -647,6 +647,17 @@ jobs:
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: tofu test -no-color
 
+      # login_texts.json must override every Login V2 text that names
+      # Zitadel in the release the zitadel chart pin deploys; a ZITADEL bump
+      # that adds one fails here instead of shipping it.
+      - name: Login V2 texts cover the pinned release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/check-zitadel-login-texts.py --selftest
+          python3 scripts/check-zitadel-login-texts.py
+
       - name: Render the chart and validate the manifests
         env:
           KUBECONFORM_VERSION: "0.8.0"
@@ -659,8 +670,23 @@ jobs:
           if helm template t platform-gitops/helm-charts/zitadel-iac --set image.digest=null >/dev/null 2>&1; then
             echo "::error::zitadel-iac rendered without image.digest"; exit 1
           fi
-          helm template t platform-gitops/helm-charts/zitadel-iac -f platform-gitops/helm-charts/zitadel-iac/values.yaml \
-            | ./kubeconform -strict -summary -schema-location default
+          helm template t platform-gitops/helm-charts/zitadel-iac -f platform-gitops/helm-charts/zitadel-iac/values.yaml > rendered.yaml
+          ./kubeconform -strict -summary -schema-location default rendered.yaml
+          # The Job reads every file of the root from the inputs ConfigMap; a
+          # glob that stops matching drops a file without any render error.
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import pathlib, sys, yaml
+          iac = pathlib.Path("platform-gitops/helm-charts/zitadel-iac/iac")
+          want = {p.name for p in iac.iterdir() if p.suffix in (".tf", ".svg", ".json")}
+          want.add("terraform.lock.hcl")
+          cm = next(d for d in yaml.safe_load_all(open("rendered.yaml"))
+                    if d and d["kind"] == "ConfigMap" and d["metadata"]["name"] == "zitadel-iac-inputs")
+          missing = sorted(want - set(cm["data"]))
+          if missing:
+              sys.exit(f"zitadel-iac-inputs is missing {missing}")
+          print(f"zitadel-iac-inputs carries all {len(want)} root files")
+          PY
 
   # The declarative Vault human sign-in root. Like zitadel-iac, the in-cluster
   # Job applies it after merge, so formatting, provider schema errors and a
