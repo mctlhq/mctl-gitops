@@ -362,10 +362,43 @@ for text, want in (
      (0, ["x/a"])),
     ("c: &a |\n  repository: x/b\nd: !!str >-\n  repository: x/c\nimage:\n  repository: x/a\n",
      (0, ["x/a"])),
+    # A plain value that merely ends in " - |" opens no scalar.
+    ("  d: a - |\n  image:\n    repository: x/a\n", (0, ["x/a"])),
+    ("d: pipe - >\nimage:\n  repository: x/a\n", (0, ["x/a"])),
+    ("- d: a - |\n  repository: x/a\n", (0, ["x/a"])),
 ):
     rc, out = read_images(text)
     check((rc, out if rc == 0 else []) == want,
           f"values-images.sh on {text!r}: {(rc, out)}, want {want}")
+# The reader against the real files: every service values.yaml and every
+# template (with the placeholders an image can use substituted) reads, and
+# yields exactly the repository keys a structural parse finds. A
+# mis-measured block scalar that swallows a key, or a form the reader reads
+# differently from YAML, fails here rather than losing a claim silently.
+def yaml_repos(text):
+    found = []
+    def walk(n):
+        if isinstance(n, dict):
+            for k, v in n.items():
+                if k == "repository" and isinstance(v, str):
+                    found.append(v)
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+    walk(yaml.safe_load(text))
+    return found
+
+real_values = (sorted((REPO / "platform-gitops/services").glob("*/*/values.yaml"))
+               + sorted((REPO / "platform-gitops/argo-workflows/service-templates").glob("*/values.yaml.tpl")))
+check(len(real_values) > 4, "no real values files found")
+for f in real_values:
+    text = f.read_text().replace("__SERVICE_NAME__", "svc").replace("__TEAM_NAME__", "team")
+    rc, out = read_images(text)
+    want = yaml_repos(text)
+    check(rc == 0 and out == want,
+          f"values-images.sh on {f.relative_to(REPO)}: {(rc, out)}, want {want}")
+
 env = {e["name"]: e["value"] for e in by_name["validate"]["script"].get("env", [])}
 check(env.get("PARAM_CONTAINER_REGISTRY") == "{{inputs.parameters.container_registry}}",
       "validate must take the registry as a bound env value")
@@ -397,8 +430,11 @@ check("platform" in reserved_names,
 # Direct dispatchers of build-image.yaml outside Argo, as found on each
 # repository's default branch (all other organisation workflows call
 # release-deploy.yaml): each must keep passing the push-time check.
-for team, name in (("labs", "openclaw"),          # mctl-openclaw upstream-sync-release.yml (repo archived)
-                   ("platform", "grafana-iac"),  # platform-gitops/images/*, by hand
+# mctl-openclaw's upstream sync (team labs, openclaw) is gone with that
+# repository's archiving, and so is its grant: nobody may build openclaw.
+check(run(REPO, "labs", "openclaw", "--build") == 1,
+      "no team may build openclaw now that its only builder is archived")
+for team, name in (("platform", "grafana-iac"),  # platform-gitops/images/*, by hand
                    ("platform", "mc"),
                    ("platform", "vault-iac"),
                    ("platform", "zitadel-iac"),
@@ -493,6 +529,19 @@ if len(caller) == 1:
                                     "GITHUB_OUTPUT": f"{out}/o"})
             got = (pathlib.Path(out) / "o").read_text().strip() if r.returncode == 0 else r.stderr
             check(got == f"direct={want}", f"caller classification for {ref}: {got!r}")
+# ...and the steps that enforce the pin run only for a direct dispatch, so a
+# release workflow_call skips them.
+for step in ("Check out image-name policy", "Check image name"):
+    st = [x for x in steps if x.get("name") == step]
+    check(len(st) == 1 and st[0].get("if") == "steps.caller.outputs.direct == 'true'",
+          f"'{step}' must run only for a direct dispatch, not for release workflow_calls")
+# The check reads team_name and component_name, so both trigger kinds must
+# declare them: an undeclared dispatch input is refused by GitHub.
+on = bi.get("on", bi.get(True, {}))
+for trigger in ("workflow_dispatch", "workflow_call"):
+    declared = (on.get(trigger) or {}).get("inputs", {})
+    for inp in ("image_name", "team_name", "component_name"):
+        check(inp in declared, f"build-image.yaml must declare {inp} under {trigger}")
 push = [s for s in steps if s.get("name") == "Build and push"][0]["with"]["tags"]
 latest = [ln for ln in push.splitlines() if "latest" in ln]
 check(len(latest) == 1 and "steps.caller.outputs.direct != 'true'" in latest[0],
@@ -503,4 +552,5 @@ if failures:
     sys.exit(1)
 print(f"OK: {len(CASES) + 7} fixture cases, "
       f"{len(list((REPO / 'platform-gitops/services').glob('*/*/')))} existing services, "
-      f"{len(referenced)} referenced platform images")
+      f"{len(referenced)} referenced platform images, "
+      f"{len(real_values)} real values files read")

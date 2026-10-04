@@ -53,19 +53,19 @@ awk -v scalar=-1 '
     # A YAML comment starts at a # preceded by whitespace.
     sub(/[[:space:]]+#.*$/, "", line)
     # A block scalar opens at a line ending in | or > (with optional
-    # indicators, and an optional anchor or tag before it), after a key or a
-    # sequence dash. It belongs to that key, or to the last dash, and its
-    # text is what is indented deeper than that column.
-    if (line ~ /(:|(^|[[:space:]])-)[[:space:]]+([&!][^[:space:]]*[[:space:]]+)*[|>][-+0-9]*[[:space:]]*$/) {
-      if (line ~ /:[[:space:]]+([&!][^[:space:]]*[[:space:]]+)*[|>][-+0-9]*[[:space:]]*$/) {
-        match(line, /^[[:space:]]*(-[[:space:]]+)*/)
-        scalar = RLENGTH
-      } else {
-        match(line, /^[[:space:]]*(-[[:space:]]+)*/)
-        prefix = substr(line, 1, RLENGTH)
-        sub(/-[[:space:]]+$/, "", prefix)
-        scalar = length(prefix)
-      }
+    # indicators, and an optional anchor or tag before it), as the value of a key
+    # or as a sequence item: the dashes then make up the whole line before
+    # it, so a plain value merely ending in " - |" opens nothing. It belongs
+    # to that key, or to the last dash, and its text is what is indented
+    # deeper than that column.
+    if (line ~ /:[[:space:]]+([&!][^[:space:]]*[[:space:]]+)*[|>][-+0-9]*[[:space:]]*$/) {
+      match(line, /^[[:space:]]*(-[[:space:]]+)*/)
+      scalar = RLENGTH
+    } else if (line ~ /^[[:space:]]*(-[[:space:]]+)*-[[:space:]]+([&!][^[:space:]]*[[:space:]]+)*[|>][-+0-9]*[[:space:]]*$/) {
+      match(line, /^[[:space:]]*(-[[:space:]]+)*/)
+      prefix = substr(line, 1, RLENGTH)
+      sub(/-[[:space:]]+$/, "", prefix)
+      scalar = length(prefix)
     }
   }
   line !~ /(^|[^A-Za-z0-9_-])repository[\047"]?[[:space:]]*:/ { next }
