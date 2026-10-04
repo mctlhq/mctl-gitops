@@ -54,8 +54,9 @@ data:
     }
 
     provider "forgejo" {
-      # host / username / password from FORGEJO_HOST, FORGEJO_USERNAME,
-      # FORGEJO_PASSWORD (the platform admin account).
+      # host and api_token from FORGEJO_HOST and FORGEJO_API_TOKEN: the access
+      # token reconcile.sh mints for this run. Never the admin password, which
+      # Forgejo would hash on every one of the run's API calls.
     }
 
     variable "manifest" {
@@ -63,11 +64,10 @@ data:
       type        = string
     }
 
-    # For what svalabs/forgejo has no resource for. Same admin account.
+    # For what svalabs/forgejo has no resource for. Same per-run token.
     provider "restapi" {
       uri                  = "${trimsuffix(var.forgejo_host, "/")}/api/v1"
-      username             = var.forgejo_username
-      password             = var.forgejo_password
+      headers              = { Authorization = "token ${var.forgejo_token}" }
       write_returns_object = false
     }
 
@@ -76,13 +76,10 @@ data:
       type        = string
     }
 
-    variable "forgejo_username" {
-      type = string
-    }
-
-    variable "forgejo_password" {
-      type      = string
-      sensitive = true
+    variable "forgejo_token" {
+      description = "The run's access token (reconcile.sh mints and deletes it)."
+      type        = string
+      sensitive   = true
     }
 
     variable "user_passwords" {
@@ -396,6 +393,14 @@ data:
     #
     # Credentials travel in an Authorization header, never in a URL, so git error
     # messages cannot print them.
+    #
+    # The admin password is used for exactly the calls that cannot take a token:
+    # minting this run's access token and deleting it again. Everything else,
+    # Terraform and git alike, uses the token. Forgejo hashes a password on every
+    # request (3-4s of CPU each under load, ~125 calls a run, which starved its
+    # health check), while a token is checked once and then cached. The token
+    # lives only for this run: deleted on any exit by the trap below, and any
+    # token a killed run left behind is deleted at the start of the next one.
     set -eu
 
     WORK=/work
@@ -404,10 +409,62 @@ data:
     cp /config/main.tf "$TF/"
     cd "$TF"
 
+    # The admin credentials stay in this shell only: the forgejo provider would
+    # pick FORGEJO_USERNAME / FORGEJO_PASSWORD up from the environment, and must
+    # use the token instead.
+    admin_user=$FORGEJO_USERNAME
+    admin_pass=$FORGEJO_PASSWORD
+    unset FORGEJO_USERNAME FORGEJO_PASSWORD
+
+    basic() { printf 'Authorization: Basic %s' "$(printf '%s:%s' "$1" "$2" | base64 | tr -d '\n')"; }
+    admin_hdr=$(basic "$admin_user" "$admin_pass")
+    api="${FORGEJO_HOST%/}/api/v1/users/$admin_user/tokens"
+
+    # busybox wget has no DELETE, so the delete is one raw HTTP/1.1 request over
+    # nc to the in-cluster plain-HTTP Service. Succeeds on 204, and on 404 (gone).
+    # The request side stays open until the answer arrives: busybox nc closes
+    # its write half on stdin EOF, and Forgejo cancels a request whose client
+    # went away (500 "context canceled").
+    hostport=${FORGEJO_HOST#http://}
+    hostport=${hostport%%/*}
+    case "$hostport" in
+      *:*) host=${hostport%:*} port=${hostport##*:} ;;
+      *) host=$hostport port=80 ;;
+    esac
+    delete_token() {
+      status=$({ printf 'DELETE /api/v1/users/%s/tokens/%s HTTP/1.1\r\nHost: %s\r\n%s\r\nConnection: close\r\n\r\n' \
+          "$admin_user" "$1" "$hostport" "$admin_hdr"; sleep 5; } \
+        | nc -w 10 "$host" "$port" | head -n 1 | cut -d' ' -f2)
+      case "$status" in
+        204|404) return 0 ;;
+        *) echo "token $1: delete answered '${status:-nothing}'"; return 1 ;;
+      esac
+    }
+
+    # Tokens a killed run (activeDeadlineSeconds, eviction) could not delete.
+    # A failed listing fails the run: it must not read as "no leftovers".
+    # One page of 50 is enough: the trap deletes a run's own token, so only
+    # killed runs leave one, and concurrencyPolicy Forbid allows one run at a time.
+    leftovers=$(wget -q -O - --header "$admin_hdr" "$api?limit=50") || { echo "cannot list access tokens"; exit 1; }
+    for t in $(printf '%s' "$leftovers" | grep -o '"name":"reconcile-[^"]*"' | cut -d'"' -f4); do
+      delete_token "$t" && echo "deleted leftover token $t"
+    done
+
+    token_name="reconcile-$(date +%s)-$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')"
+    # Scopes: creating and updating users (write:admin) and reading them back
+    # (read:user), orgs and teams (write:organization), repositories and git
+    # push (write:repository). Nothing else.
+    resp=$(wget -q -O - --header "$admin_hdr" --header 'Content-Type: application/json' \
+      --post-data "{\"name\":\"$token_name\",\"scopes\":[\"write:admin\",\"read:user\",\"write:organization\",\"write:repository\"]}" \
+      "$api") || { echo "cannot mint the run's access token"; exit 1; }
+    run_token=$(printf '%s' "$resp" | grep -o '"sha1":"[0-9a-f]*"' | cut -d'"' -f4)
+    [ -n "$run_token" ] || { echo "no token in the mint response"; exit 1; }
+    trap 'delete_token "$token_name" || true' EXIT
+    trap 'exit 143' TERM INT
+
     export TF_IN_AUTOMATION=1 TF_INPUT=0
     export TF_VAR_manifest="$MANIFEST" TF_VAR_user_passwords="$USER_PASSWORDS"
-    export TF_VAR_forgejo_host="$FORGEJO_HOST" TF_VAR_forgejo_username="$FORGEJO_USERNAME" \
-      TF_VAR_forgejo_password="$FORGEJO_PASSWORD"
+    export TF_VAR_forgejo_host="$FORGEJO_HOST" TF_VAR_forgejo_token="$run_token" FORGEJO_API_TOKEN="$run_token"
 
     terraform init -no-color \
       -backend-config="bucket=$BUCKET" \
@@ -416,8 +473,7 @@ data:
     terraform apply -no-color -auto-approve
     terraform output -raw -no-color branch_plan > "$WORK/plan.tsv"
 
-    basic() { printf 'Authorization: Basic %s' "$(printf '%s:%s' "$1" "$2" | base64 | tr -d '\n')"; }
-    dst_hdr=$(basic "$FORGEJO_USERNAME" "$FORGEJO_PASSWORD")
+    dst_hdr="Authorization: token $run_token"
 
     failed=0
     tab=$(printf '\t')
