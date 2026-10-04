@@ -55,22 +55,26 @@ reprovision=$(jq -r --arg routine "$routine_data" '
     | "\(.address) (\(.change.actions | join(",")))" ] | .[]' "$plan")
 
 fail=0
+# An allowed override is a warning, not an error: red annotations on a run
+# that was meant to pass teach reviewers to ignore red annotations.
 if [ -n "$destroy" ]; then
-  echo "::error::this plan destroys or replaces real infrastructure:"
-  printf '%s\n' "$destroy" | sed 's/^/  /'
   if [ "${ALLOW_DESTROY:-false}" = "true" ]; then
-    echo "::warning::allow_destroy was set; continuing"
+    echo "::warning::this plan destroys or replaces real infrastructure; allow_destroy was set, continuing:"
+    printf '%s\n' "$destroy" | sed 's/^/  /'
   else
+    echo "::error::this plan destroys or replaces real infrastructure:"
+    printf '%s\n' "$destroy" | sed 's/^/  /'
     echo "::error::re-dispatch with allow_destroy: true only if every address above is meant to go"
     fail=1
   fi
 fi
 if [ -n "$reprovision" ]; then
-  echo "::error::this plan re-runs node provisioners (k3s config rewrite / restart):"
-  printf '%s\n' "$reprovision" | sed 's/^/  /'
   if [ "${ALLOW_REPROVISION:-false}" = "true" ]; then
-    echo "::warning::allow_reprovision was set; continuing"
+    echo "::warning::this plan re-runs node provisioners (k3s config rewrite / restart); allow_reprovision was set, continuing:"
+    printf '%s\n' "$reprovision" | sed 's/^/  /'
   else
+    echo "::error::this plan re-runs node provisioners (k3s config rewrite / restart):"
+    printf '%s\n' "$reprovision" | sed 's/^/  /'
     echo "::error::re-dispatch with allow_reprovision: true only if restarting k3s on those nodes is intended"
     fail=1
   fi

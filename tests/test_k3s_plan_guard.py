@@ -14,6 +14,10 @@ G3. A delete of a server or a replace of the Hetzner SSH key is refused, and
     passes only with ALLOW_DESTROY=true. ALLOW_REPROVISION does not unlock it.
 G4. A plan with no changes passes; an unreadable plan is refused, never
     read as "nothing to destroy".
+G5. An allowed override reports a warning, never an ::error:: annotation.
+G6. The two PLAN_PROJECTION copies in terraform.yml are identical. The digest
+    comparison is the approval-integrity check, and a drift between them would
+    refuse every apply as "something changed after approval".
 
 No pytest, matching the plain `python3 tests/<file>.py` convention.
 
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import yaml
 import subprocess
 import sys
 import tempfile
@@ -100,6 +105,21 @@ expect("G4 no changes", {"format_version": "1.2"}, 0)
 expect("G4 empty object", {}, 1, must_say="refusing")
 expect("G4 resource_changes not a list", {"format_version": "1.2", "resource_changes": {}}, 1, must_say="refusing")
 expect("G4 not JSON", "garbage", 1, must_say="refusing")
+
+# G5
+for env, bad in (
+    ({"ALLOW_REPROVISION": "true"}, plan_of(ROUTINE + [rc("control_plane_config", "terraform_data", ["delete", "create"], "x")])),
+    ({"ALLOW_DESTROY": "true"}, plan_of(ROUTINE + [rc("server", "hcloud_server", ["delete"], 0)])),
+):
+    got, out = run(bad, env)
+    if got != 0 or "::error::" in out or "::warning::" not in out:
+        failures.append(f"G5 override {env}: rc={got}, want 0 with a warning and no error\n{out}")
+
+# G6
+wf = yaml.safe_load((ROOT / ".github/workflows/terraform.yml").read_text())
+projections = {job: wf["jobs"][job]["env"].get("PLAN_PROJECTION") for job in ("plan", "apply")}
+if not projections["plan"] or projections["plan"] != projections["apply"]:
+    failures.append(f"G6 PLAN_PROJECTION differs between jobs: {projections}")
 
 if failures:
     print("\n\n".join(failures))
