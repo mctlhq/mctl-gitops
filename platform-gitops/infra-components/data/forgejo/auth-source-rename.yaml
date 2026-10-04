@@ -30,7 +30,8 @@
 # re-registers the provider, which fetches the discovery document; when that
 # fails Forgejo restores the old row and the command fails (seen in the local
 # test), so without this rule the rename can never apply. Same Cloudflare IPv4
-# ranges as allow-forgejo-oidc-egress in networkpolicy.yaml.
+# ranges as allow-forgejo-oidc-egress in networkpolicy.yaml. DNS comes from
+# allow-dns-egress there, which selects every pod in the namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -194,7 +195,10 @@ spec:
               echo "renaming OAuth2 source $id: $OLD -> $NEW"
               fj admin auth update-oauth --id "$id" --name "$NEW"
 
-              after=$(read_sources)
+              after=$(read_sources) || {
+                echo "FAIL: could not re-read the sources after renaming $id" >&2
+                exit 1
+              }
               if [ "$(count "$(named "$OLD" "$after")")" -ne 0 ] \
                 || [ "$(oauth2_id "$(named "$NEW" "$after")")" != "$id" ]; then
                 echo "FAIL: after the rename source $id is not the only $NEW:" >&2
@@ -238,4 +242,5 @@ spec:
               cpu: 50m
               memory: 64Mi
             limits:
+              cpu: 500m
               memory: 256Mi
