@@ -53,6 +53,12 @@ variable "bootstrap_argocd" {
   default     = false
 }
 
+variable "ssh_public_key" {
+  type        = string
+  default     = ""
+  description = "Public key of hcloud_ssh_key.k3s. Empty reads ~/.ssh/id_ed25519.pub (an operator's laptop); CI passes secrets.K3S_SSH_PUBLIC_KEY so it never replaces the key with its own."
+}
+
 variable "etcd_s3_access_key" {
   type        = string
   default     = ""
@@ -81,9 +87,30 @@ module "kube-hetzner" {
   source  = "kube-hetzner/kube-hetzner/hcloud"
   version = "2.19.1"
 
-  # SSH keys
-  ssh_public_key  = file("~/.ssh/id_ed25519.pub")
+  # SSH keys (#1534).
+  #
+  # ssh_public_key is the key hcloud_ssh_key.k3s was created from. Changing it
+  # replaces that resource (public_key forces a new key), so CI must pass the
+  # SAME key the operator's laptop does, not its own: the repository secret
+  # K3S_SSH_PUBLIC_KEY holds it. The servers themselves ignore ssh_keys and
+  # user_data (kube-hetzner 2.19.1 modules/host lifecycle), so no key change
+  # here can replace a node -- only the Hetzner key object.
+  #
+  # ssh_private_key is whatever key the applier holds: the operator's own key
+  # locally, the dedicated deploy key in CI (environment k3s-apply). Both are
+  # in /root/.ssh/authorized_keys on every node; the deploy key was appended by
+  # hand to the nodes that existed on 2026-10-04, and ssh_additional_public_keys
+  # puts it into cloud-init for any node created later.
+  #
+  # The trailing newline is load-bearing: the key was created from file(),
+  # which keeps the file's final "\n", and Hetzner stored that exact string.
+  # A GitHub variable comes back without it, and the one-byte difference alone
+  # plans a replacement of hcloud_ssh_key.k3s (measured 2026-10-04).
+  ssh_public_key  = var.ssh_public_key != "" ? format("%s\n", trimspace(var.ssh_public_key)) : file("~/.ssh/id_ed25519.pub")
   ssh_private_key = file("~/.ssh/id_ed25519")
+  ssh_additional_public_keys = [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3PUD3Oz7gszB+/jzbPCkjoPOthFavXv1dX3ig0GDsy k3s-preview-ci-deploy",
+  ]
 
   # firewall_ssh_source and firewall_kube_api_source are deliberately left at
   # the module default (0.0.0.0/0, ::/0). Measured from outside the cluster on

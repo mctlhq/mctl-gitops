@@ -1,5 +1,19 @@
 name: k3s-preview (OpenTofu)
 
+# The preprod cluster itself: nodes, cloud firewall, network, load balancer
+# and the k3s configuration the module writes over SSH (#1534).
+#
+# Two jobs, the same split cloudflare-apply.yml uses and for the same reason.
+# `plan` runs on every push to main and on every dispatch, needs nobody's
+# approval and publishes what an apply would do. `apply` runs only on a
+# dispatch with apply: true, waits for a reviewer on the k3s-apply
+# environment, re-plans, and refuses unless its plan is the one `plan`
+# published. A single gated job would put the approval before the plan
+# existed: approving an intention rather than a change.
+#
+# Merging does not apply anything. Like every other root in this repository,
+# "reviewed" and "live" are two separate decisions.
+
 on:
   push:
     branches: [main]
@@ -9,132 +23,117 @@ on:
   workflow_dispatch:
     inputs:
       apply:
-        description: "Run tofu apply (default: plan only)"
+        description: "Run tofu apply after approval on k3s-apply (default: plan only)"
         type: boolean
         default: false
       allow_destroy:
-        description: "Permit a plan that destroys non-bookkeeping resources"
+        description: "Permit a plan that destroys real infrastructure (servers, network, keys...)"
+        type: boolean
+        default: false
+      allow_reprovision:
+        description: "Permit re-running node provisioners (k3s config rewrite and restart)"
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
+# One run at a time for the whole workflow, so a plan cannot race an apply
+# holding the state lock. A run waiting for approval holds the group; a push
+# arriving meanwhile queues behind it rather than replacing it.
+concurrency:
+  group: terraform-k3s-preview
+  cancel-in-progress: false
+
 jobs:
-  terraform:
+  plan:
+    name: plan
     runs-on: ubuntu-latest
+
+    # Environment k3s-plan: deployment branch policy `main` only, NO reviewer.
+    # It exists to hold the etcd snapshot credential outside repository
+    # secrets (#1118): a repository secret is readable by any workflow a
+    # branch adds, an environment secret only by a job on an allowed branch.
+    # Plans need that credential because it is part of local.k3s-config; a
+    # plan without it proposes rewriting the control-plane k3s config.
+    if: github.ref == 'refs/heads/main'
+    environment: k3s-plan
+
     defaults:
       run:
         working-directory: infrastructure/k3s-preview
-    
-    # Prevent concurrent runs
-    concurrency:
-      group: terraform-k3s-preview
-      cancel-in-progress: false
-    
+
+    outputs:
+      digest: ${{ steps.summary.outputs.digest }}
+
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
-      # The etcd snapshot credential is NOT the state-backend credential, which
-      # is what this used to pass. They are separate R2 tokens for separate
-      # buckets, and the etcd pair is part of local.k3s-config: feeding the
-      # wrong one makes CI render a k3s configuration that differs from the
-      # live node, so terraform_data.control_plane_config plans as a
-      # replacement and its provisioner rewrites /etc/rancher/k3s/config.yaml
-      # and restarts k3s on the SINGLE control-plane node. A local plan with
-      # the right credential reports "No changes"; the drift was between CI and
-      # reality, not between Git and reality. Found while applying #1119.
+      # The etcd snapshot credential is NOT the state-backend credential. They
+      # are separate R2 tokens for separate buckets, and the etcd pair is part
+      # of local.k3s-config: a wrong or empty pair makes CI render a k3s
+      # configuration that differs from the live node, so
+      # terraform_data.control_plane_config plans as a replacement and its
+      # provisioner rewrites /etc/rancher/k3s/config.yaml and restarts k3s on
+      # the SINGLE control-plane node. Found while applying #1119.
       TF_VAR_etcd_s3_access_key: ${{ secrets.ETCD_S3_ACCESS_KEY_ID }}
       TF_VAR_etcd_s3_secret_key: ${{ secrets.ETCD_S3_SECRET_ACCESS_KEY }}
-    
+      # The key hcloud_ssh_key.k3s was created from, see kube.tf. A public
+      # key, but a repository SECRET rather than a variable: its comment names
+      # the operator's machine, and step env values of a variable are printed
+      # in the logs of this public repository; a secret is masked.
+      TF_VAR_ssh_public_key: ${{ secrets.K3S_SSH_PUBLIC_KEY }}
+      # Two copies, one per job: Actions cannot share an env value across
+      # jobs. They MUST stay identical, or the digest compares two different
+      # projections. private_key is removed wherever it appears: the plan job
+      # holds a throwaway key and the apply job the deploy key, so the one
+      # attribute that carries it (ssh_sensitive_resource.kubeconfig) always
+      # differs, and the hash must not be computed over a private key anyway.
+      # With it removed, an update that changed nothing else is dropped, and
+      # so are no-ops: the throwaway key always plans that update, the deploy
+      # key does not once the state holds it. Measured 2026-10-04 against the
+      # live state: the operator's key, the deploy key and a throwaway key give
+      # one digest.
+      PLAN_PROJECTION: >-
+        {resource_changes: [ (.resource_changes // [])[]
+           | walk(if type == "object" then del(.private_key) else . end)
+           | select(.change.actions != ["no-op"])
+           | select(.change.actions != ["update"] or .change.before != .change.after) ]
+           | sort_by(.address),
+         output_changes: (.output_changes // {})}
+
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      
-      # Everything an apply needs, checked BEFORE OpenTofu runs.
-      #
-      # This exists because a plan destroys before it creates. On
-      # 2026-09-09 an apply reached hcloud_ssh_key with an empty
-      # SSH_PUBLIC_KEY, destroyed the live key, and then failed to recreate it
-      # ("Must not begin with a whitespace character" -- the file held the lone
-      # newline that printf writes for an empty secret). Neither SSH secret
-      # existed at all, so the apply path could never have worked; it simply
-      # had not been exercised. A cheap check here turns that into a job that
-      # stops before touching anything.
-      - name: Preflight the apply credentials
-        if: inputs.apply == true
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        with:
+          persist-credentials: false
+
+      # A plan that silently runs without these is not a plan of the cluster,
+      # it is a plan of a different k3s config and a different Hetzner key.
+      # Both used to be "warn and continue"; a misleading plan is now a red
+      # job, because the apply job compares its own plan against this one.
+      - name: Preflight the plan inputs
         run: |
           set -euo pipefail
           fail=0
-          require() {
-            if [ -z "$2" ]; then
-              echo "::error::$1 is empty or not set -- an apply needs it"
-              fail=1
-            fi
-          }
-          require SSH_PRIVATE_KEY "$SSH_PRIVATE_KEY"
-          require SSH_PUBLIC_KEY  "$SSH_PUBLIC_KEY"
-          require HCLOUD_TOKEN    "$TF_VAR_hcloud_token"
-          # Empty etcd credentials are not "snapshots stay off" on this
-          # cluster, they are "turn snapshots off" -- and that rewrites the
-          # control-plane k3s config. Refuse rather than plan it by accident.
-          require ETCD_S3_ACCESS_KEY_ID     "$TF_VAR_etcd_s3_access_key"
-          require ETCD_S3_SECRET_ACCESS_KEY "$TF_VAR_etcd_s3_secret_key"
-          # The empty case is already reported above; saying it twice points at
-          # two root causes where there is one.
-          case "$SSH_PUBLIC_KEY" in
-            "") ;;
+          [ -n "$TF_VAR_hcloud_token" ] || { echo "::error::HCLOUD_TOKEN is not set"; fail=1; }
+          [ -n "$TF_VAR_etcd_s3_access_key" ] || { echo "::error::ETCD_S3_ACCESS_KEY_ID is not set on environment k3s-plan"; fail=1; }
+          [ -n "$TF_VAR_etcd_s3_secret_key" ] || { echo "::error::ETCD_S3_SECRET_ACCESS_KEY is not set on environment k3s-plan"; fail=1; }
+          case "$TF_VAR_ssh_public_key" in
             ssh-*) ;;
-            *) echo "::error::SSH_PUBLIC_KEY does not start with 'ssh-'; Hetzner will reject it and the existing key is destroyed first"
-               fail=1 ;;
+            *) echo "::error::repository secret K3S_SSH_PUBLIC_KEY is empty or not an SSH public key; without it the plan replaces hcloud_ssh_key.k3s"; fail=1 ;;
           esac
           exit "$fail"
 
-      # Plan-only runs do not need the SSH keys and are not gated by the
-      # preflight above, but they DO read the etcd credentials: they are part
-      # of local.k3s-config, so a blank pair makes the plan propose replacing
-      # terraform_data.control_plane_config. That is an artefact of the missing
-      # secret, not drift in Git, and a reader who does not know that will
-      # reasonably think the control plane is about to be rewritten. Say so
-      # instead of letting the plan speak for itself. Not a failure: a
-      # plan-only run is allowed to be incomplete, it just may not be silent
-      # about it.
-      - name: Warn when a plan will be misleading
-        if: inputs.apply != true
+      # kube.tf reads ~/.ssh/id_ed25519 with file(). A plan never connects to
+      # a node, so a throwaway key is enough here; the only plan attribute it
+      # reaches is removed from the digest by PLAN_PROJECTION.
+      - name: Throwaway SSH key for the plan
         run: |
-          if [ -z "$TF_VAR_etcd_s3_access_key" ] || [ -z "$TF_VAR_etcd_s3_secret_key" ]; then
-            echo "::warning::ETCD_S3_ACCESS_KEY_ID / ETCD_S3_SECRET_ACCESS_KEY are not set, so this plan renders the k3s config without etcd snapshots and will propose replacing terraform_data.control_plane_config. That is the missing secret, not drift. See #1139."
-          fi
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "ci-plan-throwaway" -q
 
-      # Through env:, not interpolated into the script. A `${{ }}` expansion is
-      # substituted into the shell source before it runs, so any value that
-      # closes the quote executes in a runner holding HCLOUD_TOKEN, the R2
-      # credentials and this very key. Reading it as a shell variable cannot do
-      # that whatever the value is. Same reasoning as the preflight above and
-      # as the allow_destroy check below.
-      - name: Setup SSH keys
-        if: inputs.apply == true
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          printf '%s\n' "$SSH_PUBLIC_KEY" > ~/.ssh/id_ed25519.pub
-          chmod 600 ~/.ssh/id_ed25519
-      
-      # Dummy keys for plan/validate so file() calls don't fail
-      - name: Setup dummy SSH keys (plan only)
-        if: inputs.apply != true
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "ci-plan-dummy" -q
-      
-      # OpenTofu since #1534. The state, the providers and the module are the
-      # same ones Terraform 1.14 used; a tofu plan against the live state was
-      # identical to the terraform plan before the switch (2 local files to
-      # add, nothing else). Pinned like the other OpenTofu roots in this repo.
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
@@ -146,50 +145,172 @@ jobs:
 
       - name: Tofu Validate
         run: tofu validate
-      
-      # -out, so the apply below executes the plan that was printed here
-      # rather than computing a second one nobody saw. The previous shape --
-      # an advisory plan with continue-on-error, then a bare
-      # `terraform apply -auto-approve` -- meant the destructive plan of
-      # 2026-09-09 was never shown before it ran.
-      #
-      # continue-on-error is gone with it: a plan that cannot be produced is a
-      # failure, not a note.
-      - name: Tofu Plan
-        run: tofu plan -no-color -input=false -out=tfplan
 
-      # A cluster root should not be destroying anything during a routine
-      # apply. terraform_data and local_file are bookkeeping -- they carry
-      # provisioner runs and generated files, and replacing them is normal.
-      # Anything else being destroyed means the plan is not what was intended,
-      # and the run stops so a person can look.
-      - name: Refuse to destroy real infrastructure
+      # -lock=false: this job only reads. The apply job takes the lock.
+      - name: Tofu Plan
+        run: |
+          set -euo pipefail
+          tofu plan -no-color -input=false -lock=false -out=tfplan | tee plan.txt
+          tofu show -no-color -json tfplan > plan.json
+
+      - name: Summarize
+        id: summary
+        run: |
+          set -euo pipefail
+          digest=$(jq -S -c "$PLAN_PROJECTION" plan.json | sha256sum | cut -d' ' -f1)
+          {
+            echo "### plan \`infrastructure/k3s-preview\`"
+            echo
+            grep -E '^Plan:|^No changes' plan.txt || true
+            echo
+            echo "Plan digest \`${digest:0:16}\` — the apply job refuses if its own plan differs."
+            echo
+            echo '```'
+            grep -E '^  # ' plan.txt | grep -v 'data\.cloudinit_config' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # The same guard as in the apply job, run here so an unintended plan is
+      # refused before anyone is asked to approve it.
+      - name: Guard the plan
         if: inputs.apply == true
         env:
           ALLOW_DESTROY: ${{ inputs.allow_destroy }}
+          ALLOW_REPROVISION: ${{ inputs.allow_reprovision }}
+        run: ../../.github/scripts/k3s-plan-guard.sh plan.json
+
+      - name: Scrub
+        if: always()
+        run: rm -f tfplan plan.json plan.txt ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
+
+  apply:
+    name: apply
+    needs: plan
+    runs-on: ubuntu-latest
+
+    # Two layers, as in cloudflare-apply.yml: the `if` is visible in review
+    # but lives in YAML a branch controls; the k3s-apply environment's
+    # deployment-branch policy (main only) and required reviewer live in
+    # repository settings, outside a branch's reach. GitHub silently creates
+    # a referenced environment UNPROTECTED if it does not exist, so verify:
+    #   gh api repos/mctlhq/mctl-gitops/environments/k3s-apply --jq .protection_rules
+    #   gh api repos/mctlhq/mctl-gitops/environments/k3s-apply/deployment-branch-policies
+    # Expected: a required reviewer, and exactly one policy named "main".
+    if: inputs.apply == true && github.ref == 'refs/heads/main'
+    environment: k3s-apply
+
+    defaults:
+      run:
+        working-directory: infrastructure/k3s-preview
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+      # Environment secrets of k3s-apply, never repository secrets (#1118):
+      #   gh api repos/mctlhq/mctl-gitops/environments/k3s-apply/secrets
+      # lists SSH_PRIVATE_KEY, ETCD_S3_ACCESS_KEY_ID, ETCD_S3_SECRET_ACCESS_KEY.
+      TF_VAR_etcd_s3_access_key: ${{ secrets.ETCD_S3_ACCESS_KEY_ID }}
+      TF_VAR_etcd_s3_secret_key: ${{ secrets.ETCD_S3_SECRET_ACCESS_KEY }}
+      TF_VAR_ssh_public_key: ${{ secrets.K3S_SSH_PUBLIC_KEY }}
+      EXPECTED_DIGEST: ${{ needs.plan.outputs.digest }}
+      # Identical to the plan job's copy. Change both, or neither.
+      PLAN_PROJECTION: >-
+        {resource_changes: [ (.resource_changes // [])[]
+           | walk(if type == "object" then del(.private_key) else . end)
+           | select(.change.actions != ["no-op"])
+           | select(.change.actions != ["update"] or .change.before != .change.after) ]
+           | sort_by(.address),
+         output_changes: (.output_changes // {})}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # Everything an apply needs, checked BEFORE OpenTofu runs. A plan
+      # destroys before it creates: on 2026-09-09 an apply reached
+      # hcloud_ssh_key with an empty SSH_PUBLIC_KEY, destroyed the live key,
+      # and failed to recreate it.
+      - name: Preflight the apply credentials
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          tofu show -json tfplan > tfplan.json
-          doomed=$(jq -r '
-            [ .resource_changes[]?
-              | select(.change.actions | index("delete"))
-              | select(.type | test("^(terraform_data|local_file|local_sensitive_file)$") | not)
-              | "\(.address) (\(.change.actions | join(",")))"
-            ] | .[]' tfplan.json)
-          if [ -n "$doomed" ]; then
-            echo "::error::this plan destroys resources that are not bookkeeping:"
-            printf '%s\n' "$doomed"
-            echo "::error::re-run with allow_destroy: true only if that is genuinely intended"
-            [ "$ALLOW_DESTROY" = "true" ] || exit 1
-            echo "::warning::allow_destroy was set; continuing"
+          fail=0
+          [ -n "$SSH_PRIVATE_KEY" ] || { echo "::error::SSH_PRIVATE_KEY is not set on environment k3s-apply"; fail=1; }
+          [ -n "$TF_VAR_hcloud_token" ] || { echo "::error::HCLOUD_TOKEN is not set"; fail=1; }
+          [ -n "$TF_VAR_etcd_s3_access_key" ] || { echo "::error::ETCD_S3_ACCESS_KEY_ID is not set on environment k3s-apply"; fail=1; }
+          [ -n "$TF_VAR_etcd_s3_secret_key" ] || { echo "::error::ETCD_S3_SECRET_ACCESS_KEY is not set on environment k3s-apply"; fail=1; }
+          case "$TF_VAR_ssh_public_key" in
+            ssh-*) ;;
+            *) echo "::error::repository secret K3S_SSH_PUBLIC_KEY is empty or not an SSH public key"; fail=1 ;;
+          esac
+          [ -n "$EXPECTED_DIGEST" ] || { echo "::error::the plan job published no digest"; fail=1; }
+          exit "$fail"
+
+      # The dedicated deploy key (k3s-preview-ci-deploy), authorised on every
+      # node; its public half is in kube.tf. Through env:, never interpolated
+      # into the script.
+      - name: Setup SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.1
+          tofu_wrapper: false
+
+      - name: Tofu Init
+        run: tofu init -input=false
+
+      # -out, so the apply executes exactly this plan, and the digest proves
+      # it is the plan the unapproved job published.
+      - name: Tofu Plan
+        run: |
+          set -euo pipefail
+          tofu plan -no-color -input=false -out=tfplan | tee plan.txt
+          tofu show -no-color -json tfplan > plan.json
+
+      - name: Compare with the published plan
+        run: |
+          set -euo pipefail
+          digest=$(jq -S -c "$PLAN_PROJECTION" plan.json | sha256sum | cut -d' ' -f1)
+          if [ "$digest" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::this plan (${digest:0:16}) is not the one the plan job published (${EXPECTED_DIGEST:0:16}); something changed after approval. Re-dispatch and review the new plan."
+            exit 1
           fi
+          echo "plan matches the published digest ${digest:0:16}"
+
+      - name: Guard the plan
+        env:
+          ALLOW_DESTROY: ${{ inputs.allow_destroy }}
+          ALLOW_REPROVISION: ${{ inputs.allow_reprovision }}
+        run: ../../.github/scripts/k3s-plan-guard.sh plan.json
 
       - name: Tofu Apply
-        if: inputs.apply == true
         run: tofu apply -no-color -input=false tfplan
 
+      - name: Scrub
+        if: always()
+        run: rm -f tfplan plan.json plan.txt ~/.ssh/id_ed25519
+
+  notify:
+    name: notify
+    needs: [plan, apply]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
       - name: Notify Telegram on failure
-        if: failure()
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
