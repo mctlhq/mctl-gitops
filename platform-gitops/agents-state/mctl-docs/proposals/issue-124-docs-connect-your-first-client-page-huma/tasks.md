@@ -1,32 +1,18 @@
 # Tasks: issue-124-docs-connect-your-first-client-page-huma
 
-- [ ] 1. Confirm the lead path (MCP connector assumed) from the clarification answer and
-  confirm Telegram command behaviour with the mctl-telegram owners — DoD: lead path and
-  `/mctl link`, `/mctl work` wording recorded in the PR description.
-- [ ] 2. Create `docs/guides/connect-first-client.md` with sections: intro, Before you
-  start, lead path procedure, "Alternative" section for the other path, Next steps
-  (depends on 1) — DoD: exactly one numbered lead procedure; MCP section references
-  `https://api.mctl.ai/mcp`, links `/mcp/connecting`, and verifies with "Who am I on
-  MCTL?"; Telegram section lists `/mctl link` then `/mctl work`; no emoji, English.
-- [ ] 3. Add `{ text: 'Connect your first client', link: '/guides/connect-first-client' }`
-  to the "Guides" sidebar in `docs/.vitepress/config.ts` between "First-user checklist"
-  and "Deploy your first app" (depends on 2) — DoD: entry appears in that position.
-- [ ] 4. Add an entry for the page to `docs/public/llms.txt` (depends on 2) — DoD: one
-  line in the existing format pointing to `https://docs.mctl.ai/guides/connect-first-client`.
-- [ ] 5. Optionally add a one-line tip in `docs/getting-started/index.md` Step 2 linking to
-  the new page (depends on 2) — DoD: link resolves.
-- [ ] 6. Run `bun run build` to regenerate `docs/public/llms-full.txt` and build the site
-  (depends on 2-5) — DoD: build succeeds, new page included in `llms-full.txt`.
+- [ ] 1. Confirm the current `/mctl link` and `/mctl work` UX and release status from mctlhq/mctl-telegram (bot handle, code flow, replies) and mctl-api surface identity deployment — DoD: notes captured in the PR description with source links; decision recorded whether the Status warning is needed.
+- [ ] 2. Create `docs/getting-started/connect-first-client.md` with the sections in design.md, Telegram first, MCP connector as "Alternative" linking to `/mcp/connecting` (depends on 1) — DoD: page follows the outline, English, no emoji, uses `::: warning` / `::: tip` containers, links to `/human-input/surface-identity`, `/guides/first-user-checklist`, `/guides/deploy-first-app`.
+- [ ] 3. Add `{ text: 'Connect your first client', link: '/getting-started/connect-first-client' }` after "Quick Start" in the "Getting Started" sidebar group of `docs/.vitepress/config.ts` (depends on 2) — DoD: item visible in sidebar in `bun run dev`.
+- [ ] 4. Add cross-links: a `::: tip` in Step 2 of `docs/getting-started/index.md` and a sentence in item 8 of `docs/guides/first-user-checklist.md` (depends on 2) — DoD: both links resolve to the new page.
+- [ ] 5. Add the page to "Key Documentation Links" in `docs/public/llms.txt` (depends on 2) — DoD: entry present with absolute `https://docs.mctl.ai/getting-started/connect-first-client` URL.
 
 ## Tests
-- [ ] T1. `bun run build` succeeds with no dead-link errors.
-- [ ] T2. `bun run preview`: `/guides/connect-first-client` renders, the sidebar shows
-  the entry in the correct position, and local search finds "Connect your first client".
-- [ ] T3. Manual review: page has one lead procedure and one Alternative section, and the
-  Telegram section states nothing beyond confirmed behaviour.
-- [ ] T4. `grep` the new page for emoji / non-English content returns nothing.
+- [ ] T1. `bun run build` succeeds with no dead-link errors; `docs/public/llms-full.txt` contains `FILE: /getting-started/connect-first-client.md`.
+- [ ] T2. In `bun run preview`, `/getting-started/connect-first-client` renders; the first connection section is Telegram and precedes any MCP setup content.
+- [ ] T3. `grep -n "/mctl link" docs/getting-started/connect-first-client.md` appears before `grep -n "/mctl work"`, and both appear before the "Alternative" heading.
+- [ ] T4. Facts on the page (code validity, single use, `challenge_invalid`, `link_conflict`) match `docs/human-input/surface-identity.md`.
+- [ ] T5. Local search finds the page for queries "telegram" and "connect".
+- [ ] T6. No emoji and no non-English text in the changed files.
 
 ## Rollback
-Revert the PR (removes the new page, sidebar entry, `llms.txt` line and optional
-getting-started link), then cut a new patch tag (`MAJOR.MINOR.PATCH`, no `v` prefix) so
-CI rebuilds the image and updates GitOps. No data or state to restore.
+Revert the PR (removes the new page, the sidebar entry, the cross-links and the llms.txt entry), then tag a new PATCH release (`MAJOR.MINOR.PATCH`, no `v`) so CI rebuilds the image and updates GitOps. No data or config migration to undo.
