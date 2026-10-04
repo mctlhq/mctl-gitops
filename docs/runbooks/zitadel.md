@@ -194,6 +194,27 @@ no grant is refused, and
 Forgejo (another project) still signs in users without any Argo CD role, with
 no `groups` claim.
 
+### mctl-api audience (mctl-api#434)
+
+`iac/mctl-api.tf` gives mctl-api, a resource server, the audience it enforces
+on ZITADEL tokens:
+
+- **Project `MCTL API`**, separate from `MCTL platform`, because ZITADEL puts
+  the client id of every application of a project into `aud`. In `platform`,
+  every Forgejo token would also be valid at api.mctl.ai.
+- **Application `mctl-api`**, API type, private-key JWT with no key issued:
+  no credential and no flow of its own. Until a client joins this project, no
+  token carries its client id, so the provider is registered in mctl-api but
+  idle. A client meant to call mctl-api joins this project with
+  `access_token_type = "OIDC_TOKEN_TYPE_JWT"`, because mctl-api cannot
+  verify opaque access tokens. Adding one is a reviewed decision of its own.
+- **Output.** The Job writes the complete `MCTL_OIDC_PROVIDERS` JSON (name
+  `zitadel`, issuer `https://auth.mctl.ai`, audience = that client id) into
+  `mctl-api/mctl-api-oidc-zitadel`. The mctl-api chart reads it through
+  `oidcProvidersSecret`, optionally. Rollback: drop `oidcProvidersSecret`
+  from `bootstrap/templates/mctl-platform/mctl-api.yaml`. The Secret can
+  stay as it is.
+
 ## Sync hooks instead of Helm hooks
 
 The chart ships `zitadel-init` and `zitadel-setup` as Helm pre-install hooks.
