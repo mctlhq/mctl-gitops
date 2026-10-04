@@ -781,6 +781,13 @@ spec:
         # 3.6 — we run 3.3.8). They ignored ESO's own CRD defaults, which the
         # ExternalSecrets now state explicitly instead, so git matches live.
         - .status
+    # Written by the zitadel-iac Job, not by Argo CD
+    # (infra-components/observability/secrets/grafana-oidc-zitadel.yaml).
+    - kind: Secret
+      name: grafana-oidc-zitadel
+      namespace: monitoring
+      jsonPointers:
+        - /data
 
   destination:
     server: {{ .Values.spec.destination.server }}
