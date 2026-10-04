@@ -71,6 +71,16 @@ resource "zitadel_project_role" "argocd_tenant" {
   project_id   = zitadel_project.argocd.id
   role_key     = each.key
   display_name = "Argo CD tenant ${each.key}"
+
+  lifecycle {
+    # A tenant named like the admin group would hand role:admin to every
+    # opted-in user of that tenant. Admins are MCTL users, listed in
+    # argocd_admin_users; a tenant can never be one.
+    precondition {
+      condition     = each.key != local.argocd_admin_group
+      error_message = "Tenant \"${each.key}\" collides with the Argo CD admin group; admins are granted through argocd_admin_users only."
+    }
+  }
 }
 
 # A tenant organization may hand out its own tenant role, and no other.
@@ -145,7 +155,7 @@ resource "zitadel_action" "argocd_groups" {
         if (grant.projectId !== '${zitadel_project.argocd.id}') {
           return;
         }
-        grant.roles.forEach(function (role) {
+        (grant.roles || []).forEach(function (role) {
           groups.push(role);
         });
       });
