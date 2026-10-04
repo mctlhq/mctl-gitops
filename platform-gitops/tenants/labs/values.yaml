@@ -5,7 +5,9 @@ tenant:
   name: labs
   displayName: "labs"
   description: ""
-  contactEmail: "mashkoffdmitry@gmail.com"
+  # Blanked 2026-10-04: personal data does not belong in this public
+  # repository (#1627).
+  contactEmail: ""
   members:
     - userId: mashkoffdmitry
       role: owner

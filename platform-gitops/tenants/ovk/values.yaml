@@ -5,7 +5,9 @@ tenant:
   name: ovk
   displayName: "ovk"
   description: "medicine"
-  contactEmail: "mashkoffdmitry@yandex.ru"
+  # Blanked 2026-10-04: personal data does not belong in this public
+  # repository (#1627).
+  contactEmail: ""
   members:
     - userId: mctl-reviewer
       role: owner
