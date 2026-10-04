@@ -14,8 +14,12 @@ mock_provider "zitadel" {
 mock_provider "kubernetes" {}
 
 variables {
-  smtp_password   = "test"
-  platform_admins = "{}"
+  smtp_password = "test"
+  # A valid value, as in the other test files: targeted plans prune the
+  # validation of platform_admins today, which nothing here should rely on.
+  platform_admins = jsonencode({
+    admin = jsonencode({ email = "p@example.com", first_name = "P", last_name = "A" })
+  })
   tenant_users = jsonencode({
     acme = jsonencode({
       auser = jsonencode({ email = "a@example.com", first_name = "A", last_name = "U" })
