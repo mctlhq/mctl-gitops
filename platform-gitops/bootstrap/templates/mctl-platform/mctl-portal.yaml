@@ -424,6 +424,18 @@ spec:
                   redirectUris:
                     - https://rules.mctl.ai/api/auth/callback
                     - https://labs-mctl-rules.mctl.ai/api/auth/callback
+              # Forward-auth hosts other than the canonical
+              # <tenant>-<service>.mctl.ai. Each protected host gets its own
+              # host-only session, so every alias must be listed; an
+              # unlisted host is refused with 403.
+              forwardAuth:
+                hosts:
+                  - tenant: admins
+                    service: temporal-web
+                    host: temporal.mctl.ai
+                  - tenant: labs
+                    service: claude-remote
+                    host: claude-remote.mctl.ai
             {{- if (default dict .Values.surfacePortalToken).enabled }}
             # plugins/work-items-backend (mctlhq/mctl-portal#126). This
             # appConfig is the only config the pod loads, so the repo's
