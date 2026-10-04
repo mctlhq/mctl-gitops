@@ -1,4 +1,4 @@
-# Unit tests for erpact-alerts.yaml (group erpact.availability).
+# Unit tests for erpact-alerts.yaml (groups erpact.availability and erpact.backup).
 #
 # rule_files is resolved relative to this file. generated/ is produced by
 # scripts/check-vm-rules.sh, which extracts each VMRule's `.spec`.
@@ -87,3 +87,105 @@ tests:
                 No probe_success series with job="erpact-sites" for 15 minutes,
                 so ErpactSiteDown cannot fire. Check the erpact-sites VMProbe in
                 the monitoring namespace and the blackbox-exporter deployment.
+
+  # ---------------------------------------------------------------------
+  # Backup (group erpact.backup, CronJob erpact/erpact-backup)
+  # ---------------------------------------------------------------------
+  - interval: 1m
+    name: an erpact backup 24h old stays quiet
+    input_series:
+      - series: 'kube_cronjob_created{namespace="erpact",cronjob="erpact-backup"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="erpact",cronjob="erpact-backup"}'
+        values: '-86400x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ErpactBackupStale
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ErpactBackupNeverSucceeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ErpactBackupMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: an erpact backup older than 25h fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="erpact",cronjob="erpact-backup"}'
+        values: '-200000x40'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="erpact",cronjob="erpact-backup"}'
+        values: '-90000x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ErpactBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: erpact
+              namespace: erpact
+              cronjob: erpact-backup
+            exp_annotations:
+              summary: erpact backup has not succeeded in over 25 hours
+              description: >-
+                erpact/erpact-backup has no successful run in 25 hours. The Job
+                pod is pinned to the MariaDB node (erpact-data is RWO), so a
+                MariaDB outage also stops backups. Check the failed Job's logs:
+                each step says which check refused the upload.
+
+  - interval: 1m
+    name: a freshly created erpact cronjob without a success is not yet an alert
+    input_series:
+      - series: 'kube_cronjob_created{namespace="erpact",cronjob="erpact-backup"}'
+        values: '-36000x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ErpactBackupNeverSucceeded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ErpactBackupMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: an erpact cronjob older than 26h without any success fires
+    input_series:
+      - series: 'kube_cronjob_created{namespace="erpact",cronjob="erpact-backup"}'
+        values: '-100000x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ErpactBackupNeverSucceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: erpact
+              namespace: erpact
+              cronjob: erpact-backup
+            exp_annotations:
+              summary: erpact backup has never succeeded
+              description: >-
+                erpact/erpact-backup has existed for over 26 hours without one
+                successful run, so ErpactBackupStale cannot fire for it.
+
+  - interval: 1m
+    name: a missing erpact cronjob fires after 30 minutes
+    input_series:
+      - series: 'up{job="irrelevant"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ErpactBackupMetricAbsent
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: ErpactBackupMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: erpact
+              namespace: erpact
+              cronjob: erpact-backup
+            exp_annotations:
+              summary: erpact-backup CronJob is not visible to kube-state-metrics
+              description: >-
+                No kube_cronjob_created series for erpact/erpact-backup. The
+                CronJob was removed from mctl-apps or is not scraped, and the
+                other erpact backup alerts are blind while this lasts.

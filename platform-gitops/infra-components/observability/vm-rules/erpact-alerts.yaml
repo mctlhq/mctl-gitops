@@ -46,3 +46,61 @@ spec:
               No probe_success series with job="erpact-sites" for 15 minutes, so
               ErpactSiteDown cannot fire. Check the erpact-sites VMProbe in the
               monitoring namespace and the blackbox-exporter deployment.
+
+    # Daily off-cluster backup of the copy (git.mctl.ai/erpact/mctl-apps
+    # infra/backup.yaml, CronJob erpact-backup at 03:45 UTC, to R2 bucket
+    # erpact-backups). Same three-way split as the Forgejo backup alerts in
+    # backup-alerts.yaml: kube_cronjob_status_last_successful_time exists only
+    # after a first success, so Stale covers "was working, stopped",
+    # NeverSucceeded covers "never worked" (keyed on the CronJob's age), and
+    # MetricAbsent covers "the CronJob is gone or not scraped", which would
+    # otherwise silence the other two. A failed run is loud in its own logs
+    # and silent everywhere else; this is what makes it visible.
+    - name: erpact.backup
+      interval: 60s
+      rules:
+        - alert: ErpactBackupStale
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{
+              namespace="erpact", cronjob="erpact-backup"
+            } > 90000
+          for: 10m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact backup has not succeeded in over 25 hours"
+            description: >-
+              erpact/erpact-backup has no successful run in 25 hours. The Job
+              pod is pinned to the MariaDB node (erpact-data is RWO), so a
+              MariaDB outage also stops backups. Check the failed Job's logs:
+              each step says which check refused the upload.
+
+        - alert: ErpactBackupNeverSucceeded
+          # 26h after creation: one daily cycle plus the 03:45 offset.
+          expr: |
+            (time() - kube_cronjob_created{namespace="erpact", cronjob="erpact-backup"} > 93600)
+            unless on(namespace, cronjob)
+            kube_cronjob_status_last_successful_time{namespace="erpact", cronjob="erpact-backup"}
+          for: 10m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact backup has never succeeded"
+            description: >-
+              erpact/erpact-backup has existed for over 26 hours without one
+              successful run, so ErpactBackupStale cannot fire for it.
+
+        - alert: ErpactBackupMetricAbsent
+          expr: absent(kube_cronjob_created{namespace="erpact", cronjob="erpact-backup"})
+          for: 30m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact-backup CronJob is not visible to kube-state-metrics"
+            description: >-
+              No kube_cronjob_created series for erpact/erpact-backup. The
+              CronJob was removed from mctl-apps or is not scraped, and the
+              other erpact backup alerts are blind while this lasts.
