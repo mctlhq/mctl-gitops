@@ -12,12 +12,14 @@ image:
 
 # The plan actions the Job may apply, space-separated. A plan containing any
 # other action fails the Job before apply, with the plan in its log.
-#   First rollout: "no-op read". The Job plans the auth/oidc mount, its role,
-#   the groups and the tenant policies (all creates), shows the plan in its
-#   log and refuses to apply it. Widened to "create" in the PR that applies.
+#   First rollout (#1574): "no-op read". The Job planned the auth/oidc mount,
+#   its role, human-admins and human-tenant-erpact with their aliases, and the
+#   human-tenant-erpact policy (7 creates), and refused it.
+#   Apply: adds "create" for those, and "update" for a rotated client and for
+#   reverting drift on what this root owns.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
-allowedActions: "no-op read"
+allowedActions: "no-op read create update"
 
 # Resource addresses the Job may destroy or replace, space-separated. Any
 # other delete in a plan fails the Job. Name the exact address (a retired

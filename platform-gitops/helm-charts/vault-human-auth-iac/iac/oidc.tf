@@ -32,7 +32,7 @@ resource "vault_jwt_auth_backend" "oidc" {
     # Shown in the UI's method list before sign-in.
     listing_visibility = "unauth"
     default_lease_ttl  = "1h"
-    max_lease_ttl      = "8h"
+    max_lease_ttl      = "1h"
     token_type         = "default-service"
   }
 }
@@ -64,10 +64,10 @@ resource "vault_jwt_auth_backend_role" "zitadel" {
     "http://localhost:8250/oidc/callback",
   ]
 
-  # Short-lived: a human token is an admin token for some, and nothing about
-  # an interactive session needs more. No policy of its own; everything comes
-  # from the groups.
+  # Short-lived and not renewable past an hour: a human token is an admin
+  # token for some, and signing in again is one browser round trip. No
+  # policy of its own beyond `default`; everything comes from the groups.
   token_ttl      = 3600
-  token_max_ttl  = 28800
+  token_max_ttl  = 3600
   token_policies = []
 }

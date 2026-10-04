@@ -42,7 +42,7 @@ vault-human-auth-iac Job ── Vault: auth/oidc, role `zitadel`,
 - **Who is an admin.** The MCTL users in `argocd_admin_users` (`zitadel-iac/iac/argocd.tf`). Argo CD and Vault share that one list.
 - **Who is a tenant user.** A user listed in `secret/platform/zitadel/users/<tenant>` whose entry carries `"vault": true`. Without the flag, ZITADEL refuses to issue a token for Vault (`project_role_check`), so the login fails before Vault sees it.
 - **Tenant access is read-only.** Tenant secrets are written through the portal and the platform workflows, with their own identities.
-- **Token lifetime.** Human tokens live 1h and can be renewed up to 8h. Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
+- **Token lifetime.** Human tokens live 1h and cannot be renewed past that (`token_max_ttl` 1h); sign in again. Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
 
 Verified before rollout on a local ZITADEL v4.19.2 and Vault 1.17.2, running
 these roots with the bootstrap policy as the Job's only credential. Full code
