@@ -39,7 +39,19 @@ resource "cloudflare_zero_trust_access_application" "mcp_portal" {
     },
   ]
 
-  allowed_idps              = []
+  # ZITADEL ("MCTL") and the one-time PIN; Google is gone (#1500). Until
+  # 2026-10-04 this was `[]`, which Access reads as every provider in the
+  # account, Google included, whose OAuth client dies around 2026-10-17
+  # (#1328). The owner signed in here through ZITADEL on 2026-10-04 (Access
+  # log, connection=oidc) and the portal listed all six servers.
+  #
+  # The one-time PIN stays as the break-glass door: if ZITADEL is down, the
+  # pilot policy below still admits its addresses by e-mail code. Who gets in
+  # through ZITADEL is decided by ZITADEL (portal-zitadel.tf).
+  allowed_idps = [
+    cloudflare_zero_trust_access_identity_provider.zitadel.id,
+    var.projects_mcp_otp_idp_id,
+  ]
   auto_redirect_to_identity = false
 
   cors_headers = {

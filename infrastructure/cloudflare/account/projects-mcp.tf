@@ -74,9 +74,21 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
   # provider. The cost above is accepted knowingly: for any address, whoever
   # can read that inbox authenticates as it. Nothing else here depends on the
   # count if this needs removing again.
+  #
+  # ZITADEL ("MCTL") added on 2026-10-04 (#1500) for the MCP portal's path:
+  # the portal is an OAuth client of THIS application (see
+  # `https://mcp.mctl.ai/servers-callback` below), so a person using
+  # projects through mcp.mctl.ai authorizes here, on this application's own
+  # login page, separately from the portal's door. With Google gone from
+  # the portal, this is how the owner keeps one identity end to end.
+  # Customers are unaffected: ZITADEL gives a token only to holders of its
+  # `access` role (zitadel-iac iac/cloudflare-access.tf), and what anyone
+  # sees inside is still decided by the grants list, keyed by the address
+  # they sign in with.
   allowed_idps = [
     var.projects_mcp_google_idp_id,
     var.projects_mcp_otp_idp_id,
+    cloudflare_zero_trust_access_identity_provider.zitadel.id,
   ]
 
   # One provider, so there is nothing to pick — but the picker page is also
@@ -231,6 +243,7 @@ resource "cloudflare_zero_trust_access_application" "projects_mcp" {
       include = [
         { login_method = { id = var.projects_mcp_google_idp_id } },
         { login_method = { id = var.projects_mcp_otp_idp_id } },
+        { login_method = { id = cloudflare_zero_trust_access_identity_provider.zitadel.id } },
       ]
     },
   ]
