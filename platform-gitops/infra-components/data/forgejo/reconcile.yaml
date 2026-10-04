@@ -452,16 +452,38 @@ data:
       esac
     }
 
+    # A new pod's IP reaches the namespace's NetworkPolicy allow sets a few
+    # seconds after the container starts; until then Forgejo answers
+    # "connection refused". The healthz probe needs no credentials, so waiting
+    # on it costs Forgejo nothing. Not reachable within 60s fails the run.
+    n=0
+    until wget -q -O /dev/null "${FORGEJO_HOST%/}/api/healthz"; do
+      n=$((n + 1))
+      [ "$n" -lt 30 ] || { echo "Forgejo not reachable at $FORGEJO_HOST"; exit 1; }
+      sleep 2
+    done
+
     # Tokens a killed run (activeDeadlineSeconds, eviction) could not delete.
     # A failed listing fails the run: it must not read as "no leftovers".
     # One page of 50 is enough: the trap deletes a run's own token, so only
     # killed runs leave one, and concurrencyPolicy Forbid allows one run at a time.
+    # Only tokens older than activeDeadlineSeconds are swept, by the epoch in
+    # their name (the listing has no creation time): a manual run started
+    # beside a scheduled one must not delete that run's live token.
     leftovers=$(wget -q -O - --header "$admin_hdr" "$api?limit=50") || { echo "cannot list access tokens"; exit 1; }
-    for t in $(printf '%s' "$leftovers" | grep -o '"name":"reconcile-[^"]*"' | cut -d'"' -f4); do
+    now=$(date +%s)
+    for t in $(printf '%s' "$leftovers" | grep -o '"name":"reconcile-[0-9]*-[^"]*"' | cut -d'"' -f4); do
+      minted=${t#reconcile-}
+      minted=${minted%%-*}
+      [ $((now - minted)) -gt 3600 ] || continue
       delete_token "$t" && echo "deleted leftover token $t"
     done
 
-    token_name="reconcile-$(date +%s)-$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')"
+    # The trap is set before the mint: delete_token works by name, so a token
+    # that was minted but whose answer did not parse is still deleted.
+    token_name="reconcile-$now-$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')"
+    trap 'delete_token "$token_name" || true' EXIT
+    trap 'exit 143' TERM INT
     # Scopes: creating and updating users (write:admin) and reading them back
     # (read:user), orgs and teams (write:organization), repositories and git
     # push (write:repository). Nothing else.
@@ -470,8 +492,6 @@ data:
       "$api") || { echo "cannot mint the run's access token"; exit 1; }
     run_token=$(printf '%s' "$resp" | grep -o '"sha1":"[0-9a-f]*"' | cut -d'"' -f4)
     [ -n "$run_token" ] || { echo "no token in the mint response"; exit 1; }
-    trap 'delete_token "$token_name" || true' EXIT
-    trap 'exit 143' TERM INT
 
     export TF_IN_AUTOMATION=1 TF_INPUT=0
     export TF_VAR_manifest="$MANIFEST" TF_VAR_user_passwords="$USER_PASSWORDS"
