@@ -1,0 +1,88 @@
+{{- /*
+  Dex's own configuration; see dex.yaml for why Dex runs from this chart.
+*/ -}}
+{{- $url := index .Values "argo-cd" "configs" "cm" "url" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-dex-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: argocd-dex-server
+    app.kubernetes.io/part-of: argocd
+    app.kubernetes.io/component: dex-server
+data:
+  # No secret values: $VARS are expanded by Dex from the container's
+  # environment (connector config), staticClients name theirs in secretEnv.
+  config.yaml: |
+    issuer: {{ $url }}/api/dex
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:5556
+    telemetry:
+      http: 0.0.0.0:5558
+    logger:
+      level: info
+      format: json
+    oauth2:
+      skipApprovalScreen: true
+    connectors:
+      # Backstage's OIDC provider; it signs people in with GitHub and
+      # issues their tenant groups.
+      - type: oidc
+        id: backstage
+        name: mctl.ai
+        config:
+          issuer: https://app.mctl.ai/api/oidc-provider
+          clientID: $BACKSTAGE_OIDC_CLIENT_ID
+          clientSecret: $BACKSTAGE_OIDC_CLIENT_SECRET
+          redirectURI: {{ $url }}/api/dex/callback
+          scopes:
+            - openid
+            - profile
+            - email
+            - groups
+          getUserInfo: true
+          insecureEnableGroups: true
+          userNameKey: preferred_username
+          claimMapping:
+            groups: groups
+    staticClients:
+      # Argo CD's own clients, as `rundex` adds them. They stay while
+      # argocd-cm still points Argo CD at Dex; the secret is derived from
+      # server.secretkey at start-up, the way argocd-server derives it.
+      - id: argo-cd
+        name: Argo CD
+        secretEnv: ARGOCD_DEX_CLIENT_SECRET
+        redirectURIs:
+          - {{ $url }}/auth/callback
+      - id: argo-cd-cli
+        name: Argo CD CLI
+        public: true
+        redirectURIs:
+          - http://localhost
+          - http://localhost:8085/auth/callback
+      - id: argo-cd-pkce
+        name: Argo CD PKCE
+        public: true
+        redirectURIs:
+          - http://localhost:4000/auth/callback
+      - id: argo-workflows
+        name: Argo Workflows
+        # Single entry on purpose: argo-workflows presents exactly one
+        # redirect_uri (bootstrap/templates/core-infra/argo-workflows.yaml,
+        # sso.redirectUrl).
+        secretEnv: ARGO_WORKFLOWS_SSO_CLIENT_SECRET
+        redirectURIs:
+          - https://workflows.mctl.ai/oauth2/callback
+      - id: mctl-api
+        name: mctl-api
+        secretEnv: ARGO_WORKFLOWS_SSO_CLIENT_SECRET
+        redirectURIs:
+          - https://api.mctl.ai/oauth2/callback
+      - id: grafana
+        name: Grafana
+        secretEnv: ARGO_WORKFLOWS_SSO_CLIENT_SECRET
+        redirectURIs:
+          - https://grafana.mctl.ai/login/generic_oauth
