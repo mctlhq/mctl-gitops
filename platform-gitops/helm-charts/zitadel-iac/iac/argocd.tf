@@ -134,9 +134,18 @@ resource "zitadel_user_grant" "argocd_admin" {
 
 # Argo CD reads groups from a flat list of strings; ZITADEL's own role claim
 # is a map, which Argo CD ignores. This action copies the user's roles on the
-# Argo CD project, and only those, into `groups`. allowed_to_fail: a failure
-# leaves the claim out, which grants nothing, rather than breaking sign-in to
-# every other application of the organization.
+# Argo CD project and on the Vault project (vault.tf), and only those, into
+# `groups`. allowed_to_fail: a failure leaves the claim out, which grants
+# nothing, rather than breaking sign-in to every other application of the
+# organization.
+#
+# One action for both, because a trigger holds one list of actions and both
+# would set the same claim. The two never mix in one token: ZITADEL loads only
+# the grants of the requesting client's own project (prepareRoles in
+# internal/api/oidc/userinfo.go, v4.19.2), and neither Argo CD nor Vault asks
+# for another project's roles by scope. The role keys are the same on both
+# projects (`admins`, the tenant name), so each token's `groups` is exactly
+# the user's roles on the application they are signing in to.
 resource "zitadel_action" "argocd_groups" {
   for_each = local.argocd_claim_orgs
 
@@ -150,9 +159,10 @@ resource "zitadel_action" "argocd_groups" {
       if (!grants || !grants.grants) {
         return;
       }
+      var projects = ['${zitadel_project.argocd.id}', '${zitadel_project.vault.id}'];
       var groups = [];
       grants.grants.forEach(function (grant) {
-        if (grant.projectId !== '${zitadel_project.argocd.id}') {
+        if (projects.indexOf(grant.projectId) < 0) {
           return;
         }
         (grant.roles || []).forEach(function (role) {

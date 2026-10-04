@@ -23,6 +23,9 @@ image:
 #   mctl-api#434 `mctl` CLI client: a create, plus in-place updates of the
 #   MCTL API project (has_project_check) and of the data of
 #   mctl-api/mctl-api-oidc-zitadel.
+#   Vault human sign-in (Vault project, roles, grants, OIDC application, the
+#   data of vault-human-auth-iac/vault-oidc-zitadel): no new action; all
+#   creates, plus an in-place update of the groups action's script.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
