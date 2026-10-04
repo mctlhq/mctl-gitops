@@ -95,7 +95,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ steps.probe.outputs.code }}" = "1" ]; then
-            title="🚨 <b>Cloudflare Access: an identity provider cannot start a login</b>"
+            # Exit 1 is the IdP refusing a login, or Access sending it a
+            # request Git does not describe (e.g. a client id not yet applied).
+            title="🚨 <b>Cloudflare Access: an IdP login is refused or does not match Git</b>"
           else
             title="🔧 <b>Cloudflare Access login probe could not determine the state</b>"
           fi

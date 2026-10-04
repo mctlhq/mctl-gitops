@@ -169,7 +169,9 @@ def probe(t: Target, repo_root: str) -> None:
         raise Unknown(f"Access login page answered HTTP {status}")
     links = idp_links(page, t.authorize_url)
     if not links:
-        raise Broken(f"the Access login page offers no link to {t.authorize_url}")
+        # Unknown, not Broken: the page loaded, but finding no link may be
+        # this scraper missing changed markup as much as the IdP being gone.
+        raise Unknown(f"found no link to {t.authorize_url} on the Access login page")
     for link in links:
         judge_link(link, client_id)
 
