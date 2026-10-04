@@ -139,3 +139,29 @@ spec:
         # The Login V2 UI is a separate Deployment behind its own Ingress; a
         # healthy API with a dead login page still means nobody can sign in.
         - https://auth.mctl.ai/ui/v2/login/healthy
+---
+# Tenant erpact: four sites on the shared bench and the control site, a
+# non-production environment.
+# /api/method/ping is Frappe's unauthenticated liveness endpoint; it answers
+# 200 only when nginx, gunicorn and the site's database all work, so it covers
+# the whole bench, not just the ingress. The erpact Grafana dashboard reads
+# job=~"erpact-.*"; alerts are in vm-rules/erpact-alerts.yaml.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: erpact-sites
+  namespace: monitoring
+spec:
+  jobName: erpact-sites
+  interval: 60s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://erpact-11112025.mctl.ai/api/method/ping
+        - https://erpact-25092026.mctl.ai/api/method/ping
+        - https://erpact-bar2.mctl.ai/api/method/ping
+        - https://erpact-01102026.mctl.ai/api/method/ping
+        - https://erpact-control.mctl.ai/api/method/ping
