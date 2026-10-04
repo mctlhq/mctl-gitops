@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net"
 	"net/http"
@@ -118,7 +117,8 @@ func readZitadelToken() (*storedZitadelToken, error) {
 	return &st, nil
 }
 
-// writeZitadelToken writes the file owner-only, through a temp file and a
+// writeZitadelToken writes the file owner-only (mode 600 on Unix; on Windows
+// the user profile's ACLs apply), through a temp file and a
 // rename so a crash never leaves half a credential behind.
 func writeZitadelToken(st *storedZitadelToken) error {
 	p, err := zitadelTokenPath()
@@ -192,6 +192,30 @@ func ZitadelToken() (string, error) {
 	if st.Token.Valid() {
 		return st.Token.AccessToken, nil
 	}
+	return refreshZitadelToken(s)
+}
+
+// refreshZitadelToken refreshes under a lock file. ZITADEL rotates refresh
+// tokens and treats a reused one as theft, revoking the whole family, so two
+// mctl processes must never present the same one: the second waits, re-reads
+// the file, and uses what the first stored.
+func refreshZitadelToken(s zitadelSettings) (string, error) {
+	unlock, err := lockZitadelToken()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+
+	st, err := readZitadelToken()
+	if err != nil {
+		return "", err
+	}
+	if st.Issuer != s.issuer || st.ClientID != s.clientID {
+		return "", fmt.Errorf("stored ZITADEL login is for %s (client %s): run 'mctl auth login --zitadel'", st.Issuer, st.ClientID)
+	}
+	if st.Token.Valid() {
+		return st.Token.AccessToken, nil
+	}
 	if st.Token.RefreshToken == "" {
 		return "", errors.New("ZITADEL access token expired and no refresh token is stored: run 'mctl auth login --zitadel'")
 	}
@@ -213,6 +237,40 @@ func ZitadelToken() (string, error) {
 		return "", fmt.Errorf("storing the refreshed ZITADEL token: %w", err)
 	}
 	return tok.AccessToken, nil
+}
+
+const (
+	zitadelLockWait  = 15 * time.Second
+	zitadelLockStale = time.Minute
+)
+
+// lockZitadelToken takes <token file>.lock with O_EXCL. A lock older than
+// zitadelLockStale is left over from a killed process and is taken over.
+func lockZitadelToken() (func(), error) {
+	p, err := zitadelTokenPath()
+	if err != nil {
+		return nil, err
+	}
+	lock := p + ".lock"
+	deadline := time.Now().Add(zitadelLockWait)
+	for {
+		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			f.Close()                              //nolint:errcheck
+			return func() { os.Remove(lock) }, nil //nolint:errcheck
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("locking %s: %w", p, err)
+		}
+		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > zitadelLockStale {
+			os.Remove(lock) //nolint:errcheck
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("another mctl process holds %s; remove it if no mctl is running", lock)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // ZitadelIdentity returns who the stored ZITADEL login belongs to.
@@ -264,8 +322,14 @@ func ZitadelLogin(ctx context.Context, out io.Writer, openBrowser bool) error {
 	mux.HandleFunc(zitadelCallbackPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		res := callbackResult(q.Get("state"), state, q.Get("code"), q.Get("error"), q.Get("error_description"))
+		if res.foreign {
+			// Not this sign-in's redirect (a prefetch, a scanner, another
+			// local process): refuse it and keep waiting for the real one.
+			http.Error(w, "mctl: unknown sign-in", http.StatusBadRequest)
+			return
+		}
 		if res.err != nil {
-			http.Error(w, "mctl: sign-in failed: "+html.EscapeString(res.err.Error()), http.StatusBadRequest)
+			http.Error(w, "mctl: sign-in failed: "+res.err.Error(), http.StatusBadRequest)
 		} else {
 			fmt.Fprintln(w, "mctl: signed in. You can close this window.")
 		}
@@ -275,8 +339,14 @@ func ZitadelLogin(ctx context.Context, out io.Writer, openBrowser bool) error {
 		}
 	})
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	go srv.Serve(ln)  //nolint:errcheck
-	defer srv.Close() //nolint:errcheck
+	go srv.Serve(ln) //nolint:errcheck
+	defer func() {
+		// Shutdown, not Close: let the page answering the browser finish,
+		// above all the error page.
+		sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer scancel()
+		srv.Shutdown(sctx) //nolint:errcheck
+	}()
 
 	fmt.Fprintf(out, "Opening the ZITADEL sign-in page. If no browser opens, visit:\n\n  %s\n\n", authURL)
 	if openBrowser {
@@ -329,13 +399,16 @@ func ZitadelLogin(ctx context.Context, out io.Writer, openBrowser bool) error {
 type callbackOutcome struct {
 	code string
 	err  error
+	// foreign: the state is not this sign-in's, so the request is not the
+	// redirect being waited for and must not end the login.
+	foreign bool
 }
 
 // callbackResult validates one loopback callback: the state must be the one
 // this login sent (constant-time), and an error from ZITADEL wins over a code.
 func callbackResult(gotState, wantState, code, errCode, errDesc string) callbackOutcome {
 	if subtle.ConstantTimeCompare([]byte(gotState), []byte(wantState)) != 1 {
-		return callbackOutcome{err: errors.New("state does not match this sign-in")}
+		return callbackOutcome{err: errors.New("state does not match this sign-in"), foreign: true}
 	}
 	if errCode != "" {
 		if errDesc != "" {

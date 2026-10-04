@@ -36,17 +36,18 @@ var authStatusCmd = &cobra.Command{
 // zitadelStatus shows the stored ZITADEL login and asks the API who it is,
 // which is the end-to-end check that mctl-api accepts the token.
 func zitadelStatus() error {
-	sub, username, expiry, err := auth.ZitadelIdentity()
+	// The token first: it refreshes an expired one, so the expiry shown
+	// below is that of the token actually sent.
+	token, err := auth.ZitadelToken()
 	if err != nil {
 		fmt.Println("❌ Not authenticated with ZITADEL")
 		return err
 	}
-	fmt.Printf("ZITADEL login: %s (sub %s), access token expires %s\n", username, sub, expiry.Local().Format("2006-01-02 15:04"))
-
-	token, err := auth.ZitadelToken()
+	sub, username, expiry, err := auth.ZitadelIdentity()
 	if err != nil {
 		return err
 	}
+	fmt.Printf("ZITADEL login: %s (sub %s), access token expires %s\n", username, sub, expiry.Local().Format("2006-01-02 15:04"))
 	var who struct {
 		ID      string   `json:"id"`
 		Groups  []string `json:"groups"`

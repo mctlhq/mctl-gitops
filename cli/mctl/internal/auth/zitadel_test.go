@@ -7,12 +7,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -127,6 +129,8 @@ func (f *fakeZitadel) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.refreshes++
+		// Slow enough that concurrent refreshes would overlap.
+		time.Sleep(50 * time.Millisecond)
 		f.writeTokens(w, "access-2", "refresh-2", "")
 	default:
 		http.Error(w, `{"error":"unsupported_grant_type"}`, http.StatusBadRequest)
@@ -157,6 +161,18 @@ func (f *fakeZitadel) writeTokens(w http.ResponseWriter, access, refresh, nonce 
 	})
 }
 
+func (f *fakeZitadel) setNonceOverride(v string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nonceOverride = v
+}
+
+func (f *fakeZitadel) refreshCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.refreshes
+}
+
 func useFake(t *testing.T, f *fakeZitadel) string {
 	t.Helper()
 	tokenFile := filepath.Join(t.TempDir(), "mctl", "zitadel-token.json")
@@ -167,11 +183,13 @@ func useFake(t *testing.T, f *fakeZitadel) string {
 }
 
 // browser stands in for the user: it follows the sign-in URL the login
-// prints, the way a browser would after the user signs in.
+// prints, the way a browser would after the user signs in. before, if set,
+// runs first with the redirect URI the login is listening on.
 type browser struct {
-	t    *testing.T
-	done chan struct{}
-	once sync.Once
+	t      *testing.T
+	done   chan struct{}
+	once   sync.Once
+	before func(redirectURI string)
 }
 
 var authURLPattern = regexp.MustCompile(`https?://\S+/authorize\?\S+`)
@@ -181,6 +199,14 @@ func (b *browser) Write(p []byte) (int, error) {
 		b.once.Do(func() {
 			go func() {
 				defer close(b.done)
+				if b.before != nil {
+					parsed, err := url.Parse(u)
+					if err != nil {
+						b.t.Errorf("browser: %v", err)
+						return
+					}
+					b.before(parsed.Query().Get("redirect_uri"))
+				}
 				resp, err := http.Get(u)
 				if err != nil {
 					b.t.Errorf("browser: %v", err)
@@ -195,9 +221,19 @@ func (b *browser) Write(p []byte) (int, error) {
 
 func login(t *testing.T) error {
 	t.Helper()
-	b := &browser{t: t, done: make(chan struct{})}
+	return loginWith(t, nil)
+}
+
+func loginWith(t *testing.T, before func(string)) error {
+	t.Helper()
+	b := &browser{t: t, done: make(chan struct{}), before: before}
 	err := ZitadelLogin(context.Background(), b, false)
-	<-b.done
+	// The browser only starts once the login printed its URL; a login that
+	// failed before that has nothing to wait for.
+	select {
+	case <-b.done:
+	case <-time.After(5 * time.Second):
+	}
 	return err
 }
 
@@ -212,7 +248,7 @@ func TestZitadelLoginStoresTokensOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
+	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
 		t.Errorf("token file mode = %o, want 600", perm)
 	}
 	sub, user, _, err := ZitadelIdentity()
@@ -228,7 +264,7 @@ func TestZitadelLoginStoresTokensOwnerOnly(t *testing.T) {
 func TestZitadelLoginRefusesForeignNonce(t *testing.T) {
 	f := newFakeZitadel(t)
 	tokenFile := useFake(t, f)
-	f.nonceOverride = "someone-elses-nonce"
+	f.setNonceOverride("someone-elses-nonce")
 
 	err := login(t)
 	if err == nil || !strings.Contains(err.Error(), "nonce") {
@@ -266,8 +302,95 @@ func TestZitadelTokenRefreshesAndStoresRotatedToken(t *testing.T) {
 		t.Errorf("stored refresh token = %q, want the rotated refresh-2", st.Token.RefreshToken)
 	}
 	// The stored token is valid again: no second refresh.
-	if _, err := ZitadelToken(); err != nil || f.refreshes != 1 {
-		t.Errorf("refreshes = %d (%v), want 1", f.refreshes, err)
+	if _, err := ZitadelToken(); err != nil || f.refreshCount() != 1 {
+		t.Errorf("refreshes = %d (%v), want 1", f.refreshCount(), err)
+	}
+}
+
+// Parallel mctl commands after expiry must present the refresh token once:
+// ZITADEL revokes the whole token family on reuse.
+func TestZitadelTokenRefreshesOnceUnderConcurrency(t *testing.T) {
+	f := newFakeZitadel(t)
+	useFake(t, f)
+	if err := login(t); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	st, err := readZitadelToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Token.Expiry = time.Now().Add(-time.Minute)
+	if err := writeZitadelToken(st); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 5)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tok, err := ZitadelToken()
+			if err == nil && tok != "access-2" {
+				err = errors.New("got " + tok)
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent ZitadelToken: %v", err)
+		}
+	}
+	if n := f.refreshCount(); n != 1 {
+		t.Errorf("refreshes = %d, want 1", n)
+	}
+}
+
+// A request on the callback path that is not this sign-in's redirect must
+// not end the login.
+func TestZitadelLoginIgnoresForeignCallback(t *testing.T) {
+	f := newFakeZitadel(t)
+	useFake(t, f)
+
+	err := loginWith(t, func(redirectURI string) {
+		resp, err := http.Get(redirectURI + "?state=not-ours&code=stolen")
+		if err != nil {
+			t.Errorf("stray request: %v", err)
+			return
+		}
+		resp.Body.Close() //nolint:errcheck
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("stray request status = %d, want 400", resp.StatusCode)
+		}
+	})
+	if err != nil {
+		t.Fatalf("login after a stray callback: %v", err)
+	}
+	if tok, err := ZitadelToken(); err != nil || tok != "access-1" {
+		t.Errorf("token = %q %v, want access-1", tok, err)
+	}
+}
+
+func TestZitadelLogoutRemovesLoginAndIsIdempotent(t *testing.T) {
+	f := newFakeZitadel(t)
+	tokenFile := useFake(t, f)
+	if err := login(t); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if err := ZitadelLogout(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tokenFile); !os.IsNotExist(err) {
+		t.Errorf("token file still present after logout: %v", err)
+	}
+	if err := ZitadelLogout(); err != nil {
+		t.Errorf("second logout: %v", err)
+	}
+	if _, err := ZitadelToken(); err == nil {
+		t.Error("ZitadelToken after logout must fail")
 	}
 }
 
@@ -289,16 +412,20 @@ func TestCallbackResult(t *testing.T) {
 		state, code, errCode, errMsg string
 		wantCode                     string
 		wantErr                      string
+		wantForeign                  bool
 	}{
 		{name: "ok", state: "s", code: "c", wantCode: "c"},
-		{name: "foreign state", state: "x", code: "c", wantErr: "state"},
-		{name: "missing state", code: "c", wantErr: "state"},
+		{name: "foreign state", state: "x", code: "c", wantErr: "state", wantForeign: true},
+		{name: "missing state", code: "c", wantErr: "state", wantForeign: true},
 		{name: "provider error", state: "s", errCode: "access_denied", errMsg: "no", wantErr: "access_denied"},
 		{name: "no code", state: "s", wantErr: "no authorization code"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := callbackResult(c.state, "s", c.code, c.errCode, c.errMsg)
+			if got.foreign != c.wantForeign {
+				t.Fatalf("foreign = %v, want %v", got.foreign, c.wantForeign)
+			}
 			if c.wantErr != "" {
 				if got.err == nil || !strings.Contains(got.err.Error(), c.wantErr) {
 					t.Fatalf("err = %v, want %q", got.err, c.wantErr)
