@@ -13,6 +13,17 @@
 #   - allow_register = false: accounts come from this repo (S3), not sign-up;
 #   - hide_password_reset: no reset link (there is no SMTP anyway).
 # Verified on a local v4.19.2 with Login V2 before rollout (see the PR).
+#
+# ignore_unknown_usernames: Login V2 answers an unknown login name with the
+# password page instead of "User not found", and creates no session for a
+# known password user, so the two look the same and the account picker
+# learns no name. It does not cover passkey users (every personal account
+# here): Login V2 v4.19.2 still sends them to the passkey page, which opens a
+# session carrying their display name. That residue is #1612, measured on a
+# local v4.19.2. This root gives no organization a login policy of its own,
+# so tenant organizations (erpact included) inherit this one, unless one was
+# created outside it (console): that would override it, and the rollout
+# checks erpact for exactly that.
 import {
   to = zitadel_default_login_policy.default
   id = "default"
@@ -27,7 +38,7 @@ resource "zitadel_default_login_policy" "default" {
   force_mfa_local_only          = false
   passwordless_type             = "PASSWORDLESS_TYPE_ALLOWED"
   hide_password_reset           = true
-  ignore_unknown_usernames      = false
+  ignore_unknown_usernames      = true
   disable_login_with_email      = false
   disable_login_with_phone      = false
   default_redirect_uri          = ""
