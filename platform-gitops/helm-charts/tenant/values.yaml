@@ -16,7 +16,8 @@ tenant:
   # -- Optional: GitHub team slug (for ArgoCD RBAC mapping)
   githubTeam: ""
 
-  # -- Optional: contact email
+  # -- Deprecated: leave empty. This repository is public, so a tenant's
+  # contact address is not stored here; it moves to Vault (#1627).
   contactEmail: ""
 
   # -- Resource quotas for the namespace
