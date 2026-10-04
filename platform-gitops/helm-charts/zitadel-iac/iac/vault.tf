@@ -58,7 +58,7 @@ resource "zitadel_project_role" "vault_tenant" {
     # every opted-in user of that tenant.
     precondition {
       condition     = each.key != local.vault_admin_group
-      error_message = "Tenant \"${each.key}\" collides with the Vault admin group; admins are granted through argocd_admin_users only."
+      error_message = "Tenant \"${each.key}\" collides with the Vault admin group; admins are granted through platform_admin_user_ids only."
     }
   }
 }
@@ -86,22 +86,14 @@ resource "zitadel_user_grant" "vault_tenant" {
   role_keys        = [zitadel_project_role.vault_tenant[each.value.tenant].role_key]
 }
 
-# The platform admins are the same people as Argo CD's: one list, in
-# argocd.tf, looked up there by login name.
+# The platform admins, the same people as Argo CD's (admins.tf).
 resource "zitadel_user_grant" "vault_admin" {
-  for_each = local.argocd_admin_users
+  for_each = local.platform_admin_user_ids
 
   org_id     = local.mctl_org_id
-  user_id    = one(data.zitadel_human_users.argocd_admin[each.key].user_ids)
+  user_id    = each.value
   project_id = zitadel_project.vault.id
   role_keys  = [zitadel_project_role.vault_admin.role_key]
-
-  lifecycle {
-    precondition {
-      condition     = length(data.zitadel_human_users.argocd_admin[each.key].user_ids) == 1
-      error_message = "Expected exactly one MCTL user with login name ${each.key}."
-    }
-  }
 }
 
 # Vault's OIDC client serves both the UI and `vault login -method=oidc`: the

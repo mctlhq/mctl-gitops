@@ -52,7 +52,8 @@ in Vault `secret/platform/zitadel` → `admin-password`. It has IAM_OWNER.
 The password in Vault is read by the setup job **only when the instance is
 first created**. Changing it in Vault later does nothing to the account:
 change it in the Console, then write the new value to Vault so the two agree.
-Keep this account for emergencies; day-to-day admins get their own users.
+Keep this account for emergencies; day-to-day admins get their own users
+(see "Platform admins" below).
 
 ## Declarative configuration (#1520)
 
@@ -113,6 +114,64 @@ Recovery if an admin loses every authenticator: the `iac` break-glass key
 above. Remove their WebAuthn registrations through the API with it, so they can
 enrol again.
 
+### Platform admins
+
+`iac/admins.tf` holds the one list of platform admins. Each of them holds
+every admin grant: Argo CD `admins`, Vault `admins` and Cloudflare Access
+`access`. The MCTL API project has no roles, so there is nothing to grant
+there: any `MCTL` user gets its token, and mctl-api grants nothing based on
+ZITADEL roles yet.
+
+- **Break-glass.** `mctl-admin` is in `break_glass_admins` and is looked up
+  by its login name. It is not created by this root.
+- **Personal accounts.** These come from Vault
+  `secret/platform/zitadel/admins`, one field per person. The field name is
+  the user name in `MCTL`, a plain handle matching `^[a-z0-9][a-z0-9._-]*$`
+  (no `@`, never `mctl-admin`). The value is a JSON object
+  `{"email", "first_name", "last_name", "preferred_language"}`, where
+  `preferred_language` is optional and defaults to `en`. ExternalSecret
+  `zitadel-iac-admins` extracts the secret into `admins.json`, and the pod
+  passes it on as `TF_VAR_platform_admins`. The owner writes the secret;
+  it is never in git:
+
+  ```sh
+  vault kv put secret/platform/zitadel/admins \
+    <user_name>='{"email": "<email>", "first_name": "<first>", "last_name": "<last>", "preferred_language": "en"}'
+  # a second admin later: vault kv patch secret/platform/zitadel/admins <user_name2>='{...}'
+  ```
+
+  The user is created like a tenant user. It has no password and an
+  unverified e-mail, so an invitation goes out. Redeeming it in Login V2
+  enrols a passkey. The instance login policy is unchanged: a password alone
+  never suffices.
+- **Fail closed.** The pod cannot start if the Vault path is missing or was
+  never read, because ESO creates no Secret and the `secretKeyRef` is not
+  optional. If a later read fails, ESO keeps the last content
+  (`deletionPolicy: Retain`). OpenTofu refuses an empty or malformed object
+  (variable validation). In none of these cases does a plan remove an admin
+  or a grant.
+- **Removing a personal admin** from Vault plans deletes of
+  `zitadel_human_user.platform_admin["<user_name>"]` and of its
+  `zitadel_user_grant.{argocd_admin,vault_admin,cloudflare_access}["<user_name>"]`.
+  The guard refuses them until those addresses are in `allowedDeletes`.
+- **First sign-in of a personal admin.**
+  1. Open the invitation mail and follow it to Login V2 `/verify`. Choose
+     Passkeys and register one. A second passkey or a security key is a
+     good idea.
+  2. Argo CD: sign in at `https://ops.mctl.ai` via ZITADEL. **User Info**
+     must show `groups: [admins]`.
+  3. Vault: run `vault login -method=oidc` (or use the UI at
+     `https://secrets.mctl.ai`). `vault token lookup` must show
+     `identity_policies` `[admin]`.
+  4. Cloudflare Access: open the test application behind the ZITADEL
+     identity provider and sign in.
+- **Retiring mctl-admin from day-to-day grants** is a later step, and only
+  after a personal account has passed all of the above. Remove
+  `mctl-admin@mctl.auth.mctl.ai` from `break_glass_admins`, and list the
+  deletes of `zitadel_user_grant.{argocd_admin,vault_admin,cloudflare_access}["mctl-admin@mctl.auth.mctl.ai"]`
+  in `allowedDeletes` in the same PR. The account itself stays, with
+  IAM_OWNER, as the ZITADEL break-glass.
+
 ### Tenant organizations and users (#1520 S3)
 
 - **Source.** One Vault secret per tenant, `secret/platform/zitadel/users/<tenant>`.
@@ -165,8 +224,8 @@ group:
   gets no token: ZITADEL answers `Errors.User.GrantRequired` before any
   redirect to Argo CD.
 - **Roles are Argo CD group names.** `admins` (`g, admins, role:admin` in
-  `platform-gitops/argocd/values.yaml`), held by the users in
-  `argocd_admin_users` (login names of `MCTL` users). One role per tenant
+  `platform-gitops/argocd/values.yaml`), held by the platform
+  admins (`platform_admin_user_ids`, see "Platform admins"). One role per tenant
   organization, named after the tenant (`argocd/rbac/tenants/<tenant>.csv`).
   Each tenant organization is granted only its own role, and a tenant user
   holds it **only if** their Vault entry carries `"argocd": true` (opt-in,
@@ -205,7 +264,7 @@ what. Vault's own side (the `auth/oidc` mount, groups, policies) is the
   it is a project of its own so that no other application's tokens carry
   Vault's audience.
 - **Roles.**
-  - `admins` is held by the same `argocd_admin_users`. Vault maps it to the
+  - `admins` is held by the same platform admins. Vault maps it to the
     `admin` policy.
   - One role per tenant, held by a tenant user **only if** their Vault entry
     carries `"vault": true`. This works like `"argocd"`: the same users list
@@ -276,7 +335,7 @@ ZITADEL is offered as an Access identity provider:
 
 - **Project `Cloudflare Access`** in organization `MCTL`, with
   `project_role_check` and `has_project_check`. Role `access` is held by the
-  users in `cloudflare_access_users`, which is `argocd_admin_users` (the
+  users in `cloudflare_access_users`, which is the platform admins (the
   holders of the Argo CD `admins` group); anyone else is refused with `Errors.User.GrantRequired` before Access sees them.
   Access policies still decide per application on top of that.
 - **Client `cloudflare-access`**: web, `OIDC_AUTH_METHOD_TYPE_NONE`, PKCE

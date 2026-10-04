@@ -18,14 +18,6 @@ locals {
   # named like the tenant (argocd/rbac/tenants/<tenant>.csv).
   argocd_admin_group = "admins"
 
-  # Users of the MCTL organization who hold the admin group, by login name.
-  # mctl-admin is the instance's first user, declared in
-  # bootstrap/templates/core-infra/zitadel.yaml (FirstInstance); its login
-  # name is documented in docs/runbooks/zitadel.md. Matched by login name
-  # because the stored user name may or may not carry the org domain,
-  # depending on the domain policy at setup time.
-  argocd_admin_users = toset(["mctl-admin@mctl.auth.mctl.ai"])
-
   # Every organization whose users can hold an Argo CD role: the MCTL
   # organization and each tenant organization (tenants.tf). The groups claim
   # action runs in the user's own organization, so it is declared in each.
@@ -75,10 +67,10 @@ resource "zitadel_project_role" "argocd_tenant" {
   lifecycle {
     # A tenant named like the admin group would hand role:admin to every
     # opted-in user of that tenant. Admins are MCTL users, listed in
-    # argocd_admin_users; a tenant can never be one.
+    # platform_admin_user_ids (admins.tf); a tenant can never be one.
     precondition {
       condition     = each.key != local.argocd_admin_group
-      error_message = "Tenant \"${each.key}\" collides with the Argo CD admin group; admins are granted through argocd_admin_users only."
+      error_message = "Tenant \"${each.key}\" collides with the Argo CD admin group; admins are granted through platform_admin_user_ids only."
     }
   }
 }
@@ -108,28 +100,14 @@ resource "zitadel_user_grant" "argocd_tenant" {
   role_keys        = [zitadel_project_role.argocd_tenant[each.value.tenant].role_key]
 }
 
-data "zitadel_human_users" "argocd_admin" {
-  for_each = local.argocd_admin_users
-
-  org_id            = local.mctl_org_id
-  login_name        = each.key
-  login_name_method = "TEXT_QUERY_METHOD_EQUALS"
-}
-
+# The platform admins (admins.tf).
 resource "zitadel_user_grant" "argocd_admin" {
-  for_each = local.argocd_admin_users
+  for_each = local.platform_admin_user_ids
 
   org_id     = local.mctl_org_id
-  user_id    = one(data.zitadel_human_users.argocd_admin[each.key].user_ids)
+  user_id    = each.value
   project_id = zitadel_project.argocd.id
   role_keys  = [zitadel_project_role.argocd_admin.role_key]
-
-  lifecycle {
-    precondition {
-      condition     = length(data.zitadel_human_users.argocd_admin[each.key].user_ids) == 1
-      error_message = "Expected exactly one MCTL user with login name ${each.key}."
-    }
-  }
 }
 
 # Argo CD reads groups from a flat list of strings; ZITADEL's own role claim
