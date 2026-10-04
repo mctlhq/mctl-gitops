@@ -36,9 +36,10 @@ data:
     cluster there is no checkout: the CronJob passes --client-id, and
     tests/test_access_login_probe_cronjob.py holds that value equal to the root's.
 
-    With --pushgateway the outcome is also pushed as metrics (job
+    With --pushgateway the outcome is pushed as metrics instead (job
     access_login_probe by default) for the VMRules in
-    infra-components/observability/vm-rules/access-login-probe.yaml.
+    infra-components/observability/vm-rules/access-login-probe.yaml, and the exit
+    status says only whether the push got through: 0 pushed, otherwise not.
 
     Usage:
         access-login-probe.py [--repo-root DIR | --client-id ID]
@@ -356,11 +357,18 @@ data:
             check = (lambda t, root: probe(t, root, a.client_id)) if a.client_id else probe
             code = run(a.repo_root, check=check)
         if a.pushgateway:
+            # Once pushed, the outcome is the metric's to report, and the process
+            # exits 0: a Job failing on every broken probe would also raise
+            # KubeJobFailed, a second alert for the same fact routed elsewhere. A
+            # failed Job therefore means one thing, that the outcome never got
+            # out, and the staleness alert covers that too.
             try:
                 push(a.pushgateway, a.push_job, render_metrics(code, time.time()))
-            except Exception as e:  # noqa: BLE001 -- staleness alerting covers a lost push
+            except Exception as e:  # noqa: BLE001
                 print(f"UNKNOWN could not push to {a.pushgateway}: {type(e).__name__}: {e}")
                 return 2 if code == 0 else code
+            print(f"pushed access_login_probe_status {code} to job {a.push_job}")
+            return 0
         return code
 
 

@@ -22,10 +22,13 @@
 # because there is no checkout here to read it from. A Job reads the ConfigMap
 # when it starts, so a script change reaches the next run with no restart.
 #
-# Exit and metrics: 0 healthy, 1 broken, 2 could not be determined. The pushed
-# access_login_probe_status carries the same number, so "could not tell" is a
-# value of its own and never satisfies a healthy check. A Job whose push fails
-# leaves the series stale, and the staleness alert is for exactly that.
+# Metrics: access_login_probe_status is 0 healthy, 1 broken, 2 could not be
+# determined, so "could not tell" is a value of its own and never satisfies a
+# healthy check. With --pushgateway the Job exits 0 once the outcome is
+# pushed, broken or not: the alert rules report the outcome, and a Job failing
+# on every broken probe would raise KubeJobFailed as a second alert for the
+# same fact. A failed Job means the push did not get through, which leaves the
+# series stale, and the staleness alert is for exactly that.
 #
 # No NetworkPolicy, for the reason blackbox-exporter.yaml gives: the monitoring
 # namespace has none, so a policy selecting this pod alone would add a way to
@@ -95,7 +98,8 @@ spec:
                 name: access-login-probe-script
 ---
 # The red test: the same probe expecting a client id that does not exist, so
-# a healthy Access must read as broken (exit 1, status 1). Suspended, so it
+# a healthy Access must read as broken: the log says BROKEN and the push
+# carries status 1 (the Job itself succeeds, see above). Suspended, so it
 # never runs on its own; start one run with
 #   kubectl -n monitoring create job --from=cronjob/access-login-probe-red <name>
 # It pushes to its own job, access_login_probe_redtest, which no alert
