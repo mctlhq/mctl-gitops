@@ -7,7 +7,8 @@ image:
   # digest, so a re-pushed tag can never change what configures Vault.
   repository: ghcr.io/mctlhq/vault-iac
   tag: "1.13.1-5.12.0"
-  digest: ""
+  # build-image.yaml run 37192723070, from 821f7cef.
+  digest: "sha256:b0a02915b0e054007a5ac82ad6ff3c1da9a73202d286afcbce3c0f31b080b971"
 
 # The plan actions the Job may apply, space-separated. A plan containing any
 # other action fails the Job before apply, with the plan in its log.
