@@ -1,7 +1,7 @@
 # Vault human sign-in (secrets.mctl.ai via auth.mctl.ai)
 
-Humans sign in to Vault through ZITADEL on the `auth/oidc` mount, in the UI or
-with `vault login -method=oidc`. What they may read comes from the `groups`
+Humans sign in to Vault through ZITADEL on the `auth/mctl` mount (an OIDC auth
+method), in the UI (tab **mctl**) or with `vault login -method=oidc -path=mctl`. What they may read comes from the `groups`
 claim, which carries the user's roles on ZITADEL's "Vault" project, and nothing
 else.
 
@@ -28,7 +28,7 @@ zitadel-iac Job ── ZITADEL: project "Vault", roles admins + <tenant>, grants
 Secret vault-human-auth-iac/vault-oidc-zitadel   (client_id, client_secret, tenants)
         |
         v
-vault-human-auth-iac Job ── Vault: auth/oidc, role `zitadel`,
+vault-human-auth-iac Job ── Vault: auth/mctl, role `zitadel`,
                            groups human-admins / human-tenant-<tenant>,
                            policies human-tenant-<tenant>
 ```
@@ -117,7 +117,7 @@ break-glass, when the personal account cannot sign in.
 
    ```bash
    export VAULT_ADDR=https://secrets.mctl.ai
-   vault login -method=oidc
+   vault login -method=oidc -path=mctl
    ```
 
    A browser opens on `auth.mctl.ai`. After sign-in, the CLI prints
@@ -126,7 +126,7 @@ break-glass, when the personal account cannot sign in.
    - `policies [default]` and `identity_policies [admin]`
    - `ttl` of at most 1h
    - `meta` with `role=zitadel` and your `username`
-3. **UI login.** Open `https://secrets.mctl.ai/ui/`, choose method **OIDC**,
+3. **UI login.** Open `https://secrets.mctl.ai/ui/`, choose the **mctl** tab,
    leave the role empty and sign in. You land on the dashboard and can open
    `secret/`.
 4. **Tenant isolation, live.** Use a tenant user, for example your own user in
@@ -134,7 +134,7 @@ break-glass, when the personal account cannot sign in.
    - Set `"vault": true` in that user's entry at
      `secret/platform/zitadel/users/<tenant>`.
    - Wait for the next hourly zitadel-iac run.
-   - Sign in with that account (`vault login -method=oidc` in a fresh shell,
+   - Sign in with that account (`vault login -method=oidc -path=mctl` in a fresh shell,
      or a private browser window).
    - Then run:
 
@@ -171,10 +171,52 @@ break-glass, when the personal account cannot sign in.
   in `allowedDeletes` in a PR, then empty the list again after it has applied.
 - **Rotate the client secret.** Regenerate the client in ZITADEL by replacing
   `zitadel_application_oidc.vault` through zitadel-iac. The Secret updates,
-  and the next vault-human-auth-iac run updates `auth/oidc/config`.
+  and the next vault-human-auth-iac run updates `auth/mctl/config`.
 - **Drift.** A change made by hand to the mount, the role, a `human-*` group or
   a `human-tenant-*` policy shows up as an update in the next hourly plan, and
   the run reverts it.
+
+## The move from `auth/oidc` to `auth/mctl`
+
+The mount was `auth/oidc` until the owner approved moving it, because the UI
+labels the login tab with the mount path. Vault cannot show a different
+label in OSS, and the "Other" tab cannot be hidden either: custom login
+settings are Enterprise-only. What changed for users:
+
+- **Sign in again once.** The move revokes every token the mount had issued
+  (Vault 1.17.2 revokes the mount's leases on a remount). Group memberships
+  and policies are unchanged: the accessor is kept, so the same identity
+  entity is found on the next login.
+- **CLI:** `vault login -method=oidc -path=mctl`. The old
+  `vault login -method=oidc` now fails with `403 permission denied` on
+  `auth/oidc/oidc/auth_url`, because nothing is mounted there.
+- **UI:** the tab reads **mctl**.
+
+The order, each step its own change: (a) zitadel-iac registers the
+`/ui/vault/auth/mctl/oidc/callback` redirect next to the old one; (b) the
+owner applies the temporary remount grant to the Job's policy
+(cluster-bootstrap/vault-config/README.md) and it is diffed byte-identical
+against the file; (c) the root sets `path = "mctl"`, with the role listed in
+`allowedDeletes`; (d) cleanup drops the old redirect, empties
+`allowedDeletes`, and removes the remount grant.
+
+**Recovery, if (c) ever applies without the grant.** The Job destroys the role
+first and the remount then fails with a 403: the mount stays at `auth/oidc`
+with no login role, and later runs refuse to plan. Finish the move by hand
+(owner, admin token), after applying the grant:
+
+```bash
+vault write sys/remount from=auth/oidc to=auth/mctl
+```
+
+The next Job run then creates the role and converges (verified locally).
+
+**Rolling the move back is owner-only.** The grant allows exactly
+`auth/oidc` to `auth/mctl`, so the Job is refused the reverse (403). To go
+back, the owner moves the mount by hand with an admin token
+(`vault write sys/remount from=auth/mctl to=auth/oidc`) and reverts (c) in
+git. Every human signs in again, as with the move itself. This path is not
+rehearsed: plan it on a local Vault first.
 
 ## Break-glass
 
@@ -188,8 +230,8 @@ The admin paths that do not depend on ZITADEL are unchanged:
 - an existing admin token;
 - a root token generated with the unseal keys (`vault operator generate-root`).
 
-The Job never disables a mount: its policy has no `delete` on `sys/auth/oidc`.
+The Job never disables a mount: its policy has no `delete` on any `sys/auth/` path.
 To turn human OIDC sign-in off by hand, an admin runs
-`vault auth disable oidc`. That removes the group aliases with it. The next
+`vault auth disable mctl`. That removes the group aliases with it. The next
 Job run would re-create everything, so first suspend the CronJob and set
 `allowedActions: "no-op read"`.
