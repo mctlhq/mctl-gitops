@@ -643,6 +643,10 @@ jobs:
           tofu init -backend=false -lockfile=readonly -input=false
           tofu validate
 
+      - name: tofu test (mocked providers)
+        working-directory: platform-gitops/helm-charts/zitadel-iac/iac
+        run: tofu test -no-color
+
       - name: Render the chart and validate the manifests
         env:
           KUBECONFORM_VERSION: "0.8.0"

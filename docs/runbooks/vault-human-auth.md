@@ -84,9 +84,10 @@ The authorize request carried PKCE S256. Details are in docs/runbooks/zitadel.md
 ## First login (owner checklist)
 
 Sign in with your personal MCTL account, the one created from
-`secret/platform/zitadel/admins` (the owner's is `dmitrii`), using its login
-name or e-mail address. It holds `admins` on the Vault project
-(`zitadel_user_grant.vault_admin["dmitrii"]`). Use `mctl-admin` only as
+`secret/platform/zitadel/admins` (the owner's entry is keyed `dmitrii`; its
+login name is the entry's `username`, `dmitrii.mashkov`), using that login
+name or the e-mail address. It holds `admins` on the Vault project
+(`zitadel_user_grant.vault_admin["dmitrii"]`, addressed by the key). Use `mctl-admin` only as
 break-glass, when the personal account cannot sign in.
 
 1. **CLI login.**
