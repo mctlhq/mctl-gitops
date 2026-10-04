@@ -23,10 +23,12 @@ locals {
   # auth_domain).
   cloudflare_access_callback = "https://mbank.cloudflareaccess.com/cdn-cgi/access/callback"
 
-  # MCTL users who may sign in to Cloudflare Access through ZITADEL, by login
-  # name (see argocd_admin_users in argocd.tf for why login names). Access
-  # policies still decide per application; this is the outer gate.
-  cloudflare_access_users = toset(["mctl-admin@mctl.auth.mctl.ai"])
+  # Who may sign in to Cloudflare Access through ZITADEL: the platform
+  # admins, the same set that holds the Argo CD `admins` group (argocd.tf),
+  # so the two cannot drift apart. Tenant users (Vault
+  # secret/platform/zitadel/users/*) are never in it. This grant is the gate;
+  # Access policies may narrow it per application.
+  cloudflare_access_users = local.argocd_admin_users
 }
 
 resource "zitadel_project" "cloudflare_access" {

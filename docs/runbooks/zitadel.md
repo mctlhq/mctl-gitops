@@ -231,8 +231,8 @@ ZITADEL is offered as an Access identity provider:
 
 - **Project `Cloudflare Access`** in organization `MCTL`, with
   `project_role_check` and `has_project_check`. Role `access` is held by the
-  users in `cloudflare_access_users` (login names of `MCTL` users); anyone
-  else is refused with `Errors.User.GrantRequired` before Access sees them.
+  users in `cloudflare_access_users`, which is `argocd_admin_users` (the
+  holders of the Argo CD `admins` group); anyone else is refused with `Errors.User.GrantRequired` before Access sees them.
   Access policies still decide per application on top of that.
 - **Client `cloudflare-access`**: web, `OIDC_AUTH_METHOD_TYPE_NONE`, PKCE
   (S256), redirect `https://mbank.cloudflareaccess.com/cdn-cgi/access/callback`.
