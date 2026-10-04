@@ -59,9 +59,14 @@ spec:
                 cache_location: /data/loki/index_cache
                 shared_store: s3
               # Migrated 2026-07 from self-hosted MinIO to Cloudflare R2.
-              # Bucket recreated on R2 as "loki" with a 30-day defensive
-              # lifecycle rule. Loki now keeps 14d (336h) via the compactor;
-              # the bucket lifecycle remains a final backstop. The longer query
+              # Bucket recreated on R2 as "loki" with a defensive lifecycle
+              # rule, `backstop-expire-after-60-days` (read through the
+              # Cloudflare API on 2026-10-04; it was described here as 30
+              # days, which it is not). It is set in the dashboard, not in
+              # Terraform. Loki keeps 14d (336h) via the compactor, and the
+              # Vault audit stream 30d (retention_stream below); the bucket
+              # lifecycle remains a final backstop and must stay longer than
+              # every retention period here. The longer query
               # window preserves controller evidence for delayed incident review
               # (mctl-gitops#593) without retaining logs indefinitely.
               # Credentials still come from the loki-minio-credentials Secret
@@ -77,8 +82,30 @@ spec:
               ingestion_rate_mb: 4
               ingestion_burst_size_mb: 8
               retention_period: 336h  # 14 days
+              # Vault's audit log (docs/runbooks/vault-audit.md) is kept 30
+              # days: the owner's decision of 2026-10-04 for SOC 2 (#1659).
+              # Both streams of the vault container: stdout is the audit
+              # entries, stderr carries "failed to audit" lines, the evidence
+              # of any gap in them. A few MB a day compressed.
+              retention_stream:
+                - selector: '{namespace="vault", container="vault"}'
+                  priority: 1
+                  period: 720h
             chunk_store_config:
-              max_look_back_period: 336h
+              # Raised with the stream above: this caps how far back any
+              # query may reach, so at 336h the audit log's third and fourth
+              # weeks would be stored but unreadable. Other streams are
+              # still deleted at 336h.
+              max_look_back_period: 720h
+            # Flush in-memory chunks to R2 when the ingester stops. The WAL
+            # lives on an emptyDir (persistence is off), so a replaced pod
+            # starts without it, and without this flag a rollout dropped
+            # whatever had not yet been flushed: up to max_chunk_age (2h) of
+            # every busy stream, the Vault audit log included. Loki 2.9's
+            # default is false whenever the WAL is on.
+            ingester:
+              wal:
+                flush_on_shutdown: true
             # table_manager is obsolete once the compactor handles retention on tsdb;
             # keeping it alongside compactor.retention_enabled produces duplicate
             # delete workers and warnings in 2.9. Explicitly disable it.

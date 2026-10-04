@@ -11,7 +11,7 @@ the rest of the pod logs, and Grafana's Loki datasource queries them.
 | The Job's grant on `sys/audit` (applied by hand) | `infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-vault-human-auth-iac.hcl` |
 | Counters `vault_audit_entries_total`, `vault_audit_failures_total` | Promtail match block in `platform-gitops/bootstrap/templates/observability/loki.yaml` |
 | Alerts `VaultAuditLogSilent`, `VaultAuditLogAbsent`, `VaultAuditWriteFailures` | `platform-gitops/infra-components/observability/vm-rules/vault-audit-alerts.yaml` (routed to Telegram) |
-| Retention | Loki `limits_config.retention_period` 336h (14 days), same file as the Promtail block |
+| Retention | Loki `limits_config.retention_stream` 720h (30 days) for `{namespace="vault", container="vault"}`, other streams `retention_period` 336h; same file as the Promtail block |
 
 ## What is in an entry, and what is not
 
@@ -128,12 +128,21 @@ roughly 100-150 MB a day of raw lines before Loki's compression, and well
 under Loki's 4 MB/s ingestion limit. Re-measure with the volume query above a
 day after enablement and correct this paragraph.
 
-Loki keeps 14 days (`retention_period: 336h`), and the R2 bucket `loki` has a
-30-day lifecycle rule behind it. For SOC 2 (CC7.2, CC6.1 evidence) 14 days is
-short: an auditor will ask for 90 days to a year of access history. Raising it
-for the vault stream alone (`limits_config.retention_stream` on
-`{namespace="vault"}`) also needs the bucket lifecycle raised past it, or R2
-deletes the chunks first; that is tracked in mctl-gitops#1659.
+Loki keeps the Vault container streams (stdout audit entries and the stderr
+server log with any `failed to audit` lines) for 30 days through
+`limits_config.retention_stream`; every other stream stays at the global 336h.
+30 days is an owner-accepted decision of 2026-10-04 (mctl-gitops#1659): shorter
+than the 90 days to a year an auditor may ask for, accepted against the
+storage cost. `chunk_store_config.max_look_back_period` is 720h to match, so the
+whole 30 days stays queryable. Chunks live in the R2 bucket `loki`, whose
+dashboard-managed lifecycle rule `backstop-expire-after-60-days` deletes objects
+after 60 days; it is a backstop behind the compactor and must stay longer than
+every Loki retention, or R2 deletes chunks Loki still indexes. Raising Vault
+retention past 60 days means raising that rule first.
+
+Loki restarts on any config change. The ingester WAL is on an emptyDir, so
+`ingester.wal.flush_on_shutdown: true` flushes in-memory chunks to R2 on a
+graceful stop instead of dropping up to two hours of logs, audit lines included.
 
 ## One device, and what happens when it fails
 
