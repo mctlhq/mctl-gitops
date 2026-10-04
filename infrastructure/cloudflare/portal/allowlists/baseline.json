@@ -23,9 +23,10 @@
       "recorded": "2026-09-25"
     },
     "api": {
-      "tools_total": 92,
-      "tools_enabled": 77,
+      "tools_total": 93,
+      "tools_enabled": 78,
       "enabled_tools": [
+        "mctl_abandon_dev_loop",
         "mctl_acknowledge_incident",
         "mctl_add_custom_domain",
         "mctl_apply_openclaw_resource_profile",
