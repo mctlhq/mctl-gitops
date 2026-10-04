@@ -125,6 +125,8 @@ spec:
               restore. The failed Job's restore container log names the site
               and the check that failed.
 
+        # 26h also bounds the first run: a CronJob created at 05:16 UTC
+        # first runs 23h59m later, and activeDeadlineSeconds caps a run at 1h.
         - alert: ErpactRestoreDrillNeverSucceeded
           expr: |
             (time() - kube_cronjob_created{namespace="erpact", cronjob="erpact-restore-drill"} > 93600)
