@@ -139,11 +139,20 @@ for dir in "$SERVICES"/*/"$NAME"; do
 done
 
 # A service may run an image under a name other than its own directory
-# (e.g. a preview of another service): those names are taken as well.
-REGISTRY_RE=$(printf '%s' "$REGISTRY" | sed 's/[.]/\\./g')
+# (e.g. a preview of another service): those names are taken as well. The
+# images are read by values-images.sh, the same reader tpl-validate-tenant
+# uses; a values.yaml it cannot read means this cannot decide.
+VALUES_IMAGES="$ROOT/platform-gitops/argo-workflows/scripts/values-images.sh"
+if [ ! -r "$VALUES_IMAGES" ]; then
+  echo "cannot read ${VALUES_IMAGES}" >&2
+  exit 2
+fi
 for values in "$SERVICES"/*/*/values.yaml; do
   [ -f "$values" ] || continue
-  if grep -qE "^[[:space:]]*repository:[[:space:]]*[\"']?${REGISTRY_RE}/${NAME}[\"']?[[:space:]]*$" "$values"; then
+  if ! images=$(sh "$VALUES_IMAGES" "$values"); then
+    exit 2
+  fi
+  if printf '%s\n' "$images" | grep -qxF "${REGISTRY}/${NAME}"; then
     owner=$(basename "$(dirname "$(dirname "$values")")")
     if [ "$owner" != "$TEAM" ]; then
       echo "image name '${NAME}' is run by team '${owner}'; team '${TEAM}' may not use it" >&2

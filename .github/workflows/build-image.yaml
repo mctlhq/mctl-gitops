@@ -122,17 +122,23 @@ jobs:
       #     component name (mctl-telegram-preview pushes mctl-telegram).
       #   * a dispatch at a ref other than main runs that ref's copy of this
       #     file. The policy data is read from main either way.
-      # GITHUB_WORKFLOW_REF names the caller's workflow in a called run, so
-      # it tells a direct dispatch from a workflow_call.
+      # github.workflow_ref names the top-level (caller's) workflow in a
+      # called run, so it tells a direct dispatch from a workflow_call. It is
+      # bound explicitly rather than read from the implicit
+      # GITHUB_WORKFLOW_REF. github.event_name cannot make this distinction:
+      # in a called run it is the caller's event, so a dispatched
+      # release-deploy.yaml would also read workflow_dispatch.
       - name: Classify caller
         id: caller
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
-          case "$GITHUB_WORKFLOW_REF" in
+          case "$CALLER_WORKFLOW_REF" in
             "${GITHUB_REPOSITORY}/.github/workflows/build-image.yaml@"*) direct=true ;;
             *) direct=false ;;
           esac
           echo "direct=${direct}" >> "$GITHUB_OUTPUT"
-          echo "direct dispatch: ${direct} (${GITHUB_WORKFLOW_REF})"
+          echo "direct dispatch: ${direct} (${CALLER_WORKFLOW_REF})"
 
       - name: Check out image-name policy
         if: steps.caller.outputs.direct == 'true'

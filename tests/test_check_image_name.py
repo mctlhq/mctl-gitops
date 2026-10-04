@@ -16,6 +16,7 @@ build-image.yaml) actually run it before anything is built or pushed.
 """
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,7 @@ import yaml
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "platform-gitops/argo-workflows/scripts/check-image-name.sh"
+READER = REPO / "platform-gitops/argo-workflows/scripts/values-images.sh"
 LIST = REPO / "platform-gitops/argo-workflows/config/image-names.txt"
 
 failures = []
@@ -42,9 +44,15 @@ def run(root, team, name, *flags, registry=REG):
                           capture_output=True, text=True).returncode
 
 
-def fixture(list_text, services, tenants=("labs", "ovk", "karabu", "admins")):
+def fixture(list_text, services, tenants=("labs", "ovk", "karabu", "admins"), reader=True):
     """services: {"team/name": values.yaml text or None}"""
     d = pathlib.Path(tempfile.mkdtemp())
+    scripts = d / "platform-gitops/argo-workflows/scripts"
+    scripts.mkdir(parents=True)
+    if reader:
+        shutil.copy(READER, scripts / READER.name)
+    shutil.copytree(REPO / "platform-gitops/argo-workflows/service-templates",
+                    d / "platform-gitops/argo-workflows/service-templates")
     for t in tenants:
         (d / "platform-gitops/tenants" / t).mkdir(parents=True)
     cfg = d / "platform-gitops/argo-workflows/config"
@@ -139,6 +147,20 @@ check(run(fixture(LIST_TEXT, SERVICES, tenants=()), "karabu", "brand-new", "--te
 check(run(fixture(LIST_TEXT, SERVICES, tenants=()), "karabu", "brand-new") == 0,
       "without --tenant the tenants tree is not needed")
 
+# Ownership reads values through the same reader: a commented line still
+# claims its image; a values.yaml it cannot read makes the values scan
+# undecidable (exit 2), while names decided before the scan are unaffected.
+check(run(fixture(LIST_TEXT, {"labs/x": "image:\n  repository: ghcr.io/mctlhq/claimed  # c\n"}),
+          "ovk", "claimed") == 1,
+      "a commented repository line must still claim its image for its team")
+bad_values = {"labs/x": "image: {repository: ghcr.io/mctlhq/x}\n"}
+check(run(fixture(LIST_TEXT, bad_values), "ovk", "brand-new") == 2,
+      "an unreadable values.yaml must make the values scan undecidable (exit 2)")
+check(run(fixture(LIST_TEXT, bad_values), "labs", "mctl-academy") == 0,
+      "a granted name is decided before the values scan")
+check(run(fixture(LIST_TEXT, SERVICES, reader=False), "ovk", "brand-new") == 2,
+      "a missing values-images.sh must be exit 2")
+
 # Fail closed: no list, a list line the script does not understand.
 check(run(fixture(None, SERVICES), "karabu", "brand-new") == 2,
       "missing image-names.txt must refuse (exit 2)")
@@ -215,14 +237,20 @@ if m:
         "labs/runs-other": "image:\n  repository: ghcr.io/mctlhq/own\n",
         "labs/no-image": "replicas: 1\n",
         "labs/no-values": None,
+        "labs/commented": "image:\n  repository: ghcr.io/mctlhq/commented  # built here\n",
+        "labs/single": "image:\n  repository: 'ghcr.io/mctlhq/single'\n",
+        "labs/flow": "image: {repository: ghcr.io/mctlhq/flow, tag: x}\n",
+        "labs/block": "image:\n  repository: >-\n    ghcr.io/mctlhq/block\n",
     })
 
-    def builds(action, team, service, repo="org/repo", template="default"):
+    def builds(action, team, service, repo="org/repo", template="default",
+               ctype="base-service"):
         with tempfile.TemporaryDirectory() as out:
-            block = m.group(1).replace("/tmp/builds", f"{out}/builds")
+            block = (m.group(1).replace("/tmp/builds", f"{out}/builds")
+                     .replace("/tmp/onboard-values.yaml", f"{out}/onboard-values.yaml"))
             env = {"PATH": "/usr/bin:/bin", "ACTION": action, "TEAM": team,
                    "SERVICE": service, "REPO": repo, "SERVICE_TEMPLATE": template,
-                   "PARAM_CONTAINER_REGISTRY": REG}
+                   "TYPE": ctype, "PARAM_CONTAINER_REGISTRY": REG}
             r = subprocess.run(["sh", "-c", "set -e\n" + block], cwd=decide_root,
                                env=env, capture_output=True, text=True)
             if r.returncode != 0:
@@ -242,9 +270,64 @@ if m:
         (("deploy", "labs", "runs-other"), "false", "the service runs another image"),
         (("deploy", "labs", "no-image"), "true", "no image named: builds as before"),
         (("deploy", "labs", "no-values"), "true", "no values.yaml: builds (step 6 refuses deploy)"),
+        (("deploy", "labs", "commented"), "true", "a trailing comment is not another image"),
+        (("deploy", "labs", "single"), "true", "single quotes still match"),
+        (("onboard", "labs", "brand-new", "org/repo", "no-such-template"), "true",
+         "an unknown template falls back to default, as tpl-git-commit does"),
+        (("onboard", "labs", "brand-new", "org/repo", "default", "worker-service"), "true",
+         "worker-service onboard renders the worker template"),
     ):
         got = builds(*args)
         check(got == want, f"validate build decision {args}: {got!r}, want {want!r} ({why})")
+    # A repository line the reader cannot read fails the step: never a
+    # silent "no build" that would bump image.tag to a tag nothing pushed.
+    for svc in ("flow", "block"):
+        got = builds("deploy", "labs", svc)
+        check(got.startswith("error:"), f"validate must fail on labs/{svc}'s values, got {got!r}")
+
+# values-images.sh: the one reader of `repository:` both callers use.
+def read_images(text):
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        f.write(text)
+    r = subprocess.run(["sh", str(READER), f.name], capture_output=True, text=True)
+    pathlib.Path(f.name).unlink()
+    return r.returncode, r.stdout.split()
+
+for text, want in (
+    ("image:\n  repository: ghcr.io/mctlhq/a\n", (0, ["ghcr.io/mctlhq/a"])),
+    ('image:\n  repository: "ghcr.io/mctlhq/a"\n', (0, ["ghcr.io/mctlhq/a"])),
+    ("image:\n  repository: 'ghcr.io/mctlhq/a'  # c\n", (0, ["ghcr.io/mctlhq/a"])),
+    ("image:\n  repository: ghcr.io/mctlhq/a # c\n  tag: x\n", (0, ["ghcr.io/mctlhq/a"])),
+    ("image:\n\trepository:\tghcr.io/mctlhq/a\n", (0, ["ghcr.io/mctlhq/a"])),
+    ("a:\n  repository: x/a\nb:\n  repository: x/b\n", (0, ["x/a", "x/b"])),
+    ("# repository: ghcr.io/mctlhq/a\nreplicas: 1\n", (0, [])),
+    ("image_repository: something odd here\n", (0, [])),
+    ("replicas: 1\n", (0, [])),
+    ("image: {repository: ghcr.io/mctlhq/a}\n", (2, [])),
+    ("image:\n  repository: >-\n    ghcr.io/mctlhq/a\n", (2, [])),
+    ("image:\n  repository:\n", (2, [])),
+    ('image:\n  repository: ""\n', (2, [])),
+    ("image:\n  repository: *img\n", (2, [])),
+    ('image:\n  repository: "ghcr.io/mctlhq/a # b"\n', (2, [])),
+    ("image:\n  repository: ghcr.io/mctlhq/a extra\n", (2, [])),
+    ("image:\n  repository:ghcr.io/mctlhq/a\n", (2, [])),
+    ("image:\n  repository : ghcr.io/mctlhq/a\n", (2, [])),
+    ('image:\n  "repository": ghcr.io/mctlhq/a\n', (2, [])),
+    ("image:\n  'repository': ghcr.io/mctlhq/a\n", (2, [])),
+    ("- repository: ghcr.io/mctlhq/a\n", (2, [])),
+    ("image:\n  repository: ghcr.io/mctlhq/a\r\n", (0, ["ghcr.io/mctlhq/a"])),
+    # Block scalars are text: JSON mentioning repository is skipped, a line
+    # that would be a repository key refuses, and the scalar ends at the
+    # next line no deeper than its key.
+    ('config: |\n  {"subject": {"repository": ["x"]}}\nimage:\n  repository: x/a\n',
+     (0, ["x/a"])),
+    ("config: |\n  repository: x/b\nimage:\n  repository: x/a\n", (2, [])),
+    ("env:\n  - name: X\n    value: >-\n      repository: y\n", (2, [])),
+    ("note: |  # c\n  text\n\n  more\nimage:\n  repository: x/a\n", (0, ["x/a"])),
+):
+    rc, out = read_images(text)
+    check((rc, out if rc == 0 else []) == want,
+          f"values-images.sh on {text!r}: {(rc, out)}, want {want}")
 env = {e["name"]: e["value"] for e in by_name["validate"]["script"].get("env", [])}
 check(env.get("PARAM_CONTAINER_REGISTRY") == "{{inputs.parameters.container_registry}}",
       "validate must take the registry as a bound env value")
@@ -342,6 +425,15 @@ if "Check image name" in names:
     check('\nif ! sh .image-name-policy/platform-gitops/argo-workflows/scripts/check-image-name.sh --build' in run_src
           and '"${REGISTRY}/${GITHUB_REPOSITORY_OWNER}"' in run_src,
           "build-image must check in build mode against its own registry")
+# The caller is classified from github.workflow_ref bound explicitly into the
+# step (in a called run it names the caller's workflow), not from the
+# implicit GITHUB_WORKFLOW_REF or the event name.
+caller = [s for s in steps if s.get("id") == "caller"]
+check(len(caller) == 1
+      and caller[0].get("env", {}).get("CALLER_WORKFLOW_REF") == "${{ github.workflow_ref }}"
+      and 'case "$CALLER_WORKFLOW_REF" in' in caller[0]["run"]
+      and "GITHUB_WORKFLOW_REF" not in caller[0]["run"],
+      "build-image must classify its caller from an explicitly bound github.workflow_ref")
 push = [s for s in steps if s.get("name") == "Build and push"][0]["with"]["tags"]
 latest = [ln for ln in push.splitlines() if "latest" in ln]
 check(len(latest) == 1 and "steps.caller.outputs.direct != 'true'" in latest[0],
