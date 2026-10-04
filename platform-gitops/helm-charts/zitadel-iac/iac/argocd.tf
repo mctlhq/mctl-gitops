@@ -1,0 +1,229 @@
+# Argo CD (ops.mctl.ai) signs in through ZITADEL (#1500).
+#
+# Who may sign in, and as what, is decided here: Argo CD maps the `groups`
+# claim through its RBAC (platform-gitops/argocd), and that claim carries
+# exactly the roles a user holds on the project below. A user without a role
+# on it gets no Argo CD token at all (project_role_check), so a tenant user
+# is never let in by default.
+#
+# Argo CD's own project, not `zitadel_project.platform`: the role check
+# applies to every application of a project, and Forgejo (forgejo.tf) must
+# stay open to users who have no Argo CD role.
+
+locals {
+  argocd_url = "https://ops.mctl.ai"
+
+  # Argo CD RBAC group for full access (`g, admins, role:admin` in
+  # platform-gitops/argocd/values.yaml). Tenants map to their own group,
+  # named like the tenant (argocd/rbac/tenants/<tenant>.csv).
+  argocd_admin_group = "admins"
+
+  # Users of the MCTL organization who hold the admin group, by login name.
+  # mctl-admin is the instance's first user, declared in
+  # bootstrap/templates/core-infra/zitadel.yaml (FirstInstance); its login
+  # name is documented in docs/runbooks/zitadel.md. Matched by login name
+  # because the stored user name may or may not carry the org domain,
+  # depending on the domain policy at setup time.
+  argocd_admin_users = toset(["mctl-admin@mctl.auth.mctl.ai"])
+
+  # Every organization whose users can hold an Argo CD role: the MCTL
+  # organization and each tenant organization (tenants.tf). The groups claim
+  # action runs in the user's own organization, so it is declared in each.
+  argocd_claim_orgs = merge(
+    { "MCTL" = local.mctl_org_id },
+    { for tenant, org in zitadel_org.tenant : tenant => org.id },
+  )
+}
+
+resource "zitadel_project" "argocd" {
+  org_id = local.mctl_org_id
+  name   = "Argo CD"
+
+  # Only users with a role on this project may obtain a token for it, and
+  # only users of organizations that own it or were granted it.
+  project_role_check = true
+  has_project_check  = true
+  # Load-bearing although Argo CD never reads ZITADEL's own role claim: it is
+  # what loads the user's grants into the token flow at all. Without it
+  # ctx.v1.user.grants is null in the groups action below (measured on
+  # v4.19.2), the claim is never set, and nobody gets an Argo CD group.
+  project_role_assertion = true
+
+  lifecycle {
+    precondition {
+      condition     = length(data.zitadel_orgs.mctl.ids) == 1
+      error_message = "Expected exactly one ZITADEL organization named \"MCTL\"."
+    }
+  }
+}
+
+resource "zitadel_project_role" "argocd_admin" {
+  org_id       = local.mctl_org_id
+  project_id   = zitadel_project.argocd.id
+  role_key     = local.argocd_admin_group
+  display_name = "Argo CD admin"
+}
+
+resource "zitadel_project_role" "argocd_tenant" {
+  for_each = local.tenants
+
+  org_id       = local.mctl_org_id
+  project_id   = zitadel_project.argocd.id
+  role_key     = each.key
+  display_name = "Argo CD tenant ${each.key}"
+
+  lifecycle {
+    # A tenant named like the admin group would hand role:admin to every
+    # opted-in user of that tenant. Admins are MCTL users, listed in
+    # argocd_admin_users; a tenant can never be one.
+    precondition {
+      condition     = each.key != local.argocd_admin_group
+      error_message = "Tenant \"${each.key}\" collides with the Argo CD admin group; admins are granted through argocd_admin_users only."
+    }
+  }
+}
+
+# A tenant organization may hand out its own tenant role, and no other.
+resource "zitadel_project_grant" "argocd_tenant" {
+  for_each = local.tenants
+
+  org_id         = local.mctl_org_id
+  project_id     = zitadel_project.argocd.id
+  granted_org_id = zitadel_org.tenant[each.key].id
+  role_keys      = [zitadel_project_role.argocd_tenant[each.key].role_key]
+}
+
+# Opt-in: only a tenant user whose Vault entry carries "argocd": true holds
+# their tenant's role (owner decision on #1500). Membership of a tenant
+# organization alone grants no Argo CD access; with no flag, ZITADEL refuses
+# the sign-in (project_role_check above). Granting is a Vault-only change,
+# like adding the user.
+resource "zitadel_user_grant" "argocd_tenant" {
+  for_each = { for key, user in local.users : key => user if try(user.argocd, false) == true }
+
+  org_id           = zitadel_org.tenant[each.value.tenant].id
+  user_id          = zitadel_human_user.tenant[each.key].id
+  project_id       = zitadel_project.argocd.id
+  project_grant_id = zitadel_project_grant.argocd_tenant[each.value.tenant].id
+  role_keys        = [zitadel_project_role.argocd_tenant[each.value.tenant].role_key]
+}
+
+data "zitadel_human_users" "argocd_admin" {
+  for_each = local.argocd_admin_users
+
+  org_id            = local.mctl_org_id
+  login_name        = each.key
+  login_name_method = "TEXT_QUERY_METHOD_EQUALS"
+}
+
+resource "zitadel_user_grant" "argocd_admin" {
+  for_each = local.argocd_admin_users
+
+  org_id     = local.mctl_org_id
+  user_id    = one(data.zitadel_human_users.argocd_admin[each.key].user_ids)
+  project_id = zitadel_project.argocd.id
+  role_keys  = [zitadel_project_role.argocd_admin.role_key]
+
+  lifecycle {
+    precondition {
+      condition     = length(data.zitadel_human_users.argocd_admin[each.key].user_ids) == 1
+      error_message = "Expected exactly one MCTL user with login name ${each.key}."
+    }
+  }
+}
+
+# Argo CD reads groups from a flat list of strings; ZITADEL's own role claim
+# is a map, which Argo CD ignores. This action copies the user's roles on the
+# Argo CD project, and only those, into `groups`. allowed_to_fail: a failure
+# leaves the claim out, which grants nothing, rather than breaking sign-in to
+# every other application of the organization.
+resource "zitadel_action" "argocd_groups" {
+  for_each = local.argocd_claim_orgs
+
+  org_id          = each.value
+  name            = "argocdGroups"
+  timeout         = "5s"
+  allowed_to_fail = true
+  script          = <<-EOT
+    function argocdGroups(ctx, api) {
+      var grants = ctx.v1.user.grants;
+      if (!grants || !grants.grants) {
+        return;
+      }
+      var groups = [];
+      grants.grants.forEach(function (grant) {
+        if (grant.projectId !== '${zitadel_project.argocd.id}') {
+          return;
+        }
+        (grant.roles || []).forEach(function (role) {
+          groups.push(role);
+        });
+      });
+      if (groups.length > 0) {
+        api.v1.claims.setClaim('groups', groups);
+      }
+    }
+  EOT
+}
+
+# Userinfo, and with id_token_userinfo_assertion the ID token Argo CD reads.
+resource "zitadel_trigger_actions" "argocd_groups" {
+  for_each = local.argocd_claim_orgs
+
+  org_id       = each.value
+  flow_type    = "FLOW_TYPE_CUSTOMISE_TOKEN"
+  trigger_type = "TRIGGER_TYPE_PRE_USERINFO_CREATION"
+  action_ids   = [zitadel_action.argocd_groups[each.key].id]
+}
+
+resource "zitadel_application_oidc" "argocd" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.argocd.id
+  name       = "argocd"
+
+  app_type                  = "OIDC_APP_TYPE_WEB"
+  auth_method_type          = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types               = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types            = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris             = ["${local.argocd_url}/auth/callback"]
+  post_logout_redirect_uris = ["${local.argocd_url}/"]
+  access_token_type         = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                  = false
+  # Argo CD reads groups, e-mail and name from the ID token.
+  id_token_userinfo_assertion = true
+}
+
+# `argocd login --sso`: a public client with PKCE, since a CLI cannot keep a
+# secret. Argo CD accepts tokens for both client IDs (cliClientID).
+resource "zitadel_application_oidc" "argocd_cli" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.argocd.id
+  name       = "argocd-cli"
+
+  app_type                    = "OIDC_APP_TYPE_NATIVE"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_NONE"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["http://localhost:8085/auth/callback"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = false
+  id_token_userinfo_assertion = true
+}
+
+resource "kubernetes_secret_v1_data" "argocd_oidc" {
+  metadata {
+    name      = "argocd-oidc-zitadel"
+    namespace = "argocd"
+  }
+
+  # Referenced from argocd-cm oidc.config as $argocd-oidc-zitadel:<key>.
+  data = {
+    clientID     = zitadel_application_oidc.argocd.client_id
+    clientSecret = zitadel_application_oidc.argocd.client_secret
+    cliClientID  = zitadel_application_oidc.argocd_cli.client_id
+  }
+
+  field_manager = "zitadel-iac"
+  # Created by Argo CD with no data; see forgejo.tf.
+  force = true
+}

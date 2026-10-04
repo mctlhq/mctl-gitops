@@ -117,8 +117,9 @@ enrol again.
 
 - **Source.** One Vault secret per tenant, `secret/platform/zitadel/users/<tenant>`.
   Each field is one user: the field name is the user name, the value a JSON
-  object `{"email", "first_name", "last_name", "preferred_language"}`
-  (`preferred_language` is optional, default `en`). This repository is public,
+  object `{"email", "first_name", "last_name", "preferred_language", "argocd"}`
+  (`preferred_language` is optional, default `en`; `argocd` is optional,
+  default `false`, see "Argo CD sign-in" below). This repository is public,
   so the list is never in git. ExternalSecret `zitadel-iac-users` finds every
   secret under the path and folds them into `users.json` for the pod.
 - **Result.** One organization per tenant secret, named after the tenant, and
@@ -136,8 +137,11 @@ enrol again.
   the next sync) creates them. No PR is needed, because only data changes.
 - **Removing a user or a tenant** plans a `delete`, which the guard refuses
   unless that address (e.g. `zitadel_human_user.tenant["erpact/alice"]`) is in
-  `allowedDeletes`. Add it in a PR for that one change, and empty the list
-  again afterwards.
+  `allowedDeletes`. The user's Argo CD grant goes with it
+  (`zitadel_user_grant.argocd_tenant["erpact/alice"]`, see below), and a tenant
+  also takes its `argocd_tenant` role, project grant, `argocd_groups` action
+  and trigger. List every one of those addresses. Add them in a PR for that
+  one change, and empty the list again afterwards.
 - **SMTP.** `zitadel_email_provider_smtp.resend_2465`, `smtp.resend.com:2465`
   (implicit TLS). Not 465: Hetzner Cloud blocks outgoing 25 and 465. The
   password is a sending-only Resend key in Vault
@@ -149,6 +153,46 @@ enrol again.
   resource (a delete plus a create), with the old address in `allowedDeletes`.
   The cloud firewall (`infrastructure/k3s-preview/kube.tf`,
   `extra_firewall_rules`) must allow the port as well.
+
+### Argo CD sign-in (#1500)
+
+`iac/argocd.tf` declares Argo CD's ZITADEL clients and who gets which Argo CD
+group:
+
+- **Project `Argo CD`** in organization `MCTL`, separate from `MCTL platform`
+  because its checks apply to every application in it. With
+  `project_role_check` and `has_project_check`, a user who holds no role on it
+  gets no token: ZITADEL answers `Errors.User.GrantRequired` before any
+  redirect to Argo CD.
+- **Roles are Argo CD group names.** `admins` (`g, admins, role:admin` in
+  `platform-gitops/argocd/values.yaml`), held by the users in
+  `argocd_admin_users` (login names of `MCTL` users). One role per tenant
+  organization, named after the tenant (`argocd/rbac/tenants/<tenant>.csv`).
+  Each tenant organization is granted only its own role, and a tenant user
+  holds it **only if** their Vault entry carries `"argocd": true` (opt-in,
+  owner decision on #1500). Without the flag the user is refused, like any
+  user without a role. Granting or revoking it is a Vault-only change; a
+  revoke plans a delete of `zitadel_user_grant.argocd_tenant["<tenant>/<user>"]`,
+  which needs that address in `allowedDeletes`.
+- **`groups` claim.** Argo CD needs a flat list of strings. ZITADEL's own role
+  claim is a map, so the Actions v1 action `argocdGroups` copies the user's
+  roles on this project, and nothing else, into `groups` at
+  `PRE_USERINFO_CREATION` (with `id_token_userinfo_assertion`, the ID token
+  carries it). Actions v1 run in the *user's* organization, so the action and
+  its trigger exist in `MCTL` and in every tenant organization.
+  `project_role_assertion` must stay on: without it the grants are not loaded
+  into the action at all and the claim is never set. The action may fail
+  (`allowed_to_fail`), which leaves the claim out and so grants nothing.
+- **Clients.** `argocd` (web, client secret) and `argocd-cli` (native, PKCE,
+  `http://localhost:8085/auth/callback`, for `argocd login --sso`). Their IDs
+  and the secret go into `argocd/argocd-oidc-zitadel`, which `argocd-cm`
+  references as `$argocd-oidc-zitadel:<key>`.
+
+Verified on a local v4.19.2: an admin gets `groups: ["admins"]`, a flagged
+tenant user `["<tenant>"]`, an unflagged tenant user or a user of `MCTL` with
+no grant is refused, and
+Forgejo (another project) still signs in users without any Argo CD role, with
+no `groups` claim.
 
 ## Sync hooks instead of Helm hooks
 
