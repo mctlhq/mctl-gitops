@@ -94,7 +94,14 @@ argo-cd:
         - .metadata.annotations
         - .status
 
-      # Dex connector for Backstage OIDC
+      # Dex connector for Backstage OIDC. Dex itself no longer reads this
+      # key: it runs from templates/dex.yaml with its own copy of this config
+      # in templates/dex-config.yaml (#1500), and the two must change
+      # together until Argo CD's own login leaves Dex. argocd-server still
+      # reads it, to know that it signs in through Dex at <url>/api/dex, to
+      # label the login button, and to render it on every settings load:
+      # a connector without `config` there makes argocd-server exit
+      # ("malformed Dex configuration found", the #1545 outage).
       dex.config: |
         logger:
           level: info
@@ -141,6 +148,13 @@ argo-cd:
           secret: "$argo-workflows-sso-client-secret"
 
     params:
+      # Dex runs as Deployment `dex` (templates/dex.yaml) and serves plain
+      # HTTP inside the cluster. Argo CD's own Dex used self-signed TLS with
+      # strict verification off, so it authenticated nothing either.
+      # /api/dex is still proxied by argocd-server and TLS terminates at the
+      # Traefik Ingress.
+      server.dex.server: http://dex:5556
+      server.dex.server.plaintext: "true"
       # HTTP inside the cluster. TLS terminates at the Traefik Ingress
       # (server.ingress.tls + cert-manager letsencrypt-prod, secret argocd-tls,
       # hostname ops.mctl.ai). This is the standard Argo CD behind-ingress
@@ -284,32 +298,12 @@ argo-cd:
         # platform-gitops/argo-workflows/config/servicemonitor.yaml.
         interval: 30s
 
-  # Dex server probes — auto-restart when OIDC provider is temporarily unavailable
-  # Without these, dex stays "Running" but broken after failed initialization
+  # The subchart's Dex is off: Dex runs from templates/dex.yaml (resources
+  # and probes there), so that its issuer stays https://ops.mctl.ai/api/dex
+  # when Argo CD's own login leaves it (#1500). The subchart's
+  # argocd-dex-server objects stay behind, unpruned, until removed by hand.
   dex:
-    resources:
-      requests:
-        cpu: 50m
-        memory: 64Mi
-      limits:
-        cpu: 250m
-        memory: 192Mi
-    livenessProbe:
-      enabled: true
-      httpGet:
-        path: /healthz/live
-        port: 5558
-      initialDelaySeconds: 15
-      periodSeconds: 30
-      failureThreshold: 3
-    readinessProbe:
-      enabled: true
-      httpGet:
-        path: /healthz/ready
-        port: 5558
-      initialDelaySeconds: 10
-      periodSeconds: 10
-      failureThreshold: 3
+    enabled: false
 
   repoServer:
     # SOC F11: singleton repo-server. Same drain protection as server.pdb.
