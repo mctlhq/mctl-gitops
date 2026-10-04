@@ -20,10 +20,17 @@ Step 3 leaves one unfinished authorization request in the IdP, which expires
 on its own.
 
 The expected client id is read from the Cloudflare root, so a ZITADEL client
-recreated with a new id fails here instead of failing the next person.
+recreated with a new id fails here instead of failing the next person. In the
+cluster there is no checkout: the CronJob passes --client-id, and
+tests/test_access_login_probe_cronjob.py holds that value equal to the root's.
+
+With --pushgateway the outcome is also pushed as metrics (job
+access_login_probe by default) for the VMRules in
+infra-components/observability/vm-rules/access-login-probe.yaml.
 
 Usage:
-    access-login-probe.py [--repo-root DIR]
+    access-login-probe.py [--repo-root DIR | --client-id ID]
+                          [--pushgateway URL [--push-job NAME]]
     access-login-probe.py --selftest
 
 Exit status: 0 every target healthy, 1 a target is broken, 2 could not be
@@ -36,6 +43,7 @@ import html
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -154,8 +162,12 @@ def judge_authorize(status: int, location: str, body: str, t: Target) -> None:
     raise Unknown(f"IdP answered HTTP {status}")
 
 
-def probe(t: Target, repo_root: str) -> None:
-    client_id = expected_client_id(repo_root, t.client_id_source)
+def resolve_client_id(t: Target, repo_root: str, override: str | None) -> str:
+    return override if override else expected_client_id(repo_root, t.client_id_source)
+
+
+def probe(t: Target, repo_root: str, client_id: str | None = None) -> None:
+    client_id = resolve_client_id(t, repo_root, client_id)
 
     status, location, _ = fetch(t.app_url)
     login = urllib.parse.urlsplit(location)
@@ -196,6 +208,41 @@ def run(repo_root: str, targets=TARGETS, check=probe) -> int:
             print(f"UNKNOWN {t.name}: probe failed: {type(e).__name__}: {e}")
             unknown = True
     return 1 if broken else 2 if unknown else 0
+
+
+def render_metrics(status: int, now: float) -> str:
+    """The Pushgateway body for one run's overall exit status.
+
+    One gauge with the exit code rather than a success boolean, so "could not
+    determine" (2) has a value of its own and never reads as healthy. The
+    last-success timestamp is written only on success: the push is a POST,
+    which replaces just the metrics it names, so a broken or unknown run
+    leaves the previous success time in place for the staleness alert.
+    """
+    lines = [
+        "# HELP access_login_probe_status 0 healthy, 1 broken, 2 could not be determined.",
+        "# TYPE access_login_probe_status gauge",
+        f"access_login_probe_status {status}",
+        "# TYPE access_login_probe_last_run_timestamp_seconds gauge",
+        f"access_login_probe_last_run_timestamp_seconds {now:.0f}",
+    ]
+    if status == 0:
+        lines += [
+            "# TYPE access_login_probe_last_success_timestamp_seconds gauge",
+            f"access_login_probe_last_success_timestamp_seconds {now:.0f}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def push(url: str, job: str, body: str) -> None:
+    req = urllib.request.Request(
+        f"{url.rstrip('/')}/metrics/job/{urllib.parse.quote(job, safe='')}",
+        data=body.encode(), method="POST",
+        headers={"Content-Type": "text/plain; version=0.0.4"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        if resp.status // 100 != 2:
+            raise OSError(f"Pushgateway answered HTTP {resp.status}")
 
 
 def selftest() -> int:
@@ -250,6 +297,23 @@ def selftest() -> int:
                 raise kind("x")
         return check
 
+    def metrics_case(name, status, want_success):
+        body = render_metrics(status, 1700000000)
+        ok = (f"access_login_probe_status {status}\n" in body
+              and ("last_success" in body) == want_success
+              and "access_login_probe_last_run_timestamp_seconds 1700000000\n" in body)
+        cases.append(ok)
+        print(f"{'ok  ' if ok else 'FAIL'} {name}")
+
+    metrics_case("healthy pushes status 0 and a success time", 0, True)
+    metrics_case("broken pushes status 1 and no success time", 1, False)
+    metrics_case("unknown pushes status 2 and no success time", 2, False)
+    case("a --client-id is used without reading the repository",
+         lambda: None if resolve_client_id(Target("t", "", "", "", "missing.tf"), "/nonexistent", "42") == "42"
+         else (_ for _ in ()).throw(Broken("wrong")), None)
+    case("without --client-id an unreadable repository is unknown",
+         lambda: resolve_client_id(Target("t", "", "", "", "missing.tf"), "/nonexistent", None), Unknown)
+
     TARGETS_UNDER_TEST[:] = [Target(f"t{i}", "", "", "", "") for i in range(2)]
     for kinds, want in [((Unknown, Broken), 1), ((Broken, Unknown), 1),
                         ((None, Unknown), 2), ((None, KeyError), 2), ((None, None), 0)]:
@@ -266,9 +330,26 @@ TARGETS_UNDER_TEST: list[Target] = []
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--repo-root", default=os.getcwd())
+    ap.add_argument("--client-id", help="expected IdP client id, instead of reading --repo-root")
+    ap.add_argument("--pushgateway", help="push the outcome to this Pushgateway base URL")
+    ap.add_argument("--push-job", default="access_login_probe")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
-    return selftest() if a.selftest else run(a.repo_root)
+    if a.selftest:
+        return selftest()
+    if a.client_id is not None and not a.client_id.isdigit():
+        print(f"UNKNOWN --client-id {a.client_id!r} is not a numeric client id")
+        code = 2
+    else:
+        check = (lambda t, root: probe(t, root, a.client_id)) if a.client_id else probe
+        code = run(a.repo_root, check=check)
+    if a.pushgateway:
+        try:
+            push(a.pushgateway, a.push_job, render_metrics(code, time.time()))
+        except Exception as e:  # noqa: BLE001 -- staleness alerting covers a lost push
+            print(f"UNKNOWN could not push to {a.pushgateway}: {type(e).__name__}: {e}")
+            return 2 if code == 0 else code
+    return code
 
 
 if __name__ == "__main__":

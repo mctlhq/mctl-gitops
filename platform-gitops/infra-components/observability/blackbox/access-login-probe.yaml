@@ -1,0 +1,167 @@
+# Cloudflare Access login probe, in the cluster (#1329).
+#
+# scripts/access-login-probe.py follows a browser's first anonymous steps
+# through Access to the IdP and says whether a login can still start (see its
+# docstring). It ran hourly from GitHub Actions, but GitHub's scheduler is
+# best effort: in early October 2026 org-wide crons ran hours late and this
+# one had never fired on schedule at all, so the check existed and observed
+# nothing. Here it runs every 15 minutes and pushes its outcome to the
+# Pushgateway; vm-rules/access-login-probe.yaml turns that into alerts,
+# including one for the probe itself going quiet.
+#
+# Next to blackbox-exporter because it is the same kind of check: from inside
+# the cluster, out through Cloudflare to public hostnames and back. The same
+# limit applies (blackbox-exporter.yaml, "What this does NOT cover"): it
+# cannot see an outage of the cluster it runs in. auth.mctl.ai lives in this
+# cluster, so that outage is loud anyway.
+#
+# The script arrives as a ConfigMap (access-login-probe-script.yaml), which is
+# generated from scripts/access-login-probe.py and held identical to it by
+# tests/test_access_login_probe_cronjob.py. That test also holds --client-id
+# equal to zitadel_access_client_id in infrastructure/cloudflare/account,
+# because there is no checkout here to read it from. A Job reads the ConfigMap
+# when it starts, so a script change reaches the next run with no restart.
+#
+# Exit and metrics: 0 healthy, 1 broken, 2 could not be determined. The pushed
+# access_login_probe_status carries the same number, so "could not tell" is a
+# value of its own and never satisfies a healthy check. A Job whose push fails
+# leaves the series stale, and the staleness alert is for exactly that.
+#
+# No NetworkPolicy, for the reason blackbox-exporter.yaml gives: the monitoring
+# namespace has none, so a policy selecting this pod alone would add a way to
+# fail silently without hardening anything.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: access-login-probe
+  namespace: monitoring
+  labels:
+    app: access-login-probe
+spec:
+  schedule: "*/15 * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # One attempt. A retry would hide a flapping IdP behind a later green
+      # run; the alert rules already wait for repeated failures instead.
+      backoffLimit: 0
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: access-login-probe
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: probe
+              image: python:3.13.16-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+              command: ["python", "/probe/access-login-probe.py"]
+              args:
+                - --client-id
+                - "393612693447116501"
+                - --pushgateway
+                - http://prometheus-pushgateway.monitoring.svc:9091
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /probe
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: access-login-probe-script
+---
+# The red test: the same probe expecting a client id that does not exist, so
+# a healthy Access must read as broken (exit 1, status 1). Suspended, so it
+# never runs on its own; start one run with
+#   kubectl -n monitoring create job --from=cronjob/access-login-probe-red <name>
+# It pushes to its own job, access_login_probe_redtest, which no alert
+# selects, so a run proves the detector and the push path without paging
+# anyone or overwriting the real series. Delete the pushed group afterwards
+# (DELETE /metrics/job/access_login_probe_redtest) or leave it; nothing reads it.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: access-login-probe-red
+  namespace: monitoring
+  labels:
+    app: access-login-probe
+spec:
+  suspend: true
+  schedule: "0 0 1 1 *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: access-login-probe
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: probe
+              image: python:3.13.16-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+              command: ["python", "/probe/access-login-probe.py"]
+              args:
+                - --client-id
+                - "1"
+                - --pushgateway
+                - http://prometheus-pushgateway.monitoring.svc:9091
+                - --push-job
+                - access_login_probe_redtest
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /probe
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: access-login-probe-script
