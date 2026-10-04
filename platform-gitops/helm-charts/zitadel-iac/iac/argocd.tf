@@ -170,7 +170,9 @@ resource "zitadel_action" "argocd_groups" {
 # (erpact and MCTL, erpact.tf) also run their verified e-mail check; that
 # action returns at once for any other client. action_ids is a set, so the
 # order is not ours to choose, and need not be: an action that may not fail
-# aborts userinfo wherever it runs (runUserinfoActionFlows, v4.19.2).
+# aborts userinfo wherever it runs (runUserinfoActionFlows, v4.19.2). The
+# GitHub login claim (github-login.tf) runs in every organization; it returns
+# at once for any client not in github_login_client_ids.
 resource "zitadel_trigger_actions" "argocd_groups" {
   for_each = local.argocd_claim_orgs
 
@@ -180,6 +182,7 @@ resource "zitadel_trigger_actions" "argocd_groups" {
   action_ids = concat(
     contains(keys(local.erpact_frappe_user_orgs), each.key) ? [zitadel_action.erpact_verified_email[each.key].id] : [],
     [zitadel_action.argocd_groups[each.key].id],
+    [zitadel_action.github_login[each.key].id],
   )
 }
 

@@ -59,6 +59,12 @@ image:
 #   erpact-frappe redirect URIs, of erpact/erpact-oidc-zitadel and of the
 #   MCTL organization's userinfo trigger. The action's address move is a
 #   no-op.
+#   GitHub login claim (github-login.tf: the mctlGithubLogin action in each
+#   organization, and user metadata for users whose Vault entry declares
+#   github_login): no new action; creates, plus in-place updates of every
+#   organization's userinfo trigger; adding or changing a login later updates
+#   the metadata and the action in place. Dropping a user's github_login plans a
+#   delete of its metadata, which allowedDeletes refuses until listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"

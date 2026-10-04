@@ -62,19 +62,24 @@ run "verified_email_check_runs_in_both_organizations" {
     target = zitadel_action.argocd_groups
     values = { id = "groups" }
   }
+  override_resource {
+    target = zitadel_action.github_login
+    values = { id = "github" }
+  }
 
   assert {
     condition     = toset(keys(zitadel_action.erpact_verified_email)) == toset(["erpact", "MCTL"])
     error_message = "An MCTL admin's sign-in must run the check too; actions only run in the user's own organization."
   }
   # Declaring the action is not enough: it only runs if its organization's
-  # userinfo trigger lists it, next to argocdGroups.
+  # userinfo trigger lists it, next to argocdGroups and the GitHub login
+  # claim (github-login.tf).
   assert {
-    condition     = zitadel_trigger_actions.argocd_groups["MCTL"].action_ids == toset(["verify", "groups"])
+    condition     = zitadel_trigger_actions.argocd_groups["MCTL"].action_ids == toset(["verify", "groups", "github"])
     error_message = "The MCTL userinfo trigger must run erpactVerifiedEmail as well as argocdGroups."
   }
   assert {
-    condition     = zitadel_trigger_actions.argocd_groups["erpact"].action_ids == toset(["verify", "groups"])
+    condition     = zitadel_trigger_actions.argocd_groups["erpact"].action_ids == toset(["verify", "groups", "github"])
     error_message = "The erpact userinfo trigger must run erpactVerifiedEmail as well as argocdGroups."
   }
 }
