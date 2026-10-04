@@ -1,0 +1,28 @@
+{{- /*
+  The OpenTofu root lives as real files under iac/ so CI can fmt and validate
+  it; this ConfigMap carries it into the Job. The lock file is named
+  explicitly because the glob takes only *.tf, and it gets a key without the
+  leading dot; the Job copies it back to .terraform.lock.hcl.
+
+  It is a regular resource, not a hook, as in zitadel-iac (#1522): every
+  input of a run is in here (the root, the allowed plan actions and deletes,
+  and the image), so changing any of them makes the Application OutOfSync,
+  auto-sync runs, and the Job follows as PostSync.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-iac-inputs
+  labels:
+    app.kubernetes.io/name: grafana-iac
+  annotations:
+    grafana-iac/image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+data:
+  allowed-actions: {{ .Values.allowedActions | quote }}
+  allowed-deletes: {{ .Values.allowedDeletes | default "" | quote }}
+  {{- range $path, $_ := .Files.Glob "iac/*.tf" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+  terraform.lock.hcl: |
+    {{- .Files.Get "iac/.terraform.lock.hcl" | required "iac/.terraform.lock.hcl is missing" | nindent 4 }}

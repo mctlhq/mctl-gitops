@@ -1,0 +1,5 @@
+apiVersion: v2
+name: grafana-iac
+description: In-cluster OpenTofu Job that applies the declarative Grafana configuration (mctlhq/mctl-gitops#1601)
+type: application
+version: 0.1.0
