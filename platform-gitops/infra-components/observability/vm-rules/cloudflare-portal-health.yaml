@@ -1,0 +1,83 @@
+# Alerts on the MCP portal (mcp.mctl.ai) upstream servers.
+#
+# Fed by the cloudflare-portal-health CronJob (infra-components/observability/
+# blackbox/cloudflare-portal-health.yaml), every 15 minutes, pushing
+# job="cloudflare_portal_health" to the Pushgateway:
+#
+#   cloudflare_portal_health_read_ok                    1 read every server, 0 could not
+#   cloudflare_portal_server_ready{server}              1 ready with no error, 0 not
+#   cloudflare_portal_health_last_read_success_timestamp_seconds
+#
+# A failed read pushes only read_ok=0: it never sets a server ready and never
+# clears a not-ready one, so "could not observe" stays distinct from "all
+# ready". It also does not advance the success timestamp, so a check that
+# keeps failing to read trips CloudflarePortalHealthStale as well.
+#
+# Alertnames all start with CloudflarePortal, for one alertmanager route.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: cloudflare-portal-health
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: mcp-portal
+spec:
+  groups:
+    - name: cloudflare-portal-health
+      interval: 60s
+      rules:
+        - alert: CloudflarePortalServerNotReady
+          # Two runs in a row. Judged only on servers the latest successful
+          # read returned: the push replaces the whole metric, so a server
+          # removed from the portal disappears instead of staying not-ready.
+          expr: min by (job, server) (cloudflare_portal_server_ready{job="cloudflare_portal_health"}) == 0
+          for: 20m
+          labels:
+            severity: warning
+            component: mcp-portal
+          annotations:
+            summary: "MCP portal server {{ $labels.server }} is not ready"
+            description: >-
+              The Cloudflare MCP portal reports server {{ $labels.server }} as not
+              ready, or ready with an error, on two consecutive checks. Its tools
+              are served from a stale snapshot, or not at all. Usually the admin
+              credential expired (needs_reauth). Fix: Cloudflare Zero Trust ->
+              Access controls -> MCP Portals -> MCP servers -> {{ $labels.server }}
+              -> Re-authenticate server; for a DCR server, then dispatch
+              cloudflare-portal-health.yml with sync={{ $labels.server }}.
+
+        - alert: CloudflarePortalHealthReadFailing
+          expr: max by (job) (cloudflare_portal_health_read_ok{job="cloudflare_portal_health"}) == 0
+          for: 45m
+          labels:
+            severity: warning
+            component: mcp-portal
+          annotations:
+            summary: "The MCP portal health check cannot read the servers"
+            description: >-
+              For 45 minutes the check could not read the portal's servers: the
+              token, the Cloudflare API, or the answer's shape. This says nothing
+              about the servers themselves. The cloudflare-portal-health Job's log
+              in monitoring has the reason.
+
+        - alert: CloudflarePortalHealthStale
+          # No successful read in 2h, whatever the reason, including a Job that
+          # cannot start because its token Secret does not exist. The
+          # absent_over_time half covers a success timestamp that never existed.
+          expr: |
+            (time() - max by (job) (cloudflare_portal_health_last_read_success_timestamp_seconds{job="cloudflare_portal_health"}) > 7200)
+            or
+            absent_over_time(cloudflare_portal_health_last_read_success_timestamp_seconds{job="cloudflare_portal_health"}[2h])
+          for: 30m
+          labels:
+            severity: warning
+            component: mcp-portal
+          annotations:
+            summary: "No successful MCP portal health check for over 2 hours"
+            description: >-
+              Nothing has confirmed the state of the MCP portal's servers for more
+              than two hours. Check the cloudflare-portal-health CronJob in
+              monitoring (failed Jobs, CreateContainerConfigError for a missing
+              token Secret, pod logs) and the cloudflare-portal-health
+              ExternalSecret.
