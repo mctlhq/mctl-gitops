@@ -67,7 +67,7 @@ SLICE = argv_build_source()
 
 def run(issue_url="https://github.com/mctlhq/x/issues/1",
         work_item_id="", execution_id="", temporal_workflow_id="",
-        temporal_run_id="", execution_request_id=""):
+        temporal_run_id="", execution_request_id="", human_input_responses=""):
     """Run the extracted slice under /bin/sh with the six env vars set.
 
     Returns the CompletedProcess. The slice's only observable stdout is the
@@ -83,6 +83,7 @@ def run(issue_url="https://github.com/mctlhq/x/issues/1",
     env["WORKFLOW_TEMPORAL_WORKFLOW_ID"] = temporal_workflow_id
     env["WORKFLOW_TEMPORAL_RUN_ID"] = temporal_run_id
     env["WORKFLOW_EXECUTION_REQUEST_ID"] = execution_request_id
+    env["WORKFLOW_HUMAN_INPUT_RESPONSES"] = human_input_responses
     script = "set -e\n" + SLICE
     return subprocess.run(
         ["sh", "-c", script],
@@ -110,7 +111,7 @@ check("omit-both (unset) reproduces today's exact argv",
       f"rc={proc.returncode} stdout={proc.stdout!r} stderr={proc.stderr!r}")
 
 proc = run(work_item_id="", execution_id="", temporal_workflow_id="",
-           temporal_run_id="", execution_request_id="")
+           temporal_run_id="", execution_request_id="", human_input_responses="")
 check("omit-all (explicit empty string) reproduces today's exact argv",
       proc.returncode == 0 and proc.stdout == BASE_ARGV,
       f"rc={proc.returncode} stdout={proc.stdout!r} stderr={proc.stderr!r}")
@@ -205,6 +206,41 @@ with tempfile.TemporaryDirectory() as d:
           and f"--temporal-workflow-id {hostile}" in proc.stdout
           and f"--temporal-run-id {hostile}" in proc.stdout
           and f"--execution-request-id {hostile}" in proc.stdout,
+          f"stdout={proc.stdout!r} stderr={proc.stderr!r}")
+
+# T9. Human-input continuation (mctl-agents#473). A realistic answers array
+# is JSON with double quotes, braces and spaces: it must reach the
+# investigator as ONE argv token, appended last, and only when non-empty.
+HIR = ('[{"request_id": "hir-0123456789abcdef", "request_hash": "sha256:'
+       + "a" * 64 + '", "value": "library B, not $(id)", '
+       '"received_at": "2026-10-04T10:00:00Z"}]')
+proc = run(human_input_responses=HIR)
+want = (f"{ARROW} python -m orchestrator.run_issue_investigator "
+        f"--issue-url https://github.com/mctlhq/x/issues/1 "
+        f"--human-input-responses {HIR}\n")
+check("human_input_responses alone appends only its own flag, verbatim",
+      proc.returncode == 0 and proc.stdout == want,
+      f"stdout={proc.stdout!r} stderr={proc.stderr!r}")
+
+proc = run(work_item_id="wi-abc", execution_id="we-123",
+           temporal_workflow_id="dev-loop-xr_1", temporal_run_id="run-9",
+           execution_request_id="xr_1", human_input_responses=HIR)
+check("human_input_responses is appended after every other flag",
+      proc.returncode == 0
+      and proc.stdout.endswith(f"--execution-request-id xr_1 --human-input-responses {HIR}\n"),
+      f"stdout={proc.stdout!r}")
+
+# T10. Injection through the answers value: an answer is human-written text
+# relayed through the DevLoop, so it is treated like any hostile input.
+with tempfile.TemporaryDirectory() as d:
+    sentinel = pathlib.Path(d) / "pwned"
+    hostile = f'[{{"value": "x"}}] ; touch {sentinel} ; $(touch {sentinel}) `touch {sentinel}`'
+    proc = run(human_input_responses=hostile)
+    check("an injecting human_input_responses does not execute",
+          not sentinel.exists(), f"sentinel created: {sentinel}")
+    check("a hostile human_input_responses survives as one argv token",
+          proc.returncode == 0
+          and proc.stdout.endswith(f"--human-input-responses {hostile}\n"),
           f"stdout={proc.stdout!r} stderr={proc.stderr!r}")
 
 if failures:
