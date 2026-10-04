@@ -72,8 +72,8 @@ spec:
             # Backstage-hosted OIDC forward-auth used across the platform
             # (see services/<tenant>/openclaw/values.yaml for the same
             # provider). Tenant=admins because Temporal UI is platform-level.
-            address: "https://app.mctl.ai/api/oidc-provider/forward-auth?tenant=admins&service=temporal-web"
-            trustForwardHeader: true
+            address: "http://backstage.backstage.svc.cluster.local:7007/api/oidc-provider/forward-auth?tenant=admins&service=temporal-web"
+            trustForwardHeader: false
 
   destination:
     server: {{ .Values.spec.destination.server }}

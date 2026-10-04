@@ -1301,8 +1301,8 @@ ingress:
   enabled: true
   forwardAuth:
     enabled: true
-    address: "https://app.mctl.ai/api/oidc-provider/forward-auth?tenant=__TEAM_NAME__&service=__SERVICE_NAME__"
-    trustForwardHeader: true
+    address: "http://backstage.backstage.svc.cluster.local:7007/api/oidc-provider/forward-auth?tenant=__TEAM_NAME__&service=__SERVICE_NAME__"
+    trustForwardHeader: false
     authResponseHeaders:
       - X-Forwarded-User
       - X-Mctl-Team-Role

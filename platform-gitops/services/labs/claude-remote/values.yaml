@@ -743,8 +743,8 @@ ingress:
         - claude-remote.mctl.ai
   forwardAuth:
     enabled: true
-    address: "https://app.mctl.ai/api/oidc-provider/forward-auth?tenant=labs&service=claude-remote"
-    trustForwardHeader: true
+    address: "http://backstage.backstage.svc.cluster.local:7007/api/oidc-provider/forward-auth?tenant=labs&service=claude-remote"
+    trustForwardHeader: false
 backstage:
   kubernetesId: claude-remote
 # pr-steward overlay ConfigMaps
