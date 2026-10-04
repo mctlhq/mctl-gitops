@@ -34,21 +34,33 @@
 # The three pre-existing sibling applications (tg, seerrsense, api), created
 # by hand on 2026-09-10, are adopted import-only in portal-mcp-apps-adopted.tf
 # under mctlhq/mctl-gitops#1416, at their live values.
-# The "Phase 0 pilot users" policy of each application below names two
-# personal addresses. This repository is public, so those policies are
-# referenced by id, exactly as the adopted siblings reference theirs
-# (portal-mcp-apps-adopted.tf), and their include list lives only in
-# Cloudflare. They were written inline until 2026-10-04; the addresses remain
-# in git history, which is not rewritten. Referencing by id changes nothing
-# live: the plan for this change is empty. What it gives up is drift on the
-# include list itself, the same trade the adopted applications made.
-# Ids read on 2026-10-04 from GET /accounts/{account_id}/access/apps; they
-# identify objects in this account and are not secrets.
-locals {
-  pilot_policy_ids = {
-    projects = "3ebfad92-25da-467b-8acd-deb2523c0fd8"
-    alice    = "232e04f8-b124-42b0-bf1a-0f7001eebc2e"
-    coolify  = "33e844e9-11d9-496a-a015-0870ba0e4045"
+# The two addresses the "Phase 0 pilot users" policies below admit are
+# personal, and this repository is public, so they are not written here.
+# They arrive at plan and apply time from the repository secret
+# CF_PORTAL_PILOT_EMAILS (a JSON list, in the order the policies have always
+# listed them), passed as TF_VAR_portal_pilot_emails by cloudflare-plan.yml,
+# cloudflare-apply.yml and cloudflare-drift.yml for this root only.
+#
+# Fail closed: there is no default. An unset or unreadable secret reaches
+# OpenTofu as an empty string, which is not a list, and the plan fails
+# instead of planning an empty include that would lock everyone out (or,
+# worse, be read as "no restriction"). An empty or malformed list fails the
+# validation below. Sensitive, so plans print "(sensitive value)", never an
+# address, in a public repository's Actions logs.
+#
+# The addresses were written inline until 2026-10-04 and remain in git
+# history, which is not rewritten.
+variable "portal_pilot_emails" {
+  description = "Addresses admitted by the Phase 0 pilot policies of the portal member applications."
+  type        = list(string)
+  sensitive   = true
+  nullable    = false
+
+  validation {
+    condition = length(var.portal_pilot_emails) > 0 && alltrue([
+      for e in var.portal_pilot_emails : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", e))
+    ])
+    error_message = "portal_pilot_emails must be a non-empty list of well-formed e-mail addresses (CF_PORTAL_PILOT_EMAILS)."
   }
 }
 
@@ -85,8 +97,13 @@ resource "cloudflare_zero_trust_access_application" "portal_member_projects" {
   # be a wider grant than it looks, sitting behind a narrower one.
   policies = [
     {
-      id         = local.pilot_policy_ids.projects
+      name       = "Phase 0 pilot users"
+      decision   = "allow"
       precedence = 1
+
+      # The addresses come from var.portal_pilot_emails (see the top of this
+      # file); this repository is public.
+      include = [for e in var.portal_pilot_emails : { email = { email = e } }]
     },
     {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
@@ -120,8 +137,13 @@ resource "cloudflare_zero_trust_access_application" "portal_member_alice" {
   # still the owner's private aggregate view, not a customer-facing door.
   policies = [
     {
-      id         = local.pilot_policy_ids.alice
+      name       = "Phase 0 pilot users"
+      decision   = "allow"
       precedence = 1
+
+      # The addresses come from var.portal_pilot_emails (see the top of this
+      # file); this repository is public.
+      include = [for e in var.portal_pilot_emails : { email = { email = e } }]
     },
     {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
@@ -155,8 +177,13 @@ resource "cloudflare_zero_trust_access_application" "portal_member_coolify" {
   # the owner's.
   policies = [
     {
-      id         = local.pilot_policy_ids.coolify
+      name       = "Phase 0 pilot users"
+      decision   = "allow"
       precedence = 1
+
+      # The addresses come from var.portal_pilot_emails (see the top of this
+      # file); this repository is public.
+      include = [for e in var.portal_pilot_emails : { email = { email = e } }]
     },
     {
       id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
