@@ -33,14 +33,12 @@ argo-cd:
       # this aligns the self-managed live release with that.
       admin.enabled: false
       timeout.reconciliation: 180s
-      # SOC F4 accepted residual: local password login stays possible for
-      # this account. It is inert in practice — policy.default is "" and no
-      # "g, developers, ..." binding exists in policy.csv, so a login can do
-      # nothing. Kept only in case its apiKey is used somewhere out of band;
-      # delete the account once that is ruled out. (Argo CD only recognizes
-      # the apiKey and login capabilities — the previously listed
-      # "sync, application, admin" tokens were silently ignored.)
-      accounts.developers: apiKey, login
+      # No local account has the `login` capability, so Argo CD reports
+      # userLoginsDisabled and the UI shows no username/password form:
+      # ZITADEL is the only interactive sign-in. Do not add `login` to an
+      # account. (The `developers` account, the last one with it, was removed
+      # on 2026-10-04 once it was confirmed unused: no tokens in argocd-secret,
+      # no password, no RBAC binding.)
       accounts.mctl-api: apiKey
       # Read-only account for .github/workflows/argocd-freshness.yml, which
       # checks after every push that the apps tracking main resolved it
