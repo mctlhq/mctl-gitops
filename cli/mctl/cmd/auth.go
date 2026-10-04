@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -39,8 +40,12 @@ func zitadelStatus() error {
 	// The token first: it refreshes an expired one, so the expiry shown
 	// below is that of the token actually sent.
 	token, err := auth.ZitadelToken()
-	if err != nil {
+	if errors.Is(err, auth.ErrNoZitadelLogin) {
 		fmt.Println("❌ Not authenticated with ZITADEL")
+		return err
+	}
+	if err != nil {
+		fmt.Println("❌ Could not obtain a ZITADEL access token")
 		return err
 	}
 	sub, username, expiry, err := auth.ZitadelIdentity()

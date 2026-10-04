@@ -48,6 +48,9 @@ const (
 // ID token names the user in `mctl auth status`.
 var zitadelScopes = []string{oidc.ScopeOpenID, "profile", "email", oidc.ScopeOfflineAccess}
 
+// ErrNoZitadelLogin: no ZITADEL login is stored.
+var ErrNoZitadelLogin = errors.New("not logged in to ZITADEL: run 'mctl auth login --zitadel'")
+
 // UseZitadel reports whether the ZITADEL token was chosen for API calls.
 func UseZitadel() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("MCTL_AUTH")), "zitadel")
@@ -102,7 +105,7 @@ func readZitadelToken() (*storedZitadelToken, error) {
 	}
 	b, err := os.ReadFile(p)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, errors.New("not logged in to ZITADEL: run 'mctl auth login --zitadel'")
+		return nil, ErrNoZitadelLogin
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", p, err)
@@ -240,7 +243,9 @@ func refreshZitadelToken(s zitadelSettings) (string, error) {
 }
 
 const (
-	zitadelLockWait  = 15 * time.Second
+	// Longer than a refresh may take (its context allows 30 s), so a waiter
+	// never gives up on a healthy holder; shorter than zitadelLockStale.
+	zitadelLockWait  = 45 * time.Second
 	zitadelLockStale = time.Minute
 )
 
@@ -262,12 +267,17 @@ func lockZitadelToken() (func(), error) {
 		if !errors.Is(err, os.ErrExist) {
 			return nil, fmt.Errorf("locking %s: %w", p, err)
 		}
-		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > zitadelLockStale {
-			os.Remove(lock) //nolint:errcheck
-			continue
-		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("another mctl process holds %s; remove it if no mctl is running", lock)
+		}
+		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > zitadelLockStale {
+			// Take a stale lock over by renaming it away: a rename succeeds
+			// for one process only, where remove-then-create could hand the
+			// lock to two. The loser simply retries.
+			stale := fmt.Sprintf("%s.stale.%d", lock, os.Getpid())
+			if os.Rename(lock, stale) == nil {
+				os.Remove(stale) //nolint:errcheck
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -407,6 +417,11 @@ type callbackOutcome struct {
 // callbackResult validates one loopback callback: the state must be the one
 // this login sent (constant-time), and an error from ZITADEL wins over a code.
 func callbackResult(gotState, wantState, code, errCode, errDesc string) callbackOutcome {
+	// An error without any state cannot be a forged code, and dropping it
+	// would leave the user waiting for the timeout; surface it.
+	if gotState == "" && errCode != "" {
+		return callbackOutcome{err: fmt.Errorf("ZITADEL refused the sign-in: %s", errCode)}
+	}
 	if subtle.ConstantTimeCompare([]byte(gotState), []byte(wantState)) != 1 {
 		return callbackOutcome{err: errors.New("state does not match this sign-in"), foreign: true}
 	}

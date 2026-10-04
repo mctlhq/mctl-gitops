@@ -233,6 +233,8 @@ func loginWith(t *testing.T, before func(string)) error {
 	select {
 	case <-b.done:
 	case <-time.After(5 * time.Second):
+		// Do not let the browser goroutine report into a finished test.
+		t.Cleanup(func() { <-b.done })
 	}
 	return err
 }
@@ -374,6 +376,30 @@ func TestZitadelLoginIgnoresForeignCallback(t *testing.T) {
 	}
 }
 
+func TestStaleLockIsTakenOver(t *testing.T) {
+	f := newFakeZitadel(t)
+	tokenFile := useFake(t, f)
+	lock := tokenFile + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * zitadelLockStale)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockZitadelToken()
+	if err != nil {
+		t.Fatalf("stale lock not taken over: %v", err)
+	}
+	unlock()
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Errorf("lock left behind after unlock: %v", err)
+	}
+}
+
 func TestZitadelLogoutRemovesLoginAndIsIdempotent(t *testing.T) {
 	f := newFakeZitadel(t)
 	tokenFile := useFake(t, f)
@@ -419,6 +445,7 @@ func TestCallbackResult(t *testing.T) {
 		{name: "missing state", code: "c", wantErr: "state", wantForeign: true},
 		{name: "provider error", state: "s", errCode: "access_denied", errMsg: "no", wantErr: "access_denied"},
 		{name: "no code", state: "s", wantErr: "no authorization code"},
+		{name: "provider error without state", errCode: "access_denied", wantErr: "access_denied"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
