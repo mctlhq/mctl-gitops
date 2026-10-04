@@ -39,6 +39,18 @@
   `workflow.metric_meter()`, it should also carry the workflow-context labels
   (`namespace`, `task_queue`, `workflow_type`).
 
+## Owner corrections (2026-10-04, before approval)
+
+**C1. Live metric names, read off `admins-mctl-agents-worker` (mctl-agents 1.67.0, includes #561) at 2026-10-04 ~12:55 UTC:**
+```
+# TYPE temporal_workflow_completed counter
+temporal_workflow_completed{namespace="mctl-agents",service_name="temporal-core-sdk",task_queue="mctl-dev-loop",workflow_type="IssuePollWorkflow"} 1
+temporal_worker_task_slots_available{namespace="mctl-agents",service_name="temporal-core-sdk",task_queue="mctl-dev-loop",worker_type="WorkflowWorker"} 100
+```
+So: no `_total` suffix, `temporal_` prefix, and labels `namespace, service_name, task_queue, workflow_type`. `temporal_workflow_failed` follows the same family, but it has no series yet because no workflow has failed since boot. The undelivered counter only appears on its first increment, so its prefix cannot be read yet. **Rule 1 MUST match the name with `{__name__=~"(temporal_)?scheduled_dispatch_alert_undelivered"}`** so it works whether or not the Core exporter prefixes custom metrics. Tests cover both spellings. Task 1 (port-forward) is DONE by the operator: the implementer runs without cluster access and must use these names, not guess.
+
+**C2. The rule-3 worker gate MUST aggregate across series.** Worker pods are replaced on every deploy, often several times a day, and each pod is a new series (new `instance`/`pod` labels). A per-series `count_over_time(...[8d]) > 0.9 × samples` is then almost never true, so the silent-miss alert would be dead in practice. Use `sum(count_over_time(temporal_worker_task_slots_available{task_queue="mctl-dev-loop",worker_type="WorkflowWorker"}[8d]))` against the threshold. Overlap during a rollout only raises the sum, which is harmless. Add a test, T10: the gate series is split across three pods (consecutive, different `instance`) covering the whole 8d, with no completion. The rule FIRES. With a per-series gate this test fails. In the same spirit, arms A and B already `sum(...)` across series. Keep that.
+
 ## Proposed solution
 
 ### Step 0: confirm names on a live worker (gating)

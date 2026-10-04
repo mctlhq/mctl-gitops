@@ -1,6 +1,6 @@
 # Tasks: issue-1593-alert-on-scheduled-dispatch-failures-and
 
-- [ ] 1. Read the live metric names. Port-forward `admins-mctl-agents-worker:8080`
+- [x] 1. **[DONE by the operator, see design.md C1. Use those names; rule 1 matches `{__name__=~"(temporal_)?scheduled_dispatch_alert_undelivered"}`.]** Read the live metric names. Port-forward `admins-mctl-agents-worker:8080`
   and grep `/metrics` for `workflow_completed`, `workflow_failed` and
   `scheduled_dispatch_alert_undelivered`. Confirm the prefix, any `_total`
   suffix, and the label set (`workflow_type`, `task_queue`, `namespace`, `repo`,
@@ -45,6 +45,8 @@
   rule is quiet.
 - [ ] T8. Missed (restart): the old series stops, and a new series with a
   different `instance` appears at 1 within the window, so the rule is quiet.
+- [ ] T10. **[Owner correction C2]** Missed: the worker gate series is split across three consecutive pods (different `instance`) that together cover the 8d, with no completion. The rule FIRES, which proves the gate is summed across series and not per series.
+- [ ] T11. **[Owner correction C1]** Undelivered fires for both `scheduled_dispatch_alert_undelivered` and `temporal_scheduled_dispatch_alert_undelivered`.
 - [ ] T9. Missed (unknown): no worker gate series and no completed series (a
   scrape gap or worker down) stays quiet.
 
