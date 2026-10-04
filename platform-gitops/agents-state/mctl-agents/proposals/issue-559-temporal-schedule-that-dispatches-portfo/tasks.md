@@ -14,12 +14,12 @@
   - Find the open alert issue with `GET /repos/{repo}/issues?state=open&labels=scheduled-dispatch-failed&per_page=100`, matching the exact title `Scheduled dispatch failed: <workflow_file>`. A non-2xx response, a transport error or a malformed body raises `AlertIssueSearchUnreadable`, which is **never** read as "no issue", because that would open duplicate alert issues.
   - If a matching issue is found, `POST .../issues/{n}/comments`. If none is found, `POST /repos/{repo}/issues` with the title, the label, and a body naming the Temporal workflow id, error type, message and the fire's UTC time. Any non-2xx raises.
   - Returns the issue number and URL. 429, 5xx and transport errors are retryable. Other 4xx are non-retryable.
-- [ ] 3. Add `orchestrator/temporal/workflows/scheduled_dispatch.py` with `ScheduledDispatchInput` and `ScheduledDispatchWorkflow` (depends on 2). — DoD:
+- [ ] 3. Add `orchestrator/temporal/workflows/scheduled_dispatch.py` with `ScheduledDispatchInput` and `ScheduledDispatchWorkflow` (depends on 2, 2a). — DoD:
   - The workflow fixes `not_before = workflow.now()` once and calls the activity with `RetryPolicy(maximum_attempts=3, non_retryable_error_types=[...])`, `start_to_close_timeout` of 8 min and `heartbeat_timeout` of 1 min.
   - It does not swallow activity errors, so a failure fails the workflow execution.
   - The activity is imported under `workflow.unsafe.imports_passed_through()`.
   - **[Owner correction 2026-10-04, P2 — part of this task, not optional]** On a terminal failure the workflow runs a second activity, `report_dispatch_failure`, before re-raising: it opens ONE issue in the target repo titled `Scheduled dispatch failed: <workflow_file>` with label `scheduled-dispatch-failed` (creating the label if missing), or comments on that issue if one is already open, with the Temporal workflow id, error type and message. Then the original error is re-raised so the execution is still Failed. Reason: nothing alerts on failed Temporal executions, so a Failed workflow by itself is silent. The reporting activity has its own bounded retry; if it still fails, log it and re-raise the ORIGINAL error, never the reporting error. Register it on the control queue next to `dispatch_and_observe` (T4 covers both).
-- [ ] 4. Register the new pieces in `orchestrator/temporal/worker.py` (depends on 1-3). — DoD:
+- [ ] 4. Register the new pieces in `orchestrator/temporal/worker.py` (depends on 1, 2, 2a, 3). — DoD:
   - `setup_schedules` loops over `WEEKLY_DISPATCH_TARGETS` and calls `_ensure_schedule` with `ScheduleActionStartWorkflow(ScheduledDispatchWorkflow.run, ...)`, `id=target.workflow_id`, `task_queue=TASK_QUEUE`, `ScheduleSpec(intervals=[target.interval()])` and an explicit `SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP)`.
   - A comment explains why :01 clears every Temporal and Argo minute.
   - `dispatch_and_observe` **and `report_dispatch_failure`** are added to `short_activities`, and `ScheduledDispatchWorkflow` to `workflows`.
@@ -50,7 +50,7 @@ Each test must fail when the guard it covers is removed.
   - An activity raising `DispatchFailed` is retried and stops at 3 attempts.
   - `not_before` is identical across attempts.
   - **[Owner correction]** A terminal `RunNotObserved` (and, separately, exhausted `DispatchFailed` retries) calls `report_dispatch_failure` exactly once with the error type, and the workflow is still Failed with the ORIGINAL error. A successful dispatch never calls it. A `report_dispatch_failure` that itself fails does not replace the original error. Each assertion must fail when the reporting call is removed.
-- [ ] T7. **[Owner correction]** `report_dispatch_failure` activity tests (MockTransport): no open issue → POST creates one with the title and label; an open issue exists → a comment is posted and no new issue is created; an unreadable issue search is an error, never read as "no issue" (which would open duplicates).
+- [ ] T7. **[Owner correction]** `report_dispatch_failure` activity tests (MockTransport): no open issue → POST creates one with the title and label; an open issue exists → a comment is posted and no new issue is created; an unreadable issue search (non-2xx, transport error, malformed body) raises `AlertIssueSearchUnreadable` and makes no POST, so it is never read as "no issue", which would open duplicates; an empty token raises before any request; label 404 → label POST then issue POST, label 200 → no label POST, label 500 → raises with no issue POST; status classification for each of the label, search, create and comment calls: 429/5xx/transport are retryable, other 4xx (e.g. 422) are non-retryable. Each case must fail when its guard is removed.
 
 ## Rollback
 
