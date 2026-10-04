@@ -78,19 +78,19 @@ resource "cloudflare_zero_trust_access_application" "zitadel_test" {
   app_launcher_visible      = false
   session_duration          = "1h"
 
+  # Anyone ZITADEL lets through. ZITADEL is the gate here: the `Cloudflare
+  # Access` project refuses every user without its `access` role
+  # (project_role_check), and that role is held by exactly the Argo CD
+  # admins (zitadel-iac iac/cloudflare-access.tf). Matching an e-mail as well
+  # would repeat that list in this public repository, and with the address
+  # of a user whose ZITADEL profile can change outside Git.
   policies = [
     {
-      name       = "zitadel-test-admin"
+      name       = "zitadel-test-any-zitadel-login"
       decision   = "allow"
       precedence = 1
 
-      # The e-mail of mctl-admin, the one user granted the `Cloudflare
-      # Access` project in ZITADEL (bootstrap/templates/core-infra/zitadel.yaml,
-      # FirstInstance). Both gates must agree for the login to pass.
       include = [
-        { email = { email = "admin@mctl.ai" } },
-      ]
-      require = [
         { login_method = { id = cloudflare_zero_trust_access_identity_provider.zitadel.id } },
       ]
     },
