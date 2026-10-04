@@ -18,12 +18,12 @@
 # The identity provider Access offers on the login page, named outright.
 #
 # A data source would have been nicer to read, and was tried: the plan identity
-# for this root is read-only and deliberately does not carry
-# `Access: Organizations, Identity Providers, and Groups Read`, so the lookup
+# for this root did not then carry an identity-provider read, so the lookup
 # came back with an empty list rather than an error and the plan proposed an
 # application with no providers at all. A wrong answer that looks like an answer
-# is worse than a pasted UUID, and widening a read-only plan token to see the
-# account's identity configuration is the wrong way to avoid one.
+# is worse than a pasted UUID. The plan identity has carried
+# `Access: Identity Providers Read` since 2026-10-04 (#1500), and
+# access-idps-read.tf fails the plan if these two ids are not in its listing.
 #
 # The value is not a secret; it identifies an object in this account. Confirm
 # with `GET /accounts/{account_id}/access/identity_providers`.

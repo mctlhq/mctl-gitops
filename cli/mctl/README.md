@@ -28,6 +28,30 @@ make build
 ./mctl --help
 ```
 
+## Signing in with ZITADEL (opt-in)
+
+By default mctl sends your GitHub token (`MCTL_TOKEN`, `GITHUB_TOKEN`, or
+`gh auth token`). To use your MCTL account at auth.mctl.ai instead:
+
+```bash
+mctl auth login --zitadel              # browser sign-in: authorization code + PKCE on a loopback port
+MCTL_AUTH=zitadel mctl auth status     # shows the login and asks the API who you are
+mctl auth logout --zitadel             # removes the stored login
+```
+
+`MCTL_AUTH=zitadel` makes every command send the ZITADEL token. Set it per
+command for now rather than exporting it: the login carries no tenant or
+admin access yet (see below), so `deploy`, `status`, `logs` and the rest
+need the GitHub token.
+
+The token is stored in `<user config dir>/mctl/zitadel-token.json` (mode
+600 on Unix; override with `MCTL_ZITADEL_TOKEN_FILE`) and refreshed automatically.
+`MCTL_TOKEN` still wins when set. `MCTL_ZITADEL_ISSUER` and
+`MCTL_ZITADEL_CLIENT_ID` override the defaults (`https://auth.mctl.ai`, the
+`mctl-cli` application of project "MCTL API"). A ZITADEL login carries no
+tenant or admin access in mctl-api yet (mctlhq/mctl-api#435, #377), so for
+now it serves identity checks such as `mctl auth status`.
+
 ## Usage
 
 ### Deploy a service

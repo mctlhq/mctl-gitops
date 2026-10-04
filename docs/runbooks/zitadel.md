@@ -269,6 +269,28 @@ on ZITADEL tokens:
   from `bootstrap/templates/mctl-platform/mctl-api.yaml`. The Secret can
   stay as it is.
 
+### Cloudflare Access sign-in (#1500 step 3)
+
+`iac/cloudflare-access.tf` declares the client Cloudflare Access uses when
+ZITADEL is offered as an Access identity provider:
+
+- **Project `Cloudflare Access`** in organization `MCTL`, with
+  `project_role_check` and `has_project_check`. Role `access` is held by the
+  users in `cloudflare_access_users`, which is `argocd_admin_users` (the
+  holders of the Argo CD `admins` group); anyone else is refused with `Errors.User.GrantRequired` before Access sees them.
+  Access policies still decide per application on top of that.
+- **Client `cloudflare-access`**: web, `OIDC_AUTH_METHOD_TYPE_NONE`, PKCE
+  (S256), redirect `https://mbank.cloudflareaccess.com/cdn-cgi/access/callback`.
+  No secret exists, so none has to reach `infrastructure/cloudflare/account`.
+  Verified on a local v4.19.2: a token request without a valid
+  `code_verifier` is refused, and any client secret sent is ignored.
+- **Client id.** The only value Cloudflare needs. The Job writes it into
+  `zitadel/cloudflare-access-oidc` (key `clientID`); copy it into the
+  `zitadel_access_client_id` variable of the Cloudflare account root. It is
+  not a secret. The project and the application carry `prevent_destroy`,
+  because a recreate changes the id and breaks the Access login until the
+  copy is updated.
+
 ## Sync hooks instead of Helm hooks
 
 The chart ships `zitadel-init` and `zitadel-setup` as Helm pre-install hooks.
