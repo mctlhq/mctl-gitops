@@ -158,6 +158,14 @@ data:
       email     = each.value.email
       full_name = try(each.value.full_name, null)
       password  = local.passwords[each.key]
+      # Binds the account to one identity of an authentication source:
+      # Forgejo's OAuth callback looks a user up by (source, login_name = the
+      # provider's `sub`) before its linked-accounts table, so this re-points
+      # an existing account at a new identity and keeps its id, repositories
+      # and memberships. Unset means a local account, as before (the
+      # provider's own default); the provider sends both on every update.
+      login_name = try(each.value.oauth.subject, null)
+      source_id  = try(each.value.oauth.source_id, null)
       # Machine accounts ("bot": true) authenticate with this password from a
       # Secret; a forced change would lock them out of git and the API.
       must_change_password      = !try(each.value.bot, false)
@@ -170,6 +178,13 @@ data:
         # The user changes the initial password on first login; Terraform must
         # not reset it on every run.
         ignore_changes = [password, must_change_password]
+
+        # Forgejo refuses one without the other (422), and a source id of 0
+        # would silently make the account local again.
+        precondition {
+          condition     = try(each.value.oauth, null) == null || try(length(each.value.oauth.subject) > 0 && each.value.oauth.source_id > 0, false)
+          error_message = "User ${each.key}: oauth needs a non-empty subject and a positive source_id."
+        }
       }
     }
 
