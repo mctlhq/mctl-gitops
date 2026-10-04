@@ -270,9 +270,10 @@ rehearsed: plan it on a local Vault first.
 Once tenants could list `teams/` (above), a legacy `platform` folder showed
 up there next to the tenant folders. It held two keys, last written on
 2026-03-21 and referenced nowhere, because the `mctl-agent` consumers read
-`secret/platform/mctl-agent/*`. Whether anything still read them could not be
-checked, since Vault has no audit device. The owner approved moving the folder
-out of `teams/`.
+`secret/platform/mctl-agent/*`. The audit log shows no reads between the
+audit device going live (its first entry is at 20:00:04Z that day) and the
+move; nothing older is observable. The owner approved moving the folder out
+of `teams/`.
 
 | From | To | Versions |
 | --- | --- | --- |
@@ -290,6 +291,12 @@ out of `teams/`.
   sides, without printing any value. The old paths were then removed with
   `vault kv metadata delete`, because a plain `kv delete` leaves earlier
   versions readable.
+- **Audit log.** The Loki query
+  `{namespace="vault",container="vault"} |= "teams/platform"` from 20:00Z to
+  the move returned 18 requests, all from the admin token that did the
+  inventory and the move, starting at 21:29:52Z. Throughout that window the
+  pipeline delivered 200 to 380 audit requests every 10 minutes, so an empty
+  result means no reads, not a missing log.
 - **After.**
   - `secret/metadata/teams/` lists only tenant folders.
   - Every old version returns 404.
