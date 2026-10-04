@@ -45,6 +45,13 @@ resources:
     # fix that removes the amplification is tracked in mctl-telegram.
     memory: 768Mi
 env:
+  # Per-file download cap for get_media (default 20 MiB). Lowered to 12 MB
+  # (2026-10-04): Claude via the MCP portal drops the connection on a
+  # ~14 MB file (base64 ~19.6M chars) while 12.4 MB passes, consistent with
+  # a ~16 MiB per-message limit; above the cap get_media now returns a clear
+  # "exceeds the download cap" error instead of a transport failure.
+  # ChatGPT (direct) accepted up to 19.9 MB in the same test.
+  MEDIA_DOWNLOAD_MAX_BYTES: "12000000"
   APP_ENV: production
   # Soft heap target below the 768Mi limit so the Go GC works harder before
   # the kernel OOM-kills the container.
