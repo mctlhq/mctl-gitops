@@ -25,6 +25,19 @@ spec:
           authModes:
             - sso
             - client
+          # #1560: the server serves TLS itself, because that is the only
+          # thing that makes it mark its SSO cookies (state, `authorization`)
+          # Secure: sso.New gets secure = TLS config present (v3.7.11
+          # server/apiserver/argoserver.go). TLS still terminates for
+          # browsers at Traefik, which re-encrypts to the pod's self-signed
+          # certificate (serviceAnnotations, extraObjects below). The probes
+          # switch to HTTPS with this flag; HSTS comes on with it.
+          # Residual risk: the cookie name `authorization` is hard-coded, so a
+          # Domain=.mctl.ai cookie from a tenant host can still shadow it.
+          secure: true
+          serviceAnnotations:
+            traefik.ingress.kubernetes.io/service.serversscheme: https
+            traefik.ingress.kubernetes.io/service.serverstransport: argo-workflows-argo-workflows-server-tls@kubernetescrd
           extraArgs: []
           # Signs in through ZITADEL. Who gets in, and as which SSO RBAC
           # ServiceAccount, is declared in helm-charts/zitadel-iac/iac/workflows.tf:
@@ -188,6 +201,21 @@ spec:
             name: argo-workflow-sa
 
         useStaticCredentials: true
+
+        extraObjects:
+          # Traefik to the Argo server. The server generates a self-signed
+          # certificate at every start, so there is nothing stable to pin;
+          # the hop stays inside the cluster, behind the namespace's ingress
+          # NetworkPolicy (argo-workflows/config/networkpolicy.yaml). Shipped
+          # in this Application so it exists before the Service annotation
+          # that names it.
+          - apiVersion: traefik.io/v1alpha1
+            kind: ServersTransport
+            metadata:
+              name: argo-workflows-server-tls
+              namespace: argo-workflows
+            spec:
+              insecureSkipVerify: true
 
   destination:
     server: {{ .Values.spec.destination.server }}
