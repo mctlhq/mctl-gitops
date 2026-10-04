@@ -112,8 +112,9 @@ resource "zitadel_user_grant" "argocd_admin" {
 
 # Argo CD reads groups from a flat list of strings; ZITADEL's own role claim
 # is a map, which Argo CD ignores. This action copies the user's roles on the
-# Argo CD project, the Vault project (vault.tf) and the Argo Workflows project
-# (workflows.tf), and only those, into `groups`. allowed_to_fail: a failure leaves the claim out, which grants
+# Argo CD project, the Vault project (vault.tf), the Argo Workflows project
+# (workflows.tf) and the Grafana project (grafana.tf), and only those, into
+# `groups`. allowed_to_fail: a failure leaves the claim out, which grants
 # nothing, rather than breaking sign-in to every other application of the
 # organization.
 #
@@ -144,7 +145,8 @@ resource "zitadel_action" "argocd_groups" {
       var projects = [
         '${zitadel_project.argocd.id}',
         '${zitadel_project.vault.id}',
-        '${zitadel_project.workflows.id}'
+        '${zitadel_project.workflows.id}',
+        '${zitadel_project.grafana.id}'
       ];
       var groups = [];
       grants.grants.forEach(function (grant) {
