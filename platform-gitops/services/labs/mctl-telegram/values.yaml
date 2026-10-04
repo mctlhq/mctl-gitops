@@ -206,10 +206,12 @@ ingress:
 #   3. Set enabled: true below and confirm the ExternalSecret's Secret
 #      synced: kubectl -n labs get secret labs-mctl-telegram-work-context.
 #   4. Only then set featureEnabled: true.
+# Steps 1-3 done 2026-10-04 (Vault v2, tenant admins, enabled below); step 4
+# (featureEnabled) follows in its own PR once the Secret has synced.
 workContext:
-  enabled: false
+  enabled: true
   featureEnabled: false
-  tenant: ""
+  tenant: admins
   tokenVaultKey: platform/mctl-api/surface-tokens
   tokenVaultProperty: telegram-token
   apiBaseUrl: ""

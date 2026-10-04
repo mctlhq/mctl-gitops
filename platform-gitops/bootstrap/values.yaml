@@ -220,9 +220,10 @@ usageWriter:
 #      from MCTL_AGENT_SERVICE_TOKEN and from every other surface token, or
 #      mctl-api refuses it.)
 #   2. Set enabled: true below (mctl-api then rolls to pick up the env).
-# Not done yet: step 0 has not landed, so this stays false.
+# Done: step 0 (mctl-api helm surfaceTelegramTokenSecret), step 1 on
+# 2026-10-04 (Vault v2, together with portal-token), step 2 below.
 surfaceTelegramToken:
-  enabled: false
+  enabled: true
 
 # Namespaces whose workloads are written outside the platform team's review
 # (a tenant's own Git repository, a service of theirs that pushes to it),
