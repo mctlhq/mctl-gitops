@@ -30,7 +30,7 @@ registration closed, nothing visible without signing in.
 
 ## Admin login
 
-People sign in to the web UI only through ZITADEL ("Sign in with ZITADEL";
+People sign in to the web UI only through ZITADEL (button "Sign in with MCTL";
 `ENABLE_INTERNAL_SIGNIN: false`, #1520 S5). The first ZITADEL sign-in of an
 existing user lands on the link-account page, which still takes that
 account's Forgejo password once.

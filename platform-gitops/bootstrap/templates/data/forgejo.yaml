@@ -117,13 +117,20 @@ spec:
             # (helm-charts/zitadel-iac/iac/forgejo.tf); the name is part of the
             # callback URL registered there, so the two must change together.
             # The chart's init container adds or updates the source on every
-            # start. `scopes` is split on commas by the Forgejo CLI.
+            # start, finding it BY NAME. `scopes` is split on commas by the
+            # Forgejo CLI.
+            #
+            # The name is also the button label ("Sign in with MCTL"). It was
+            # ZITADEL until 2026-10-04; the existing source was renamed in place
+            # by infra-components/data/forgejo/auth-source-rename.yaml so its
+            # ID and account links carried over. Renaming here alone would
+            # create a second source instead.
             #
             # Registration stays disabled (service below), so a ZITADEL
             # identity can only be linked to an existing account with that
             # account's own credentials; it never creates one.
             oauth:
-              - name: ZITADEL
+              - name: MCTL
                 provider: openidConnect
                 existingSecret: forgejo-oidc-zitadel
                 autoDiscoverUrl: https://auth.mctl.ai/.well-known/openid-configuration
