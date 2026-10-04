@@ -321,10 +321,16 @@ spec:
               userKey: admin-user
               passwordKey: admin-password
             envValueFrom:
+              # Written by the zitadel-iac Job (helm-charts/zitadel-iac/iac/grafana.tf,
+              # infra-components/observability/secrets/grafana-oidc-zitadel.yaml).
+              GF_AUTH_GENERIC_OAUTH_CLIENT_ID:
+                secretKeyRef:
+                  name: grafana-oidc-zitadel
+                  key: client-id
               GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
                 secretKeyRef:
-                  name: grafana-admin-secret
-                  key: oidc-client-secret
+                  name: grafana-oidc-zitadel
+                  key: client-secret
               # Consumed via the $__env{} macro in the mctl-academy
               # read-only Postgres datasource (academy-postgres-datasource
               # ConfigMap) instead of a plaintext password in provisioning
@@ -341,21 +347,41 @@ spec:
             grafana.ini:
               server:
                 root_url: https://grafana.mctl.ai
+              # #1560: Secure on every cookie, and a __Host- session cookie a
+              # tenant host on *.mctl.ai cannot shadow (it would need
+              # Domain=.mctl.ai, which the prefix forbids).
+              security:
+                cookie_secure: true
               auth:
                 disable_login_form: true
                 oauth_auto_login: true
+                login_cookie_name: __Host-grafana_session
               auth.basic:
                 enabled: false
+              # Signs in through ZITADEL (helm-charts/zitadel-iac/iac/grafana.tf).
+              # Admins only: `groups` carries the user's roles on the ZITADEL
+              # project "Grafana", which has no tenant roles, and ZITADEL
+              # refuses a token to anyone without one. role_attribute_strict
+              # refuses a sign-in whose groups map to no role, so nobody
+              # falls through to Viewer of this cluster-wide organization.
+              # Rollback: the Dex URLs (https://ops.mctl.ai/api/dex/{auth,token,userinfo}),
+              # client_id grafana with grafana-admin-secret/oidc-client-secret,
+              # the `groups` scope and the old role_attribute_path; Dex keeps
+              # its grafana client until it is removed.
               auth.generic_oauth:
                 enabled: true
-                name: mctl.ai
+                name: ZITADEL
                 allow_sign_up: true
-                client_id: grafana
-                scopes: openid profile email groups
-                auth_url: https://ops.mctl.ai/api/dex/auth
-                token_url: https://ops.mctl.ai/api/dex/token
-                api_url: https://ops.mctl.ai/api/dex/userinfo
-                role_attribute_path: "contains(groups, 'admins') && 'Admin' || 'Viewer'"
+                scopes: openid profile email
+                auth_url: https://auth.mctl.ai/oauth/v2/authorize
+                token_url: https://auth.mctl.ai/oauth/v2/token
+                api_url: https://auth.mctl.ai/oidc/v1/userinfo
+                use_pkce: true
+                login_attribute_path: preferred_username
+                groups_attribute_path: groups
+                role_attribute_path: "contains(groups[*], 'admins') && 'GrafanaAdmin' || ''"
+                role_attribute_strict: true
+                allow_assign_grafana_admin: true
               feature_toggles:
                 # CVE-2026-27876: disable SQL Expressions RCE attack vector
                 sqlExpressions: "false"
