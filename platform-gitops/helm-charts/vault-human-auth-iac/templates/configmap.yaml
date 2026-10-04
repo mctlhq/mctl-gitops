@@ -1,7 +1,8 @@
 {{- /*
   The OpenTofu root lives as real files under iac/ so CI can fmt and validate
   it; this ConfigMap carries it into the Job. The lock file is named
-  explicitly: a dotfile is not matched by the glob.
+  explicitly because the glob takes only *.tf, and it gets a key without the
+  leading dot; the Job copies it back to .terraform.lock.hcl.
 
   It is a regular resource, not a hook. ArgoCD does not diff hooks, so while
   it was one (#1522) a change under iac/ left the Application Synced, no sync
