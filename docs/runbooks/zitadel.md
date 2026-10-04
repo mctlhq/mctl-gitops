@@ -466,8 +466,15 @@ checks it both ways before anyone else is pointed at it:
    existing Frappe user.
 2. An `erpact` user whose e-mail is not verified is refused at the userinfo
    step (Frappe shows an error; nobody is signed in).
-3. A user of `MCTL` is refused by ZITADEL (`has_project_check`).
-4. An `erpact` user with no matching Frappe user gets Frappe's 403 "Signup is
+3. A user of `MCTL` on the `mctl` key is refused by ZITADEL ("User is no
+   member of the required organization"), grant or not.
+4. A platform admin with a `frappe` field signs in on the `mctl_admin` key
+   and lands on `/app` as the Frappe user of their MCTL e-mail.
+5. A user of `MCTL` without the `frappe` grant, on the `mctl_admin` key: until
+   `project_role_check` is on, ZITADEL issues the token and Frappe refuses
+   (no such user, sign-up disabled); once it is on, ZITADEL refuses
+   (`Errors.User.GrantRequired`).
+6. An `erpact` user with no matching Frappe user gets Frappe's 403 "Signup is
    disabled".
 
 ## Known risk: same site as tenant workloads
