@@ -122,9 +122,8 @@ spec:
             #
             # The name is also the button label ("Sign in with MCTL"). It was
             # ZITADEL until 2026-10-04; the existing source was renamed in place
-            # by infra-components/data/forgejo/auth-source-rename.yaml so its
-            # ID and account links carried over. Renaming here alone would
-            # create a second source instead.
+            # by a one-off hook (#1599) so its ID and account links carried
+            # over. Renaming here alone would create a second source instead.
             #
             # Registration stays disabled (service below), so a ZITADEL
             # identity can only be linked to an existing account with that
