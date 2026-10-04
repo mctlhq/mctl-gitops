@@ -317,6 +317,31 @@ all refused (403). Each grant was checked by removing it: without
 `sudo` on `sys/mounts/auth/oidc`, `list` anywhere and `create` on the
 `identity/*/id` paths turned out unneeded and are not granted.
 
+**Temporary: the move from `auth/oidc` to `auth/mctl`.** The Vault UI labels
+the login tab with the mount path, so the owner approved moving the mount.
+The policy carries, for the move only, `sys/remount` (`update`, `sudo`, with
+`allowed_parameters` limited to `from=auth/oidc`, `to=auth/mctl`),
+`sys/remount/status/*` (read), and `sys/mounts/auth/mctl` (read),
+`sys/mounts/auth/mctl/tune`, `auth/mctl/config` and `auth/mctl/role/*` on the
+new path. Proven on a local Vault 1.17.2 with the Job's image and guard: with
+exactly these blocks the move applies (role replaced, mount moved, accessor
+kept, re-plan clean), and without any one of them it fails with a 403
+mid-apply. `sys/auth/mctl` turned out unneeded for the move. Any other
+remount (`auth/mctl` to `auth/oidc`, `auth/token` to `auth/mctl`) is refused.
+The cleanup step removes `sys/remount*` and replaces the `oidc` paths with
+`mctl`, so the Job keeps no standing remount ability.
+
+Apply (owner, admin token), **before** the vault-human-auth-iac change that
+sets `path = "mctl"` merges:
+
+```bash
+vault policy write vault-human-auth-iac \
+  infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-vault-human-auth-iac.hcl
+```
+
+Then check that `vault policy read vault-human-auth-iac` is byte-identical to
+the file.
+
 **Rollback:** `vault delete auth/kubernetes/role/vault-human-auth-iac` and
 `vault policy delete vault-human-auth-iac`. The Job then fails at login and
 changes nothing; what it already declared stays as it is.
