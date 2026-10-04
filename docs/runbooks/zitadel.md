@@ -119,8 +119,9 @@ enrol again.
 `iac/admins.tf` holds the one list of platform admins. Each of them holds
 every admin grant: Argo CD `admins`, Vault `admins` and Cloudflare Access
 `access`. The MCTL API project has no roles, so there is nothing to grant
-there: any `MCTL` user gets its token, and mctl-api grants nothing based on
-ZITADEL roles yet.
+there: any `MCTL` user, and any user of a tenant organization (see "mctl-api
+audience"), gets its token, and mctl-api grants nothing based on ZITADEL
+roles yet.
 
 - **Break-glass.** `mctl-admin` is in `break_glass_admins` and is looked up
   by its login name. It is not created by this root.
@@ -334,9 +335,16 @@ on ZITADEL tokens:
   PKCE, authorization code + refresh token, JWT access tokens, redirects
   `http://127.0.0.1/callback` and `http://localhost/callback`. ZITADEL
   matches loopback redirects of a native app on path and query only, so the
-  CLI's ephemeral port needs no entry and `dev_mode` stays off. The project
-  sets `has_project_check`: only `MCTL` users obtain a token; tenant
-  organizations are not granted the project.
+  CLI's ephemeral port needs no entry and `dev_mode` stays off.
+- **Who gets a token.** The project sets `has_project_check`: only users of
+  `MCTL` and of an organization the project is granted to obtain one.
+  `zitadel_project_grant.mctl_api_tenant` grants it, with no role keys, to
+  every tenant organization, so tenant users can link (`mctl-api-link`) and
+  later sign in to mctl-api through ZITADEL (#1500). ZITADEL accepts a grant
+  to the user's organization alone; no user grant is needed while
+  `project_role_check` stays off. Any other organization of the instance is
+  refused. A token is authentication only: mctl-api resolves it to the
+  linked principal, or to a new principal with no tenant or admin access.
 - **Client `mctl-api-link`** (mctl-api#435, owner decision B): confidential
   web app, client secret plus PKCE, redirect
   `https://api.mctl.ai/identity/link/zitadel/callback` only. mctl-api signs a

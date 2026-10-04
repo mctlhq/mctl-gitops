@@ -27,11 +27,11 @@ resource "zitadel_project" "mctl_api" {
   org_id = local.mctl_org_id
   name   = "MCTL API"
 
-  # Only users of the organization that owns the project (MCTL) obtain a
-  # token for it: tenant organizations are never granted it. mctl-api does
-  # authenticate a ZITADEL user it has never seen (a new principal with no
-  # tenant or admin access), so this keeps tenant users out until linking
-  # and principal-based authorization (mctl-api#435, #377) decide otherwise.
+  # Only users of MCTL, which owns the project, and of an organization it is
+  # granted to (zitadel_project_grant.mctl_api_tenant below) obtain a token
+  # for it. Any other organization of the instance, present or future, stays
+  # refused. No project_role_check: the project has no roles, and a token
+  # grants nothing in mctl-api by itself (see the grant).
   has_project_check = true
 
   lifecycle {
@@ -40,6 +40,31 @@ resource "zitadel_project" "mctl_api" {
       error_message = "Expected exactly one ZITADEL organization named \"MCTL\"."
     }
   }
+}
+
+# Every tenant organization, so its users can link their ZITADEL identity
+# (mctl-api#435) and later sign in to mctl-api through ZITADEL (#1500).
+# has_project_check is satisfied by an active grant of the project to the
+# user's organization; no user grant is needed while project_role_check is
+# off (ZITADEL v4.19.2, internal/query/app_oidc_project_permission.sql).
+#
+# No role keys: mctl-api reads no ZITADEL role (grant_groups unset below,
+# mctl-api#377), so there is nothing to hand out, and a tenant organization
+# can grant its users nothing in this project. What a tenant user gains is
+# authentication only: a token mctl-api resolves to their linked principal,
+# or to a new principal with no tenant or admin access. Linking itself
+# requires proving the GitHub identity the principal already has.
+#
+# A grant per declared tenant rather than has_project_check off: off would
+# admit every organization of the instance, including one created outside
+# this repository. Here the set is the tenant list in Vault, the same source
+# that creates the organizations, and removing a tenant removes its grant.
+resource "zitadel_project_grant" "mctl_api_tenant" {
+  for_each = local.tenants
+
+  org_id         = local.mctl_org_id
+  project_id     = zitadel_project.mctl_api.id
+  granted_org_id = zitadel_org.tenant[each.key].id
 }
 
 resource "zitadel_application_api" "mctl_api" {
@@ -90,8 +115,8 @@ resource "zitadel_application_oidc" "mctl_cli" {
 # purpose: every app in this project shares the project audience, so a JWT
 # access token of this client would pass mctl-api's JWT bearer check. Do not
 # switch it to JWT. The userinfo assertion puts preferred_username into the
-# ID token for the confirmation page. has_project_check on the project limits it to MCTL
-# users, like the CLI.
+# ID token for the confirmation page. has_project_check on the project limits
+# it to MCTL and the tenant organizations granted the project, like the CLI.
 resource "zitadel_application_oidc" "mctl_api_link" {
   org_id     = local.mctl_org_id
   project_id = zitadel_project.mctl_api.id
