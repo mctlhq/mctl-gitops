@@ -230,10 +230,11 @@ ingress:
 # surface:telegram token as production (one principal, one Vault property).
 # Same two-step order as production: enabled first so the Secret syncs, then
 # featureEnabled in a follow-up -- the server refuses to start with the
-# feature on and no token, and strategy is Recreate.
+# feature on and no token, and strategy is Recreate. Step 1 merged in #1550
+# and labs-mctl-telegram-preview-base-service-work-context synced; step 2 here.
 workContext:
   enabled: true
-  featureEnabled: false
+  featureEnabled: true
   tenant: admins
   tokenVaultKey: platform/mctl-api/surface-tokens
   tokenVaultProperty: telegram-token
