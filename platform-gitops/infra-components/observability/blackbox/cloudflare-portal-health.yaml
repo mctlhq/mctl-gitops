@@ -1,0 +1,91 @@
+# MCP portal (mcp.mctl.ai) upstream health, in the cluster.
+#
+# scripts/cloudflare-portal-health.py lists every server of the Cloudflare
+# MCP portal and reports which are not ready -- the state a server falls into
+# when the admin credential it syncs with expires, after which its tools are
+# served from a stale snapshot or not at all (see the script's docstring).
+# This ran hourly from .github/workflows/cloudflare-portal-health.yml, whose
+# schedule GitHub fired hours late or not at all in early October 2026. Here
+# it runs every 15 minutes and pushes to the Pushgateway, and
+# vm-rules/cloudflare-portal-health.yaml alerts, including on the check itself
+# going quiet. The workflow keeps its dispatch-only `sync` job: the write
+# token that re-snapshots a server stays out of the cluster.
+#
+# The token is read-only, MCP Portals -> Read on this account only, from
+# Vault through secrets/cloudflare-portal-health-externalsecret.yaml.
+#
+# The script arrives as a generated ConfigMap
+# (cloudflare-portal-health-script.yaml), held identical to
+# scripts/cloudflare-portal-health.py by
+# tests/test_cloudflare_portal_health_cronjob.py.
+#
+# The Job exits 0 once the outcome is pushed, for the reason
+# access-login-probe.yaml gives: the metrics carry the outcome, and a Job
+# failing on every not-ready server would add KubeJobFailed as a duplicate.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cloudflare-portal-health
+  namespace: monitoring
+  labels:
+    app: cloudflare-portal-health
+spec:
+  schedule: "*/15 * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: cloudflare-portal-health
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: check
+              image: python:3.13.16-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+              command: ["python", "/check/cloudflare-portal-health.py"]
+              args:
+                - --account
+                - 6a09f637d20e1f66a8e9d45ebe778058
+                - --pushgateway
+                - http://prometheus-pushgateway.monitoring.svc:9091
+              env:
+                - name: CLOUDFLARE_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: cloudflare-portal-health
+                      key: CLOUDFLARE_API_TOKEN
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /check
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: cloudflare-portal-health-script

@@ -387,6 +387,16 @@ jobs:
         # plane, so it is exercised here against synthetic plans.
         run: python3 tests/test_k3s_plan_guard.py
 
+      - name: Check the in-cluster MCP portal health check against its sources
+        # The cloudflare-portal-health CronJob runs a ConfigMap copy of
+        # scripts/cloudflare-portal-health.py and reads its token from the
+        # Secret an ExternalSecret writes. A drifted copy would run an old
+        # script and stay green; a drifted Secret name or key would keep the
+        # Job from starting.
+        run: |
+          python3 scripts/cloudflare-portal-health.py --selftest
+          python3 tests/test_cloudflare_portal_health_cronjob.py
+
       - name: Unit-test the release-deploy bump script
         # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
         # it only ever runs during a real release — a bug in it is found by

@@ -561,6 +561,16 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "SeerrSense.*"
+                  # The MCP portal health check (vm-rules/cloudflare-portal-health.yaml).
+                  # Telegram only, no ticket: every remedy is a human's -- the
+                  # dashboard's "Re-authenticate server", a token, or a sync
+                  # behind the cloudflare-apply reviewer -- and mctl-agent can
+                  # take none of them. This replaces the Telegram message
+                  # cloudflare-portal-health.yml sent on its own schedule.
+                  # Prefix match so the next portal alert is not agent-only.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "CloudflarePortal.*"
                   # The lifecycle ownership rollout (ADR-010 §12,
                   # mctlhq/.github#57). Telegram only, no ticket, and the
                   # routing is load-bearing rather than a preference:
