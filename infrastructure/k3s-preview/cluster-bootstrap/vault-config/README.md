@@ -271,8 +271,10 @@ until fixed live, then backported to the `.hcl` file above.
 
 Humans sign in to Vault through ZITADEL (`auth.mctl.ai`) on the `auth/oidc`
 mount, and get access from the `groups` claim: `admins` maps to the `admin`
-policy, a tenant name to `human-tenant-<tenant>`, read-only on
-`secret/{data,metadata}/teams/<tenant>/*`. None of that is typed here: the
+policy, a tenant name to `human-tenant-<tenant>`: read and write on
+`secret/teams/<tenant>/*`. That policy grants no destroy and no metadata
+write, and keeps `<service>/database` read only
+(docs/runbooks/vault-human-auth.md). None of that is typed here: the
 `vault-human-auth-iac` Job (Argo CD Application of the same name, namespace
 `vault-human-auth-iac`) declares the mount, its role, the external groups,
 their aliases and the tenant policies with OpenTofu, and re-applies hourly.

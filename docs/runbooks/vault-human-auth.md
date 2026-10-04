@@ -36,7 +36,7 @@ vault-human-auth-iac Job ── Vault: auth/oidc, role `zitadel`,
 | `groups` value | Vault group | Policy |
 | --- | --- | --- |
 | `admins` | `human-admins` | `admin` (existing, hand-written, not managed here) |
-| `<tenant>` | `human-tenant-<tenant>` | `human-tenant-<tenant>`: `read` on `secret/data/teams/<tenant>/*`, `read`+`list` on `secret/metadata/teams/<tenant>/*` |
+| `<tenant>` | `human-tenant-<tenant>` | `human-tenant-<tenant>`: read and write (create, update, patch, soft delete, undelete, list) on `secret/data/teams/<tenant>/*`, `read`+`list` on its metadata; `<service>/database` read only; no destroy, no metadata write or delete |
 | anything else, or none | none | `default` only |
 
 - **Who is an admin.** The platform admins in `zitadel-iac/iac/admins.tf`
@@ -49,7 +49,14 @@ vault-human-auth-iac Job ── Vault: auth/oidc, role `zitadel`,
   `groups` claim from the `vault` client carries `admins` lands in
   `human-admins`.
 - **Who is a tenant user.** A user listed in `secret/platform/zitadel/users/<tenant>` whose entry carries `"vault": true`. Without the flag, ZITADEL refuses to issue a token for Vault (`project_role_check`), so the login fails before Vault sees it.
-- **Tenant access is read-only.** Tenant secrets are written through the portal and the platform workflows, with their own identities.
+- **Tenant access is read and write on the tenant's own prefix** (owner
+  decision 2026-10-04). A tenant user can create, update, patch, soft-delete
+  and undelete secrets under `secret/teams/<tenant>/`. They cannot destroy a
+  version, or write or delete metadata, so every deleted version stays
+  recoverable and only platform admins can purge.
+- **`<service>/database` stays read only for tenants.** `wft-provision-database`
+  generates it and the `cnpg-db-creds` store syncs it into the shared-pg role,
+  so a human edit would break the database login.
 - **Token lifetime.** Human tokens live 1h and cannot be renewed past that (`token_max_ttl` 1h); sign in again. Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
 
 Verified before rollout on a local ZITADEL v4.19.2 and Vault 1.17.2, running
@@ -58,11 +65,27 @@ flows through Vault's `auth_url` and `callback`, for both redirects, gave:
 
 | User | Result |
 | --- | --- |
-| Opted-in tenant user | `identity_policies ["human-tenant-<tenant>"]`, TTL 3600. Reads its own tenant; another tenant's path and any write return 403. |
+| Opted-in tenant user | `identity_policies ["human-tenant-<tenant>"]`, TTL 3600. Reads its own tenant; another tenant's path returns 403. (Read-only policy at the time; write was added later and proven separately, see below.) |
 | Admin | `["admin"]` |
 | Unflagged user, or flagged for Argo CD only | Refused by ZITADEL (`Errors.User.GrantRequired`) |
 
 The authorize request carried PKCE S256. Details are in docs/runbooks/zitadel.md, "Vault sign-in".
+
+Tenant write access was proven on a local Vault 1.17.2 with this root applied
+by the bootstrap policy, using a token from a simulated `groups: ["erpact"]`
+login:
+
+| Action | Result |
+| --- | --- |
+| `put`, `patch`, new key, `delete`, `undelete`, `delete -versions` on `secret/teams/erpact/...` | allowed |
+| `destroy`, `metadata delete`, `metadata put` | 403 |
+| `get` on `erpact/<svc>/database` | allowed |
+| `put`, `patch`, `delete` on `erpact/<svc>/database` | 403 |
+| any `labs` path, listing `secret/teams`, `secret/platform/...`, `secret/teams/erpactx/...` | 403 |
+
+The test was also run against two broken policies. With the database rules
+removed, the tenant could overwrite `database`. With the old read-only policy,
+`put` returned 403. The next Job run reverted the edited policy (`update`).
 
 ## Rollout order
 
@@ -117,7 +140,9 @@ break-glass, when the personal account cannot sign in.
 
    ```bash
    vault token lookup        # identity_policies [human-tenant-<tenant>]
-   vault token capabilities secret/data/teams/<tenant>/x        # read
+   vault token capabilities secret/data/teams/<tenant>/x        # create, delete, list, patch, read, update
+   vault token capabilities secret/data/teams/<tenant>/<svc>/database  # read
+   vault token capabilities secret/destroy/teams/<tenant>/x     # deny
    vault token capabilities secret/data/teams/<other-tenant>/x  # deny
    vault token capabilities secret/metadata/teams/              # deny
    vault kv get secret/teams/<other-tenant>/<any>               # 403
