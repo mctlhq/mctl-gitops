@@ -104,7 +104,8 @@ def redact(url: str) -> str:
 def expected_client_id(repo_root: str, source: str) -> str:
     path = os.path.join(repo_root, source)
     try:
-        text = open(path, encoding="utf-8").read()
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
     except OSError as e:
         raise Unknown(f"cannot read {source}: {e}") from e
     return parse_client_id_default(text, source)
@@ -175,19 +176,21 @@ def probe(t: Target, repo_root: str) -> None:
     judge_authorize(*fetch(links[0]), t)
 
 
-def run(repo_root: str) -> int:
-    worst = 0
-    for t in TARGETS:
+def run(repo_root: str, targets=TARGETS, check=probe) -> int:
+    # A confirmed break outranks anything unknown elsewhere, in any order:
+    # the alert for an outage must not be downgraded to "could not tell".
+    broken = unknown = False
+    for t in targets:
         try:
-            probe(t, repo_root)
+            check(t, repo_root)
             print(f"ok      {t.name}")
         except Broken as e:
             print(f"BROKEN  {t.name}: {e}")
-            worst = max(worst, 1)
+            broken = True
         except Unknown as e:
             print(f"UNKNOWN {t.name}: {e}")
-            worst = 2 if worst == 0 else worst
-    return worst
+            unknown = True
+    return 1 if broken else 2 if unknown else 0
 
 
 def selftest() -> int:
@@ -234,7 +237,25 @@ def selftest() -> int:
          lambda: None if parse_client_id_default(
              'variable "zitadel_access_client_id" {\n  default = "123"\n}', "x") == "123"
          else (_ for _ in ()).throw(Broken("wrong")), None)
+
+    def outcome(*kinds):
+        def check(target, _root):
+            kind = kinds[TARGETS_UNDER_TEST.index(target)]
+            if kind:
+                raise kind("x")
+        return check
+
+    TARGETS_UNDER_TEST[:] = [Target(f"t{i}", "", "", "", "") for i in range(2)]
+    for kinds, want in [((Unknown, Broken), 1), ((Broken, Unknown), 1),
+                        ((None, Unknown), 2), ((None, None), 0)]:
+        got = run(".", TARGETS_UNDER_TEST, outcome(*kinds))
+        ok = got == want
+        cases.append(ok)
+        print(f"{'ok  ' if ok else 'FAIL'} run() with {[k.__name__ if k else 'ok' for k in kinds]} exits {want}")
     return 0 if all(cases) else 1
+
+
+TARGETS_UNDER_TEST: list[Target] = []
 
 
 def main() -> int:

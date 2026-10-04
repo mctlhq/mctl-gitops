@@ -50,8 +50,13 @@ jobs:
         id: probe
         run: |
           set -uo pipefail
+          # Actions runs this with `bash -eo pipefail`; without +e a failing
+          # probe would end the step here, before code and sig are recorded,
+          # and every alert would read as "could not determine".
+          set +e
           python3 scripts/access-login-probe.py | tee probe.txt
           code=${PIPESTATUS[0]}
+          set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
           # Signature: which targets, in which state, with which reason, so
           # an hour passing is not a new problem.
