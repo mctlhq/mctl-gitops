@@ -25,5 +25,10 @@ data:
   {{ base $path }}: |
     {{- $.Files.Get $path | nindent 4 }}
   {{- end }}
+  {{- /* Branding assets uploaded by branding.tf. */}}
+  {{- range $path, $_ := .Files.Glob "iac/*.svg" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
   terraform.lock.hcl: |
     {{- .Files.Get "iac/.terraform.lock.hcl" | required "iac/.terraform.lock.hcl is missing" | nindent 4 }}

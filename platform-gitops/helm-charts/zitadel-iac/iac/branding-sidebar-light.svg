@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="110" height="32" viewBox="0 0 110 32" fill="none">
+  <!-- Storybook manager wordmark (light chrome). Baked terracotta — brandImage is an <img>. -->
+  <!-- https://ui.mctl.ai/brand/sidebar-light.svg -->
+  <g transform="scale(0.0625)">
+    <path d="M256 60L435.263 158V354L256 452L76.7372 354V158L256 60Z" stroke="#b83d28" stroke-width="48" stroke-linejoin="round"/>
+    <circle cx="256" cy="256" r="64" fill="#b83d28"/>
+  </g>
+  <text x="40" y="22" font-family="Onest, system-ui, -apple-system, sans-serif" font-size="18" font-weight="700" letter-spacing="1.5" fill="#15181d">MCTL</text>
+</svg>
