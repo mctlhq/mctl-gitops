@@ -134,7 +134,7 @@ data:
       # a repository dropped from "repos" is removed from the team.
       scoped_teams = merge([
         for o in local.m.orgs : {
-          for t in try(o.teams, []) : "${o.name}/${t.name}" => merge(t, { org = o.name })
+          for t in try(o.teams, []) : "${o.name}/${try(t.name, "")}" => merge(t, { org = o.name, name = try(t.name, "") })
         }
       ]...)
       scoped_members = merge([
@@ -259,12 +259,12 @@ data:
         # admin/owner would let the team manage the org's repositories and
         # members; the built-in names are the teams above.
         precondition {
-          condition     = contains(["read", "write"], each.value.permission)
+          condition     = contains(["read", "write"], try(each.value.permission, ""))
           error_message = "Team ${each.key}: permission must be read or write."
         }
         precondition {
-          condition     = !contains(["owners", "developers", "readers"], lower(each.value.name))
-          error_message = "Team ${each.key}: Owners, Developers and Readers are reserved."
+          condition     = each.value.name != "" && !contains(["owners", "developers", "readers"], lower(each.value.name))
+          error_message = "Team ${each.key}: a name is required, and Owners, Developers and Readers are reserved."
         }
         precondition {
           condition     = length(try(each.value.repos, [])) > 0 && alltrue([for r in try(each.value.repos, []) : contains(keys(local.repos), "${each.value.org}/${r}")])
