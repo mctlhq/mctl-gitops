@@ -36,7 +36,7 @@ vault-human-auth-iac Job ── Vault: auth/mctl, role `zitadel`,
 | `groups` value | Vault group | Policy |
 | --- | --- | --- |
 | `admins` | `human-admins` | `admin` (existing, hand-written, not managed here) |
-| `<tenant>` | `human-tenant-<tenant>` | `human-tenant-<tenant>`: read and write (create, update, patch, soft delete, undelete, list) on `secret/data/teams/<tenant>/*`, `read`+`list` on its metadata; `<service>/database` read only; no destroy, no metadata write or delete |
+| `<tenant>` | `human-tenant-<tenant>` | `human-tenant-<tenant>`: read and write (create, update, patch, soft delete, undelete, list) on `secret/data/teams/<tenant>/*`, `read`+`list` on its metadata; `list` only on exactly `secret/metadata/` and `secret/metadata/teams/` (browse); `<service>/database` read only; no destroy, no metadata write or delete |
 | anything else, or none | none | `default` only |
 
 - **Who is an admin.** The platform admins in `zitadel-iac/iac/admins.tf`
@@ -57,6 +57,16 @@ vault-human-auth-iac Job ── Vault: auth/mctl, role `zitadel`,
 - **`<service>/database` stays read only for tenants.** `wft-provision-database`
   generates it and the `cnpg-db-creds` store syncs it into the shared-pg role,
   so a human edit would break the database login.
+- **Tenants browse down to their folder in the UI.** In the UI, a tenant user
+  opens `secret/`, then `teams/`, then `<tenant>/`. To make that work, the
+  policy grants `list`, and nothing else, on exactly `secret/metadata/` and
+  `secret/metadata/teams/`, with no glob. Those two listings show the
+  top-level key names and the folder names under `teams/`, which are the
+  tenant names in `platform-gitops/tenants/` (public). Opening another
+  tenant's folder, or anything under `platform/`, is still 403. Before this,
+  `secret/` looked empty to a tenant, who had to type `teams/<tenant>/` into
+  "View secret" by hand. The CLI equivalent is
+  `vault kv list secret/teams/<tenant>/`.
 - **Token lifetime.** Human tokens live 1h and cannot be renewed past that (`token_max_ttl` 1h); sign in again. Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
 
 Verified before rollout on a local ZITADEL v4.19.2 and Vault 1.17.2, running
@@ -81,11 +91,27 @@ login:
 | `destroy`, `metadata delete`, `metadata put` | 403 |
 | `get` on `erpact/<svc>/database` | allowed |
 | `put`, `patch`, `delete` on `erpact/<svc>/database` | 403 |
-| any `labs` path, listing `secret/teams`, `secret/platform/...`, `secret/teams/erpactx/...` | 403 |
+| any `labs` path, listing `secret/teams` (before the browse rules below), `secret/platform/...`, `secret/teams/erpactx/...` | 403 |
 
 The test was also run against two broken policies. With the database rules
 removed, the tenant could overwrite `database`. With the old read-only policy,
 `put` returned 403. The next Job run reverted the edited policy (`update`).
+
+The browse rules were proven the same way, on a local Vault 1.17.2. The token
+held the rendered `human-tenant-erpact` policy, with a second tenant `other`
+and a `platform/` tree seeded:
+
+| Action | Result |
+| --- | --- |
+| list `secret/metadata/`, `secret/metadata/teams/`, `secret/metadata/teams/erpact/` | allowed |
+| list `secret/metadata/teams/other/` and `.../other/<svc>/`, list `secret/metadata/platform/` | 403 |
+| read `secret/metadata/teams` (not list), read data or metadata under `other/`, write at `teams/x` or a top-level key, delete `secret/metadata/teams` | 403 |
+| the tenant's own read and write, and the `database` and destroy rules | as above |
+
+The test was also run against two broken policies. Without the two browse
+rules, listing `secret/metadata/` and `secret/metadata/teams/` returned 403,
+which was the reported bug. With `secret/metadata/teams/*` in place of the
+exact path, the tenant could list `other/` and its subfolders.
 
 ## Rollout order
 
@@ -128,7 +154,8 @@ break-glass, when the personal account cannot sign in.
    - `meta` with `role=zitadel` and your `username`
 3. **UI login.** Open `https://secrets.mctl.ai/ui/`, choose the **mctl** tab,
    leave the role empty and sign in. You land on the dashboard and can open
-   `secret/`.
+   `secret/`. A tenant user sees `teams/` there, and inside it every tenant
+   folder, but can open only their own.
 4. **Tenant isolation, live.** Use a tenant user, for example your own user in
    a tenant organization:
    - Set `"vault": true` in that user's entry at
@@ -144,7 +171,8 @@ break-glass, when the personal account cannot sign in.
    vault token capabilities secret/data/teams/<tenant>/<svc>/database  # read
    vault token capabilities secret/destroy/teams/<tenant>/x     # deny
    vault token capabilities secret/data/teams/<other-tenant>/x  # deny
-   vault token capabilities secret/metadata/teams/              # deny
+   vault token capabilities secret/metadata/teams/              # list
+   vault token capabilities secret/metadata/teams/<other-tenant>/  # deny
    vault kv get secret/teams/<other-tenant>/<any>               # 403
    ```
 
