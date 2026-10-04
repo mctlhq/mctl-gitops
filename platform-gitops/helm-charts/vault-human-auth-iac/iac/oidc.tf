@@ -14,9 +14,12 @@ locals {
 }
 
 resource "vault_jwt_auth_backend" "oidc" {
-  path        = "oidc"
-  type        = "oidc"
-  description = "Human sign-in through ZITADEL (auth.mctl.ai)"
+  path = "oidc"
+  type = "oidc"
+  # What the UI shows next to the mount; users sign in to "MCTL", ZITADEL
+  # is the identity provider behind it. The path stays `oidc`: it is part of
+  # the redirect URI registered in ZITADEL (zitadel-iac vault.tf).
+  description = "MCTL login (auth.mctl.ai)"
 
   oidc_discovery_url = local.issuer
   bound_issuer       = local.issuer
