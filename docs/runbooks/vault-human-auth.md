@@ -39,7 +39,15 @@ vault-human-auth-iac Job ── Vault: auth/oidc, role `zitadel`,
 | `<tenant>` | `human-tenant-<tenant>` | `human-tenant-<tenant>`: `read` on `secret/data/teams/<tenant>/*`, `read`+`list` on `secret/metadata/teams/<tenant>/*` |
 | anything else, or none | none | `default` only |
 
-- **Who is an admin.** The MCTL users in `argocd_admin_users` (`zitadel-iac/iac/argocd.tf`). Argo CD and Vault share that one list.
+- **Who is an admin.** The platform admins in `zitadel-iac/iac/admins.tf`
+  (`platform_admin_user_ids`):
+  - the personal MCTL accounts listed in Vault `secret/platform/zitadel/admins`;
+  - the break-glass account `mctl-admin`.
+
+  Argo CD, Vault, Argo Workflows, Grafana and Cloudflare Access share that one
+  list. Vault's side does not care how many admins there are: anyone whose
+  `groups` claim from the `vault` client carries `admins` lands in
+  `human-admins`.
 - **Who is a tenant user.** A user listed in `secret/platform/zitadel/users/<tenant>` whose entry carries `"vault": true`. Without the flag, ZITADEL refuses to issue a token for Vault (`project_role_check`), so the login fails before Vault sees it.
 - **Tenant access is read-only.** Tenant secrets are written through the portal and the platform workflows, with their own identities.
 - **Token lifetime.** Human tokens live 1h and cannot be renewed past that (`token_max_ttl` 1h); sign in again. Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
@@ -75,7 +83,11 @@ The authorize request carried PKCE S256. Details are in docs/runbooks/zitadel.md
 
 ## First login (owner checklist)
 
-Use a ZITADEL account that holds the `admins` role (today `mctl-admin`).
+Sign in with your personal MCTL account, the one created from
+`secret/platform/zitadel/admins` (the owner's is `dmitrii`), using its login
+name or e-mail address. It holds `admins` on the Vault project
+(`zitadel_user_grant.vault_admin["dmitrii"]`). Use `mctl-admin` only as
+break-glass, when the personal account cannot sign in.
 
 1. **CLI login.**
 
