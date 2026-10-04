@@ -102,8 +102,11 @@ argo-cd:
       # No dex.config any more: Argo CD itself no longer signs in through
       # Dex. Dex keeps running for Argo Workflows, Grafana and mctl-api
       # (templates/dex.yaml), and argocd-server still proxies /api/dex to it.
+      #
+      # `name` is only the login button label ("Log in via MCTL"); the
+      # callback, the CLI SSO flow and RBAC do not read it.
       oidc.config: |
-        name: ZITADEL
+        name: MCTL
         issuer: https://auth.mctl.ai
         clientID: $argocd-oidc-zitadel:clientID
         clientSecret: $argocd-oidc-zitadel:clientSecret
