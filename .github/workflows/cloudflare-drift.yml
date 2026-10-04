@@ -138,7 +138,9 @@ jobs:
       # and now holds an Access application, which the zone credential cannot
       # even read: it answers 1010 auth.forbidden on the refresh, so the root
       # fails before it can compare anything. CF_ACCOUNT_READ_TOKEN is
-      # Account -> Access: Apps and Policies -> Read on this account alone.
+      # Account -> Access: Apps and Policies -> Read and Access: Identity
+      # Providers -> Read (since 2026-10-04, #1500) on this account alone;
+      # account/access-idps-read.tf fails the plan if the second is lost.
       # Absent, the chain falls back to the zone credential and that root keeps
       # failing visibly rather than being skipped.
       CLOUDFLARE_API_TOKEN: >-
