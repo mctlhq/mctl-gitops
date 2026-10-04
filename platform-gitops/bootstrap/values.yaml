@@ -256,8 +256,8 @@ surfaceTelegramToken:
 # Four more policies hold what reaches outside the namespace: Ingress hosts
 # must match hostPattern, every Traefik kind is refused, Services must be
 # ClusterIP without externalIPs (no NodePort, no LoadBalancer: those open
-# node ports or buy a Hetzner load balancer), and ConfigMaps may not carry
-# grafana_* labels (the Grafana sidecar reads those cluster-wide).
+# node ports or buy a Hetzner load balancer), and ConfigMaps and Secrets may
+# not carry grafana_* labels (the Grafana sidecar reads those cluster-wide).
 #
 # Platform workflows cannot run in these namespaces as a consequence
 # (argo-workflow-sa, minio-artifact-credentials): that is intended.

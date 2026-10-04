@@ -1,4 +1,4 @@
-# expect: may not carry grafana_* labels
+# expect: ConfigMaps in this namespace may not carry grafana_* labels (got grafana_dashboard)
 apiVersion: v1
 kind: ConfigMap
 metadata:

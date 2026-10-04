@@ -1,4 +1,4 @@
-# expect: must be ClusterIP
+# expect: must be ClusterIP without externalIPs (no NodePort, LoadBalancer or ExternalName); got type NodePort
 apiVersion: v1
 kind: Service
 metadata:

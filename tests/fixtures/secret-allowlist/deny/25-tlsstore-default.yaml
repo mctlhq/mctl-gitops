@@ -1,4 +1,4 @@
-# expect: Traefik objects are not allowed
+# expect: Traefik objects are not allowed in this namespace (got TLSStore)
 # Named "default", this would replace the global default certificate.
 apiVersion: traefik.io/v1alpha1
 kind: TLSStore
