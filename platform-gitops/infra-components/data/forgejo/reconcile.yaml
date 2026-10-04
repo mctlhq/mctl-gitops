@@ -130,6 +130,15 @@ data:
       # the whole org (a bot that pushes to one repository). Unlike Developers
       # and Readers, the repository list is explicit and enforced both ways:
       # a repository dropped from "repos" is removed from the team.
+      #
+      # One exception: a team whose only unit is repo.packages may have no
+      # repositories. That is how an account gets the org's container
+      # registry and nothing else: Forgejo grants org packages by the
+      # highest team permission the account holds in the org, whatever the
+      # team's units or repositories (services/packages/perm.go), so such a
+      # team reads ("read") or pushes ("write") every package of the org and
+      # reaches no repository.
+      #
       # merge({}, ...) so that an org list without any teams still gives
       # merge() one argument, whatever the Terraform version.
       scoped_teams = merge({}, [
@@ -274,7 +283,7 @@ data:
 
       organization              = forgejo_organization.this[each.value.org].name
       name                      = each.value.name
-      description               = "${title(each.value.permission)} access to: ${join(", ", try(each.value.repos, []))}"
+      description               = length(try(each.value.repos, [])) > 0 ? "${title(each.value.permission)} access to: ${join(", ", each.value.repos)}" : "${title(each.value.permission)} access to the org's packages"
       permission                = each.value.permission
       includes_all_repositories = false
       can_create_org_repo       = false
@@ -292,8 +301,8 @@ data:
           error_message = "Team ${each.key}: a name is required, and Owners, Developers and Readers are reserved."
         }
         precondition {
-          condition     = length(try(each.value.repos, [])) > 0 && alltrue([for r in try(each.value.repos, []) : contains(keys(local.repos), "${each.value.org}/${r}")])
-          error_message = "Team ${each.key}: every repo must be a repository of the same org in the manifest."
+          condition     = (length(try(each.value.repos, [])) > 0 || try(each.value.units, null) == ["repo.packages"]) && alltrue([for r in try(each.value.repos, []) : contains(keys(local.repos), "${each.value.org}/${r}")])
+          error_message = "Team ${each.key}: every repo must be a repository of the same org in the manifest, and only a team whose units are exactly [\"repo.packages\"] may have none."
         }
         precondition {
           condition     = alltrue([for l in try(each.value.members, []) : contains(keys(local.users), l)])
