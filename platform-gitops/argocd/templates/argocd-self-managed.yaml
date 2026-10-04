@@ -18,13 +18,7 @@ spec:
     namespace: argocd
   syncPolicy:
     automated:
-      # TEMPORARY (2026-10-04): true for one sync, to delete the chart Dex
-      # objects orphaned by the standalone `dex` Deployment (#1553):
-      # argocd-dex-server Deployment, Service, ServiceAccount, Role and
-      # RoleBinding. The only other resources that required pruning were the
-      # redis-secret-init hook objects, which the chart recreates on every
-      # sync. A follow-up PR sets this back to false.
-      prune: true
+      prune: false
       selfHeal: true
     syncOptions:
       - CreateNamespace=false
