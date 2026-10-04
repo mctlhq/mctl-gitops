@@ -43,9 +43,10 @@ resource "zitadel_project" "argocd" {
   # only users of organizations that own it or were granted it.
   project_role_check = true
   has_project_check  = true
-  # Also what loads the user's grants into the token flow at all: without
-  # it ctx.v1.user.grants is null in the groups action below (measured on
-  # v4.19.2), and the claim would never be set.
+  # Load-bearing although Argo CD never reads ZITADEL's own role claim: it is
+  # what loads the user's grants into the token flow at all. Without it
+  # ctx.v1.user.grants is null in the groups action below (measured on
+  # v4.19.2), the claim is never set, and nobody gets an Argo CD group.
   project_role_assertion = true
 
   lifecycle {
@@ -82,10 +83,13 @@ resource "zitadel_project_grant" "argocd_tenant" {
   role_keys      = [zitadel_project_role.argocd_tenant[each.key].role_key]
 }
 
-# Every tenant user holds their tenant's role, as every member of a tenant
-# held its Backstage group before.
+# Opt-in: only a tenant user whose Vault entry carries "argocd": true holds
+# their tenant's role (owner decision on #1500). Membership of a tenant
+# organization alone grants no Argo CD access; with no flag, ZITADEL refuses
+# the sign-in (project_role_check above). Granting is a Vault-only change,
+# like adding the user.
 resource "zitadel_user_grant" "argocd_tenant" {
-  for_each = local.users
+  for_each = { for key, user in local.users : key => user if try(user.argocd, false) == true }
 
   org_id           = zitadel_org.tenant[each.value.tenant].id
   user_id          = zitadel_human_user.tenant[each.key].id

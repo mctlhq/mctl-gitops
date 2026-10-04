@@ -117,8 +117,9 @@ enrol again.
 
 - **Source.** One Vault secret per tenant, `secret/platform/zitadel/users/<tenant>`.
   Each field is one user: the field name is the user name, the value a JSON
-  object `{"email", "first_name", "last_name", "preferred_language"}`
-  (`preferred_language` is optional, default `en`). This repository is public,
+  object `{"email", "first_name", "last_name", "preferred_language", "argocd"}`
+  (`preferred_language` is optional, default `en`; `argocd` is optional,
+  default `false`, see "Argo CD sign-in" below). This repository is public,
   so the list is never in git. ExternalSecret `zitadel-iac-users` finds every
   secret under the path and folds them into `users.json` for the pod.
 - **Result.** One organization per tenant secret, named after the tenant, and
@@ -167,8 +168,12 @@ group:
   `platform-gitops/argocd/values.yaml`), held by the users in
   `argocd_admin_users` (login names of `MCTL` users). One role per tenant
   organization, named after the tenant (`argocd/rbac/tenants/<tenant>.csv`).
-  Each tenant organization is granted only its own role, and every user of
-  the tenant holds it.
+  Each tenant organization is granted only its own role, and a tenant user
+  holds it **only if** their Vault entry carries `"argocd": true` (opt-in,
+  owner decision on #1500). Without the flag the user is refused, like any
+  user without a role. Granting or revoking it is a Vault-only change; a
+  revoke plans a delete of `zitadel_user_grant.argocd_tenant["<tenant>/<user>"]`,
+  which needs that address in `allowedDeletes`.
 - **`groups` claim.** Argo CD needs a flat list of strings. ZITADEL's own role
   claim is a map, so the Actions v1 action `argocdGroups` copies the user's
   roles on this project, and nothing else, into `groups` at
@@ -183,8 +188,9 @@ group:
   and the secret go into `argocd/argocd-oidc-zitadel`, which `argocd-cm`
   references as `$argocd-oidc-zitadel:<key>`.
 
-Verified on a local v4.19.2: an admin gets `groups: ["admins"]`, a tenant user
-`["<tenant>"]`, a user of a tenant or of `MCTL` with no grant is refused, and
+Verified on a local v4.19.2: an admin gets `groups: ["admins"]`, a flagged
+tenant user `["<tenant>"]`, an unflagged tenant user or a user of `MCTL` with
+no grant is refused, and
 Forgejo (another project) still signs in users without any Argo CD role, with
 no `groups` claim.
 
