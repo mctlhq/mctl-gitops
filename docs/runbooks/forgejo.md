@@ -165,7 +165,8 @@ The desired state is in Vault, not here (this repository is public):
     "<name>": {"url": "https://host/group", "token_env": "SRC_TOKEN",
                "username": "oauth2", "insecure_skip_tls": false}
   },
-  "users": [{"login": "...", "email": "...", "full_name": "...", "bot": false}],
+  "users": [{"login": "...", "email": "...", "full_name": "...", "bot": false,
+             "oauth": {"source_id": 1, "subject": "<sub>"}}],
   "orgs": [{
     "name": "...", "full_name": "...",
     "owners": ["<login>"], "developers": ["<login>"], "readers": ["<login>"],
@@ -196,6 +197,17 @@ The desired state is in Vault, not here (this repository is public):
   The run fails on `admin`/`owner`, on the names Owners, Developers or
   Readers, on a repository not in the org's `repos`, and on a member not in
   `users`.
+- `oauth` binds the account to one identity of an authentication source:
+  `source_id` is the source's id (`MCTL` is 1, Site Administration >
+  Authentication Sources) and `subject` the identity's `sub` (for ZITADEL the
+  user id). Forgejo's OAuth callback matches (source, `sub`) on the user
+  before its linked-accounts table, so this re-points an existing account at
+  another identity and keeps its id, repositories and memberships; links in
+  Settings > Security keep working alongside. Removing `oauth` makes the
+  account local again and leaves the links. Proven on Forgejo 15.0.9 with
+  this provider (2026-10-04): the new identity signed in to the same account,
+  the old link still worked, password basic auth still worked, re-plan was
+  clean, and removing `oauth` sent the new identity back to the link page.
 - `"bot": true` marks a machine account (a CD system cloning, a service
   pushing): it is created without `must_change_password`, which would
   otherwise lock it out of git and the API with 403.
