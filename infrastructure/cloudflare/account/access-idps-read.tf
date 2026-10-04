@@ -22,7 +22,7 @@ data "cloudflare_zero_trust_access_identity_providers" "all" {
         for id in [var.projects_mcp_google_idp_id, var.projects_mcp_otp_idp_id] :
         contains([for idp in self.result : idp.id], id)
       ])
-      error_message = "The plan identity cannot see the account's Access identity providers: the Google and one-time PIN providers are missing from the listing. CF_ACCOUNT_READ_TOKEN needs `Access: Identity Providers Read`."
+      error_message = "The plan identity cannot see the account's Access identity providers: the Google or the one-time PIN provider (or both) is missing from the listing. CF_ACCOUNT_READ_TOKEN needs `Access: Identity Providers Read`."
     }
   }
 }
