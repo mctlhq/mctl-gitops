@@ -127,6 +127,26 @@ data:
           for login in try(o.developers, []) : "${o.name}/${login}" => { org = o.name, login = login }
         }
       ]...)
+
+      # Teams scoped to named repositories, for an account that must not reach
+      # the whole org (a bot that pushes to one repository). Unlike Developers
+      # and Readers, the repository list is explicit and enforced both ways:
+      # a repository dropped from "repos" is removed from the team.
+      scoped_teams = merge([
+        for o in local.m.orgs : {
+          for t in try(o.teams, []) : "${o.name}/${t.name}" => merge(t, { org = o.name })
+        }
+      ]...)
+      scoped_members = merge([
+        for tk, t in local.scoped_teams : {
+          for login in try(t.members, []) : "${tk}/${login}" => { team = tk, login = login }
+        }
+      ]...)
+      scoped_repos = merge([
+        for tk, t in local.scoped_teams : {
+          for repo in try(t.repos, []) : "${tk}/${repo}" => { team = tk, repo = "${t.org}/${repo}" }
+        }
+      ]...)
     }
 
     resource "forgejo_user" "this" {
@@ -224,6 +244,46 @@ data:
       user    = forgejo_user.this[each.value.login].login
     }
 
+    resource "forgejo_team" "scoped" {
+      for_each = local.scoped_teams
+
+      organization              = forgejo_organization.this[each.value.org].name
+      name                      = each.value.name
+      description               = "${title(each.value.permission)} access to: ${join(", ", try(each.value.repos, []))}"
+      permission                = each.value.permission
+      includes_all_repositories = false
+      can_create_org_repo       = false
+      units_map                 = { for u in try(each.value.units, ["repo.code", "repo.issues", "repo.pulls", "repo.releases", "repo.wiki"]) : u => each.value.permission }
+
+      lifecycle {
+        # admin/owner would let the team manage the org's repositories and
+        # members; the built-in names are the teams above.
+        precondition {
+          condition     = contains(["read", "write"], each.value.permission)
+          error_message = "Team ${each.key}: permission must be read or write."
+        }
+        precondition {
+          condition     = !contains(["owners", "developers", "readers"], lower(each.value.name))
+          error_message = "Team ${each.key}: Owners, Developers and Readers are reserved."
+        }
+        precondition {
+          condition     = length(try(each.value.repos, [])) > 0 && alltrue([for r in try(each.value.repos, []) : contains(keys(local.repos), "${each.value.org}/${r}")])
+          error_message = "Team ${each.key}: every repo must be a repository of the same org in the manifest."
+        }
+        precondition {
+          condition     = alltrue([for l in try(each.value.members, []) : contains(keys(local.users), l)])
+          error_message = "Team ${each.key}: every member must be a user in the manifest."
+        }
+      }
+    }
+
+    resource "forgejo_team_member" "scoped" {
+      for_each = local.scoped_members
+
+      team_id = forgejo_team.scoped[each.value.team].id
+      user    = forgejo_user.this[each.value.login].login
+    }
+
     # Every repository of the org in every team that claims "all repositories".
     # Forgejo only adds a repository to such a team at the moment one of the two
     # is created, and the two race when one apply creates both: on 2026-10-03
@@ -232,7 +292,8 @@ data:
     # this one reads GET /teams/{id}/repos/{owner}/{repo} on every run (404 =
     # missing, so it is planned again) and adds with the idempotent PUT.
     # Removing it (repository dropped from the manifest) sends DELETE, which
-    # Forgejo ignores for an all-repositories team.
+    # Forgejo ignores for an all-repositories team. Scoped teams get only their
+    # own "repos", and there DELETE does take the repository away.
     locals {
       team_repos = merge([
         for kind, teams in { developers = forgejo_team.developers, readers = forgejo_team.readers } : merge([
@@ -241,10 +302,13 @@ data:
           }
         ]...)
       ]...)
+      scoped_team_repos = {
+        for k, v in local.scoped_repos : "scoped/${k}" => { team_id = forgejo_team.scoped[v.team].id, repo = v.repo }
+      }
     }
 
     resource "restapi_object" "team_repo" {
-      for_each = local.team_repos
+      for_each = merge(local.team_repos, local.scoped_team_repos)
 
       path                      = "/teams/${each.value.team_id}/repos"
       object_id                 = each.value.repo
@@ -299,8 +363,9 @@ data:
     #!/bin/sh
     # Reconcile Forgejo organisations to the manifest in Vault.
     #
-    #   1. terraform apply  users, orgs, teams, repositories, and every repository
-    #                       into the teams that cover all of them (main.tf)
+    #   1. terraform apply  users, orgs, teams, repositories, every repository
+    #                       into the teams that cover all of them, and the named
+    #                       ones into scoped teams (main.tf)
     #   2. branch sync      every branch listed in the manifest is fetched from its
     #                       source and pushed to Forgejo, fast-forward only
     #   3. terraform apply  again: Forgejo makes the first branch pushed into an

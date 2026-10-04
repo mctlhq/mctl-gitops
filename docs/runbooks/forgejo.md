@@ -139,6 +139,8 @@ The desired state is in Vault, not here (this repository is public):
   "orgs": [{
     "name": "...", "full_name": "...",
     "owners": ["<login>"], "developers": ["<login>"], "readers": ["<login>"],
+    "teams": [{"name": "Deployers", "permission": "write", "units": ["repo.code"],
+               "members": ["<login>"], "repos": ["<repo>"]}],
     "repos": [{
       "name": "...", "default_branch": "main",
       "branches": [{"name": "main", "source": "<name>", "path": "group/repo", "ref": "main"}]
@@ -155,6 +157,15 @@ The desired state is in Vault, not here (this repository is public):
   repository's membership in both teams and re-adds a missing one
   (`restapi_object.team_repo`): Forgejo's own "all repositories" flag only
   acts at creation time and loses repositories created in the same run.
+- `teams` are for an account that must not reach the whole org, typically a
+  bot that pushes to one repository: each is a team with `permission` `read`
+  or `write` on exactly the listed `repos` of that org. Leave such an account
+  out of `developers`, which reaches every repository. `units` defaults to
+  code, issues, pulls, releases and wiki; `["repo.code"]` is enough for git.
+  A repository dropped from `repos` is removed from the team on the next run.
+  The run fails on `admin`/`owner`, on the names Owners, Developers or
+  Readers, on a repository not in the org's `repos`, and on a member not in
+  `users`.
 - `"bot": true` marks a machine account (a CD system cloning, a service
   pushing): it is created without `must_change_password`, which would
   otherwise lock it out of git and the API with 403.
