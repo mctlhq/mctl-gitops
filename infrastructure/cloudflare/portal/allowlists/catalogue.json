@@ -87,6 +87,7 @@
       "mctl_remove_custom_domain",
       "mctl_request_lifecycle_handoff",
       "mctl_request_lifecycle_reconcile",
+      "mctl_request_work_item_execution",
       "mctl_resolve_agent",
       "mctl_resolve_incident",
       "mctl_resume_openclaw_deploy",
