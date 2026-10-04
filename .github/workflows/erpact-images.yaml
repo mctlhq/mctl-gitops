@@ -29,7 +29,9 @@ run-name: "erpact-images: ${{ inputs.image }}:${{ inputs.version }} (${{ inputs.
 # the image is built to an OCI archive and pushed by regctl in 20 MB chunks
 # (measured 2026-10-04: 300 MB layer, 15 chunks, OK).
 #
-# Versions are immutable: the run refuses a tag that already exists.
+# Versions are immutable: the run refuses a tag that already exists. After a
+# push the run keeps the newest KEEP_VERSIONS semver tags of the image and
+# deletes older ones (Forgejo's own cleanup rules exist only in its web UI).
 
 on:
   workflow_dispatch:
@@ -70,6 +72,9 @@ env:
   # 20 MB: well under Cloudflare's 100 MB, and finishes inside Traefik's 60 s
   # at anything above ~0.35 MB/s.
   CHUNK_BYTES: "20971520"
+  # Older semver tags of the same image are deleted after a successful push.
+  # A rollback target older than this has to be rebuilt from its source.
+  KEEP_VERSIONS: "10"
 
 jobs:
   build:
@@ -220,6 +225,10 @@ jobs:
             --label "org.opencontainers.image.source=$FORGEJO/$ORG/$REPO"
             --label "org.opencontainers.image.revision=$SHA"
             --label "org.opencontainers.image.version=$VERSION"
+            # One plain manifest per tag: no attestation index whose
+            # untagged children pruning would leave behind.
+            --provenance=false
+            --sbom=false
             --output "type=oci,dest=$RUNNER_TEMP/image.tar"
           )
           if [ -n "$VARIANT" ]; then
@@ -244,11 +253,42 @@ jobs:
           set -euo pipefail
           regctl registry set "$REGISTRY" --blob-chunk "$CHUNK_BYTES" --blob-max "$CHUNK_BYTES"
           regctl registry login "$REGISTRY" -u "$(cat "$RUNNER_TEMP/registry-user")" --pass-stdin < "$RUNNER_TEMP/registry-token"
-          rm -f "$RUNNER_TEMP/registry-token"
           regctl image import "$REF" "$RUNNER_TEMP/image.tar"
           digest=$(regctl image digest "$REF")
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           regctl registry logout "$REGISTRY"
+
+      - name: Prune old versions
+        env:
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          auth="$(cat "$RUNNER_TEMP/registry-user"):$(cat "$RUNNER_TEMP/registry-token")"
+          # The whole listing or nothing: a failed page fails the step before
+          # anything is deleted, never "fewer versions".
+          : > versions.txt
+          page=1
+          while :; do
+            body=$(curl -fsS -u "$auth" \
+              "$FORGEJO/api/v1/packages/$ORG?type=container&q=$IMAGE&limit=50&page=$page")
+            n=$(jq 'length' <<<"$body")
+            jq -r --arg n "$IMAGE" '.[] | select(.name == $n) | .version' <<<"$body" >> versions.txt
+            [ "$n" -lt 50 ] && break
+            page=$((page + 1))
+          done
+          grep -qxF "$VERSION" versions.txt || {
+            echo "::error::the listing does not show $VERSION just pushed; not pruning"; exit 1; }
+          # Only semver tags; digest-named versions are left alone.
+          grep -E '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' versions.txt \
+            | sort -t. -k1,1nr -k2,2nr -k3,3nr > semver.txt || true
+          tail -n +"$((KEEP_VERSIONS + 1))" semver.txt > prune.txt
+          while read -r old; do
+            [ "$old" = "$VERSION" ] && continue
+            echo "delete $ORG/$IMAGE:$old"
+            curl -fsS -X DELETE -u "$auth" "$FORGEJO/api/v1/packages/$ORG/container/$IMAGE/$old"
+          done < prune.txt
+          echo "semver tags: $(wc -l < semver.txt), deleted: $(wc -l < prune.txt)"
 
       - name: Summary
         env:

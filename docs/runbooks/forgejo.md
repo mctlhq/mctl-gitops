@@ -277,10 +277,19 @@ uses the registry's chunked upload (`PATCH` with `Content-Range`), e.g.
 --blob-max 20971520`; 20 MB chunks measured fine on 2026-10-04 (a 300 MB
 layer, 15 chunks). 50 MB chunks hit Traefik's 60 s from a slow uplink.
 
-Space. Packages live on `forgejo-data` with the repositories; there is no
-per-owner quota (chart defaults). A deleted package version is unlinked at
-once; its blobs are removed by the `cleanup_packages` cron at midnight, only
-once they are over 24 hours old.
+Space. Packages live on `forgejo-data` with the repositories.
+`[packages] LIMIT_TOTAL_OWNER_SIZE = 4G` caps each owner (org or user); a push
+over the cap is refused, and the fix is deleting old versions, not raising
+the cap past what the volume holds. `erpact-images.yaml` keeps the newest 10
+semver tags per image and deletes older ones after each successful push.
+That is a workflow step because Forgejo's own cleanup rules exist only in the
+web UI, with no API, so they could not be declared. A deleted version is
+unlinked at once; its blobs are removed by the `cleanup_packages` cron at
+midnight, once they are over 24 hours old.
+
+Known behaviour: org members with write (Owners, Developers, write teams)
+can push and delete every package of the org, not only the CI account. For
+erpact that includes the developer accounts. Accepted as is (2026-10-04).
 
 ## Upgrades
 
