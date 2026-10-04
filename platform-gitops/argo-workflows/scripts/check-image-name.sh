@@ -59,6 +59,11 @@ if [ ! -r "$LIST" ] || [ ! -d "$SERVICES" ]; then
   echo "cannot read ${LIST} or ${SERVICES}" >&2
   exit 2
 fi
+# Without the tenants tree every team would read as "not a tenant".
+if [ "$TENANT" = true ] && [ ! -d "$TENANTS" ]; then
+  echo "cannot read ${TENANTS}" >&2
+  exit 2
+fi
 
 # Every non-comment line must be one of the known forms, and there must be
 # exactly one registry line.

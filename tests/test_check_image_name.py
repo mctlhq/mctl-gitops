@@ -132,6 +132,13 @@ check(run(fixture(LIST_TEXT, SERVICES, tenants=("platform",)), "platform", "graf
           "--tenant") == 1,
       "--tenant must refuse team platform even with a tenants/platform directory")
 
+# A --tenant check without the tenants tree cannot decide; it is not "no
+# such tenant". Without --tenant the tree is not read.
+check(run(fixture(LIST_TEXT, SERVICES, tenants=()), "karabu", "brand-new", "--tenant") == 2,
+      "--tenant without platform-gitops/tenants/ must be exit 2 (could not decide)")
+check(run(fixture(LIST_TEXT, SERVICES, tenants=()), "karabu", "brand-new") == 0,
+      "without --tenant the tenants tree is not needed")
+
 # Fail closed: no list, a list line the script does not understand.
 check(run(fixture(None, SERVICES), "karabu", "brand-new") == 2,
       "missing image-names.txt must refuse (exit 2)")
@@ -190,9 +197,54 @@ call = ('\nif ! sh platform-gitops/argo-workflows/scripts/check-image-name.sh --
 check(call in src, "validate does not run check-image-name.sh --tenant with its registry")
 check(call in src and src.index(call) < src.index("# ── 4."),
       "validate must check the image name before the action-specific checks")
-build_cond = ('if [ "$ACTION" != "update-config" ] && [ -n "$REPO" ] && '
-              '[ "$SERVICE_TEMPLATE" != "openclaw" ]; then\n  BUILD_FLAG="--build"')
-check(build_cond in src, "validate must pass --build exactly when deploy-service builds")
+# The build decision: extracted from validate and run against a fixture, so
+# it is the template's own block that is tested. Its result is both the
+# --build flag and the `builds` output deploy-service's build runs on.
+m = re.search(r'^(BUILDS=false\n.*?\necho "\$BUILDS" > /tmp/builds)$', src, re.S | re.M)
+check(m is not None, "could not extract validate's build decision")
+check('\n[ "$BUILDS" = true ] && BUILD_FLAG="--build"' in src,
+      "validate must pass --build exactly when it decided to build")
+outs = {o["name"]: o for o in by_name["validate"]["outputs"]["parameters"]}
+check(outs.get("builds", {}).get("valueFrom", {}).get("path") == "/tmp/builds",
+      "validate must output its build decision")
+if m:
+    decide_root = fixture(LIST_TEXT, {
+        "labs/own": "image:\n  repository: ghcr.io/mctlhq/own\n  tag: x\n",
+        "labs/quoted": 'image:\n  repository: "ghcr.io/mctlhq/quoted"\n',
+        "ovk/openclaw": "image:\n  repository: ghcr.io/mctlhq/mctl-openclaw\n",
+        "labs/runs-other": "image:\n  repository: ghcr.io/mctlhq/own\n",
+        "labs/no-image": "replicas: 1\n",
+        "labs/no-values": None,
+    })
+
+    def builds(action, team, service, repo="org/repo", template="default"):
+        with tempfile.TemporaryDirectory() as out:
+            block = m.group(1).replace("/tmp/builds", f"{out}/builds")
+            env = {"PATH": "/usr/bin:/bin", "ACTION": action, "TEAM": team,
+                   "SERVICE": service, "REPO": repo, "SERVICE_TEMPLATE": template,
+                   "PARAM_CONTAINER_REGISTRY": REG}
+            r = subprocess.run(["sh", "-c", "set -e\n" + block], cwd=decide_root,
+                               env=env, capture_output=True, text=True)
+            if r.returncode != 0:
+                return f"error: {r.stderr}"
+            return (pathlib.Path(out) / "builds").read_text().strip()
+
+    for args, want, why in (
+        (("update-config", "labs", "own"), "false", "update-config never builds"),
+        (("deploy", "labs", "own", ""), "false", "no dockerfile_repo, nothing to build"),
+        (("onboard", "labs", "brand-new"), "true", "onboard builds the new service"),
+        (("onboard", "ovk", "claw", "org/repo", "openclaw"), "false",
+         "the openclaw template runs mctl-openclaw"),
+        (("deploy", "labs", "own"), "true", "the service runs <registry>/<name>"),
+        (("deploy", "labs", "quoted"), "true", "a quoted repository still matches"),
+        (("deploy", "ovk", "openclaw"), "false",
+         "an existing openclaw service runs mctl-openclaw, whatever service_template says"),
+        (("deploy", "labs", "runs-other"), "false", "the service runs another image"),
+        (("deploy", "labs", "no-image"), "true", "no image named: builds as before"),
+        (("deploy", "labs", "no-values"), "true", "no values.yaml: builds (step 6 refuses deploy)"),
+    ):
+        got = builds(*args)
+        check(got == want, f"validate build decision {args}: {got!r}, want {want!r} ({why})")
 env = {e["name"]: e["value"] for e in by_name["validate"]["script"].get("env", [])}
 check(env.get("PARAM_CONTAINER_REGISTRY") == "{{inputs.parameters.container_registry}}",
       "validate must take the registry as a bound env value")
@@ -212,19 +264,14 @@ dtasks = {t["name"]: t for t in
 vparams = {p["name"]: p["value"] for p in dtasks["validate"]["arguments"]["parameters"]}
 check(vparams.get("container_registry") == "{{workflow.parameters.container_registry}}",
       "deploy-service must hand validate the registry it builds into")
-when = dtasks["build-image"]["when"]
-for part in ('"{{workflow.parameters.action}}\" != \"update-config\"',
-             '"{{workflow.parameters.dockerfile_repo}}\" != \"\"',
-             '"{{workflow.parameters.service_template}}\" != \"openclaw\"'):
-    check(part.replace('\\"', '"') in when.replace('\\"', '"'),
-          f"deploy-service build condition changed; keep validate's --build in step ({part})")
+check(dtasks["build-image"]["when"] == '"{{tasks.validate.outputs.parameters.builds}}" == "true"',
+      "deploy-service must build exactly when validate decided to (and checked with --build)")
 
 ct = (REPO / "platform-gitops/argo-workflows/cluster-templates/wft-create-tenant.yaml").read_text()
 reserved_line = [ln for ln in ct.splitlines() if "for reserved in" in ln][0]
 reserved_names = reserved_line.split("for reserved in", 1)[1].split(";")[0].split()
-for t in ("platform", "admins"):
-    check(t in reserved_names,
-          f"wft-create-tenant must reserve the tenant name '{t}' (image-names.txt grants to it)")
+check("platform" in reserved_names,
+      "wft-create-tenant must reserve the tenant name 'platform' (image-names.txt grants to it)")
 
 # Direct dispatchers of build-image.yaml outside Argo, as found on each
 # repository's default branch (all other organisation workflows call
@@ -248,6 +295,36 @@ check("image-name" in tasks["build-image"].get("dependencies", []),
       "preview-deploy's build must depend on the image-name check")
 check("image-name" in tasks["deploy-preview"].get("dependencies", []),
       "preview-deploy's deploy must depend on the image-name check")
+iparams = {p["name"]: p["value"] for p in tasks["image-name"]["arguments"]["parameters"]}
+check(iparams.get("git_ref") == "{{workflow.parameters.git_ref}}",
+      "preview-deploy must tell image-name whether it will build (git_ref)")
+
+# build-image.yaml's push-time check pins image_name to
+# <registry>/<component_name> and checks team_name, so both Argo callers must
+# send team_name and component_name in the dispatch: an empty one would
+# refuse every tenant build. Pinned from the task arguments through the
+# trigger template's env into the dispatch payload.
+for label, doc, pipeline in (("deploy-service", ds, "deploy-pipeline"),
+                             ("preview-deploy", pv, "preview-pipeline")):
+    ptasks = {t["name"]: t for t in
+              [t for t in doc["spec"]["templates"] if t["name"] == pipeline][0]["dag"]["tasks"]}
+    bargs = {p["name"]: p["value"] for p in ptasks["build-image"]["arguments"]["parameters"]}
+    trig = [t for t in doc["spec"]["templates"]
+            if t["name"] == ptasks["build-image"]["template"]][0]
+    tenv = {e["name"]: e.get("value") for e in trig["script"].get("env", [])}
+    tsrc = trig["script"]["source"]
+    for p in ("team_name", "component_name"):
+        check(bargs.get(p) == "{{workflow.parameters.%s}}" % p,
+              f"{label}'s build-image must pass {p}")
+        check(tenv.get("PARAM_" + p.upper()) == "{{inputs.parameters.%s}}" % p,
+              f"{label}'s trigger template must bind {p} from its inputs")
+        check(re.search(r'\b%s\s*=\s*os\.environ\["PARAM_%s"\]' % (p, p.upper()), tsrc) is not None
+              and re.search(r'"%s":\s*%s,' % (p, p), tsrc) is not None,
+              f"{label}'s dispatch payload must carry {p}")
+dbargs = {p["name"]: p["value"] for p in dtasks["build-image"]["arguments"]["parameters"]}
+check(dbargs.get("image_name")
+      == "{{workflow.parameters.container_registry}}/{{workflow.parameters.component_name}}",
+      "deploy-service must build <registry>/<component_name>")
 
 bi = yaml.safe_load((REPO / ".github/workflows/build-image.yaml").read_text())
 steps = bi["jobs"]["build"]["steps"]

@@ -49,6 +49,12 @@ spec:
           - name: image_tag
             valueFrom:
               path: /tmp/image_tag
+          - name: builds
+            valueFrom:
+              path: /tmp/builds
+            # "true" when deploy-service will build and push
+            # <registry>/<component_name>; its build-image step runs on this
+            # alone, so the check below and the build cannot disagree.
       script:
         image: alpine/git:2.43.0
         command: [sh]
@@ -126,8 +132,8 @@ spec:
           # team may only use a name it owns. Rule and reviewed grants:
           # config/image-names.txt. --tenant: TEAM is requester-supplied here,
           # so it must be an existing tenant (never "platform"). --build when
-          # deploy-service will build (its build-image `when`, kept in step
-          # by tests/test_check_image_name.py). Any non-zero exit (refused,
+          # deploy-service will build (the `builds` output, which is the only
+          # thing its build-image step runs on). Any non-zero exit (refused,
           # or could not decide) stops here, for every action.
           #
           # This is check-then-act: two teams onboarding the same free name
@@ -135,10 +141,31 @@ spec:
           # the push sees the first team's services/ commit only once it has
           # landed; closing the window fully needs the claim and the check
           # in one commit.
-          BUILD_FLAG=""
-          if [ "$ACTION" != "update-config" ] && [ -n "$REPO" ] && [ "$SERVICE_TEMPLATE" != "openclaw" ]; then
-            BUILD_FLAG="--build"
+          #
+          # Whether it builds: never for update-config or without a
+          # dockerfile_repo. On onboard the new service's template decides
+          # (openclaw services run the fixed image mctl-openclaw). On any
+          # other action the existing service decides: if its values.yaml
+          # names an image and none of them is <registry>/<component_name>,
+          # it runs another image, and building this name would push one
+          # nothing runs. A missing values.yaml or one naming no image
+          # builds, as before (and deploy then fails at step 6).
+          BUILDS=false
+          if [ "$ACTION" != "update-config" ] && [ -n "$REPO" ]; then
+            VALUES="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
+            REGISTRY_RE=$(printf '%s' "$PARAM_CONTAINER_REGISTRY" | sed 's/[.]/\\./g')
+            if [ "$ACTION" = "onboard" ]; then
+              if [ "$SERVICE_TEMPLATE" != "openclaw" ]; then BUILDS=true; fi
+            elif [ -f "$VALUES" ] && grep -qE '^[[:space:]]*repository:' "$VALUES" \
+                && ! grep -qE "^[[:space:]]*repository:[[:space:]]*[\"']?${REGISTRY_RE}/${SERVICE}[\"']?[[:space:]]*\$" "$VALUES"; then
+              echo "ℹ️ ${TEAM}/${SERVICE} runs another image; not building ${PARAM_CONTAINER_REGISTRY}/${SERVICE}"
+            else
+              BUILDS=true
+            fi
           fi
+          echo "$BUILDS" > /tmp/builds
+          BUILD_FLAG=""
+          [ "$BUILDS" = true ] && BUILD_FLAG="--build"
           if ! sh platform-gitops/argo-workflows/scripts/check-image-name.sh --tenant $BUILD_FLAG \
               . "$PARAM_CONTAINER_REGISTRY" "$TEAM" "$SERVICE"; then
             echo "❌ component_name '${SERVICE}' is not available to team '${TEAM}'"
