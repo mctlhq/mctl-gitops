@@ -267,7 +267,21 @@ spec:
               cpu: 650m
               memory: 320Mi
 
+    # Manifests next to the chart that the mctl-api repo cannot carry,
+    # because they belong to this platform rather than to the service: today
+    # the Secret the zitadel-iac Job fills with MCTL_OIDC_PROVIDERS, and the
+    # Role that lets it do so (mctlhq/mctl-api#434).
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/mctl-platform/mctl-api
+
   ignoreDifferences:
+    # Written by the zitadel-iac Job, not by Argo CD
+    # (infra-components/mctl-platform/mctl-api/oidc-zitadel.yaml).
+    - kind: Secret
+      name: mctl-api-oidc-zitadel
+      jsonPointers:
+        - /data
     # ESO admission webhook injects defaults absent in git, plus legacy
     # last-applied-configuration annotations can pin stale apiVersion across
     # chart churn. Mirror the tenants ApplicationSet pattern.
@@ -290,7 +304,8 @@ spec:
         # ExternalSecrets now state explicitly instead, so git matches live.
         #
         # This whole ExternalSecret rule is in fact inert for THIS Application: its
-        # only source is the mctl-api repo's `helm/` chart, which renders no ExternalSecret. The
+        # sources (the mctl-api repo's `helm/` chart and the oidc-zitadel
+        # manifests) render no ExternalSecret. The
         # ExternalSecrets in this namespace live in the bootstrap chart and belong
         # to root-app. Kept rather than deleted so the rule stays uniform with the
         # apps that do own ExternalSecrets.
