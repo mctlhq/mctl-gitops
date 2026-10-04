@@ -24,11 +24,11 @@ locals {
   cloudflare_access_callback = "https://mbank.cloudflareaccess.com/cdn-cgi/access/callback"
 
   # Who may sign in to Cloudflare Access through ZITADEL: the platform
-  # admins, the same set that holds the Argo CD `admins` group (argocd.tf),
+  # admins (admins.tf), the same set that holds the Argo CD `admins` group,
   # so the two cannot drift apart. Tenant users (Vault
   # secret/platform/zitadel/users/*) are never in it. This grant is the gate;
   # Access policies may narrow it per application.
-  cloudflare_access_users = local.argocd_admin_users
+  cloudflare_access_users = local.platform_admin_user_ids
 }
 
 resource "zitadel_project" "cloudflare_access" {
@@ -58,28 +58,13 @@ resource "zitadel_project_role" "cloudflare_access" {
   display_name = "Cloudflare Access sign-in"
 }
 
-data "zitadel_human_users" "cloudflare_access" {
-  for_each = local.cloudflare_access_users
-
-  org_id            = local.mctl_org_id
-  login_name        = each.key
-  login_name_method = "TEXT_QUERY_METHOD_EQUALS"
-}
-
 resource "zitadel_user_grant" "cloudflare_access" {
   for_each = local.cloudflare_access_users
 
   org_id     = local.mctl_org_id
-  user_id    = one(data.zitadel_human_users.cloudflare_access[each.key].user_ids)
+  user_id    = each.value
   project_id = zitadel_project.cloudflare_access.id
   role_keys  = [zitadel_project_role.cloudflare_access.role_key]
-
-  lifecycle {
-    precondition {
-      condition     = length(data.zitadel_human_users.cloudflare_access[each.key].user_ids) == 1
-      error_message = "Expected exactly one MCTL user with login name ${each.key}."
-    }
-  }
 }
 
 # A web application, since Access redirects back to a server-side callback,

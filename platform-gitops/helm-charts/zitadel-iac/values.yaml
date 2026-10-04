@@ -32,6 +32,10 @@ image:
 #   #1501 (ERPact project, Frappe OIDC application, verified e-mail action,
 #   the data of erpact/erpact-oidc-zitadel): no new action; creates, plus an
 #   in-place update of the erpact organization's userinfo trigger.
+#   Platform admins (admins.tf: personal MCTL users from Vault
+#   secret/platform/zitadel/admins, and their Argo CD, Vault and Cloudflare
+#   Access grants): no new action; all creates. Removing an admin from Vault
+#   plans deletes, which allowedDeletes refuses until the addresses are listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"

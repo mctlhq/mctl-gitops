@@ -34,15 +34,21 @@ containers:
           configMapKeyRef:
             name: zitadel-iac-inputs
             key: allowed-deletes
-      # Tenant users and the SMTP password come from Vault through the
-      # ExternalSecrets in infra-components/identity/zitadel. Neither is
-      # optional: a missing Secret fails the pod rather than planning an
-      # empty tenant list, which would read as "delete every tenant".
+      # Tenant users, platform admins and the SMTP password come from Vault
+      # through the ExternalSecrets in infra-components/identity/zitadel. None
+      # is optional: a missing Secret fails the pod rather than planning an
+      # empty list, which would read as "delete every tenant" or "remove
+      # every admin".
       - name: TF_VAR_tenant_users
         valueFrom:
           secretKeyRef:
             name: zitadel-iac-users
             key: users.json
+      - name: TF_VAR_platform_admins
+        valueFrom:
+          secretKeyRef:
+            name: zitadel-iac-admins
+            key: admins.json
       - name: TF_VAR_smtp_password
         valueFrom:
           secretKeyRef:
