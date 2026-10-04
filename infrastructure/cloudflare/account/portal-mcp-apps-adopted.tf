@@ -25,8 +25,9 @@
 #
 # `oauth_configuration` is unset, as it is live.
 #
-# Policies. Each application has exactly one policy, "Phase 0 pilot users"
-# (allow; include the two pilot users; no exclude, no require). All three
+# Policies. Each application has one policy of its own, "Phase 0 pilot users"
+# (allow; include the two pilot users; no exclude, no require), plus the
+# shared ZITADEL policy at precedence 2 (portal-zitadel.tf). All three
 # are app-scoped (`reusable: false`) and are
 # absent from GET /accounts/{account_id}/access/policies, so there is no
 # standalone cloudflare_zero_trust_access_policy to import: each is referenced
@@ -81,6 +82,10 @@ resource "cloudflare_zero_trust_access_application" "portal_member_tg" {
       id         = local.adopted_member_apps.tg.policy_id
       precedence = 1
     },
+    {
+      id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
+      precedence = 2
+    },
   ]
 
   lifecycle {
@@ -114,6 +119,10 @@ resource "cloudflare_zero_trust_access_application" "portal_member_seerrsense" {
       id         = local.adopted_member_apps.seerrsense.policy_id
       precedence = 1
     },
+    {
+      id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
+      precedence = 2
+    },
   ]
 
   lifecycle {
@@ -146,6 +155,10 @@ resource "cloudflare_zero_trust_access_application" "portal_member_api" {
     {
       id         = local.adopted_member_apps.api.policy_id
       precedence = 1
+    },
+    {
+      id         = cloudflare_zero_trust_access_policy.zitadel_access_role.id
+      precedence = 2
     },
   ]
 
