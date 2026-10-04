@@ -77,4 +77,11 @@ externalSecret:
 envFrom:
   - secretRef:
       name: coolify-mcp-secrets
+  # "Log in with MCTL account" (ZITADEL_*), filled by the zitadel-iac Job
+  # (helm-charts/zitadel-iac/iac/labs-apps.tf, infra-components/labs).
+  # Optional: until it is filled, or on an image before ZITADEL support
+  # (mctl-coolify-mcp#10), the app runs with GitHub and Google only.
+  - secretRef:
+      name: coolify-mcp-oidc-zitadel
+      optional: true
 extraContainers: []

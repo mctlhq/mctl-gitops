@@ -50,6 +50,14 @@ envFrom:
       name: "labs-mctl-academy-db-creds"
   - secretRef:
       name: mctl-academy-secrets
+  # "Log in with MCTL account" (ZITADEL_*), filled by the zitadel-iac Job
+  # (helm-charts/zitadel-iac/iac/labs-apps.tf, infra-components/labs). A
+  # Secret rather than `env`, since ZITADEL_ISSUER contains a colon.
+  # Optional: until it is filled, or on an image before ZITADEL support
+  # (mctl-academy#279), the app runs with GitHub only.
+  - secretRef:
+      name: mctl-academy-oidc-zitadel
+      optional: true
 externalSecret:
   targetSecret: mctl-academy-secrets
   data:

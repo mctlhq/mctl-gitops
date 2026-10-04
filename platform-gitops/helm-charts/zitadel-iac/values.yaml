@@ -59,6 +59,9 @@ image:
 #   erpact-frappe redirect URIs, of erpact/erpact-oidc-zitadel and of the
 #   MCTL organization's userinfo trigger. The action's address move is a
 #   no-op.
+#   Labs apps sign-in (labs-apps.tf: project "Labs apps", OIDC applications
+#   coolify-mcp and mctl-academy, the data of labs/coolify-mcp-oidc-zitadel
+#   and labs/mctl-academy-oidc-zitadel): no new action; all creates.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"

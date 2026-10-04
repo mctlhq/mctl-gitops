@@ -480,6 +480,38 @@ checks it both ways before anyone else is pointed at it:
 6. An `erpact` user with no matching Frappe user gets Frappe's 403 "Signup is
    disabled".
 
+### Labs apps sign-in ("Log in with MCTL account")
+
+`iac/labs-apps.tf` gives the public labs apps an extra sign-in button next
+to their own GitHub/Google sign-in (never instead of it):
+
+- **Project `Labs apps`** in MCTL with no project or role check: any account
+  on this instance may sign in. Nothing of the platform's is granted: a
+  ZITADEL user there gets a personal coolify-mcp tenant record or an academy
+  learner account, keyed by the ZITADEL `sub` alone and never matched to a
+  GitHub or Google user by e-mail.
+- **Applications `coolify-mcp`** (redirect
+  `https://coolify.mctl.ai/auth/zitadel/callback`) and **`mctl-academy`**
+  (`https://academy.mctl.ai/api/auth/oauth2/callback/zitadel`): web,
+  `client_secret_basic`, code flow (the apps add PKCE), user info in the ID
+  token.
+- The Job writes `ZITADEL_ISSUER`, `ZITADEL_CLIENT_ID`,
+  `ZITADEL_CLIENT_SECRET` and `ZITADEL_DISPLAY_NAME` into
+  `labs/coolify-mcp-oidc-zitadel` and `labs/mctl-academy-oidc-zitadel`
+  (`infra-components/labs/oidc-zitadel.yaml`, Application
+  `labs-oidc-zitadel`). The services read them through an optional
+  `envFrom`; a pod started before the Job filled its Secret shows the button
+  after one restart.
+- **Who can actually use it** is set by `login_policy.tf`: with
+  `allow_register = false` nobody can create an account, so the button serves
+  the platform admins and tenant users this repository creates. A newcomer
+  who clicks it reaches the ZITADEL login page, has no way to register, and
+  goes back to GitHub. Opening registration is an instance-wide policy
+  change of its own.
+- Moderators and stats admins of the academy are listed by GitHub login; a
+  ZITADEL user is listed only as `zitadel:<sub>` in
+  `MCTL_ACADEMY_MODERATORS` / `MCTL_ACADEMY_STATS_ADMINS`.
+
 ## Known risk: same site as tenant workloads
 
 `auth.mctl.ai` shares the registrable domain `mctl.ai` with tenant
