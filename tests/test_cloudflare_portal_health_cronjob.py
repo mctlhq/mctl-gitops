@@ -45,7 +45,9 @@ HEADER = """\
 
 
 def render_configmap(script: str) -> str:
-    body = "".join(("    " + line) if line.strip() else "\n" for line in script.splitlines(keepends=True))
+    # Only an empty line stays unindented; a whitespace-only one is indented
+    # like any other so it round-trips unchanged through the block scalar.
+    body = "".join(line if line == "\n" else "    " + line for line in script.splitlines(keepends=True))
     return (
         HEADER
         + "apiVersion: v1\n"

@@ -38,9 +38,12 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      # Deadline and TTL as in access-login-probe.yaml: room for slow
+      # sockets and an uncached pull, and a failed Job that does not hold
+      # KubeJobFailed for a day after the next run recovered.
       backoffLimit: 0
-      activeDeadlineSeconds: 120
-      ttlSecondsAfterFinished: 86400
+      activeDeadlineSeconds: 180
+      ttlSecondsAfterFinished: 3600
       template:
         metadata:
           labels:
