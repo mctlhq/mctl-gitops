@@ -647,6 +647,14 @@ jobs:
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: tofu test -no-color
 
+      # login_texts.json must override every Login V2 text that names
+      # Zitadel in the release the zitadel chart pin deploys; a ZITADEL bump
+      # that adds one fails here instead of shipping it.
+      - name: Login V2 texts cover the pinned release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-zitadel-login-texts.py
+
       - name: Render the chart and validate the manifests
         env:
           KUBECONFORM_VERSION: "0.8.0"

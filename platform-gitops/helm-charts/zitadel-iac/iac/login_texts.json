@@ -1,0 +1,242 @@
+{
+  "ar": {
+    "common": {
+      "title": "تسجيل الدخول باستخدام MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "تسجيل الدخول باستخدام MCTL"
+    },
+    "register": {
+      "description": "أنشئ حساب MCTL الخاص بك."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "بالنقر فوق سماح، فإنك تسمح لـ {appName} و MCTL استخدام معلوماتك وفقاً لشروط الخدمة وسياسات الخصوصية الخاصة بكل منهما. يمكنك إلغاء هذا الوصول في أي وقت."
+      }
+    }
+  },
+  "de": {
+    "common": {
+      "title": "Anmelden mit MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Mit MCTL anmelden"
+    },
+    "register": {
+      "description": "Erstellen Sie Ihr MCTL-Konto."
+    },
+    "device": {
+      "request": {
+        "description": "Durch Klicken auf Zulassen erlauben Sie {appName} und MCTL, Ihre Informationen gemäß ihren jeweiligen Nutzungsbedingungen und Datenschutzrichtlinien zu verwenden. Sie können diesen Zugriff jederzeit widerrufen."
+      }
+    }
+  },
+  "en": {
+    "common": {
+      "title": "Login with MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Sign in with MCTL"
+    },
+    "register": {
+      "description": "Create your MCTL account."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "By clicking Allow, you allow {appName} and MCTL to use your information in accordance with their respective terms of service and privacy policies. You can revoke this access at any time."
+      }
+    }
+  },
+  "es": {
+    "common": {
+      "title": "Iniciar sesión con MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Iniciar sesión con MCTL"
+    },
+    "register": {
+      "description": "Crea tu cuenta MCTL."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "Al hacer clic en Permitir, autorizas a {appName} y a MCTL a usar tu información de acuerdo con sus respectivos términos de servicio y políticas de privacidad. Puedes revocar este acceso en cualquier momento."
+      }
+    }
+  },
+  "fr": {
+    "common": {
+      "title": "Connexion avec MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Se connecter avec MCTL"
+    },
+    "register": {
+      "description": "Créez votre compte MCTL."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "En cliquant sur Autoriser, vous permettez à {appName} et à MCTL d'utiliser vos informations conformément à leurs conditions d'utilisation et politiques de confidentialité respectives. Vous pouvez révoquer cet accès à tout moment."
+      }
+    }
+  },
+  "hu": {
+    "common": {
+      "title": "Bejelentkezés az MCTL-lel"
+    },
+    "idp": {
+      "signInWithZitadel": "Bejelentkezés MCTL-lel"
+    },
+    "register": {
+      "description": "Hozd létre az MCTL-fiókodat."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "Az Engedélyezés gombra kattintva engedélyezed, hogy a(z) {appName} és az MCTL a saját felhasználási feltételeik és adatvédelmi irányelveik szerint használja az adataidat. Ezt a hozzáférést bármikor visszavonhatod."
+      }
+    }
+  },
+  "it": {
+    "common": {
+      "title": "Accedi con MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Accedi con MCTL"
+    },
+    "register": {
+      "description": "Crea il tuo account MCTL."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "Cliccando su Consenti, autorizzi {appName} e MCTL a utilizzare le tue informazioni in conformità con i rispettivi termini di servizio e politiche sulla privacy. Puoi revocare questo accesso in qualsiasi momento."
+      }
+    }
+  },
+  "ja": {
+    "common": {
+      "title": "MCTLでログイン"
+    },
+    "idp": {
+      "signInWithZitadel": "MCTLでサインイン"
+    },
+    "register": {
+      "description": "MCTLアカウントを作成します。"
+    },
+    "device": {
+      "request": {
+        "disclaimer": "「許可」をクリックすることで、{appName}とMCTLがそれぞれの利用規約およびプライバシーポリシーに従ってあなたの情報を使用することを許可します。このアクセスはいつでも取り消すことができます。"
+      }
+    }
+  },
+  "nl": {
+    "common": {
+      "title": "Inloggen met MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Aanmelden met MCTL"
+    },
+    "register": {
+      "description": "Maak jouw MCTL-account aan."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "Door op Toestaan te klikken geeft u {appName} en MCTL toestemming om jouw informatie te gebruiken overeenkomstig hun respectieve servicevoorwaarden en privacybeleid. U kunt deze toegang op elk moment intrekken."
+      }
+    }
+  },
+  "pl": {
+    "common": {
+      "title": "Zaloguj się za pomocą MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Zaloguj się przez MCTL"
+    },
+    "register": {
+      "description": "Utwórz konto MCTL."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "Klikając Zezwól, pozwalasz tej aplikacji i MCTL na korzystanie z Twoich informacji zgodnie z ich odpowiednimi warunkami użytkowania i politykami prywatności. Możesz cofnąć ten dostęp w dowolnym momencie."
+      }
+    }
+  },
+  "pt": {
+    "common": {
+      "title": "Entrar com MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Entrar com MCTL"
+    },
+    "register": {
+      "description": "Crie sua conta MCTL."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "Ao clicar em Permitir, você autoriza {appName} e MCTL a usar suas informações de acordo com seus respectivos termos de serviço e políticas de privacidade. Você pode revogar este acesso a qualquer momento."
+      }
+    }
+  },
+  "ru": {
+    "common": {
+      "title": "Войти с MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Войти через MCTL"
+    },
+    "register": {
+      "description": "Создайте свой аккаунт MCTL."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "Нажимая «Разрешить», вы разрешаете этому приложению и MCTL использовать вашу информацию в соответствии с их условиями использования и политиками конфиденциальности. Вы можете отозвать этот доступ в любое время."
+      }
+    }
+  },
+  "tr": {
+    "common": {
+      "title": "MCTL ile Giriş"
+    },
+    "idp": {
+      "signInWithZitadel": "MCTL ile Giriş"
+    },
+    "register": {
+      "description": "MCTL hesabınızı oluşturun."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "İzin Ver'e tıklayarak, {appName} ve MCTL'nin bilgilerinizi kendi hizmet şartları ve gizlilik politikalarına uygun olarak kullanmasına izin vermiş olursunuz. Bu erişimi istediğiniz zaman iptal edebilirsiniz."
+      }
+    }
+  },
+  "uk": {
+    "common": {
+      "title": "Вхід через MCTL"
+    },
+    "idp": {
+      "signInWithZitadel": "Увійти через MCTL"
+    },
+    "register": {
+      "description": "Створіть свій обліковий запис MCTL."
+    },
+    "device": {
+      "request": {
+        "disclaimer": "Натискаючи Дозволити, ви дозволяєте {appName} та MCTL використовувати вашу інформацію відповідно до їхніх умов надання послуг та політик конфіденційності. Ви можете скасувати цей доступ у будь-який час."
+      }
+    }
+  },
+  "zh": {
+    "common": {
+      "title": "使用 MCTL 登录"
+    },
+    "idp": {
+      "signInWithZitadel": "用 MCTL 登录"
+    },
+    "register": {
+      "description": "创建您的 MCTL 账户。"
+    },
+    "device": {
+      "request": {
+        "disclaimer": "点击“允许”即表示您允许此应用程序和 MCTL 根据其各自的服务条款和隐私政策使用您的信息。您可以随时撤销此访问权限。"
+      }
+    }
+  }
+}
