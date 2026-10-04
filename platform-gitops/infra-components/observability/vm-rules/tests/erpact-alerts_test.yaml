@@ -1,0 +1,89 @@
+# Unit tests for erpact-alerts.yaml (group erpact.availability).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec`.
+rule_files:
+  - generated/erpact-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: a reachable site stays quiet
+    input_series:
+      - series: 'probe_success{job="erpact-sites",instance="https://erpact-bar2.mctl.ai/api/method/ping"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ErpactSiteDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ErpactSiteProbeAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: four failed probes are still under the 5m threshold
+    input_series:
+      - series: 'probe_success{job="erpact-sites",instance="https://erpact-bar2.mctl.ai/api/method/ping"}'
+        values: '1 1 0 0 0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ErpactSiteDown
+        exp_alerts: []
+
+  - interval: 1m
+    name: a site down for more than 5m fires a warning naming it
+    input_series:
+      - series: 'probe_success{job="erpact-sites",instance="https://erpact-bar2.mctl.ai/api/method/ping"}'
+        values: '1 1 0x18'
+      - series: 'probe_success{job="erpact-sites",instance="https://erpact-control.mctl.ai/api/method/ping"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ErpactSiteDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: erpact
+              job: erpact-sites
+              instance: https://erpact-bar2.mctl.ai/api/method/ping
+            exp_annotations:
+              summary: erpact site https://erpact-bar2.mctl.ai/api/method/ping is down
+              description: >-
+                https://erpact-bar2.mctl.ai/api/method/ping has not answered 2xx
+                for 5 minutes. The probe goes through Cloudflare and Traefik to
+                the site's bench in namespace erpact, and /api/method/ping needs
+                nginx, gunicorn and the site's MariaDB database. Check
+                probe_http_status_code (502/504 point at the bench pods, 404 at
+                a missing site), the erpact Argo CD applications, and pod
+                mariadb-0.
+
+  - interval: 1m
+    name: a failing probe is not an absent probe
+    input_series:
+      - series: 'probe_success{job="erpact-sites",instance="https://erpact-bar2.mctl.ai/api/method/ping"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ErpactSiteProbeAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: no erpact probe series fires the absence alert
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ErpactSiteProbeAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: erpact
+              job: erpact-sites
+            exp_annotations:
+              summary: erpact site probes have stopped reporting
+              description: >-
+                No probe_success series with job="erpact-sites" for 15 minutes,
+                so ErpactSiteDown cannot fire. Check the erpact-sites VMProbe in
+                the monitoring namespace and the blackbox-exporter deployment.

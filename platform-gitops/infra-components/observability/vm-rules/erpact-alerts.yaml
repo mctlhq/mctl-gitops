@@ -1,0 +1,48 @@
+# Alerts on tenant erpact's site probes (blackbox/vmprobes.yaml, job
+# erpact-sites). The environment is not production, so both are warnings; they
+# exist so that a broken site is noticed before someone tries to use it.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: erpact-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: availability
+spec:
+  groups:
+    - name: erpact.availability
+      interval: 60s
+      rules:
+        - alert: ErpactSiteDown
+          # Five consecutive failed probes at a 60s interval: rides out a pod
+          # restart (the benches run one replica each) but not an outage.
+          expr: probe_success{job="erpact-sites"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact site {{ $labels.instance }} is down"
+            description: >-
+              {{ $labels.instance }} has not answered 2xx for 5 minutes. The
+              probe goes through Cloudflare and Traefik to the site's bench in
+              namespace erpact, and /api/method/ping needs nginx, gunicorn and
+              the site's MariaDB database. Check probe_http_status_code (502/504
+              point at the bench pods, 404 at a missing site), the erpact Argo CD
+              applications, and pod mariadb-0.
+
+        - alert: ErpactSiteProbeAbsent
+          # Without this, deleting or breaking the VMProbe would silence
+          # ErpactSiteDown with nothing to say so.
+          expr: absent(probe_success{job="erpact-sites"})
+          for: 15m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact site probes have stopped reporting"
+            description: >-
+              No probe_success series with job="erpact-sites" for 15 minutes, so
+              ErpactSiteDown cannot fire. Check the erpact-sites VMProbe in the
+              monitoring namespace and the blackbox-exporter deployment.
