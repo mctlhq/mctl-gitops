@@ -1,17 +1,24 @@
 # Tasks: issue-737-test-work-context-controlled-work-item-f
 
-DO NOT APPROVE. These are owner or operator actions, not implementer tasks. No commit to `mctl-telegram` is expected.
+There are no implementation tasks. This proposal must NOT be approved.
 
-- [ ] 1. Owner runs `/mctl link <code>` and then `/mctl work https://github.com/mctlhq/mctl-telegram/issues/737` from Telegram Saved Messages. DoD: the reply from `WorkHandler.handleOpen` shows "Bound to work item <id>" and a start request id.
-- [ ] 2. (depends on 1) Owner repeats `/mctl work status` until the request line reads `fulfilled, execution <id>`. DoD: `pending`/`claimed`/`fulfilled` transitions observed and the execution id noted.
-- [ ] 3. (depends on 2) Owner opens `/work-items/<id>` in the portal (mctl-portal#126). DoD: the portal shows the same WorkItem, execution id and snapshot pointer as `/mctl work status`.
-- [ ] 4. (depends on 3) Record the evidence on #443, plus the REST observations for mctl-api#341. DoD: a comment on #443 lists ids and states only, with no Telegram identifiers or message content.
-- [ ] 5. (depends on 4) Leave this proposal unapproved, and cancel or abandon the DevLoop `dev-loop-mctlhq-mctl-telegram-737`. DoD: no implementer run and no `feat/agents-*` PR exists for this issue.
-- [ ] 6. (depends on 4) Close issue #737. DoD: issue state is CLOSED.
+- [ ] 1. (Owner, manual, outside the implementer) Confirm `/mctl work status`
+  shows the #737 start request as `fulfilled` with this investigation's
+  execution id, and that the portal `/work-items/<id>` shows the same execution
+  and snapshot pointer — DoD: evidence recorded on mctlhq/mctl-telegram#443 and
+  mctlhq/mctl-api#341.
+- [ ] 2. (Owner, manual, depends on 1) End the parked DevLoop for #737 without
+  approving it (e.g. `mctl_abandon_dev_loop`, reason "controlled test item for
+  #443") and leave the proposal un-accepted — DoD: no `feat/agents-issue-737-*`
+  branch or PR exists in `mctlhq/mctl-telegram`.
 
 ## Tests
-- [ ] T1. No new tests. The existing suites `go test ./internal/agent/control/... ./internal/workctx/... ./internal/db/...` remain green on main (sanity check only, no change).
-- [ ] T2. Manual: the cross-surface check in steps 1-3 above, following `docs/work-context.md` "Manual cross-surface verification".
+- [ ] T1. `git log` / PR list on `mctlhq/mctl-telegram` shows no change
+  attributable to issue #737.
+- [ ] T2. `/mctl work status` in Saved Messages renders the request line via
+  `formatRequestState` in `internal/agent/control/work.go` as `fulfilled`.
 
 ## Rollback
-Nothing ships, so there is nothing to roll back in `mctl-telegram`. If an implementer PR is opened by mistake, close it unmerged and delete its branch. If the live session misbehaves, set `WORK_CONTEXT_ENABLED=false` and restart, as `docs/work-context.md` "Rollback" describes. Work items that were already created remain valid state in mctl-api.
+Nothing to roll back: no code, config or docs change is made. If the proposal
+was approved by mistake, abandon the DevLoop, close any resulting PR unmerged,
+and mark the proposal `rejected`.
