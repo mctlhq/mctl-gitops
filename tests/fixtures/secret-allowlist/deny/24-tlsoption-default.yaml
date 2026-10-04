@@ -1,4 +1,4 @@
-# expect: Traefik objects are not allowed
+# expect: Traefik objects are not allowed in this namespace (got TLSOption)
 # Named "default", this would become Traefik's global TLS option and drop the
 # origin-pull client-certificate check (core-infra/traefik-origin-pull.yaml).
 apiVersion: traefik.io/v1alpha1

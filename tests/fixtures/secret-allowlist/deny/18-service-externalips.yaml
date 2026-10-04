@@ -1,4 +1,4 @@
-# expect: must be ClusterIP
+# expect: must be ClusterIP without externalIPs (no NodePort, LoadBalancer or ExternalName); got externalIPs 203.0.113.10
 apiVersion: v1
 kind: Service
 metadata:

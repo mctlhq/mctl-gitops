@@ -63,13 +63,19 @@ kubectl wait --for=condition=Established --timeout=60s \
 echo "== policies from the rendered bootstrap chart"
 helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/bootstrap/values.yaml" \
   -f "$FIXTURES/values-test.yaml" > "$WORK/bootstrap.yaml"
-python3 - "$WORK/bootstrap.yaml" "$POLICY" > "$WORK/policy.yaml" <<'PY'
+# The render must hold exactly one policy and one binding for each name in
+# $POLICIES: a policy added to the chart but not here would go untested,
+# and one listed here but not rendered would only show up as a timeout.
+python3 - "$WORK/bootstrap.yaml" "$POLICY" "$POLICIES" > "$WORK/policy.yaml" <<'PY'
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d
         and d.get("kind") in ("ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding")
         and d["metadata"]["name"].startswith(sys.argv[2] + "-")]
-if len(docs) != 10:
-    sys.exit(f"expected five policies and five bindings in the render, found {len(docs)}")
+want = sorted(sys.argv[3].split())
+for kind in ("ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"):
+    got = sorted(d["metadata"]["name"] for d in docs if d["kind"] == kind)
+    if got != want:
+        sys.exit(f"{kind}s in the render do not match $POLICIES:\n  render:    {got}\n  POLICIES:  {want}")
 print(yaml.safe_dump_all(docs))
 PY
 kubectl apply -f "$WORK/policy.yaml" >/dev/null
