@@ -371,7 +371,11 @@ spec:
               # (#1601). Credentials come from env (envValueFrom above).
               # ssl_mode require as mctl-api and the academy datasource use
               # it: CNPG serves TLS with its own CA, which is not verified.
-              # max_open_conn stays under the role's connectionLimit (10).
+              # max_open_conn keeps two pods under the role's connectionLimit
+              # (10): a rolling update runs the old and the new pod together.
+              # At 8 each the new pod exited on "too many connections for role
+              # grafana" (live 2026-10-04 15:46, and 2 of 3 local trials); at
+              # 4 each, 0 of 9.
               # Rollback: drop this section and the two GF_DATABASE_* env
               # entries; Grafana starts on an empty SQLite again.
               database:
@@ -379,7 +383,7 @@ spec:
                 host: shared-pg-rw.platform-db.svc.cluster.local:5432
                 name: grafana
                 ssl_mode: require
-                max_open_conn: 8
+                max_open_conn: 4
                 max_idle_conn: 2
               # #1560: Secure on every cookie, and a __Host- session cookie a
               # tenant host on *.mctl.ai cannot shadow (it would need
