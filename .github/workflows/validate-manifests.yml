@@ -170,7 +170,7 @@ jobs:
             --set surfacePortalToken.enabled=true > "$tmpdir/on.yaml"
           kubeconform -strict -summary -schema-location default \
             -schema-location "$CRD_SCHEMA_LOCATION" "$tmpdir/on.yaml"
-          for marker in 'name: mctl-api-surface-portal' 'name: backstage-surface-portal' 'surfacePortalTokenSecret: mctl-api-surface-portal' 'property: portal-token' 'name: MCTL_SURFACE_PORTAL_TOKEN'; do
+          for marker in 'name: mctl-api-surface-portal' 'name: backstage-surface-portal' 'surfacePortalTokenSecret: mctl-api-surface-portal' 'property: portal-token' 'name: MCTL_SURFACE_PORTAL_TOKEN' 'surfaceToken: ${MCTL_SURFACE_PORTAL_TOKEN}'; do
             grep -qF "$marker" "$tmpdir/on.yaml" || { echo "::error::flag on: missing '$marker'"; exit 1; }
             if grep -qF "$marker" "$tmpdir/off.yaml"; then echo "::error::flag off: '$marker' rendered"; exit 1; fi
           done

@@ -424,6 +424,17 @@ spec:
                   redirectUris:
                     - https://rules.mctl.ai/api/auth/callback
                     - https://labs-mctl-rules.mctl.ai/api/auth/callback
+            {{- if (default dict .Values.surfacePortalToken).enabled }}
+            # plugins/work-items-backend (mctlhq/mctl-portal#126). This
+            # appConfig is the only config the pod loads, so the repo's
+            # app-config.production.yaml workItems block never applies here.
+            # surfaceToken comes from the optional backstage-surface-portal env;
+            # mutations stay off.
+            workItems:
+              baseUrl: https://api.mctl.ai
+              surfaceToken: ${MCTL_SURFACE_PORTAL_TOKEN}
+              actionsEnabled: false
+            {{- end }}
             resourceUsage:
               kubeConfigType: token
               kubeApiUrl: https://kubernetes.default.svc
