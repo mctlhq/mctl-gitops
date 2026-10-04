@@ -40,6 +40,9 @@ image:
 #   application, the data of monitoring/grafana-oidc-zitadel): no new
 #   action; all creates, plus an in-place update of the groups action's
 #   script.
+#   Grafana sign-out (grafana.tf: a second post-logout URI and the
+#   signout-redirect-url key of monitoring/grafana-oidc-zitadel): no new
+#   action; in-place updates.
 #   Platform admins (admins.tf: personal MCTL users from Vault
 #   secret/platform/zitadel/admins, and their Argo CD, Vault and Cloudflare
 #   Access grants): no new action; all creates. Removing an admin from Vault

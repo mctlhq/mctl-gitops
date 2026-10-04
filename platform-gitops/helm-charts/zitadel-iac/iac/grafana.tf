@@ -14,6 +14,10 @@
 
 locals {
   grafana_url = "https://grafana.mctl.ai"
+  # Where ZITADEL sends the browser after Grafana's sign-out ends the ZITADEL
+  # session (end_session below). Grafana's login page; with oauth_auto_login
+  # it goes straight to ZITADEL, which now has no session and asks again.
+  grafana_post_logout_url = "${local.grafana_url}/login"
   # Matched by role_attribute_path in
   # bootstrap/templates/observability/monitoring.yaml.
   grafana_admin_group = "admins"
@@ -66,7 +70,7 @@ resource "zitadel_application_oidc" "grafana" {
   grant_types               = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
   response_types            = ["OIDC_RESPONSE_TYPE_CODE"]
   redirect_uris             = ["${local.grafana_url}/login/generic_oauth"]
-  post_logout_redirect_uris = ["${local.grafana_url}/"]
+  post_logout_redirect_uris = ["${local.grafana_url}/", local.grafana_post_logout_url]
   access_token_type         = "OIDC_TOKEN_TYPE_BEARER"
   dev_mode                  = false
   # Grafana reads `groups` from the ID token before it calls userinfo.
@@ -79,11 +83,24 @@ resource "kubernetes_secret_v1_data" "grafana_oidc" {
     namespace = "monitoring"
   }
 
-  # Read by Grafana as GF_AUTH_GENERIC_OAUTH_CLIENT_ID / _CLIENT_SECRET
-  # (envValueFrom in monitoring.yaml).
+  # Read by Grafana as GF_AUTH_GENERIC_OAUTH_CLIENT_ID / _CLIENT_SECRET /
+  # _SIGNOUT_REDIRECT_URL (envValueFrom in monitoring.yaml).
+  #
+  # signout-redirect-url: Grafana's "Sign out" only ends its own session, and
+  # with oauth_auto_login the browser goes straight back through ZITADEL,
+  # whose session signs it in again. Sending it to ZITADEL's end_session
+  # instead ends that session too. Grafana adds id_token_hint itself while
+  # the user's token is valid (it treats a URL carrying
+  # post_logout_redirect_uri as OIDC logout); client_id lets ZITADEL check
+  # the post-logout URI against this application when it is not.
   data = {
     client-id     = zitadel_application_oidc.grafana.client_id
     client-secret = zitadel_application_oidc.grafana.client_secret
+    signout-redirect-url = format(
+      "https://auth.mctl.ai/oidc/v1/end_session?client_id=%s&post_logout_redirect_uri=%s",
+      urlencode(zitadel_application_oidc.grafana.client_id),
+      urlencode(local.grafana_post_logout_url),
+    )
   }
 
   field_manager = "zitadel-iac"
