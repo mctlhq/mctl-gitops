@@ -426,6 +426,13 @@ jobs:
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
 
+      - name: Unit-test create-tenant's existing-tenant checks
+        # create-tenant creates a tenant: an existing one fails validate unless
+        # reprovision=true, and the commit step refuses one that appeared
+        # after validate. Runs the template's own extracted blocks against a
+        # fixture checkout, with git clone stubbed.
+        run: python3 tests/test_wft_create_tenant_existing.py
+
       - name: Unit-test the shepherd's commit-and-push staging
         # commit-and-push is the only step that writes agents-state back to
         # git, and it stages through `git add` pathspecs. A pathspec that
