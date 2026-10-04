@@ -127,17 +127,30 @@ class ScheduledDispatchWorkflow:
     @workflow.run
     async def run(self, target: ScheduledDispatchInput) -> DispatchResult:
         not_before = workflow.now()          # deterministic, fixed for this fire
-        return await workflow.execute_activity(
-            dispatch_and_observe,
-            DispatchInput(target.repo, target.workflow_file, target.ref, not_before),
-            start_to_close_timeout=timedelta(minutes=8),
-            heartbeat_timeout=timedelta(minutes=1),
-            retry_policy=RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=30),
-                                     non_retryable_error_types=["DispatchRejected", "RunNotObserved", "NoGitHubToken"]),
-        )
+        try:
+            return await workflow.execute_activity(
+                dispatch_and_observe,
+                DispatchInput(target.repo, target.workflow_file, target.ref, not_before),
+                start_to_close_timeout=timedelta(minutes=8),
+                heartbeat_timeout=timedelta(minutes=1),
+                retry_policy=RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=30),
+                                         non_retryable_error_types=["DispatchRejected", "RunNotObserved", "NoGitHubToken"]),
+            )
+        except ActivityError as original:    # owner correction: a Failed workflow alone alerts nobody
+            try:
+                await workflow.execute_activity(
+                    report_dispatch_failure,
+                    FailureReport(target.repo, target.workflow_file, workflow.info().workflow_id,
+                                  _error_type(original), str(original.cause or original)),
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+            except ActivityError:
+                workflow.logger.exception("failure report could not be filed")
+            raise original                   # the ORIGINAL error fails the execution
 ```
 
-`ScheduledDispatchInput` holds `repo`, `workflow_file` and `ref`, so the schedule action's arguments stay plain data. **[Owner correction 2026-10-04]** On a terminal `ActivityError` the workflow first calls the `report_dispatch_failure` activity (bounded retry; it opens or comments on one `scheduled-dispatch-failed` issue in the target repo with the workflow id, error type and message), then re-raises the ORIGINAL error so the execution is marked **Failed**. If reporting itself fails, that is logged and the original error is still what propagates. See requirements.md and tasks.md task 3. That failed execution is the visible signal, and it appears in Temporal visibility and in the worker's Prometheus metrics (`telemetry_config`).
+`ScheduledDispatchInput` holds `repo`, `workflow_file` and `ref`, so the schedule action's arguments stay plain data. **[Owner correction 2026-10-04]** On a terminal `ActivityError` the workflow first calls the `report_dispatch_failure` activity (bounded retry; it opens or comments on one `scheduled-dispatch-failed` issue in the target repo with the workflow id, error type and message), then re-raises the ORIGINAL error so the execution is marked **Failed**. If reporting itself fails, that is logged and the original error is still what propagates. See requirements.md, tasks.md task 2a (the activity) and task 3 (the call site). That failed execution is the visible signal, and it appears in Temporal visibility and in the worker's Prometheus metrics (`telemetry_config`).
 
 Why this is bounded to one dispatch per fire:
 - Every attempt runs the pre-check first.

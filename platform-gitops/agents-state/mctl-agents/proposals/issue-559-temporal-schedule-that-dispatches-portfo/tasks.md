@@ -8,6 +8,12 @@
   - No run within `OBSERVE_TIMEOUT` (5 min) raises non-retryable `RunNotObserved`.
   - The activity heartbeats while polling.
   - Constants are named at module level: `POLL_INTERVAL`, `OBSERVE_TIMEOUT`, `SKEW_SLACK`.
+- [ ] 2a. **[Owner correction 2026-10-04]** In the same module, add `FailureReport` (repo, workflow_file, workflow_id, error_type, message) and the `report_dispatch_failure` activity. — DoD:
+  - Token comes from `_resolve_token`; an empty token raises without an unauthenticated request.
+  - Ensure label `scheduled-dispatch-failed` exists in the target repo: `GET /repos/{repo}/labels/{name}`; on 404 `POST /repos/{repo}/labels`. Any other non-2xx or transport error raises.
+  - Find the open alert issue with `GET /repos/{repo}/issues?state=open&labels=scheduled-dispatch-failed&per_page=100`, matching the exact title `Scheduled dispatch failed: <workflow_file>`. A non-2xx response, a transport error or a malformed body raises `AlertIssueSearchUnreadable`, which is **never** read as "no issue", because that would open duplicate alert issues.
+  - If a matching issue is found, `POST .../issues/{n}/comments`. If none is found, `POST /repos/{repo}/issues` with the title, the label, and a body naming the Temporal workflow id, error type, message and the fire's UTC time. Any non-2xx raises.
+  - Returns the issue number and URL. 429, 5xx and transport errors are retryable. Other 4xx are non-retryable.
 - [ ] 3. Add `orchestrator/temporal/workflows/scheduled_dispatch.py` with `ScheduledDispatchInput` and `ScheduledDispatchWorkflow` (depends on 2). — DoD:
   - The workflow fixes `not_before = workflow.now()` once and calls the activity with `RetryPolicy(maximum_attempts=3, non_retryable_error_types=[...])`, `start_to_close_timeout` of 8 min and `heartbeat_timeout` of 1 min.
   - It does not swallow activity errors, so a failure fails the workflow execution.
