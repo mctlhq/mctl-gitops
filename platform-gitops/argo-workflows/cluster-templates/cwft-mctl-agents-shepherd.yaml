@@ -785,6 +785,8 @@ spec:
           # the cron shepherd delegates mctl-docs' merge to the DevLoop's
           # gated activity instead of merging in-pod. It must match the
           # mctl-agents-worker env; revert both together after the proof.
+          - name: MCTL_POLICY_APPROVALS
+            value: "mctl-api"
           - name: MCTL_POLICY_MERGE_APPROVAL
             value: "require"
           - name: SHEPHERD_MERGE_APPROVAL_SERVICES
