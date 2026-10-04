@@ -201,10 +201,10 @@ against the file; (c) the root sets `path = "mctl"`, with the role listed in
 `allowedDeletes`, removes the remount grant and renames the policy's `oidc`
 paths to `mctl` (the owner re-applies the policy file).
 
-**Recovery, if (c) ever applies without the grant** (only before (d)). The
-Job destroys the role first and the remount then fails with a 403: the mount
-stays at `auth/oidc` with no login role, and later runs refuse to plan. Finish the move by hand
-(owner, admin token), after applying the grant:
+**Recovery, if (c) ever applies without the grant** (only before (d)). The Job
+destroys the role first and the remount then fails with a 403: the mount stays
+at `auth/oidc` with no login role, and later runs refuse to plan. Finish the
+move by hand (owner, admin token), after applying the grant:
 
 ```bash
 vault write sys/remount from=auth/oidc to=auth/mctl
@@ -222,7 +222,10 @@ grant at all, and before it the grant allowed exactly `auth/oidc` to
    (`vault write sys/remount from=auth/mctl to=auth/oidc`).
 3. Revert (c) and (d) in git; the policy then needs the `oidc` paths again,
    re-applied by the owner.
-4. Resume the CronJob and widen `allowedActions` again once a run re-plans
+4. Expect a state fix-up before that run plans clean: the provider tracks
+   the mount by its path, so `tofu state rm vault_jwt_auth_backend.oidc`
+   and an import at `oidc` may be needed (not verified; rehearse it).
+5. Resume the CronJob and widen `allowedActions` again once a run re-plans
    clean.
 
 Every human signs in again, as with the move itself. This path is not

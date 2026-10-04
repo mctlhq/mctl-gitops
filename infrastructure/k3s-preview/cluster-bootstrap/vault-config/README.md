@@ -321,8 +321,9 @@ all refused (403). Each grant was checked by removing it: without
 **The move from `auth/oidc` to `auth/mctl`** (docs/runbooks/vault-human-auth.md)
 needed a temporary `sys/remount` grant, limited by `allowed_parameters` to
 `from=auth/oidc`, `to=auth/mctl`. The cleanup step removed it and renamed the
-`oidc` paths to `mctl`, so the Job keeps no remount ability. Re-apply the
-file after that change merges, as above, and diff it byte-identical. The end
+`oidc` paths to `mctl`, so the Job keeps no remount ability. The owner
+applied that file before the cleanup change merged, as above, and it was
+diffed byte-identical (the Job touches only `mctl` paths by then). The end
 state was proven on a local Vault 1.17.2: the root re-plans clean, and
 `sys/remount` gets a 403.
 
