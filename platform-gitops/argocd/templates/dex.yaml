@@ -56,6 +56,11 @@ metadata:
     app.kubernetes.io/component: dex-server
 spec:
   replicas: 1
+  # Auth codes and sessions live in this pod's memory: two pods behind the
+  # Service during a rolling update would split a login between stores.
+  # A few seconds of no Dex is the more honest failure.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: dex
@@ -91,6 +96,15 @@ spec:
           args:
             - |
               set -eu
+              # Known answer first: the hex-to-byte decode below must
+              # reproduce Go's base64url(sha256(""))[:40] in this image, or
+              # a wrong but well-formed secret would pass the length check.
+              probe="$(printf %s "" | sha256sum | cut -d' ' -f1 | sed 's/\(..\)/\\x\1/g')"
+              probe="$(printf '%b' "$probe" | base64 | tr '+/' '-_' | cut -c1-40)"
+              if [ "$probe" != "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hS" ]; then
+                echo "hex-to-byte decoding in this image does not match Go" >&2
+                exit 1
+              fi
               digest="$(printf %s "$ARGOCD_SERVER_SECRETKEY" | sha256sum | cut -d' ' -f1 | sed 's/\(..\)/\\x\1/g')"
               ARGOCD_DEX_CLIENT_SECRET="$(printf '%b' "$digest" | base64 | tr '+/' '-_' | cut -c1-40)"
               # Fail closed: a broken pipeline must not start Dex with an
@@ -171,3 +185,20 @@ spec:
             name: argocd-dex-config
         - name: tmp
           emptyDir: {}
+---
+# SOC F11, as for argocd-server and argocd-repo-server in values.yaml: no
+# voluntary eviction of the singleton every Dex login depends on.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dex
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: dex
+    app.kubernetes.io/part-of: argocd
+    app.kubernetes.io/component: dex-server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dex

@@ -20,7 +20,9 @@
 # After step 4, argocd-server must be Ready without restarts, /api/dex served
 # through argocd-server must answer with issuer <url>/api/dex, and /auth/login
 # must redirect to /api/dex/auth, or to the ZITADEL authorize endpoint when
-# argocd-cm carries oidc.config instead of dex.config. Then a mutation run: Deployment `dex` scaled
+# argocd-cm carries oidc.config instead of dex.config. While Argo CD still
+# signs in through Dex, Dex's token endpoint must accept the argo-cd client
+# secret argocd-server derives, and refuse a wrong one. Then a mutation run: Deployment `dex` scaled
 # to 0 must make /api/dex fail, proving argocd-server proxies to that Dex and
 # not to a leftover one; scaled back, it must recover.
 #
@@ -56,7 +58,15 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
-fail() { echo "FAIL: $*" >&2; exit 1; }
+fail() {
+  echo "FAIL: $*" >&2
+  if [ -n "${KEEP_ON_FAIL:-}" ]; then
+    echo "kept: docker container $NAME, kubeconfig $WORK/kubeconfig.kept" >&2
+    cp "$WORK/kubeconfig" "$WORK/../kubeconfig.$NAME"
+    trap - EXIT
+  fi
+  exit 1
+}
 
 echo "== starting $K3S_IMAGE"
 docker run -d --privileged --name "$NAME" -p 127.0.0.1::6443 "$K3S_IMAGE" server \
@@ -162,7 +172,16 @@ for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18080/healthz && 
 discovery() { curl -s -o "$WORK/disc.json" -w '%{http_code}' -H "Host: ${URL#https://}" http://127.0.0.1:18080/api/dex/.well-known/openid-configuration; }
 
 echo "== /api/dex through argocd-server"
-code="$(discovery)"
+# Right after the rollout the first answers may still come from a pod that is
+# going away; every non-200 is printed with its body, and only one that does
+# not clear within a minute fails the run.
+code=""
+for _ in $(seq 1 12); do
+  code="$(discovery)"
+  [ "$code" = 200 ] && break
+  echo "   transient $code: $(head -c 200 "$WORK/disc.json") [$(kubectl -n argocd get pods -l 'app.kubernetes.io/name in (argocd-server,dex)' --no-headers 2>&1 | awk '{print $1":"$2":"$3}' | tr '\n' ' ')]"
+  sleep 5
+done
 [ "$code" = 200 ] || fail "/api/dex discovery returned $code"
 issuer="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["issuer"])' "$WORK/disc.json")"
 [ "$issuer" = "$URL/api/dex" ] || fail "issuer is $issuer, want $URL/api/dex"
@@ -182,6 +201,29 @@ case "$loc" in
   "303 $EXPECT_LOGIN"*) echo "   $loc" | cut -c1-120 ;;
   *) fail "/auth/login answered: $loc" ;;
 esac
+
+if [ -z "$OIDC_ISSUER" ]; then
+  # The only place argocd-server presents the argo-cd client secret is
+  # Dex's token endpoint; a discovery or authorize check cannot see a wrong
+  # one. Derive it from this cluster's server.secretkey exactly as
+  # argocd-server does (DexOAuth2ClientSecret), present it with a bogus code
+  # through argocd-server's proxy: client auth passing means invalid_grant,
+  # failing means invalid_client. Then the same with a wrong secret.
+  echo "== argo-cd client secret accepted by Dex (token endpoint)"
+  kubectl -n argocd get secret argocd-secret -o jsonpath='{.data.server\.secretkey}' > "$WORK/sk.b64"
+  token_error() { # <secret>
+    curl -s -u "argo-cd:$1" -H "Host: ${URL#https://}" \
+      -d grant_type=authorization_code -d code=bogus --data-urlencode "redirect_uri=$URL/auth/callback" \
+      http://127.0.0.1:18080/api/dex/token | python3 -c 'import json,sys; print(json.load(sys.stdin).get("error"))'
+  }
+  derived="$(python3 -c 'import base64,hashlib,sys; k=base64.b64decode(open(sys.argv[1]).read()); print(base64.urlsafe_b64encode(hashlib.sha256(k).digest()).decode()[:40])' "$WORK/sk.b64")"
+  err="$(token_error "$derived")"
+  [ "$err" = invalid_grant ] || fail "argo-cd with the derived secret: $err (want invalid_grant)"
+  echo "   derived secret: $err"
+  err="$(token_error "wrong-${derived#??????}")"
+  [ "$err" = invalid_client ] || fail "argo-cd with a wrong secret: $err (want invalid_client)"
+  echo "   wrong secret:   $err"
+fi
 
 if kubectl -n argocd get deploy dex >/dev/null 2>&1; then
   echo "== mutation: Deployment dex scaled to 0 must break /api/dex"
