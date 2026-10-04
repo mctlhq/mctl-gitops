@@ -211,6 +211,13 @@ vault write sys/remount from=auth/oidc to=auth/mctl
 
 The next Job run then creates the role and converges (verified locally).
 
+**Rolling the move back is owner-only.** The grant allows exactly
+`auth/oidc` to `auth/mctl`, so the Job is refused the reverse (403). To go
+back, the owner moves the mount by hand with an admin token
+(`vault write sys/remount from=auth/mctl to=auth/oidc`) and reverts (c) in
+git. Every human signs in again, as with the move itself. This path is not
+rehearsed: plan it on a local Vault first.
+
 ## Break-glass
 
 When ZITADEL is down, OIDC logins fail. Already-issued tokens keep working
