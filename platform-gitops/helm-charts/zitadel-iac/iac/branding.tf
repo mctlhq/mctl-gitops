@@ -11,8 +11,10 @@
 # them again when the brand changes there. The *_hash
 # arguments make the provider upload a file again when its content changes.
 #
-# There is no destroy: the provider's delete is a no-op, and removing this
-# resource would leave the last applied branding in place.
+# No import block, unlike login_policy.tf: this resource's create is the same
+# UpdateLabelPolicy call as its update, so it adopts the instance default as
+# is. There is no destroy either: the provider's delete is a no-op, and
+# removing this resource would leave the last applied branding in place.
 resource "zitadel_default_label_policy" "default" {
   primary_color    = "#b83d28" # terracottaDeep
   background_color = "#f1ede4" # paper
