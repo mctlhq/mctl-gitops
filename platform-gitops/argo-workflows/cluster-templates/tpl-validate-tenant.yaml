@@ -145,7 +145,8 @@ spec:
           # Whether it builds: never for update-config or without a
           # dockerfile_repo. Otherwise the values the service runs decide:
           # on onboard, the service template tpl-git-commit will render
-          # (selected the same way, __SERVICE_NAME__ substituted); on any
+          # (selected the same way, __SERVICE_NAME__ and __TEAM_NAME__
+          # substituted, the placeholders an image name can use); on any
           # other action, the existing values.yaml. If they name an image and
           # none of them is <registry>/<component_name>, the service runs
           # another image (e.g. the openclaw template's mctl-openclaw), and
@@ -154,7 +155,9 @@ spec:
           # then fails at step 6). The images are read by values-images.sh,
           # the reader check-image-name.sh uses too; a repository line it
           # cannot read fails here rather than guessing "no build", which
-          # would bump image.tag to a tag nothing pushed.
+          # would bump image.tag to a tag nothing pushed. So does an image
+          # still holding a __PLACEHOLDER__: a template using one this step
+          # does not substitute would otherwise read as "another image".
           BUILDS=false
           if [ "$ACTION" != "update-config" ] && [ -n "$REPO" ]; then
             TPLS="platform-gitops/argo-workflows/service-templates"
@@ -168,7 +171,7 @@ spec:
                 TPL="${TPLS}/default/values.yaml.tpl"
               fi
               VALUES=/tmp/onboard-values.yaml
-              sed -e "s|__SERVICE_NAME__|${SERVICE}|g" "$TPL" > "$VALUES"
+              sed -e "s|__SERVICE_NAME__|${SERVICE}|g" -e "s|__TEAM_NAME__|${TEAM}|g" "$TPL" > "$VALUES"
             else
               VALUES="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
             fi
@@ -176,6 +179,9 @@ spec:
               BUILDS=true
             elif ! IMAGES=$(sh platform-gitops/argo-workflows/scripts/values-images.sh "$VALUES"); then
               echo "❌ cannot read the images ${VALUES} runs; not deciding whether to build"
+              exit 1
+            elif printf '%s\n' "$IMAGES" | grep -q '__[A-Z][A-Z_]*__'; then
+              echo "❌ ${VALUES} names an image with an unsubstituted placeholder; not deciding whether to build"
               exit 1
             elif [ -z "$IMAGES" ] || printf '%s\n' "$IMAGES" | grep -qxF "${PARAM_CONTAINER_REGISTRY}/${SERVICE}"; then
               BUILDS=true

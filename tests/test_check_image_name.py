@@ -158,6 +158,14 @@ check(run(fixture(LIST_TEXT, bad_values), "ovk", "brand-new") == 2,
       "an unreadable values.yaml must make the values scan undecidable (exit 2)")
 check(run(fixture(LIST_TEXT, bad_values), "labs", "mctl-academy") == 0,
       "a granted name is decided before the values scan")
+# Text in a block scalar claims nothing and is not unreadable, whether a
+# key or a sequence item opens it (the openclaw values' `- |` scripts).
+script_values = {"labs/x": "command:\n  - |\n    repository: ghcr.io/mctlhq/in-script\n"
+                           "    echo \"repository: $X\"\nimage:\n  repository: ghcr.io/mctlhq/x\n"}
+check(run(fixture(LIST_TEXT, script_values), "ovk", "in-script") == 0,
+      "a repository line inside a `- |` script must not claim its image")
+check(run(fixture(LIST_TEXT, script_values), "ovk", "x") == 1,
+      "the real repository key after the script still claims its image")
 check(run(fixture(LIST_TEXT, SERVICES, reader=False), "ovk", "brand-new") == 2,
       "a missing values-images.sh must be exit 2")
 
@@ -241,7 +249,18 @@ if m:
         "labs/single": "image:\n  repository: 'ghcr.io/mctlhq/single'\n",
         "labs/flow": "image: {repository: ghcr.io/mctlhq/flow, tag: x}\n",
         "labs/block": "image:\n  repository: >-\n    ghcr.io/mctlhq/block\n",
+        "labs/script": "command:\n  - |\n    repository: ghcr.io/mctlhq/other\n"
+                       "image:\n  repository: ghcr.io/mctlhq/script\n",
     })
+    # Templates using the other substituted placeholder, and one this step
+    # does not substitute.
+    tdir = decide_root / "platform-gitops/argo-workflows/service-templates"
+    (tdir / "team-named").mkdir()
+    (tdir / "team-named/values.yaml.tpl").write_text(
+        "image:\n  repository: ghcr.io/mctlhq/__TEAM_NAME__-__SERVICE_NAME__\n")
+    (tdir / "odd").mkdir()
+    (tdir / "odd/values.yaml.tpl").write_text(
+        "image:\n  repository: ghcr.io/mctlhq/__OTHER__\n")
 
     def builds(action, team, service, repo="org/repo", template="default",
                ctype="base-service"):
@@ -276,6 +295,9 @@ if m:
          "an unknown template falls back to default, as tpl-git-commit does"),
         (("onboard", "labs", "brand-new", "org/repo", "default", "worker-service"), "true",
          "worker-service onboard renders the worker template"),
+        (("deploy", "labs", "script"), "true", "text in a `- |` script is not another image"),
+        (("onboard", "labs", "x", "org/repo", "team-named"), "false",
+         "__TEAM_NAME__ is substituted: the template runs labs-x, not x"),
     ):
         got = builds(*args)
         check(got == want, f"validate build decision {args}: {got!r}, want {want!r} ({why})")
@@ -284,8 +306,13 @@ if m:
     for svc in ("flow", "block"):
         got = builds("deploy", "labs", svc)
         check(got.startswith("error:"), f"validate must fail on labs/{svc}'s values, got {got!r}")
+    got = builds("onboard", "labs", "x", "org/repo", "odd")
+    check(got.startswith("error:"), f"validate must fail on an unsubstituted placeholder, got {got!r}")
 
 # values-images.sh: the one reader of `repository:` both callers use.
+check(subprocess.run(["git", "ls-files", "-s", str(READER)], cwd=REPO, capture_output=True,
+                     text=True).stdout.startswith("100755"),
+      "values-images.sh must be committed executable, like its siblings")
 def read_images(text):
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
         f.write(text)
@@ -316,14 +343,25 @@ for text, want in (
     ("image:\n  'repository': ghcr.io/mctlhq/a\n", (2, [])),
     ("- repository: ghcr.io/mctlhq/a\n", (2, [])),
     ("image:\n  repository: ghcr.io/mctlhq/a\r\n", (0, ["ghcr.io/mctlhq/a"])),
-    # Block scalars are text: JSON mentioning repository is skipped, a line
-    # that would be a repository key refuses, and the scalar ends at the
-    # next line no deeper than its key.
+    # Block scalars are text, skipped: opened by a key or by a sequence
+    # item, they hold the lines deeper than that key or dash, and end at the
+    # next line no deeper.
     ('config: |\n  {"subject": {"repository": ["x"]}}\nimage:\n  repository: x/a\n',
      (0, ["x/a"])),
-    ("config: |\n  repository: x/b\nimage:\n  repository: x/a\n", (2, [])),
-    ("env:\n  - name: X\n    value: >-\n      repository: y\n", (2, [])),
+    ("config: |\n  repository: x/b\nimage:\n  repository: x/a\n", (0, ["x/a"])),
+    ("env:\n  - name: X\n    value: >-\n      repository: y\n", (0, [])),
     ("note: |  # c\n  text\n\n  more\nimage:\n  repository: x/a\n", (0, ["x/a"])),
+    ("command:\n  - |\n    repository: x/y\n", (0, [])),
+    ('command:\n  - |\n    {"repository": ["x"]}\n    echo "repository: $X"\n', (0, [])),
+    # A sibling `- |` at the dash's column closes the previous scalar.
+    ("command:\n  - |\n    echo\n  - |\n    repository: x/y\n  - image:\n      repository: x/a\n",
+     (0, ["x/a"])),
+    ("command:\n- |\n  repository: x/y\nimage:\n  repository: x/a\n", (0, ["x/a"])),
+    # A key in a sequence item opens at the key's column, not the dash's.
+    ("jobs:\n  - run: |\n      repository: x/b\n    image:\n      repository: x/a\n",
+     (0, ["x/a"])),
+    ("c: &a |\n  repository: x/b\nd: !!str >-\n  repository: x/c\nimage:\n  repository: x/a\n",
+     (0, ["x/a"])),
 ):
     rc, out = read_images(text)
     check((rc, out if rc == 0 else []) == want,
