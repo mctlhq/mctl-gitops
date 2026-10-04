@@ -39,11 +39,13 @@ resource "cloudflare_zero_trust_access_application" "mcp_portal" {
     },
   ]
 
-  # ZITADEL ("MCTL") and the one-time PIN; Google is gone (#1500). Until
-  # 2026-10-04 this was `[]`, which Access reads as every provider in the
-  # account, Google included, whose OAuth client dies around 2026-10-17
-  # (#1328). The owner signed in here through ZITADEL on 2026-10-04 (Access
-  # log, connection=oidc) and the portal listed all six servers.
+  # ZITADEL ("MCTL") and the one-time PIN; Google removed deliberately
+  # (#1500). Until 2026-10-04 this was `[]`, which Access reads as every
+  # provider in the account, Google included. Google itself still works (its
+  # project was undeleted on 2026-09-21, #1328) and stays on other
+  # applications; the portal moved to ZITADEL by choice. The owner signed in
+  # here through ZITADEL on 2026-10-04 (Access log, connection=oidc) and the
+  # portal listed all six servers.
   #
   # The one-time PIN stays as the break-glass door: if ZITADEL is down, the
   # pilot policy below still admits its addresses by e-mail code. Who gets in
