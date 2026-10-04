@@ -1,0 +1,29 @@
+# Rendered as the second source of the `grafana-iac` Application
+# (bootstrap/templates/observability/grafana-iac.yaml), into the grafana-iac
+# namespace.
+
+image:
+  # Built from platform-gitops/images/grafana-iac by build-image.yaml; pinned
+  # by digest, so a re-pushed tag can never change what configures Grafana.
+  repository: ghcr.io/mctlhq/grafana-iac
+  tag: "1.13.1-4.47.0"
+  # build-image.yaml run 37212669451, from 38e89abd.
+  digest: "sha256:68e3a0537b1beeb9ae6cc7be4559bc486d2a972f221314d6e86b837ad361f4a8"
+
+# The plan actions the Job may apply, space-separated. A plan containing any
+# other action fails the Job before apply, with the plan in its log.
+#   First rollout (#1601 step 1): "no-op read create update". The Main Org
+#   "Internal" folder ACL is one create; "update" reverts a permission
+#   changed in the UI.
+# Widen deliberately, in the PR that needs it. "delete" is never an action
+# class here; deletes are allowed per address in allowedDeletes below.
+allowedActions: "no-op read create update"
+
+# Resource addresses the Job may destroy or replace, space-separated. Any
+# other delete in a plan fails the Job. Name the exact address, in the PR
+# that needs it, and empty the list once it has applied.
+allowedDeletes: ""
+
+# The CronJob's schedule. It reverts permissions changed in the UI, which no
+# sync observes. Offset from zitadel-iac (:17) and vault-human-auth-iac (:37).
+schedule: "47 * * * *"

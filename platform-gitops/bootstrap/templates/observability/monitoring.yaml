@@ -386,12 +386,27 @@ spec:
               # Domain=.mctl.ai, which the prefix forbids).
               security:
                 cookie_secure: true
+                # Locks a username after 5 failed password attempts (Grafana's
+                # default, stated so it cannot be dropped unnoticed). The
+                # only password path is basic auth from the grafana-iac Job
+                # (auth.basic below); the login form is disabled.
+                disable_brute_force_login_protection: false
               auth:
                 disable_login_form: true
                 oauth_auto_login: true
                 login_cookie_name: __Host-grafana_session
+              # Basic auth for the grafana-iac Job only, which signs in as the
+              # server admin on the in-cluster Service (#1601: creating
+              # organizations needs a server admin, which a service account
+              # cannot be). Unreachable from outside: the Ingress strips
+              # Authorization and Grafana's NetworkPolicy admits traefik,
+              # grafana-iac and vmagent only
+              # (infra-components/observability/grafana-access). The login
+              # form stays disabled, so no browser path takes a password.
+              # Rollback: enabled: false; the Job then fails with a 401 and
+              # changes nothing.
               auth.basic:
-                enabled: false
+                enabled: true
               # Signs in through ZITADEL (helm-charts/zitadel-iac/iac/grafana.tf).
               # Admins only: `groups` carries the user's roles on the ZITADEL
               # project "Grafana", which has no tenant roles, and ZITADEL
@@ -424,6 +439,12 @@ spec:
               ingressClassName: traefik
               annotations:
                 cert-manager.io/cluster-issuer: letsencrypt-prod
+                # Removes Authorization before Grafana sees it
+                # (infra-components/observability/grafana-access/middleware.yaml).
+                # Wave -1: the strip is live before the Grafana rollout (wave 0)
+                # that turns basic auth on; the middleware itself is wave -2.
+                traefik.ingress.kubernetes.io/router.middlewares: monitoring-grafana-strip-authorization@kubernetescrd
+                argocd.argoproj.io/sync-wave: "-1"
               hosts:
                 - grafana.mctl.ai
               tls:
@@ -809,6 +830,12 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/observability/secrets
+
+    # Grafana's edge and network boundary for in-cluster basic auth: the
+    # Authorization-stripping middleware and Grafana's NetworkPolicy (#1601).
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/grafana-access
 
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main

@@ -1,0 +1,28 @@
+{{- $_ := required "image.digest is required: pin the grafana-iac image by digest" .Values.image.digest -}}
+{{- /*
+  The same run as the PostSync Job, hourly. A permission changed in the
+  Grafana UI is state ArgoCD never diffs; this run reverts it.
+  Runs never overlap (Forbid), and the state Lease serialises a run against
+  the PostSync Job.
+*/ -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: grafana-iac
+  labels:
+    app.kubernetes.io/name: grafana-iac
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: grafana-iac
+        spec:
+          {{- include "grafana-iac.podSpec" . | nindent 10 }}

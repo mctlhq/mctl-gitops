@@ -1,0 +1,56 @@
+# Nothing in this namespace serves anything, and the Job reaches only what it
+# needs: DNS, Grafana on 3000, and the Kubernetes API for its state (a Secret
+# and a Lease, the kubernetes backend). Service DNAT happens before egress
+# filtering on this datapath, so monitoring-grafana:80 is evaluated as the
+# Grafana pod on 3000, and kubernetes.default (10.43.0.1:443) as the
+# control-plane endpoint on 6443; same rule and reasoning as
+# infra-components/identity/vault-human-auth-iac/networkpolicy.yaml. The
+# matching ingress rule on Grafana's side is in
+# infra-components/observability/grafana-access/networkpolicy.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-grafana-iac-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana-iac
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: monitoring
+              app.kubernetes.io/name: grafana
+      ports:
+        - protocol: TCP
+          port: 3000
+    - to:
+        - ipBlock:
+            cidr: 10.255.0.0/24
+      ports:
+        - protocol: TCP
+          port: 6443

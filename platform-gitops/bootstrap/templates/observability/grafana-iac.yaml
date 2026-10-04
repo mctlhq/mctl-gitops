@@ -1,0 +1,56 @@
+# Declarative Grafana configuration (grafana.mctl.ai), applied by an
+# in-cluster OpenTofu Job rather than clicked in the UI: folder permissions
+# now, and the tenant organizations, datasources and dashboards of
+# mctlhq/mctl-gitops#1601 next.
+#
+# Its own namespace, so the state backend's Secret access reaches nothing in
+# monitoring. The Job signs in as Grafana's server admin with basic auth on the
+# in-cluster Service; the public ingress strips Authorization and Grafana's
+# NetworkPolicy admits this namespace, traefik and vmagent only
+# (infra-components/observability/grafana-access).
+#
+# Sources: infra-components/observability/grafana-iac holds the admin
+# credential and image pull credentials (ExternalSecrets) and the
+# NetworkPolicies; helm-charts/grafana-iac is the Job: PostSync after every
+# sync and hourly, refusing any plan action outside its allowlist. Runbook:
+# docs/runbooks/grafana-iac.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: grafana-iac
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/grafana-iac
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/helm-charts/grafana-iac
+      helm:
+        releaseName: grafana-iac
+  ignoreDifferences:
+    # Same ESO handling as vault-human-auth-iac.yaml: admission-injected
+    # annotations and status only; never jq paths that index into spec arrays
+    # (#789).
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .metadata.annotations
+        - .spec.target.deletionPolicy
+        - .status
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: grafana-iac
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

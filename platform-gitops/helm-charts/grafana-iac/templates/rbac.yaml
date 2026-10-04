@@ -1,0 +1,44 @@
+{{- /*
+  The kubernetes state backend lists Secrets and Leases by label, and list
+  cannot be narrowed by resourceNames, so this Role can read every Secret in
+  this namespace. That is why the Job has a namespace of its own rather than
+  monitoring: here it can read only its own Secrets (the Grafana admin
+  credential it already uses, the image pull credentials) and the Secrets
+  Reflector copies into every namespace (mctl-gitops#1230), which anything
+  allowed to read Secrets in any namespace can read today.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana-iac
+  labels:
+    app.kubernetes.io/name: grafana-iac
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: grafana-iac-state
+  labels:
+    app.kubernetes.io/name: grafana-iac
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: grafana-iac-state
+  labels:
+    app.kubernetes.io/name: grafana-iac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: grafana-iac-state
+subjects:
+  - kind: ServiceAccount
+    name: grafana-iac
+    namespace: {{ .Release.Namespace }}
