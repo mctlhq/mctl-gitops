@@ -225,6 +225,17 @@ spec:
           # catalog logs one ERROR and usage is still recorded without a
           # derived cost -- it never blocks the pod.
           usagePricingConfigMap: mctl-api-usage-pricing
+
+          # MCTL_OIDC_PROVIDERS, the federation registry (mctlhq/mctl-api#434,
+          # docs/federation.md there): ZITADEL as provider `zitadel`, audience
+          # enforced. The zitadel-iac Job builds the value from the client id
+          # ZITADEL generated (helm-charts/zitadel-iac/iac/mctl-api.tf) and
+          # writes it into this Secret, which the second source below
+          # pre-creates. The chart (mctl-api >= #440) reads it optionally, so
+          # an empty Secret is the Dex-only configuration. Dex is unaffected:
+          # with no entry named `dex`, the DEX_* shim above still applies.
+          # Rollback: delete this line.
+          oidcProvidersSecret: mctl-api-oidc-zitadel
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the
