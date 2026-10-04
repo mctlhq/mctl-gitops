@@ -427,10 +427,14 @@ data:
     # went away (500 "context canceled").
     hostport=${FORGEJO_HOST#http://}
     hostport=${hostport%%/*}
+    case "$hostport" in
+      *:*) host=${hostport%:*} port=${hostport##*:} ;;
+      *) host=$hostport port=80 ;;
+    esac
     delete_token() {
       status=$({ printf 'DELETE /api/v1/users/%s/tokens/%s HTTP/1.1\r\nHost: %s\r\n%s\r\nConnection: close\r\n\r\n' \
           "$admin_user" "$1" "$hostport" "$admin_hdr"; sleep 5; } \
-        | nc -w 10 "${hostport%:*}" "${hostport##*:}" | head -n 1 | cut -d' ' -f2)
+        | nc -w 10 "$host" "$port" | head -n 1 | cut -d' ' -f2)
       case "$status" in
         204|404) return 0 ;;
         *) echo "token $1: delete answered '${status:-nothing}'"; return 1 ;;
@@ -439,7 +443,9 @@ data:
 
     # Tokens a killed run (activeDeadlineSeconds, eviction) could not delete.
     # A failed listing fails the run: it must not read as "no leftovers".
-    leftovers=$(wget -q -O - --header "$admin_hdr" "$api") || { echo "cannot list access tokens"; exit 1; }
+    # One page of 50 is enough: the trap deletes a run's own token, so only
+    # killed runs leave one, and concurrencyPolicy Forbid allows one run at a time.
+    leftovers=$(wget -q -O - --header "$admin_hdr" "$api?limit=50") || { echo "cannot list access tokens"; exit 1; }
     for t in $(printf '%s' "$leftovers" | grep -o '"name":"reconcile-[^"]*"' | cut -d'"' -f4); do
       delete_token "$t" && echo "deleted leftover token $t"
     done
@@ -451,14 +457,14 @@ data:
     resp=$(wget -q -O - --header "$admin_hdr" --header 'Content-Type: application/json' \
       --post-data "{\"name\":\"$token_name\",\"scopes\":[\"write:admin\",\"read:user\",\"write:organization\",\"write:repository\"]}" \
       "$api") || { echo "cannot mint the run's access token"; exit 1; }
-    token=$(printf '%s' "$resp" | grep -o '"sha1":"[0-9a-f]*"' | cut -d'"' -f4)
-    [ -n "$token" ] || { echo "no token in the mint response"; exit 1; }
+    run_token=$(printf '%s' "$resp" | grep -o '"sha1":"[0-9a-f]*"' | cut -d'"' -f4)
+    [ -n "$run_token" ] || { echo "no token in the mint response"; exit 1; }
     trap 'delete_token "$token_name" || true' EXIT
     trap 'exit 143' TERM INT
 
     export TF_IN_AUTOMATION=1 TF_INPUT=0
     export TF_VAR_manifest="$MANIFEST" TF_VAR_user_passwords="$USER_PASSWORDS"
-    export TF_VAR_forgejo_host="$FORGEJO_HOST" TF_VAR_forgejo_token="$token" FORGEJO_API_TOKEN="$token"
+    export TF_VAR_forgejo_host="$FORGEJO_HOST" TF_VAR_forgejo_token="$run_token" FORGEJO_API_TOKEN="$run_token"
 
     terraform init -no-color \
       -backend-config="bucket=$BUCKET" \
@@ -467,7 +473,7 @@ data:
     terraform apply -no-color -auto-approve
     terraform output -raw -no-color branch_plan > "$WORK/plan.tsv"
 
-    dst_hdr="Authorization: token $token"
+    dst_hdr="Authorization: token $run_token"
 
     failed=0
     tab=$(printf '\t')
