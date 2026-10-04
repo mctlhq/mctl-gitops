@@ -331,6 +331,41 @@ All state is in the `zitadel` database on shared-pg, backed up by CNPG to R2
 database to a point in time, keep the masterkey from Vault unchanged, and
 restart both Deployments.
 
+### ERPact copy sign-in (#1501)
+
+`iac/erpact.tf` lets the Frappe sites of the ERPact copy (tenant `erpact`,
+the copy only) sign their users in through ZITADEL:
+
+- **Project `ERPact`** owned by organization `erpact`, with
+  `has_project_check`, no roles and no grants: only users of `erpact` get a
+  token, and the path confers no Argo CD, mctl-api or tenant-admin rights.
+- **Application `erpact-frappe`**: web, `client_secret_post` (what Frappe's
+  rauth client sends), opaque access token read at userinfo; one redirect URI
+  per site, `https://<site>/api/method/frappe.integrations.oauth2_logins.custom/mctl`.
+  The Job writes `client_id`, `client_secret` and `org_id` into
+  `erpact/erpact-oidc-zitadel` (`infra-components/erpact/oidc-zitadel.yaml`).
+- **Verified e-mail only.** Frappe matches users by the `email` claim alone,
+  without `email_verified` and without the stored `sub`. The action
+  `erpactVerifiedEmail` (`erpact` organization, `PRE_USERINFO_CREATION`,
+  first in the same trigger as `argocdGroups`, not allowed to fail) refuses
+  userinfo for this client unless the user's e-mail is verified. It returns
+  at once for every other client.
+- **Frappe side** (git.mctl.ai/erpact/mctl-apps, the restore Jobs' `sso`
+  step): Social Login Key `mctl` per site, sign-up of unknown users disabled
+  (v15 `sign_ups = Deny`; v14 Website Settings `disable_signup`), users
+  matched by e-mail to the users each site already has.
+
+Not yet verified with a real sign-in. The owner's first sign-in on the copy
+checks it both ways before anyone else is pointed at it:
+
+1. A verified `erpact` user signs in on one site and lands on `/app` as their
+   existing Frappe user.
+2. An `erpact` user whose e-mail is not verified is refused at the userinfo
+   step (Frappe shows an error; nobody is signed in).
+3. A user of `MCTL` is refused by ZITADEL (`has_project_check`).
+4. An `erpact` user with no matching Frappe user gets Frappe's 403 "Signup is
+   disabled".
+
 ## Known risk: same site as tenant workloads
 
 `auth.mctl.ai` shares the registrable domain `mctl.ai` with tenant
@@ -343,8 +378,12 @@ browser that makes them the same site:
 - `SameSite` cookie attributes do not separate them, because a request from a
   tenant app to the IdP is same-site.
 
-Accepted for phase 1, while nothing signs in through ZITADEL. Two follow-ups
-in the unified-identity epic close it, and must land before real sign-ins:
+Owner decision 2026-10-04 (#1504, left open as the tracked risk): accepted,
+tenant applications stay on `mctl.ai`, and tenant sign-in (#1501) proceeds;
+platform session cookies get hardened against tossing instead (#1560).
+Originally accepted for phase 1, while nothing signed in through ZITADEL. Two
+follow-ups in the unified-identity epic close it; since the decision above they
+are tracked follow-ups, not blockers:
 
 - reserve platform hostnames (`auth`, `api`, `app`, `ops`, …) at admission,
   so no tenant Ingress can claim `auth.mctl.ai` (#1503);

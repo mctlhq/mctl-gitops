@@ -29,6 +29,9 @@ image:
 #   Vault human sign-in (Vault project, roles, grants, OIDC application, the
 #   data of vault-human-auth-iac/vault-oidc-zitadel): no new action; all
 #   creates, plus an in-place update of the groups action's script.
+#   #1501 (ERPact project, Frappe OIDC application, verified e-mail action,
+#   the data of erpact/erpact-oidc-zitadel): no new action; creates, plus an
+#   in-place update of the erpact organization's userinfo trigger.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
