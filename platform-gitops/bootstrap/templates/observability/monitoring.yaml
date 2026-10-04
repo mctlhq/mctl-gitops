@@ -395,6 +395,15 @@ spec:
                 # only password path is basic auth from the grafana-iac Job
                 # (auth.basic below); the login form is disabled.
                 disable_brute_force_login_protection: false
+              # Nothing leaves the cluster from a dashboard, now that tenant
+              # members (Editor in their own org, #1601) can share them: no
+              # snapshot published to snapshots.raintank.io, and no public
+              # (anonymous-link) dashboards. Local snapshots stay, behind
+              # sign-in. Both were on (Grafana's defaults) until now.
+              snapshots:
+                external_enabled: false
+              public_dashboards:
+                enabled: false
               auth:
                 disable_login_form: true
                 oauth_auto_login: true
