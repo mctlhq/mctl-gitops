@@ -190,6 +190,9 @@ def run(repo_root: str, targets=TARGETS, check=probe) -> int:
         except Unknown as e:
             print(f"UNKNOWN {t.name}: {e}")
             unknown = True
+        except Exception as e:  # a crash here proves nothing about the IdP
+            print(f"UNKNOWN {t.name}: probe failed: {type(e).__name__}: {e}")
+            unknown = True
     return 1 if broken else 2 if unknown else 0
 
 
@@ -247,7 +250,7 @@ def selftest() -> int:
 
     TARGETS_UNDER_TEST[:] = [Target(f"t{i}", "", "", "", "") for i in range(2)]
     for kinds, want in [((Unknown, Broken), 1), ((Broken, Unknown), 1),
-                        ((None, Unknown), 2), ((None, None), 0)]:
+                        ((None, Unknown), 2), ((None, KeyError), 2), ((None, None), 0)]:
         got = run(".", TARGETS_UNDER_TEST, outcome(*kinds))
         ok = got == want
         cases.append(ok)
