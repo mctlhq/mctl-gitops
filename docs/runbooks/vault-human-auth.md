@@ -44,6 +44,18 @@ vault-human-auth-iac Job ── Vault: auth/oidc, role `zitadel`,
 - **Tenant access is read-only.** Tenant secrets are written through the portal and the platform workflows, with their own identities.
 - **Token lifetime.** Human tokens live 1h and can be renewed up to 8h. Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
 
+Verified before rollout on a local ZITADEL v4.19.2 and Vault 1.17.2, running
+these roots with the bootstrap policy as the Job's only credential. Full code
+flows through Vault's `auth_url` and `callback`, for both redirects, gave:
+
+| User | Result |
+| --- | --- |
+| Opted-in tenant user | `identity_policies ["human-tenant-<tenant>"]`, TTL 3600. Reads its own tenant; another tenant's path and any write return 403. |
+| Admin | `["admin"]` |
+| Unflagged user, or flagged for Argo CD only | Refused by ZITADEL (`Errors.User.GrantRequired`) |
+
+The authorize request carried PKCE S256. Details are in docs/runbooks/zitadel.md, "Vault sign-in".
+
 ## Rollout order
 
 1. The owner applies the Job's Vault policy and Kubernetes auth role once
