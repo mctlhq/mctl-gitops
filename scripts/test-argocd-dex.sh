@@ -179,7 +179,7 @@ code=""
 for _ in $(seq 1 12); do
   code="$(discovery)"
   [ "$code" = 200 ] && break
-  echo "   transient $code: $(head -c 200 "$WORK/disc.json") [$(kubectl -n argocd get pods -l 'app.kubernetes.io/name in (argocd-server,dex)' --no-headers 2>&1 | awk '{print $1":"$2":"$3}' | tr '\n' ' ')]"
+  echo "   transient $code: $(head -c 200 "$WORK/disc.json") [$(kubectl -n argocd get pods -l 'app.kubernetes.io/name in (argocd-server,dex)' --no-headers 2>&1 | awk '{print $1":"$2":"$3}' | tr '\n' ' ')] argocd-server: $(kubectl -n argocd logs deploy/argocd-server --since=2m 2>/dev/null | grep -E 'restarting|serving on' | tail -2 | sed 's/.*msg=//' | tr '\n' ' ')"
   sleep 5
 done
 [ "$code" = 200 ] || fail "/api/dex discovery returned $code"
