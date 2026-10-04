@@ -338,20 +338,26 @@ spec:
           MEM_LIM="$PARAM_QUOTA_MEMORY_LIM"
           PODS="$PARAM_QUOTA_PODS"
           INTERNET_EGRESS="$PARAM_ALLOW_INTERNET_EGRESS"
-          CONTACT_EMAIL="$PARAM_CONTACT_EMAIL"
+          # contact_email is accepted for compatibility with existing callers
+          # (mctl-api, Backstage) and deliberately NOT written anywhere: this
+          # repository is public, and tenant contact data is personal. Its
+          # store is Vault, designed in mctlhq/mctl-gitops#1627.
+          if [ -n "$PARAM_CONTACT_EMAIL" ]; then
+            echo "ℹ️ contact_email given but not stored: it does not go into the public gitops repository (mctlhq/mctl-gitops#1627)"
+          fi
           CREATOR_USER_ID="$PARAM_CREATOR_USER_ID"
 
           # Defaults
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
 
-          # These three are free text and continue past the shell into a
-          # hand-built YAML DOCUMENT below (displayName/description/
-          # contactEmail are emitted as quoted scalars in a heredoc). Env
+          # These two are free text and continue past the shell into a
+          # hand-built YAML DOCUMENT below (displayName/description are
+          # emitted as quoted scalars in a heredoc). Env
           # binding stops the shell from executing them; it does not stop a
           # value like
           #     Foo"\n  admin: true\n  x: "
           # from closing the quoted scalar and adding sibling keys to the
-          # tenant values.yaml that ArgoCD then applies. None of the three
+          # tenant values.yaml that ArgoCD then applies. Neither of the two
           # carries a Pattern in the operations registry.
           #
           # Free text cannot be constrained to a grammar the way an integer
@@ -360,10 +366,10 @@ spec:
           # real YAML emitter would be better and is the right fix if these
           # fields ever need them (claude P2 on gitops#993).
           NEWLINE="$(printf '\nx')"; NEWLINE="${NEWLINE%x}"
-          for value in "$DISPLAY_NAME" "$DESCRIPTION" "$CONTACT_EMAIL"; do
+          for value in "$DISPLAY_NAME" "$DESCRIPTION"; do
             case "$value" in
               *'"'* | *"$NEWLINE"* )
-                echo "❌ display_name, description and contact_email must not contain a double quote or a newline" >&2
+                echo "❌ display_name and description must not contain a double quote or a newline" >&2
                 exit 1
                 ;;
             esac
@@ -387,7 +393,7 @@ spec:
           fi
 
           # The five quota values land in quoted YAML scalars exactly like
-          # displayName/description/contactEmail, and carry no Pattern
+          # displayName/description, and carry no Pattern
           # either (claude P2 on gitops#993). They are Kubernetes
           # quantities — a digit followed by digits, a decimal point or a
           # unit suffix — so, again, a grammar rather than a character ban:
@@ -472,7 +478,6 @@ spec:
             name: ${TENANT}
             displayName: "${DISPLAY_NAME}"
             description: "${DESCRIPTION}"
-            contactEmail: "${CONTACT_EMAIL}"
           ${MEMBERS_BLOCK}
             quotas:
               requests.cpu: "${CPU_REQ}"

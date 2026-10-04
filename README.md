@@ -150,7 +150,6 @@ mctl deploy --team billing --service payment-api --repo mctlhq/payment-api --tag
 ```yaml
 name: payments
 displayName: "Payments Team"
-contactEmail: payments@example.com
 quota:
   cpu: "2"
   memory: "4Gi"
@@ -196,7 +195,7 @@ Located at `platform-gitops/tenants/{team}/values.yaml`. Consumed by the `tenant
 |---|---|
 | `name` | Workspace name (DNS-safe) |
 | `displayName` | Human-readable team name |
-| `contactEmail` | Team contact |
+| `contactEmail` | Deprecated, keep empty: this repository is public. Tenant contact data moves to Vault (#1627) |
 | `quota.cpu` | CPU request quota |
 | `quota.memory` | Memory request quota |
 | `quota.pods` | Maximum pod count |

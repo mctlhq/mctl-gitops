@@ -48,10 +48,6 @@ spec:
           ui:widget: textarea
           ui:options:
             rows: 3
-        contactEmail:
-          title: Contact Email
-          type: string
-          description: "Team email for platform notifications."
 
     - title: Resource Quotas
       description: |
@@ -107,7 +103,6 @@ spec:
           tenantName: ${{ parameters.tenantName }}
           displayName: ${{ parameters.displayName }}
           description: ${{ parameters.description | default('') }}
-          contactEmail: ${{ parameters.contactEmail | default('') }}
           quotaCpuReq: ${{ parameters.quotaCpuReq | default('500m') }}
           quotaCpuLim: ${{ parameters.quotaCpuLim | default('3') }}
           quotaMemoryReq: ${{ parameters.quotaMemoryReq | default('1280Mi') }}
