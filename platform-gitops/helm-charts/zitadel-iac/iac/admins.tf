@@ -94,5 +94,15 @@ resource "zitadel_human_user" "platform_admin" {
       condition     = length(data.zitadel_orgs.mctl.ids) == 1
       error_message = "Expected exactly one ZITADEL organization named \"MCTL\"."
     }
+
+    # User names are unique across the instance, not per organization:
+    # ZITADEL refuses one that a user of another organization holds (409,
+    # measured on v4.19.2) and frees it as soon as that user is deleted. A
+    # tenant user of the same name must therefore be removed in an earlier
+    # run; refused here at plan time rather than mid-apply.
+    precondition {
+      condition     = !contains([for u in local.users : u.user_name], local.platform_admin_user_names[each.key])
+      error_message = "Admin ${each.key}'s login name is held by a tenant user; delete that user (Vault secret/platform/zitadel/users/<tenant>, allowedDeletes) in an earlier run."
+    }
   }
 }

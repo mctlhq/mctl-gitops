@@ -30,10 +30,13 @@ variable "platform_admins" {
   description = <<-EOT
     The Vault secret secret/platform/zitadel/admins as JSON: one field per
     personal platform admin account in the MCTL organization, each a
-    JSON-encoded {email, first_name, last_name, preferred_language, username}
-    (admins.tf). The field name is the stable key of the account; `username`,
-    optional, is its login name when it differs from the key. This repository
-    is public, so personal data never appears in it.
+    JSON-encoded {email, first_name, last_name, preferred_language, username,
+    frappe} (admins.tf). The field name is the stable key of the account;
+    `username`, optional, is its login name when it differs from the key;
+    `frappe`, optional ({sites, roles}, as for tenant users), lists the
+    admin for the ERPact copy's Frappe sites and grants their sign-in
+    (erpact.tf). This repository is public, so personal data never appears
+    in it.
   EOT
   type        = string
 
