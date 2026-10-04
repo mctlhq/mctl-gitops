@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-10-04T11:41:08Z'
-updated_by: mctl-agents[bot]
+status: accepted
+updated_at: '2026-10-04T12:13:44Z'
+updated_by: mashkovd
 execution:
   context_id: ex-7079793f7d2adfe4
   trace_id: 8b0dd803fa117b928e367b0e26f0304d
@@ -21,15 +21,3 @@ context:
 approval:
   approved_by: mashkovd
   approved_at: '2026-10-04T11:28:32Z'
-attempt:
-  id: 4f5ae48d93ed3c337eb77ee7662109212f70f3088b11e6cfb7fcc512a3752807
-  started_at: '2026-10-04T11:35:50Z'
-  expires_at: '2026-10-04T13:45:50Z'
-  finished_at: '2026-10-04T11:41:08Z'
-failure:
-  code: orphaned-subagent
-  stage: runtime
-  message: 'orphaned sub-agent: sub-agent task(s) never reported a terminal status
-    within 300s: 1 task(s) still live: a001da72b881c7226'
-notes: 'runtime: orphaned sub-agent: sub-agent task(s) never reported a terminal status
-  within 300s: 1 task(s) still live: a001da72b881c7226'

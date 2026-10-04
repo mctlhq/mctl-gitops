@@ -45,6 +45,8 @@
   DoD: the docs describe the new behaviour; no stale claims ("converges only
   the spec") remain.
 
+- **[Operator note 2026-10-04, retry]** While implementing, run only the test files you touch: `uv run --frozen python -m pytest tests/test_worker_schedules.py tests/test_workflow_dispatch_activity.py tests/test_scheduled_dispatch_workflow.py -q`, plus the diagram-facts test if present. Do NOT run the whole `tests/` suite inside the agent: it takes more than 5 minutes, and on 2026-10-04 the first attempt was killed as an orphaned sub-agent while a full-suite run was still going. CI runs the full suite on the PR.
+
 ## Tests
 
 - [ ] T1. `tests/test_worker_schedules.py`: with `converge_action=True` and a live
