@@ -200,6 +200,17 @@ otelCollector:
 usageWriter:
   enabled: true
 
+# The evidence-writer principal's bearer token (mctlhq/mctl-agents#199,
+# mctlhq/mctl-api#409). Same shape as usageWriter above: ONE value in Vault
+# secret/platform/mctl-agents, property evidence-writer-token, which the agent
+# runner pods already receive through mctl-agents-secrets (dataFrom extract).
+# This flag hands the same value to mctl-api.
+# Done 2026-10-05 (owner decision 2026-10-04): step 1, a fresh random 64-hex
+# value written with vault kv patch -method=rw (Vault v3138; no other key
+# changed); step 2 is enabled: true below.
+evidenceWriter:
+  enabled: true
+
 # The surface:portal principal's bearer token (mctlhq/mctl-portal#126):
 # mctl-api reads it as MCTL_SURFACE_PORTAL_TOKEN (surfaceTokenEnv maps portal
 # to it, minSurfaceTokenLen = 32) and backstage's work-items-backend sends it.
