@@ -102,6 +102,18 @@ spec:
             enabled: false
 
           gitea:
+            # /api/healthz pings the database. During a forgejo-reconcile run
+            # Forgejo sits at its CPU limit hashing the admin password for
+            # every API call, a ping that has to open a new connection then
+            # outlives the chart's 1s timeout, kubelet cancels it mid-SCRAM,
+            # and Forgejo logs "database ping failed". 3s rides that out;
+            # the other probe fields stay at the chart defaults (Helm merges
+            # this map). The TCP liveness probe is unaffected by CPU and
+            # stays as is. In this chart the probes live under `gitea:`
+            # (templates/gitea/deployment.yaml reads .Values.gitea.readinessProbe);
+            # a top-level readinessProbe would be ignored.
+            readinessProbe:
+              timeoutSeconds: 3
             admin:
               # Keys `username` / `password` (+ `email` from below).
               existingSecret: forgejo-admin
