@@ -20,8 +20,10 @@
 # learns no name. It does not cover passkey users (every personal account
 # here): Login V2 v4.19.2 still sends them to the passkey page, which opens a
 # session carrying their display name. That residue is #1612, measured on a
-# local v4.19.2. No organization has a login policy of its own in this root,
-# so tenant organizations (erpact included) inherit this one.
+# local v4.19.2. This root gives no organization a login policy of its own,
+# so tenant organizations (erpact included) inherit this one, unless one was
+# created outside it (console): that would override it, and the rollout
+# checks erpact for exactly that.
 import {
   to = zitadel_default_login_policy.default
   id = "default"
