@@ -45,10 +45,9 @@ env:
   # This is the switch, and it is the whole switch. Removing the line closes
   # signup again on the next sync, with no release and no image change.
   SEERRSENSE_OPEN_SIGNUP: "true"
-  # Now ignored while OPEN_SIGNUP is true, and deliberately kept: it is what the
-  # server falls back to the moment the flag above goes away, and an empty
-  # allowlist at that moment would lock everyone out including the owner.
-  SEERRSENSE_ALLOWED_EMAILS: mashkoffdmitry@gmail.com,moonqua@gmail.com,mashkovdm.dm@gmail.com
+  # SEERRSENSE_ALLOWED_EMAILS and SEERRSENSE_HOUSEHOLD_EMAILS are personal
+  # addresses and come from Vault, not from here: see seerrsense-access under
+  # extraExternalSecrets below.
   # The private aggregate portal mcp.mctl.ai (Cloudflare MCP Server Portal,
   # mctlhq/.github#35) reaches this server as a pre-registered public OAuth
   # client: token_endpoint_auth_method none, PKCE S256, exact redirect match.
@@ -82,17 +81,6 @@ env:
   # public origin, and it proves only that whoever set it controls this host.
   # A resubmission issues a new token, which is an edit here, not a release.
   SEERRSENSE_OPENAI_APPS_CHALLENGE: Vk-eH4uc_v2S8Akww72HHNkfhy4aYfxvPoQkzavJMaI
-  # Who may reach the shared SEERR_URL instance when they have attached nothing
-  # of their own. Fail-closed like the allowlist: unset offers the household to
-  # no signed-in subject, so this MUST be present before the image that reads it
-  # is deployed, or the owner loses their own working setup on rollout. The
-  # legacy shared token and stdio mode are unaffected — they have no address to
-  # check. Setting it on an image that does not yet read it is a no-op, which is
-  # why this lands first (seerrsense#44).
-  # mctlhq@gmail.com is the ChatGPT plugin-directory reviewer account: it reaches
-  # the household Seerr without attaching anything, and its requests land as
-  # pending approval because the matching Overseerr user has REQUEST only.
-  SEERRSENSE_HOUSEHOLD_EMAILS: mashkoffdmitry@gmail.com,mctlhq@gmail.com
   # How many proxy hops in front of the pod to believe when deriving the client
   # address for the per-IP rate limits. The code defaults to 0 — trust no
   # forwarding header — because a directly exposed container has nothing in
@@ -205,6 +193,42 @@ envFrom:
   # person attaches out of process memory, where a restart lost them.
   - secretRef:
       name: labs-seerrsense-db-creds
+  # The two address lists (extraExternalSecrets.seerrsense-access below).
+  - secretRef:
+      name: seerrsense-access
+# The two address lists, kept out of this public repository (they were plain
+# env values until 2026-10-04 and remain in git history). Vault path
+# teams/labs/seerrsense/access, properties SEERRSENSE_ALLOWED_EMAILS and
+# SEERRSENSE_HOUSEHOLD_EMAILS. A separate ExternalSecret rather than two more
+# rows in seerrsense-secrets, so a missing property here stops only this one
+# from syncing instead of every key the server needs.
+#
+# Both lists fail closed in the server (src/auth/config.ts): unset or empty is
+# an empty set, so nobody is on either list, never everybody.
+# - SEERRSENSE_ALLOWED_EMAILS is ignored while SEERRSENSE_OPEN_SIGNUP is
+#   "true", and kept on purpose: it is what the server falls back to the
+#   moment that flag goes away, and an empty allowlist then would lock out
+#   everyone including the owner.
+# - SEERRSENSE_HOUSEHOLD_EMAILS names who may reach the shared SEERR_URL
+#   instance without attaching a Seerr of their own. It includes the ChatGPT
+#   plugin-directory reviewer account, whose requests land as pending approval
+#   because the matching Overseerr user has REQUEST only (seerrsense#44). The
+#   legacy shared token and stdio mode are unaffected.
+#
+# The envFrom reference above is not optional, so a pod never starts without
+# these keys: if the Secret is absent the new pod waits and the old one keeps
+# serving, which is a stuck rollout rather than an open door.
+extraExternalSecrets:
+  seerrsense-access:
+    refreshInterval: 1h
+    targetSecret: seerrsense-access
+    data:
+      - secretKey: SEERRSENSE_ALLOWED_EMAILS
+        remoteKey: teams/labs/seerrsense/access
+        property: SEERRSENSE_ALLOWED_EMAILS
+      - secretKey: SEERRSENSE_HOUSEHOLD_EMAILS
+        remoteKey: teams/labs/seerrsense/access
+        property: SEERRSENSE_HOUSEHOLD_EMAILS
 extraContainers: []
 dbSecret:
   vaultPath: "teams/labs/seerrsense/database"

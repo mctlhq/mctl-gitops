@@ -39,7 +39,7 @@ spec:
             description: |
               Someone completed the SeerrSense sign-in (consent POST) in the
               last 10 minutes. During the ChatGPT directory review this is most
-              likely the reviewer account mctlhq@gmail.com. Any request they
+              likely the plugin-directory reviewer account. Any request they
               file lands as pending approval on media.mctl.ai (Overseerr user
               "reviewer", REQUEST only); check the Overseerr request list to
               see who it was and what they asked for.
