@@ -144,7 +144,9 @@ When ZITADEL is down, OIDC logins fail. Already-issued tokens keep working
 until they expire.
 
 The admin paths that do not depend on ZITADEL are unchanged:
-- the existing `github` auth method;
+- the `github` auth method (`auth/github`, a user map). It is the current
+  human fallback and stays as it is: retiring it is a separate owner
+  decision, made once OIDC sign-in has been in use for a while;
 - an existing admin token;
 - a root token generated with the unseal keys (`vault operator generate-root`).
 
