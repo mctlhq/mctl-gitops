@@ -130,9 +130,10 @@ ZITADEL roles yet.
   (no `@`, never `mctl-admin`): it addresses the user and its grants. The
   value is a JSON object
   `{"email", "first_name", "last_name", "preferred_language", "username"}`,
-  where `preferred_language` is optional and defaults to `en`, and
+  where `preferred_language` is optional and defaults to `en`,
   `username`, optional, is the login name when it should differ from the key
-  (same pattern; login names must be unique). ExternalSecret
+  (same pattern; login names must be unique), and `github_login`, optional,
+  is the admin's GitHub login (see "GitHub login claim"). ExternalSecret
   `zitadel-iac-admins` extracts the secret into `admins.json`, and the pod
   passes it on as `TF_VAR_platform_admins`. The owner writes the secret;
   it is never in git:
@@ -188,9 +189,12 @@ ZITADEL roles yet.
 
 - **Source.** One Vault secret per tenant, `secret/platform/zitadel/users/<tenant>`.
   Each field is one user: the field name is the user name, the value a JSON
-  object `{"email", "first_name", "last_name", "preferred_language", "argocd"}`
-  (`preferred_language` is optional, default `en`; `argocd` is optional,
-  default `false`, see "Argo CD sign-in" below). This repository is public,
+  object `{"email", "first_name", "last_name", "preferred_language", "argocd",
+  "vault", "workflows", "frappe", "github_login"}` (`preferred_language` is
+  optional, default `en`; `argocd`, `vault` and `workflows` are optional,
+  default `false`, see "Argo CD sign-in" and "Vault sign-in" below, and
+  `iac/workflows.tf`; `frappe` is for tenant `erpact` only, see "ERPact copy
+  sign-in"; `github_login` is optional, see "GitHub login claim"). This repository is public,
   so the list is never in git. ExternalSecret `zitadel-iac-users` finds every
   secret under the path and folds them into `users.json` for the pod.
 - **Result.** One organization per tenant secret, named after the tenant, and
@@ -370,6 +374,53 @@ ZITADEL is offered as an Access identity provider:
   not a secret. The project and the application carry `prevent_destroy`,
   because a recreate changes the id and breaks the Access login until the
   copy is updated.
+
+### GitHub login claim (#1500 phase 1)
+
+`iac/github-login.tf` gives the applications that still identify people by
+GitHub login (the portal and its OIDC provider) that login, as declared by
+an admin. It is a no-op until those clients exist (#1500 phase 3).
+
+- **Source.** Optional field `github_login` in a user's Vault entry,
+  `secret/platform/zitadel/users/<tenant>` or `secret/platform/zitadel/admins`:
+
+  ```sh
+  vault kv patch secret/platform/zitadel/users/<tenant> \
+    <user_name>='{"email": "...", "first_name": "...", "last_name": "...", "github_login": "<login>"}'
+  ```
+
+  `kv patch` replaces the whole field, so the JSON must carry the user's
+  other attributes too. The value must be a GitHub login: 1-39 letters,
+  digits and single inner hyphens. Anything else, including `null` or an
+  empty string, fails variable validation and stops the run; leave the field
+  out instead. The same login twice (ignoring case), across all tenants and
+  the admins, fails the plan. Never derive it from the e-mail: it is the
+  admin's statement that this ZITADEL user is that GitHub account.
+- **Storage.** User metadata `github_login` on the user, its value the login
+  as a JSON string, marked sensitive in the plan.
+- **Claim.** The Actions v1 action `mctlGithubLogin`, in every organization's
+  `PRE_USERINFO_CREATION` trigger next to `argocdGroups`, sets
+  `mctl:github_login` only when the client is in `github_login_client_ids`
+  (variable, empty by default) and the user is one whose login this root
+  manages (their IDs are in the script). It checks the value again and
+  leaves the claim out if it is not a login. It may fail
+  (`allowed_to_fail`), which leaves the claim out: a consumer must treat a
+  missing claim as "not mapped" and refuse, never fall back to the e-mail.
+  The claim is in userinfo, and in the ID token for a client with
+  `id_token_userinfo_assertion`.
+- **Who can write the metadata.** Not the user: on v4.19.2 the auth API has
+  only `ListMyMetadata` and `GetMyMetadata`, and user v2 `SetUserMetadata`
+  requires `user.write` with self-management off
+  (`internal/api/grpc/user/v2/metadata.go`). Holders of `user.write` on the
+  user's organization can (IAM owners; no organization members are declared
+  here), and so can the organization's Actions, all declared here. Because
+  the action trusts only the users listed in it, a key set on any other user
+  is ignored, and a value changed out of band on a listed user is put back by
+  the next run of the hourly CronJob.
+- **Removing** a user's `github_login` plans a delete of
+  `zitadel_user_metadata.github_login_tenant["<tenant>/<user_name>"]`
+  (`github_login_admin["<key>"]` for an admin), which needs that address in
+  `allowedDeletes`. Changing it is an in-place update.
 
 ## Sync hooks instead of Helm hooks
 
