@@ -1,9 +1,10 @@
 # ZITADEL sign-in to the MCP portal (mcp.mctl.ai) and its members (#1500).
 #
-# The Google client behind the account's Google provider dies around
-# 2026-10-17 (#1328), and the portal's pilot policies admit two addresses by
-# e-mail, whichever provider asserted them. This adds a second door that
-# names no one: any login through the ZITADEL provider (zitadel-idp.tf).
+# ZITADEL is the platform's human identity provider, and the portal's pilot
+# policies admit two addresses by e-mail, whichever provider asserted them.
+# This adds a second door that names no one: any login through the ZITADEL
+# provider (zitadel-idp.tf). (The Google client behind the account's Google
+# provider does not expire: its project was undeleted on 2026-09-21, #1328.)
 #
 # This policy is correct ONLY because of how the ZITADEL side is configured:
 # it admits every identity ZITADEL hands to Access, so the authorization is
