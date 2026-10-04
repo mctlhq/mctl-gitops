@@ -18,6 +18,8 @@ image:
 #   and the data of forgejo/forgejo-oidc-zitadel are creates.
 #   #1500 (Argo CD OIDC applications, roles, grants, groups action): no new
 #   action; all creates, plus a read of the admin user lookup.
+#   mctl-api#434 (mctl-api project, API application, the data of
+#   mctl-api/mctl-api-oidc-zitadel): no new action; all creates.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
