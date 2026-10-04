@@ -16,7 +16,7 @@
 - [ ] 4. Register the new pieces in `orchestrator/temporal/worker.py` (depends on 1-3). — DoD:
   - `setup_schedules` loops over `WEEKLY_DISPATCH_TARGETS` and calls `_ensure_schedule` with `ScheduleActionStartWorkflow(ScheduledDispatchWorkflow.run, ...)`, `id=target.workflow_id`, `task_queue=TASK_QUEUE`, `ScheduleSpec(intervals=[target.interval()])` and an explicit `SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP)`.
   - A comment explains why :01 clears every Temporal and Argo minute.
-  - `dispatch_and_observe` is added to `short_activities` and `ScheduledDispatchWorkflow` to `workflows`.
+  - `dispatch_and_observe` **and `report_dispatch_failure`** are added to `short_activities`, and `ScheduledDispatchWorkflow` to `workflows`.
   - The module docstring lists the new workflow.
 - [ ] 5. Confirm the token scope (depends on 4). — DoD: someone has confirmed that the token the worker mounts (`GITHUB_TOKEN_FILE` / `GITHUB_TOKEN`) can dispatch workflows in `mctlhq/portfolio` (`actions:write`). If it cannot, an mctl-gitops PR that widens the worker's token target is opened and linked from the implementation PR.
 - [ ] 6. Verify after deploy (depends on 4, 5). — DoD: `temporal schedule trigger --schedule-id dispatch-mctlhq-portfolio-weekly-refresh-schedule --namespace mctl-agents` produces a Completed `ScheduledDispatchWorkflow` whose result names a `workflow_dispatch` run of `weekly-refresh.yml` in `mctlhq/portfolio`, and that run concludes `success`. Record the result on issue #559. Only then open the follow-up portfolio change that removes the `schedule:` trigger.
@@ -28,7 +28,7 @@ Each test must fail when the guard it covers is removed.
 - [ ] T1. `tests/test_worker_schedules.py`: the new schedule spec. Using `_FakeClient`, find `dispatch-mctlhq-portfolio-weekly-refresh-schedule` in `client.created`. Assert one interval with `every == timedelta(days=7)`. Compute `epoch + offset` and the next fire after a fixed reference instant, and assert `weekday() == 6`, `hour == 9`, `minute == 1` (UTC). It fails if the weekday arithmetic (epoch Thursday) or the time changes.
 - [ ] T2. `tests/test_worker_schedules.py`: the existing `test_no_two_schedules_fire_on_the_same_minute` and `test_no_schedule_lands_on_an_argo_cron_minute` pass with the new schedule included. Add an assertion that the weekly schedule's id appears among the scanned specs, so a future change to a non-interval spec cannot make it vacuously invisible. Check manually: moving the minute to :00 or :03 makes the relevant test fail.
 - [ ] T3. `tests/test_worker_schedules.py` (`TestOverlapPolicy`): the existing "every schedule declares SKIP explicitly" test covers the new schedule.
-- [ ] T4. `tests/test_worker_roles.py`: `dispatch_and_observe` is in `control.activity_names` and absent from the execution and implementation plans. `ScheduledDispatchWorkflow` is in the control plan's workflows and absent from the others.
+- [ ] T4. `tests/test_worker_roles.py`: `dispatch_and_observe` and `report_dispatch_failure` are both in `control.activity_names` and absent from the execution and implementation plans. `ScheduledDispatchWorkflow` is in the control plan's workflows and absent from the others.
 - [ ] T5. New `tests/test_workflow_dispatch_activity.py`, patching `httpx.AsyncClient` with `httpx.MockTransport` as `tests/test_lifecycle_activity.py` does. Patch the clock and sleep helpers so the tests run without real waiting. Cases:
   - Dispatch 422 raises a non-retryable `DispatchRejected`.
   - Dispatch 500 and dispatch 429 raise a retryable `DispatchFailed`.

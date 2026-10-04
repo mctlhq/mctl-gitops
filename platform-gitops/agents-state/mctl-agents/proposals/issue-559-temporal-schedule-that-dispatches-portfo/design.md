@@ -137,7 +137,7 @@ class ScheduledDispatchWorkflow:
         )
 ```
 
-`ScheduledDispatchInput` holds `repo`, `workflow_file` and `ref`, so the schedule action's arguments stay plain data. The workflow does not catch the activity error: an `ActivityError` propagates and the workflow execution is marked **Failed**. That failed execution is the visible signal, and it appears in Temporal visibility and in the worker's Prometheus metrics (`telemetry_config`).
+`ScheduledDispatchInput` holds `repo`, `workflow_file` and `ref`, so the schedule action's arguments stay plain data. **[Owner correction 2026-10-04]** On a terminal `ActivityError` the workflow first calls the `report_dispatch_failure` activity (bounded retry; it opens or comments on one `scheduled-dispatch-failed` issue in the target repo with the workflow id, error type and message), then re-raises the ORIGINAL error so the execution is marked **Failed**. If reporting itself fails, that is logged and the original error is still what propagates. See requirements.md and tasks.md task 3. That failed execution is the visible signal, and it appears in Temporal visibility and in the worker's Prometheus metrics (`telemetry_config`).
 
 Why this is bounded to one dispatch per fire:
 - Every attempt runs the pre-check first.
@@ -160,7 +160,7 @@ Why this is bounded to one dispatch per fire:
   ```
 
   Add a comment block explaining the :01 choice and the epoch-Thursday offset, in the style of the existing comments.
-- Add `dispatch_and_observe` to `short_activities`, because it makes bounded HTTP calls and does no Argo or mutex wait. Add `ScheduledDispatchWorkflow` to `workflows`. Both land on the control queue only.
+- Add `dispatch_and_observe` and `report_dispatch_failure` to `short_activities`, because both make bounded HTTP calls and do no Argo or mutex wait. Add `ScheduledDispatchWorkflow` to `workflows`. Both land on the control queue only.
 - Update the module docstring's workflow list.
 
 ### 6. Post-deploy verification
