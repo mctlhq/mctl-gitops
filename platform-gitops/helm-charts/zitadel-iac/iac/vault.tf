@@ -1,5 +1,5 @@
 # Vault (secrets.mctl.ai) signs in humans through ZITADEL. Vault's side (the
-# auth/oidc mount, external groups, tenant policies) is declared by the
+# auth/mctl mount, external groups, tenant policies) is declared by the
 # vault-human-auth-iac Job (helm-charts/vault-human-auth-iac); this file
 # declares who may sign in, and as what.
 #
@@ -111,12 +111,9 @@ resource "zitadel_application_oidc" "vault" {
   auth_method_type = "OIDC_AUTH_METHOD_TYPE_BASIC"
   grant_types      = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
   response_types   = ["OIDC_RESPONSE_TYPE_CODE"]
-  # The UI callback carries the auth mount path. Vault's mount moves from
-  # auth/oidc to auth/mctl (the UI tab label is the path), so both are
-  # registered until the move has landed; the auth/oidc one is then dropped.
-  # The CLI loopback has no mount path in it and serves both.
+  # The UI callback carries the auth mount path (auth/mctl; the UI tab label
+  # is the path). The CLI loopback has no mount path in it.
   redirect_uris = [
-    "${local.vault_url}/ui/vault/auth/oidc/oidc/callback",
     "${local.vault_url}/ui/vault/auth/mctl/oidc/callback",
     "http://localhost:8250/oidc/callback",
   ]
