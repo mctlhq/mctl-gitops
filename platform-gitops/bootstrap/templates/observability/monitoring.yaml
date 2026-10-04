@@ -550,6 +550,19 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlTelegramCanary.*"
+                  # The Cloudflare Access login probe (#1329,
+                  # vm-rules/access-login-probe.yaml). A broken or unverifiable
+                  # sign-in locks people out of every Access application, and
+                  # the remedy (the IdP client, the Access IdP, ZITADEL) is a
+                  # human's, so an operator has to hear it. Same two-part shape
+                  # as the canary route above: continue: true here, AND
+                  # AccessLogin.* in the mctl-agent catch-all below, so the
+                  # agent still gets its ticket. Prefix match so the next
+                  # probe alert does not default to agent-only.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "AccessLogin.*"
                   # seerrsense's ChatGPT plugin-directory review: a reviewer
                   # connecting, or a tool failing on them, is news for the
                   # operator and nothing mctl-agent can act on — so Telegram
@@ -738,7 +751,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
+                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
               receivers:
                 - name: "null"
                 - name: mctl-agent
