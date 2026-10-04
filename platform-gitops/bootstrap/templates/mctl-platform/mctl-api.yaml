@@ -236,6 +236,16 @@ spec:
           # with no entry named `dex`, the DEX_* shim above still applies.
           # Rollback: delete this line.
           oidcProvidersSecret: mctl-api-oidc-zitadel
+
+          # ZITADEL_LINK_CLIENT_ID / ZITADEL_LINK_CLIENT_SECRET for the
+          # identity-link browser flow (mctlhq/mctl-api#435, chart #447):
+          # the confidential `mctl-api-link` client that zitadel-iac writes
+          # into the same Secret (helm-charts/zitadel-iac/iac/mctl-api.tf).
+          # The issuer comes from the `zitadel` entry above
+          # (ZITADEL_LINK_PROVIDER defaults to it). Both refs are optional,
+          # so a Secret without the keys leaves the flow off (503) and the
+          # rest of mctl-api unaffected. Rollback: delete this line.
+          zitadelLinkSecret: mctl-api-oidc-zitadel
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the
