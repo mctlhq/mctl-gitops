@@ -7,6 +7,12 @@
 #
 # The same message also goes out when an existing user changes their e-mail,
 # so the wording covers both.
+#
+# Login V2 sends the "invite user" message instead when someone with no
+# sign-in method yet enters their name and asks for a new code ("Resend
+# code" on /verify?invite=true). Its stock text is "Invitation to Zitadel
+# Login", so it is declared too, with the same wording. Placeholders:
+# {{.DisplayName}}, {{.ApplicationName}}; the button carries the link.
 
 resource "zitadel_default_verify_email_message_text" "en" {
   language    = "en"
@@ -27,5 +33,27 @@ resource "zitadel_default_verify_email_message_text" "ru" {
   greeting    = "Здравствуйте, {{.DisplayName}}!"
   text        = "Этот адрес указан в аккаунте MCTL (auth.mctl.ai). Подтвердите его кнопкой ниже или введите код {{.Code}}. Затем выберите Passkeys: вход будет по отпечатку пальца, лицу или PIN-коду устройства, без пароля. Если вы не ждали этого письма, просто проигнорируйте его."
   button_text = "Подтвердить и настроить вход"
+  footer_text = "MCTL, auth.mctl.ai"
+}
+
+resource "zitadel_default_invite_user_message_text" "en" {
+  language    = "en"
+  title       = "Your MCTL account"
+  pre_header  = "Set up a passkey for MCTL"
+  subject     = "MCTL: set up sign-in to your account"
+  greeting    = "Hello {{.DisplayName}},"
+  text        = "You have an MCTL account (auth.mctl.ai). Use the button below to confirm your e-mail and set up sign-in, then choose Passkeys: you sign in with your device's fingerprint, face or PIN, without a password. If you did not expect this e-mail, ignore it."
+  button_text = "Set up sign-in"
+  footer_text = "MCTL, auth.mctl.ai"
+}
+
+resource "zitadel_default_invite_user_message_text" "ru" {
+  language    = "ru"
+  title       = "Ваш аккаунт MCTL"
+  pre_header  = "Настройте passkey для MCTL"
+  subject     = "MCTL: настройте вход в аккаунт"
+  greeting    = "Здравствуйте, {{.DisplayName}}!"
+  text        = "Для вас создан аккаунт MCTL (auth.mctl.ai). Нажмите кнопку ниже, чтобы подтвердить почту и настроить вход, и выберите Passkeys: вход будет по отпечатку пальца, лицу или PIN-коду устройства, без пароля. Если вы не ждали этого письма, просто проигнорируйте его."
+  button_text = "Настроить вход"
   footer_text = "MCTL, auth.mctl.ai"
 }
