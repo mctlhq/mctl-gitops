@@ -14,6 +14,12 @@
 # A recreate of the application would change it and silently break the
 # Access login until that copy is updated, hence prevent_destroy below.
 #
+# Load-bearing for Cloudflare: the Access policy on mcp.mctl.ai and its
+# members (infrastructure/cloudflare/account/portal-zitadel.tf) admits every
+# identity this client hands over. The role check, the project check and who
+# holds `access` below ARE that door's authorization; widening any of them
+# widens who reaches the MCP portal.
+#
 # Its own project, not `zitadel_project.platform`: the role check applies to
 # every application of a project, and ZITADEL puts the client ids of every
 # application of a project into `aud`.

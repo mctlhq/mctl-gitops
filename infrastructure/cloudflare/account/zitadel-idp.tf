@@ -48,8 +48,11 @@ variable "zitadel_access_client_id" {
 
 resource "cloudflare_zero_trust_access_identity_provider" "zitadel" {
   account_id = var.account_id
-  name       = "ZITADEL (auth.mctl.ai)"
-  type       = "oidc"
+  # The label on the Access login picker; ZITADEL at auth.mctl.ai is the
+  # provider. Renaming is an in-place update (only account_id, zone_id and
+  # type force a replace), so the id other resources reference stays.
+  name = "MCTL"
+  type = "oidc"
 
   config = {
     client_id = var.zitadel_access_client_id
