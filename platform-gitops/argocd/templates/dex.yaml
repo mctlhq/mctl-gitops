@@ -97,11 +97,14 @@ spec:
             - |
               set -eu
               # Known answer first: the hex-to-byte decode below must
-              # reproduce Go's base64url(sha256(""))[:40] in this image, or
-              # a wrong but well-formed secret would pass the length check.
-              probe="$(printf %s "" | sha256sum | cut -d' ' -f1 | sed 's/\(..\)/\\x\1/g')"
+              # reproduce Go's base64url(sha256("probe-258"))[:40] in this
+              # image, or a wrong but well-formed secret would pass the
+              # length check. That digest has a 0x00 at byte 28, the one
+              # place where a printf that stopped at NUL would still yield
+              # 40 characters. Re-measure on a Dex image bump.
+              probe="$(printf %s probe-258 | sha256sum | cut -d' ' -f1 | sed 's/\(..\)/\\x\1/g')"
               probe="$(printf '%b' "$probe" | base64 | tr '+/' '-_' | cut -c1-40)"
-              if [ "$probe" != "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hS" ]; then
+              if [ "$probe" != "J6u6Fj-FBYcXaPTdNO9jebYDsqMlYQwCUUCy2QD9" ]; then
                 echo "hex-to-byte decoding in this image does not match Go" >&2
                 exit 1
               fi

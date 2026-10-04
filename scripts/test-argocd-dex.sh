@@ -208,13 +208,18 @@ if [ -z "$OIDC_ISSUER" ]; then
   # one. Derive it from this cluster's server.secretkey exactly as
   # argocd-server does (DexOAuth2ClientSecret), present it with a bogus code
   # through argocd-server's proxy: client auth passing means invalid_grant,
-  # failing means invalid_client. Then the same with a wrong secret.
+  # failing means invalid_client (Dex v2.45.1; older Dex answered an unknown
+  # code with invalid_request, so re-measure on a bump). Then the same with
+  # a wrong secret.
   echo "== argo-cd client secret accepted by Dex (token endpoint)"
   kubectl -n argocd get secret argocd-secret -o jsonpath='{.data.server\.secretkey}' > "$WORK/sk.b64"
-  token_error() { # <secret>
-    curl -s -u "argo-cd:$1" -H "Host: ${URL#https://}" \
+  token_error() { # <secret> -> Dex error code, or the status and body of a non-JSON answer
+    local code
+    code="$(curl -s -o "$WORK/tok.json" -w '%{http_code}' -u "argo-cd:$1" -H "Host: ${URL#https://}" \
       -d grant_type=authorization_code -d code=bogus --data-urlencode "redirect_uri=$URL/auth/callback" \
-      http://127.0.0.1:18080/api/dex/token | python3 -c 'import json,sys; print(json.load(sys.stdin).get("error"))'
+      http://127.0.0.1:18080/api/dex/token)" || true
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["error"])' "$WORK/tok.json" 2>/dev/null \
+      || echo "http $code: $(head -c 200 "$WORK/tok.json" 2>/dev/null)"
   }
   derived="$(python3 -c 'import base64,hashlib,sys; k=base64.b64decode(open(sys.argv[1]).read()); print(base64.urlsafe_b64encode(hashlib.sha256(k).digest()).decode()[:40])' "$WORK/sk.b64")"
   err="$(token_error "$derived")"
