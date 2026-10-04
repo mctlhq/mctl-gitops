@@ -425,7 +425,8 @@ the copy only) sign their users in through ZITADEL:
 - **Admins sign in with a second key.** The `mctl` key's
   `urn:zitadel:iam:org:id:<erpact>` scope makes ZITADEL refuse any user of
   another organization, grant or not, so admins use the Social Login Key
-  `mctl_admin` ("Login with MCTL (admin)"), scoped to the MCTL organization
+  `mctl_admin` (provider name "MCTL Admin", button "Login with MCTL Admin"),
+  scoped to the MCTL organization
   (`admin_org_id` in `erpact/erpact-oidc-zitadel`; a second redirect URI per
   site, `.../custom/mctl_admin`). Their Frappe user is the one under the MCTL
   account's e-mail.

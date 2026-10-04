@@ -98,3 +98,89 @@ run "rejects_admin_login_name_held_by_a_tenant_user" {
   }
   expect_failures = [zitadel_human_user.platform_admin]
 }
+
+# The tenant users' Frappe preconditions hold for admins too.
+run "rejects_admin_frappe_site_outside_the_copy" {
+  command = plan
+  plan_options {
+    target = [kubernetes_secret_v1_data.erpact_frappe_users]
+  }
+  variables {
+    platform_admins = jsonencode({
+      dmitrii = jsonencode({
+        email  = "a@example.com", first_name = "A", last_name = "B",
+        frappe = { sites = ["erp.example.com"], roles = ["System Manager"] }
+      })
+    })
+  }
+  expect_failures = [kubernetes_secret_v1_data.erpact_frappe_users]
+}
+
+run "rejects_admin_frappe_without_sites" {
+  command = plan
+  plan_options {
+    target = [kubernetes_secret_v1_data.erpact_frappe_users]
+  }
+  variables {
+    platform_admins = jsonencode({
+      dmitrii = jsonencode({
+        email  = "a@example.com", first_name = "A", last_name = "B",
+        frappe = { sites = [], roles = ["System Manager"] }
+      })
+    })
+  }
+  expect_failures = [kubernetes_secret_v1_data.erpact_frappe_users]
+}
+
+run "rejects_admin_frappe_administrator_role" {
+  command = plan
+  plan_options {
+    target = [kubernetes_secret_v1_data.erpact_frappe_users]
+  }
+  variables {
+    platform_admins = jsonencode({
+      dmitrii = jsonencode({
+        email  = "a@example.com", first_name = "A", last_name = "B",
+        frappe = { sites = ["erpact-control.mctl.ai"], roles = ["Administrator"] }
+      })
+    })
+  }
+  expect_failures = [kubernetes_secret_v1_data.erpact_frappe_users]
+}
+
+run "rejects_admin_frappe_without_roles" {
+  command = plan
+  plan_options {
+    target = [kubernetes_secret_v1_data.erpact_frappe_users]
+  }
+  variables {
+    platform_admins = jsonencode({
+      dmitrii = jsonencode({
+        email  = "a@example.com", first_name = "A", last_name = "B",
+        frappe = { sites = ["erpact-control.mctl.ai"], roles = [] }
+      })
+    })
+  }
+  expect_failures = [kubernetes_secret_v1_data.erpact_frappe_users]
+}
+
+run "rejects_frappe_on_another_tenant" {
+  command = plan
+  plan_options {
+    target = [kubernetes_secret_v1_data.erpact_frappe_users]
+  }
+  variables {
+    tenant_users = jsonencode({
+      erpact = jsonencode({
+        tuser = jsonencode({ email = "t@example.com", first_name = "T", last_name = "U" })
+      })
+      other = jsonencode({
+        ouser = jsonencode({
+          email  = "x@example.com", first_name = "X", last_name = "Y",
+          frappe = { sites = ["erpact-control.mctl.ai"], roles = ["System Manager"] }
+        })
+      })
+    })
+  }
+  expect_failures = [kubernetes_secret_v1_data.erpact_frappe_users]
+}

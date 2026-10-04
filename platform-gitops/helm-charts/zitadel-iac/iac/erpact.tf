@@ -26,8 +26,9 @@ locals {
   # name the restore Jobs create.
   erpact_frappe_callback = "/api/method/frappe.integrations.oauth2_logins.custom/mctl"
 
-  # The second Social Login Key, `mctl_admin` ("Login with MCTL (admin)"),
-  # for platform admins. The `mctl` key's org scope pins sign-in to the
+  # The second Social Login Key, `mctl_admin` (provider name "MCTL Admin",
+  # which Frappe scrubs to that key name; the restore Jobs check the two
+  # match), for platform admins. The `mctl` key's org scope pins sign-in to the
   # erpact organization, and ZITADEL refuses a user of any other
   # organization there even with a grant ("User is no member of the required
   # organization", measured on v4.19.2), so admins, who are MCTL users, need
