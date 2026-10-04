@@ -20,6 +20,9 @@ image:
 #   action; all creates, plus a read of the admin user lookup.
 #   mctl-api#434 (mctl-api project, API application, the data of
 #   mctl-api/mctl-api-oidc-zitadel): no new action; all creates.
+#   mctl-api#434 `mctl` CLI client: a create, plus in-place updates of the
+#   MCTL API project (has_project_check) and of the data of
+#   mctl-api/mctl-api-oidc-zitadel.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"

@@ -208,9 +208,18 @@ on ZITADEL tokens:
   idle. A client meant to call mctl-api joins this project with
   `access_token_type = "OIDC_TOKEN_TYPE_JWT"`, because mctl-api cannot
   verify opaque access tokens. Adding one is a reviewed decision of its own.
+- **Client `mctl-cli`** (owner decision on mctl-api#434): native, public,
+  PKCE, authorization code + refresh token, JWT access tokens, redirects
+  `http://127.0.0.1/callback` and `http://localhost/callback`. ZITADEL
+  matches loopback redirects of a native app on path and query only, so the
+  CLI's ephemeral port needs no entry and `dev_mode` stays off. The project
+  sets `has_project_check`: only `MCTL` users obtain a token; tenant
+  organizations are not granted the project.
 - **Output.** The Job writes the complete `MCTL_OIDC_PROVIDERS` JSON (name
   `zitadel`, issuer `https://auth.mctl.ai`, audience = that client id) into
-  `mctl-api/mctl-api-oidc-zitadel`. The mctl-api chart reads it through
+  `mctl-api/mctl-api-oidc-zitadel`, plus `MCTL_CLI_ZITADEL_CLIENT_ID`, which
+  mctl-api does not read: it is where the CLI's default client id comes from
+  (the provider marks every client id sensitive). The mctl-api chart reads it through
   `oidcProvidersSecret`, optionally. Rollback: drop `oidcProvidersSecret`
   from `bootstrap/templates/mctl-platform/mctl-api.yaml`. The Secret can
   stay as it is.

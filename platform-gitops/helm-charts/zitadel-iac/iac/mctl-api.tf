@@ -19,12 +19,20 @@
 # opaque access tokens.
 #
 # An API application with private-key JWT and no key issued: it has no
-# credential at all, and no sign-in flow of its own. Until a client joins the
-# project, no token carries this audience.
+# credential at all, and no sign-in flow of its own. The clients that carry
+# its audience are the applications of this project, today only the `mctl`
+# CLI below (owner decision on mctl-api#434).
 
 resource "zitadel_project" "mctl_api" {
   org_id = local.mctl_org_id
   name   = "MCTL API"
+
+  # Only users of the organization that owns the project (MCTL) obtain a
+  # token for it: tenant organizations are never granted it. mctl-api does
+  # authenticate a ZITADEL user it has never seen (a new principal with no
+  # tenant or admin access), so this keeps tenant users out until linking
+  # and principal-based authorization (mctl-api#435, #377) decide otherwise.
+  has_project_check = true
 
   lifecycle {
     precondition {
@@ -40,6 +48,38 @@ resource "zitadel_application_api" "mctl_api" {
   name       = "mctl-api"
 
   auth_method_type = "API_AUTH_METHOD_TYPE_PRIVATE_KEY_JWT"
+}
+
+# `mctl auth login --zitadel` (cli/mctl): a public client with PKCE, since a
+# CLI cannot keep a secret. Loopback redirects without a port: for a native
+# application ZITADEL matches a loopback redirect on path and query only
+# (RFC 8252 7.3; zitadel/oidc validateAuthReqRedirectURINative), so the CLI
+# listens on an ephemeral port and dev_mode stays off, which keeps every
+# non-loopback http redirect refused.
+#
+# JWT access tokens, because mctl-api verifies tokens locally and cannot read
+# ZITADEL's opaque ones. Refresh tokens so a login lasts beyond the access
+# token. No role assertion: mctl-api grants nothing from ZITADEL roles until
+# mctl-api#377.
+resource "zitadel_application_oidc" "mctl_cli" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.mctl_api.id
+  name       = "mctl-cli"
+
+  app_type         = "OIDC_APP_TYPE_NATIVE"
+  auth_method_type = "OIDC_AUTH_METHOD_TYPE_NONE"
+  grant_types = [
+    "OIDC_GRANT_TYPE_AUTHORIZATION_CODE",
+    "OIDC_GRANT_TYPE_REFRESH_TOKEN",
+  ]
+  response_types = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris = [
+    "http://127.0.0.1/callback",
+    "http://localhost/callback",
+  ]
+  access_token_type            = "OIDC_TOKEN_TYPE_JWT"
+  dev_mode                     = false
+  skip_native_app_success_page = false
 }
 
 resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
@@ -60,6 +100,11 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
         audiences = [zitadel_application_api.mctl_api.client_id]
       },
     ])
+    # Not read by mctl-api (the chart references MCTL_OIDC_PROVIDERS only).
+    # The CLI's client id is public by nature, but the provider marks every
+    # client_id sensitive, so this Secret is where an operator reads it to
+    # set the CLI default (cli/mctl/internal/auth/zitadel.go).
+    MCTL_CLI_ZITADEL_CLIENT_ID = zitadel_application_oidc.mctl_cli.client_id
   }
 
   field_manager = "zitadel-iac"
