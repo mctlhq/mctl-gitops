@@ -5,7 +5,8 @@ metadata:
   annotations:
     workflows.argoproj.io/description: |
       Creates a new tenant on the platform:
-        1. Validates tenant name (DNS-safe, not already exists)
+        1. Validates tenant name (DNS-safe, not already exists unless
+           reprovision=true)
         2. Creates Vault policy tenant-{name} (scoped to secret/data/teams/{name}/*)
         3. Commits tenant directory to gitops repo (values.yaml + catalog-info.yaml)
         4. Appends ArgoCD RBAC entries to argocd/values.yaml
@@ -58,6 +59,12 @@ spec:
         value: ""
       - name: creator_user_id
         value: ""
+      - name: reprovision
+        value: "false"
+        # "true": re-run provisioning for a tenant that already exists
+        # (Vault policies and roles, ApplicationSet refresh) without writing
+        # its files. Only for re-running a half-finished or outdated tenant
+        # by hand; the default refuses an existing tenant in validate.
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
@@ -71,6 +78,8 @@ spec:
               parameters:
                 - name: tenant_name
                   value: "{{workflow.parameters.tenant_name}}"
+                - name: reprovision
+                  value: "{{workflow.parameters.reprovision}}"
 
           # Step 2: create Vault policy (after validate)
           - name: create-vault-policy
@@ -109,6 +118,8 @@ spec:
                   value: "{{workflow.parameters.contact_email}}"
                 - name: creator_user_id
                   value: "{{workflow.parameters.creator_user_id}}"
+                - name: reprovision
+                  value: "{{workflow.parameters.reprovision}}"
 
           - name: refresh-tenants-appset
             dependencies: [commit-to-git]
@@ -127,17 +138,31 @@ spec:
       inputs:
         parameters:
           - name: tenant_name
+          - name: reprovision
       script:
-        image: alpine:3.19
+        image: alpine/git:2.43.0
         command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        # Bound through env, not interpolated into the script text, like
+        # commit-tenant-to-git's parameters.
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
+          - name: PARAM_REPROVISION
+            value: "{{inputs.parameters.reprovision}}"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
+          REPROVISION="$PARAM_REPROVISION"
 
           echo "Validating tenant name: $TENANT"
 
-          # Format check: lowercase alphanumeric + hyphens, 2-63 chars, no leading/trailing hyphens
-          if ! echo "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+          # Format check: lowercase alphanumeric + hyphens, 2-63 chars, no leading/trailing hyphens.
+          # grep matches per line, so a multi-line value is refused first.
+          if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
             echo "ERROR: Tenant name '$TENANT' is invalid."
             echo "Must match: ^[a-z0-9][a-z0-9-]{1,62}$"
             echo "Examples: my-team, team1, dev-platform"
@@ -151,6 +176,32 @@ spec:
               exit 1
             fi
           done
+
+          case "$REPROVISION" in
+            true|false) ;;
+            *)
+              echo "ERROR: reprovision must be \"true\" or \"false\", got: $REPROVISION"
+              exit 1
+              ;;
+          esac
+
+          # Existence: create-tenant creates a tenant. An existing one is an
+          # error unless reprovision=true asks for exactly that, so a request
+          # for a taken name fails here instead of skipping the files and
+          # provisioning on. A failed clone fails the step: "could not check"
+          # is not "does not exist".
+          git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          if [ -e "/tmp/mctl-gitops/platform-gitops/tenants/${TENANT}" ]; then
+            if [ "$REPROVISION" != "true" ]; then
+              echo "ERROR: tenant '$TENANT' already exists (platform-gitops/tenants/${TENANT})."
+              echo "To re-run its provisioning, submit with reprovision=true."
+              exit 1
+            fi
+            echo "Tenant '$TENANT' exists; reprovision=true: provisioning again without writing its files."
+          elif [ "$REPROVISION" = "true" ]; then
+            echo "ERROR: reprovision=true, but tenant '$TENANT' does not exist."
+            exit 1
+          fi
 
           echo "Tenant name '$TENANT' is valid."
 
@@ -272,6 +323,7 @@ spec:
           - name: allow_internet_egress
           - name: contact_email
           - name: creator_user_id
+          - name: reprovision
       volumes:
         - name: deploy-key
           secret:
@@ -310,6 +362,8 @@ spec:
             value: "{{inputs.parameters.contact_email}}"
           - name: PARAM_CREATOR_USER_ID
             value: "{{inputs.parameters.creator_user_id}}"
+          - name: PARAM_REPROVISION
+            value: "{{inputs.parameters.reprovision}}"
         source: |
           set -e
 
@@ -450,11 +504,17 @@ spec:
           git clone --depth=50 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
-          # ── Security: check tenant doesn't already exist ────────────────────
+          # ── Existing tenant: only with reprovision=true ─────────────────────
+          # validate already refused an existing tenant without it; this
+          # catches one created between validate and this clone.
           TENANT_DIR="platform-gitops/tenants/${TENANT}"
           SKIP_GIT=false
-          if [ -d "$TENANT_DIR" ]; then
-            echo "INFO: Tenant directory already exists: $TENANT_DIR — skipping git commit, continuing provisioning."
+          if [ -e "$TENANT_DIR" ]; then
+            if [ "$PARAM_REPROVISION" != "true" ]; then
+              echo "ERROR: tenant directory already exists: $TENANT_DIR"
+              exit 1
+            fi
+            echo "INFO: reprovision=true: $TENANT_DIR exists — skipping git commit, continuing provisioning."
             SKIP_GIT=true
           fi
 
