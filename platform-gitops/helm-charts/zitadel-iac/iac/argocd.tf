@@ -140,12 +140,16 @@ resource "zitadel_user_grant" "argocd_admin" {
 # organization.
 #
 # One action for both, because a trigger holds one list of actions and both
-# would set the same claim. The two never mix in one token: ZITADEL loads only
-# the grants of the requesting client's own project (prepareRoles in
-# internal/api/oidc/userinfo.go, v4.19.2), and neither Argo CD nor Vault asks
-# for another project's roles by scope. The role keys are the same on both
-# projects (`admins`, the tenant name), so each token's `groups` is exactly
-# the user's roles on the application they are signing in to.
+# would set the same claim. The two never mix in one token: ctx.v1.user.grants
+# is not every grant the user holds. It is built from the same query as the
+# token's own role claim (runUserinfoActions passes qu.UserGrants, which
+# GetOIDCUserInfo loads for the role audience prepareRoles computes, i.e. the
+# requesting client's project; internal/api/oidc/userinfo.go, v4.19.2).
+# Measured on a local v4.19.2 with a user holding `t1` on an Argo CD-shaped
+# project and `admins` on a Vault-shaped one, both accepted by this filter:
+# the Argo CD token carries ["t1"], the Vault token ["admins"], and adding
+# the other project's audience scope to the Argo CD request still yields
+# ["t1"]. The project filter below stays as defence in depth.
 resource "zitadel_action" "argocd_groups" {
   for_each = local.argocd_claim_orgs
 
