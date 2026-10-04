@@ -184,10 +184,12 @@ merge gets a plan without the capability. A run that has already resolved
 its plan keeps it -- an `ExecutionPlan` is immutable per run.
 
 Turning it back on is the same three steps in reverse, with another version
-bump. Two things keep the capability inert today whatever this file says:
-the investigator CWFT does not set `ISSUE_INVESTIGATOR_RESOLVER_MODE`, so it
-runs in the `legacy` mode, which builds no plan at all; and on mctl-agents
-`main` nothing calls `plan_grants_human_input` yet.
+bump. The capability is live: the investigator CWFT sets
+`ISSUE_INVESTIGATOR_RESOLVER_MODE=declarative` (owner decision 2026-10-04),
+and since mctl-agents 1.66.0 (#558) a plan that grants it lets the
+investigator seal one clarification question per round. A second, coarser
+off switch is setting that env var back to `legacy` in the CWFT, which
+skips the catalog entirely.
 
 ## Capability discovery: `capabilityDiscovery`
 
@@ -226,12 +228,13 @@ eager mode.
 
 ## Rollback
 
-This catalog is additive and not runtime-load-bearing in production: no
-deployment runs `ISSUE_INVESTIGATOR_RESOLVER_MODE=declarative` yet, so no
-production run resolves against it. The resolver itself does read it, and
-fails closed on what it reads (see the two sections above). Reverting the commit that introduced it removes the
-catalog, schemas, validator, and CI step with no effect on any running
-agent, CWFT, or mctl-api state. Once real registry-backed bindings exist,
+This catalog is runtime-load-bearing in production: the investigator CWFT
+runs `ISSUE_INVESTIGATOR_RESOLVER_MODE=declarative`, so every investigation
+resolves its plan from it, and a broken binding or profile fails every run
+closed. The immediate operational rollback is setting that env var to
+`legacy` in the CWFT. The resolver itself does read it, and
+fails closed on what it reads (see the two sections above). Reverting the commit that introduced it would now
+break investigations unless the CWFT is switched back to `legacy` first. Once real registry-backed bindings exist,
 operational rollback always selects the exact previous registry tuple
 (`mctl_rollback_agent`'s existing "revert to from_version" semantics),
 never an independently chosen pair -- exactly what

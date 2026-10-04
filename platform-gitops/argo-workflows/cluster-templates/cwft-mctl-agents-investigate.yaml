@@ -587,6 +587,22 @@ spec:
           # owner decision. Roll back by setting "off".
           - name: ISSUE_INVESTIGATOR_CONTEXT_MODE
             value: "shadow"
+          # Declarative resolver (mctlhq/mctl-agents#227/#277, ADR 007), owner
+          # decision 2026-10-04. Each run resolves its immutable
+          # ExecutionPlan from the agent-platform catalog under
+          # MCTL_GITOPS_ROOT below (profile issue-investigator-default,
+          # binding releases/shadow/issue-investigator.yaml) instead of the
+          # hardcoded legacy options. Same model, budget ($8) and SDK tools as
+          # legacy; the difference is the `human.request_input` capability
+          # the profile grants (mctl-agents#473), which legacy never honours.
+          # Fail-closed: a binding/profile/definition mismatch stops the run
+          # before the model with a ResolverError, never a silent fallback,
+          # so an mctl-agents release that changes agent.yaml needs the
+          # binding's sourceManifest.contentHash re-pinned in the same step.
+          # Roll back by setting "legacy" (or deleting this entry): no image,
+          # no catalog change.
+          - name: ISSUE_INVESTIGATOR_RESOLVER_MODE
+            value: "declarative"
           # WorkItem intents as a ContextSnapshot source (mctlhq/mctl-agents#542
           # tasks 12-18, orchestrator/work_context/intents.py; released in
           # mctl-agents 1.63.0). `on`: the investigator reads the WorkItem's
@@ -651,9 +667,7 @@ spec:
           # into the image at tests/fixtures/resolver/, which is why no path
           # was needed here before.
           #
-          # Inert until that step ships AND the mode is switched off its
-          # `legacy` default -- this is the path being in place first, not an
-          # activation.
+          # Live since ISSUE_INVESTIGATOR_RESOLVER_MODE=declarative above.
           - name: MCTL_GITOPS_ROOT
             value: /workdir/mctl-gitops/platform-gitops
           # Redirect Python's tempfile.gettempdir() onto the PVC so the
