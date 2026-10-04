@@ -1,0 +1,33 @@
+# Rendered as the second source of the `vault-human-auth-iac` Application
+# (bootstrap/templates/core-infra/vault-human-auth-iac.yaml), into the
+# vault-human-auth-iac namespace.
+
+image:
+  # Built from platform-gitops/images/vault-iac by build-image.yaml; pinned by
+  # digest, so a re-pushed tag can never change what configures Vault.
+  repository: ghcr.io/mctlhq/vault-iac
+  tag: "1.13.1-5.12.0"
+  # build-image.yaml run 37192723070, from 821f7cef.
+  digest: "sha256:b0a02915b0e054007a5ac82ad6ff3c1da9a73202d286afcbce3c0f31b080b971"
+
+# The plan actions the Job may apply, space-separated. A plan containing any
+# other action fails the Job before apply, with the plan in its log.
+#   First rollout (#1574): "no-op read". The Job planned the auth/oidc mount,
+#   its role, human-admins and human-tenant-erpact with their aliases, and the
+#   human-tenant-erpact policy (7 creates), and refused it.
+#   Apply: adds "create" for those, and "update" for a rotated client and for
+#   reverting drift on what this root owns.
+# Widen deliberately, in the PR that needs it. "delete" is never an action
+# class here; deletes are allowed per address in allowedDeletes below.
+allowedActions: "no-op read create update"
+
+# Resource addresses the Job may destroy or replace, space-separated. Any
+# other delete in a plan fails the Job. Name the exact address (a retired
+# tenant's group, alias and policy), in the PR that needs it, and empty the
+# list once it has applied.
+allowedDeletes: ""
+
+# The CronJob's schedule. The tenant list and the OIDC client arrive through
+# the Secret zitadel-iac writes, which no sync observes; this is how a new
+# tenant or a rotated client reaches Vault. Offset from zitadel-iac (:17).
+schedule: "37 * * * *"
