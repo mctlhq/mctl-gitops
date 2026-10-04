@@ -267,6 +267,58 @@ incompatibility, and this policy missing `create` on `metadata/*` — the last
 of which 403'd every first-ever write (including `oauth-state` on first boot)
 until fixed live, then backported to the `.hcl` file above.
 
+### vault-human-auth-iac (human sign-in through ZITADEL)
+
+Humans sign in to Vault through ZITADEL (`auth.mctl.ai`) on the `auth/oidc`
+mount, and get access from the `groups` claim: `admins` maps to the `admin`
+policy, a tenant name to `human-tenant-<tenant>`, read-only on
+`secret/{data,metadata}/teams/<tenant>/*`. None of that is typed here: the
+`vault-human-auth-iac` Job (Argo CD Application of the same name, namespace
+`vault-human-auth-iac`) declares the mount, its role, the external groups,
+their aliases and the tenant policies with OpenTofu, and re-applies hourly.
+
+The only hand-applied part is the Job's own identity: the policy
+`vault-human-auth-iac` and the Kubernetes auth role that hands it out. The
+policy covers `sys/auth/oidc` (no delete), `auth/oidc/{config,role/*}`, `identity/group*`,
+`identity/group-alias*` and `sys/policies/acl/human-tenant-*`, and no secret
+data. It cannot write the `admin` policy, create tokens, or touch any other
+auth mount. It is still admin-equivalent in effect, since it decides which
+identity lands in which policy group; read the header of the `.hcl`.
+
+One-time apply (owner, admin token, `VAULT_ADDR=https://secrets.mctl.ai`).
+Safe before the Job exists: the role binds a ServiceAccount that Argo CD
+creates later.
+
+```bash
+vault policy write vault-human-auth-iac \
+  infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-vault-human-auth-iac.hcl
+
+vault write auth/kubernetes/role/vault-human-auth-iac \
+  bound_service_account_names=vault-human-auth-iac \
+  bound_service_account_namespaces=vault-human-auth-iac \
+  token_policies=vault-human-auth-iac \
+  token_ttl=10m \
+  token_max_ttl=10m
+```
+
+Check: `vault policy read vault-human-auth-iac` matches the file, and
+`vault read auth/kubernetes/role/vault-human-auth-iac` shows the one
+ServiceAccount, the one namespace and the one policy.
+
+Proven on a local Vault 1.17.2 (the live version) with a token holding only
+this policy: the OpenTofu root creates everything, re-plans clean, adds and
+removes a tenant, and rotates the client; reading any `secret/` path, reading
+or writing any other policy (`admin` included), disabling the mount, enabling
+another auth method, writing a Kubernetes auth role and creating a token are
+all refused (403). Each grant was checked by removing it: without
+`sys/mounts/auth/oidc` the apply fails, while `read` on `sys/auth/oidc`,
+`sudo` on `sys/mounts/auth/oidc`, `list` anywhere and `create` on the
+`identity/*/id` paths turned out unneeded and are not granted.
+
+**Rollback:** `vault delete auth/kubernetes/role/vault-human-auth-iac` and
+`vault policy delete vault-human-auth-iac`. The Job then fails at login and
+changes nothing; what it already declared stays as it is.
+
 ## ESO tenant isolation
 
 ESO reads Vault through three distinct identities. The split exists because a

@@ -1,0 +1,46 @@
+# Human sign-in to Vault (secrets.mctl.ai) through ZITADEL, declared rather
+# than typed: Vault's auth/oidc mount, the identity groups per tenant and for
+# admins, and the tenant policies. Bootstrap and design:
+# infrastructure/k3s-preview/cluster-bootstrap/vault-config/README.md,
+# "vault-human-auth-iac".
+#
+# Its own namespace, so the Job that configures Vault shares no Secret with
+# Vault itself (the vault namespace holds the unseal keys). The Job reaches
+# Vault through auth/kubernetes with the narrow policy vault-human-auth-iac,
+# which the owner applies once by hand (cluster-bootstrap/vault-config).
+#
+# infra-components/identity/vault-human-auth-iac holds the Secret the
+# zitadel-iac Job fills with the OIDC client and the tenant list, and the Role
+# that lets it. The Job itself (helm-charts/vault-human-auth-iac) is added as
+# a second source once its image exists.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault-human-auth-iac
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/identity/vault-human-auth-iac
+  ignoreDifferences:
+    # Written by the zitadel-iac Job, not by Argo CD (oidc-zitadel.yaml).
+    - kind: Secret
+      name: vault-oidc-zitadel
+      jsonPointers:
+        - /data
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: vault-human-auth-iac
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

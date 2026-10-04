@@ -1,0 +1,52 @@
+# The OIDC client of Vault (secrets.mctl.ai) in ZITADEL. ZITADEL generates
+# the client secret, and the zitadel-iac Job (helm-charts/zitadel-iac/iac/
+# vault.tf) writes it here with server-side apply as field manager
+# `zitadel-iac`, together with the client id and the tenant list the Vault
+# side declares its groups from. The vault-human-auth-iac Job in this
+# namespace reads it and configures Vault's auth/oidc mount.
+#
+# A namespace of its own, not `vault`: the vault namespace holds the unseal
+# keys, and the OpenTofu kubernetes state backend needs list on Secrets in its
+# namespace, which cannot be narrowed by name.
+#
+# Argo CD creates the Secret without data and never owns `.data`
+# (ignoreDifferences in bootstrap/templates/core-infra/vault-human-auth-iac.yaml),
+# so a sync does not wipe what the Job wrote. The zitadel-iac Job may only read
+# and patch this one Secret by name: no create, no list, nothing else here.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-oidc-zitadel
+  labels:
+    app.kubernetes.io/name: vault-human-auth-iac
+    app.kubernetes.io/component: oidc-zitadel
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/name: vault-human-auth-iac
+    app.kubernetes.io/component: oidc-zitadel
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["vault-oidc-zitadel"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/name: vault-human-auth-iac
+    app.kubernetes.io/component: oidc-zitadel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-iac-oidc-client
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-iac
+    namespace: zitadel
