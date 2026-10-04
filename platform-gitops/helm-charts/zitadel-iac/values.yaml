@@ -16,6 +16,8 @@ image:
 #   S3 (SMTP, tenant orgs and users): adds "create".
 #   S4 (Forgejo OIDC application): no new action; its project, application
 #   and the data of forgejo/forgejo-oidc-zitadel are creates.
+#   #1500 (Argo CD OIDC applications, roles, grants, groups action): no new
+#   action; all creates, plus a read of the admin user lookup.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
