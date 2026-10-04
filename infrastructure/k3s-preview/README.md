@@ -75,25 +75,48 @@ tofu plan
 tofu apply
 ```
 
-The `terraform.yml` GitHub Actions workflow ("k3s-preview (OpenTofu)") runs `tofu plan` automatically
-on every push to `infrastructure/k3s-preview/**`. Apply requires manual dispatch with `apply: true`.
+The `terraform.yml` GitHub Actions workflow ("k3s-preview (OpenTofu)") applies
+this root from CI (#1534). Merging applies nothing.
 
-**Applying from CI needs secrets that do not exist yet.** The apply path had never
-been exercised until 2026-09-09, when it destroyed the cluster's `hcloud_ssh_key`
-and could not recreate it — `SSH_PRIVATE_KEY` and `SSH_PUBLIC_KEY` are referenced
-by the workflow but are not set, in this repository or the organisation, so the
-job wrote a lone newline and Hetzner refused it. The workflow now refuses the
-apply up front instead, and applies run locally until someone decides to put a
-node SSH key into Actions secrets. Four secrets gate it:
+1. **`plan`** runs on every push to `infrastructure/k3s-preview/**` and on every
+   dispatch, on environment `k3s-plan` (branch `main`, no reviewer; a dispatch
+   from another branch fails in the `wrong-ref` job). It needs no approval and publishes the plan, its counts and a digest in the run summary.
+2. **`apply`** runs only on a dispatch with `apply: true`, on environment
+   `k3s-apply` (branch `main`, required reviewer). It re-plans with the deploy
+   key and refuses unless its plan has the digest `plan` published, then applies
+   exactly that plan.
 
-| Secret | Purpose |
-| --- | --- |
-| `HCLOUD_TOKEN` | exists |
-| `SSH_PRIVATE_KEY` / `SSH_PUBLIC_KEY` | **absent** — the module drives node configuration over SSH, so an apply cannot work without them. Putting a node's private key in a repository secret makes it readable by every workflow in the repo (see #1118); that is a decision, not an oversight. |
-| `ETCD_S3_ACCESS_KEY_ID` / `ETCD_S3_SECRET_ACCESS_KEY` | **absent** — the snapshots-bucket token. Until 2026-09-09 the workflow passed the *state-backend* token here instead, which made every CI plan propose replacing `terraform_data.control_plane_config` and restarting k3s on the single control-plane node. |
+Both jobs run `.github/scripts/k3s-plan-guard.sh` on every plan, the
+push-to-main plan included, so a merge that would restart k3s turns the `plan`
+job red right away (tested by `tests/test_k3s_plan_guard.py`). It refuses:
 
-See #1139. Local applies read all of these from the Keychain via `tfenv.sh` and
-are unaffected.
+- any destroy or replace of real infrastructure (servers, network, firewall,
+  load balancer, the Hetzner SSH key) unless dispatched with `allow_destroy`;
+- any replacement of a `terraform_data` provisioner other than the
+  kustomization ones unless dispatched with `allow_reprovision`.
+  `control_plane_config`, `agent_config`, `registries` and friends rewrite the
+  k3s configuration over SSH and restart k3s, on the single control plane for
+  the first.
+
+| Input | Where | Notes |
+| --- | --- | --- |
+| `HCLOUD_TOKEN`, `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | repository secrets | Hetzner API and the state backend. Still repository-level (#1118). |
+| `ETCD_S3_ACCESS_KEY_ID` / `ETCD_S3_SECRET_ACCESS_KEY` | environment secrets on **both** `k3s-plan` and `k3s-apply` | The snapshots-bucket token, *not* the state token. It is part of the k3s config, so a plan without it proposes rewriting the control plane. Same values as Keychain `mctl-r2-etcd-snapshots`. |
+| `SSH_PRIVATE_KEY` | environment secret on `k3s-apply` only | The dedicated deploy key `k3s-preview-ci-deploy`, not an operator's key. Its public half is in `kube.tf` (`ssh_additional_public_keys`) and in `/root/.ssh/authorized_keys` on every node. |
+| `K3S_SSH_PUBLIC_KEY` | repository secret | The public key `hcloud_ssh_key.k3s` was created from (the operator's), byte for byte. CI passes it instead of its own key, which would replace that resource. A secret rather than a variable only so its comment, which names a machine, is masked in public logs. |
+
+Rotating the deploy key: generate a new pair, append the public half to
+`authorized_keys` on every node, replace it in `kube.tf`, update the
+`SSH_PRIVATE_KEY` secret, apply once, then remove the old line from the nodes.
+The servers ignore `ssh_keys` and `user_data`, so none of this replaces a node.
+
+After a CI apply, the state holds the deploy key in
+`ssh_sensitive_resource.kubeconfig`, so the next local plan shows that resource
+"updated in-place" (`private_key`). That is harmless; it runs no command. The
+reverse happens after a local apply.
+
+Local applies read all of these from the Keychain via `tfenv.sh` and are
+unaffected.
 
 ## Updating the kube-hetzner module
 

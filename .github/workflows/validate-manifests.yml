@@ -380,6 +380,13 @@ jobs:
         # deploy key.
         run: python3 tests/test_cwft_implement_shepherd_work_context_env.py
 
+      - name: Unit-test the k3s-preview apply guard
+        # terraform.yml refuses a cluster plan that destroys infrastructure or
+        # re-runs node provisioners (#1534). It only meets a real plan during
+        # an apply of the preprod cluster, where a miss is a restarted control
+        # plane, so it is exercised here against synthetic plans.
+        run: python3 tests/test_k3s_plan_guard.py
+
       - name: Unit-test the release-deploy bump script
         # The image-tag rewriter is a heredoc inside release-deploy.yaml, so
         # it only ever runs during a real release — a bug in it is found by
