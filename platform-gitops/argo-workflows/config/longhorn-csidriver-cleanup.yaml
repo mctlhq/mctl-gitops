@@ -1,0 +1,120 @@
+# One-shot removal of the orphaned Longhorn CSIDriver.
+#
+# Longhorn was uninstalled on 2026-03-20 (commit 03019fd2, enable_longhorn =
+# false in infrastructure/k3s-preview/kube.tf), but the cluster-scoped
+# `CSIDriver driver.longhorn.io` survived it. longhorn-manager registers that
+# object itself at runtime (managedFields manager: longhorn-manager, created
+# 2026-03-25), so no Helm release, HelmChart or ArgoCD Application ever owned
+# it and nothing was there to prune it. Its only remaining effect is harmful:
+# stuck-pv-janitor's zombie finalizer pass refuses to strip a VolumeAttachment
+# whose attacher CSIDriver "still exists", so a Longhorn leftover could never
+# satisfy that gate.
+#
+# The Job is an ArgoCD PostSync hook of argo-workflows-config. It deletes the
+# one named driver, and only when nothing in the cluster still refers to it:
+# no VolumeAttachment with that attacher, no PV with that CSI driver, no
+# CSINode registration, no StorageClass provisioner. If any consumer exists it
+# exits non-zero and deletes nothing, which fails the sync visibly instead of
+# abandoning a volume. Every read must succeed — a failed list is an error,
+# never "no consumers". Once the driver is gone the Job is a no-op, so
+# re-running on every sync is safe. Remove this file in a follow-up PR once
+# the deletion has been verified.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: longhorn-csidriver-cleanup
+  namespace: argo-workflows
+---
+# Delete is limited to the single named CSIDriver; everything else is
+# list-only, for the consumer check.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: longhorn-csidriver-cleanup
+rules:
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csidrivers"]
+    resourceNames: ["driver.longhorn.io"]
+    verbs: ["get", "delete"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments", "csinodes", "storageclasses"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: longhorn-csidriver-cleanup
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: longhorn-csidriver-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: longhorn-csidriver-cleanup
+    namespace: argo-workflows
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: longhorn-csidriver-cleanup
+  namespace: argo-workflows
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    # Keep the finished Job (and its log) until the next sync replaces it.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      serviceAccountName: longhorn-csidriver-cleanup
+      restartPolicy: Never
+      # Same image as stuck-pv-janitor: ships kubectl and jq.
+      containers:
+        - name: cleanup
+          image: alpine/k8s:1.33.12
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              D=driver.longhorn.io
+              # --ignore-not-found: empty output means NotFound; any other
+              # failure aborts under set -e. Assign first: a failing command
+              # substitution inside `[ ]` would be ignored and read as absent.
+              LIVE=$(kubectl get csidriver "$D" --ignore-not-found -o name)
+              if [ -z "$LIVE" ]; then
+                echo "csidriver $D already absent; nothing to do"
+                exit 0
+              fi
+              # Write each list to a file first so a failed read aborts here
+              # instead of feeding empty input to jq and reading as zero.
+              kubectl get volumeattachments -o json > /tmp/va.json
+              kubectl get persistentvolumes -o json > /tmp/pv.json
+              kubectl get csinodes -o json > /tmp/csinode.json
+              kubectl get storageclasses -o json > /tmp/sc.json
+              # One jq per list at top level, so a jq failure (e.g. a body
+              # without .items) also aborts rather than being masked.
+              : > /tmp/consumers
+              jq -r --arg d "$D" '.items[] | select(.spec.attacher == $d) | "volumeattachment/\(.metadata.name)"' /tmp/va.json >> /tmp/consumers
+              jq -r --arg d "$D" '.items[] | select(.spec.csi.driver? == $d) | "persistentvolume/\(.metadata.name)"' /tmp/pv.json >> /tmp/consumers
+              jq -r --arg d "$D" '.items[] | select(any(.spec.drivers[]?; .name == $d)) | "csinode/\(.metadata.name)"' /tmp/csinode.json >> /tmp/consumers
+              jq -r --arg d "$D" '.items[] | select(.provisioner == $d) | "storageclass/\(.metadata.name)"' /tmp/sc.json >> /tmp/consumers
+              if [ -s /tmp/consumers ]; then
+                echo "REFUSING to delete csidriver $D: still referenced by"
+                cat /tmp/consumers
+                exit 1
+              fi
+              echo "csidriver $D has no consumers; deleting"
+              kubectl delete csidriver "$D" --ignore-not-found --wait=false
