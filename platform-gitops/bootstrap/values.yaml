@@ -272,6 +272,9 @@ externalManifestNamespaces:
       - deployer-secret
       # R2 token for the copy's backups (bucket erpact-backups only).
       - erpact-backup-r2
+      # OIDC client of the sites in ZITADEL, filled by the zitadel-iac Job;
+      # declared in infra-components/erpact/oidc-zitadel.yaml (#1501).
+      - erpact-oidc-zitadel
       - mariadb-root
     # No RBAC is bound to default in erpact. Project erpact (#1516) admits
     # no Secret and no RBAC kind from the tenant's repository, so that

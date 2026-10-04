@@ -1,0 +1,42 @@
+# Platform-owned manifests in namespace erpact for the copy's sign-in through
+# ZITADEL (mctlhq/mctl-gitops#1501): the Secret the zitadel-iac Job fills and
+# the Role that lets it do so (infra-components/erpact/oidc-zitadel.yaml).
+#
+# Its own Application in project default, not one of the tenant's: project
+# erpact admits no Secret or RBAC kind, and root-app deliberately runs
+# without RespectIgnoreDifferences (templates/bootstrap/root-app.yaml), which
+# this needs so a sync never applies the empty `.data` over what the Job
+# wrote. Same shape as forgejo-oidc-zitadel (templates/data/forgejo.yaml).
+#
+# Not named after a site: the tenant's Argo CD role sees project erpact only.
+# Wave 0 like everything erpact (applications.yaml explains why).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: erpact-oidc-zitadel
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    targetRevision: main
+    path: platform-gitops/infra-components/erpact
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: erpact
+  ignoreDifferences:
+    # Written by the zitadel-iac Job, not by Argo CD.
+    - kind: Secret
+      name: erpact-oidc-zitadel
+      jsonPointers:
+        - /data
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
