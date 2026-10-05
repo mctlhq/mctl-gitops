@@ -363,6 +363,29 @@ def _iter_env_vars(node):
             yield from _iter_env_vars(item)
 
 
+def _env_value_by_name(doc, env_name: str, path: pathlib.Path):
+    """The single value of the env var named exactly `env_name`, or None.
+
+    For a template that runs several agents and therefore sets several
+    *_BUDGET_USD variables (cwft-mctl-agents-run.yaml: the service agents,
+    the mentor and the incident responder), where `_unique_env_by_suffix`
+    rightly refuses to pick one. The profile names its own variable in
+    spec.runtime.sandbox.budgetEnv and this reads exactly that one.
+
+    A name the template sets with two different values is ambiguous for the
+    same reason it is below, and is the same error.
+    """
+    values = {str(value) for name, value in _iter_env_vars(doc) if name == env_name}
+    if not values:
+        return None
+    if len(values) > 1:
+        raise CatalogValidationError(
+            f"{path.name} declares {env_name} with {len(values)} different values "
+            f"({', '.join(sorted(values))}); the effective value is ambiguous"
+        )
+    return next(iter(values))
+
+
 def _unique_env_by_suffix(doc, suffix: str, path: pathlib.Path):
     """The single value of the one env var ending in `suffix`, or None.
 
@@ -434,7 +457,15 @@ def validate_profile_against_cwft(
         cwft = load_yaml(cwft_path)
         if not isinstance(cwft, dict):
             raise CatalogValidationError("not a YAML mapping")
-        budget = _unique_env_by_suffix(cwft, BUDGET_ENV_SUFFIX, cwft_path)
+        # A profile that names its budget variable is checked against that
+        # variable and no other. Without a name the template must set exactly
+        # one *_BUDGET_USD, as before: guessing among several is the failure
+        # `_unique_env_by_suffix` exists to refuse.
+        budget_env = spec["runtime"]["sandbox"].get("budgetEnv")
+        if budget_env is not None:
+            budget = _env_value_by_name(cwft, budget_env, cwft_path)
+        else:
+            budget = _unique_env_by_suffix(cwft, BUDGET_ENV_SUFFIX, cwft_path)
         timeout_env = _unique_env_by_suffix(cwft, TIMEOUT_ENV_SUFFIX, cwft_path)
 
         # No *_TIMEOUT_SECONDS override means the pod-level deadline IS the
@@ -461,7 +492,13 @@ def validate_profile_against_cwft(
         errors.append(f"{path}: reading {cwft_path.name}: {exc}")
         return
 
-    if budget_value is None:
+    if budget_value is None and budget_env is not None:
+        errors.append(
+            f"{path}: profile {name!r} names sandbox.budgetEnv {budget_env!r} but "
+            f"{cwft_path.name} does not set it — the profile's effective value "
+            "cannot be verified against anything"
+        )
+    elif budget_value is None:
         errors.append(
             f"{path}: profile {name!r} declares budgetUsd {spec['budgetUsd']} but "
             f"{cwft_path.name} sets no *{BUDGET_ENV_SUFFIX} — the profile's "

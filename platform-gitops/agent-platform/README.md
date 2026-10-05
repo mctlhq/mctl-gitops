@@ -64,6 +64,27 @@ always the `orchestrator/options.py` Python default:
 | implementer | 20.00 | 2400 | `cwft-mctl-agents-implement.yaml` `IMPLEMENTER_BUDGET_USD` / `IMPLEMENTER_TIMEOUT_SECONDS` -- these CWFT overrides win over the Python defaults ($3 / 900s) |
 | shepherd | 5.00 | 7200 | `cwft-mctl-agents-shepherd.yaml` `SHEPHERD_BUDGET_USD` (raised from the Tier 3 spec's $1.00 default); no per-tick timeout override exists, so `activeDeadlineSeconds: 7200` is the effective ceiling |
 
+Three more profiles were added for mctl-agents#470
+(`incident-responder-default`, `mentor-default`, `service-agent-default`),
+under the same rule. All three agents run in `mctl-agents-run`, which is why
+each names its own budget variable in `sandbox.budgetEnv` (see "Effective
+values are checked against the deployed template" below):
+
+| Agent | budgetUsd | timeoutSeconds | Source |
+|---|---|---|---|
+| incident-responder | 20.00 | 3600 | `cwft-mctl-agents-run.yaml` `INCIDENT_RESPONDER_BUDGET_USD` -- the CWFT override wins over the Python default ($5); no per-agent timeout exists, so `activeDeadlineSeconds: 3600` is the effective ceiling |
+| mentor | 10.00 | 3600 | `cwft-mctl-agents-run.yaml` `MENTOR_BUDGET_USD`; `activeDeadlineSeconds: 3600` |
+| service-agent | 5.00 | 3600 | `cwft-mctl-agents-run.yaml` `SERVICE_AGENT_BUDGET_USD`, per service run; `activeDeadlineSeconds: 3600` |
+
+Those three agents are `agents.mctl.ai/v1alpha1` and never go through the
+runtime resolver, so nothing reads their profiles or bindings at run time.
+They exist for mctl-agents' production promotion gate
+(`tools/check_binding_hash.py` `evaluate_promotion`), which refuses to
+promote a release whose `agent.yaml` does not hash to the binding's
+`spec.sourceManifest.contentHash`. Editing one of those `agent.yaml` files
+therefore needs its binding re-pinned here first; the procedure is
+mctl-agents `docs/runbooks/agent-yaml-binding-repin.md`.
+
 Any future profile bump must state which side (Python default vs. deployed
 CWFT override) it is changing, and why -- silently reverting to the Python
 default would be a behavior change this issue is explicitly scoped not to
@@ -73,7 +94,7 @@ make.
 
 Every `ReleaseBindingIntent` fixture under `releases/` today has
 `spec.bindingSource: compatibility-fixture` and `spec.promotable: false`.
-There is no real mctl-api-published v1alpha2 version of any of these three
+There is no real mctl-api-published v1alpha2 version of any of these
 agents or profiles yet -- that publish step, and the runtime resolver that
 would actually consume a real binding (mctl-agents #227), are both
 follow-up work. Until they land:
@@ -122,6 +143,11 @@ expectation:
 | effective budget/timeout match the CWFT | `invalid/cwft-budget-mismatch/` |
 | conflicting values for one CWFT variable rejected | `invalid/cwft-conflicting-budget-values/` |
 | non-numeric CWFT value degrades to a file-scoped error | `invalid/cwft-non-numeric-budget/` |
+| several budget variables and no `budgetEnv` rejected | `invalid/cwft-several-budgets-without-budget-env/` |
+| `budgetEnv` reads the named variable, not another one | `invalid/cwft-budget-env-mismatch/` |
+| `budgetEnv` naming a variable the CWFT does not set rejected | `invalid/cwft-budget-env-not-set/` |
+| `budgetEnv` must be a `*_BUDGET_USD` name | `invalid/budget-env-not-a-budget-variable/` |
+| `budgetEnv` selects one of several budget variables | `valid/cwft-budget-env-selects-one-of-several/` |
 | exact-pair rollback accepted | `valid/rollback-replay/` |
 
 ### Effective values are checked against the deployed template
@@ -139,6 +165,15 @@ correctly declares `$20.00` because `cwft-mctl-agents-implement.yaml` sets
 `IMPLEMENTER_BUDGET_USD` to `"20.00"`, while `orchestrator/options.py`
 defaults to `$3.00`. A check written against the defaults would fire
 immediately and be wrong.
+
+A template that runs one agent sets one `*_BUDGET_USD` variable, and the
+check finds it by suffix. `mctl-agents-run` runs three agents and sets three,
+and the check refuses to pick among them. A profile for such a template names
+its variable in `spec.runtime.sandbox.budgetEnv`, and `budgetUsd` is then
+compared with that variable alone. The field only says which variable is
+checked. It configures nothing, and no agent reads it. What it cannot catch is
+a profile naming another agent's variable: which variable an agent reads is
+known only to mctl-agents (`budgetEnv` in its `docs/agent-inventory.yaml`).
 
 For timeouts: a `*_TIMEOUT_SECONDS` env var wins when present, otherwise
 the workflow-level `spec.activeDeadlineSeconds` is the effective timeout —

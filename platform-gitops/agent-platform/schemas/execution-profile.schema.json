@@ -108,6 +108,11 @@
               "properties": {
                 "backend": { "type": "string", "minLength": 1 },
                 "clusterWorkflowTemplate": { "type": "string", "minLength": 1 },
+                "budgetEnv": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]*_BUDGET_USD$",
+                  "description": "Optional. The exact environment variable in the named ClusterWorkflowTemplate that carries this profile's budgetUsd. Needed when one template runs several agents and so sets several *_BUDGET_USD variables (mctl-agents-run sets three): validate-agent-platform.py then compares budgetUsd with this variable and no other. Without it the template must set exactly one *_BUDGET_USD. Mirrors `budgetEnv` in mctl-agents docs/agent-inventory.yaml. Declares which variable is checked; it configures nothing."
+                },
                 "approved": { "type": "boolean" }
               }
             }
