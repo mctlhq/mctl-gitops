@@ -146,6 +146,13 @@ spec:
       requiresApproval: null
     # mctl_resolve_incident over the mctl MCP: the responder closes the
     # incident it has just written a proposal for.
+    #
+    # Unlike the two scopes above, this one changes state outside this
+    # repository: an incident record in mctl-api, which a revert commit does
+    # not bring back. On incident-responder-default it sits next to
+    # proposal-status, so the whole chain (diagnose, accept the proposal,
+    # close the incident) runs with no human step. `null` below says that is
+    # how it works today. Whether it should have a gate is undecided.
     - name: incident-resolve
       mutating: true
       requiresApproval: null

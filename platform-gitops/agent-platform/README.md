@@ -146,6 +146,7 @@ expectation:
 | several budget variables and no `budgetEnv` rejected | `invalid/cwft-several-budgets-without-budget-env/` |
 | `budgetEnv` reads the named variable, not another one | `invalid/cwft-budget-env-mismatch/` |
 | `budgetEnv` naming a variable the CWFT does not set rejected | `invalid/cwft-budget-env-not-set/` |
+| `budgetEnv` variable set twice with different values rejected, whichever value the profile declares | `invalid/cwft-budget-env-conflicting-values-declares-first/`, `...-declares-second/` |
 | `budgetEnv` must be a `*_BUDGET_USD` name | `invalid/budget-env-not-a-budget-variable/` |
 | `budgetEnv` selects one of several budget variables | `valid/cwft-budget-env-selects-one-of-several/` |
 | exact-pair rollback accepted | `valid/rollback-replay/` |
@@ -171,9 +172,22 @@ check finds it by suffix. `mctl-agents-run` runs three agents and sets three,
 and the check refuses to pick among them. A profile for such a template names
 its variable in `spec.runtime.sandbox.budgetEnv`, and `budgetUsd` is then
 compared with that variable alone. The field only says which variable is
-checked. It configures nothing, and no agent reads it. What it cannot catch is
-a profile naming another agent's variable: which variable an agent reads is
-known only to mctl-agents (`budgetEnv` in its `docs/agent-inventory.yaml`).
+checked. It configures nothing, and no agent reads it.
+
+Nothing here checks that a profile names its own agent's variable. Which
+variable an agent reads is decided in mctl-agents (`budgetEnv` in its
+`docs/agent-inventory.yaml`). By convention it is the agent's name in upper
+snake case plus `_BUDGET_USD`, and all six deployed variables follow that, so
+a new profile should too. The convention is not enforced: an agent may
+legitimately read a differently named variable, and a check built on the
+name would then refuse a correct profile.
+
+There is no `timeoutEnv` counterpart. `mctl-agents-run` sets no
+`*_TIMEOUT_SECONDS` today, so its three profiles all take
+`activeDeadlineSeconds`. Adding a per-agent `*_TIMEOUT_SECONDS` to a template
+that several profiles name needs that counterpart first: one such variable
+would be read as the timeout of every profile naming the template, and two
+would fail them all as ambiguous.
 
 For timeouts: a `*_TIMEOUT_SECONDS` env var wins when present, otherwise
 the workflow-level `spec.activeDeadlineSeconds` is the effective timeout —

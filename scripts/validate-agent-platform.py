@@ -690,8 +690,8 @@ def case_cwft_dir(case_dir: pathlib.Path) -> pathlib.Path | None:
 
     Without this the effective-value check would be unreachable from
     --selftest, and a weakened version of it could be merged green. Opting
-    in per fixture keeps the other 18 cases from being checked against
-    production templates they have nothing to do with.
+    in per fixture keeps every other case from being checked against
+    production templates it has nothing to do with.
     """
     fixture_cwfts = case_dir / "cluster-templates"
     return fixture_cwfts if fixture_cwfts.is_dir() else None
