@@ -30,7 +30,46 @@ jobs:
       github.event.review.state == 'approved' &&
       startsWith(github.event.pull_request.head.ref, 'claude/')
     steps:
+      # A bot approval is enough to merge an ordinary `claude/*` PR, but not
+      # one that decides which agent exists or what it may do
+      # (mctl-agents#470), nor one that flips a proposal's approval state
+      # (gitops#986). Those wait for a person to merge them.
+      #
+      # Fail closed: a file list that cannot be read in full is treated as
+      # touching a protected path. "Could not list" is never "nothing
+      # protected".
+      - name: Refuse paths that need a human merge
+        id: guard
+        run: |
+          set -euo pipefail
+          if ! files=$(gh api --paginate \
+                "repos/${REPO}/pulls/${PR}/files?per_page=100" \
+                --jq '.[] | .filename, (.previous_filename // empty)'); then
+            echo "::error::Could not list the files of #${PR}; not merging."
+            exit 1
+          fi
+          expected=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.changed_files')
+          listed=$(gh api --paginate \
+                "repos/${REPO}/pulls/${PR}/files?per_page=100" --jq '.[].filename' | wc -l | tr -d ' ')
+          if [ "$listed" != "$expected" ]; then
+            echo "::error::#${PR} reports ${expected} changed files but ${listed} were listed; not merging."
+            exit 1
+          fi
+          protected=$(printf '%s\n' "$files" | grep -E \
+            '^platform-gitops/agent-platform/|^platform-gitops/agents-state/[^/]+/proposals/[^/]+/\.status\.yaml$' || true)
+          if [ -n "$protected" ]; then
+            echo "::notice::#${PR} touches paths that need a human merge; leaving it open:"
+            printf '%s\n' "$protected"
+            echo "merge=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
       - name: Merge PR
+        if: steps.guard.outputs.merge == 'true'
         run: |
           gh pr merge ${{ github.event.pull_request.number }} \
             --merge --delete-branch \
