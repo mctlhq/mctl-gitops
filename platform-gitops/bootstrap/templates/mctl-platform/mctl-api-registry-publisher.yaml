@@ -1,0 +1,30 @@
+{{- if (default dict .Values.registryPublisher).enabled }}
+# Bearer token of the registry-publisher principal (mctlhq/mctl-agents#470,
+# mctlhq/mctl-api#481): it may only publish and promote agent versions.
+# Rendered only when registryPublisher.enabled is true in bootstrap/values.yaml.
+#
+# Its own ExternalSecret and file for the same reasons as
+# mctl-api-usage-writer.yaml. Unlike the evidence-writer token, this value
+# lives on its OWN Vault path and is deliberately NOT a property of
+# secret/platform/mctl-agents: the agent runner pods extract that whole path,
+# and the point of this principal is that the release pipeline holds a
+# credential the agents never receive.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-api-registry-publisher
+  namespace: mctl-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-api-registry-publisher
+    creationPolicy: Owner
+  data:
+    - secretKey: MCTL_REGISTRY_PUBLISHER_TOKEN
+      remoteRef:
+        key: platform/mctl-api/registry-publisher
+        property: token
+{{- end }}
