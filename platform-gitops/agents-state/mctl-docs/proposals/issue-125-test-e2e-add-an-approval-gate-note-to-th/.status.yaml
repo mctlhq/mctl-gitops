@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-05T00:01:14Z'
+status: merged
+updated_at: '2026-10-05T01:31:23Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-c91a0c428259c3dc
@@ -27,5 +27,5 @@ attempt:
   expires_at: '2026-10-05T01:23:45Z'
   finished_at: '2026-10-04T23:14:30Z'
 pr: https://github.com/mctlhq/mctl-docs/pull/126
-review_attempts: 1
-merge_owner: devloop-workflow
+merged_at: '2026-10-05T01:31:23Z'
+merge_commit: 61e915bb84310112bf5b57662ebbf13d81215630
