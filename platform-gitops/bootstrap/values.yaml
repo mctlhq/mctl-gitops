@@ -211,6 +211,18 @@ usageWriter:
 evidenceWriter:
   enabled: true
 
+# The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
+# mctlhq/mctl-api#481, mctl-api >= 4.67.0): the mctl-agents release pipeline
+# publishes and promotes agent versions with it instead of the admin service
+# token the agent pods also hold. Vault: secret/platform/mctl-api/registry-publisher,
+# property token (>= 32 chars, different from every other principal's token,
+# or mctl-api refuses it). Its own path on purpose: the agent runner pods
+# extract all of secret/platform/mctl-agents and must never receive this one.
+#   1. Write the value to Vault (owner).
+#   2. Set enabled: true below (mctl-api then rolls to pick up the env).
+registryPublisher:
+  enabled: true
+
 # The surface:portal principal's bearer token (mctlhq/mctl-portal#126):
 # mctl-api reads it as MCTL_SURFACE_PORTAL_TOKEN (surfaceTokenEnv maps portal
 # to it, minSurfaceTokenLen = 32) and backstage's work-items-backend sends it.

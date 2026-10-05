@@ -58,6 +58,7 @@ jobs:
             platform-gitops/bootstrap/templates/observability/eval-candidates.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-evidence-writer.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-api-registry-publisher.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-surface-telegram.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-surface-portal.yaml
             platform-gitops/argocd/templates/argocd-rbac-cm.yaml

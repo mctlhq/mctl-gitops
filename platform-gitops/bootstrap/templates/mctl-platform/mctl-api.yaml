@@ -287,6 +287,15 @@ spec:
           # the principal disabled instead of failing the pod.
           evidenceWriterTokenSecret: mctl-api-evidence-writer
           {{- end }}
+          {{- if (default dict .Values.registryPublisher).enabled }}
+
+          # The registry-publisher token (mctlhq/mctl-agents#470), from the
+          # mctl-api-registry-publisher ExternalSecret. Gated with it on
+          # registryPublisher.enabled in bootstrap/values.yaml; the chart's
+          # reference is optional, so a Secret that has not synced yet leaves
+          # the principal disabled instead of failing the pod.
+          registryPublisherTokenSecret: mctl-api-registry-publisher
+          {{- end }}
           {{- if (default dict .Values.surfaceTelegramToken).enabled }}
 
           # The surface:telegram bearer token (mctlhq/mctl-telegram#443), from
