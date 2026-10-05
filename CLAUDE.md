@@ -43,8 +43,10 @@ directly to `main` with no PR:
 - `release-deploy.yaml` — bumps `image.tag` after `mctl_deploy_service` /
   a release tag.
 
-This is intentional: both use their own scoped `GITHUB_TOKEN` with
-`contents: write` and only ever touch a single `image.tag` field, which is
+This is intentional: both push with a write deploy key that only the
+`gitops-bump` environment holds (released to jobs on `main` only; deploy
+keys are the bypass actor on the `main-protection` ruleset) and only ever
+touch a single `image.tag` field, which is
 the same class of change the human "trivial changes — merge immediately"
 rule already allows to skip review. Requiring a PR (and therefore a human
 or Claude review) for every automated image bump would add review latency

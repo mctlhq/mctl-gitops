@@ -60,9 +60,12 @@ App — and every widening silently landed on customers too. See #761 for the
 | Audience | **customers** install it | internal only, never offered |
 | Target permissions | `contents:read`, `metadata:read` | `contents/issues/pull_requests/workflows:write`, `actions:write`, `checks:read`, `metadata:read` |
 
-`mctl-agents` is also the App on the `main-protection` ruleset's
-`bypass_actors` list (ruleset `18465404`), which is what lets the tag-bump
-workflows push straight to `main`.
+The tag-bump workflows no longer push as `mctl-agents`: since
+mctlhq/mctl-agents#470 they push with a write deploy key held by the
+`gitops-bump` environment (released only to jobs on `main`). The App's own
+entry on the `main-protection` ruleset's `bypass_actors` list (ruleset
+`18465404`) is being removed for the same reason: the agents run with this
+App's token, so an App that can bypass the ruleset means every agent can.
 
 ## Consumers
 
@@ -82,7 +85,7 @@ document covers), see `docs/runbooks/agents-app-secret-exposure.md`.
 
 | Consumer | Needs |
 |---|---|
-| `release-deploy.yaml` / `gitops-bump.yaml` bump jobs | `contents:write` on mctl-gitops + ruleset bypass |
+| `release-deploy.yaml` / `gitops-bump.yaml` bump jobs | none since mctlhq/mctl-agents#470: they push with the `gitops-bump` environment deploy key |
 | `release-please.yml` dispatch step in mctl-api, mctl-agent, mctl-agents, mctl-portal, mctl-docs, mctl-academy, mctl-telegram, mctl-design, pfeifenpatenschaft-backend | `actions:write` on mctl-gitops |
 | `mctl-telegram/.github/workflows/preview-deploy.yml` | `actions:write` on mctl-gitops |
 | `mctl-agents/.github/workflows/release-please.yml` release-please step | `contents/pull_requests/issues:write` on mctl-agents |

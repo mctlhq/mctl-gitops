@@ -98,39 +98,28 @@ jobs:
   bump:
     needs: build
     runs-on: ubuntu-latest
+    environment: gitops-bump
     permissions:
       contents: write
     steps:
       # main is protected by the `main-protection` ruleset (required PR +
       # review); the default GITHUB_TOKEN has no bypass for it, so a plain
-      # checkout+push here gets rejected with GH013. The mctl-agents App is
-      # on that ruleset's bypass list for exactly these tag-bump commits —
-      # the narrowly-scoped exception to "never commit to main" that
-      # CLAUDE.md documents — so mint a token as that app and push with it.
+      # checkout+push here gets rejected with GH013. These tag-bump commits
+      # are the narrowly-scoped exception to "never commit to main" that
+      # CLAUDE.md documents, and they push with a write deploy key (deploy
+      # keys are on the ruleset's bypass list).
       #
-      # Deliberately NOT the repo's APP_ID/APP_PRIVATE_KEY (MCTL App): that
-      # is the user-facing App people authorize at mctl.ai/#request-access,
-      # whose published description promises least privilege. Letting it
-      # bypass branch protection here would widen it in exactly the
-      # direction #761 is trying to narrow. mctl-agents is backend-only
-      # automation, so the bypass stays with it.
-      #
-      # Its credentials are repo secrets rather than a Vault lookup: Vault
-      # is unreachable from GitHub Actions runners (#779).
-      - name: Generate GitHub App token
-        id: app_token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ secrets.AGENTS_APP_ID }}
-          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
-          owner: mctlhq
-          repositories: mctl-gitops
-          permission-contents: write
-
+      # A deploy key rather than an mctl-agents App token: that App's token
+      # is also what the agents run with, so while the App could bypass the
+      # ruleset, so could every agent (mctlhq/mctl-agents#470), and so could
+      # any workflow in the org that reads the App's org-wide signing key
+      # (#1033). The key is a secret of the `gitops-bump` environment, which
+      # only releases it to jobs running on main, so a workflow pushed to a
+      # branch cannot read it.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
-          token: ${{ steps.app_token.outputs.token }}
+          ssh-key: ${{ secrets.GITOPS_BUMP_DEPLOY_KEY }}
 
       - name: Bump image tag(s)
         env:
@@ -164,7 +153,7 @@ jobs:
               print(f"ERROR: refusing tag {new_tag!r}: not a valid image tag", file=sys.stderr)
               sys.exit(5)
 
-          # The mctl-agents App token used to push this commit is on the
+          # The deploy key used to push this commit is on the
           # main-protection ruleset's bypass list on the understanding (see
           # CLAUDE.md's "Branch Protection Exception") that it only ever
           # touches image.tag data. Nothing about workflow_dispatch inputs
