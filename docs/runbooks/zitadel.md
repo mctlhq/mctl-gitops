@@ -352,6 +352,23 @@ on ZITADEL tokens:
   principal they already have; it reads the ID token only. Its id and secret
   go into the same Secret as `ZITADEL_LINK_CLIENT_ID` /
   `ZITADEL_LINK_CLIENT_SECRET` (chart value `zitadelLinkSecret`).
+- **Client `mctl-api-oauth`** (mctl-api#467): confidential web app, client
+  secret (HTTP Basic) plus PKCE, redirect
+  `https://api.mctl.ai/oauth/zitadel/callback` only, opaque access token,
+  `preferred_username` in the ID token. It is the ZITADEL upstream of
+  `/oauth/authorize`, which every MCP connector signs in through: with
+  `OAUTH_UPSTREAM=zitadel` or `both`, mctl-api signs a person in here,
+  resolves the ZITADEL identity to the principal it is linked to, and issues
+  its own code for that principal's GitHub login, with the same groups as a
+  GitHub sign-in. A person who is not linked is sent to the link flow; no
+  principal is created. Its id and secret go into the same Secret as
+  `OAUTH_ZITADEL_CLIENT_ID` / `OAUTH_ZITADEL_CLIENT_SECRET` (chart value
+  `oauthZitadelSecret`). Nothing reads them while `OAUTH_UPSTREAM` is
+  `github`, the default; `zitadel` and `both` refuse to start without them.
+  It is separate from `mctl-api-link` so that neither flow accepts the
+  other's codes and either secret can be rotated alone. Rollback of the
+  upstream: set `OAUTH_UPSTREAM` back to `github` (or remove it) in
+  `bootstrap/templates/mctl-platform/mctl-api.yaml`.
 - **Output.** The Job writes the complete `MCTL_OIDC_PROVIDERS` JSON (name
   `zitadel`, issuer `https://auth.mctl.ai`, audience = that client id) into
   `mctl-api/mctl-api-oidc-zitadel`, plus `MCTL_CLI_ZITADEL_CLIENT_ID`, which
