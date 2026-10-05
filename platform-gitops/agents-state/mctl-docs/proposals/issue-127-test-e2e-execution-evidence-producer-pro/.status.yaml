@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-10-05T02:51:12Z'
-updated_by: mctl-agents[bot]
+status: rejected
+updated_at: '2026-10-05T07:04:10Z'
+updated_by: mashkovd
 execution:
   context_id: ex-3089629b6da47b4e
   trace_id: 6fbce2150d20bb3a0e35079d10da09dc
@@ -18,3 +18,4 @@ context:
   content_hash: sha256:78c3f03129c3fa8e5b50a5d9baddb457a01dedef04ad586648f34833f6c23e62
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
+notes: Test proposal for the mctlhq/mctl-agents#199 evidence proof; never to be implemented (mctlhq/mctl-docs#127 closed as not planned).
