@@ -44,14 +44,18 @@ jobs:
     runs-on: ubuntu-latest
     environment: gitops-bump
     permissions:
-      contents: write  # commit + push to main
+      # Read only: the push is authorized by the deploy key, not by
+      # GITHUB_TOKEN.
+      contents: read
     steps:
       # main is protected by the `main-protection` ruleset (required PR +
       # review); the default GITHUB_TOKEN has no bypass for it, so a plain
       # checkout+push here gets rejected with GH013. These tag-bump commits
       # are the narrowly-scoped exception to "never commit to main" that
-      # CLAUDE.md documents, and they push with a write deploy key (deploy
-      # keys are on the ruleset's bypass list).
+      # CLAUDE.md documents, and they push with a write deploy key. The
+      # ruleset's bypass_actors carry a `DeployKey` entry of its own,
+      # independent of any App: it is the same entry the agent workflows'
+      # commit-and-push steps have always pushed agents-state through.
       #
       # A deploy key rather than an mctl-agents App token: that App's token
       # is also what the agents run with, so while the App could bypass the
