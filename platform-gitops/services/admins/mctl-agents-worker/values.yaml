@@ -125,14 +125,6 @@ env:
   # Live proof: mctl-agents#490. Set to "false" to turn it off again; a
   # request left claimed is re-claimable once its lease lapses.
   EXECUTION_REQUEST_DISPATCHER: "true"
-  # Human approval gate for the shepherd's merge (mctl-agents#198, ADR 016),
-  # TEMPORARY for the live E2E, owner decision 2026-10-04: scoped to
-  # mctl-docs only and to be reverted right after the proof. All three keys
-  # must move together; the policy env alone would gate every service.
-  # Remove all three to turn the gate off.
-  MCTL_POLICY_APPROVALS: mctl-api
-  MCTL_POLICY_MERGE_APPROVAL: require
-  SHEPHERD_MERGE_APPROVAL_SERVICES: mctl-docs
 envFrom:
   - secretRef:
       name: mctl-agents-worker-secrets

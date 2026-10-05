@@ -781,16 +781,6 @@ spec:
             value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
           - name: SHEPHERD_SKIP_SERVICES
             value: "mctl-academy"
-          # TEMPORARY, mctl-agents#198 live E2E (owner decision 2026-10-04):
-          # the cron shepherd delegates mctl-docs' merge to the DevLoop's
-          # gated activity instead of merging in-pod. It must match the
-          # mctl-agents-worker env; revert both together after the proof.
-          - name: MCTL_POLICY_APPROVALS
-            value: "mctl-api"
-          - name: MCTL_POLICY_MERGE_APPROVAL
-            value: "require"
-          - name: SHEPHERD_MERGE_APPROVAL_SERVICES
-            value: "mctl-docs"
           # How long run_implementer --review-feedback waits for an
           # asynchronously launched `implementer` sub-agent to reach a
           # terminal status before giving up with exit 46
