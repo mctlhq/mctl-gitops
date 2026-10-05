@@ -4,6 +4,78 @@ metadata:
   name: argo-workflow-sa
   namespace: argo-workflows
 ---
+# Identities for the mctl-agents step pods (cwft-mctl-agents-*.yaml).
+#
+# The agent step runs a model-driven session, some with a shell, on input it
+# does not control: issue text, PR diffs, review comments. It talks to GitHub
+# and mctl-api with its own scoped tokens and needs neither the Kubernetes API
+# nor Vault, so it does not get the platform workflow identity above. Two
+# accounts, so that the pod's identity and the credential Argo's executor
+# needs are separate things:
+#
+#   mctl-agents-runner    the pod's ServiceAccount. No Role, no RoleBinding,
+#                         no Vault role. The templates also set
+#                         automountServiceAccountToken: false, so the agent
+#                         container and the clone initContainer have no API
+#                         token mounted at all; the flag is repeated here so
+#                         the account stays tokenless if a template forgets it.
+#   mctl-agents-executor  mounted by the controller into Argo's own `init` and
+#                         `wait` containers only (template `executor:`), to
+#                         report the step result. Its Role is the executor
+#                         minimum and nothing else.
+#
+# Neither name is bound by any Vault kubernetes-auth role; keep it that way.
+# Steps that do need cluster access (post-deploy-verify) keep argo-workflow-sa.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mctl-agents-runner
+  namespace: argo-workflows
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mctl-agents-executor
+  namespace: argo-workflows
+automountServiceAccountToken: false
+---
+# The controller mounts the executor token from a Secret it finds by this name
+# (<serviceaccount>.service-account-token); Kubernetes no longer creates one
+# for a ServiceAccount by itself. Same shape as argo-workflows-admin below.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mctl-agents-executor.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: mctl-agents-executor
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mctl-agents-executor
+  namespace: argo-workflows
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mctl-agents-executor
+  namespace: argo-workflows
+subjects:
+  - kind: ServiceAccount
+    name: mctl-agents-executor
+    namespace: argo-workflows
+roleRef:
+  kind: Role
+  name: mctl-agents-executor
+  apiGroup: rbac.authorization.k8s.io
+---
 # SSO RBAC: admin access for admins group — ClusterRole = sees ALL namespaces
 apiVersion: v1
 kind: ServiceAccount
