@@ -708,6 +708,21 @@ spec:
                 name: mctl-agents-secrets
                 key: usage-writer-token
                 optional: true
+          # Bearer token of the evidence-writer principal (mctlhq/mctl-agents#199,
+          # ADR 018): the producer posts one sealed execution-evidence envelope
+          # per governed run to mctl-api and may do nothing else there.
+          # Optional and never fatal: absent, the producer logs once and posts
+          # nothing; the run itself is unaffected.
+          - name: MCTL_EVIDENCE_WRITER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: evidence-writer-token
+                optional: true
+          # ADR 018 Amendment 2 blocks (versions, subject, tool_calls,
+          # provenance). mctl-api accepts them since 4.66.0 (mctl-api#473).
+          - name: MCTL_EVIDENCE_AMENDMENT_2
+            value: "true"
           # The Argo run name, the join key of this run's usage records to
           # its agent_executions row (argo_workflow_name). Read by nothing
           # else in this runner.
