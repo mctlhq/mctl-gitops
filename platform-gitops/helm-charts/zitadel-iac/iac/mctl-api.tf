@@ -132,6 +132,39 @@ resource "zitadel_application_oidc" "mctl_api_link" {
   id_token_userinfo_assertion = true
 }
 
+# The ZITADEL upstream of /oauth/authorize (mctl-api#467, #469): with
+# OAUTH_UPSTREAM=zitadel or both, mctl-api signs a person in here instead of
+# at GitHub, resolves the ZITADEL identity to the principal it is linked to,
+# and issues its own code and JWT for that principal's GitHub login, as the
+# GitHub callback does. A client of its own rather than a second redirect on
+# mctl-api-link: the two flows then never accept each other's codes, and
+# either secret can be rotated or the client removed without touching the
+# other flow.
+#
+# The same shape as the link client, for the same reasons: client secret
+# (sent as HTTP Basic) plus PKCE, redirect only to api.mctl.ai, and an opaque
+# (BEARER) access token, because a JWT access token of any app in this
+# project would pass mctl-api's JWT bearer check. Do not switch it to JWT.
+# mctl-api requests `openid profile` and reads the ID token only: `sub` keys
+# the linked identity, and the userinfo assertion puts preferred_username
+# into the ID token for the pages shown to a person who is not linked.
+# No GitHub login claim (github-login.tf): mctl-api takes the login from its
+# own principal link, never from a ZITADEL claim.
+resource "zitadel_application_oidc" "mctl_api_oauth" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.mctl_api.id
+  name       = "mctl-api-oauth"
+
+  app_type                    = "OIDC_APP_TYPE_WEB"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["https://api.mctl.ai/oauth/zitadel/callback"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = false
+  id_token_userinfo_assertion = true
+}
+
 resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   metadata {
     name      = "mctl-api-oidc-zitadel"
@@ -159,6 +192,11 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
     # zitadelLinkSecret. The secret never leaves this Secret and the state.
     ZITADEL_LINK_CLIENT_ID     = zitadel_application_oidc.mctl_api_link.client_id
     ZITADEL_LINK_CLIENT_SECRET = zitadel_application_oidc.mctl_api_link.client_secret
+    # The /oauth/authorize upstream client (mctl-api#467), read through the
+    # chart's optional oauthZitadelSecret. Nothing reads these keys while
+    # OAUTH_UPSTREAM is github, the default.
+    OAUTH_ZITADEL_CLIENT_ID     = zitadel_application_oidc.mctl_api_oauth.client_id
+    OAUTH_ZITADEL_CLIENT_SECRET = zitadel_application_oidc.mctl_api_oauth.client_secret
   }
 
   field_manager = "zitadel-iac"

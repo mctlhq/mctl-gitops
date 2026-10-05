@@ -69,6 +69,10 @@ image:
 #   organization, no role keys): no new action; all creates. Removing a
 #   tenant plans a destroy of its grant, which allowedDeletes refuses until
 #   the address is listed.
+#   mctl-api#467 (mctl-api.tf: the mctl-api-oauth web client of
+#   /oauth/authorize's ZITADEL upstream, in the MCTL API project): no new
+#   action; a create, plus an in-place update of the data of
+#   mctl-api/mctl-api-oidc-zitadel (two keys added).
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
