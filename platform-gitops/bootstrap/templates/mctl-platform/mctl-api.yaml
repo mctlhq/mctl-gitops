@@ -107,6 +107,16 @@ spec:
             # mode. The portal now registers itself through /oauth/register,
             # persisted since mctlhq/mctl-api#400, with the two callbacks
             # above (mctlhq/mctl-gitops#1363).
+            # Upstream identity provider of /oauth/authorize
+            # (mctlhq/mctl-api#467, canary for mctlhq/mctl-gitops#1500 phase 2).
+            # `both`: ZITADEL (auth.mctl.ai) is the primary sign-in and GitHub
+            # stays as the legacy link, so a person without a linked ZITADEL
+            # identity can still sign in. Needs OAUTH_ZITADEL_CLIENT_ID/SECRET
+            # from oauthZitadelSecret below; mctl-api refuses to start in this
+            # mode without them. mctl-issued tokens and group resolution are
+            # unchanged: the ZITADEL identity maps to the linked GitHub login.
+            # Rollback: delete this line (default `github`).
+            OAUTH_UPSTREAM: "both"
             # Browser origins permitted by CORS. Distinct from the redirect URIs
             # above: those govern where the OAuth dance may hand a code back,
             # this governs which page may read an authenticated API response.
