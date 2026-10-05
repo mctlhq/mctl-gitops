@@ -246,6 +246,19 @@ spec:
           # so a Secret without the keys leaves the flow off (503) and the
           # rest of mctl-api unaffected. Rollback: delete this line.
           zitadelLinkSecret: mctl-api-oidc-zitadel
+
+          # OAUTH_ZITADEL_CLIENT_ID / OAUTH_ZITADEL_CLIENT_SECRET for the
+          # ZITADEL upstream of /oauth/authorize (mctlhq/mctl-api#467, chart
+          # #469): the confidential `mctl-api-oauth` client that zitadel-iac
+          # writes into the same Secret (helm-charts/zitadel-iac/iac/
+          # mctl-api.tf). This line alone changes no behaviour: OAUTH_UPSTREAM
+          # is not set, so it is `github`, and in that mode mctl-api reads
+          # neither variable. Both refs are optional, so a Secret without the
+          # keys still starts the pod. Selecting the upstream is a separate
+          # change (OAUTH_UPSTREAM: both, then zitadel, under env above), and
+          # that one does need the keys: mctl-api refuses to start in those
+          # modes without them. Rollback: delete this line.
+          oauthZitadelSecret: mctl-api-oidc-zitadel
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the
