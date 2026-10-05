@@ -1,0 +1,49 @@
+# ReleaseBindingIntent for incident-responder (mctl-agents#470). It binds the agent.yaml
+# that is released today to incident-responder-default, so the production promotion gate
+# (mctl-agents tools/check_binding_hash.py evaluate_promotion) has something
+# to compare a release with. Before this the agent had no binding and was
+# promoted unchecked.
+#
+# bindingSource and promotable are the same as the three older bindings, and
+# not by choice: mctl-agents' parse_release_binding accepts only
+# compatibility-fixture with promotable: false, and validate-agent-platform.py
+# rejects a fixture marked promotable. No mctl-api v1alpha2 version of this
+# agent exists that a `registry` binding could name. releases/shadow/ is the
+# only binding catalog; the gate reads it for the production promotion.
+#
+# Nothing reads this file at run time. incident-responder is a v1alpha1 agent
+# and never goes through orchestrator/resolver.py.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: incident-responder
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/incident-responder/agent.yaml
+    # A real commit, unlike the placeholder the older bindings carry:
+    # mctlhq/mctl-agents main when contentHash was computed. Nothing verifies
+    # it; contentHash is the pin.
+    gitSha: "bd93190b0a35a5401b93a274760f19c961ea3dea"
+    # sha256 of the exact bytes of `path` at gitSha, as mctl-agents'
+    # resolver.definition_content_hash computes it. Editing that agent.yaml
+    # requires re-pinning this value first, or the release that carries the
+    # edit is refused promotion (mctl-agents
+    # docs/runbooks/agent-yaml-binding-repin.md).
+    contentHash: "sha256:7e31a9de9d3707e41dbb5a81245e40bb411d10edb716ee5b31db32efc4923cd2"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: incident-responder
+    # As in the older bindings, a label that names no bytes: contentHash
+    # above is what pins the definition.
+    version: "1"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: incident-responder-default
+    version: "1.0.0"
+  bindingRevision: 1
