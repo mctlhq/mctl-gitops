@@ -316,6 +316,16 @@ spec:
     # mid-flight is never raced — only CLOSED-unmerged PRs trigger the
     # flip-to-rejected path. 1.9.0 was the first tag with the orchestrator.
     - name: run-shepherd
+      # Least privilege: this step needs neither the Kubernetes API nor Vault.
+      # The pod runs as an identity with no role bindings and mounts no API
+      # token into the agent or clone containers; only Argo's own init/wait
+      # containers get the executor token, to report the step result. See
+      # config/sa-and-rbac.yaml. Template-level on purpose: the other steps
+      # keep the workflow-level account.
+      serviceAccountName: mctl-agents-runner
+      automountServiceAccountToken: false
+      executor:
+        serviceAccountName: mctl-agents-executor
       outputs:
         artifacts:
           # The `.status.yaml` flips and adopted-prs/pr-<n>/.prref.yaml records
