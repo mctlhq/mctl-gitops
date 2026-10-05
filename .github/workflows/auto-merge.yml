@@ -30,10 +30,59 @@ jobs:
       github.event.review.state == 'approved' &&
       startsWith(github.event.pull_request.head.ref, 'claude/')
     steps:
+      # A bot approval is enough to merge an ordinary `claude/*` PR, but not
+      # one that decides which agent exists or what it may do
+      # (mctl-agents#470), nor one that flips a proposal's approval state
+      # (gitops#986). Those wait for a person to merge them.
+      #
+      # Fail closed: a file list that cannot be read in full is treated as
+      # touching a protected path. "Could not list" is never "nothing
+      # protected".
+      - name: Refuse paths that need a human merge
+        id: guard
+        run: |
+          set -euo pipefail
+          # One read of the PR (head and file count) and ONE read of the file
+          # list. The count and the path check both use that single list, and
+          # the merge below is pinned to this head, so a commit pushed after
+          # this step cannot be merged on the strength of an older list.
+          if ! pr=$(gh api "repos/${REPO}/pulls/${PR}" --jq '"\(.head.sha) \(.changed_files)"'); then
+            echo "::error::Could not read #${PR}; not merging."
+            exit 1
+          fi
+          head_sha=${pr%% *}
+          expected=${pr##* }
+          if ! files=$(gh api --paginate \
+                "repos/${REPO}/pulls/${PR}/files?per_page=100" \
+                --jq '.[] | [.filename, (.previous_filename // "")] | @tsv'); then
+            echo "::error::Could not list the files of #${PR}; not merging."
+            exit 1
+          fi
+          listed=$(printf '%s' "$files" | grep -c . || true)
+          if [ -z "$head_sha" ] || [ "$listed" != "$expected" ]; then
+            echo "::error::#${PR} reports ${expected} changed files but ${listed} were listed; not merging."
+            exit 1
+          fi
+          protected=$(printf '%s\n' "$files" | tr '\t' '\n' | grep -E \
+            '^platform-gitops/agent-platform/|^platform-gitops/agents-state/[^/]+/proposals/[^/]+/\.status\.yaml$' || true)
+          if [ -n "$protected" ]; then
+            echo "::notice::#${PR} touches paths that need a human merge; leaving it open:"
+            printf '%s\n' "$protected"
+            echo "merge=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge=true" >> "$GITHUB_OUTPUT"
+            echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
       - name: Merge PR
+        if: steps.guard.outputs.merge == 'true'
         run: |
           gh pr merge ${{ github.event.pull_request.number }} \
             --merge --delete-branch \
+            --match-head-commit "${{ steps.guard.outputs.head_sha }}" \
             --repo ${{ github.repository }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
