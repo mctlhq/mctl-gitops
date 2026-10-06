@@ -120,3 +120,35 @@ spec:
       default:
         defaultCertificate:
           secretName: traefik-origin-ca
+
+    # Give Traefik room for a burst. The values below replace the kube-hetzner
+    # module defaults (requests 100m/50Mi, limits 300m/150Mi), which nothing in
+    # this repository had ever set.
+    #
+    # On 2026-10-06 at 03:41 UTC a short inbound burst (about 800 KB/s in
+    # total, against a baseline of a few KB/s) took all three replicas down
+    # within ten seconds of each other. CPU throttling reached 72% against the
+    # 300m limit, /ping stopped answering inside its 2s liveness timeout, and
+    # the kubelet restarted the containers; one of them was OOMKilled at 146Mi
+    # on the way down. Eight external probes failed for about a minute. The
+    # HPA did scale to 10, but only after the original pods were gone.
+    #
+    # The limits were tight long before that: the 7-day memory peak sat at
+    # 140-148Mi on five pods, and Traefik containers restarted nine times in
+    # the same week.
+    #
+    # requests.cpu stays at 100m on purpose. The HPA targets 80% CPU
+    # utilisation of the REQUEST, so raising it would make the autoscaler
+    # react later, which is the opposite of what the incident calls for.
+    # requests.memory moves to the observed steady state so the scheduler
+    # reserves what the pods really use: +78Mi per replica, 234Mi for three.
+    #
+    # The chart derives GOMEMLIMIT and GOMAXPROCS from these limits, so the Go
+    # runtime follows the new numbers without further configuration.
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "1000m"
+        memory: "512Mi"
