@@ -556,6 +556,59 @@ checks it both ways before anyone else is pointed at it:
 6. An `erpact` user with no matching Frappe user gets Frappe's 403 "Signup is
    disabled".
 
+### Labs apps sign-in ("Log in with MCTL account")
+
+`iac/labs-apps.tf` gives the public labs apps a ZITADEL client each, for an
+extra sign-in button next to their own GitHub/Google sign-in (never instead
+of it). Creating the clients turns nothing on.
+
+- **Projects `Coolify MCP` and `MCTL Academy`** in MCTL, one per app, with
+  `has_project_check` on and a grant to every tenant organization: users of
+  MCTL and of the declared tenants may sign in, nobody else. No roles.
+  Nothing of the platform's is granted: a ZITADEL user gets a personal
+  coolify-mcp tenant record or an academy learner account, keyed by the
+  ZITADEL `sub` alone and never matched to a GitHub or Google user by
+  e-mail.
+- **Applications `coolify-mcp`** (redirect
+  `https://coolify.mctl.ai/auth/zitadel/callback`) and **`mctl-academy`**
+  (`https://academy.mctl.ai/api/auth/oauth2/callback/zitadel`): web,
+  `client_secret_basic`, code flow (the apps add PKCE), opaque access token,
+  user info in the ID token.
+- The Job writes `ZITADEL_ISSUER`, `ZITADEL_CLIENT_ID`,
+  `ZITADEL_CLIENT_SECRET` and `ZITADEL_DISPLAY_NAME` into
+  `labs/coolify-mcp-oidc-zitadel` and `labs/mctl-academy-oidc-zitadel`
+  (`infra-components/labs/oidc-zitadel.yaml`, Application
+  `labs-oidc-zitadel`).
+- **Turning it on**, per app, is a separate change with its own owner
+  approval. The app's image must contain the feature (mctl-coolify-mcp#10,
+  mctl-academy#279). Then add to `envFrom` in
+  `services/labs/<app>/values.yaml`:
+
+  ```yaml
+  - secretRef:
+      name: <app>-oidc-zitadel
+      optional: true
+  ```
+
+  The Deployment rolls and the button appears. Both apps refuse to start on
+  a half-set configuration, and the Job writes all keys in one apply, so
+  check the Secret has its four keys before wiring it.
+- **Turning it off** is removing that entry. People who signed in through
+  ZITADEL keep their records but cannot reach them until it is back; GitHub
+  and Google users are unaffected either way.
+- **Who can get an account** is set by `login_policy.tf`: with
+  `allow_register = false` nobody can create one, so the button serves the
+  platform admins and tenant users this repository creates. A newcomer who
+  clicks it reaches the ZITADEL login page, has no way to register, and goes
+  back to GitHub.
+- The academy refuses a ZITADEL sign-in whose verified e-mail already
+  belongs to an academy user (it never links accounts by e-mail), so a
+  person who already uses the academy through GitHub with the same address
+  keeps using GitHub.
+- Moderators and stats admins of the academy are listed by GitHub login; a
+  ZITADEL user is listed only as `zitadel:<sub>` in
+  `MCTL_ACADEMY_MODERATORS` / `MCTL_ACADEMY_STATS_ADMINS`.
+
 ## Known risk: same site as tenant workloads
 
 `auth.mctl.ai` shares the registrable domain `mctl.ai` with tenant
