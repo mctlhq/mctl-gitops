@@ -172,7 +172,7 @@ resource "zitadel_action" "argocd_groups" {
 # order is not ours to choose, and need not be: an action that may not fail
 # aborts userinfo wherever it runs (runUserinfoActionFlows, v4.19.2). The
 # GitHub login claim (github-login.tf) runs in every organization; it returns
-# at once for any client not in github_login_client_ids.
+# at once for any client not in local.github_login_clients (portal.tf).
 resource "zitadel_trigger_actions" "argocd_groups" {
   for_each = local.argocd_claim_orgs
 

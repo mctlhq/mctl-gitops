@@ -113,9 +113,10 @@ variable "platform_admins" {
 
 variable "github_login_client_ids" {
   description = <<-EOT
-    The OIDC client IDs that receive the mctl:github_login claim
-    (github-login.tf): the portal and its OIDC provider, once their ZITADEL
-    clients exist (#1500 phase 3). Empty, no client receives it.
+    OIDC client IDs that receive the mctl:github_login claim
+    (github-login.tf) in addition to the portal's own clients, which
+    portal.tf adds by reference. Empty, only the portal's clients receive
+    it.
   EOT
   type        = list(string)
   default     = []

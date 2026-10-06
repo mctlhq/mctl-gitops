@@ -73,6 +73,13 @@ image:
 #   /oauth/authorize's ZITADEL upstream, in the MCTL API project): no new
 #   action; a create, plus an in-place update of the data of
 #   mctl-api/mctl-api-oidc-zitadel (two keys added).
+#   Portal sign-in (portal.tf: the MCTL Portal project, one project grant
+#   per tenant organization, the portal-oidc-provider web client, the data
+#   of backstage/backstage-oidc-zitadel): no new action; all creates, plus an
+#   in-place update of the mctlGithubLogin action's script in every
+#   organization (the portal's client id joins its allowlist). Removing a
+#   tenant plans a destroy of its grant, which allowedDeletes refuses until
+#   the address is listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
