@@ -73,6 +73,12 @@ image:
 #   /oauth/authorize's ZITADEL upstream, in the MCTL API project): no new
 #   action; a create, plus an in-place update of the data of
 #   mctl-api/mctl-api-oidc-zitadel (two keys added).
+#   Labs apps sign-in (labs-apps.tf: a project and an OIDC application each
+#   for coolify-mcp and mctl-academy, one grant of each project per tenant
+#   organization with no role keys, the data of labs/coolify-mcp-oidc-zitadel
+#   and labs/mctl-academy-oidc-zitadel): no new action; all creates. Removing
+#   a tenant plans a destroy of its two grants, which allowedDeletes refuses
+#   until the addresses are listed.
 #   Portal sign-in (portal.tf: the MCTL Portal project, one project grant
 #   per tenant organization, the portal-oidc-provider web client, the data
 #   of backstage/backstage-oidc-zitadel): no new action; all creates, plus an
