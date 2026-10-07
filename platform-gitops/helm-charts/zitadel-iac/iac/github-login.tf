@@ -9,7 +9,7 @@
 # It is never derived from the user's e-mail, and never taken from anything
 # the user can write. This Job stores it as user metadata, and the action
 # below copies it into the claim `mctl:github_login`, for the clients in
-# github_login_client_ids only.
+# local.github_login_clients only (portal.tf).
 #
 # Who can write user metadata (ZITADEL v4.19.2):
 #   - not the user: the auth API has only ListMyMetadata and GetMyMetadata,
@@ -93,11 +93,11 @@ resource "zitadel_user_metadata" "github_login_admin" {
 
 # Runs in the user's organization, like argocdGroups (argocd.tf), and is
 # listed in the same trigger: one trigger per organization and flow holds
-# every action of it. With github_login_client_ids empty it returns at once,
-# for every client. allowed_to_fail: a failure leaves the claim out, which
-# the portal must treat as "not mapped", rather than breaking sign-in to
-# every other application of the organization. The login is checked again
-# here, so a malformed value never becomes a claim.
+# every action of it. For a client that is not in
+# local.github_login_clients it returns at once. allowed_to_fail: a failure
+# leaves the claim out, which the portal must treat as "not mapped", rather
+# than breaking sign-in to every other application of the organization. The
+# login is checked again here, so a malformed value never becomes a claim.
 resource "zitadel_action" "github_login" {
   for_each = local.argocd_claim_orgs
 
@@ -107,7 +107,7 @@ resource "zitadel_action" "github_login" {
   allowed_to_fail = true
   script          = <<-EOT
     function mctlGithubLogin(ctx, api) {
-      var clients = ${jsonencode(var.github_login_client_ids)};
+      var clients = ${jsonencode(local.github_login_clients)};
       if (clients.indexOf(ctx.v1.application.getClientId()) < 0) {
         return;
       }

@@ -404,7 +404,8 @@ ZITADEL is offered as an Access identity provider:
 
 `iac/github-login.tf` gives the applications that still identify people by
 GitHub login (the portal and its OIDC provider) that login, as declared by
-an admin. It is a no-op until those clients exist (#1500 phase 3).
+an admin. Its first client is the portal's OIDC provider (see "Portal
+sign-in" below).
 
 - **Source.** Optional field `github_login` in a user's Vault entry,
   `secret/platform/zitadel/users/<tenant>` or `secret/platform/zitadel/admins`:
@@ -425,9 +426,10 @@ an admin. It is a no-op until those clients exist (#1500 phase 3).
   as a JSON string, marked sensitive in the plan.
 - **Claim.** The Actions v1 action `mctlGithubLogin`, in every organization's
   `PRE_USERINFO_CREATION` trigger next to `argocdGroups`, sets
-  `mctl:github_login` only when the client is in `github_login_client_ids`
-  (variable, empty by default) and the user is one whose login this root
-  manages (their IDs are in the script). It checks the value again and
+  `mctl:github_login` only when the client is in
+  `local.github_login_clients` (the portal's clients, by reference in
+  `portal.tf`, plus the variable `github_login_client_ids`, empty by
+  default) and the user is one whose login this root manages (their IDs are in the script). It checks the value again and
   leaves the claim out if it is not a login. It may fail
   (`allowed_to_fail`), which leaves the claim out: a consumer must treat a
   missing claim as "not mapped" and refuse, never fall back to the e-mail.
@@ -446,6 +448,33 @@ an admin. It is a no-op until those clients exist (#1500 phase 3).
   `zitadel_user_metadata.github_login_tenant["<tenant>/<user_name>"]`
   (`github_login_admin["<key>"]` for an admin), which needs that address in
   `allowedDeletes`. Changing it is an in-place update.
+
+### Portal sign-in (#1500 phase 3)
+
+`iac/portal.tf` lets the portal (app.mctl.ai) sign people in through ZITADEL
+instead of GitHub (mctlhq/mctl-portal#150). The portal keeps identifying a
+person by GitHub login, which it reads from `mctl:github_login`; a ZITADEL
+user without the claim is refused there, never matched by e-mail.
+
+- **Project `MCTL Portal`**, owned by MCTL, `has_project_check` on, no
+  roles. One `zitadel_project_grant.portal_tenant` per tenant organization,
+  without role keys, is what lets a tenant's users obtain a token; removing a
+  tenant plans a destroy of its grant, which needs the address in
+  `allowedDeletes`.
+- **Client `portal-oidc-provider`**: the upstream of the portal's OIDC
+  provider (`plugins/oidc-provider-backend`). Confidential web app, client
+  secret plus PKCE, authorization code only, the single redirect
+  `https://app.mctl.ai/api/oidc-provider/zitadel/callback`, opaque access
+  token, `id_token_userinfo_assertion` on so the claim reaches the ID token.
+- **Secret.** The Job writes `OIDC_ZITADEL_CLIENT_ID` and
+  `OIDC_ZITADEL_CLIENT_SECRET` into `backstage/backstage-oidc-zitadel`,
+  which the `mctl-portal-oidc-zitadel` Application pre-creates empty
+  (`infra-components/mctl-platform/mctl-portal/oidc-zitadel.yaml`).
+- **Switch.** Creating the client changes nothing in the portal: it signs
+  people in at GitHub until its `oidcProvider.upstream` is set to `both` or
+  `zitadel`, a separate change in
+  `bootstrap/templates/mctl-platform/mctl-portal.yaml` that also has to
+  reference the Secret. Setting it back to `github` is the rollback.
 
 ## Sync hooks instead of Helm hooks
 
