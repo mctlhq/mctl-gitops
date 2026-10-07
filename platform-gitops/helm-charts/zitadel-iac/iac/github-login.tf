@@ -96,8 +96,8 @@ resource "zitadel_user_metadata" "github_login_admin" {
 # every action of it. For a client that is not in
 # local.github_login_clients it returns at once. allowed_to_fail: a failure
 # leaves the claim out, which the portal must treat as "not mapped", rather
-# than breaking sign-in to every other application of the organization. The login is checked again
-# here, so a malformed value never becomes a claim.
+# than breaking sign-in to every other application of the organization. The
+# login is checked again here, so a malformed value never becomes a claim.
 resource "zitadel_action" "github_login" {
   for_each = local.argocd_claim_orgs
 
