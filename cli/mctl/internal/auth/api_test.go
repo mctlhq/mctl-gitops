@@ -39,6 +39,7 @@ type fakeAPI struct {
 	refreshes  int
 	revoked    []string
 	expiresIn  int
+	noRefresh  bool
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -159,13 +160,18 @@ func (f *fakeAPI) token(w http.ResponseWriter, r *http.Request) {
 	f.issued++
 	f.refresh = fmt.Sprintf("refresh-%d", f.issued)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"access_token":  fmt.Sprintf("access-%d", f.issued),
-		"refresh_token": f.refresh,
-		"token_type":    "Bearer",
-		"expires_in":    f.expiresIn,
-		"scope":         "mctl",
-	})
+	resp := map[string]any{
+		"access_token": fmt.Sprintf("access-%d", f.issued),
+		"token_type":   "Bearer",
+		"scope":        "mctl",
+	}
+	if !f.noRefresh {
+		resp["refresh_token"] = f.refresh
+	}
+	if f.expiresIn > 0 {
+		resp["expires_in"] = f.expiresIn
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (f *fakeAPI) revoke(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +215,13 @@ func apiLogin(t *testing.T) error {
 	select {
 	case <-b.done:
 	case <-time.After(5 * time.Second):
-		t.Cleanup(func() { <-b.done })
+		t.Cleanup(func() {
+			select {
+			case <-b.done:
+			case <-time.After(5 * time.Second):
+				t.Error("the fake browser never finished")
+			}
+		})
 	}
 	return err
 }
@@ -537,5 +549,43 @@ func TestAPILogoutRemovesTheFileWhenRevocationFails(t *testing.T) {
 	}
 	if _, err := os.Stat(tokenFile); !os.IsNotExist(err) {
 		t.Errorf("token file still there: %v", err)
+	}
+}
+
+// A token that could never be renewed is refused at sign-in, not at the
+// first command after it expires.
+func TestAPILoginRefusesATokenItCannotRenew(t *testing.T) {
+	for name, breakIt := range map[string]func(*fakeAPI){
+		"no refresh token": func(f *fakeAPI) { f.noRefresh = true },
+		"no expiry":        func(f *fakeAPI) { f.expiresIn = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeAPI(t)
+			useFakeAPI(t, f)
+			breakIt(f)
+			if err := apiLogin(t); err == nil || !strings.Contains(err.Error(), "cannot be renewed") {
+				t.Fatalf("login err = %v, want a refusal", err)
+			}
+			if _, err := readAPIToken(); !errors.Is(err, ErrNoAPILogin) {
+				t.Errorf("a refused login left a credential behind: %v", err)
+			}
+		})
+	}
+}
+
+// With no usable credential the error says why the stored sign-in does not
+// count, not only that there is none.
+func TestNoCredentialErrorNamesTheOtherAPI(t *testing.T) {
+	f := newFakeAPI(t)
+	useFakeAPI(t, f)
+	if err := writeAPIToken(&storedAPIToken{
+		APIURL: "https://api.other.example", ClientID: "dcr_1",
+		Token: &oauth2.Token{AccessToken: "x", Expiry: time.Now().Add(time.Hour)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := GetToken()
+	if err == nil || !strings.Contains(err.Error(), "https://api.other.example") || !errors.Is(err, ErrNoAPILogin) {
+		t.Errorf("err = %v, want one naming the API the sign-in belongs to", err)
 	}
 }

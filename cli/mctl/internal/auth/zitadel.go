@@ -249,9 +249,9 @@ func refreshZitadelToken(s zitadelSettings) (string, error) {
 
 const (
 	// Longer than a refresh may take (its context allows 30 s), so a waiter
-	// never gives up on a healthy holder; shorter than zitadelLockStale.
-	zitadelLockWait  = 45 * time.Second
-	zitadelLockStale = time.Minute
+	// never gives up on a healthy holder; shorter than tokenLockStale.
+	tokenLockWait  = 45 * time.Second
+	tokenLockStale = 5 * time.Minute
 )
 
 // lockZitadelToken locks the ZITADEL credential file (see lockTokenFile).
@@ -264,7 +264,7 @@ func lockZitadelToken() (func(), error) {
 }
 
 // lockTokenFile takes <token file>.lock with O_EXCL. A lock older than
-// zitadelLockStale is left over from a killed process and is taken over.
+// tokenLockStale is left over from a killed process and is taken over.
 func lockTokenFile(p string) (func(), error) {
 	lock := p + ".lock"
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
@@ -274,7 +274,7 @@ func lockTokenFile(p string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(zitadelLockWait)
+	deadline := time.Now().Add(tokenLockWait)
 	for {
 		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
@@ -298,7 +298,7 @@ func lockTokenFile(p string) (func(), error) {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("another mctl process holds %s; remove it if no mctl is running", lock)
 		}
-		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > zitadelLockStale {
+		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > tokenLockStale {
 			// Take a stale lock over by renaming it away: a rename succeeds
 			// for one process only, where remove-then-create could hand the
 			// lock to two. The loser simply retries.

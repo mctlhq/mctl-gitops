@@ -389,7 +389,7 @@ func TestStaleLockIsTakenOver(t *testing.T) {
 	if err := os.WriteFile(lock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().Add(-2 * zitadelLockStale)
+	old := time.Now().Add(-2 * tokenLockStale)
 	if err := os.Chtimes(lock, old, old); err != nil {
 		t.Fatal(err)
 	}

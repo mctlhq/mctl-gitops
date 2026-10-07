@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -21,40 +22,38 @@ var authStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show current authentication status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		mode, err := auth.AuthMode()
-		if err != nil {
-			return err
-		}
-		if os.Getenv("MCTL_TOKEN") == "" {
-			switch mode {
-			case auth.ModeZitadel:
-				return zitadelStatus()
-			case auth.ModeDefault:
-				_, expiry, err := auth.APILoginInfo()
-				if err == nil {
-					return apiStatus(expiry)
-				}
-				// Only "no sign-in" continues to the GitHub token below; a
-				// sign-in that cannot be read is reported as such.
-				if !errors.Is(err, auth.ErrNoAPILogin) {
-					fmt.Println("❌ The stored sign-in could not be read")
-					return err
-				}
-			}
-		}
-		user, err := auth.GetUser()
-		if err != nil {
-			fmt.Println("❌ Not authenticated")
-			fmt.Println("   Run 'mctl auth login' to sign in")
-			return err
-		}
-
-		fmt.Printf("✅ Authenticated as %s (GitHub token)\n", user)
-		if mode == auth.ModeDefault && os.Getenv("MCTL_TOKEN") == "" {
-			fmt.Println("   Run 'mctl auth login' to sign in with your MCTL account instead.")
-		}
-		return nil
+		return authStatus(cmd.OutOrStdout())
 	},
+}
+
+// authStatus reports the credential GetToken would send, in GetToken's own
+// order, and asks the API who it is. It never reports an identity taken from
+// anywhere but that credential.
+func authStatus(w io.Writer) error {
+	mode, err := auth.AuthMode()
+	if err != nil {
+		return err
+	}
+	if os.Getenv("MCTL_TOKEN") != "" {
+		return tokenStatus(w, "MCTL_TOKEN", false)
+	}
+	switch mode {
+	case auth.ModeZitadel:
+		return zitadelStatus(w)
+	case auth.ModeGitHub:
+		return tokenStatus(w, "GitHub token, MCTL_AUTH=github", false)
+	}
+	_, expiry, err := auth.APILoginInfo()
+	if err == nil {
+		return apiStatus(w, expiry)
+	}
+	// Only "no sign-in" continues to the GitHub token; a sign-in that
+	// cannot be read is reported as such.
+	if !errors.Is(err, auth.ErrNoAPILogin) {
+		fmt.Fprintln(w, "❌ The stored sign-in could not be read")
+		return err
+	}
+	return tokenStatus(w, "GitHub token", true)
 }
 
 type whoami struct {
@@ -63,67 +62,87 @@ type whoami struct {
 	IsAdmin bool     `json:"isAdmin"`
 }
 
-// apiStatus shows the stored mctl sign-in and asks the API who it is, which
-// is the end-to-end check that the token still works.
-func apiStatus(expiry time.Time) error {
-	// The token first: it refreshes an expired one.
-	token, err := auth.APIToken()
+// tokenStatus covers the credentials that are not a stored sign-in:
+// MCTL_TOKEN and the GitHub token. source names which one for the reader.
+func tokenStatus(w io.Writer, source string, suggestLogin bool) error {
+	token, err := auth.GetToken()
 	if err != nil {
-		fmt.Println("❌ The stored sign-in no longer works")
+		fmt.Fprintln(w, "❌ Not authenticated")
 		return err
 	}
 	var who whoami
 	if err := api.NewClient(token).Get("/api/v1/whoami", &who); err != nil {
-		fmt.Println("❌ The mctl API refused the stored sign-in")
+		fmt.Fprintf(w, "❌ The mctl API refused the credential in use (%s)\n", source)
 		return err
 	}
-	fmt.Printf("✅ Signed in to %s as %s (groups: %v, admin: %v)\n", GetAPIURL(), who.ID, who.Groups, who.IsAdmin)
+	fmt.Fprintf(w, "✅ Authenticated to %s as %s (%s; groups: %v, admin: %v)\n", GetAPIURL(), who.ID, source, who.Groups, who.IsAdmin)
+	if suggestLogin {
+		fmt.Fprintln(w, "   Run 'mctl auth login' to sign in with your MCTL account instead.")
+	}
+	return nil
+}
+
+// apiStatus shows the stored mctl sign-in and asks the API who it is, which
+// is the end-to-end check that the token still works.
+func apiStatus(w io.Writer, expiry time.Time) error {
+	// The token first: it refreshes an expired one.
+	token, err := auth.APIToken()
+	if err != nil {
+		fmt.Fprintln(w, "❌ The stored sign-in no longer works")
+		return err
+	}
+	var who whoami
+	if err := api.NewClient(token).Get("/api/v1/whoami", &who); err != nil {
+		fmt.Fprintln(w, "❌ The mctl API refused the stored sign-in")
+		return err
+	}
+	fmt.Fprintf(w, "✅ Signed in to %s as %s (groups: %v, admin: %v)\n", GetAPIURL(), who.ID, who.Groups, who.IsAdmin)
 	if _, fresh, err := auth.APILoginInfo(); err == nil {
 		expiry = fresh
 	}
 	if !expiry.IsZero() {
-		fmt.Printf("   Access token expires %s and is renewed automatically.\n", expiry.Local().Format("2006-01-02 15:04"))
+		fmt.Fprintf(w, "   Access token expires %s and is renewed automatically.\n", expiry.Local().Format("2006-01-02 15:04"))
 	}
-	warnNoAccess(who)
+	warnNoAccess(w, who)
 	return nil
 }
 
 // warnNoAccess explains a sign-in that works but opens nothing: the usual
 // cause is a ZITADEL account not yet linked to the person's teams.
-func warnNoAccess(who whoami) {
+func warnNoAccess(w io.Writer, who whoami) {
 	if len(who.Groups) > 0 || who.IsAdmin {
 		return
 	}
-	fmt.Println("⚠️  This sign-in has no team access, so deploy, status and logs will be refused.")
-	fmt.Printf("   If you signed in with ZITADEL, link it to your existing account at %s/identity/link/zitadel\n", GetAPIURL())
-	fmt.Println("   Until then, MCTL_AUTH=github uses your GitHub token.")
+	fmt.Fprintln(w, "⚠️  This sign-in has no team access, so deploy, status and logs will be refused.")
+	fmt.Fprintf(w, "   If you signed in with ZITADEL, link it to your existing account at %s/identity/link/zitadel\n", GetAPIURL())
+	fmt.Fprintln(w, "   Until then, MCTL_AUTH=github uses your GitHub token.")
 }
 
 // zitadelStatus shows the stored ZITADEL login and asks the API who it is,
 // which is the end-to-end check that mctl-api accepts the token.
-func zitadelStatus() error {
+func zitadelStatus(w io.Writer) error {
 	// The token first: it refreshes an expired one, so the expiry shown
 	// below is that of the token actually sent.
 	token, err := auth.ZitadelToken()
 	if errors.Is(err, auth.ErrNoZitadelLogin) {
-		fmt.Println("❌ Not authenticated with ZITADEL")
+		fmt.Fprintln(w, "❌ Not authenticated with ZITADEL")
 		return err
 	}
 	if err != nil {
-		fmt.Println("❌ Could not obtain a ZITADEL access token")
+		fmt.Fprintln(w, "❌ Could not obtain a ZITADEL access token")
 		return err
 	}
 	sub, username, expiry, err := auth.ZitadelIdentity()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("ZITADEL login: %s (sub %s), access token expires %s\n", username, sub, expiry.Local().Format("2006-01-02 15:04"))
+	fmt.Fprintf(w, "ZITADEL login: %s (sub %s), access token expires %s\n", username, sub, expiry.Local().Format("2006-01-02 15:04"))
 	var who whoami
 	if err := api.NewClient(token).Get("/api/v1/whoami", &who); err != nil {
-		fmt.Println("❌ The mctl API refused the ZITADEL token")
+		fmt.Fprintln(w, "❌ The mctl API refused the ZITADEL token")
 		return err
 	}
-	fmt.Printf("✅ Authenticated to %s as %s (groups: %v, admin: %v)\n", GetAPIURL(), who.ID, who.Groups, who.IsAdmin)
+	fmt.Fprintf(w, "✅ Authenticated to %s as %s (groups: %v, admin: %v)\n", GetAPIURL(), who.ID, who.Groups, who.IsAdmin)
 	return nil
 }
 
@@ -167,7 +186,7 @@ MCTL_AUTH=zitadel is set. It carries no team access; prefer the default.`,
 			return err
 		}
 		fmt.Printf("✅ Signed in to %s as %s (groups: %v, admin: %v)\n", GetAPIURL(), who.ID, who.Groups, who.IsAdmin)
-		warnNoAccess(who)
+		warnNoAccess(cmd.OutOrStdout(), who)
 		if mode, err := auth.AuthMode(); err != nil || mode != auth.ModeDefault || os.Getenv("MCTL_TOKEN") != "" {
 			fmt.Println("   MCTL_TOKEN or MCTL_AUTH is set and takes precedence: unset it to use this sign-in.")
 		}

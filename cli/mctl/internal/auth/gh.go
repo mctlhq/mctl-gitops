@@ -78,7 +78,9 @@ func GetToken() (string, error) {
 	}
 	tok, ghErr := githubToken()
 	if ghErr != nil {
-		return "", errors.New("not signed in\n\nRun:\n  mctl auth login\n\nor set MCTL_TOKEN=<token>")
+		// err says why there is no sign-in, which matters when one exists
+		// for another API URL.
+		return "", fmt.Errorf("%w\n\nRun:\n  mctl auth login\n\nor set MCTL_TOKEN=<token>", err)
 	}
 	legacyNoticeOnce.Do(func() {
 		fmt.Fprintln(legacyNotice, "mctl: using your GitHub token. Run 'mctl auth login' to sign in with your MCTL account; set MCTL_AUTH=github to keep the GitHub token and silence this.")

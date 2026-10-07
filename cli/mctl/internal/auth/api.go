@@ -344,6 +344,12 @@ func APILogin(ctx context.Context, out io.Writer, openBrowser bool) error {
 	if tok.AccessToken == "" {
 		return errors.New("the API returned no access token")
 	}
+	// Refuse at sign-in what would only fail later: without an expiry the
+	// token is never renewed (a zero Expiry reads as "never expires"), and
+	// without a refresh token it cannot be.
+	if tok.RefreshToken == "" || tok.Expiry.IsZero() {
+		return errors.New("the API returned a token that cannot be renewed (no refresh token or no expiry); nothing was stored")
+	}
 	if err := writeAPIToken(&storedAPIToken{APIURL: base, ClientID: clientID, Token: tok}); err != nil {
 		return fmt.Errorf("storing the sign-in: %w", err)
 	}
