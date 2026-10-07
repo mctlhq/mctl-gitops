@@ -5,7 +5,8 @@ Same operations as the Backstage UI, but from your terminal.
 
 ## Prerequisites
 
-- [gh CLI](https://cli.github.com/) installed and authenticated (`gh auth login`)
+- A browser on this machine for `mctl auth login`. The [gh CLI](https://cli.github.com/)
+  is only needed for the legacy GitHub-token path.
 - Go 1.25.13+ on the 1.25 line, **or 1.26.1+ on the 1.26 line** (for building
   from source). The `go` directive in `go.mod` is a minimum, not a pin, so a
   newer toolchain always satisfies it — including go1.26.0, which still
@@ -28,29 +29,51 @@ make build
 ./mctl --help
 ```
 
-## Signing in with ZITADEL (opt-in)
-
-By default mctl sends your GitHub token (`MCTL_TOKEN`, `GITHUB_TOKEN`, or
-`gh auth token`). To use your MCTL account at auth.mctl.ai instead:
+## Signing in
 
 ```bash
-mctl auth login --zitadel              # browser sign-in: authorization code + PKCE on a loopback port
-MCTL_AUTH=zitadel mctl auth status     # shows the login and asks the API who you are
-mctl auth logout --zitadel             # removes the stored login
+mctl auth login      # browser sign-in with your MCTL account
+mctl auth status     # shows the sign-in and asks the API who you are
+mctl auth logout     # revokes the sign-in and removes it from this machine
 ```
 
-`MCTL_AUTH=zitadel` makes every command send the ZITADEL token. Set it per
-command for now rather than exporting it: the login carries no tenant or
-admin access yet (see below), so `deploy`, `status`, `logs` and the rest
-need the GitHub token.
+`mctl auth login` signs you in through the mctl API's own OAuth server, the
+same one MCP clients use: the CLI registers itself as a public client,
+opens the browser, and receives the result on a loopback port
+(authorization code with PKCE). The API sends you to auth.mctl.ai and then
+issues its own token, which carries the tenant and admin access of your
+linked account. If the sign-in ends with no access, link your account once
+at `https://api.mctl.ai/identity/link/zitadel`.
 
-The token is stored in `<user config dir>/mctl/zitadel-token.json` (mode
-600 on Unix; override with `MCTL_ZITADEL_TOKEN_FILE`) and refreshed automatically.
-`MCTL_TOKEN` still wins when set. `MCTL_ZITADEL_ISSUER` and
-`MCTL_ZITADEL_CLIENT_ID` override the defaults (`https://auth.mctl.ai`, the
-`mctl-cli` application of project "MCTL API"). A ZITADEL login carries no
-tenant or admin access in mctl-api yet (mctlhq/mctl-api#435, #377), so for
-now it serves identity checks such as `mctl auth status`.
+The sign-in is stored in `<user config dir>/mctl/api-token.json` (mode 600
+on Unix; override with `MCTL_API_TOKEN_FILE`) and refreshed automatically.
+It is bound to the API it was issued by: with another `MCTL_API_URL` it is
+not sent, and you sign in again.
+
+Which credential a command sends, first match wins:
+
+1. `MCTL_TOKEN`, when set.
+2. What `MCTL_AUTH` selects: `github` for the GitHub token, `zitadel` for a
+   raw ZITADEL token (below). Any other value is an error.
+3. The stored sign-in from `mctl auth login`.
+4. Only when there is no stored sign-in: the GitHub token (`GITHUB_TOKEN`,
+   then `gh auth token`), with a one-line reminder on stderr. This is the
+   previous default and will be removed once GitHub tokens stop being
+   accepted by the API.
+
+A stored sign-in that cannot be read or refreshed is an error, not a reason
+to fall back to the GitHub token.
+
+### Raw ZITADEL token
+
+`mctl auth login --zitadel` signs in directly at auth.mctl.ai (the
+`mctl-cli` application of project "MCTL API") and `MCTL_AUTH=zitadel` sends
+that token. It carries no tenant or admin access in mctl-api
+(mctlhq/mctl-api#435, #377), so it is only useful for identity checks; use
+plain `mctl auth login` for everything else. The token lives in
+`<user config dir>/mctl/zitadel-token.json` (`MCTL_ZITADEL_TOKEN_FILE`);
+`MCTL_ZITADEL_ISSUER` and `MCTL_ZITADEL_CLIENT_ID` override the defaults.
+`mctl auth logout --zitadel` removes it.
 
 ## Usage
 
@@ -131,4 +154,4 @@ mctl auth status
 | `mctl status` | (read) | GET /api/v1/status |
 | `mctl logs` | (read) | GET /api/v1/logs |
 
-Authentication: set `MCTL_TOKEN` or `GITHUB_TOKEN`, or fall back to `gh auth token`.
+Authentication: see [Signing in](#signing-in).
