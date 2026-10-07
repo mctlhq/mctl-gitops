@@ -33,7 +33,11 @@
 #                                                      on the same mux that carries
 #                                                      m.HTTPMiddleware()
 #   mctl_sessions_borrow_total{result}                 metrics.go New() — result is
-#                                                      "ok"|"error"|"expired_idle"|"expired_absolute"
+#                                                      "ok"|"error"|"flood_wait"|"call_error"|
+#                                                      "expired_idle"|"expired_absolute"
+#                                                      (flood_wait and call_error since
+#                                                      mctl-telegram 0.79.2; like the TTL
+#                                                      expirations they are outside the SLI)
 #
 # Aggregation: sum by (job, namespace). An SLO is a property of the service,
 # not of a pod, so the ratios must not be computed per replica — with several
@@ -67,15 +71,36 @@ spec:
     - name: mctl-telegram-slo-sli
       interval: 1m
       rules:
+        # Every numerator below selects failures only, and a healthy service
+        # exports no failure series: a counter child appears on its first
+        # increment, so after a rollout there is no status="error" (or 5xx,
+        # or result="error") until something fails. A selector that matches
+        # nothing yields an empty vector, and an empty numerator makes the
+        # division empty, so without the `or 0 *` fill these ratios record
+        # nothing in the healthy case and "no errors" cannot be told from
+        # "the metric is gone" on a panel. The fill is 0 times the
+        # denominator, not a constant: it carries the (job, namespace) labels,
+        # and when nothing was served the ratio still stays absent instead of
+        # reporting an unmeasured service as healthy. The burn-rate alerts are
+        # unaffected either way, since neither 0 nor an absent series crosses
+        # a threshold.
         # --- MCP tool availability (99.5% objective) ---
         - record: mctl_telegram:tool_errors:ratio_rate1h
           expr: |
-            sum by (job, namespace) (rate(mctl_tool_invocations_total{status="error"}[1h]))
+            (
+              sum by (job, namespace) (rate(mctl_tool_invocations_total{status="error"}[1h]))
+              or
+              0 * sum by (job, namespace) (rate(mctl_tool_invocations_total[1h]))
+            )
             /
             sum by (job, namespace) (rate(mctl_tool_invocations_total[1h]))
         - record: mctl_telegram:tool_errors:ratio_rate6h
           expr: |
-            sum by (job, namespace) (rate(mctl_tool_invocations_total{status="error"}[6h]))
+            (
+              sum by (job, namespace) (rate(mctl_tool_invocations_total{status="error"}[6h]))
+              or
+              0 * sum by (job, namespace) (rate(mctl_tool_invocations_total[6h]))
+            )
             /
             sum by (job, namespace) (rate(mctl_tool_invocations_total[6h]))
 
@@ -85,8 +110,14 @@ spec:
         # is a browser entry point, not part of the token-issuance SLO.
         - record: mctl_telegram:oauth_5xx:ratio_rate1h
           expr: |
-            sum by (job, namespace) (
-              rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback",status_code=~"5.."}[1h])
+            (
+              sum by (job, namespace) (
+                rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback",status_code=~"5.."}[1h])
+              )
+              or
+              0 * sum by (job, namespace) (
+                rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback"}[1h])
+              )
             )
             /
             sum by (job, namespace) (
@@ -94,8 +125,14 @@ spec:
             )
         - record: mctl_telegram:oauth_5xx:ratio_rate6h
           expr: |
-            sum by (job, namespace) (
-              rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback",status_code=~"5.."}[6h])
+            (
+              sum by (job, namespace) (
+                rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback",status_code=~"5.."}[6h])
+              )
+              or
+              0 * sum by (job, namespace) (
+                rate(mctl_http_requests_total{route=~"/oauth/token|/oauth/telegram/callback"}[6h])
+              )
             )
             /
             sum by (job, namespace) (
@@ -111,12 +148,20 @@ spec:
         # silently inflate the denominator and hide a real regression.
         - record: mctl_telegram:session_borrow_errors:ratio_rate1h
           expr: |
-            sum by (job, namespace) (rate(mctl_sessions_borrow_total{result="error"}[1h]))
+            (
+              sum by (job, namespace) (rate(mctl_sessions_borrow_total{result="error"}[1h]))
+              or
+              0 * sum by (job, namespace) (rate(mctl_sessions_borrow_total{result=~"ok|error"}[1h]))
+            )
             /
             sum by (job, namespace) (rate(mctl_sessions_borrow_total{result=~"ok|error"}[1h]))
         - record: mctl_telegram:session_borrow_errors:ratio_rate6h
           expr: |
-            sum by (job, namespace) (rate(mctl_sessions_borrow_total{result="error"}[6h]))
+            (
+              sum by (job, namespace) (rate(mctl_sessions_borrow_total{result="error"}[6h]))
+              or
+              0 * sum by (job, namespace) (rate(mctl_sessions_borrow_total{result=~"ok|error"}[6h]))
+            )
             /
             sum by (job, namespace) (rate(mctl_sessions_borrow_total{result=~"ok|error"}[6h]))
 
