@@ -15,6 +15,8 @@ tenant:
       role: developer
     - userId: grerik
       role: developer
+    - userId: octongues
+      role: developer
   # Sized for two Frappe benches + MariaDB + Valkey + the site deployer
   # (requests ~550m/2.5Gi steady, ~840m/4.1Gi with every Job running at
   # once: two configure, two restore, one new-site). Limits sit well above
