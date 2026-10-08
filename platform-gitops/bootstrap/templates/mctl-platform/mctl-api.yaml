@@ -100,7 +100,25 @@ spec:
             # holds the verifier. If a tenant ever moves under a basePath this
             # entry stops matching, which fails loudly and is the safer way to
             # find out.
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/overview?mctl_oauth=1,https://labs-openclaw.mctl.ai/overview?mctl_oauth=1,https://ovk-openclaw.mctl.ai/overview?mctl_oauth=1,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api"
+            #
+            # IDE clients (2026-10-08). /oauth/register refuses a registration
+            # as a whole when any one of its redirect_uris is not allowed, and
+            # these clients send their full set every time, so their loopback
+            # entry alone never got them in:
+            #   VS Code  -- https://vscode.dev/redirect,
+            #               https://insiders.vscode.dev/redirect, plus two
+            #               127.0.0.1 entries (src/vs/base/common/oauth.ts,
+            #               fetchDynamicRegistration).
+            #   Cursor   -- cursor://anysphere.cursor-mcp/oauth/callback,
+            #               https://www.cursor.com/agents/mcp/oauth/callback,
+            #               plus http://localhost:8787/callback (read from the
+            #               3.19.16 bundle).
+            # Exact strings, for the reason given above. The two vscode.dev
+            # pages and the cursor:// scheme hand the code to the editor on the
+            # user's own machine; www.cursor.com is Cursor's hosted agent
+            # callback, the same class of entry as claude.ai and chatgpt.com.
+            # Windsurf needs nothing here: it registers a loopback callback.
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/overview?mctl_oauth=1,https://labs-openclaw.mctl.ai/overview?mctl_oauth=1,https://ovk-openclaw.mctl.ai/overview?mctl_oauth=1,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect,cursor://anysphere.cursor-mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback"
             # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
             # `cloudflare-portal-mcp` (mctlhq/mctl-api#278) was retired on
             # 2026-09-26 after the `api` upstream moved to automatic (DCR)
