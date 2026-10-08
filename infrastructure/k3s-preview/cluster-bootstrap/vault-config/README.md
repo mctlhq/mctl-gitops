@@ -62,6 +62,25 @@ write path, no reason to grant the rest of `secret/teams/*/*`.
 vault policy write mctl-api-openclaw-read vault-policy-mctl-api-openclaw-read.hcl
 ```
 
+### mctl-api-erpact-deployer-read
+
+Read-only access to one tenant secret, `secret/teams/erpact/deployer`'s
+`DEPLOYER_API_TOKEN` property: the bearer token mctl-api uses to call the
+erpact tenant's own site-deployer (mctl-api#486, cmd/api/main.go's
+`erpactDeployer` construction), backing the temporary
+`/api/v1/tenants/erpact/sites*` routes. Read at request time through the
+same `VaultReader` the OpenClaw Telegram-token check above uses, not
+through an ExternalSecret env var -- the cluster-wide `vault-backend`
+ClusterSecretStore's policy (`vault-policy-external-secrets-read.hcl`)
+deliberately denies all of `secret/data/teams/*`, since it is reachable
+from every namespace and any tenant path granted there becomes readable by
+every other tenant. This policy, bound only to mctl-api's own Kubernetes
+auth role below, is the narrow alternative.
+
+```bash
+vault policy write mctl-api-erpact-deployer-read vault-policy-mctl-api-erpact-deployer-read.hcl
+```
+
 ### mctl-api auth: Kubernetes auth (migration in progress)
 
 `mctl-api.yaml` sets `VAULT_KUBERNETES_ROLE: mctl-api`, which takes
@@ -74,7 +93,7 @@ the mctl-api repo) — no new identity needed, just the Vault role:
 vault write auth/kubernetes/role/mctl-api \
   bound_service_account_names=mctl-api \
   bound_service_account_namespaces=mctl-api \
-  policies=mctl-api-openclaw-read \
+  policies=mctl-api-openclaw-read,mctl-api-erpact-deployer-read \
   ttl=1h
 ```
 
