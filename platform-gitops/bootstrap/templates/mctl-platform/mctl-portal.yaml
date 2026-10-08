@@ -271,6 +271,9 @@ spec:
               memory: 768Mi
           extraEnvVarsSecrets:
             - backstage-secrets
+            # ZITADEL client of the portal's OIDC provider (OIDC_ZITADEL_CLIENT_ID
+            # and _SECRET), filled by the zitadel-iac Job (portal.tf).
+            - backstage-oidc-zitadel
           {{- if (default dict .Values.surfacePortalToken).enabled }}
           # surface:portal token for plugins/work-items-backend
           # (workItems.surfaceToken). optional: a Secret that has not synced
@@ -409,6 +412,15 @@ spec:
               maxTeamsPerTenant: 1
             oidcProvider:
               issuer: https://app.mctl.ai/api/oidc-provider
+              # Canary (mctlhq/mctl-gitops#1500, phase 3): the sign-in page
+              # offers ZITADEL first and GitHub as "legacy". Rollback is
+              # `upstream: github` (the default), which ignores the zitadel
+              # block below.
+              upstream: both
+              zitadel:
+                issuer: https://auth.mctl.ai
+                clientId: ${OIDC_ZITADEL_CLIENT_ID}
+                clientSecret: ${OIDC_ZITADEL_CLIENT_SECRET}
               github:
                 clientId: ${AUTH_GITHUB_CLIENT_ID}
                 clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
