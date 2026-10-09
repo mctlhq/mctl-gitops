@@ -95,6 +95,21 @@
       "reason": "Binds a platform skill to a tenant, granting its agent a new capability. Enabled on the shared portal by owner decision 2026-09-12 (mctlhq/.github#35): the portal switch is user-blind, so the mctl API's own authentication, team scope and role checks are the access control -- the portal only decides visibility."
     },
     {
+      "name": "mctl_erpact_list_sites",
+      "enabled": true,
+      "reason": "Lists tenant erpact's sites from its own site-deployer. Visible and callable only for tenant erpact's owners and platform admins: the MCP tools/list filter hides it from everyone else and the REST handler re-checks the owner role. Enabled on the portal by owner decision 2026-10-09. Provisional Option A stopgap (mctl-api#486, removed once Option B ships)"
+    },
+    {
+      "name": "mctl_erpact_create_site",
+      "enabled": true,
+      "reason": "Creates a new site for tenant erpact via its site-deployer. Visible and callable only for tenant erpact's owners and platform admins: the MCP tools/list filter hides it from everyone else and the REST handler re-checks the owner role. Enabled on the portal by owner decision 2026-10-09. Provisional Option A stopgap (mctl-api#486, removed once Option B ships)"
+    },
+    {
+      "name": "mctl_erpact_site_status",
+      "enabled": true,
+      "reason": "Reads one erpact site's creation status from its site-deployer. Visible and callable only for tenant erpact's owners and platform admins: the MCP tools/list filter hides it from everyone else and the REST handler re-checks the owner role. Enabled on the portal by owner decision 2026-10-09. Provisional Option A stopgap (mctl-api#486, removed once Option B ships)"
+    },
+    {
       "name": "mctl_get_agent",
       "enabled": false,
       "reason": "Admin-only read of one agent's registry entry: owner, every definition version with its lifecycle, and the active binding per environment. Read-only, but it exposes the agent registry's internals; not yet enabled on the shared portal, an owner decision."
@@ -282,7 +297,7 @@
     {
       "name": "mctl_list_services",
       "enabled": true,
-      "reason": "Deployed services with team, image tag, host and database flag; operational metadata, tenant-filtered by the upstream."
+      "reason": "Catalogue services and the ArgoCD applications in a team's namespace: image tag, hosts, images, sync and health; operational metadata, tenant-filtered by the upstream, and the manifest source is withheld from non-admins whenever the application is not the tenant's own, including a catalogue row the platform deploys from elsewhere."
     },
     {
       "name": "mctl_list_tenant_skill_bindings",
