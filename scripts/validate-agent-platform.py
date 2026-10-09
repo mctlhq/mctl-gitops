@@ -153,6 +153,8 @@ class Policy:
         self.known_skills = set(spec.get("knownSkills") or [])
         self.known_model_policy_tasks = set(spec.get("knownModelPolicyTasks") or [])
         self.known_policies = set(spec.get("knownPolicies") or [])
+        # Absent or empty means nobody is exempt (fails closed).
+        self.uncalled_profiles = set(spec.get("uncalledProfiles") or [])
         self.known_evidence_kinds = set(spec.get("knownEvidenceKinds") or [])
         self.mutation_scopes = {
             s["name"]: s for s in spec.get("knownMutationScopes") or []
@@ -433,9 +435,17 @@ def _unique_env_by_suffix(doc, suffix: str, path: pathlib.Path):
 
 
 def validate_profile_against_cwft(
-    path: pathlib.Path, doc: dict, errors: list, cwft_dir: pathlib.Path
+    path: pathlib.Path,
+    doc: dict,
+    errors: list,
+    cwft_dir: pathlib.Path,
+    uncalled: bool = False,
 ) -> None:
     """Check budgetUsd/timeoutSeconds against the CWFT the profile names.
+
+    uncalled=True (profile listed in policy.yaml uncalledProfiles) skips only
+    the budget comparison, after verifying that the profile names no
+    budgetEnv and that no template references its entrypoint module.
 
     The CWFT is derived from spec.runtime.sandbox.clusterWorkflowTemplate
     rather than from a profile->template table. A table would be a third
@@ -446,6 +456,21 @@ def validate_profile_against_cwft(
     name = doc["metadata"]["name"]
     cwft_name = spec["runtime"]["sandbox"]["clusterWorkflowTemplate"]
     cwft_path = cwft_dir / f"cwft-{cwft_name}.yaml"
+    if uncalled:
+        if spec["runtime"]["sandbox"].get("budgetEnv") is not None:
+            errors.append(
+                f"{path}: profile {name!r} is listed in uncalledProfiles but "
+                "declares sandbox.budgetEnv — an uncalled profile has no "
+                "budget variable to name"
+            )
+        token = spec["runtime"]["entrypoint"].split(":")[0].rsplit(".", 1)[-1]
+        for template_path in sorted(cwft_dir.glob("*.yaml")):
+            if token in template_path.read_text():
+                errors.append(
+                    f"{path}: profile {name!r} is listed in uncalledProfiles "
+                    f"but {template_path.name} references {token!r}; it has a "
+                    "caller"
+                )
     if not cwft_path.exists():
         errors.append(
             f"{path}: names sandbox.clusterWorkflowTemplate {cwft_name!r} but "
@@ -462,7 +487,9 @@ def validate_profile_against_cwft(
         # one *_BUDGET_USD, as before: guessing among several is the failure
         # `_unique_env_by_suffix` exists to refuse.
         budget_env = spec["runtime"]["sandbox"].get("budgetEnv")
-        if budget_env is not None:
+        if uncalled:
+            budget = None
+        elif budget_env is not None:
             budget = _env_value_by_name(cwft, budget_env, cwft_path)
         else:
             budget = _unique_env_by_suffix(cwft, BUDGET_ENV_SUFFIX, cwft_path)
@@ -492,7 +519,9 @@ def validate_profile_against_cwft(
         errors.append(f"{path}: reading {cwft_path.name}: {exc}")
         return
 
-    if budget_value is None and budget_env is not None:
+    if uncalled:
+        pass
+    elif budget_value is None and budget_env is not None:
         errors.append(
             f"{path}: profile {name!r} names sandbox.budgetEnv {budget_env!r} but "
             f"{cwft_path.name} does not set it — the profile's effective value "
@@ -631,6 +660,7 @@ def validate_catalog(
     policy: Policy,
     errors: list,
     cwft_dir: pathlib.Path | None = None,
+    check_stale_exemptions: bool = True,
 ):
     profiles_by_name: dict[str, list[str]] = {}
 
@@ -649,8 +679,21 @@ def validate_catalog(
         # exercise this check ships its own cluster-templates/ instead.
         if cwft_dir is not None:
             validate_profile_against_cwft(
-                profile_path, load_yaml(profile_path), errors, cwft_dir
+                profile_path,
+                load_yaml(profile_path),
+                errors,
+                cwft_dir,
+                uncalled=name in policy.uncalled_profiles,
             )
+
+    # A fixture without its own policy.yaml borrows the real one, whose
+    # exemptions name real profiles the fixture does not contain.
+    stale_names = policy.uncalled_profiles - set(profiles_by_name)
+    for stale in sorted(stale_names if check_stale_exemptions else ()):
+        errors.append(
+            f"policy.yaml: uncalledProfiles names {stale!r}, which is not a "
+            "profile in the catalog (stale exemption)"
+        )
 
     # profiles_by_name maps name -> list of versions seen across every
     # execution-profiles/*/profile.yaml in this catalog root; more than one
@@ -715,6 +758,7 @@ def run_selftest() -> list:
                 policy,
                 errors,
                 cwft_dir=case_cwft_dir(case_dir),
+                check_stale_exemptions=(case_dir / "policy.yaml").exists(),
             )
         if errors:
             problems.append(f"valid fixture {case_dir.name} unexpectedly failed:")
@@ -733,6 +777,7 @@ def run_selftest() -> list:
                 policy,
                 errors,
                 cwft_dir=case_cwft_dir(case_dir),
+                check_stale_exemptions=(case_dir / "policy.yaml").exists(),
             )
         if not errors:
             problems.append(f"invalid fixture {case_dir.name} unexpectedly passed (expected at least one error)")

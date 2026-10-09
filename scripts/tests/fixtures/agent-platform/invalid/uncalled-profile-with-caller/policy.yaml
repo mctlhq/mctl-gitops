@@ -129,7 +129,7 @@ spec:
     # mctl-agents#596/#598: inert proof-run agent for the governed authoring
     # path. Its manifest names mctl-agents-run only because the contract
     # needs an existing template.
-    - authoring-canary-default
+    - example
 
   # Mutation scopes an ExecutionProfile.spec.permissions.mutationScopes
   # entry may declare. "mutating: true" scopes require the profile's

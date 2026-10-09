@@ -75,6 +75,18 @@ values are checked against the deployed template" below):
 | incident-responder | 20.00 | 3600 | `cwft-mctl-agents-run.yaml` `INCIDENT_RESPONDER_BUDGET_USD` -- the CWFT override wins over the Python default ($5); no per-agent timeout exists, so `activeDeadlineSeconds: 3600` is the effective ceiling |
 | mentor | 10.00 | 3600 | `cwft-mctl-agents-run.yaml` `MENTOR_BUDGET_USD`; `activeDeadlineSeconds: 3600` |
 | service-agent | 5.00 | 3600 | `cwft-mctl-agents-run.yaml` `SERVICE_AGENT_BUDGET_USD`, per service run; `activeDeadlineSeconds: 3600` |
+| authoring-canary | 0.01 | 3600 | The agent's `agent.yaml` `execution.budgetUsd`; no template carries it (see "Profiles with no caller"). `activeDeadlineSeconds: 3600` |
+
+#### Profiles with no caller
+
+`authoring-canary` (mctl-agents#596/#598) is inert: no ClusterWorkflowTemplate
+or CronWorkflow runs it, so no template holds its budget. A profile listed in
+`policy.yaml` `spec.uncalledProfiles` skips only the `budgetUsd` comparison
+with the template; `timeoutSeconds` is still compared. The claim is verified,
+not trusted: the profile must not declare `sandbox.budgetEnv`, no file under
+`argo-workflows/cluster-templates/` may mention the entrypoint module, and an
+entry naming no profile is an error. Giving the agent a caller means removing
+it from the list and declaring `budgetEnv` in the same PR.
 
 Those three agents are `agents.mctl.ai/v1alpha1` and never go through the
 runtime resolver, so nothing reads their profiles or bindings at run time.
@@ -150,6 +162,12 @@ expectation:
 | `budgetEnv` must be a `*_BUDGET_USD` name | `invalid/budget-env-not-a-budget-variable/` |
 | `budgetEnv` selects one of several budget variables | `valid/cwft-budget-env-selects-one-of-several/` |
 | exact-pair rollback accepted | `valid/rollback-replay/` |
+| uncalled profile skips only the budget comparison | `valid/uncalled-profile-without-budget-env/` |
+| uncalled profile with a caller in a template rejected | `invalid/uncalled-profile-with-caller/` |
+| uncalled profile naming `budgetEnv` rejected | `invalid/uncalled-profile-with-budget-env/` |
+| uncalled profile's timeout still checked | `invalid/uncalled-profile-timeout-mismatch/` |
+| stale `uncalledProfiles` entry rejected | `invalid/uncalled-profiles-stale-entry/` |
+| profile not listed in `uncalledProfiles` validated as before | `invalid/unlisted-profile-without-budget-env/` |
 
 ### Effective values are checked against the deployed template
 
