@@ -1,0 +1,38 @@
+# ReleaseBindingIntent for authoring-canary (mctl-agents#596/#598, proof run
+# for mctl-agents#470). It pins the exact agent.yaml bytes so the production
+# promotion gate (mctl-agents tools/check_binding_hash.py evaluate_promotion)
+# reports `match` instead of `missing`.
+#
+# bindingSource and promotable are the same as the other bindings: mctl-agents
+# accepts only compatibility-fixture with promotable: false. Nothing reads this
+# file at run time; the canary is a v1alpha1 agent with no caller.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: authoring-canary
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/authoring-canary/agent.yaml
+    # mctlhq/mctl-agents#598 head when contentHash was computed. The file was
+    # introduced by 15afef7 and is byte-identical at both. Nothing verifies
+    # gitSha; contentHash is the pin.
+    gitSha: "ad4a2b95506bf0d008eaa18a2ba52250e27316fa"
+    # sha256 of the exact bytes of `path` at gitSha. Editing that agent.yaml
+    # requires re-pinning this value first (mctl-agents
+    # docs/runbooks/agent-yaml-binding-repin.md).
+    contentHash: "sha256:4af4245df12133259961558f52a409cbf1ca8cca2ed08d5476942c22f62fe513"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: authoring-canary
+    version: "1"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: authoring-canary-default
+    version: "1.0.0"
+  bindingRevision: 1
