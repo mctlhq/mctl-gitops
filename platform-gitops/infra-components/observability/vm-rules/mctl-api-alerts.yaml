@@ -10,8 +10,8 @@
 #   - the stock KubeDeploymentReplicasMismatch / KubePodNotReady rules never
 #     fired: the pod was Running, and its brief flips back to Ready reset
 #     their `for` windows every time (MctlApiNoReadyReplicas fixes that by
-#     looking at the whole window, so a one-minute recovery does not reset
-#     it).
+#     averaging availability over a window, so a one-minute recovery moves
+#     the average a little instead of clearing the condition).
 #
 # Both are critical: when mctl-api is down the platform has no human or
 # agent entry point. Routed to Telegram in
@@ -50,29 +50,35 @@ spec:
               `kubectl -n mctl-api rollout restart deploy/mctl-api`.
 
         - alert: MctlApiNoReadyReplicas
-          # max_over_time over 5m, held for 5m: the deployment had no
-          # available replica at any point in the last ten minutes. A short
-          # return to Ready inside that window does not reset it, which is
-          # the shape of the 2026-10-09 outage (Ready for about a minute
-          # every 45 minutes) and exactly what the stock rules missed.
+          # Average available replicas over 10m below 0.5, held 5m: mctl-api
+          # was Ready for less than half of the last ten minutes. An average,
+          # not max_over_time == 0 — the max form clears on any single Ready
+          # sample, so a pod that flaps back to Ready for a minute every few
+          # minutes would never fire at all. Here a one-minute blip only
+          # raises the 10m average by 0.1, the condition stays true and the
+          # alert keeps firing (2026-10-09: Ready for about a minute every
+          # 45 minutes). A normal rollout or a single container restart keeps
+          # the average near 1: RollingUpdate holds the old pod until the new
+          # one is Ready.
           expr: |
-            max_over_time(
-              kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}[5m]
-            ) == 0
+            avg_over_time(
+              kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}[10m]
+            ) < 0.5
           for: 5m
           labels:
             severity: critical
             service: mctl-api
           annotations:
-            summary: "mctl-api has had no Ready replica for 10 minutes"
+            summary: "mctl-api was Ready less than half of the last 10 minutes"
             description: >-
-              kube-state-metrics reports zero available replicas for
-              deployment mctl-api for the last ten minutes. Traefik is
-              answering api.mctl.ai with "no available server". Look at
-              `kubectl -n mctl-api describe pod` for the readiness probe
-              result and at the pod log for `readyz probe failed`; the
-              `check` field names the dependency. A restart of the deployment
-              clears a pod that is stuck Running-but-unready.
+              kube-state-metrics reports that deployment mctl-api averaged
+              fewer than 0.5 available replicas over the last ten minutes, so
+              Traefik has been answering api.mctl.ai with "no available
+              server" most of that time. Look at `kubectl -n mctl-api describe
+              pod` for the readiness probe result and at the pod log for
+              `readyz probe failed`; the `check` field names the dependency. A
+              restart of the deployment clears a pod that is stuck
+              Running-but-unready.
 
         - alert: MctlApiProbeAbsent
           # Without the series MctlApiDown can never fire — same reasoning as
