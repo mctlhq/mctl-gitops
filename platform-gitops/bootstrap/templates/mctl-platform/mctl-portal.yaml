@@ -358,11 +358,27 @@ spec:
                     max: 3
             auth:
               environment: production
+              # Which providers the sign-in page offers (mctlhq/mctl-portal#155):
+              # github, zitadel, or both (ZITADEL first, GitHub as legacy).
+              # Rollback from a ZITADEL canary is `github`.
+              signIn: github
               providers:
                 github:
                   production:
                     clientId: ${AUTH_GITHUB_CLIENT_ID}
                     clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
+                # Portal UI sign-in through ZITADEL (mctl-gitops#1500 phase
+                # 3.4). Client `portal` in zitadel-iac (portal.tf); its
+                # credentials come from the backstage-oidc-zitadel Secret.
+                # prompt: auto, because the oidc authenticator defaults to
+                # prompt=none, which fails for anyone without a live ZITADEL
+                # session instead of showing the login.
+                oidc:
+                  production:
+                    metadataUrl: https://auth.mctl.ai/.well-known/openid-configuration
+                    clientId: ${AUTH_OIDC_CLIENT_ID}
+                    clientSecret: ${AUTH_OIDC_CLIENT_SECRET}
+                    prompt: auto
             integrations:
               github:
                 - host: github.com
