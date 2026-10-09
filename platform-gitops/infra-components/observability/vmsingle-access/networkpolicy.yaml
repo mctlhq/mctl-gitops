@@ -1,0 +1,65 @@
+# VMSingle holds every namespace's metrics and has no authentication, so
+# without this policy any pod in the cluster, a tenant's included, can query
+# it directly and bypass the per-tenant filter in vmauth grafana-tenants
+# (infra-components/observability/grafana-tenants). It admits, on 8428 only,
+# the in-cluster clients found by inventory (2026-10-04: pod specs, ConfigMaps,
+# Secret values, app repos at their deployed tags, and VMSingle's own
+# per-path request counters):
+#   - vmagent: remote write (/api/v1/write) and the self-scrape of /metrics;
+#   - vmalert: rule queries (-datasource.url), state restore
+#     (-remoteRead.url) and recording-rule results (-remoteWrite.url);
+#   - Grafana: the sidecar-provisioned VictoriaMetrics datasource
+#     (admins' Main Org only);
+#   - vmauth grafana-tenants: tenant reads, filtered per tenant;
+#   - mctl-api: OpenClaw sizing queries (VICTORIA_METRICS_URL, code default).
+# Everything else is denied. Not affected: the vmbackup sidecar, which talks
+# to 127.0.0.1 inside the pod; kubelet probes; `kubectl port-forward`, which
+# enters the pod's network namespace through the kubelet.
+#
+# A new client needs an entry here, or its queries are refused (connection
+# refused under k3s kube-router). A freshly started client pod can also be
+# refused for its first few seconds, until kube-router adds its IP to the
+# allow set; vmagent and vmalert retry, and the other readers are interactive.
+#
+# Rollback: delete this file. VMSingle is then reachable from every pod again,
+# which reopens the tenant bypass, so do not roll back while any tenant has
+# Grafana access.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vmsingle-ingress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vmsingle
+      app.kubernetes.io/instance: monitoring-victoria-metrics-k8s-stack
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vmagent
+              app.kubernetes.io/instance: monitoring-victoria-metrics-k8s-stack
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vmalert
+              app.kubernetes.io/instance: monitoring-victoria-metrics-k8s-stack
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+              app.kubernetes.io/instance: monitoring
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vmauth
+              app.kubernetes.io/instance: grafana-tenants
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-api
+      ports:
+        - protocol: TCP
+          port: 8428

@@ -877,6 +877,12 @@ spec:
       targetRevision: main
       path: platform-gitops/infra-components/observability/grafana-tenants
 
+    # VMSingle's NetworkPolicy: only the inventoried clients reach it, so a
+    # tenant cannot query it around vmauth (#1601).
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/vmsingle-access
+
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/observability/vm-rules
