@@ -17,7 +17,7 @@ GitOps repository. ArgoCD source of truth for the entire mctl platform.
 - `platform-gitops/bootstrap/` — App-of-Apps bootstrap (ArgoCD entry point)
 - `platform-gitops/services/` — per-tenant service values: `admins/`, `labs/`, `ovk/`
 - `platform-gitops/argo-workflows/cluster-templates/` — ClusterWorkflowTemplates and CronWorkflows
-- `platform-gitops/helm-charts/` — internal charts: `base-service`, `tenant`, `openclaw-skills`
+- `platform-gitops/helm-charts/` — internal charts: `base-service`, `tenant`
 - `platform-gitops/backstage/templates/` — Backstage scaffolder templates
 - `infrastructure/k3s-preview/` — Terraform: preprod cluster on Hetzner (kube-hetzner module)
 - `cli/mctl/` — Go CLI tool

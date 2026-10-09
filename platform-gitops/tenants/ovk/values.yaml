@@ -13,13 +13,13 @@ tenant:
       role: owner
     - userId: mashkovd
       role: owner
-  # ovk already owns ghcr-credentials via services/ovk/openclaw/values.yaml
-  # extraExternalSecrets. A second Owner ExternalSecret here would fight it
-  # for ownership of the same Secret — the exact collision that held the
-  # admins-openclaw Application Degraded for 684 reconciliations over 7 days
-  # (see services/admins/openclaw/values.yaml's extraExternalSecrets comment).
+  # The tenant chart owns ghcr-credentials here again: services/ovk/openclaw
+  # used to own it via extraExternalSecrets and was removed with openclaw.
+  # Its Application's cascade deletes that ExternalSecret and its Secret; this
+  # one then (re)creates the Secret. Running pods are unaffected (pull secrets
+  # are read at image pull time only).
   ghcrCredentials:
-    enabled: false
+    enabled: true
   quotas:
     # Bumped 2026-08-15: kube-state-metrics "namespace quota is going to be
     # full" fired (incident 8c23258d) — used was 490m/500m (98%). openclaw's
