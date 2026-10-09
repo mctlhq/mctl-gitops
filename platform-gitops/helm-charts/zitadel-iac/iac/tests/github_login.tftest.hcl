@@ -147,13 +147,13 @@ run "action_is_in_every_organization_and_trigger" {
     ])
     error_message = "Each organization's userinfo trigger must run both argocdGroups and the GitHub login action."
   }
-  # By default the portal's client and no other (portal.tf).
+  # By default the portal's two clients and no other (portal.tf).
   assert {
     condition = alltrue([
       for org in ["MCTL", "erpact", "other"] :
-      strcontains(zitadel_action.github_login[org].script, "var clients = [\"${nonsensitive(zitadel_application_oidc.portal_oidc_provider.client_id)}\"];")
+      strcontains(zitadel_action.github_login[org].script, "var clients = [\"${nonsensitive(zitadel_application_oidc.portal_oidc_provider.client_id)}\",\"${nonsensitive(zitadel_application_oidc.portal_ui.client_id)}\"];")
     ])
-    error_message = "With no extra client IDs the action must allow the portal's OIDC provider client only, in every organization."
+    error_message = "With no extra client IDs the action must allow the portal's two clients only (OIDC provider and UI), in every organization."
   }
   # Only the users whose login this root manages, per organization.
   assert {
@@ -178,9 +178,13 @@ run "client_allowlist_is_rendered_into_the_action" {
     target = zitadel_application_oidc.portal_oidc_provider
     values = { client_id = "portal-client-id" }
   }
+  override_resource {
+    target = zitadel_application_oidc.portal_ui
+    values = { client_id = "portal-ui-client-id" }
+  }
   assert {
-    condition     = strcontains(zitadel_action.github_login["MCTL"].script, "var clients = [\"111111111111111111\",\"222222222222222222\",\"portal-client-id\"];")
-    error_message = "The action must allow exactly the listed client IDs and the portal's."
+    condition     = strcontains(zitadel_action.github_login["MCTL"].script, "var clients = [\"111111111111111111\",\"222222222222222222\",\"portal-client-id\",\"portal-ui-client-id\"];")
+    error_message = "The action must allow exactly the listed client IDs and the portal's two."
   }
   # A client id reaches the script in clear: a sensitive script would be
   # hidden in the Job's plan, and with it every change to the action.
