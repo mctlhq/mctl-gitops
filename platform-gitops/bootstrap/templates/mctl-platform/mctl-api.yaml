@@ -46,7 +46,17 @@ spec:
             DEX_ISSUER_URL: https://ops.mctl.ai/api/dex
             DEX_CLIENT_ID: mctl-api
             SELF_URL: https://api.mctl.ai
-            VAULT_ADDR: https://secrets.mctl.ai
+            # In-cluster, not https://secrets.mctl.ai. On 2026-10-09 the pod's
+            # /readyz Vault check timed out through the public, Cloudflare-
+            # fronted hostname for five hours while Vault itself answered the
+            # same URL from outside; readiness took the whole API down with
+            # it. Every other in-cluster consumer (ESO, Argo Workflows,
+            # vault-backup) already talks to the service directly. The
+            # listener is plain HTTP (vault.yaml, tls_disable = 1); the
+            # mctl-api namespace is allowed by the vault namespace's
+            # allow-vault-ingress policy. vault-active routes to the leader,
+            # so reads skip the standby-forwarding hop.
+            VAULT_ADDR: http://vault-active.vault.svc.cluster.local:8200
             # Kubernetes auth (mirrors the Backstage migration, gitops#699):
             # the mctl-api ServiceAccount authenticates with its own
             # projected token via the `mctl-api` Vault role. Confirmed live
