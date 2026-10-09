@@ -1,4 +1,5 @@
-# Exemption names a profile that does not exist.
+# Listed in uncalledProfiles and valid on its own; the exemption list also
+# names a profile that does not exist, which must be the only error.
 apiVersion: agents.mctl.ai/v1alpha2
 kind: ExecutionProfile
 metadata:

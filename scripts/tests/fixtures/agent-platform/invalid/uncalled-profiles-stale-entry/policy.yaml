@@ -129,6 +129,9 @@ spec:
     # mctl-agents#596/#598: inert proof-run agent for the governed authoring
     # path. Its manifest names mctl-agents-run only because the contract
     # needs an existing template.
+    # `example` exists and is a valid uncalled profile, so the stale entry
+    # below is the only error this fixture can produce.
+    - example
     - no-such-profile
 
   # Mutation scopes an ExecutionProfile.spec.permissions.mutationScopes
