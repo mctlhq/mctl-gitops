@@ -28,7 +28,7 @@ A gateway-mode OpenTelemetry Collector runs in `monitoring`
 (`platform-gitops/bootstrap/templates/observability/otel-collector.yaml`),
 accepts OTLP on `otel-collector.monitoring.svc.cluster.local:4317/4318`,
 enriches spans with `mctl.team` / `mctl.component` / `k8s.*` /
-`deployment.environment`, redacts credential-shaped and prompt-shaped
+`deployment.environment.name`, redacts credential-shaped and prompt-shaped
 attributes, and exports to exactly one sink today: the `debug` exporter,
 whose stdout lands in Loki via promtail.
 `platform-gitops/bootstrap/values.yaml` holds `otelCollector.backendEndpoint:

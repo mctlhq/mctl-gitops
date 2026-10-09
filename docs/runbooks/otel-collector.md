@@ -67,7 +67,7 @@ It also attaches `k8s.namespace.name`, `k8s.pod.name`, `k8s.node.name` and
 namespaces, replicasets — no secrets, no write verbs).
 
 `k8s.cluster.name` (`otelCollector.clusterName`, currently `mctl-preprod`) and
-`deployment.environment` (`otelCollector.environment`, currently `preprod`) in
+`deployment.environment.name` (`otelCollector.environment`, currently `preprod`) in
 `platform-gitops/bootstrap/values.yaml` are added with **`action: insert`, not
 `upsert`** — if a producer already set either attribute, the producer's value
 survives. Do not change this to `upsert`; it would silently overwrite
@@ -256,7 +256,7 @@ kubectl get clusterrole otel-collector -o yaml
 #   {namespace="monitoring"} | filtered to the otel-collector pod
 # and check k8s.namespace.name / k8s.pod.name / k8s.deployment.name /
 # k8s.node.name / mctl.team / mctl.component / k8s.cluster.name /
-# deployment.environment are present, and that authorization/cookie/token/
+# deployment.environment.name are present, and that authorization/cookie/token/
 # etc. attributes are absent or masked.
 ```
 
