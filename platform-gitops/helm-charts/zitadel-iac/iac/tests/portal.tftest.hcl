@@ -1,8 +1,9 @@
-# The portal's ZITADEL project, its OIDC provider's upstream client and the
-# Secret that carries the client's credentials (portal.tf), run in CI
+# The portal's ZITADEL project, its two clients (the OIDC provider's
+# upstream and the UI sign-in) and the Secret that carries their credentials
+# (portal.tf), run in CI
 # (`tofu test`) against mocked providers. Plans are targeted, as in
 # admins.tftest.hcl: the root's import blocks crash the mock providers.
-# That the client receives the mctl:github_login claim is asserted in
+# That the clients receive the mctl:github_login claim is asserted in
 # github_login.tftest.hcl.
 
 mock_provider "zitadel" {
@@ -143,6 +144,54 @@ run "oidc_provider_client_is_a_confidential_pkce_web_client" {
   }
 }
 
+# The UI sign-in client: the same closed shape as the provider's client,
+# plus the refresh-token grant the Backstage session refresh needs.
+run "ui_client_is_a_confidential_web_client_with_refresh" {
+  command = plan
+  plan_options {
+    target = [zitadel_application_oidc.portal_ui]
+  }
+
+  override_resource {
+    target = zitadel_project.portal
+    values = { id = "portal-project" }
+  }
+
+  assert {
+    condition     = zitadel_application_oidc.portal_ui.name == "portal"
+    error_message = "The client is named portal."
+  }
+  assert {
+    condition     = zitadel_application_oidc.portal_ui.project_id == "portal-project" && zitadel_application_oidc.portal_ui.org_id == "100000000000000001"
+    error_message = "The client must be in the MCTL Portal project of MCTL: has_project_check there is what limits who can sign in."
+  }
+  # Exactly the Backstage handler of auth provider `oidc`.
+  assert {
+    condition     = zitadel_application_oidc.portal_ui.redirect_uris == tolist(["https://app.mctl.ai/api/auth/oidc/handler/frame"])
+    error_message = "The only redirect URI must be https://app.mctl.ai/api/auth/oidc/handler/frame."
+  }
+  assert {
+    condition     = zitadel_application_oidc.portal_ui.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.portal_ui.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"
+    error_message = "The client must be a confidential web client authenticating with client_secret_basic."
+  }
+  assert {
+    condition     = zitadel_application_oidc.portal_ui.grant_types == tolist(["OIDC_GRANT_TYPE_AUTHORIZATION_CODE", "OIDC_GRANT_TYPE_REFRESH_TOKEN"]) && zitadel_application_oidc.portal_ui.response_types == tolist(["OIDC_RESPONSE_TYPE_CODE"])
+    error_message = "Authorization code plus refresh token only: Backstage refreshes its session, and nothing needs implicit or device grants."
+  }
+  assert {
+    condition     = zitadel_application_oidc.portal_ui.access_token_type == "OIDC_TOKEN_TYPE_BEARER"
+    error_message = "The access token must stay opaque (BEARER)."
+  }
+  assert {
+    condition     = zitadel_application_oidc.portal_ui.id_token_userinfo_assertion == true
+    error_message = "id_token_userinfo_assertion must be on: the portal reads mctl:github_login from the ID token."
+  }
+  assert {
+    condition     = zitadel_application_oidc.portal_ui.dev_mode == false
+    error_message = "dev_mode must stay off: on, ZITADEL accepts http redirects."
+  }
+}
+
 run "oidc_provider_client_reaches_the_portal_secret" {
   command = plan
   plan_options {
@@ -153,14 +202,18 @@ run "oidc_provider_client_reaches_the_portal_secret" {
     target = zitadel_application_oidc.portal_oidc_provider
     values = { client_id = "portal-client-id", client_secret = "portal-client-secret" }
   }
+  override_resource {
+    target = zitadel_application_oidc.portal_ui
+    values = { client_id = "portal-ui-client-id", client_secret = "portal-ui-client-secret" }
+  }
 
   assert {
     condition     = kubernetes_secret_v1_data.portal_oidc.metadata[0].name == "backstage-oidc-zitadel" && kubernetes_secret_v1_data.portal_oidc.metadata[0].namespace == "backstage"
     error_message = "The keys go into backstage/backstage-oidc-zitadel, the Secret the mctl-portal-oidc-zitadel Application pre-creates."
   }
   assert {
-    condition     = toset(keys(kubernetes_secret_v1_data.portal_oidc.data)) == toset(["OIDC_ZITADEL_CLIENT_ID", "OIDC_ZITADEL_CLIENT_SECRET"])
-    error_message = "backstage/backstage-oidc-zitadel must carry exactly the two keys the portal reads."
+    condition     = toset(keys(kubernetes_secret_v1_data.portal_oidc.data)) == toset(["OIDC_ZITADEL_CLIENT_ID", "OIDC_ZITADEL_CLIENT_SECRET", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_CLIENT_SECRET"])
+    error_message = "backstage/backstage-oidc-zitadel must carry exactly the four keys the portal reads."
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["OIDC_ZITADEL_CLIENT_ID"]) == "portal-client-id"
@@ -169,6 +222,14 @@ run "oidc_provider_client_reaches_the_portal_secret" {
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["OIDC_ZITADEL_CLIENT_SECRET"]) == "portal-client-secret"
     error_message = "OIDC_ZITADEL_CLIENT_SECRET must be the portal-oidc-provider client secret."
+  }
+  assert {
+    condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["AUTH_OIDC_CLIENT_ID"]) == "portal-ui-client-id"
+    error_message = "AUTH_OIDC_CLIENT_ID must be the portal (UI) client id."
+  }
+  assert {
+    condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["AUTH_OIDC_CLIENT_SECRET"]) == "portal-ui-client-secret"
+    error_message = "AUTH_OIDC_CLIENT_SECRET must be the portal (UI) client secret."
   }
   assert {
     condition     = kubernetes_secret_v1_data.portal_oidc.field_manager == "zitadel-iac" && kubernetes_secret_v1_data.portal_oidc.force == true

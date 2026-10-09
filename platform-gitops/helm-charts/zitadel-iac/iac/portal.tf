@@ -74,14 +74,42 @@ resource "zitadel_application_oidc" "portal_oidc_provider" {
   id_token_userinfo_assertion = true
 }
 
+# The portal UI's own sign-in (auth provider `oidc`, mctlhq/mctl-portal#150
+# step 2, `auth.signIn` = zitadel or both): Backstage signs a person in here
+# and resolves them to the catalog User of their mctl:github_login.
+#
+# A confidential web client like portal_oidc_provider, redirecting only to
+# the Backstage auth handler. Unlike the provider's client it also has the
+# refresh-token grant: Backstage refreshes its session with the refresh token
+# ZITADEL returns for `offline_access`, and without the grant every session
+# would end when the first access token expires. The userinfo assertion puts
+# mctl:github_login into the ID token, which is where the portal reads it.
+resource "zitadel_application_oidc" "portal_ui" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.portal.id
+  name       = "portal"
+
+  app_type                    = "OIDC_APP_TYPE_WEB"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE", "OIDC_GRANT_TYPE_REFRESH_TOKEN"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["https://app.mctl.ai/api/auth/oidc/handler/frame"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = false
+  id_token_userinfo_assertion = true
+}
+
 locals {
-  # The clients that receive mctl:github_login: the portal's, whose ids
+  # The clients that receive mctl:github_login: the portal's two, whose ids
   # ZITADEL generates, and any listed in github_login_client_ids. A client id
   # is public (it is in every authorization URL); the provider marks it
   # sensitive, which would hide the whole action script in the plan.
   github_login_clients = concat(
     var.github_login_client_ids,
-    [nonsensitive(zitadel_application_oidc.portal_oidc_provider.client_id)],
+    [
+      nonsensitive(zitadel_application_oidc.portal_oidc_provider.client_id),
+      nonsensitive(zitadel_application_oidc.portal_ui.client_id),
+    ],
   )
 }
 
@@ -95,13 +123,15 @@ resource "kubernetes_secret_v1_data" "portal_oidc" {
     namespace = "backstage"
   }
 
-  # The keys are the env vars the portal's app-config substitutes into
-  # oidcProvider.zitadel. Nothing reads them until the portal's Deployment
-  # references this Secret, in a separate change, and nothing uses them
-  # while oidcProvider.upstream is github, the default.
+  # The keys are the env vars the portal's app-config substitutes:
+  # OIDC_ZITADEL_* into oidcProvider.zitadel, AUTH_OIDC_* into
+  # auth.providers.oidc. Neither is used while its switch
+  # (oidcProvider.upstream, auth.signIn) is github, the default.
   data = {
     OIDC_ZITADEL_CLIENT_ID     = zitadel_application_oidc.portal_oidc_provider.client_id
     OIDC_ZITADEL_CLIENT_SECRET = zitadel_application_oidc.portal_oidc_provider.client_secret
+    AUTH_OIDC_CLIENT_ID        = zitadel_application_oidc.portal_ui.client_id
+    AUTH_OIDC_CLIENT_SECRET    = zitadel_application_oidc.portal_ui.client_secret
   }
 
   field_manager = "zitadel-iac"
