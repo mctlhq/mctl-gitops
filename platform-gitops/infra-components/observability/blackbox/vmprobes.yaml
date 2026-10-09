@@ -165,3 +165,28 @@ spec:
         - https://erpact-bar2.mctl.ai/api/method/ping
         - https://erpact-01102026.mctl.ai/api/method/ping
         - https://erpact-control.mctl.ai/api/method/ping
+---
+# mctl-api through the edge. On 2026-10-09 the single mctl-api pod lost
+# readiness at 07:23Z (its /readyz Vault check timed out from inside the pod
+# while Vault itself answered the platform-public probe the whole time) and
+# Traefik returned "no available server" for about five hours. Nothing fired:
+# api.mctl.ai was not probed, and the kube-state rules sat behind `for`
+# windows that the pod's brief returns to Ready kept resetting. This probe
+# supplies MctlApiDown (vm-rules/mctl-api-alerts.yaml). /healthz is the
+# liveness path, which is fine here: Traefik only routes to Ready endpoints,
+# so an unready pod fails this probe just as it failed users.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: mctl-api-healthz
+  namespace: monitoring
+spec:
+  jobName: mctl-api-healthz
+  interval: 60s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://api.mctl.ai/healthz

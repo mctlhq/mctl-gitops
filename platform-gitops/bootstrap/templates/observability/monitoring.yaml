@@ -780,6 +780,20 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
+                  # mctl-api availability (vm-rules/mctl-api-alerts.yaml): the
+                  # same circularity as the three above, one layer down.
+                  # mctl-agent files its incidents through mctl-api, so an
+                  # agent-only route for "mctl-api is down" is a ticket raised
+                  # with the component that is down. On 2026-10-09 the one pod
+                  # sat Running-but-unready for five hours and nobody heard:
+                  # api.mctl.ai was not probed and nothing routed here. Same
+                  # two-part shape: continue: true here, AND MctlApi.* in the
+                  # mctl-agent catch-all below. Prefix match so the next alert
+                  # added to the VMRule cannot fall back to agent-only silently.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlApi.*"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
@@ -791,7 +805,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
+                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*"
               receivers:
                 - name: "null"
                 - name: mctl-agent
