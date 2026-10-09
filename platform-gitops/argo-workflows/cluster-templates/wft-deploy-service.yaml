@@ -128,11 +128,24 @@ spec:
                   value: "{{workflow.parameters.image_tag}}"
                 - name: service_template
                   value: "{{workflow.parameters.service_template}}"
+                - name: container_registry
+                  value: "{{workflow.parameters.container_registry}}"
 
-          # Step 1b: build Docker image via GitHub Actions (skip for update-config)
+          # Step 1b: build Docker image via GitHub Actions, when validate
+          # decided this run builds (not for update-config, not without a
+          # dockerfile_repo, and not for a service that runs another image,
+          # such as the openclaw template's mctl-openclaw). validate checked
+          # the image name with --build on exactly this decision.
+          #
+          # This `when` reads tpl-validate-tenant's `builds` output, so the
+          # two ClusterWorkflowTemplates must be on the cluster together: a
+          # run submitted against an older tpl-validate-tenant has no such
+          # output and errors at parameter resolution (nothing is built or
+          # committed). Both sync in the same Argo CD Application; wait for
+          # it before submitting, as for any template change.
           - name: build-image
             dependencies: [validate]
-            when: "\"{{workflow.parameters.action}}\" != \"update-config\" && \"{{workflow.parameters.dockerfile_repo}}\" != \"\""
+            when: "\"{{tasks.validate.outputs.parameters.builds}}\" == \"true\""
             template: trigger-github-build
             arguments:
               parameters:

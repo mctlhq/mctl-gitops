@@ -424,6 +424,17 @@ jobs:
         # nobody watches, so it is tested here instead.
         run: python3 tests/test_rotate_github_token_scope.py
 
+      - name: Unit-test the image-name ownership check
+        # Tenant builds push, and tenant services run, ghcr.io/mctlhq/<component
+        # name>. check-image-name.sh decides which team may use a name; this
+        # runs it against fixtures and this tree, keeps image-names.txt
+        # complete (every platform image reserved, every existing service
+        # passing), and checks that validate, preview-deploy and build-image
+        # call it before anything is built or pushed.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_check_image_name.py
+
       - name: Unit-test tpl-git-commit's yq handling
         # The static check above proves no yq expression interpolates a shell
         # variable. This proves the shape that replaced it actually resists

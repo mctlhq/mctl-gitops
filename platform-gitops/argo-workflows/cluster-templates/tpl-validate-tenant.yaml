@@ -6,6 +6,9 @@ metadata:
     workflows.argoproj.io/description: |
       Reusable template: validates tenant and service naming conventions,
       checks team exists in Git tenants/ directory.
+      `image-name` checks only that a team may use a component name as its
+      image name (config/image-names.txt), for workflows that build without
+      running `validate`.
 spec:
   templates:
     - name: validate
@@ -31,6 +34,10 @@ spec:
           - name: service_template
             default: "default"
             # when not "default", dockerfile_repo is not required
+          - name: container_registry
+            default: "ghcr.io/mctlhq"
+            # where deploy-service pushes and services pull; must be the
+            # registry config/image-names.txt governs
       outputs:
         parameters:
           - name: service_dir
@@ -42,12 +49,21 @@ spec:
           - name: image_tag
             valueFrom:
               path: /tmp/image_tag
+          - name: builds
+            valueFrom:
+              path: /tmp/builds
+            # "true" when deploy-service will build and push
+            # <registry>/<component_name>; its build-image step runs on this
+            # alone, so the check below and the build cannot disagree.
       script:
         image: alpine/git:2.43.0
         command: [sh]
         envFrom:
           - configMapRef:
               name: mctl-platform-config
+        env:
+          - name: PARAM_CONTAINER_REGISTRY
+            value: "{{inputs.parameters.container_registry}}"
         source: |
           set -e
 
@@ -111,6 +127,77 @@ spec:
           git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
+          # ── 3b. Image name: the component name is the image name ───────────
+          # Services run, and builds push, <registry>/<component_name>, so a
+          # team may only use a name it owns. Rule and reviewed grants:
+          # config/image-names.txt. --tenant: TEAM is requester-supplied here,
+          # so it must be an existing tenant (never "platform"). --build when
+          # deploy-service will build (the `builds` output, which is the only
+          # thing its build-image step runs on). Any non-zero exit (refused,
+          # or could not decide) stops here, for every action.
+          #
+          # This is check-then-act: two teams onboarding the same free name
+          # at the same moment can both pass. The build-image.yaml check at
+          # the push sees the first team's services/ commit only once it has
+          # landed; closing the window fully needs the claim and the check
+          # in one commit.
+          #
+          # Whether it builds: never for update-config or without a
+          # dockerfile_repo. Otherwise the values the service runs decide:
+          # on onboard, the service template tpl-git-commit will render
+          # (selected the same way, __SERVICE_NAME__ and __TEAM_NAME__
+          # substituted, the placeholders an image name can use); on any
+          # other action, the existing values.yaml. If they name an image and
+          # none of them is <registry>/<component_name>, the service runs
+          # another image (e.g. the openclaw template's mctl-openclaw), and
+          # building this name would push one nothing runs. Values naming no
+          # image, or a deploy with no values.yaml, build as before (deploy
+          # then fails at step 6). The images are read by values-images.sh,
+          # the reader check-image-name.sh uses too; a repository line it
+          # cannot read fails here rather than guessing "no build", which
+          # would bump image.tag to a tag nothing pushed. So does an image
+          # still holding a __PLACEHOLDER__: a template using one this step
+          # does not substitute would otherwise read as "another image".
+          BUILDS=false
+          if [ "$ACTION" != "update-config" ] && [ -n "$REPO" ]; then
+            TPLS="platform-gitops/argo-workflows/service-templates"
+            if [ "$ACTION" = "onboard" ]; then
+              # tpl-git-commit.yaml's template selection, step 4.
+              if [ "$SERVICE_TEMPLATE" != "default" ] && [ -d "${TPLS}/${SERVICE_TEMPLATE}" ]; then
+                TPL="${TPLS}/${SERVICE_TEMPLATE}/values.yaml.tpl"
+              elif [ "$TYPE" = "worker-service" ]; then
+                TPL="${TPLS}/worker/values.yaml.tpl"
+              else
+                TPL="${TPLS}/default/values.yaml.tpl"
+              fi
+              VALUES=/tmp/onboard-values.yaml
+              sed -e "s|__SERVICE_NAME__|${SERVICE}|g" -e "s|__TEAM_NAME__|${TEAM}|g" "$TPL" > "$VALUES"
+            else
+              VALUES="platform-gitops/services/${TEAM}/${SERVICE}/values.yaml"
+            fi
+            if [ ! -f "$VALUES" ]; then
+              BUILDS=true
+            elif ! IMAGES=$(sh platform-gitops/argo-workflows/scripts/values-images.sh "$VALUES"); then
+              echo "❌ cannot read the images ${VALUES} runs; not deciding whether to build"
+              exit 1
+            elif printf '%s\n' "$IMAGES" | grep -q '__[A-Z][A-Z_]*__'; then
+              echo "❌ ${VALUES} names an image with an unsubstituted placeholder; not deciding whether to build"
+              exit 1
+            elif [ -z "$IMAGES" ] || printf '%s\n' "$IMAGES" | grep -qxF "${PARAM_CONTAINER_REGISTRY}/${SERVICE}"; then
+              BUILDS=true
+            else
+              echo "ℹ️ ${TEAM}/${SERVICE} runs another image; not building ${PARAM_CONTAINER_REGISTRY}/${SERVICE}"
+            fi
+          fi
+          echo "$BUILDS" > /tmp/builds
+          BUILD_FLAG=""
+          [ "$BUILDS" = true ] && BUILD_FLAG="--build"
+          if ! sh platform-gitops/argo-workflows/scripts/check-image-name.sh --tenant $BUILD_FLAG \
+              . "$PARAM_CONTAINER_REGISTRY" "$TEAM" "$SERVICE"; then
+            echo "❌ component_name '${SERVICE}' is not available to team '${TEAM}'"
+            exit 1
+          fi
+
           # ── 4. Verify service exists for deploy/update-config ────────────────
           if [ "$ACTION" = "deploy" ] || [ "$ACTION" = "update-config" ]; then
             if [ ! -d "platform-gitops/services/${TEAM}/${SERVICE}" ]; then
@@ -156,6 +243,13 @@ spec:
             echo "latest" > /tmp/image_tag
           fi
           echo "🏷 Image tag: $(cat /tmp/image_tag)"
+        resources:
+          requests:
+            memory: 32Mi
+            cpu: 10m
+          limits:
+            memory: 128Mi
+            cpu: 200m
         volumeMounts:
           - name: deploy-key
             mountPath: /secrets/deploy-key
@@ -163,3 +257,48 @@ spec:
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
+
+    # Image-name check alone, for preview-deploy (which builds without
+    # running `validate`). mctl-gitops is public, so an anonymous HTTPS clone
+    # of main is enough: no deploy key in this pod. Parameters arrive as env,
+    # never interpolated into the script text.
+    - name: image-name
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+          - name: git_ref
+            default: ""
+            # non-empty: preview-deploy will build, so the check is --build
+      script:
+        image: alpine/git:2.43.0
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_GIT_REF
+            value: "{{inputs.parameters.git_ref}}"
+        source: |
+          set -e
+          git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+          BUILD_FLAG=""
+          [ -n "$PARAM_GIT_REF" ] && BUILD_FLAG="--build"
+          # preview-deploy builds ghcr.io/<org>/<component_name>.
+          if ! sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/check-image-name.sh --tenant $BUILD_FLAG \
+              /tmp/mctl-gitops "ghcr.io/${GITOPS_ORG}" "$PARAM_TEAM_NAME" "$PARAM_COMPONENT_NAME"; then
+            echo "❌ component_name '${PARAM_COMPONENT_NAME}' is not available to team '${PARAM_TEAM_NAME}'"
+            exit 1
+          fi
+          echo "✅ image name ${PARAM_COMPONENT_NAME} is available to ${PARAM_TEAM_NAME}"
+        resources:
+          requests:
+            memory: 32Mi
+            cpu: 10m
+          limits:
+            memory: 128Mi
+            cpu: 200m

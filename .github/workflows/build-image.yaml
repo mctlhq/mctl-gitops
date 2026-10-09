@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       image_name:
-        description: "Full image name (e.g. ghcr.io/mctlhq/openclaw)"
+        description: "Full image name; for a direct dispatch it must be ghcr.io/mctlhq/<component_name>"
         required: true
         type: string
       image_tag:
@@ -100,6 +100,79 @@ jobs:
       # OIDC JWT for Vault JWT auth (ROADMAP 3.3). No long-lived VAULT_TOKEN.
       id-token: write
     steps:
+      # --- Image name: build only names owned by the requesting team ---
+      # A direct dispatch is how tenant builds arrive (Argo's deploy-service
+      # and preview-deploy) and how platform images under
+      # platform-gitops/images/ are built by hand (team platform). Every
+      # other dispatcher in the organisation calls release-deploy.yaml. For a
+      # direct dispatch the pushed name must be exactly
+      # <registry>/<component_name>, and that name must be one the team may
+      # build (platform-gitops/argo-workflows/config/image-names.txt, read
+      # from main, not from anything the caller chose).
+      #
+      # Argo's validation (tpl-validate-tenant) is the boundary for tenants:
+      # it also binds team_name to an existing tenant, which this workflow
+      # cannot, because it never sees who asked. This step is a backstop at
+      # the push, for whoever holds actions:write on this repository, and it
+      # has two known gaps that only such a holder can use:
+      #   * release-deploy.yaml takes a free-text image_name and calls this
+      #     workflow (workflow_call), which is not checked here: release
+      #     images are named by their release and may differ from the
+      #     component name (mctl-telegram-preview pushes mctl-telegram).
+      #   * a dispatch at a ref other than main runs that ref's copy of this
+      #     file. The policy data is read from main either way.
+      # github.workflow_ref names the top-level (caller's) workflow in a
+      # called run, so it tells a direct dispatch from a workflow_call. It is
+      # bound explicitly rather than read from the implicit
+      # GITHUB_WORKFLOW_REF. github.event_name cannot make this distinction:
+      # in a called run it is the caller's event, so a dispatched
+      # release-deploy.yaml would also read workflow_dispatch.
+      - name: Classify caller
+        id: caller
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          case "$CALLER_WORKFLOW_REF" in
+            "${GITHUB_REPOSITORY}/.github/workflows/build-image.yaml@"*) direct=true ;;
+            *) direct=false ;;
+          esac
+          echo "direct=${direct}" >> "$GITHUB_OUTPUT"
+          echo "direct dispatch: ${direct} (${CALLER_WORKFLOW_REF})"
+
+      - name: Check out image-name policy
+        if: steps.caller.outputs.direct == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.repository }}
+          ref: main
+          path: .image-name-policy
+          persist-credentials: false
+          sparse-checkout: |
+            platform-gitops/services
+            platform-gitops/argo-workflows/config
+            platform-gitops/argo-workflows/scripts
+
+      - name: Check image name
+        if: steps.caller.outputs.direct == 'true'
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_TEAM_NAME: ${{ inputs.team_name }}
+          INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
+        run: |
+          set -euo pipefail
+          expected="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${INPUT_COMPONENT_NAME}"
+          if [ "$INPUT_IMAGE_NAME" != "$expected" ]; then
+            echo "::error::image_name must be ${expected} for a direct dispatch, got: ${INPUT_IMAGE_NAME}"
+            exit 1
+          fi
+          if ! sh .image-name-policy/platform-gitops/argo-workflows/scripts/check-image-name.sh --build \
+              .image-name-policy "${REGISTRY}/${GITHUB_REPOSITORY_OWNER}" \
+              "$INPUT_TEAM_NAME" "$INPUT_COMPONENT_NAME"; then
+            echo "::error::component_name ${INPUT_COMPONENT_NAME} is not available to team ${INPUT_TEAM_NAME}"
+            exit 1
+          fi
+          rm -rf .image-name-policy
+
       # --- Tier 1: Vault PAT via GitHub OIDC -> Vault JWT ---
       - name: Fetch Vault PAT
         id: vault_pat
@@ -318,9 +391,12 @@ jobs:
           # the PAT.
           secrets: |
             github_token=${{ contains(fromJSON('["mctlhq/mctl-web","mctlhq/mctl-docs","mctlhq/mctl-academy"]'), inputs.repo) && secrets.GH_PACKAGES_TOKEN || '' }}
+          # :latest only for release builds. Nothing in this repository or the
+          # cluster pulls ghcr.io/mctlhq/*:latest, and a direct dispatch moving
+          # it would repoint the tag at whatever was built last.
           tags: |
             ${{ inputs.image_name }}:${{ inputs.image_tag }}
-            ${{ inputs.image_name }}:latest
+            ${{ steps.caller.outputs.direct != 'true' && format('{0}:latest', inputs.image_name) || '' }}
 
       - name: Summary
         # Same reason as the Vault step: these land in a shell command, so
