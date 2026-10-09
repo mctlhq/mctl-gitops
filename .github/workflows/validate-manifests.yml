@@ -633,6 +633,12 @@ jobs:
         with:
           version: "v3.16.4"
 
+      # The k3s image is pulled with retries (scripts/lib/docker-pull-retry.sh);
+      # this proves the retry helper itself, with a stubbed docker, before the
+      # k3s scripts rely on it.
+      - name: Prove the Docker pull retry helper
+        run: scripts/test-docker-pull-retry.sh
+
       - name: Prove the reserved-host admission policies
         run: |
           set -euo pipefail
