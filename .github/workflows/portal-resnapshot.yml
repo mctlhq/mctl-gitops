@@ -1,0 +1,364 @@
+name: Portal re-snapshot
+
+# Refresh a manual-OAuth portal server's tool catalogue (mctlhq/.github#64,
+# mctlhq/mctl-gitops#1258). The procedure this automates is
+# infrastructure/cloudflare/portal/README.md, which stays the documentation —
+# this file is the thing that runs, and the README's "Recipe" section is where
+# the reasoning for each step lives.
+#
+# WHY IT EXISTS. The portal stores a snapshot of each upstream's tools and
+# serves clients from it. For a server in manual OAuth mode — all three of ours
+# — that snapshot is taken ONCE, at the first user authorization, and is never
+# refreshed. Cloudflare documents this: "Manual OAuth capabilities are captured
+# during the first user authorization ... Background and manual capability
+# synchronization do not refresh them." So `POST servers/{id}/sync` answering
+# `success` is correct behaviour, not a bug, and a released tool never reaches
+# clients until the snapshot is retaken.
+#
+# WHY IT IS NOT ONE UNATTENDED JOB, which is the whole shape of this file. The
+# same docs say a manual-OAuth server "remain[s] in Waiting status until a user
+# completes upstream OAuth", and there is no API that completes it. So the
+# middle of the procedure is a person in a browser, and between the flip and
+# that sign-in the server is DOWN for every portal user.
+#
+# That is why the obvious design — one job, one approval at the top — is worse
+# than the runbook it would replace. The runbook has an operator sitting at a
+# terminal with the restoration body already built, so the window is minutes; a
+# CI job that flips and then ends leaves the server in Waiting until somebody
+# notices, and nothing bounds it. Automating the destructive half while the
+# closing half stays human LENGTHENS the unsupervised outage.
+#
+# So: approval before the destructive half, and then a bounded MEASUREMENT
+# rather than a second approval. #1258 proposed a second approval gate meaning
+# "I have signed in"; the server reaching `ready` with a moved `last_synced` is
+# the same claim, measured instead of asserted, and it fails loudly on a
+# timeout — which an approval that nobody clicks does not.
+
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: 'Portal server to re-snapshot'
+        required: true
+        type: choice
+        options: [api, tg, seerrsense]
+      reason:
+        description: 'Why (e.g. "mctl-api 4.47.0 adds mctl_get_lifecycle_ownership")'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per server, and never cancelled. A run cancelled between the flip and the
+  # restore leaves the server with no registration at all — the one state this
+  # procedure has no automatic way out of.
+  group: portal-resnapshot-${{ inputs.server }}
+  cancel-in-progress: false
+
+env:
+  CLOUDFLARE_ACCOUNT_ID: 6a09f637d20e1f66a8e9d45ebe778058
+
+jobs:
+  preflight:
+    name: preflight ${{ inputs.server }}
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    env:
+      # READ credential. This job exists to be looked at before anyone approves
+      # anything, the same split cloudflare-apply.yml makes between plan and
+      # apply: an approval given before the current state is known approves an
+      # intention rather than a change.
+      CF_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Read the server as it stands
+        id: state
+        env:
+          SERVER: ${{ inputs.server }}
+        run: .github/scripts/portal-resnapshot-preflight.sh
+
+  flip:
+    name: flip ${{ inputs.server }}
+    needs: preflight
+    runs-on: ubuntu-latest
+    outputs:
+      # The baseline `verify` waits to move. Taken AFTER the restore, not from
+      # preflight: the bearer flip moves `last_synced` itself, so a pre-flip
+      # value is already stale and verify would read it as "moved" the instant
+      # it starts — a check that passes without a sign-in having happened.
+      last_synced: ${{ steps.flip.outputs.last_synced_after_restore }}
+      # WHETHER THE SERVER WAS TOUCHED, published so the job graph can branch
+      # on it. The markers say what was written; only the graph decides whether
+      # the bound runs, and those two had drifted apart.
+      flipped: ${{ steps.marks.outputs.flipped }}
+      # AND `restored`. `flipped` answers "did the outage start"; it does not
+      # answer "is there a sign-in to wait for". Four points in flip.sh sit
+      # between the bearer PUT and the restore read-back, and on all of them
+      # the registration is CLEARED -- a server nobody can sign into. Waiting
+      # on it burns the full deadline and then fires "may still be in Waiting,
+      # i.e. unusable", which contradicts the announce's correct "the
+      # registration is cleared, restore it by hand" and arrives thirty minutes
+      # later, putting the wrong message at the bottom of the channel.
+      restored: ${{ steps.marks.outputs.restored }}
+    # THE approval, and it is before anything is written. `cloudflare-apply` is
+    # where CF_APPLY_TOKEN_PORTAL lives (Account -> MCP Portals -> Edit), so the
+    # environment issues the credential and takes the approval in one.
+    #
+    # Approving this is approving an OUTAGE: the server is unusable from the
+    # moment the next job's first PUT lands until a person signs it back in.
+    # Whoever approves should be the person who will do that sign-in, now.
+    environment: cloudflare-apply
+    env:
+      # NOT the write token here. Job-level `env:` is handed to EVERY step,
+      # including the third-party Telegram container action below, so CF_TOKEN
+      # is scoped to the two steps that need it.
+      #
+      # `VAULT_TOKEN` is NOT scoped and cannot be: the canary exports it
+      # through `$GITHUB_ENV`, which by design reaches every later step in the
+      # job. It is a short-lived JWT-login token for one Vault path, and the
+      # honest note is that it remains in scope for the announce step rather
+      # than a claim that both were moved.
+      #
+      # secrets.mctl.ai, NOT vault.mctl.ai. The latter does not exist: the
+      # platform's Vault is what `build-image.yaml` logs into, what
+      # `infrastructure/cloudflare/zones/mctl-ai/firewall.tf` allowlists, and
+      # what the k3s bootstrap README names. A wrong address fails closed here
+      # — the canary runs before anything destructive — but it would have made
+      # the workflow unrunnable rather than merely wrong.
+      VAULT_ADDR: https://secrets.mctl.ai
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      # BEFORE the flip, and the run dies here if it cannot. From step 1 on,
+      # the live server no longer holds the registration, and for `api` and
+      # `seerrsense` nothing else records it — only `tg` is described in
+      # mcp-servers.tf. A runner that dies in that window would take the only
+      # copy with it.
+      #
+      # Not a workflow artifact: that publishes the registration — endpoints,
+      # client id, scope — into the repository's artifact store, where it
+      # outlives the run and is readable by everyone with repository access.
+      #
+      # The canary is a WRITE, not a policy assertion. Whether this repository's
+      # OIDC role may write this path is a fact about Vault, and a workflow that
+      # assumed it would discover it was wrong immediately after the flip — the
+      # one moment there is no way back. Measured first, fail-closed.
+      - name: Prove the backup path is writable
+        id: vault
+        env:
+          SERVER: ${{ inputs.server }}
+          CF_TOKEN: ${{ secrets.CF_APPLY_TOKEN_PORTAL }}
+        run: .github/scripts/portal-resnapshot-vault-canary.sh
+
+      - name: Back up, flip, and restore
+        id: flip
+        env:
+          SERVER: ${{ inputs.server }}
+          RUN_ID: ${{ github.run_id }}
+          CF_TOKEN: ${{ secrets.CF_APPLY_TOKEN_PORTAL }}
+        run: .github/scripts/portal-resnapshot-flip.sh
+
+      # The catalogue as it was, for `verify` to prove the snapshot moved. An
+      # artifact, unlike the registration: this is tool names, schemas and
+      # annotations, which already live in each owning repository's
+      # docs/portal-allowlist.json. The registration does not, which is why it
+      # goes to Vault instead.
+      - name: Publish the pre-flip catalogue
+        if: steps.flip.outcome == 'success'
+        # A failed upload must not fail this job. It runs AFTER the destructive
+        # flip, and failing here skips `verify` — which `needs: flip` — and
+        # `verify` is the only thing bounding how long the server stays down.
+        # Losing the byte comparison costs a red `verify` with the server
+        # restored; losing `verify` costs an unbounded outage.
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: portal-catalogue-before-${{ inputs.server }}
+          path: ${{ runner.temp }}/portal-resnapshot/before.json
+          retention-days: 7
+          if-no-files-found: error
+
+      # The window is open from here. Announced on the channel an operator
+      # actually watches, because the next job measures rather than waits for a
+      # click: nobody is going to be prompted.
+      # Read the MARKERS, not `steps.flip.outcome`. For a cancelled job the
+      # outcome is `cancelled` whichever side of the destructive PUT it landed
+      # on, so an outcome-only reading told an operator "nothing was written"
+      # for a run that had already cleared the registration. The flip script
+      # touches these files either side of the PUT, and a file survives the
+      # killed step.
+      - name: Read what actually happened
+        if: always()
+        id: marks
+        run: |
+          set -euo pipefail
+          m="${RUNNER_TEMP}/portal-resnapshot"
+          { echo "flipped=$([ -e "$m/flipped" ] && echo yes || echo no)"
+            echo "restored=$([ -e "$m/restored" ] && echo yes || echo no)"
+          } >> "$GITHUB_OUTPUT"
+
+      # THREE outcomes, not two, and they are different instructions.
+      #
+      # A failure BEFORE the flip step ran — the Vault canary refused, the
+      # checkout failed — touched nothing: the server is exactly as it was and
+      # the right action is to fix the cause and dispatch again. A failure
+      # INSIDE the flip step is the dangerous one: the registration may be
+      # cleared, and the recovery is the Vault copy. Collapsing them into "the
+      # job failed" sends an operator to look for damage that does not exist,
+      # or worse, not to look for damage that does.
+      #
+      # `steps.flip.outcome` is what separates them: `skipped` when an earlier
+      # step failed, `failure` when this one did.
+      - name: Announce the sign-in window
+        if: always()
+        # A notifier that cannot reach Telegram must not fail this job. It
+        # would skip `verify` — which `needs: flip` — and `verify` is the only
+        # thing bounding how long the server stays down. Losing the
+        # announcement is bad; losing the bound because the announcement failed
+        # is the outcome this whole design exists to prevent.
+        continue-on-error: true
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # HTML rather than the default Markdown: an unpaired underscore in a
+          # server or tool name makes Telegram reject the whole message with a
+          # 400, losing the alert exactly when it matters.
+          format: html
+          message: |
+            <b>Portal re-snapshot</b> — <code>${{ inputs.server }}</code>
+            ${{ steps.marks.outputs.restored == 'yes' && 'Server is in <b>Waiting</b> and unusable until someone signs it out and back in on the portal server-selection page. Do it now — verify is already counting down. While it is Waiting it reports NO tools, so do not reconnect any MCP client until this is done: a client that refreshes now caches an empty catalogue and keeps it until it is removed and re-added.' || '' }}
+            ${{ (steps.marks.outputs.flipped == 'yes' && steps.marks.outputs.restored != 'yes') && format('<b>The registration is CLEARED and was not restored.</b> {0} is unusable. The backup is in Vault at <code>secret/platform/portal-resnapshot/{0}</code> — restore it by hand before anything else.', inputs.server) || '' }}
+            ${{ steps.marks.outputs.flipped != 'yes' && 'Stopped <b>before</b> the flip; nothing was written and the server is untouched.' || '' }}
+            <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">run</a>
+
+  verify:
+    name: verify ${{ inputs.server }}
+    needs: flip
+    # RUNS WHENEVER THE SERVER WAS FLIPPED, not only when the flip job was
+    # green. Four things can fail that job after the restore -- step 2a's
+    # registration-changed exit most importantly -- and `needs:` alone skipped
+    # this job for all of them: no wait, no diff, and no `failure()` alert
+    # either, because a skipped job runs no steps. The announce meanwhile told
+    # the operator the countdown was running.
+    #
+    # The markers are the right source for WHAT WAS WRITTEN; the job graph is
+    # the only source for WHETHER THE BOUND IS RUNNING, and this is where the
+    # two are reconciled.
+    if: always() && needs.flip.outputs.flipped == 'yes'
+    runs-on: ubuntu-latest
+    env:
+      CF_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      # The bounded wait, and it is the gate #1258 proposed as a second
+      # approval. `ready` with a moved `last_synced` is what an approval saying
+      # "I signed in" would be claiming, measured rather than asserted — and it
+      # fails on a timeout, which an unclicked approval does not.
+      # THE CLEARED CASE, refused before the wait rather than after it. There is
+      # no sign-in to wait for on a server with no registration, so polling it
+      # only delays the right message by the full deadline.
+      - name: Refuse to wait on a server with no registration
+        if: needs.flip.outputs.restored != 'yes'
+        # Through `env:`, like every other shell consumer in this file, and for
+        # the reason portal-resnapshot-lib.sh states: `type: choice` constrains
+        # the UI, not the API, so a dispatch through `gh api` can send anything
+        # and `${{ }}` is substituted before bash parses the line. This was the
+        # only `run:` here that interpolated the input into the script text,
+        # which left the file holding two answers to whether that premise is
+        # true.
+        env:
+          SERVER: ${{ inputs.server }}
+        run: |
+          echo "::error::${SERVER} was flipped and NOT restored: the registration is cleared and no sign-in is possible. Restore from Vault at secret/platform/portal-resnapshot/${SERVER} by hand."
+          exit 1
+
+      - name: Wait for the sign-in
+        id: wait
+        env:
+          SERVER: ${{ inputs.server }}
+          LAST_SYNCED_BEFORE: ${{ needs.flip.outputs.last_synced }}
+        run: .github/scripts/portal-resnapshot-wait.sh
+
+      # An IDENTICAL catalogue is a failure, not a pass: it means the snapshot
+      # never moved, whatever `last_synced` says. Whole tool objects, because
+      # annotations travel in the snapshot too and `readOnlyHint` is a
+      # structural claim this platform acts on — a projection down to names
+      # would call a changed annotation "no change".
+      - name: Fetch the pre-flip catalogue
+        # Its absence is survivable and its failure must not skip the WAIT:
+        # the upload that produces it is itself `continue-on-error`, for the
+        # same reason. `diff.sh` says it could not compare rather than passing
+        # quietly — a red run with the server restored, not an unbounded one.
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: portal-catalogue-before-${{ inputs.server }}
+          path: ${{ runner.temp }}/before
+
+      - name: Diff the catalogue
+        env:
+          SERVER: ${{ inputs.server }}
+          BEFORE_JSON: ${{ runner.temp }}/before/before.json
+        run: .github/scripts/portal-resnapshot-diff.sh
+
+      # The end state, checked by the same detector that found the problem.
+      # This workflow does NOT apply the tool allowlist: those live with the
+      # servers that register the tools, because "this tool is safe to expose"
+      # belongs in the same diff as the tool. A new tool arriving here still
+      # needs its owning repository's scripts/portal-allowlist-apply.sh, and
+      # the detector is what says so rather than this file guessing.
+      - name: Catalogue drift must be green for this server
+        env:
+          SERVER: ${{ inputs.server }}
+          # THE NAME THE SCRIPT READS. `portal-catalogue-drift.py` takes
+          # `CLOUDFLARE_API_TOKEN`; the job's own `CF_TOKEN` is what the `cf`
+          # helper reads. Two consumers, two names, and both have to be fed.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PORTAL_READ_TOKEN }}
+        run: .github/scripts/portal-resnapshot-drift-gate.sh
+
+      - name: Notify Telegram
+        if: failure()
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: html
+          # THREE states, EXHAUSTIVE. `restored` is yes or it is not; if it is,
+          # the wait either succeeded or it did not.
+          #
+          # `!= 'success'` and not `== 'failure'`, because `steps.wait.outcome`
+          # is only one of those when the step RAN. A failed checkout above
+          # skips it and leaves `skipped` -- and with `== 'failure'` none of the
+          # three matched, so the operator got a header, three blank lines and
+          # a link, for a server sitting in Waiting after the flip announce had
+          # already said the countdown was running. The branch carrying a
+          # POSITIVE claim -- "no portal action needed" -- is the one that must
+          # require evidence, so it keeps `== 'success'` and the others do not.
+          #
+          # And "may still be in Waiting" is wrong on two of these and sends an
+          # operator to the portal UI for a problem the portal UI cannot fix.
+          #
+          # The cleared-registration path's timing was fixed last commit and its
+          # MESSAGE was not: the recovery there is Vault, not a sign-in. And
+          # the steps after the wait can only fail once the sign-in has already
+          # happened, so asserting Waiting for them is false too.
+          message: |
+            <b>Portal re-snapshot FAILED to verify</b> — <code>${{ inputs.server }}</code>
+            ${{ needs.flip.outputs.restored != 'yes' && format('The registration is <b>cleared</b>, not merely unauthorized — a sign-in cannot fix it. Restore from Vault at <code>secret/platform/portal-resnapshot/{0}</code>.', inputs.server) || '' }}
+            ${{ (needs.flip.outputs.restored == 'yes' && steps.wait.outcome != 'success') && 'The server is still in <b>Waiting</b> and unusable: nobody completed the upstream sign-in, it could not be read, or this job died before it got that far. The run says which.' || '' }}
+            ${{ (needs.flip.outputs.restored == 'yes' && steps.wait.outcome == 'success') && 'The sign-in <b>completed</b> and the server is usable; the catalogue or drift check is what failed. No portal action needed — read the run.' || '' }}
+            <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">run</a>
