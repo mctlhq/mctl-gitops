@@ -596,17 +596,29 @@ jobs:
           scripts/validate-eval-teardown-date.py --selftest
           scripts/validate-eval-teardown-date.py
 
-      - name: Unit-test the otel-collector redaction processor (issue-1355)
-        # gen_ai.usage.*_tokens (the AI/agent-observability rubric
-        # dimension's evidence) are currently caught by the bare `token`
-        # alternative in blocked_key_patterns[0] -- mctlhq/mctl-gitops#1332.
-        # This makes that status a CI-visible fact (an expected failure that
-        # names the issue and exits 0) instead of a claim in a comment, while
-        # still hard-failing on the credential block list every run, marker
-        # or no marker.
+      - name: Unit-test the otel-collector redaction processor (issue-1355, #1332)
+        # Key classification against the committed ignored_key_patterns and
+        # blocked_key_patterns: credential-shaped keys (including ones inside
+        # the gen_ai.usage namespace the ignore list opens) are masked, the
+        # GenAI usage counters and cost-shaped keys survive.
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_otel_collector_redaction.py
+
+      - name: Run the redaction processor in the real collector (#1332)
+        # The key test above cannot see #1332's actual defect: a masked
+        # integer counter arrives as the string "****". This runs the pinned
+        # otelcol-contrib image with the rendered redaction/resource
+        # processors and checks the exported values and types. The
+        # --without-ignore run puts #1332 back and must fail first, so the
+        # detector is seen to fire on every run, not only once in review.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          if python3 tests/test_otel_collector_redaction_e2e.py --without-ignore; then
+            echo "::error::redaction e2e passed with ignored_key_patterns removed -- the detector does not detect #1332"
+            exit 1
+          fi
+          python3 tests/test_otel_collector_redaction_e2e.py
 
       - name: Validate storage & finops Grafana dashboards
         run: |

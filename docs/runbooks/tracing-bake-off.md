@@ -23,12 +23,13 @@ Before flipping any flag, confirm all of the following:
   soak has nothing real to measure beyond the fixture emitter (`wft-otel-trace-fixture`,
   see step 4) and the rubric's candidate UI cells cannot be filled from live
   traffic.
-- **The status of #1332.** Run `python3 tests/test_otel_collector_redaction.py`
-  and read its output. While `KNOWN_BROKEN_ISSUE = "mctlhq/mctl-gitops#1332"`
-  is still set in that file, the collector's `redaction` processor strips
-  the four `gen_ai.usage.*_tokens` counters the rubric's
-  `ai_agent_observability` dimension is scored from — record this as a
-  `0`-with-reason on that dimension's cells (step 4), not a silent skip.
+- **GenAI usage counters reach the backend.** #1332 is fixed: the
+  collector's `redaction` processor exempts the `gen_ai.usage.*_tokens`
+  counters through `ignored_key_patterns`, and
+  `tests/test_otel_collector_redaction_e2e.py` proves in the real collector
+  binary that they arrive as integers. Run it once before the soak; if it
+  fails, the rubric's `ai_agent_observability` cells are a `0`-with-reason
+  (step 4), not a silent skip.
 - **Cluster headroom against the quota.** `otelCollector.eval.quota` reserves
   `requests.cpu: "4"`, `requests.memory: "12Gi"`, `limits.cpu: "8"`,
   `limits.memory: "20Gi"`, `pods: "10"`, `persistentvolumeclaims: "4"` and
@@ -107,7 +108,7 @@ evidence comes from:
 | Dimension | Weight | Source |
 |---|---|---|
 | `trace_reconstruction` | 25 | Candidate UI against the representative fixture `tests/fixtures/devloop-trace.json`, submitted via the registered `otel-trace-fixture` `ClusterWorkflowTemplate` (`platform-gitops/argo-workflows/cluster-templates/wft-otel-trace-fixture.yaml`) — parent/child tree, async/queue/Temporal/Argo visibility, search, error navigation. |
-| `ai_agent_observability` | 25 | `gen_ai.usage.*` counters (input/output/cache/reasoning tokens) and the candidate's model/tool/session grouping UI. **Unmeasurable while #1332 is open** — record as a `0`-with-reason cell, not a skipped one, per step 1. |
+| `ai_agent_observability` | 25 | `gen_ai.usage.*` counters (input/output/cache/reasoning tokens) and the candidate's model/tool/session grouping UI. Measurable since #1332; if the step 1 e2e check fails, record a `0`-with-reason cell, not a skipped one. |
 | `data_ownership_portability` | 20 | The candidate's documented self-hosting licence (already recorded per-candidate in `docs/adr/0001-rubric.yaml`'s `stage_a`), plus a live check of raw data export and OTLP compatibility against the deployed candidate. |
 | `operations` | 15 | `otelcol_exporter_*` series in VictoriaMetrics for exporter health (send failures, queue size/capacity — same metrics `docs/runbooks/otel-collector.md`'s verification commands already query); `kubectl top` and the quota's own `status.used` (`kubectl -n observability-eval get resourcequota observability-eval-quota`) for the operations footprint against `otelCollector.eval.quota`. |
 | `security_privacy` | 10 | `tests/test_otel_collector_redaction.py`'s output (what is and is not redacted before it ever reaches the candidate) plus a check of the candidate's own storage of prompts/completions/credentials. |
