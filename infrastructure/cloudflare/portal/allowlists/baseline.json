@@ -23,8 +23,8 @@
       "recorded": "2026-09-25"
     },
     "api": {
-      "tools_total": 98,
-      "tools_enabled": 82,
+      "tools_total": 101,
+      "tools_enabled": 85,
       "enabled_tools": [
         "mctl_abandon_dev_loop",
         "mctl_acknowledge_incident",
@@ -43,6 +43,9 @@
         "mctl_deprecate_platform_skill",
         "mctl_disable_tenant_skill",
         "mctl_enable_tenant_skill",
+        "mctl_erpact_create_site",
+        "mctl_erpact_list_sites",
+        "mctl_erpact_site_status",
         "mctl_get_dev_loop",
         "mctl_get_incident",
         "mctl_get_lifecycle_ownership",
