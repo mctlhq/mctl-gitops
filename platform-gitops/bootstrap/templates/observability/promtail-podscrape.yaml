@@ -4,14 +4,13 @@
 # up. Confirmed against VictoriaMetrics on 2026-09-10: no series named
 # promtail_*, no job for promtail in `up`, and — the part that matters —
 # every counter produced by the Promtail metrics stage in loki.yaml
-# (openclaw_token_refresh_failed_total, openclaw_provider_missing_api_key_total,
-# seerrsense_oauth_consent_total, seerrsense_tool_failures_total) absent from
-# the database. Promtail exposes those counters on its own :3101/metrics and
-# nowhere else, so the VMRules built on them (openclaw-auth-alerts.yaml,
-# seerrsense-alerts.yaml) evaluated against nothing and could never fire.
-# That is the real reason mctlhq/mctl-gitops#556 found the openclaw refresh
-# counter at zero data points across the whole retention window: not a quiet
-# metric, an unscraped one.
+# (seerrsense_oauth_consent_total, seerrsense_tool_failures_total and the
+# then-present openclaw counters) absent from the database. Promtail exposes
+# those counters on its own :3101/metrics and nowhere else, so the VMRules
+# built on them (seerrsense-alerts.yaml among them) evaluated against nothing
+# and could never fire. That is the real reason mctlhq/mctl-gitops#556 found
+# zero data points across the whole retention window: not a quiet metric, an
+# unscraped one.
 #
 # VMPodScrape rather than VMServiceScrape because the loki-stack promtail
 # subchart (promtail-6.15.5) renders no Service, only a DaemonSet with the

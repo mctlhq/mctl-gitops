@@ -166,9 +166,9 @@ env:
 # So this service deliberately keeps the env clean.
 # Bootstrap procedure for the credentials.json is in README.md.
 
-# ghcr-credentials is already managed by labs/openclaw — no second owner here.
+# ghcr-credentials is owned by the labs tenant chart — no second owner here.
 
-# MinIO credentials — same Vault path as labs/openclaw
+# MinIO credentials
 extraExternalSecrets:
   labs-claude-remote-minio:
     # Platform-scoped path — must use the cluster store; tenant-store only

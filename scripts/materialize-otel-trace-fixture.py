@@ -9,9 +9,8 @@ is the single source of truth reviewed by every fixture test
 copies, this script renders
 `platform-gitops/argo-workflows/config/otel-trace-fixture-configmap.yaml`
 from `tests/fixtures/devloop-trace.json` and
-`tests/fixtures/devloop-trace-redaction.json`, the same generate-then-`--check`
-contract `scripts/materialize-openclaw-platform-skills.py` already has in
-`.github/workflows/validate-manifests.yml`.
+`tests/fixtures/devloop-trace-redaction.json`, with a generate-then-`--check`
+contract enforced in `.github/workflows/validate-manifests.yml`.
 
 The ConfigMap lands in `argo-workflows` because that is the namespace
 `platform-gitops/bootstrap/templates/core-infra/argo-workflows-config.yaml`

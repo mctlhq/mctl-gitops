@@ -25,7 +25,7 @@ tenant:
     # Aggregate CPU/memory requests across all pods
     requests.cpu: "500m"
     requests.memory: "2Gi"
-    # Aggregate CPU/memory limits across all pods (sized for one OpenClaw pod + one service + deploy workflow)
+    # Aggregate CPU/memory limits across all pods (sized for one service + deploy workflow)
     limits.cpu: "4"
     limits.memory: "6Gi"
     # Maximum number of pods
@@ -39,7 +39,7 @@ tenant:
   # which base-service's Deployment always references via imagePullSecrets).
   # Defaults on so every current/future tenant gets it automatically. Set to
   # false only for tenants that already own that Secret another way (e.g.
-  # via a platform-level or per-service openclaw ExternalSecret) — a second
+  # via a platform-level ExternalSecret, as admins does) — a second
   # Owner ExternalSecret targeting the same Secret name causes ArgoCD
   # self-heal drift fights between the two owners.
   ghcrCredentials:
