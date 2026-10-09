@@ -60,8 +60,22 @@ spec:
       automountServiceAccountToken: false
       executor:
         serviceAccountName: mctl-agents-executor
+      # Restricted pod posture for the step that runs model-driven shell
+      # (mctl-gitops#1717). Template-level: the helper steps are root images.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       container:
         image: "{{workflow.parameters.agent_image}}"
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
