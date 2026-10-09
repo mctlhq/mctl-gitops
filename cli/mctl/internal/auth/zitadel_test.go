@@ -180,6 +180,8 @@ func useFake(t *testing.T, f *fakeZitadel) string {
 	t.Setenv("MCTL_ZITADEL_ISSUER", f.srv.URL)
 	t.Setenv("MCTL_ZITADEL_CLIENT_ID", testClientID)
 	t.Setenv("MCTL_ZITADEL_TOKEN_FILE", tokenFile)
+	// Keep the default path away from the developer's own mctl sign-in.
+	t.Setenv("MCTL_API_TOKEN_FILE", filepath.Join(t.TempDir(), "mctl", "api-token.json"))
 	return tokenFile
 }
 
@@ -387,7 +389,7 @@ func TestStaleLockIsTakenOver(t *testing.T) {
 	if err := os.WriteFile(lock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().Add(-2 * zitadelLockStale)
+	old := time.Now().Add(-2 * tokenLockStale)
 	if err := os.Chtimes(lock, old, old); err != nil {
 		t.Fatal(err)
 	}

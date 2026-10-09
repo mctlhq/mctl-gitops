@@ -1,0 +1,122 @@
+# Availability of mctl-api (api.mctl.ai): every MCP connector, `mctl auth`,
+# the identity link flow and the ERPact site tools sit behind it.
+#
+# Written after 2026-10-09: the one mctl-api pod went Running-but-unready at
+# 07:23Z and stayed that way, with short returns to Ready, until a manual
+# restart at 12:35Z. Five hours of "no available server" from Traefik and
+# not a single alert. Two gaps, two rules:
+#
+#   - nothing probed api.mctl.ai from outside (MctlApiDown fixes that);
+#   - the stock KubeDeploymentReplicasMismatch / KubePodNotReady rules never
+#     fired: the pod was Running, and its brief flips back to Ready reset
+#     their `for` windows every time (MctlApiNoReadyReplicas fixes that by
+#     averaging availability over a window, so a one-minute recovery moves
+#     the average a little instead of clearing the condition).
+#
+# Both are critical: when mctl-api is down the platform has no human or
+# agent entry point. Routed to Telegram in
+# bootstrap/templates/observability/monitoring.yaml (alertname =~ "MctlApi.*").
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-api-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: mctl-api
+spec:
+  groups:
+    - name: mctl.api.availability
+      interval: 60s
+      rules:
+        - alert: MctlApiDown
+          # Probed every 60s; 3m is three consecutive failures. The probe goes
+          # out through Cloudflare and back, so a refused origin, an unready
+          # pod, a broken ingress route and an edge failure all look the same.
+          expr: probe_success{job="mctl-api-healthz"} == 0
+          for: 3m
+          labels:
+            severity: critical
+            service: mctl-api
+          annotations:
+            summary: "api.mctl.ai has failed its health check for 3 minutes"
+            description: >-
+              blackbox-exporter has had no 2xx from {{ $labels.instance }} for
+              3 minutes. A 503 with an empty body is Traefik with no Ready
+              endpoint: check `kubectl -n mctl-api get pods` and the pod's
+              `readyz probe failed` log lines, which name the failing
+              dependency (gitops, postgres, dex, vault). A pod that is Running
+              but not Ready recovers with
+              `kubectl -n mctl-api rollout restart deploy/mctl-api`.
+
+        - alert: MctlApiNoReadyReplicas
+          # Average available replicas over 10m below 0.5, held 5m: mctl-api
+          # was Ready for less than half of the last ten minutes. An average,
+          # not max_over_time == 0 — the max form clears on any single Ready
+          # sample, so a pod that flaps back to Ready for a minute every few
+          # minutes would never fire at all. Here a one-minute blip only
+          # raises the 10m average by 0.1, the condition stays true and the
+          # alert keeps firing (2026-10-09: Ready for about a minute every
+          # 45 minutes). A normal rollout or a single container restart keeps
+          # the average near 1: RollingUpdate holds the old pod until the new
+          # one is Ready.
+          expr: |
+            avg_over_time(
+              kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}[10m]
+            ) < 0.5
+          for: 5m
+          labels:
+            severity: critical
+            service: mctl-api
+          annotations:
+            summary: "mctl-api was Ready less than half of the last 10 minutes"
+            description: >-
+              kube-state-metrics reports that deployment mctl-api averaged
+              fewer than 0.5 available replicas over the last ten minutes, so
+              Traefik has been answering api.mctl.ai with "no available
+              server" most of that time. Look at `kubectl -n mctl-api describe
+              pod` for the readiness probe result and at the pod log for
+              `readyz probe failed`; the `check` field names the dependency. A
+              restart of the deployment clears a pod that is stuck
+              Running-but-unready.
+
+        - alert: MctlApiDegraded
+          # Fewer replicas available than the deployment asks for, averaged
+          # over 15m (same reason as above: a flapping pod must not reset the
+          # window). With two replicas the API keeps answering, so this is the
+          # early warning MctlApiNoReadyReplicas can no longer give: it only
+          # fires once every replica is gone. A rollout does not trip it,
+          # because RollingUpdate surges a new pod before removing an old one.
+          expr: |
+            kube_deployment_spec_replicas{namespace="mctl-api",deployment="mctl-api"}
+              - avg_over_time(kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}[15m])
+              > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            service: mctl-api
+          annotations:
+            summary: "mctl-api is running below its replica count"
+            description: >-
+              Deployment mctl-api has averaged fewer available replicas than
+              it asks for over the last 15 minutes. The API still answers on
+              the remaining replica, but one more failure takes it down. Look
+              at `kubectl -n mctl-api get pods -o wide` for the pod that is
+              not Ready and at its `readyz probe failed` log lines.
+
+        - alert: MctlApiProbeAbsent
+          # Without the series MctlApiDown can never fire — same reasoning as
+          # BlackboxProbeMetricAbsent in blackbox-alerts.yaml.
+          expr: absent(probe_success{job="mctl-api-healthz"})
+          for: 15m
+          labels:
+            severity: warning
+            service: mctl-api
+          annotations:
+            summary: "No probe_success series for job=mctl-api-healthz"
+            description: >-
+              The VMProbe mctl-api-healthz (infra-components/observability/
+              blackbox/vmprobes.yaml) has produced no probe_success series for
+              15 minutes, so MctlApiDown is blind. Check that the VMProbe
+              exists, that vmagent picked it up, and that blackbox-exporter is
+              running.

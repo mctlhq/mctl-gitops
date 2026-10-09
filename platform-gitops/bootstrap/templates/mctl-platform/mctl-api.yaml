@@ -13,9 +13,36 @@ spec:
       helm:
         releaseName: mctl-api
         values: |
+          # Two replicas since mctl-api 4.70.0 (mctl-api#503), after the
+          # 2026-10-09 outage in which the single pod sat unready for five
+          # hours. OAuth sign-ins keep their in-flight state (pending
+          # authorizations, codes) in Postgres and work on any replica. The
+          # identity link flow keeps its challenges in the memory of the pod
+          # that started them, so the Service gets a sticky cookie: every
+          # link step is a browser request and stays on one pod (without it a
+          # link fails safe with "start again"). Rate limiters are per pod, so
+          # their effective ceilings double. The spread keeps the replicas on
+          # different nodes; ScheduleAnyway, so a node down for maintenance
+          # never blocks scheduling.
+          replicaCount: 2
+          service:
+            annotations:
+              traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+              traefik.ingress.kubernetes.io/service.sticky.cookie.name: mctl_api_affinity
+              traefik.ingress.kubernetes.io/service.sticky.cookie.secure: "true"
+              traefik.ingress.kubernetes.io/service.sticky.cookie.httponly: "true"
+              traefik.ingress.kubernetes.io/service.sticky.cookie.samesite: lax
+          topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: mctl-api
+
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.68.0"
+            tag: "4.70.1"
 
           ingress:
             enabled: true
@@ -46,7 +73,17 @@ spec:
             DEX_ISSUER_URL: https://ops.mctl.ai/api/dex
             DEX_CLIENT_ID: mctl-api
             SELF_URL: https://api.mctl.ai
-            VAULT_ADDR: https://secrets.mctl.ai
+            # In-cluster, not https://secrets.mctl.ai. On 2026-10-09 the pod's
+            # /readyz Vault check timed out through the public, Cloudflare-
+            # fronted hostname for five hours while Vault itself answered the
+            # same URL from outside; readiness took the whole API down with
+            # it. Every other in-cluster consumer (ESO, Argo Workflows,
+            # vault-backup) already talks to the service directly. The
+            # listener is plain HTTP (vault.yaml, tls_disable = 1); the
+            # mctl-api namespace is allowed by the vault namespace's
+            # allow-vault-ingress policy. vault-active routes to the leader,
+            # so reads skip the standby-forwarding hop.
+            VAULT_ADDR: http://vault-active.vault.svc.cluster.local:8200
             # Kubernetes auth (mirrors the Backstage migration, gitops#699):
             # the mctl-api ServiceAccount authenticates with its own
             # projected token via the `mctl-api` Vault role. Confirmed live
@@ -100,7 +137,25 @@ spec:
             # holds the verifier. If a tenant ever moves under a basePath this
             # entry stops matching, which fails loudly and is the safer way to
             # find out.
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/overview?mctl_oauth=1,https://labs-openclaw.mctl.ai/overview?mctl_oauth=1,https://ovk-openclaw.mctl.ai/overview?mctl_oauth=1,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api"
+            #
+            # IDE clients (2026-10-08). /oauth/register refuses a registration
+            # as a whole when any one of its redirect_uris is not allowed, and
+            # these clients send their full set every time, so their loopback
+            # entry alone never got them in:
+            #   VS Code  -- https://vscode.dev/redirect,
+            #               https://insiders.vscode.dev/redirect, plus two
+            #               127.0.0.1 entries (src/vs/base/common/oauth.ts,
+            #               fetchDynamicRegistration).
+            #   Cursor   -- cursor://anysphere.cursor-mcp/oauth/callback,
+            #               https://www.cursor.com/agents/mcp/oauth/callback,
+            #               plus http://localhost:8787/callback (read from the
+            #               3.19.16 bundle).
+            # Exact strings, for the reason given above. The two vscode.dev
+            # pages and the cursor:// scheme hand the code to the editor on the
+            # user's own machine; www.cursor.com is Cursor's hosted agent
+            # callback, the same class of entry as claude.ai and chatgpt.com.
+            # Windsurf needs nothing here: it registers a loopback callback.
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/overview?mctl_oauth=1,https://labs-openclaw.mctl.ai/overview?mctl_oauth=1,https://ovk-openclaw.mctl.ai/overview?mctl_oauth=1,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect,cursor://anysphere.cursor-mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback"
             # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
             # `cloudflare-portal-mcp` (mctlhq/mctl-api#278) was retired on
             # 2026-09-26 after the `api` upstream moved to automatic (DCR)

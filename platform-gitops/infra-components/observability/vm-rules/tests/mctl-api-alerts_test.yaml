@@ -1,0 +1,297 @@
+# Unit tests for mctl-api-alerts.yaml (group mctl.api.availability).
+# rule_files is resolved relative to this file; generated/ is produced by
+# scripts/check-vm-rules.sh.
+rule_files:
+  - generated/mctl-api-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: a healthy mctl-api is quiet
+    input_series:
+      - series: 'probe_success{job="mctl-api-healthz",instance="https://api.mctl.ai/healthz"}'
+        values: '1x30'
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlApiDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: MctlApiProbeAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: two consecutive probe failures stay under the 3m threshold
+    input_series:
+      - series: 'probe_success{job="mctl-api-healthz",instance="https://api.mctl.ai/healthz"}'
+        values: '1 1 1 1 1 0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: MctlApiDown
+        exp_alerts: []
+
+  - interval: 1m
+    name: a failing health probe fires critical after 3m
+    input_series:
+      - series: 'probe_success{job="mctl-api-healthz",instance="https://api.mctl.ai/healthz"}'
+        values: '1 1 0x18'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlApiDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-api
+              job: mctl-api-healthz
+              instance: https://api.mctl.ai/healthz
+            exp_annotations:
+              summary: api.mctl.ai has failed its health check for 3 minutes
+              description: >-
+                blackbox-exporter has had no 2xx from https://api.mctl.ai/healthz
+                for 3 minutes. A 503 with an empty body is Traefik with no Ready
+                endpoint: check `kubectl -n mctl-api get pods` and the pod's
+                `readyz probe failed` log lines, which name the failing
+                dependency (gitops, postgres, dex, vault). A pod that is Running
+                but not Ready recovers with
+                `kubectl -n mctl-api rollout restart deploy/mctl-api`.
+
+  - interval: 1m
+    name: an outage fires critical once Ready less than half of 10m for 5m
+    input_series:
+      # Ready for 12 minutes (a full window of healthy history, as in
+      # production), down from t=12m. The 10m window ending at t=16m still
+      # holds five Ready samples (0.5, not below), at t=17m four (0.4), so
+      # the condition starts at t=17m and the 5m hold fires it at t=22m:
+      # about ten minutes after the outage began.
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '1x11 0x30'
+    alert_rule_test:
+      - eval_time: 21m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts: []
+      - eval_time: 23m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-api
+              namespace: mctl-api
+              deployment: mctl-api
+            exp_annotations:
+              summary: mctl-api was Ready less than half of the last 10 minutes
+              description: >-
+                kube-state-metrics reports that deployment mctl-api averaged
+                fewer than 0.5 available replicas over the last ten minutes, so
+                Traefik has been answering api.mctl.ai with "no available
+                server" most of that time. Look at `kubectl -n mctl-api describe
+                pod` for the readiness probe result and at the pod log for
+                `readyz probe failed`; the `check` field names the dependency. A
+                restart of the deployment clears a pod that is stuck
+                Running-but-unready.
+
+  - interval: 1m
+    name: a one-minute return to Ready inside a long outage does not clear the alert
+    input_series:
+      # Down from t=0 except one Ready sample at t=20m, as on 2026-10-09.
+      # The 10m average goes from 0 to 0.1 for ten minutes and never
+      # reaches 0.5, so the alert is firing before, during and after the
+      # blip with no gap.
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '0x20 1 0x19'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-api
+              namespace: mctl-api
+              deployment: mctl-api
+            exp_annotations:
+              summary: mctl-api was Ready less than half of the last 10 minutes
+              description: >-
+                kube-state-metrics reports that deployment mctl-api averaged
+                fewer than 0.5 available replicas over the last ten minutes, so
+                Traefik has been answering api.mctl.ai with "no available
+                server" most of that time. Look at `kubectl -n mctl-api describe
+                pod` for the readiness probe result and at the pod log for
+                `readyz probe failed`; the `check` field names the dependency. A
+                restart of the deployment clears a pod that is stuck
+                Running-but-unready.
+      - eval_time: 21m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-api
+              namespace: mctl-api
+              deployment: mctl-api
+            exp_annotations:
+              summary: mctl-api was Ready less than half of the last 10 minutes
+              description: >-
+                kube-state-metrics reports that deployment mctl-api averaged
+                fewer than 0.5 available replicas over the last ten minutes, so
+                Traefik has been answering api.mctl.ai with "no available
+                server" most of that time. Look at `kubectl -n mctl-api describe
+                pod` for the readiness probe result and at the pod log for
+                `readyz probe failed`; the `check` field names the dependency. A
+                restart of the deployment clears a pod that is stuck
+                Running-but-unready.
+      - eval_time: 25m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-api
+              namespace: mctl-api
+              deployment: mctl-api
+            exp_annotations:
+              summary: mctl-api was Ready less than half of the last 10 minutes
+              description: >-
+                kube-state-metrics reports that deployment mctl-api averaged
+                fewer than 0.5 available replicas over the last ten minutes, so
+                Traefik has been answering api.mctl.ai with "no available
+                server" most of that time. Look at `kubectl -n mctl-api describe
+                pod` for the readiness probe result and at the pod log for
+                `readyz probe failed`; the `check` field names the dependency. A
+                restart of the deployment clears a pod that is stuck
+                Running-but-unready.
+
+  - interval: 1m
+    name: a pod flapping Ready one minute in four still fires
+    input_series:
+      # The failure mode of the max_over_time form: Ready once every four
+      # minutes is a 0.25 average, below the threshold, so the alert fires
+      # even though no 5m window is ever all zeros.
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-api
+              namespace: mctl-api
+              deployment: mctl-api
+            exp_annotations:
+              summary: mctl-api was Ready less than half of the last 10 minutes
+              description: >-
+                kube-state-metrics reports that deployment mctl-api averaged
+                fewer than 0.5 available replicas over the last ten minutes, so
+                Traefik has been answering api.mctl.ai with "no available
+                server" most of that time. Look at `kubectl -n mctl-api describe
+                pod` for the readiness probe result and at the pod log for
+                `readyz probe failed`; the `check` field names the dependency. A
+                restart of the deployment clears a pod that is stuck
+                Running-but-unready.
+
+  - interval: 1m
+    name: a single container restart does not fire
+    input_series:
+      # Two minutes without a Ready replica inside an otherwise healthy hour:
+      # the 10m average bottoms out at 0.8.
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '1x10 0 0 1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts: []
+
+  - interval: 1m
+    name: a missing probe series fires the absent alert after 15m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlApiProbeAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-api
+              job: mctl-api-healthz
+            exp_annotations:
+              summary: No probe_success series for job=mctl-api-healthz
+              description: >-
+                The VMProbe mctl-api-healthz (infra-components/observability/
+                blackbox/vmprobes.yaml) has produced no probe_success series for
+                15 minutes, so MctlApiDown is blind. Check that the VMProbe
+                exists, that vmagent picked it up, and that blackbox-exporter is
+                running.
+
+  - interval: 1m
+    name: two healthy replicas and a rollout surge are not degraded
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x40'
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x15 3 3 2x23'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MctlApiDegraded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts: []
+
+  - interval: 1m
+    name: one replica down fires the warning, not the critical
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x50'
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x15 1x35'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlApiDegraded
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: MctlApiDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-api
+              namespace: mctl-api
+              deployment: mctl-api
+            exp_annotations:
+              summary: mctl-api is running below its replica count
+              description: >-
+                Deployment mctl-api has averaged fewer available replicas than
+                it asks for over the last 15 minutes. The API still answers on
+                the remaining replica, but one more failure takes it down. Look
+                at `kubectl -n mctl-api get pods -o wide` for the pod that is
+                not Ready and at its `readyz probe failed` log lines.
+      - eval_time: 45m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts: []
+
+  - interval: 1m
+    name: a replica flapping back to Ready briefly stays degraded
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x50'
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x10 1x14 2 1x14 2 1x14'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MctlApiDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-api
+              namespace: mctl-api
+              deployment: mctl-api
+            exp_annotations:
+              summary: mctl-api is running below its replica count
+              description: >-
+                Deployment mctl-api has averaged fewer available replicas than
+                it asks for over the last 15 minutes. The API still answers on
+                the remaining replica, but one more failure takes it down. Look
+                at `kubectl -n mctl-api get pods -o wide` for the pod that is
+                not Ready and at its `readyz probe failed` log lines.

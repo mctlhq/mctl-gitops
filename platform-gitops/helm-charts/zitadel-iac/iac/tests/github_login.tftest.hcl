@@ -147,10 +147,13 @@ run "action_is_in_every_organization_and_trigger" {
     ])
     error_message = "Each organization's userinfo trigger must run both argocdGroups and the GitHub login action."
   }
-  # Empty by default: no client receives the claim until phase 3 lists one.
+  # By default the portal's client and no other (portal.tf).
   assert {
-    condition     = strcontains(zitadel_action.github_login["erpact"].script, "var clients = [];")
-    error_message = "With no client IDs the action must return for every client."
+    condition = alltrue([
+      for org in ["MCTL", "erpact", "other"] :
+      strcontains(zitadel_action.github_login[org].script, "var clients = [\"${nonsensitive(zitadel_application_oidc.portal_oidc_provider.client_id)}\"];")
+    ])
+    error_message = "With no extra client IDs the action must allow the portal's OIDC provider client only, in every organization."
   }
   # Only the users whose login this root manages, per organization.
   assert {
@@ -171,9 +174,19 @@ run "client_allowlist_is_rendered_into_the_action" {
   variables {
     github_login_client_ids = ["111111111111111111", "222222222222222222"]
   }
+  override_resource {
+    target = zitadel_application_oidc.portal_oidc_provider
+    values = { client_id = "portal-client-id" }
+  }
   assert {
-    condition     = strcontains(zitadel_action.github_login["MCTL"].script, "var clients = [\"111111111111111111\",\"222222222222222222\"];")
-    error_message = "The action must allow exactly the listed client IDs."
+    condition     = strcontains(zitadel_action.github_login["MCTL"].script, "var clients = [\"111111111111111111\",\"222222222222222222\",\"portal-client-id\"];")
+    error_message = "The action must allow exactly the listed client IDs and the portal's."
+  }
+  # A client id reaches the script in clear: a sensitive script would be
+  # hidden in the Job's plan, and with it every change to the action.
+  assert {
+    condition     = !issensitive(zitadel_action.github_login["MCTL"].script)
+    error_message = "The action script must not be sensitive."
   }
 }
 

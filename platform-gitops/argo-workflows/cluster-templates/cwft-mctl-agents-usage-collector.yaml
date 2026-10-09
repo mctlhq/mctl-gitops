@@ -39,7 +39,7 @@ spec:
       - name: dry_run
         value: "false"
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.68.3
+        value: ghcr.io/mctlhq/mctl-agents:1.69.0
         # Bump alongside the other CWFTs' agent_image default; the registry's
         # resolved image_ref overrides this once a caller pins per-run.
 
@@ -60,8 +60,22 @@ spec:
       automountServiceAccountToken: false
       executor:
         serviceAccountName: mctl-agents-executor
+      # Restricted pod posture for the step that runs model-driven shell
+      # (mctl-gitops#1717). Template-level: the helper steps are root images.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       container:
         image: "{{workflow.parameters.agent_image}}"
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:

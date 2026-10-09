@@ -120,22 +120,27 @@ func readZitadelToken() (*storedZitadelToken, error) {
 	return &st, nil
 }
 
-// writeZitadelToken writes the file owner-only (mode 600 on Unix; on Windows
-// the user profile's ACLs apply), through a temp file and a
-// rename so a crash never leaves half a credential behind.
+// writeZitadelToken stores the ZITADEL credential (see writeOwnerOnly).
 func writeZitadelToken(st *storedZitadelToken) error {
 	p, err := zitadelTokenPath()
 	if err != nil {
 		return err
 	}
+	return writeOwnerOnly(p, st)
+}
+
+// writeOwnerOnly writes v as JSON to p, owner-only (mode 600 on Unix; on
+// Windows the user profile's ACLs apply), through a temp file and a rename
+// so a crash never leaves half a credential behind.
+func writeOwnerOnly(p string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(p), err)
 	}
-	b, err := json.MarshalIndent(st, "", "  ")
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(p), ".zitadel-token-*")
+	tmp, err := os.CreateTemp(filepath.Dir(p), "."+filepath.Base(p)+"-*")
 	if err != nil {
 		return fmt.Errorf("writing %s: %w", p, err)
 	}
@@ -244,24 +249,32 @@ func refreshZitadelToken(s zitadelSettings) (string, error) {
 
 const (
 	// Longer than a refresh may take (its context allows 30 s), so a waiter
-	// never gives up on a healthy holder; shorter than zitadelLockStale.
-	zitadelLockWait  = 45 * time.Second
-	zitadelLockStale = time.Minute
+	// never gives up on a healthy holder; shorter than tokenLockStale.
+	tokenLockWait  = 45 * time.Second
+	tokenLockStale = 5 * time.Minute
 )
 
-// lockZitadelToken takes <token file>.lock with O_EXCL. A lock older than
-// zitadelLockStale is left over from a killed process and is taken over.
+// lockZitadelToken locks the ZITADEL credential file (see lockTokenFile).
 func lockZitadelToken() (func(), error) {
 	p, err := zitadelTokenPath()
 	if err != nil {
 		return nil, err
 	}
+	return lockTokenFile(p)
+}
+
+// lockTokenFile takes <token file>.lock with O_EXCL. A lock older than
+// tokenLockStale is left over from a killed process and is taken over.
+func lockTokenFile(p string) (func(), error) {
 	lock := p + ".lock"
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return nil, fmt.Errorf("creating %s: %w", filepath.Dir(p), err)
+	}
 	owner, err := randomToken()
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(zitadelLockWait)
+	deadline := time.Now().Add(tokenLockWait)
 	for {
 		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
@@ -285,7 +298,7 @@ func lockZitadelToken() (func(), error) {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("another mctl process holds %s; remove it if no mctl is running", lock)
 		}
-		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > zitadelLockStale {
+		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > tokenLockStale {
 			// Take a stale lock over by renaming it away: a rename succeeds
 			// for one process only, where remove-then-create could hand the
 			// lock to two. The loser simply retries.
@@ -342,51 +355,9 @@ func ZitadelLogin(ctx context.Context, out io.Writer, openBrowser bool) error {
 	verifier := oauth2.GenerateVerifier()
 	authURL := cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce))
 
-	results := make(chan callbackOutcome, 1)
-	mux := http.NewServeMux()
-	mux.HandleFunc(zitadelCallbackPath, func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		res := callbackResult(q.Get("state"), state, q.Get("code"), q.Get("error"), q.Get("error_description"))
-		if res.foreign {
-			// Not this sign-in's redirect (a prefetch, a scanner, another
-			// local process): refuse it and keep waiting for the real one.
-			http.Error(w, "mctl: unknown sign-in", http.StatusBadRequest)
-			return
-		}
-		if res.err != nil {
-			http.Error(w, "mctl: sign-in failed: "+res.err.Error(), http.StatusBadRequest)
-		} else {
-			fmt.Fprintln(w, "mctl: signed in. You can close this window.")
-		}
-		select {
-		case results <- res:
-		default:
-		}
-	})
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	go srv.Serve(ln) //nolint:errcheck
-	defer func() {
-		// Shutdown, not Close: let the page answering the browser finish,
-		// above all the error page.
-		sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer scancel()
-		srv.Shutdown(sctx) //nolint:errcheck
-	}()
-
-	fmt.Fprintf(out, "Opening the ZITADEL sign-in page. If no browser opens, visit:\n\n  %s\n\n", authURL)
-	if openBrowser {
-		_ = launchBrowser(authURL)
-	}
-
-	var code string
-	select {
-	case res := <-results:
-		if res.err != nil {
-			return res.err
-		}
-		code = res.code
-	case <-ctx.Done():
-		return fmt.Errorf("waiting for the ZITADEL sign-in: %w", ctx.Err())
+	code, err := awaitLoopbackCode(ctx, ln, zitadelCallbackPath, state, out, "ZITADEL", authURL, openBrowser)
+	if err != nil {
+		return err
 	}
 
 	tok, err := cfg.Exchange(ctx, code, oauth2.VerifierOption(verifier))
@@ -421,6 +392,59 @@ func ZitadelLogin(ctx context.Context, out io.Writer, openBrowser bool) error {
 	return nil
 }
 
+// awaitLoopbackCode serves the loopback redirect of one sign-in on ln, prints
+// authURL (opening a browser when asked) and returns the authorization code
+// carried by the redirect whose state is this sign-in's. what names the
+// sign-in page in messages.
+func awaitLoopbackCode(ctx context.Context, ln net.Listener, callbackPath, state string, out io.Writer, what, authURL string, openBrowser bool) (string, error) {
+	results := make(chan callbackOutcome, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		res := callbackResult(q.Get("state"), state, q.Get("code"), q.Get("error"), q.Get("error_description"))
+		if res.foreign {
+			// Not this sign-in's redirect (a prefetch, a scanner, another
+			// local process): refuse it and keep waiting for the real one.
+			http.Error(w, "mctl: unknown sign-in", http.StatusBadRequest)
+			return
+		}
+		if res.err != nil {
+			http.Error(w, "mctl: sign-in failed: "+res.err.Error(), http.StatusBadRequest)
+		} else {
+			fmt.Fprintln(w, "mctl: signed in. You can close this window.")
+		}
+		select {
+		case results <- res:
+		default:
+		}
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go srv.Serve(ln) //nolint:errcheck
+	defer func() {
+		// Shutdown, not Close: let the page answering the browser finish,
+		// above all the error page.
+		sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer scancel()
+		srv.Shutdown(sctx) //nolint:errcheck
+	}()
+
+	if openBrowser {
+		fmt.Fprintf(out, "Opening the %s sign-in page. If no browser opens, visit:\n\n  %s\n\n", what, authURL)
+	} else {
+		fmt.Fprintf(out, "To sign in to %s, visit:\n\n  %s\n\n", what, authURL)
+	}
+	if openBrowser {
+		_ = launchBrowser(authURL)
+	}
+
+	select {
+	case res := <-results:
+		return res.code, res.err
+	case <-ctx.Done():
+		return "", fmt.Errorf("waiting for the %s sign-in: %w", what, ctx.Err())
+	}
+}
+
 type callbackOutcome struct {
 	code string
 	err  error
@@ -430,16 +454,17 @@ type callbackOutcome struct {
 }
 
 // callbackResult validates one loopback callback: the state must be the one
-// this login sent (constant-time), and an error from ZITADEL wins over a code.
+// this login sent (constant-time), and an error from the sign-in page wins
+// over a code.
 func callbackResult(gotState, wantState, code, errCode, errDesc string) callbackOutcome {
 	if subtle.ConstantTimeCompare([]byte(gotState), []byte(wantState)) != 1 {
 		return callbackOutcome{err: errors.New("state does not match this sign-in"), foreign: true}
 	}
 	if errCode != "" {
 		if errDesc != "" {
-			return callbackOutcome{err: fmt.Errorf("ZITADEL refused the sign-in: %s: %s", errCode, errDesc)}
+			return callbackOutcome{err: fmt.Errorf("the sign-in was refused: %s: %s", errCode, errDesc)}
 		}
-		return callbackOutcome{err: fmt.Errorf("ZITADEL refused the sign-in: %s", errCode)}
+		return callbackOutcome{err: fmt.Errorf("the sign-in was refused: %s", errCode)}
 	}
 	if code == "" {
 		return callbackOutcome{err: errors.New("callback carried no authorization code")}

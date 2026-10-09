@@ -1,0 +1,65 @@
+# ExecutionProfile for authoring-canary (ADR 007, mctl-agents#596/#598, proof
+# run for mctl-agents#470). The canary is an inert v1alpha1 agent with no
+# caller: no ClusterWorkflowTemplate or CronWorkflow runs it, and nothing reads
+# this file at run time. Only the release gate (mctl-agents
+# tools/check_binding_hash.py evaluate_promotion) and mctl-agents'
+# validate_manifest read it.
+#
+# Source of each value:
+#   tools            agents/_manifests/authoring-canary/agent.yaml
+#                    toolPolicy.allow and build_authoring_canary_options:
+#                    Read, Glob, Grep.
+#   modelPolicyRef   the manifest's modelPolicy.task: service_agent.
+#   budgetUsd        the manifest's execution.budgetUsd and
+#                    build_authoring_canary_options, 0.01. No template carries
+#                    it, so it is not compared with one: the profile is listed
+#                    in policy.yaml uncalledProfiles, and the validator checks
+#                    that no template references the entrypoint.
+#   timeoutSeconds   cwft-mctl-agents-run.yaml spec.activeDeadlineSeconds,
+#                    3600: the only wall-clock bound that would apply if the
+#                    canary ever ran in its nominal sandbox. The agent has no
+#                    bound of its own.
+#   sandbox          mctl-agents-run, as the manifest names it. Nominal: the
+#                    template never invokes the canary. No budgetEnv, because
+#                    no variable carries the canary's budget.
+#   permissions      the canary reads the workspace and writes nothing.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: authoring-canary-default
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: service_agent
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools:
+    - Read
+    - Glob
+    - Grep
+  policyRef: inert-read-only
+  permissions:
+    repository:
+      read: true
+      branchCreate: false
+      commit: false
+      pullRequestCreate: false
+      merge: false
+    kubernetes: none
+    # The SDK still calls the model provider.
+    network: approved-providers-only
+    mutationScopes: []
+  budgetUsd: 0.01
+  timeoutSeconds: 3600
+  runtime:
+    entrypoint: orchestrator.run_authoring_canary:run_authoring_canary
+    optionsBuilder: orchestrator.options:build_authoring_canary_options
+    sandbox:
+      backend: argo
+      clusterWorkflowTemplate: mctl-agents-run
+      approved: true
+  approval:
+    requiredBefore: []
+  evidence:
+    required: []

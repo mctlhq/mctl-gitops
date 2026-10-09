@@ -244,6 +244,12 @@ jobs:
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
 
+      - name: Validate agent pod security context
+        run: |
+          set -euo pipefail
+          scripts/validate-agent-pod-security.py --selftest
+          scripts/validate-agent-pod-security.py
+
       # A proposal committed as `accepted` while demanding an approval it does
       # not carry is unrunnable by every supported path, and nothing fails on
       # it: the approve operation and the implementer both exit 0. One sat in

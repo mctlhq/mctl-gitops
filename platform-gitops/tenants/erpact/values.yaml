@@ -12,8 +12,10 @@ tenant:
     # GitHub logins, lowercased: the portal stores and looks them up in
     # lowercase, and mctl-api compares case-insensitively.
     - userId: obukhov23
-      role: developer
+      role: owner
     - userId: grerik
+      role: developer
+    - userId: octongues
       role: developer
   # Sized for two Frappe benches + MariaDB + Valkey + the site deployer
   # (requests ~550m/2.5Gi steady, ~840m/4.1Gi with every Job running at

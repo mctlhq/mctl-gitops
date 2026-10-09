@@ -404,7 +404,8 @@ ZITADEL is offered as an Access identity provider:
 
 `iac/github-login.tf` gives the applications that still identify people by
 GitHub login (the portal and its OIDC provider) that login, as declared by
-an admin. It is a no-op until those clients exist (#1500 phase 3).
+an admin. Its first client is the portal's OIDC provider (see "Portal
+sign-in" below).
 
 - **Source.** Optional field `github_login` in a user's Vault entry,
   `secret/platform/zitadel/users/<tenant>` or `secret/platform/zitadel/admins`:
@@ -425,9 +426,10 @@ an admin. It is a no-op until those clients exist (#1500 phase 3).
   as a JSON string, marked sensitive in the plan.
 - **Claim.** The Actions v1 action `mctlGithubLogin`, in every organization's
   `PRE_USERINFO_CREATION` trigger next to `argocdGroups`, sets
-  `mctl:github_login` only when the client is in `github_login_client_ids`
-  (variable, empty by default) and the user is one whose login this root
-  manages (their IDs are in the script). It checks the value again and
+  `mctl:github_login` only when the client is in
+  `local.github_login_clients` (the portal's clients, by reference in
+  `portal.tf`, plus the variable `github_login_client_ids`, empty by
+  default) and the user is one whose login this root manages (their IDs are in the script). It checks the value again and
   leaves the claim out if it is not a login. It may fail
   (`allowed_to_fail`), which leaves the claim out: a consumer must treat a
   missing claim as "not mapped" and refuse, never fall back to the e-mail.
@@ -446,6 +448,33 @@ an admin. It is a no-op until those clients exist (#1500 phase 3).
   `zitadel_user_metadata.github_login_tenant["<tenant>/<user_name>"]`
   (`github_login_admin["<key>"]` for an admin), which needs that address in
   `allowedDeletes`. Changing it is an in-place update.
+
+### Portal sign-in (#1500 phase 3)
+
+`iac/portal.tf` lets the portal (app.mctl.ai) sign people in through ZITADEL
+instead of GitHub (mctlhq/mctl-portal#150). The portal keeps identifying a
+person by GitHub login, which it reads from `mctl:github_login`; a ZITADEL
+user without the claim is refused there, never matched by e-mail.
+
+- **Project `MCTL Portal`**, owned by MCTL, `has_project_check` on, no
+  roles. One `zitadel_project_grant.portal_tenant` per tenant organization,
+  without role keys, is what lets a tenant's users obtain a token; removing a
+  tenant plans a destroy of its grant, which needs the address in
+  `allowedDeletes`.
+- **Client `portal-oidc-provider`**: the upstream of the portal's OIDC
+  provider (`plugins/oidc-provider-backend`). Confidential web app, client
+  secret plus PKCE, authorization code only, the single redirect
+  `https://app.mctl.ai/api/oidc-provider/zitadel/callback`, opaque access
+  token, `id_token_userinfo_assertion` on so the claim reaches the ID token.
+- **Secret.** The Job writes `OIDC_ZITADEL_CLIENT_ID` and
+  `OIDC_ZITADEL_CLIENT_SECRET` into `backstage/backstage-oidc-zitadel`,
+  which the `mctl-portal-oidc-zitadel` Application pre-creates empty
+  (`infra-components/mctl-platform/mctl-portal/oidc-zitadel.yaml`).
+- **Switch.** Creating the client changes nothing in the portal: it signs
+  people in at GitHub until its `oidcProvider.upstream` is set to `both` or
+  `zitadel`, a separate change in
+  `bootstrap/templates/mctl-platform/mctl-portal.yaml` that also has to
+  reference the Secret. Setting it back to `github` is the rollback.
 
 ## Sync hooks instead of Helm hooks
 
@@ -555,6 +584,59 @@ checks it both ways before anyone else is pointed at it:
    (`Errors.User.GrantRequired`).
 6. An `erpact` user with no matching Frappe user gets Frappe's 403 "Signup is
    disabled".
+
+### Labs apps sign-in ("Log in with MCTL account")
+
+`iac/labs-apps.tf` gives the public labs apps a ZITADEL client each, for an
+extra sign-in button next to their own GitHub/Google sign-in (never instead
+of it). Creating the clients turns nothing on.
+
+- **Projects `Coolify MCP` and `MCTL Academy`** in MCTL, one per app, with
+  `has_project_check` on and a grant to every tenant organization: users of
+  MCTL and of the declared tenants may sign in, nobody else. No roles.
+  Nothing of the platform's is granted: a ZITADEL user gets a personal
+  coolify-mcp tenant record or an academy learner account, keyed by the
+  ZITADEL `sub` alone and never matched to a GitHub or Google user by
+  e-mail.
+- **Applications `coolify-mcp`** (redirect
+  `https://coolify.mctl.ai/auth/zitadel/callback`) and **`mctl-academy`**
+  (`https://academy.mctl.ai/api/auth/oauth2/callback/zitadel`): web,
+  `client_secret_basic`, code flow (the apps add PKCE), opaque access token,
+  user info in the ID token.
+- The Job writes `ZITADEL_ISSUER`, `ZITADEL_CLIENT_ID`,
+  `ZITADEL_CLIENT_SECRET` and `ZITADEL_DISPLAY_NAME` into
+  `labs/coolify-mcp-oidc-zitadel` and `labs/mctl-academy-oidc-zitadel`
+  (`infra-components/labs/oidc-zitadel.yaml`, Application
+  `labs-oidc-zitadel`).
+- **Turning it on**, per app, is a separate change with its own owner
+  approval. The app's image must contain the feature (mctl-coolify-mcp#10,
+  mctl-academy#279). Then add to `envFrom` in
+  `services/labs/<app>/values.yaml`:
+
+  ```yaml
+  - secretRef:
+      name: <app>-oidc-zitadel
+      optional: true
+  ```
+
+  The Deployment rolls and the button appears. Both apps refuse to start on
+  a half-set configuration, and the Job writes all keys in one apply, so
+  check the Secret has its four keys before wiring it.
+- **Turning it off** is removing that entry. People who signed in through
+  ZITADEL keep their records but cannot reach them until it is back; GitHub
+  and Google users are unaffected either way.
+- **Who can get an account** is set by `login_policy.tf`: with
+  `allow_register = false` nobody can create one, so the button serves the
+  platform admins and tenant users this repository creates. A newcomer who
+  clicks it reaches the ZITADEL login page, has no way to register, and goes
+  back to GitHub.
+- The academy refuses a ZITADEL sign-in whose verified e-mail already
+  belongs to an academy user (it never links accounts by e-mail), so a
+  person who already uses the academy through GitHub with the same address
+  keeps using GitHub.
+- Moderators and stats admins of the academy are listed by GitHub login; a
+  ZITADEL user is listed only as `zitadel:<sub>` in
+  `MCTL_ACADEMY_MODERATORS` / `MCTL_ACADEMY_STATS_ADMINS`.
 
 ## Known risk: same site as tenant workloads
 

@@ -80,7 +80,7 @@ spec:
         # https://github.com/mctlhq/mctl-telegram/issues/123
         # run-investigator fails fast with a clear message if empty.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.68.3
+        value: ghcr.io/mctlhq/mctl-agents:1.69.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -255,6 +255,15 @@ spec:
       automountServiceAccountToken: false
       executor:
         serviceAccountName: mctl-agents-executor
+      # Restricted pod posture for the step that runs model-driven shell
+      # (mctl-gitops#1717). Template-level: the helper steps are root images.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       inputs:
         parameters:
           - name: oauth-key
@@ -305,6 +314,17 @@ spec:
       initContainers:
         - name: clone-gitops
           image: alpine/git:2.43.0
+          # Root on purpose: apk add + chown -R 1000:1000 /workdir hand-off
+          # (validate-local-workdir.py). Escalation is off and every capability
+          # except the file-ownership ones is dropped (mctl-gitops#1717).
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
           command: [sh, -c]
           args:
             - |
@@ -354,6 +374,11 @@ spec:
               mountPath: /secrets/deploy-key
       container:
         image: "{{workflow.parameters.agent_image}}"
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
