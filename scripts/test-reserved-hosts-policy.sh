@@ -67,6 +67,10 @@ NAME="mctl-vap-test-$$"
 cleanup() { rc=$?; docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; exit "$rc"; }
 trap cleanup EXIT
 
+# Docker Hub pulls time out in bursts on GitHub-hosted runners; retry the pull.
+# shellcheck source=lib/docker-pull-retry.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/docker-pull-retry.sh"
+docker_pull_retry "$K3S_IMAGE"
 echo "== starting $K3S_IMAGE"
 docker run -d --privileged --name "$NAME" -p 127.0.0.1::6443 "$K3S_IMAGE" server \
   --disable=traefik,servicelb,metrics-server,local-storage \
