@@ -164,14 +164,18 @@ spec:
             # above (mctlhq/mctl-gitops#1363).
             # Upstream identity provider of /oauth/authorize
             # (mctlhq/mctl-api#467, canary for mctlhq/mctl-gitops#1500 phase 2).
-            # `both`: ZITADEL (auth.mctl.ai) is the primary sign-in and GitHub
-            # stays as the legacy link, so a person without a linked ZITADEL
-            # identity can still sign in. Needs OAUTH_ZITADEL_CLIENT_ID/SECRET
-            # from oauthZitadelSecret below; mctl-api refuses to start in this
-            # mode without them. mctl-issued tokens and group resolution are
-            # unchanged: the ZITADEL identity maps to the linked GitHub login.
-            # Rollback: delete this line (default `github`).
-            OAUTH_UPSTREAM: "both"
+            # `zitadel`: ZITADEL (auth.mctl.ai) is the only sign-in. The canary
+            # on `both` was proven end to end on 2026-10-06. A person whose
+            # ZITADEL identity is not linked gets a 403 page that leads to the
+            # link flow (/identity/link/zitadel); that flow still signs them in
+            # with GitHub once to prove the old account, in any mode. Sessions
+            # that already exist keep working: refresh never goes upstream.
+            # Needs OAUTH_ZITADEL_CLIENT_ID/SECRET from oauthZitadelSecret
+            # below; mctl-api refuses to start in this mode without them.
+            # mctl-issued tokens and group resolution are unchanged: the
+            # ZITADEL identity maps to the linked GitHub login.
+            # Rollback: set this back to `both`.
+            OAUTH_UPSTREAM: "zitadel"
             # Browser origins permitted by CORS. Distinct from the redirect URIs
             # above: those govern where the OAuth dance may hand a code back,
             # this governs which page may read an authenticated API response.
