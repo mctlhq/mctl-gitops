@@ -738,6 +738,28 @@ jobs:
           print(f"zitadel-iac-inputs carries all {len(want)} root files")
           PY
 
+  # The Forgejo reconciler's scoped-team rule, evaluated by OpenTofu itself
+  # (main.tf lives in a ConfigMap, so no root here runs `tofu validate` on it).
+  # A packages-only team may name no repository; every other team must name
+  # repositories of its own org.
+  forgejo-reconcile-teams:
+    name: forgejo reconcile team rule
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: "1.13.1"
+          tofu_wrapper: false
+
+      - name: Scoped teams accept packages-only, refuse everything else without repos
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_forgejo_reconcile_teams.py
+
   # The declarative Vault human sign-in root. Like zitadel-iac, the in-cluster
   # Job applies it after merge, so formatting, provider schema errors and a
   # lock file that does not match the pinned provider must fail here.

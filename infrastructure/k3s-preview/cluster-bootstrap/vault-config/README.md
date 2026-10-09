@@ -206,6 +206,51 @@ work here, as it only fires from the default branch.
 `vault policy delete github-actions-repo-pat`. No workflow change is needed —
 `build-image.yaml` falls back to the GitHub App token on its own, which is
 exactly what it did for the whole period this role did not exist.
+`auth/jwt` also carries `erpact-images` (below), which has no fallback:
+disabling the mount stops those builds.
+
+### erpact-images (GitHub OIDC JWT)
+
+`erpact-images.yaml` builds the ERPact copy's images and pushes them to the
+Forgejo registry `git.mctl.ai/erpact/*`. It logs into `auth/jwt` as role
+`erpact-images` and can read exactly `secret/platform/forgejo/erpact-images`:
+
+| Key | Content |
+|---|---|
+| `user` | the Forgejo bot account (`erpact-ci`) |
+| `source-token` | its token with scope `read:repository`; the only credential the build sees |
+| `registry-token` | its token with scope `write:package`; used by the push step only |
+
+The role is bound to the workflow file **on main** (`@refs/heads/main`, not
+`@*` as `github-actions` is): a modified copy of the workflow dispatched from
+another branch gets no token. The workflow has no fallback, so a failed
+login is a failed run. The account and its teams are declared in the Forgejo
+reconcile manifest (docs/runbooks/forgejo.md, "Container registry").
+
+One-time apply (Vault admin token):
+
+```bash
+vault policy write github-actions-erpact-images \
+  infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-github-actions-erpact-images.hcl
+
+vault write auth/jwt/role/erpact-images -<<'EOF'
+{
+  "role_type": "jwt",
+  "user_claim": "sub",
+  "bound_audiences": "https://github.com/mctlhq",
+  "bound_claims_type": "string",
+  "bound_claims": {
+    "repository": "mctlhq/mctl-gitops",
+    "job_workflow_ref": "mctlhq/mctl-gitops/.github/workflows/erpact-images.yaml@refs/heads/main"
+  },
+  "policies": ["github-actions-erpact-images"],
+  "ttl": "10m"
+}
+EOF
+```
+
+**Rollback:** `vault delete auth/jwt/role/erpact-images` plus
+`vault policy delete github-actions-erpact-images`.
 
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.

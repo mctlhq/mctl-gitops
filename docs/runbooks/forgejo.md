@@ -106,7 +106,7 @@ Restore:
 
 - git.mctl.ai is proxied by Cloudflare: request bodies over 100 MB are rejected
   at the edge, so a single huge push over HTTPS can fail there. Push in smaller
-  chunks or use LFS.
+  chunks or use LFS. Container images: see "Container registry" below.
 - The volume is ReadWriteOnce on one hcloud volume; `replicaCount` must stay 1
   and the strategy `Recreate`.
 - Nodes run SELinux and relabel a volume to the mounting pod's MCS level.
@@ -197,6 +197,10 @@ The desired state is in Vault, not here (this repository is public):
   The run fails on `admin`/`owner`, on the names Owners, Developers or
   Readers, on a repository not in the org's `repos`, and on a member not in
   `users`.
+- A team with `"units": ["repo.packages"]` and no `repos` is the one team
+  that may name no repository: it gives its members the org's container
+  registry and nothing else (see "Container registry"). Any other team
+  without `repos` fails the run (`tests/test_forgejo_reconcile_teams.py`).
 - `oauth` binds the account to one identity of an authentication source:
   `source_id` is the source's id (`MCTL` is 1, Site Administration >
   Authentication Sources) and `subject` the identity's `sub` (for ZITADEL the
@@ -240,6 +244,52 @@ Read the outcome in the latest Job's log (`OK`, `SYNC`, `FAIL`, `WARN` lines).
 `ForgejoReconcileStale` fires after 2 hours without a successful run, and
 `ForgejoReconcileNeverSucceeded` fires for a CronJob that has never succeeded.
 A pod stuck in `CreateContainerConfigError` means the Vault secret is missing.
+
+## Container registry
+
+Forgejo's built-in registry serves `git.mctl.ai/<org>/<image>:<tag>`. It is
+used for images that must not be in `ghcr.io/mctlhq` (one org-wide pull
+credential): today the ERPact copy, built by
+`.github/workflows/erpact-images.yaml`.
+
+Who can pull and push. Forgejo decides package access for an org by the
+**highest team permission** the account holds in that org, regardless of the
+team's units or repositories (`services/packages/perm.go`), and does not
+consider site admins who are not members. So:
+
+| Account | Team | Packages |
+|---|---|---|
+| org owners | Owners | write |
+| `developers`, any member of a `write` team | Developers, `teams[]` | write |
+| `readers`, any member of a `read` team | Readers, `teams[]` | read |
+| anyone else, anonymous | none | none (401 on a private org) |
+
+A machine account that needs the registry only is a member of a team with
+`"units": ["repo.packages"]` and no `repos` (write to push, read to pull), so
+it reaches no repository. Its token is scoped as well: `write:package` or
+`read:package`.
+
+Pushing. Cloudflare rejects bodies over 100 MB and Traefik ends a request
+whose body takes over 60 s. `docker push`, containerd and crane send a layer
+in one request and get 413 on any layer over 100 MB. Push with a client that
+uses the registry's chunked upload (`PATCH` with `Content-Range`), e.g.
+`regctl` with `regctl registry set git.mctl.ai --blob-chunk 20971520
+--blob-max 20971520`; 20 MB chunks measured fine on 2026-10-04 (a 300 MB
+layer, 15 chunks). 50 MB chunks hit Traefik's 60 s from a slow uplink.
+
+Space. Packages live on `forgejo-data` with the repositories.
+`[packages] LIMIT_TOTAL_OWNER_SIZE = 4G` caps each owner (org or user); a push
+over the cap is refused, and the fix is deleting old versions, not raising
+the cap past what the volume holds. `erpact-images.yaml` keeps the newest 10
+semver tags per image and deletes older ones after each successful push.
+That is a workflow step because Forgejo's own cleanup rules exist only in the
+web UI, with no API, so they could not be declared. A deleted version is
+unlinked at once; its blobs are removed by the `cleanup_packages` cron at
+midnight, once they are over 24 hours old.
+
+Known behaviour: org members with write (Owners, Developers, write teams)
+can push and delete every package of the org, not only the CI account. For
+erpact that includes the developer accounts. Accepted as is (2026-10-04).
 
 ## Upgrades
 
