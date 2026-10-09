@@ -434,6 +434,23 @@ def _unique_env_by_suffix(doc, suffix: str, path: pathlib.Path):
     return next(iter(values))
 
 
+def _uncalled_needles(entrypoint: str) -> tuple[str, ...]:
+    """Every spelling a template could use to call an uncalled profile's agent.
+
+    From `orchestrator.run_authoring_canary:run_authoring_canary`: the module
+    (`run_authoring_canary`), the agent in snake and kebab case
+    (`authoring_canary`, `authoring-canary`) and in upper case, the form a
+    budget or timeout variable takes (`AUTHORING_CANARY`). The same three
+    lower-case spellings mctl-agents' inertness test scans for. A match on an
+    unrelated word fails the exemption, which is the safe direction.
+    """
+    module = entrypoint.split(":")[0].rsplit(".", 1)[-1]
+    agent = module.removeprefix("run_")
+    return tuple(dict.fromkeys(
+        (module, agent, agent.replace("_", "-"), agent.upper())
+    ))
+
+
 def validate_profile_against_cwft(
     path: pathlib.Path,
     doc: dict,
@@ -445,7 +462,14 @@ def validate_profile_against_cwft(
 
     uncalled=True (profile listed in policy.yaml uncalledProfiles) skips only
     the budget comparison, after verifying that the profile names no
-    budgetEnv and that no template references its entrypoint module.
+    budgetEnv and that no file in cwft_dir names the agent (see
+    _uncalled_needles). That proves no template or CronWorkflow calls the
+    agent DIRECTLY. It cannot see a call made inside the orchestrator, such
+    as a new mode of `python -m orchestrator.run_all`, which several agents
+    are reached through without appearing in any template; that direction
+    is guarded in mctl-agents, whose test suite fails when any module under
+    orchestrator/, tools/ or config/ names the entrypoint
+    (tests/test_authoring_canary.py for authoring-canary).
 
     The CWFT is derived from spec.runtime.sandbox.clusterWorkflowTemplate
     rather than from a profile->template table. A table would be a third
@@ -463,14 +487,26 @@ def validate_profile_against_cwft(
                 "declares sandbox.budgetEnv — an uncalled profile has no "
                 "budget variable to name"
             )
-        token = spec["runtime"]["entrypoint"].split(":")[0].rsplit(".", 1)[-1]
+        needles = _uncalled_needles(spec["runtime"]["entrypoint"])
         for template_path in sorted(cwft_dir.glob("*.yaml")):
-            if token in template_path.read_text():
+            # An unreadable template proves nothing either way, so it fails
+            # the exemption instead of aborting the run or passing it.
+            try:
+                text = template_path.read_text()
+            except Exception as exc:  # noqa: BLE001 - report and continue
                 errors.append(
                     f"{path}: profile {name!r} is listed in uncalledProfiles "
-                    f"but {template_path.name} references {token!r}; it has a "
-                    "caller"
+                    f"but {template_path.name} could not be read ({exc}); "
+                    "no caller cannot be proven"
                 )
+                continue
+            for needle in needles:
+                if needle in text:
+                    errors.append(
+                        f"{path}: profile {name!r} is listed in "
+                        f"uncalledProfiles but {template_path.name} references "
+                        f"{needle!r}; it has a caller"
+                    )
     if not cwft_path.exists():
         errors.append(
             f"{path}: names sandbox.clusterWorkflowTemplate {cwft_name!r} but "
@@ -488,7 +524,7 @@ def validate_profile_against_cwft(
         # `_unique_env_by_suffix` exists to refuse.
         budget_env = spec["runtime"]["sandbox"].get("budgetEnv")
         if uncalled:
-            budget = None
+            budget = None  # never compared, see below
         elif budget_env is not None:
             budget = _env_value_by_name(cwft, budget_env, cwft_path)
         else:
@@ -519,25 +555,24 @@ def validate_profile_against_cwft(
         errors.append(f"{path}: reading {cwft_path.name}: {exc}")
         return
 
-    if uncalled:
-        pass
-    elif budget_value is None and budget_env is not None:
-        errors.append(
-            f"{path}: profile {name!r} names sandbox.budgetEnv {budget_env!r} but "
-            f"{cwft_path.name} does not set it — the profile's effective value "
-            "cannot be verified against anything"
-        )
-    elif budget_value is None:
-        errors.append(
-            f"{path}: profile {name!r} declares budgetUsd {spec['budgetUsd']} but "
-            f"{cwft_path.name} sets no *{BUDGET_ENV_SUFFIX} — the profile's "
-            "effective value cannot be verified against anything"
-        )
-    elif budget_value != float(spec["budgetUsd"]):
-        errors.append(
-            f"{path}: budgetUsd {spec['budgetUsd']} does not match "
-            f"{cwft_path.name}'s {budget_value}"
-        )
+    if not uncalled:
+        if budget_value is None and budget_env is not None:
+            errors.append(
+                f"{path}: profile {name!r} names sandbox.budgetEnv {budget_env!r} but "
+                f"{cwft_path.name} does not set it — the profile's effective value "
+                "cannot be verified against anything"
+            )
+        elif budget_value is None:
+            errors.append(
+                f"{path}: profile {name!r} declares budgetUsd {spec['budgetUsd']} but "
+                f"{cwft_path.name} sets no *{BUDGET_ENV_SUFFIX} — the profile's "
+                "effective value cannot be verified against anything"
+            )
+        elif budget_value != float(spec["budgetUsd"]):
+            errors.append(
+                f"{path}: budgetUsd {spec['budgetUsd']} does not match "
+                f"{cwft_path.name}'s {budget_value}"
+            )
 
     if timeout_value is None:
         errors.append(
@@ -663,9 +698,18 @@ def validate_catalog(
     check_stale_exemptions: bool = True,
 ):
     profiles_by_name: dict[str, list[str]] = {}
+    # Names of every profile file on disk, valid or not, so an exempt profile
+    # with its own error is not also reported as a stale exemption.
+    names_on_disk: set[str] = set()
 
     profiles_dir = root / "execution-profiles"
     for profile_path in sorted(profiles_dir.glob("*/profile.yaml")) if profiles_dir.is_dir() else []:
+        try:
+            raw_name = (load_yaml(profile_path) or {}).get("metadata", {}).get("name")
+        except Exception:  # noqa: BLE001 - validate_profile_file reports it
+            raw_name = None
+        if isinstance(raw_name, str):
+            names_on_disk.add(raw_name)
         result = validate_profile_file(profile_path, profile_schema, policy, errors)
         if result is None:
             continue
@@ -688,7 +732,7 @@ def validate_catalog(
 
     # A fixture without its own policy.yaml borrows the real one, whose
     # exemptions name real profiles the fixture does not contain.
-    stale_names = policy.uncalled_profiles - set(profiles_by_name)
+    stale_names = policy.uncalled_profiles - names_on_disk
     for stale in sorted(stale_names if check_stale_exemptions else ()):
         errors.append(
             f"policy.yaml: uncalledProfiles names {stale!r}, which is not a "
@@ -758,7 +802,7 @@ def run_selftest() -> list:
                 policy,
                 errors,
                 cwft_dir=case_cwft_dir(case_dir),
-                check_stale_exemptions=(case_dir / "policy.yaml").exists(),
+                check_stale_exemptions=case_policy_path(case_dir) != CATALOG / "policy.yaml",
             )
         if errors:
             problems.append(f"valid fixture {case_dir.name} unexpectedly failed:")
@@ -777,7 +821,7 @@ def run_selftest() -> list:
                 policy,
                 errors,
                 cwft_dir=case_cwft_dir(case_dir),
-                check_stale_exemptions=(case_dir / "policy.yaml").exists(),
+                check_stale_exemptions=case_policy_path(case_dir) != CATALOG / "policy.yaml",
             )
         if not errors:
             problems.append(f"invalid fixture {case_dir.name} unexpectedly passed (expected at least one error)")

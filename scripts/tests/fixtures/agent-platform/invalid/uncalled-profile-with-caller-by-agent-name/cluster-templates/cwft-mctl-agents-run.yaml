@@ -22,3 +22,5 @@ spec:
             value: "5.00"
           - name: MENTOR_BUDGET_USD
             value: "10.00"
+          - name: EXAMPLE_CANARY_BUDGET_USD
+            value: "0.01"
