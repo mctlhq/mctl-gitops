@@ -71,7 +71,7 @@ def check_template(where: str, tpl: dict, spec: dict) -> list[str]:
 def violations(directory: Path) -> list[str]:
     found: list[str] = []
     matched = 0
-    for path in sorted(directory.glob("cwft-mctl-agents-*.yaml")):
+    for path in sorted(directory.glob("*.yaml")):
         for doc in yaml.safe_load_all(path.read_text()):
             if not isinstance(doc, dict):
                 continue
