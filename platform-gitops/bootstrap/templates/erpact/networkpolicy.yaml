@@ -9,7 +9,8 @@
 # (projects/project-erpact.yaml) does not allow NetworkPolicy from that
 # repository, so the tenant cannot widen its own ingress.
 #
-# Narrow on purpose: one source namespace, the deployer pods only, one port.
+# Narrow on purpose: the mctl-api server pods only (the namespace also runs
+# cron jobs that have no business here), the deployer pods only, one port.
 # Remove together with internal/erpactsites in mctl-api once Option B ships.
 #
 # Wave 0, no annotation: a later wave would deadlock root-app (see
@@ -29,9 +30,14 @@ spec:
     - Ingress
   ingress:
     - from:
+        # namespaceSelector and podSelector in ONE element: an AND, not an OR
+        # across two elements.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: mctl-api
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-api
       ports:
         - protocol: TCP
           port: 8000
