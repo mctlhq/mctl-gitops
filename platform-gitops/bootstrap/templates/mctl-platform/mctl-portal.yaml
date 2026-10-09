@@ -372,7 +372,8 @@ spec:
               # Which providers the sign-in page offers (mctlhq/mctl-portal#155):
               # github, zitadel, or both (ZITADEL first, GitHub as legacy).
               # Rollback from a ZITADEL canary is `github`.
-              signIn: github
+              # Canary (#1500 phase 3.4): ZITADEL first, GitHub as legacy.
+              signIn: both
               # Turns on the auth backend's server-side session (stored in
               # the portal database). The oidc provider needs it for its
               # state and nonce; without it /api/auth/oidc/start answers 500.
