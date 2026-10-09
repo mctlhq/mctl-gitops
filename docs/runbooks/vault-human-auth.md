@@ -68,6 +68,11 @@ vault-human-auth-iac Job ── Vault: auth/mctl, role `zitadel`,
   `secret/` looked empty to a tenant, who had to type `teams/<tenant>/` into
   "View secret" by hand. The CLI equivalent is
   `vault kv list secret/teams/<tenant>/`.
+
+  Anything kept directly under `teams/` is therefore visible by name to every
+  tenant. Only tenant folders belong there; platform-owned secrets go under
+  `secret/platform/`. Per-tenant mounts, which would remove the shared listing
+  altogether, are tracked in #1670.
 - **Token lifetime.** Human tokens live 1h and cannot be renewed past that (`token_max_ttl` 1h); sign in again. Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
 
 Verified before rollout on a local ZITADEL v4.19.2 and Vault 1.17.2, running
@@ -259,6 +264,46 @@ grant at all, and before it the grant allowed exactly `auth/oidc` to
 
 Every human signs in again, as with the move itself. This path is not
 rehearsed: plan it on a local Vault first.
+
+## The move of `secret/teams/platform/` (2026-10-04)
+
+Once tenants could list `teams/` (above), a legacy `platform` folder showed
+up there next to the tenant folders. It held two keys, last written on
+2026-03-21 and referenced nowhere, because the `mctl-agent` consumers read
+`secret/platform/mctl-agent/*`. The audit log shows no reads between the
+audit device going live (its first entry is at 20:00:04Z that day) and the
+move; nothing older is observable. The owner approved moving the folder out
+of `teams/`.
+
+| From | To | Versions |
+| --- | --- | --- |
+| `secret/teams/platform/mctl-agent/database` | `secret/platform/legacy/teams-platform/mctl-agent/database` | latest (v2) copied; v1 and v2 removed |
+| `secret/teams/platform/mctl-agent/tokens` | `secret/platform/legacy/teams-platform/mctl-agent/tokens` | latest (v1) copied and removed |
+
+- **Before.** Nothing referenced the path. That was checked with
+  `gh search code` across the `mctlhq` default branches, the live cluster
+  (ExternalSecrets and their stores, workloads, ConfigMaps, Argo workflow
+  templates, Applications, pods), and every Vault policy and Kubernetes auth
+  role. The templated `teams/${TEAM}/...` paths only resolve for existing
+  tenants, and no tenant is called `platform`.
+- **Move (21:31Z).** Each latest version was piped from the old path to the
+  new one, and checked by comparing a SHA-256 of the sorted data on both
+  sides, without printing any value. The old paths were then removed with
+  `vault kv metadata delete`, because a plain `kv delete` leaves earlier
+  versions readable.
+- **Audit log.** The Loki query
+  `{namespace="vault",container="vault"} |= "teams/platform"` from 20:00Z to
+  the move returned 18 requests, all from the admin token that did the
+  inventory and the move, starting at 21:29:52Z. Throughout that window the
+  pipeline delivered 200 to 380 audit requests every 10 minutes, so an empty
+  result means no reads, not a missing log.
+- **After.**
+  - `secret/metadata/teams/` lists only tenant folders.
+  - Every old version returns 404.
+  - An admin reads the copies.
+  - A `human-tenant-erpact` token gets 403 on `platform/` and on both copies.
+
+Delete the copies once the owner confirms that nothing needs them.
 
 ## Break-glass
 
