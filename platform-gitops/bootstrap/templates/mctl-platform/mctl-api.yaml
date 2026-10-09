@@ -13,6 +13,33 @@ spec:
       helm:
         releaseName: mctl-api
         values: |
+          # Two replicas since mctl-api 4.70.0 (mctl-api#503), after the
+          # 2026-10-09 outage in which the single pod sat unready for five
+          # hours. OAuth sign-ins keep their in-flight state (pending
+          # authorizations, codes) in Postgres and work on any replica. The
+          # identity link flow keeps its challenges in the memory of the pod
+          # that started them, so the Service gets a sticky cookie: every
+          # link step is a browser request and stays on one pod (without it a
+          # link fails safe with "start again"). Rate limiters are per pod, so
+          # their effective ceilings double. The spread keeps the replicas on
+          # different nodes; ScheduleAnyway, so a node down for maintenance
+          # never blocks scheduling.
+          replicaCount: 2
+          service:
+            annotations:
+              traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+              traefik.ingress.kubernetes.io/service.sticky.cookie.name: mctl_api_affinity
+              traefik.ingress.kubernetes.io/service.sticky.cookie.secure: "true"
+              traefik.ingress.kubernetes.io/service.sticky.cookie.httponly: "true"
+              traefik.ingress.kubernetes.io/service.sticky.cookie.samesite: lax
+          topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: mctl-api
+
           image:
             repository: ghcr.io/mctlhq/mctl-api
             tag: "4.70.0"

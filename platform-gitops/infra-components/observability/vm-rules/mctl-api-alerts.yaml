@@ -80,6 +80,30 @@ spec:
               restart of the deployment clears a pod that is stuck
               Running-but-unready.
 
+        - alert: MctlApiDegraded
+          # Fewer replicas available than the deployment asks for, averaged
+          # over 15m (same reason as above: a flapping pod must not reset the
+          # window). With two replicas the API keeps answering, so this is the
+          # early warning MctlApiNoReadyReplicas can no longer give: it only
+          # fires once every replica is gone. A rollout does not trip it,
+          # because RollingUpdate surges a new pod before removing an old one.
+          expr: |
+            kube_deployment_spec_replicas{namespace="mctl-api",deployment="mctl-api"}
+              - avg_over_time(kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}[15m])
+              > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            service: mctl-api
+          annotations:
+            summary: "mctl-api is running below its replica count"
+            description: >-
+              Deployment mctl-api has averaged fewer available replicas than
+              it asks for over the last 15 minutes. The API still answers on
+              the remaining replica, but one more failure takes it down. Look
+              at `kubectl -n mctl-api get pods -o wide` for the pod that is
+              not Ready and at its `readyz probe failed` log lines.
+
         - alert: MctlApiProbeAbsent
           # Without the series MctlApiDown can never fire — same reasoning as
           # BlackboxProbeMetricAbsent in blackbox-alerts.yaml.

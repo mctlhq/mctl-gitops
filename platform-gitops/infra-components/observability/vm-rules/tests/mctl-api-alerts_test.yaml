@@ -224,3 +224,74 @@ tests:
                 15 minutes, so MctlApiDown is blind. Check that the VMProbe
                 exists, that vmagent picked it up, and that blackbox-exporter is
                 running.
+
+  - interval: 1m
+    name: two healthy replicas and a rollout surge are not degraded
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x40'
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x15 3 3 2x23'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: MctlApiDegraded
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts: []
+
+  - interval: 1m
+    name: one replica down fires the warning, not the critical
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x50'
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x15 1x35'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlApiDegraded
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: MctlApiDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-api
+              namespace: mctl-api
+              deployment: mctl-api
+            exp_annotations:
+              summary: mctl-api is running below its replica count
+              description: >-
+                Deployment mctl-api has averaged fewer available replicas than
+                it asks for over the last 15 minutes. The API still answers on
+                the remaining replica, but one more failure takes it down. Look
+                at `kubectl -n mctl-api get pods -o wide` for the pod that is
+                not Ready and at its `readyz probe failed` log lines.
+      - eval_time: 45m
+        alertname: MctlApiNoReadyReplicas
+        exp_alerts: []
+
+  - interval: 1m
+    name: a replica flapping back to Ready briefly stays degraded
+    input_series:
+      - series: 'kube_deployment_spec_replicas{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x50'
+      - series: 'kube_deployment_status_replicas_available{namespace="mctl-api",deployment="mctl-api"}'
+        values: '2x10 1x14 2 1x14 2 1x14'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MctlApiDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-api
+              namespace: mctl-api
+              deployment: mctl-api
+            exp_annotations:
+              summary: mctl-api is running below its replica count
+              description: >-
+                Deployment mctl-api has averaged fewer available replicas than
+                it asks for over the last 15 minutes. The API still answers on
+                the remaining replica, but one more failure takes it down. Look
+                at `kubectl -n mctl-api get pods -o wide` for the pod that is
+                not Ready and at its `readyz probe failed` log lines.
