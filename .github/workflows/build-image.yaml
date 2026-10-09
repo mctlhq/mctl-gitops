@@ -279,6 +279,22 @@ jobs:
           username: ${{ steps.ghcr_token.outputs.username }}
           password: ${{ steps.ghcr_token.outputs.token }}
 
+      # setup-buildx pulls moby/buildkit from Docker Hub anonymously, and that
+      # pull times out in bursts on GitHub-hosted runners (2026-10-09: the
+      # mctl-api 4.71.0 build failed three times on auth.docker.io, the fourth
+      # attempt passed). Pull it here with retries first; buildx reuses an image
+      # that is already present. A pull that never succeeds still fails the job.
+      - name: Pre-pull BuildKit image (retry)
+        run: |
+          image="moby/buildkit:buildx-stable-1"
+          for n in 1 2 3 4 5; do
+            docker pull "$image" && exit 0
+            echo "docker pull $image failed (attempt $n/5)" >&2
+            [ "$n" -lt 5 ] && sleep "$((n * 10))"
+          done
+          echo "::error::docker pull $image failed after 5 attempts"
+          exit 1
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 

@@ -47,11 +47,14 @@ processors:
     - key: k8s.cluster.name
       value: mctl-preprod
       action: insert
-    - key: deployment.environment
+    - key: deployment.environment.name
       value: preprod
       action: insert
   redaction:
     allow_all_keys: true
+    summary: info
+    ignored_key_patterns:
+    - ^gen_ai\.usage\.((cache_read|cache_creation)[._])?(input|output|reasoning|prompt|completion|total)_tokens$
     blocked_key_patterns:
     - (?i).*(authorization|cookie|api[-_]?key|token|secret|password|credential).*
     - (?i)^vault\..*
