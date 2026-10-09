@@ -39,6 +39,7 @@ spec:
         GITHUB_WEBHOOK_SECRET: "{{ `{{ .webhook_secret }}` }}"
         BACKSTAGE_LANDING_TOKEN: "{{ `{{ .landing_token }}` }}"
         BACKSTAGE_TOKEN: "{{ `{{ .backstage_token }}` }}"
+        AUTH_SESSION_SECRET: "{{ `{{ .auth_session_secret }}` }}"
   data:
     - secretKey: client_id
       remoteRef:
@@ -128,6 +129,16 @@ spec:
       remoteRef:
         key: platform/backstage/landing-token
         property: token
+    # auth.session.secret: signs the auth backend's session cookie. The oidc
+    # (ZITADEL) sign-in keeps its state and nonce in that session and fails
+    # with "authentication requires session support" without it. Random,
+    # used only by the portal; rotating it ends in-flight sign-ins only.
+    # Must exist in Vault BEFORE this file merges, or the whole
+    # backstage-oauth ExternalSecret stops syncing.
+    - secretKey: auth_session_secret
+      remoteRef:
+        key: platform/backstage/auth-session
+        property: session-secret
 
 ---
 apiVersion: external-secrets.io/v1beta1
@@ -362,6 +373,11 @@ spec:
               # github, zitadel, or both (ZITADEL first, GitHub as legacy).
               # Rollback from a ZITADEL canary is `github`.
               signIn: github
+              # Turns on the auth backend's server-side session (stored in
+              # the portal database). The oidc provider needs it for its
+              # state and nonce; without it /api/auth/oidc/start answers 500.
+              session:
+                secret: ${AUTH_SESSION_SECRET}
               providers:
                 github:
                   production:
