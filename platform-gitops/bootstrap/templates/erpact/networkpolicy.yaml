@@ -1,0 +1,37 @@
+# Lets mctl-api reach the ERPact site-deployer (mctl-api#486, temporary
+# Option A; mctl-api#499 tracks the replacement). The namespace is under the
+# tenant chart's default-deny-all, which admits only traefik, monitoring and
+# the namespace itself, so mctl-api's call to
+# erpact-deployer.erpact.svc.cluster.local:8000 was refused (503 from
+# /api/v1/tenants/erpact/sites).
+#
+# Declared here, not in git.mctl.ai/erpact/mctl-apps: the AppProject
+# (projects/project-erpact.yaml) does not allow NetworkPolicy from that
+# repository, so the tenant cannot widen its own ingress.
+#
+# Narrow on purpose: one source namespace, the deployer pods only, one port.
+# Remove together with internal/erpactsites in mctl-api once Option B ships.
+#
+# Wave 0, no annotation: a later wave would deadlock root-app (see
+# applications.yaml).
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-mctl-api-to-deployer
+  namespace: erpact
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: erpact-deployer
+      app.kubernetes.io/name: helm-deployer
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+      ports:
+        - protocol: TCP
+          port: 8000
