@@ -194,8 +194,14 @@ spec:
         # initialises, and at 20 the new pod hit "too many connections for
         # role" (2026-09-24 11:20Z); the agent registry, surface identities,
         # event outbox and domains stores then stayed disabled (503) until
-        # the next restart. Steady state is ~8; 40 covers two pods at init.
-        connectionLimit: 40
+        # the next restart.
+        # 64, not 40: mctl-api runs 2 replicas since gitops#1715, so a rolling
+        # update has three pods at once, each holding 11-15 connections
+        # (measured 2026-10-09: 15 + 13 + 11 = 39). At 40 the surge pod hit
+        # the limit again and its agent registry and domains stores stayed
+        # disabled, so it never became Ready. 64 covers three pods at init
+        # with headroom; mctl-api#508 tracks shrinking the per-store pools.
+        connectionLimit: 64
         ensure: present
         passwordSecret:
           name: mctl-api-db-creds
