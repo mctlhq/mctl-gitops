@@ -12,7 +12,7 @@ tenant:
     # GitHub logins, lowercased: the portal stores and looks them up in
     # lowercase, and mctl-api compares case-insensitively.
     - userId: obukhov23
-      role: developer
+      role: owner
     - userId: grerik
       role: developer
     - userId: octongues
