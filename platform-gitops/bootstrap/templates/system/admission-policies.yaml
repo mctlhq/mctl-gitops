@@ -83,6 +83,7 @@ spec:
 # root-app from bootstrap/templates/mctl-platform/:
 #   allow-monitoring-to-mctl-agent               admins, mctl-agent.yaml
 #   allow-mctl-agent-to-mctl-telegram-bot-start  labs, mctl-telegram-bot-start-netpol.yaml
+#   allow-ingress-from-mctl-api-to-deployer      erpact, erpact/networkpolicy.yaml
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -107,7 +108,8 @@ spec:
           'allow-ingress-from-monitoring',
           'allow-mctl-services-internet-egress',
           'allow-monitoring-to-mctl-agent',
-          'allow-mctl-agent-to-mctl-telegram-bot-start'
+          'allow-mctl-agent-to-mctl-telegram-bot-start',
+          'allow-ingress-from-mctl-api-to-deployer'
         ]
       message: "NetworkPolicies in tenant namespaces are limited to the platform-rendered set; policies are additive and a new one can relax the tenant's isolation"
       reason: Forbidden
