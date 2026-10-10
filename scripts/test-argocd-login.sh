@@ -167,6 +167,9 @@ kubectl -n argocd port-forward svc/argocd-server 18080:80 >/dev/null 2>&1 &
 PF_PID=$!
 for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 1; done
 
+# The #1545 signal; checked before the login, which needs oidc.config.
+[ -z "$APPLY_ERRORS" ] || fail "server-side apply failed for:$APPLY_ERRORS"
+
 # Where Argo CD's own login must send the browser: the oidc.config issuer.
 OIDC_ISSUER="$(kubectl -n argocd get cm argocd-cm -o jsonpath='{.data.oidc\.config}' | sed -n 's/^issuer: *//p')"
 [ -n "$OIDC_ISSUER" ] || fail "argocd-cm has no oidc.config issuer"
@@ -178,5 +181,4 @@ case "$loc" in
   *) fail "/auth/login answered: $loc" ;;
 esac
 
-[ -z "$APPLY_ERRORS" ] || fail "server-side apply failed for:$APPLY_ERRORS"
 echo "PASS"
