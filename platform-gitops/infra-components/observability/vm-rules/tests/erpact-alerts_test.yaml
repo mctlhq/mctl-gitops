@@ -1,4 +1,4 @@
-# Unit tests for erpact-alerts.yaml (groups erpact.availability and erpact.backup).
+# Unit tests for erpact-alerts.yaml (groups erpact.availability, erpact.capacity and erpact.backup).
 #
 # rule_files is resolved relative to this file. generated/ is produced by
 # scripts/check-vm-rules.sh, which extracts each VMRule's `.spec`.
@@ -275,3 +275,89 @@ tests:
                 No kube_cronjob_created series for erpact/erpact-restore-drill. The
                 CronJob was removed from mctl-apps or is not scraped, and the other
                 restore drill alerts are blind while this lasts.
+
+  # erpact.capacity. Limit 2560Mi = 2684354560 bytes, as set in mctl-apps#12.
+  - interval: 1m
+    name: mariadb at half its memory limit stays quiet
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+        values: '1342177280x40'
+      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
+        values: '1342177280x40'
+      - series: 'kube_pod_container_resource_limits{namespace="erpact",pod="mariadb-0",container="mariadb",resource="memory"}'
+        values: '2684354560x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ErpactMariadbMemoryHigh
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ErpactMariadbMemoryMetricAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: mariadb above 85% for under 15 minutes stays quiet
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+        values: '1342177280x10 2362232012.8x10'
+      - series: 'kube_pod_container_resource_limits{namespace="erpact",pod="mariadb-0",container="mariadb",resource="memory"}'
+        values: '2684354560x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ErpactMariadbMemoryHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: mariadb at 88% of its limit for 15 minutes fires
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+        values: '2362232012.8x30'
+      - series: 'kube_pod_container_resource_limits{namespace="erpact",pod="mariadb-0",container="mariadb",resource="memory"}'
+        values: '2684354560x30'
+      # Another erpact container near its own limit must not fire this alert.
+      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="erpact-shared-gunicorn-x",container="gunicorn",metrics_path="/metrics/cadvisor"}'
+        values: '760000000x30'
+      - series: 'kube_pod_container_resource_limits{namespace="erpact",pod="erpact-shared-gunicorn-x",container="gunicorn",resource="memory"}'
+        values: '805306368x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ErpactMariadbMemoryHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: erpact
+              namespace: erpact
+              pod: mariadb-0
+              container: mariadb
+            exp_annotations:
+              summary: erpact MariaDB is at 88% of its memory limit
+              description: >-
+                mariadb-0 has used over 85% of its memory limit for 15
+                minutes. When it reaches the limit, the kernel kills it and every
+                erpact site answers 500 until it restarts. Raise the limit in
+                git.mctl.ai/erpact/mctl-apps infra/mariadb.yaml (the change
+                restarts MariaDB, ~20 s of 500s), and check the tenant quota
+                limits.memory first.
+
+  - interval: 1m
+    name: mariadb without a memory limit series fires the absent alert
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+        values: '1342177280x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ErpactMariadbMemoryMetricAbsent
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: ErpactMariadbMemoryMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: erpact
+            exp_annotations:
+              summary: erpact MariaDB memory usage cannot be computed
+              description: >-
+                The working set of container mariadb in namespace erpact, or its
+                memory limit, has been missing for 30 minutes, so
+                ErpactMariadbMemoryHigh cannot fire. Check that pod mariadb-0
+                exists and still has a memory limit, and check the kubelet
+                cAdvisor and kube-state-metrics scrapes.
