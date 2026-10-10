@@ -856,14 +856,20 @@ spec:
                   # earlier continue: true telegram route (canary, Access login,
                   # SLO fast-burn, communication agent, mctl-api). Adding a new
                   # continue: true telegram route for an alert that can be
-                  # critical means adding its names to that exclusion too;
-                  # scripts/check-alertmanager-routes.py fails CI on any
-                  # platform rule that would page twice.
+                  # critical means adding its names to that exclusion too.
+                  # scripts/check-alertmanager-routes.py fails CI on a
+                  # platform rule that would page twice, but only where its
+                  # STATIC labels decide the routing; a route gated on a
+                  # query-result label (project, namespace, job) needs a CASES
+                  # entry in that script to be covered.
                   #
                   # The ArgoCD platform-app route is not excluded: both of its
                   # alerts are severity=warning, and excluding them by name
                   # would also drop tenant-project apps, which that route does
-                  # not page.
+                  # not page. Raising either to critical would page
+                  # project=default|platform twice, and the static-label check
+                  # cannot see that (no project label): add a project-scoped
+                  # exclusion here at the same time.
                   - receiver: telegram
                     continue: true
                     matchers:
@@ -876,7 +882,10 @@ spec:
                   # here (which also matches alerts with no severity label).
                   # Alertmanager.* covers the upstream alertmanager.rules group
                   # and vmalert's AlertmanagerErrors; MctlAgentMetricsAbsent is
-                  # mctl-agent's own liveness signal.
+                  # mctl-agent's own liveness signal. VMAlert.*/vmalert.* match
+                  # no alert shipped today (vmalert's own rules have generic
+                  # names, handled below); they are kept, as #1771 asked, so a
+                  # future rule named after the component is paged too.
                   - receiver: telegram
                     continue: true
                     matchers:
@@ -885,7 +894,10 @@ spec:
                   # vmalert's own rules have generic names
                   # (ConfigurationReloadFailure also exists in the vmagent
                   # group), so they are matched by the alertgroup label vmalert
-                  # adds to every alert. RecordingRulesError/NoData and the
+                  # adds to every alert unless -disableAlertgroupLabel is set
+                  # (it is not here); the group is named "vmalert" in the
+                  # victoria-metrics-k8s-stack 0.72.5 rule files, so re-check
+                  # both on a chart bump. RecordingRulesError/NoData and the
                   # RemoteWrite* alerts are left out: they concern recording
                   # rules and state persistence, not alert delivery. The vm
                   # ServiceDown alert is scoped to the alerting components by

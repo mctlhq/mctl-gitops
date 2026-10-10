@@ -24,14 +24,24 @@ it with `amtool`:
        - every severity=critical alert resolves to telegram, unless it is
          muted outright (resolves to "null" only).
 
-amtool is used from PATH when present; otherwise the pinned Alertmanager
-release below is downloaded and its sha256 verified. Its version matches the
-VMAlertmanager image the victoria-metrics-k8s-stack chart deploys, so routing
-semantics are the cluster's.
+amtool is used from PATH only when it reports the pinned version; otherwise
+the pinned Alertmanager release below is downloaded once, its sha256
+verified, and cached under $XDG_CACHE_HOME (or ~/.cache), so the self-test
+and the real run in one CI job share a single download. The version matches
+the VMAlertmanager image the victoria-metrics-k8s-stack chart deploys, so
+routing semantics are the cluster's.
+
+Needs helm, pyyaml and (without a cached amtool) network egress to github.com;
+validate-manifests.yml has all three by the time check-vm-rules.sh runs.
+
+Scope of check 3: rules are routed with their STATIC labels only. A route
+gated on a label that comes from the query result (project, namespace, job)
+is visible only through CASES, so label-scoped combinations that matter need
+an explicit CASES entry.
 
 Run with --selftest to prove the checks still fail on a broken tree: it removes
-the critical route, the dedupe exclusion and the trailing mctl-agent route in
-turn and asserts each mutation is caught.
+the critical route, the dedupe exclusion, the trailing mctl-agent route and an
+alerting-path route, and buries the trailing route, asserting each is caught.
 
 Run: python3 scripts/check-alertmanager-routes.py [--selftest] [--config FILE]
   --config FILE  test an already-rendered Alertmanager config instead of
@@ -58,7 +68,11 @@ ROOT = Path(__file__).resolve().parent.parent
 CHART = ROOT / "platform-gitops/bootstrap"
 VALUES = CHART / "values.yaml"
 TEMPLATE = "templates/observability/monitoring.yaml"
-RULES_DIR = ROOT / "platform-gitops/infra-components/observability/vm-rules"
+# Honours the same RULES_DIR override as check-vm-rules.sh, which passes it
+# through, so the promtool half and this half never check different rule sets.
+RULES_DIR = Path(os.environ.get(
+    "RULES_DIR",
+    ROOT / "platform-gitops/infra-components/observability/vm-rules"))
 
 # victoria-metrics-k8s-stack 0.72.5 deploys VMAlertmanager v0.28.1
 # (alertmanager.spec.image.tag in the chart's values.yaml).
@@ -169,10 +183,27 @@ def render_config() -> dict:
         f"rendered from {TEMPLATE}")
 
 
-def find_amtool(workdir: Path) -> str:
+def amtool_version(path: str) -> str | None:
+    out = subprocess.run([path, "--version"], capture_output=True, text=True,
+                         check=False)
+    # "amtool, version 0.28.1 (branch: ..."
+    words = (out.stdout + out.stderr).split()
+    if "version" in words and words.index("version") + 1 < len(words):
+        return words[words.index("version") + 1]
+    return None
+
+
+def find_amtool() -> str:
     found = shutil.which("amtool")
-    if found:
+    if found and amtool_version(found) == AM_VERSION:
         return found
+    if found:
+        print(f"amtool on PATH is {amtool_version(found)}, not {AM_VERSION}; "
+              f"using the pinned release instead", file=sys.stderr)
+    cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    dest = cache / "mctl-amtool" / AM_VERSION / "amtool"
+    if dest.is_file() and amtool_version(str(dest)) == AM_VERSION:
+        return str(dest)
     with urllib.request.urlopen(AM_URL, timeout=60) as resp:  # noqa: S310
         blob = resp.read()
     digest = hashlib.sha256(blob).hexdigest()
@@ -183,9 +214,11 @@ def find_amtool(workdir: Path) -> str:
         src = tar.extractfile(member)
         if src is None:
             raise RuntimeError(f"{member} missing from {AM_TARBALL}")
-        dest = workdir / "amtool"
-        dest.write_bytes(src.read())
-    dest.chmod(0o755)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".tmp")
+        tmp.write_bytes(src.read())
+    tmp.chmod(0o755)
+    tmp.replace(dest)
     return str(dest)
 
 
@@ -242,6 +275,14 @@ def problems(amtool: str, config: dict, workdir: Path,
         return [f"amtool check-config failed:\n{err}"]
     found = []
 
+    # The matcher-less mctl-agent route stands in for the root default
+    # receiver; anything appended after it is unreachable.
+    tail = (config.get("route", {}).get("routes") or [None])[-1]
+    if tail != {"receiver": "mctl-agent"}:
+        found.append(f"the last child route must be the matcher-less "
+                     f"mctl-agent route (it replaces the root default once a "
+                     f"continue: true route has matched); found {tail}")
+
     for desc, labels, want in CASES:
         got = router.receivers(labels)
         if verbose:
@@ -291,11 +332,10 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
         r["matchers"] = [m for m in r["matchers"] if "!~" not in m]
 
     def drop_agent_tail(cfg):
-        tail = routes(cfg)[-1]
-        if tail != {"receiver": "mctl-agent"}:
-            raise RuntimeError(f"selftest: last route is {tail}, "
-                               f"expected the matcher-less mctl-agent route")
         routes(cfg).pop()
+
+    def bury_agent_tail(cfg):
+        routes(cfg).append({"receiver": "telegram"})
 
     def drop_meta(cfg):
         del routes(cfg)[matcher_index(cfg, "MctlAgentMetricsAbsent")]
@@ -310,6 +350,8 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
         ("critical route removed", drop_critical, "KubeAPIDown"),
         ("dedupe exclusion removed", drop_dedupe, "pages Telegram 2 times"),
         ("trailing mctl-agent route removed", drop_agent_tail, "KubeAPIDown"),
+        ("route appended after the mctl-agent tail", bury_agent_tail,
+         "last child route"),
         ("alerting-path route removed", drop_meta, "MctlAgentMetricsAbsent"),
     ]:
         cfg = copy.deepcopy(config)
@@ -320,7 +362,7 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
                   f"{expect!r}. Got: {got}", file=sys.stderr)
             failed = 1
     if not failed:
-        print("check-alertmanager-routes.py self-test: all 4 mutations caught")
+        print("check-alertmanager-routes.py self-test: all 5 mutations caught")
     return failed
 
 
@@ -341,9 +383,9 @@ def main(argv: list[str]) -> int:
     else:
         config = render_config()
 
+    amtool = find_amtool()
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
-        amtool = find_amtool(workdir)
         if do_selftest:
             return selftest(config, amtool, workdir)
         print(f"== amtool check-config + routes test ({TEMPLATE}) ==")
