@@ -7,13 +7,14 @@ Same operations as the Backstage UI, but from your terminal.
 
 - A browser on this machine for `mctl auth login`. The [gh CLI](https://cli.github.com/)
   is only needed for the legacy GitHub-token path.
-- Go 1.25.13+ on the 1.25 line, **or 1.26.1+ on the 1.26 line** (for building
-  from source). The `go` directive in `go.mod` is a minimum, not a pin, so a
-  newer toolchain always satisfies it — including go1.26.0, which still
-  carries the 16 reachable `crypto/x509` and related stdlib advisories that
-  this floor exists to close (verified with `govulncheck@v1.7.0`: clean under
-  `GOTOOLCHAIN=go1.25.13`, 16 reachable under go1.26.0). Being "above the
-  floor" is not the same as being patched.
+- Go 1.26.9+ (for building from source). The `go` directive in `go.mod` is a
+  minimum, not a pin, so a newer toolchain always satisfies it. The floor is
+  1.26.9 because it closes the reachable `net/http`, `net/textproto` and
+  `crypto/tls` advisories (GO-2026-6603..6617) that the 1.25 line never got a
+  fix for (verified with `govulncheck`: 9 reachable under
+  `GOTOOLCHAIN=go1.25.13`, clean under go1.26.9). Being "above the floor" is
+  not the same as being patched: check a newer minor line with `govulncheck`
+  too.
 
 ## Install
 
