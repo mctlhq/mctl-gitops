@@ -319,6 +319,15 @@ jobs:
           scripts/check-vm-rules.sh --selftest
           scripts/check-vm-rules.sh
 
+      - name: Test Alertmanager routing (issue-1771)
+        # Every critical alert must reach Telegram exactly once; the selftest
+        # proves the test fails when the severity route is removed.
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_alertmanager_routing.py --selftest
+          python3 tests/test_alertmanager_routing.py
+
       - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
         run: |
           set -euo pipefail

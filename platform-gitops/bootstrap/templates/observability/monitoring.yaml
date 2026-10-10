@@ -514,6 +514,9 @@ spec:
                 group_interval: 5m
                 repeat_interval: 4h
                 routes:
+                  # Null routes first: a silence must win over the severity page below.
+                  # KubeControllerManagerDown|KubeSchedulerDown|KubeProxyDown are critical
+                  # upstream but meaningless on k3s, which does not expose them.
                   - receiver: "null"
                     matchers:
                       - alertname =~ "InfoInhibitor|Watchdog"
@@ -527,6 +530,21 @@ spec:
                     matchers:
                       - alertname = "KubeContainerWaiting"
                       - namespace = "vault"
+                  - receiver: "null"
+                    matchers:
+                      - alertname = "KubeJobFailed"
+                      - namespace = "labs"
+                  - receiver: "null"
+                    matchers:
+                      - alertname = "CPUThrottlingHigh"
+                      - namespace = "monitoring"
+                  - receiver: "null"
+                    matchers:
+                      - alertname =~ "KubeControllerManagerDown|KubeSchedulerDown|KubeProxyDown"
+                  - receiver: "null"
+                    matchers:
+                      - alertname =~ "KubePodNotReady|PodNotReady"
+                      - namespace = "argo-workflows"
                   # vault CronJobs (backup, auto-unseal) are operator-owned —
                   # mctl-agent can't remediate them, so a failed job pages a
                   # human. This also backstops the jobs' own Telegram reports:
@@ -586,6 +604,8 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlTelegramCanary.*"
+                      # Critical variants are paged by the severity route below.
+                      - severity != "critical"
                   # The Cloudflare Access login probe (#1329,
                   # vm-rules/access-login-probe.yaml). A broken or unverifiable
                   # sign-in locks people out of every Access application, and
@@ -599,6 +619,8 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "AccessLogin.*"
+                      # Critical variants are paged by the severity route below.
+                      - severity != "critical"
                   # seerrsense's ChatGPT plugin-directory review: a reviewer
                   # connecting, or a tool failing on them, is news for the
                   # operator and nothing mctl-agent can act on — so Telegram
@@ -702,27 +724,14 @@ spec:
                     matchers:
                       - alertname =~ "ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong"
                       - project =~ "default|platform"
+                      # Critical variants are paged by the severity route below.
+                      - severity != "critical"
                   # A stalled GitOps loop needs a human: nothing deploys until
                   # someone restarts or hard-refreshes (#970). No project
                   # label on this one — it is about the repo, not an app.
                   - receiver: telegram
                     matchers:
                       - alertname = "ArgoCDGitPollingStalled"
-                  - receiver: "null"
-                    matchers:
-                      - alertname = "KubeJobFailed"
-                      - namespace = "labs"
-                  - receiver: "null"
-                    matchers:
-                      - alertname = "CPUThrottlingHigh"
-                      - namespace = "monitoring"
-                  - receiver: "null"
-                    matchers:
-                      - alertname =~ "KubeControllerManagerDown|KubeSchedulerDown|KubeProxyDown"
-                  - receiver: "null"
-                    matchers:
-                      - alertname =~ "KubePodNotReady|PodNotReady"
-                      - namespace = "argo-workflows"
                   # Node-cordon / stuck-upgrade alerts go straight to a human on
                   # Telegram — mctl-agent cannot auto-remediate these (they need
                   # an operator to uncordon / re-drive the upgrade).
@@ -750,6 +759,8 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn"
+                      # Critical variants are paged by the severity route below.
+                      - severity != "critical"
                   # The two communication-agent alerts are the one case in
                   # this file where agent-only routing is not merely
                   # suboptimal but circular: both fire precisely when the
@@ -793,7 +804,9 @@ spec:
                   #
                   # The other four alerts ported in mctl-telegram#555 —
                   # PoolNearCapacity, FloodWaitSpike, OAuthPendingStuck,
-                  # BridgeDaemonsFlapping — are deliberately agent-only. They
+                  # BridgeDaemonsFlapping — are agent-only at warning severity
+                  # (their critical PoolNearCapacity/FloodWaitSpike variants now
+                  # also page Telegram through the severity route). They
                   # describe load and capacity conditions the agent can
                   # triage, and none of them implicates the agent itself.
                   # They are NOT listed in the catch-all below, and must not
@@ -808,6 +821,8 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
+                      # Critical variants are paged by the severity route below.
+                      - severity != "critical"
                   # mctl-api availability (vm-rules/mctl-api-alerts.yaml): the
                   # same circularity as the three above, one layer down.
                   # mctl-agent files its incidents through mctl-api, so an
@@ -822,11 +837,36 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlApi.*"
+                      # Critical variants are paged by the severity route below.
+                      - severity != "critical"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
                     matchers:
                       - alertname =~ "ArgoLocalWorkdirPodPending|ArgoLocalWorkdirQuotaHigh|ArgoLocalWorkdirQuotaCritical|NodeDiskSpaceCritical|NodeFilesystemCollectorFailed"
+                  # Alerts about the notification path itself (Alertmanager, vmalert,
+                  # mctl-agent's own metrics) must not be delivered only through it, so they
+                  # page Telegram whatever their severity. Critical ones are left to the
+                  # severity route below so they are never sent twice.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "Alertmanager.*|VMAlert.*|vmalert.*|MctlAgentMetricsAbsent"
+                      - severity != "critical"
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname = "ServiceDown"
+                      - job =~ ".*(vmalert|alertmanager).*"
+                      - severity != "critical"
+                  # Every critical alert reaches a human directly, not only through
+                  # mctl-agent. Placed after all terminal Telegram routes (those stay
+                  # Telegram-only, once) and after the null routes (silences win).
+                  # continue: true keeps the mctl-agent routes below reachable.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - severity = "critical"
                   - receiver: mctl-agent
                     matchers:
                       - alertname =~ "RecordingRulesNoData|ScrapePoolHasNoTargets|TooManyScrapeErrors|TooManyLogs"
@@ -834,6 +874,11 @@ spec:
                   - receiver: mctl-agent
                     matchers:
                       - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*"
+                  # Restores the root default for alerts passed on by a continue: true route
+                  # above (severity and meta-alert routes), which would otherwise never reach
+                  # mctl-agent. Makes the alertname list above redundant; removing it is a
+                  # separate clean-up.
+                  - receiver: mctl-agent
               receivers:
                 - name: "null"
                 - name: mctl-agent
