@@ -63,7 +63,6 @@ resource "cloudflare_zero_trust_access_policy" "seerrsense_service_token" {
   ]
 }
 
-
 # --- Applications --------------------------------------------------------------
 
 # Seerr (Overseerr) at media.mctl.ai, #1089 decision 1.

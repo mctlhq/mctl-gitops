@@ -132,12 +132,10 @@ notify() {
 # exists. But across every mctlhq repo, claude-review.yml's base trigger is
 # `pull_request: [opened, reopened, synchronize, ready_for_review]` — i.e. the
 # FIRST review always auto-fires on PR open, and re-reviews after a fix-up
-# push auto-fire too (synchronize is already in that trigger list). Only 7/16
-# repos (mctl-gitops, mctl-api, mctl-portal, mctl-web, mctl-agents, mctl-docs,
-# mctl-telegram) additionally wire up `issue_comment` as a manual rerun path;
-# the other 9 (incl. mctl-claude-remote, mctl-design, ...) have
-# no comment listener at all, so a posted "@claude review" there is a no-op.
-# A missing trigger comment is therefore the COMMON case, not an error — fall
+# push auto-fire too (synchronize is already in that trigger list). Every
+# caller repo also wires `issue_comment` as a manual rerun path (re-verified
+# on GitHub 2026-10-10), but that path is only needed for a rerun on an
+# unchanged head. A missing trigger comment is therefore the COMMON case, not an error — fall
 # back to "now" and rely on the caller launching the watcher right after the
 # open/push event it wants to observe.
 #
