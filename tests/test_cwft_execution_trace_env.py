@@ -70,7 +70,10 @@ def main():
     files = sorted(TEMPLATES_DIR.glob("cwft-mctl-agents-*.yaml"))
     check("found the mctl-agents CWFTs", len(files) >= 2, str(files))
     for path in files:
-        doc = yaml.safe_load(path.read_text())
+        # A second `---` document would go unchecked by safe_load; refuse it.
+        docs = [d for d in yaml.safe_load_all(path.read_text()) if d is not None]
+        check(f"{path.name} is a single YAML document", len(docs) == 1, f"{len(docs)} documents")
+        doc = docs[0] if docs else {}
         spec = doc.get("spec") or {}
         params = {p.get("name"): p for p in (spec.get("arguments") or {}).get("parameters") or []}
         maps_traceparent = False
