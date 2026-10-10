@@ -803,17 +803,18 @@ spec:
                   #
                   # The other four alerts ported in mctl-telegram#555 —
                   # PoolNearCapacity, FloodWaitSpike, OAuthPendingStuck,
-                  # BridgeDaemonsFlapping — are deliberately agent-only. They
-                  # describe load and capacity conditions the agent can
+                  # BridgeDaemonsFlapping — are deliberately not on this route.
+                  # They describe load and capacity conditions the agent can
                   # triage, and none of them implicates the agent itself.
                   # They are NOT listed in the catch-all below, and must not
-                  # be added "for symmetry": matching no child route at all,
-                  # they already reach mctl-agent through the root default
-                  # receiver, and the catch-all route carries no grouping or
-                  # timing of its own. Verified with `amtool config routes
-                  # test`: mctl-agent before the change and after it, in both
-                  # forms. An entry would read as a routing decision while
-                  # changing nothing.
+                  # be added "for symmetry": they reach mctl-agent through
+                  # the matcher-less route at the end of this list (formerly
+                  # the root default receiver), and the catch-all route
+                  # carries no grouping or timing of its own. An entry would
+                  # read as a routing decision while changing nothing.
+                  # PoolNearCapacity and FloodWaitSpike are severity=critical,
+                  # so since #1771 the severity route further down pages them
+                  # on Telegram as well — every critical alert does, by design.
                   - receiver: telegram
                     continue: true
                     matchers:
@@ -849,6 +850,93 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "ArgoLocalWorkdirPodPending|ArgoLocalWorkdirQuotaHigh|ArgoLocalWorkdirQuotaCritical|NodeDiskSpaceCritical|NodeFilesystemCollectorFailed"
+                  # ---- Direct paging by severity and for the alerting path (#1771)
+                  #
+                  # Everything above is an allowlist of alertnames. Before
+                  # these routes, a critical alert that was not on it —
+                  # KubeAPIDown, KubeletDown, AlertmanagerClusterDown, and 10
+                  # of the 25 platform-owned critical rules — reached a human
+                  # only if mctl-agent was up and chose to escalate. That
+                  # includes the alerts about the notification path itself,
+                  # which were routed to the component they are about.
+                  #
+                  # Placement is load-bearing. These sit AFTER every route
+                  # that stops evaluation (the "null" mutes, e.g. the k3s
+                  # KubeControllerManagerDown/KubeSchedulerDown/KubeProxyDown
+                  # false positives, and the telegram-only routes, which have
+                  # already paged), and BEFORE the mctl-agent catch-alls.
+                  # All of them are continue: true, so the agent still gets its
+                  # ticket: through the catch-alls below, or through the
+                  # matcher-less mctl-agent route at the very end.
+                  #
+                  # No alert may reach Telegram twice: two routes to the same
+                  # receiver are two notification pipelines and two messages.
+                  # So these routes partition on severity — the critical
+                  # route pages every critical alert, and the alerting-path
+                  # routes page only the non-critical ones — and the critical
+                  # route excludes exactly the alertnames already paged by an
+                  # earlier continue: true telegram route (canary, Access login,
+                  # SLO fast-burn, communication agent, mctl-api). Adding a new
+                  # continue: true telegram route for an alert that can be
+                  # critical means adding its names to that exclusion too.
+                  # scripts/check-alertmanager-routes.py fails CI on a
+                  # platform rule that would page twice, but only where its
+                  # STATIC labels decide the routing; a route gated on a
+                  # query-result label (project, namespace, job) needs a CASES
+                  # entry in that script to be covered.
+                  #
+                  # The ArgoCD platform-app route is not excluded: both of its
+                  # alerts are severity=warning, and excluding them by name
+                  # would also drop tenant-project apps, which that route does
+                  # not page. Raising either to critical would page
+                  # project=default|platform twice, and the static-label check
+                  # cannot see that (no project label): add a project-scoped
+                  # exclusion here at the same time.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - severity = "critical"
+                      - alertname !~ "MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*"
+                  # The alerting path itself pages regardless of severity:
+                  # when Alertmanager, vmalert or mctl-agent is what broke, the
+                  # alert about it must not depend on it. Critical ones are
+                  # already paged by the route above, hence severity != critical
+                  # here (which also matches alerts with no severity label).
+                  # Alertmanager.* covers the upstream alertmanager.rules group
+                  # and vmalert's AlertmanagerErrors; MctlAgentMetricsAbsent is
+                  # mctl-agent's own liveness signal. VMAlert.*/vmalert.* match
+                  # no alert shipped today (vmalert's own rules have generic
+                  # names, handled below); they are kept, as #1771 asked, so a
+                  # future rule named after the component is paged too.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "Alertmanager.*|VMAlert.*|vmalert.*|MctlAgentMetricsAbsent"
+                      - severity != "critical"
+                  # vmalert's own rules have generic names
+                  # (ConfigurationReloadFailure also exists in the vmagent
+                  # group), so they are matched by the alertgroup label vmalert
+                  # adds to every alert unless -disableAlertgroupLabel is set
+                  # (it is not here); the group is named "vmalert" in the
+                  # victoria-metrics-k8s-stack 0.72.5 rule files, so re-check
+                  # both on a chart bump. RecordingRulesError/NoData and the
+                  # RemoteWrite* alerts are left out: they concern recording
+                  # rules and state persistence, not alert delivery. The vm
+                  # ServiceDown alert is scoped to the alerting components by
+                  # job (vmalert-*, vmalertmanager-*); it is critical upstream,
+                  # so this branch only matters if that is ever downgraded.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertgroup = "vmalert"
+                      - alertname =~ "ConfigurationReloadFailure|AlertingRulesError|TooManyMissedIterations"
+                      - severity != "critical"
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname = "ServiceDown"
+                      - job =~ ".*(vmalert|alertmanager).*"
+                      - severity != "critical"
                   - receiver: mctl-agent
                     matchers:
                       - alertname =~ "RecordingRulesNoData|ScrapePoolHasNoTargets|TooManyScrapeErrors|TooManyLogs"
@@ -856,6 +944,17 @@ spec:
                   - receiver: mctl-agent
                     matchers:
                       - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|PlatformWebEndpoint.*"
+                  # Restores the root default for everything that got this far.
+                  # The root receiver fires only when NO child route matched,
+                  # and the continue: true direct-paging routes above count as
+                  # a match — without this route KubeAPIDown or
+                  # AlertmanagerFailedToSendAlerts would reach Telegram and stop
+                  # reaching mctl-agent. An alert that matched no route at all
+                  # lands here too, which is what the root default did for it.
+                  # Every alert reaching this point used to reach mctl-agent
+                  # (via the root default or the catch-alls above), so this
+                  # adds no agent traffic.
+                  - receiver: mctl-agent
               receivers:
                 - name: "null"
                 - name: mctl-agent
@@ -894,6 +993,72 @@ spec:
             enabled: false
           prometheusOperator:
             enabled: true # Keep operator to manage CRDs (ServiceMonitors, VMAlerts)
+
+          # Drop apiserver/etcd histogram buckets that nothing reads (#1772).
+          # They were ~22% of vmsingle's active series while it ran at ~1.6Gi
+          # of its 2Gi limit.
+          #
+          # `endpoints` is a list, and Helm replaces lists rather than merging
+          # them, so the chart's (0.72.5) default endpoint is restated in full
+          # here. Only metricRelabelConfigs is new. If you bump the chart,
+          # compare this endpoint with its kubeApiServer.vmScrape default.
+          #
+          # This is an explicit list of names on purpose: no regex such as
+          # `apiserver_.*_bucket`. A family that is not listed is still
+          # stored, so a dashboard added later does not lose data without
+          # anyone noticing. Only `_bucket` is dropped. `_sum` and `_count`
+          # stay, because the API Server dashboard reads
+          # apiserver_request_duration_seconds_sum/_count.
+          #
+          # DO NOT add these two. Enabled default rules read them:
+          #   apiserver_request_sli_duration_seconds_bucket
+          #     kube-apiserver-burnrate.rules (apiserver_request:burnrate*,
+          #     which KubeAPIErrorBudgetBurn reads),
+          #     kube-apiserver-availability.rules, and
+          #     kube-apiserver-histogram.rules
+          #   apiserver_client_certificate_expiration_seconds_bucket
+          #     KubeClientCertificateExpiration
+          # Before you add a name to this list, grep for it in
+          # infra-components/observability/{vm-rules,grafana-dashboards} and
+          # in the chart's enabled default rules and dashboards.
+          kubeApiServer:
+            vmScrape:
+              spec:
+                endpoints:
+                  - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+                    port: https
+                    scheme: https
+                    tlsConfig:
+                      caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                      serverName: kubernetes
+                    metricRelabelConfigs:
+                      - action: drop
+                        sourceLabels: [__name__]
+                        # A list: VictoriaMetrics joins the items with `|` and anchors
+                        # the result, so each entry matches one metric name exactly.
+                        regex:
+                          - apiserver_request_duration_seconds_bucket
+                          - apiserver_request_slo_duration_seconds_bucket
+                          - apiserver_response_sizes_bucket
+                          - apiserver_request_body_size_bytes_bucket
+                          - apiserver_watch_events_sizes_bucket
+                          - apiserver_watch_list_duration_seconds_bucket
+                          - apiserver_watch_cache_read_wait_seconds_bucket
+                          - apiserver_request_filter_duration_seconds_bucket
+                          - apiserver_admission_controller_admission_duration_seconds_bucket
+                          - apiserver_admission_step_admission_duration_seconds_bucket
+                          - apiserver_admission_webhook_admission_duration_seconds_bucket
+                          - apiserver_crd_conversion_webhook_duration_seconds_bucket
+                          - apiserver_flowcontrol_request_wait_duration_seconds_bucket
+                          - apiserver_flowcontrol_request_execution_seconds_bucket
+                          - apiserver_flowcontrol_request_queue_length_after_enqueue_bucket
+                          - apiserver_flowcontrol_work_estimated_seats_bucket
+                          - apiserver_flowcontrol_watch_count_samples_bucket
+                          - apiserver_flowcontrol_priority_level_request_utilization_bucket
+                          - apiserver_flowcontrol_priority_level_seat_utilization_bucket
+                          - apiserver_flowcontrol_read_vs_write_current_requests_bucket
+                          - apiserver_flowcontrol_demand_seats_bucket
+                          - etcd_request_duration_seconds_bucket
 
           kubeControllerManager:
             enabled: false
