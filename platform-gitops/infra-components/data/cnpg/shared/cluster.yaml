@@ -5,6 +5,10 @@ metadata:
   annotations:
     argocd.argoproj.io/compare-options: IgnoreExtraneous
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # The operator rolls the instances whenever this value changes; it is what
+    # `kubectl cnpg restart` sets, kept here so the roll goes through review.
+    # Set 2026-10-10 to apply priorityClassName (see below) to the running pods.
+    kubectl.kubernetes.io/restartedAt: "2026-10-10T22:04:59Z"
 spec:
   # HA: primary + 1 hot standby. Two instances is the minimum that lets a node
   # drain succeed — CNPG promotes the standby and evicts the old primary,
@@ -59,8 +63,11 @@ spec:
     target: prefer-standby
 
   # Data-path priority (#1774); class declared in
-  # priority-class.yaml (sync-wave -1). Changing it rolls the
-  # instances (standby first, then the primary per primaryUpdateMethod).
+  # priority-class.yaml (sync-wave -1). CNPG 1.25 does NOT roll the instances
+  # when only this field changes: after #1783 the spec carried the class for
+  # hours while shared-pg-1/-2 kept running without it. Bump the restartedAt
+  # annotation above to apply a change (standby first, then the primary per
+  # primaryUpdateMethod).
   priorityClassName: platform-data-critical
 
   affinity:
