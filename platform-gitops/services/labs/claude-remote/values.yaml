@@ -97,10 +97,17 @@ env:
   # mcp__mctl-events__ack_event — it wrote a fake acknowledgement to /tmp with
   # Bash instead (mctl-claude-remote#66) — so nothing was acknowledged after
   # the 0.12.1 haiku pin rolled on 2026-09-19 10:13Z, max_inflight saturated
-  # and the adapter stopped reading. Sonnet is the model the round trip was
-  # proven on (docs/claude-channels-spike.md). pr-steward is unaffected: its
-  # ticks pass --model explicitly (PR_STEWARD_MODEL, default sonnet).
-  CLAUDE_REMOTE_MODEL: "sonnet"
+  # and the adapter stopped reading. pr-steward is unaffected: its ticks pass
+  # --model explicitly (PR_STEWARD_MODEL, default sonnet).
+  #
+  # 2026-10-10: operator requested pinning Haiku 5.5 for this session despite
+  # #66, without running the GO/NO-GO validation proposed in
+  # mctl-claude-remote#79 (20+-event Sonnet-vs-Haiku-5.5 audit-stream
+  # comparison) first — explicit id so a future Haiku release can't silently
+  # re-open #66 the way the bare "haiku" alias did. If ack_event stops being
+  # called after this rolls out (max_inflight saturates, events stop being
+  # read), this is the first thing to revert: set back to "sonnet".
+  CLAUDE_REMOTE_MODEL: "claude-haiku-5-5"
   # Built-in scheduler (0.4.0+): fire a headless `claude -p "Run the pr-steward
   # skill"` tick every 20 min so the steward runs without a human prompting the
   # live remote-control session (closes the manual-trigger gap, gitops #276).
