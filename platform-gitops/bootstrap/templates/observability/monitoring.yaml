@@ -620,6 +620,17 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "ErpactMariadbMemory.*"
+                  # Tenant erpact's off-cluster backup and its daily restore
+                  # drill (vm-rules/erpact-alerts.yaml, group erpact.backup).
+                  # Telegram only, same reasoning as the MariaDB route above:
+                  # both CronJobs live in Forgejo erpact/mctl-apps, which
+                  # mctl-agent cannot write, and a backup that stopped or does
+                  # not restore is the one failure nobody notices until it is
+                  # needed. Prefix matches cover the Stale, NeverSucceeded and
+                  # MetricAbsent variants of each.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ErpactBackup.*|ErpactRestoreDrill.*"
                   # The lifecycle ownership rollout (ADR-010 §12,
                   # mctlhq/.github#57). Telegram only, no ticket, and the
                   # routing is load-bearing rather than a preference:
