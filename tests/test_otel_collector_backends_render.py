@@ -649,11 +649,58 @@ if committed_ds:
     otlp_host = tempo_candidate["otlpEndpoint"].rsplit(":", 1)[0]
     check(ds_host == otlp_host, f"datasource host {ds_host!r} should match the tempo otlpEndpoint host {otlp_host!r}")
 
+# Loki <-> Tempo navigation (agent#97). The Loki datasource keeps its live uid
+# (Grafana cannot change a provisioned uid in place), gains a trace_id derived
+# field only while the tempo candidate is rendered, and the Tempo datasource's
+# trace-to-logs link points back at that same uid.
+LOKI_UID = "P8E80F9AEF21F6940"
+
+
+def _loki_ds(docs):
+    cms = find(docs, "ConfigMap", name="loki-grafana-datasource", namespace="monitoring")
+    check(len(cms) == 1, f"expected one Loki datasource ConfigMap, got {len(cms)}")
+    if not cms:
+        return {}
+    return yaml.safe_load(next(iter(cms[0]["data"].values())))["datasources"][0]
+
+
+loki_on = _loki_ds(committed_docs)
+check(loki_on.get("uid") == LOKI_UID, f"Loki datasource uid must stay {LOKI_UID}, got {loki_on.get('uid')!r}")
+derived = loki_on.get("jsonData", {}).get("derivedFields", [])
+check(
+    [(f.get("name"), f.get("datasourceUid")) for f in derived] == [("trace_id", "tempo-eval")],
+    f"eval-on Loki datasource needs exactly one trace_id derived field to tempo-eval, got {derived!r}",
+)
+if derived:
+    import re as _re
+    m = _re.search(derived[0]["matcherRegex"], "INFO:x:msg trace_id=" + "ab" * 16 + " span_id=" + "cd" * 8)
+    check(m is not None and m.group(1) == "ab" * 16, "trace_id matcherRegex must capture the 32-hex trace id")
+    # "$$" is Grafana's provisioning escape: an unescaped ${...} is read as an
+    # environment variable at load time and expands to nothing.
+    check(derived[0].get("url") == "$${__value.raw}", f"derived field url must be $${{__value.raw}}, got {derived[0].get('url')!r}")
+
+if committed_ds:
+    t2l = yaml.safe_load(next(iter(committed_ds[0]["data"].values())))["datasources"][0].get("jsonData", {}).get("tracesToLogsV2", {})
+    check(t2l.get("datasourceUid") == LOKI_UID, f"tracesToLogsV2 must point at the Loki uid, got {t2l!r}")
+    check("k8s.pod.name" in t2l.get("query", ""), "tracesToLogsV2 query must scope by the span's pod")
+
+loki_off = _loki_ds(default_docs)
+check(loki_off.get("uid") == LOKI_UID, "eval-off Loki datasource must keep the same uid")
+check(
+    not loki_off.get("jsonData", {}).get("derivedFields"),
+    "eval-off Loki datasource must not link to a Tempo datasource that does not exist",
+)
+
 # Tempo disabled with the sandbox open: no datasource pointing at nothing.
 tempo_off = _write_values(_eval_values(True, [dict(tempo_candidate, enabled=False)]))
+tempo_off_docs = helm_template(DEFAULT_VALUES, tempo_off)
 check(
-    not find(helm_template(DEFAULT_VALUES, tempo_off), "ConfigMap", name="tempo-eval-grafana-datasource"),
+    not find(tempo_off_docs, "ConfigMap", name="tempo-eval-grafana-datasource"),
     "a disabled tempo candidate must not emit the Tempo (eval) datasource",
+)
+check(
+    not _loki_ds(tempo_off_docs).get("jsonData", {}).get("derivedFields"),
+    "a disabled tempo candidate must not leave a Loki derived field pointing at tempo-eval",
 )
 
 if failures:

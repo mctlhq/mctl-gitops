@@ -38,6 +38,22 @@ data:
         access: proxy
         isDefault: false
         editable: false
+        jsonData:
+          # Trace -> logs (mctlhq/mctl-agent#97): a span's pod log stream,
+          # around the span. The Collector stamps k8s.namespace.name and
+          # k8s.pod.name on every span, and promtail labels the same pod with
+          # `namespace` and `pod`, so no mapping table is needed. Agent pods
+          # log one `[trace] trace_id=...` anchor line; worker lines inside a
+          # traced activity end in `trace_id=...`. The uid is Loki's
+          # (loki-datasource.yaml).
+          tracesToLogsV2:
+            datasourceUid: P8E80F9AEF21F6940
+            spanStartTimeShift: '-1m'
+            spanEndTimeShift: '1m'
+            filterByTraceID: false
+            filterBySpanID: false
+            customQuery: true
+            query: '{namespace="$${__span.tags["k8s.namespace.name"]}", pod="$${__span.tags["k8s.pod.name"]}"}'
 {{- end }}
 {{- end }}
 {{- end }}

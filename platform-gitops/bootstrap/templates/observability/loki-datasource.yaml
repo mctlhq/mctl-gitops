@@ -1,3 +1,27 @@
+{{- /*
+Grafana datasource for Loki, picked up by the datasource sidecar.
+
+`uid` is the value Grafana already derived from the name "Loki" when it
+provisioned this datasource without one (Grafana keeps a provisioned
+datasource's uid and cannot change it in place). Declaring it here changes
+nothing live; it lets the Tempo datasource link to it by uid
+(tempo-datasource.yaml, mctlhq/mctl-agent#97).
+
+Trace link (mctlhq/mctl-agent#97): mctl-agents log lines carry
+`trace_id=<32 hex>` (worker lines inside a recording span, and one `[trace]`
+anchor line per agent pod). The derived field turns that text into a link
+to the trace. It is plain text matching, not a label or a parsing stage, so
+it adds no stream cardinality and works on any line format. Rendered only
+while a trace backend exists to point at: today that is the Tempo bake-off
+candidate (#1280). The #1280 verdict repoints `datasourceUid` to whatever
+backend it selects.
+*/}}
+{{- $tempo := false }}
+{{- if .Values.otelCollector.eval.enabled }}
+{{- range .Values.otelCollector.eval.candidates }}
+{{- if and .enabled (eq .name "tempo") }}{{ $tempo = true }}{{ end }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,9 +34,18 @@ data:
     apiVersion: 1
     datasources:
       - name: Loki
+        uid: P8E80F9AEF21F6940
         type: loki
         url: http://loki-stack.monitoring.svc.cluster.local:3100
         access: proxy
         isDefault: false
         jsonData:
           maxLines: 1000
+{{- if $tempo }}
+          derivedFields:
+            - name: trace_id
+              matcherRegex: 'trace_id=([0-9a-f]{32})'
+              url: '$${__value.raw}'
+              datasourceUid: tempo-eval
+              urlDisplayLabel: Open trace
+{{- end }}
