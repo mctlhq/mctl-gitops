@@ -62,9 +62,9 @@ spec:
           # false) so the deployment's intent doesn't silently depend on whatever
           # a future image tag ships as its compiled-in default.
           AUTO_MERGE_ENABLED: "false"
-          WEBHOOK_ENABLED: "true"
+          # Base URL for the Telegram bot webhook (setWebhook); not related to
+          # the removed outbound subscription API (mctl-agent#161).
           WEBHOOK_CALLBACK_URL: "https://agent.mctl.ai"
-          WEBHOOK_DEFAULT_TTL: "15m"
           # LLM fallback skill disabled — Anthropic Console API key removed.
           # Deterministic skills cover all known alert types; TypeGeneric
           # alerts will remain open until MAX_ANALYZING_AGE expires.
