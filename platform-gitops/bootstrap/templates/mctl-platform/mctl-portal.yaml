@@ -19,8 +19,6 @@ spec:
       data:
         AUTH_GITHUB_CLIENT_ID: "{{ `{{ .client_id }}` }}"
         AUTH_GITHUB_CLIENT_SECRET: "{{ `{{ .client_secret }}` }}"
-        OIDC_CLIENT_ID: "{{ `{{ .oidc_client_id }}` }}"
-        OIDC_CLIENT_SECRET: "{{ `{{ .oidc_client_secret }}` }}"
         OIDC_RULES_CLIENT_SECRET: "{{ `{{ .rules_oidc_client_secret }}` }}"
         GITHUB_APP_ID: "{{ `{{ .app_id }}` }}"
         GITHUB_APP_CLIENT_ID: "{{ `{{ .client_id }}` }}"
@@ -48,14 +46,6 @@ spec:
     - secretKey: client_secret
       remoteRef:
         key: platform/github-app
-        property: client-secret
-    - secretKey: oidc_client_id
-      remoteRef:
-        key: platform/backstage/github-oauth
-        property: client-id
-    - secretKey: oidc_client_secret
-      remoteRef:
-        key: platform/backstage/github-oauth
         property: client-secret
     # Same OIDC client secret the mctl-rules app uses on its side. Copied from
     # teams/labs/mctl-rules to a platform path so this ExternalSecret does not
