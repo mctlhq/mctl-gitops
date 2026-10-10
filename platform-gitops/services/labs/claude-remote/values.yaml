@@ -338,7 +338,7 @@ initContainers:
             old=$(mc ls --recursive minio/platform-state/labs/claude-remote/) \
               || fatal "cannot list the MinIO state; not marking the migration done"
             if [ -n "$old" ]; then
-              mc mirror --overwrite --preserve --exclude '.mc/*' \
+              mc mirror --overwrite --preserve --exclude '.mc/*' --exclude 'go/*' --exclude '.cache/*' \
                 minio/platform-state/labs/claude-remote/ "$STATE" \
                 || fatal "MinIO -> R2 copy failed; the next start retries it"
             else
@@ -366,7 +366,8 @@ initContainers:
           # with --preserve a 10-day-old file comes back dated 10 days ago;
           # without it, dated now. Every mirror that writes to the bucket passes
           # --preserve too, otherwise there is no stored mtime to restore.
-          mc mirror --overwrite --preserve --exclude '.mc/*' "$STATE" /workspace \
+          mc mirror --overwrite --preserve --exclude '.mc/*' --exclude 'go/*' --exclude '.cache/*' \
+            "$STATE" /workspace \
             || fatal "restore from R2 failed"
           echo "Restore complete."
         else
@@ -474,6 +475,11 @@ extraContainers:
           return 1
         }
         while true; do
+          # go/ (Go module cache) and .cache/ (go-build, gh, claude-cli) are
+          # never synced: ~64k mostly-cache files made each 60 s mirror cost
+          # ~2.8M R2 operations a month. Both rebuild on demand, so a restart
+          # only means a cold Go cache (owner decision, 2026-10-10).
+          #
           # Additive backup only -- NO --remove here, so a local logout that
           # deletes ~/.claude/.credentials.json can never wipe the R2
           # credentials backup (root cause of the 2026-05-21 restart loop).
@@ -483,11 +489,11 @@ extraContainers:
             echo "[cred-guard] REFUSING to mirror $CRED -- tokens are empty/expired." \
                  "R2 keeps the last good copy; recover with 'claude auth login'" \
                  "in this pod (see mctl-claude-remote#40)."
-            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
+            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' \
               --exclude '.claude/.credentials.json' \
               /workspace s3/claude-remote-state/labs/claude-remote/ || true
           else
-            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
+            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' \
               /workspace s3/claude-remote-state/labs/claude-remote/ || true
             # Keep a last-known-good copy that a later wipe cannot overwrite:
             # it is only ever refreshed while the live file is valid. Recovery
@@ -607,19 +613,9 @@ extraContainers:
                 echo "[gc] rm stale staging: $s"
                 rm -rf "$s"
               done
-              # Reconcile to R2 with a --remove SCOPED to staging (no
-              # credentials here, same rationale as versions/ and bin/ above).
-              # Required, not cosmetic: this sweep runs OUTSIDE the size gate
-              # below, so freeing enough space to drop under the threshold
-              # means the root mirror never runs and the deletions never
-              # propagate. The normal sync loop and preStop flush are
-              # deliberately additive, and last_gc resets on every restart, so
-              # without this the objects survive in R2 and restore-state
-              # downloads them all back on the next cold start — which is the
-              # path that used to OOM-kill it. MinIO currently holds staging
-              # dirs going back to 2.1.185, far more than the 14 left on disk.
-              mc mirror --overwrite --preserve --remove "$SDIR" \
-                s3/claude-remote-state/labs/claude-remote/.cache/claude/staging/ || true
+              # No R2 reconcile here: .cache/ (like go/) is not synced to R2
+              # at all since the move off MinIO, so staging never reaches the
+              # bucket and restore-state never downloads it back.
             fi
             size_kb=$(du -sk /workspace 2>/dev/null)
             size_kb=${size_kb%%[!0-9]*}
@@ -691,6 +687,7 @@ extraContainers:
                 --exclude '.claude.json' --exclude 'CLAUDE.md' \
                 --exclude '.gitconfig' \
                 --exclude '.local' --exclude '.local/*' --exclude '*.tmp' \
+                --exclude 'go/*' --exclude '.cache/*' \
                 /workspace s3/claude-remote-state/labs/claude-remote/ || true
               last_gc=$(date +%s)
             fi
@@ -747,11 +744,11 @@ extraContainers:
               }
               if [ -e "$CRED" ] && ! cred_is_valid; then
                 echo "[cred-guard] shutdown flush EXCLUDING $CRED -- tokens are empty/expired"
-                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
+                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' \
                   --exclude '.claude/.credentials.json' \
                   /workspace s3/claude-remote-state/labs/claude-remote/
               else
-                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
+                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' \
                   /workspace s3/claude-remote-state/labs/claude-remote/
               fi
   # log-tail sidecar — surfaces the steward's structured JSON log on its own
