@@ -15,7 +15,7 @@ metadata:
       the production tenant namespace. Tenant Vault paths are rewritten to
       teams/<team>/<service>/preview/* and resolved through a namespaced
       SecretStore whose ESO role cannot read production secrets. Platform
-      paths (GHCR, shared MinIO) stay on ClusterSecretStore.
+      paths (GHCR, shared R2 artifact store) stay on ClusterSecretStore.
       Accessible at {app}-{id}.{PLATFORM_DOMAIN} (covered by *.{PLATFORM_DOMAIN} wildcard).
       Cleanup via preview-delete workflow (helm uninstall).
       Vault ESO role eso-tenant-{team}-preview is created by wft-create-tenant

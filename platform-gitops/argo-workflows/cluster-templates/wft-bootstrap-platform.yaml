@@ -8,8 +8,6 @@ metadata:
       Idempotent — skips any secret that already exists.
 
       Secrets written:
-        secret/platform/minio          → root-user, root-password
-        secret/platform/minio          → root-user, root-password (shared key for artifact creds)
         secret/platform/argo-workflows/database → username, password
         secret/platform/backstage/database      → postgres-user, postgres-password
         secret/platform/mctl-agent/database     → username, password
@@ -87,8 +85,6 @@ spec:
           # ── Generate random passwords ──────────────────────────────────────
           gen() { openssl rand -hex 20; }
 
-          MINIO_USER="minioadmin"
-          MINIO_PASS=$(gen)
           ARGO_DB_USER="argo"
           ARGO_DB_PASS=$(gen)
           BACKSTAGE_DB_USER="backstage"
@@ -97,9 +93,6 @@ spec:
           AGENT_DB_PASS=$(gen)
 
           # ── Write secrets ──────────────────────────────────────────────────
-          write_if_missing "platform/minio" \
-            "{\"root-user\":\"${MINIO_USER}\",\"root-password\":\"${MINIO_PASS}\"}"
-
           write_if_missing "platform/argo-workflows/database" \
             "{\"username\":\"${ARGO_DB_USER}\",\"password\":\"${ARGO_DB_PASS}\"}"
 

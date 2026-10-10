@@ -60,7 +60,7 @@ All applications are configured with `automated: { prune: true, selfHeal: true }
 | Database | CloudNativePG (PostgreSQL) |
 | Monitoring | VictoriaMetrics, Grafana, Loki |
 | Ingress/TLS | Traefik, Cert-Manager, Reflector |
-| Storage | MinIO (S3-compatible) |
+| Storage | Cloudflare R2 (S3-compatible, managed in `infrastructure/cloudflare`) |
 | CI/CD | GitHub Actions |
 | Catalog | Backstage (software templates + service catalog) |
 
@@ -86,7 +86,7 @@ mctl-gitops/
 │   │   ├── templates/                 #   Backstage Scaffolder templates
 │   │   └── mcp/                       #   AI Agent instructions (SKILL.md)
 │   ├── infra-components/              # Foundation services
-│   │   ├── data/                      #   PostgreSQL (CNPG), MinIO
+│   │   ├── data/                      #   PostgreSQL (CNPG), Forgejo, Temporal, Valkey
 │   │   └── observability/             #   Grafana dashboards, VictoriaMetrics
 │   ├── helm-charts/
 │   │   ├── base-service/              #   Universal chart for all microservices

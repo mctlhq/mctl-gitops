@@ -267,7 +267,7 @@ surfaceTelegramToken:
 # Every namespace also holds Secrets it never asked for: the reflector copies
 # argo-workflows/github-actions-pat, argo-workflows/mctl-gitops-deploy-key and
 # the database/* credentials into all of them (#1230), and the tenant chart
-# adds ghcr and MinIO credentials. It also creates argo-workflow-sa, whose
+# adds ghcr and artifact-store (R2) credentials. It also creates argo-workflow-sa, whose
 # Roles read every Secret in the namespace through the API. In a reviewed
 # namespace that is a latent risk; where someone outside the platform writes
 # the Pod specs, mounting a Secret or running as that ServiceAccount is one

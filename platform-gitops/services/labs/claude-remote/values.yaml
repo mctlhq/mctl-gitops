@@ -174,10 +174,6 @@ env:
 # bucket only (Object Read & Write), written by the owner to
 # secret/platform/mctl-claude-remote/r2 (access-key, secret-key). Platform
 # path, next to the service's other platform/mctl-claude-remote/* secrets.
-#
-# claude-remote-minio-creds is TRANSITIONAL: restore-state reads it once to
-# copy the existing state out of the in-cluster MinIO into R2 (see the
-# migration block there). It goes away with MinIO itself.
 extraExternalSecrets:
   labs-claude-remote-r2:
     store: vault-backend
@@ -190,19 +186,6 @@ extraExternalSecrets:
       - secretKey: secret-key
         remoteKey: platform/mctl-claude-remote/r2
         property: secret-key
-  labs-claude-remote-minio:
-    # Platform-scoped path — must use the cluster store; tenant-store only
-    # resolves secret/data/teams/labs/*.
-    store: vault-backend
-    storeKind: ClusterSecretStore
-    targetSecret: claude-remote-minio-creds
-    data:
-      - secretKey: access-key
-        remoteKey: platform/minio
-        property: root-user
-      - secretKey: secret-key
-        remoteKey: platform/minio
-        property: root-password
   # pr-steward GitHub App private key (RS256 PEM). Mounted on tmpfs, 0440,
   # never in env — gh-app-token mints a 1h installation token from it.
   mctl-claude-remote-github-app:
@@ -319,38 +302,6 @@ initContainers:
           || fatal "cannot configure the R2 alias"
         STATE=s3/claude-remote-state/labs/claude-remote/
 
-        # ---- One-time MinIO -> R2 migration. Remove together with MinIO. ----
-        # Runs in the FIRST pod of the new spec. The Recreate strategy means
-        # the old pod is gone by then, and its preStop has already flushed the
-        # final state to MinIO, so this copy is complete. The marker lives
-        # outside $STATE on purpose: the GC mirrors in s3-sync run with
-        # --remove against $STATE and would delete it.
-        MARKER_DIR=s3/claude-remote-state/migration/
-        markers=$(mc ls --recursive "$MARKER_DIR") \
-          || fatal "cannot list $MARKER_DIR on R2; refusing to guess whether MinIO state was migrated"
-        case "$markers" in
-          *labs-claude-remote-from-minio*)
-            echo "MinIO state already migrated to R2." ;;
-          *)
-            echo "Migrating workspace state MinIO -> R2 (one-time)..."
-            mc alias set minio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null \
-              || fatal "cannot configure the MinIO alias for the migration"
-            old=$(mc ls --recursive minio/platform-state/labs/claude-remote/) \
-              || fatal "cannot list the MinIO state; not marking the migration done"
-            if [ -n "$old" ]; then
-              mc mirror --overwrite --preserve --exclude '.mc/*' \
-                minio/platform-state/labs/claude-remote/ "$STATE" \
-                || fatal "MinIO -> R2 copy failed; the next start retries it"
-            else
-              echo "MinIO holds no state for this service; nothing to copy."
-            fi
-            echo "migrated $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              | mc pipe "${MARKER_DIR}labs-claude-remote-from-minio" \
-              || fatal "cannot write the migration marker"
-            echo "Migration complete." ;;
-        esac
-        # ---- end of the migration block ----
-
         listing=$(mc ls --recursive "$STATE") || fatal "cannot list $STATE on R2"
         if [ -n "$listing" ]; then
           echo "Restoring workspace from R2..."
@@ -386,19 +337,6 @@ initContainers:
         valueFrom:
           secretKeyRef:
             name: claude-remote-r2-creds
-            key: secret-key
-      # TRANSITIONAL: read only by the one-time migration block above.
-      - name: MINIO_ENDPOINT
-        value: "http://minio.minio.svc.cluster.local:9000"
-      - name: MINIO_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: claude-remote-minio-creds
-            key: access-key
-      - name: MINIO_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: claude-remote-minio-creds
             key: secret-key
     volumeMounts:
       - name: workspace
@@ -616,7 +554,7 @@ extraContainers:
               # deliberately additive, and last_gc resets on every restart, so
               # without this the objects survive in R2 and restore-state
               # downloads them all back on the next cold start — which is the
-              # path that used to OOM-kill it. MinIO currently holds staging
+              # path that used to OOM-kill it. MinIO, when this was written, held staging
               # dirs going back to 2.1.185, far more than the 14 left on disk.
               mc mirror --overwrite --preserve --remove "$SDIR" \
                 s3/claude-remote-state/labs/claude-remote/.cache/claude/staging/ || true

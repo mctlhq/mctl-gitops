@@ -23,9 +23,8 @@ export KUBECONFIG="$(pwd)/infrastructure/k3s-preview/kubeconfig.yaml"
 | `<team>` (e.g. `labs`, `admins`, `ovk`) | tenant | `<team>-<service>-base-service` Deployments. Tenant workloads live here. |
 | `mctl-api` | platform | `mctl-api` Deployment and Service. ArgoCD Application is `admins-mctl-api`, but the pod runs here. |
 | `backstage` | platform | Backstage / mctl-portal Deployment and Service. ArgoCD Application is `admins-mctl-portal`. |
-| `argocd` | platform | ArgoCD Applications (`<team>-<service>`, `tenant-<team>`, `loki-stack`, `minio`, …) |
+| `argocd` | platform | ArgoCD Applications (`<team>-<service>`, `tenant-<team>`, `loki-stack`, …) |
 | `argo-workflows` | platform | ClusterWorkflowTemplates for centralized write operations (build/deploy/rollback templates). Deploy-key secret `mctl-gitops-deploy-key` lives here. |
-| `minio` | platform | `minio` StatefulSet + 10 GiB hcloud-volumes PVC mounted at `/export`. Buckets include `platform-state` (tenant mirror), `loki` (log chunks), `argo-workflows-logs`, `platform-cache`, `postgres-backups`. |
 | `monitoring` | platform | `loki-stack` StatefulSet (Loki ≥ 2.9 with tsdb + compactor retention), Prometheus, Grafana. |
 | `cnpg-system` | platform | CloudNativePG operator. |
 | `platform-db` | platform | Shared PostgreSQL cluster (`shared-pg`), including Backstage database `backstage`. |
@@ -59,7 +58,6 @@ Key files:
 - `platform-gitops/services/<team>/<service>/values.yaml` — per-service chart values.
 - `platform-gitops/helm-charts/base-service/` — chart every tenant service shares.
 - `platform-gitops/bootstrap/templates/observability/loki.yaml` — Loki Application.
-- `platform-gitops/bootstrap/templates/data/minio.yaml` — MinIO Application.
 
 **Never `kubectl edit` an ArgoCD-managed resource.** ArgoCD reverts within seconds. Edit gitops, commit, PR, merge.
 
@@ -85,7 +83,7 @@ kubectl -n argocd patch application <team>-<service> \
 ### Resize a `hcloud-volumes` PVC online
 
 ```sh
-kubectl patch pvc minio -n minio --type=merge \
+kubectl patch pvc <pvc> -n <namespace> --type=merge \
   -p '{"spec":{"resources":{"requests":{"storage":"30Gi"}}}}'
 ```
 
@@ -93,16 +91,9 @@ kubectl patch pvc minio -n minio --type=merge \
 
 For StatefulSets, `volumeClaimTemplates.storage` is immutable — a chart bump will render the new value but k8s refuses to mutate the STS. Patch the underlying PVC by hand once; ArgoCD then becomes a no-op.
 
-### MinIO disk triage
+### Object storage
 
-When MinIO returns `XMinioStorageFull` (status 507), scale Loki down, clear `/export/loki/{fake,index}` on the MinIO pod, scale Loki back up. The Loki compactor then keeps things clean going forward.
-
-```sh
-kubectl -n monitoring scale sts loki-stack --replicas=0
-kubectl -n monitoring wait --for=delete pod/loki-stack-0 --timeout=120s
-kubectl -n minio exec <minio-pod> -- sh -c 'rm -rf /export/loki/fake /export/loki/index'
-kubectl -n monitoring scale sts loki-stack --replicas=1
-```
+There is no in-cluster object store any more: the MinIO in namespace `minio` was decommissioned in 2026-10 in favour of Cloudflare R2. Buckets (`loki`, `argo-workflows-logs`, `tempo-traces`, `claude-remote-state`, backup buckets) are declared in `infrastructure/cloudflare/account/r2.tf`; workloads reach `https://<account>.r2.cloudflarestorage.com` with bucket-scoped tokens from Vault.
 
 ## Anti-patterns and historical outages
 

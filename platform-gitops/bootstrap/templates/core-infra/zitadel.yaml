@@ -236,7 +236,7 @@ spec:
         releaseName: zitadel-iac
 
   ignoreDifferences:
-    # Same ESO handling as forgejo.yaml / minio.yaml: admission-injected
+    # Same ESO handling as forgejo.yaml / valkey.yaml: admission-injected
     # annotations and status only; never jq paths that index into spec arrays (#789).
     - group: external-secrets.io
       kind: ExternalSecret

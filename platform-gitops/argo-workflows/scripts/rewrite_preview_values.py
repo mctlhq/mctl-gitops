@@ -11,7 +11,7 @@ become
 Team-scoped ExternalSecrets are forced onto the namespaced tenant-store
 (eso-tenant-<team>-preview), which can only read the preview/ prefix.
 Platform paths (platform/*, ClusterSecretStore) are left unchanged — they are
-shared infrastructure (GHCR, MinIO), not tenant production credentials.
+shared infrastructure (GHCR, the R2 artifact store), not tenant production credentials.
 
 Exits non-zero if a values file still points a tenant-store ES at a non-preview
 teams/ path after rewrite, or if one ExternalSecret mixes platform and team keys.

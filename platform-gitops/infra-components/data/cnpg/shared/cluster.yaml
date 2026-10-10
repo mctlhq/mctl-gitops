@@ -19,7 +19,8 @@ spec:
   # Backups go OFF-cluster to R2: the previous in-cluster MinIO target died
   # together with the very cluster/PVCs it was protecting against. Same R2
   # account+bucket as vault-backup and vmbackup; endpoint matches backend.tf.
-  # Old MinIO backups (s3://postgres-backups/shared-pg) age out on their own.
+  # The old MinIO backups (s3://postgres-backups/shared-pg) were deleted with
+  # MinIO itself; PITR reaches back only as far as the first R2 base backup.
   backup:
     barmanObjectStore:
       destinationPath: s3://vault-backup/postgres-backups/shared-pg
@@ -54,7 +55,7 @@ spec:
         immediateCheckpoint: true
     # 14d: 3d left no margin to notice data loss that survives a weekend or
     # a bad migration discovered late. WAL+base are gzip'd; 9 small tenant DBs
-    # fit comfortably in MinIO at this window.
+    # fit comfortably in the R2 bucket at this window.
     retentionPolicy: "14d"
     target: prefer-standby
 

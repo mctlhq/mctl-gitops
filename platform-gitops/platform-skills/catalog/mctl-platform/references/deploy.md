@@ -143,7 +143,7 @@ pre-built `image_tag`.
 ## Vault Secrets Structure
 
 - **Root Path:** `secret/` (KV version 2).
-- **Platform Secrets:** System components use `platform/` (e.g., `platform/minio`, `platform/argo-workflows/database`).
+- **Platform Secrets:** System components use `platform/` (e.g., `platform/valkey`, `platform/argo-workflows/database`).
 - **Team Secrets:** Tenant apps use `teams/{team}/{service}/database`.
 - **Internal URL:** `http://vault.vault.svc.cluster.local:8200`.
 - **ExternalSecret:** Synced to K8s automatically via `ExternalSecret` resources.

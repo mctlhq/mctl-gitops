@@ -13,14 +13,15 @@
 
 ## Patterns Seen In `mctlhq`
 
-### `minio` degraded with `ProgressDeadlineExceeded`
+### Single-RWO-PVC deployment degraded with `ProgressDeadlineExceeded`
 
 - Symptom:
   - app `Synced Degraded`
   - deployment stuck with `replicas: 2`, `ready: 1`, `updated: 1`
   - old pod holds the only RWO PVC
 - Durable fix:
-  - set `deploymentUpdate.type: Recreate` in `platform-gitops/bootstrap/templates/data/minio.yaml`
+  - use the `Recreate` deployment strategy for that workload (seen on the
+    former in-cluster MinIO, decommissioned 2026-10)
 
 ### `tenant-*` sync failure on `ExternalSecret`
 
