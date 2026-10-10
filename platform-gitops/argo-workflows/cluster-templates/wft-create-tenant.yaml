@@ -5,8 +5,10 @@ metadata:
   annotations:
     workflows.argoproj.io/description: |
       Creates a new tenant on the platform:
-        1. Validates tenant name (DNS-safe, not already exists unless
-           reprovision=true)
+        1. Validates tenant name (DNS-safe, not reserved, not already exists
+           unless reprovision=true) and that no namespace {name} or
+           {name}-preview exists in the cluster unless it carries
+           mctl.me/tenant={name}
         2. Creates Vault policy tenant-{name} (scoped to secret/data/teams/{name}/*)
         3. Commits tenant directory to gitops repo (values.yaml + catalog-info.yaml)
         4. Appends ArgoCD RBAC entries to argocd/values.yaml
@@ -17,6 +19,7 @@ metadata:
 
       Steps:
         1. validate           — name format + non-existence check
+           check-namespace    — live namespace collision check (parallel)
         2. create-vault-policy — Vault policy scoped to teams/{name}/*
         3. commit-to-git      — tenant files + ArgoCD RBAC pushed to mctl-gitops
 
@@ -81,9 +84,25 @@ spec:
                 - name: reprovision
                   value: "{{workflow.parameters.reprovision}}"
 
-          # Step 2: create Vault policy (after validate)
+          # Step 1b: refuse a name that collides with a live namespace the
+          # tenant does not own. Without it the tenant ApplicationSet
+          # (CreateNamespace=true, ServerSideApply) adopts a platform
+          # namespace and the tenant chart writes a ResourceQuota, a
+          # default-deny NetworkPolicy and RoleBindings into it. A separate
+          # template so it can be run alone, side-effect free:
+          #   argo submit --from clusterworkflowtemplate/create-tenant \
+          #     --entrypoint check-namespace-collision -p tenant_name=<name>
+          - name: check-namespace
+            template: check-namespace-collision
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
+          # Step 2: create Vault policy (after both checks; nothing is
+          # written to Vault or git unless both pass)
           - name: create-vault-policy
-            dependencies: [validate]
+            dependencies: [validate, check-namespace]
             template: create-vault-policy
             arguments:
               parameters:
@@ -169,13 +188,70 @@ spec:
             exit 1
           fi
 
-          # Reserved names
-          for reserved in argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring; do
-            if [ "$TENANT" = "$reserved" ]; then
-              echo "ERROR: '$TENANT' is a reserved namespace name."
-              exit 1
+          # BEGIN tenant-ns-guard
+          # Shared by create-tenant, delete-tenant-safe and delete-tenant. Argo
+          # templates cannot share a script file, so the copies are kept
+          # byte-identical by tests/test_wft_create_tenant_existing.py.
+          #
+          # tenant_name_reserved NAME succeeds when NAME is a platform namespace a
+          # tenant must never take. Defence in depth only: a static list goes stale
+          # whenever a platform namespace is added, so every caller that can reach
+          # the API also checks the live cluster with tenant_ns_check.
+          tenant_name_reserved() {
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|observability-eval|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
+                return 0 ;;
+            esac
+            return 1
+          }
+
+          # tenant_ns_state NAMESPACE TENANT prints "absent", "owned" (the namespace
+          # carries mctl.me/tenant=TENANT, which the tenant chart puts on every
+          # namespace it renders) or "foreign". A failed lookup prints nothing and
+          # returns 2: "could not list namespaces" is never "does not exist". A list
+          # with a field selector is empty for an absent namespace and exits non-zero
+          # only on a real error, so no NotFound message has to be parsed.
+          tenant_ns_state() {
+            _tns_out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+              -o 'jsonpath={range .items[*]}{.metadata.name}={.metadata.labels.mctl\.me/tenant}{"\n"}{end}') \
+              || return 2
+            if [ -z "$_tns_out" ]; then
+              echo absent
+            elif [ "$_tns_out" = "$1=$2" ]; then
+              echo owned
+            else
+              echo foreign
             fi
-          done
+          }
+
+          # tenant_ns_check TENANT fails unless both namespaces the tenant chart
+          # renders (TENANT and TENANT-preview) are absent or owned by TENANT.
+          tenant_ns_check() {
+            for _tns_ns in "$1" "$1-preview"; do
+              if ! _tns_state=$(tenant_ns_state "$_tns_ns" "$1"); then
+                echo "ERROR: could not list namespaces to check '$_tns_ns'; refusing."
+                return 1
+              fi
+              if [ "$_tns_state" = foreign ]; then
+                echo "ERROR: namespace '$_tns_ns' exists without label mctl.me/tenant=$1;"
+                echo "it is not a namespace of tenant '$1'."
+                return 1
+              fi
+              echo "Namespace '$_tns_ns': $_tns_state"
+            done
+          }
+          # END tenant-ns-guard
+
+          # Reserved names. The live namespace check runs in
+          # check-namespace-collision: this image has no kubectl.
+          if tenant_name_reserved "$TENANT"; then
+            echo "ERROR: '$TENANT' is a reserved namespace name."
+            exit 1
+          fi
 
           case "$REPROVISION" in
             true|false) ;;
@@ -204,6 +280,102 @@ spec:
           fi
 
           echo "Tenant name '$TENANT' is valid."
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: check-namespace-collision
+      inputs:
+        parameters:
+          - name: tenant_name
+      script:
+        image: alpine/k8s:1.33.12
+        command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
+        source: |
+          set -e
+          TENANT="$PARAM_TENANT_NAME"
+
+          echo "Checking tenant '$TENANT' against live namespaces"
+
+          # Repeated from validate-tenant-name so this template is safe to
+          # run on its own via --entrypoint.
+          if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            echo "ERROR: Tenant name '$TENANT' is invalid."
+            exit 1
+          fi
+
+          # BEGIN tenant-ns-guard
+          # Shared by create-tenant, delete-tenant-safe and delete-tenant. Argo
+          # templates cannot share a script file, so the copies are kept
+          # byte-identical by tests/test_wft_create_tenant_existing.py.
+          #
+          # tenant_name_reserved NAME succeeds when NAME is a platform namespace a
+          # tenant must never take. Defence in depth only: a static list goes stale
+          # whenever a platform namespace is added, so every caller that can reach
+          # the API also checks the live cluster with tenant_ns_check.
+          tenant_name_reserved() {
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|observability-eval|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
+                return 0 ;;
+            esac
+            return 1
+          }
+
+          # tenant_ns_state NAMESPACE TENANT prints "absent", "owned" (the namespace
+          # carries mctl.me/tenant=TENANT, which the tenant chart puts on every
+          # namespace it renders) or "foreign". A failed lookup prints nothing and
+          # returns 2: "could not list namespaces" is never "does not exist". A list
+          # with a field selector is empty for an absent namespace and exits non-zero
+          # only on a real error, so no NotFound message has to be parsed.
+          tenant_ns_state() {
+            _tns_out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+              -o 'jsonpath={range .items[*]}{.metadata.name}={.metadata.labels.mctl\.me/tenant}{"\n"}{end}') \
+              || return 2
+            if [ -z "$_tns_out" ]; then
+              echo absent
+            elif [ "$_tns_out" = "$1=$2" ]; then
+              echo owned
+            else
+              echo foreign
+            fi
+          }
+
+          # tenant_ns_check TENANT fails unless both namespaces the tenant chart
+          # renders (TENANT and TENANT-preview) are absent or owned by TENANT.
+          tenant_ns_check() {
+            for _tns_ns in "$1" "$1-preview"; do
+              if ! _tns_state=$(tenant_ns_state "$_tns_ns" "$1"); then
+                echo "ERROR: could not list namespaces to check '$_tns_ns'; refusing."
+                return 1
+              fi
+              if [ "$_tns_state" = foreign ]; then
+                echo "ERROR: namespace '$_tns_ns' exists without label mctl.me/tenant=$1;"
+                echo "it is not a namespace of tenant '$1'."
+                return 1
+              fi
+              echo "Namespace '$_tns_ns': $_tns_state"
+            done
+          }
+          # END tenant-ns-guard
+
+          if tenant_name_reserved "$TENANT"; then
+            echo "ERROR: '$TENANT' is a reserved namespace name."
+            exit 1
+          fi
+
+          # A namespace that already carries mctl.me/tenant=$TENANT is this
+          # tenant's own (reprovision, or a half-deleted tenant re-created);
+          # anything else under that name belongs to the platform or to
+          # someone else and must not be adopted.
+          tenant_ns_check "$TENANT"
+
+          echo "No namespace collision for tenant '$TENANT'."
 
     # ────────────────────────────────────────────────────────────────────────
     - name: create-vault-policy

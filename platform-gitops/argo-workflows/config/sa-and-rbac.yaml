@@ -237,6 +237,33 @@ roleRef:
   name: argo-workflow-argocd-sync
   apiGroup: rbac.authorization.k8s.io
 ---
+# create-tenant, delete-tenant-safe and delete-tenant check that a namespace
+# named after the tenant is absent or carries mctl.me/tenant=<tenant> before
+# adopting or deleting it (gitops#1768). That is a cluster-wide read of
+# Namespace objects (labels and annotations, no secret material): get and
+# list only, nothing that writes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argo-workflow-namespace-read
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argo-workflow-namespace-read
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: argo-workflows
+roleRef:
+  kind: ClusterRole
+  name: argo-workflow-namespace-read
+  apiGroup: rbac.authorization.k8s.io
+---
 # Workflow SA: read ExternalSecrets + Secrets in platform-db (for smoke-test verification)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
