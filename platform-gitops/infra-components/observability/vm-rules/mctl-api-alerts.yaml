@@ -14,7 +14,8 @@
 #     the average a little instead of clearing the condition).
 #
 # Both are critical: when mctl-api is down the platform has no human or
-# agent entry point. Routed to Telegram in
+# agent entry point. MctlApiDependencyDown (warning) covers the shared
+# dependencies that, since mctl-api#542, no longer fail readiness. Routed to Telegram in
 # bootstrap/templates/observability/monitoring.yaml (alertname =~ "MctlApi.*").
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
@@ -43,11 +44,12 @@ spec:
             description: >-
               blackbox-exporter has had no 2xx from {{ $labels.instance }} for
               3 minutes. A 503 with an empty body is Traefik with no Ready
-              endpoint: check `kubectl -n mctl-api get pods` and the pod's
-              `readyz probe failed` log lines, which name the failing
-              dependency (gitops, postgres, dex, vault). A pod that is Running
-              but not Ready recovers with
-              `kubectl -n mctl-api rollout restart deploy/mctl-api`.
+              endpoint: check `kubectl -n mctl-api get pods` and the `checks`
+              field of the pod's GET /readyz body. Only pod-local conditions
+              make a pod unready (stores=init_failed, gitops_sync=never_synced,
+              shutdown=draining); a shared dependency outage shows up in
+              MctlApiDependencyDown instead. A pod with stores=init_failed
+              recovers with `kubectl -n mctl-api rollout restart deploy/mctl-api`.
 
         - alert: MctlApiNoReadyReplicas
           # Average available replicas over 10m below 0.5, held 5m: mctl-api
@@ -75,10 +77,10 @@ spec:
               fewer than 0.5 available replicas over the last ten minutes, so
               Traefik has been answering api.mctl.ai with "no available
               server" most of that time. Look at `kubectl -n mctl-api describe
-              pod` for the readiness probe result and at the pod log for
-              `readyz probe failed`; the `check` field names the dependency. A
-              restart of the deployment clears a pod that is stuck
-              Running-but-unready.
+              pod` for the readiness probe result and at the `checks` field of
+              GET /readyz: stores=init_failed clears only with a restart of the
+              deployment, gitops_sync=never_synced means the checkout cannot
+              clone, shutdown=draining means the pod is terminating.
 
         - alert: MctlApiDegraded
           # Fewer replicas available than the deployment asks for, averaged
@@ -102,7 +104,29 @@ spec:
               it asks for over the last 15 minutes. The API still answers on
               the remaining replica, but one more failure takes it down. Look
               at `kubectl -n mctl-api get pods -o wide` for the pod that is
-              not Ready and at its `readyz probe failed` log lines.
+              not Ready and at the `checks` field of its GET /readyz body.
+
+        - alert: MctlApiDependencyDown
+          # Since mctl-api#542 a failing shared dependency (gitops remote,
+          # postgres, dex, vault) no longer makes /readyz fail: every replica
+          # shares it, so failing readiness would drain them all at once
+          # (2026-10-09). The probe result is still exported per pod as
+          # mctl_api_dependency_up{check}, refreshed on every kubelet readiness
+          # call. max by (check): the alert needs every replica to see the
+          # dependency down, so one pod's network blip does not page.
+          expr: max by (check) (mctl_api_dependency_up{namespace="mctl-api"}) == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-api
+          annotations:
+            summary: "mctl-api dependency {{ $labels.check }} has been down for 5 minutes"
+            description: >-
+              Every mctl-api replica has failed its {{ $labels.check }} probe
+              for 5 minutes. The pods stay Ready and keep serving, so requests
+              that need {{ $labels.check }} fail while the rest of the API
+              works. The pod log line `readyz probe failed` with
+              check={{ $labels.check }} carries the error.
 
         - alert: MctlApiProbeAbsent
           # Without the series MctlApiDown can never fire — same reasoning as
