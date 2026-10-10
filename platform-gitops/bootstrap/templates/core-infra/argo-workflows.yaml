@@ -46,8 +46,6 @@ spec:
           # and ZITADEL refuses a token to anyone without one. The client
           # credentials are written by the zitadel-iac Job into
           # argo-workflows-sso-zitadel (argo-workflows/config/sso-zitadel.yaml).
-          # Rollback: issuer https://ops.mctl.ai/api/dex with the Secret
-          # argo-workflows-sso and the `groups` scope, until Dex is removed.
           sso:
             enabled: true
             issuer: https://auth.mctl.ai

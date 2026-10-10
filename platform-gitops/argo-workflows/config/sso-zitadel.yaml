@@ -7,10 +7,6 @@
 # (ignoreDifferences in bootstrap/templates/core-infra/argo-workflows-config.yaml),
 # so a sync does not wipe what the Job wrote. The Job may only read and patch
 # this one Secret by name: no create, no list, nothing else in this namespace.
-#
-# Rollback to Dex: point server.sso in core-infra/argo-workflows.yaml back at
-# the issuer https://ops.mctl.ai/api/dex and the Secret argo-workflows-sso
-# (sso-secret.yaml), which stays in place until Dex is removed.
 apiVersion: v1
 kind: Secret
 metadata:

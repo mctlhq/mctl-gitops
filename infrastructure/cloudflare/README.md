@@ -116,7 +116,7 @@ later:
 | --- | --- |
 | `app.mctl.ai` | Traefik `ForwardAuth`, on **every** request to claude-remote and temporal-web; also `mctl-api` creating tenants |
 | `secrets.mctl.ai` | `mctl-api` and `mctl-portal` Vault logins, and every service's Vault-cleanup PreDelete job |
-| `ops.mctl.ai` | `mctl-api` (ArgoCD API and Dex OIDC discovery) and Grafana's OAuth token/userinfo calls |
+| `ops.mctl.ai` | `mctl-api` (ArgoCD API) |
 | `api.mctl.ai` | `mctl-agents` (`MCTL_MCP_URL`, hardcoded) and its Temporal workers |
 | `media.mctl.ai` | `seerrsense` → Overseerr, with the Access service token |
 | `tg.mctl.ai` | the `mctl-telegram` canary CronJob, deliberately probing from outside |

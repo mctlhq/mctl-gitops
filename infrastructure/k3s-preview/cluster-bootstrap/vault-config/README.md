@@ -404,7 +404,7 @@ secret/
 │   ├── github-app          ← GitHub App credentials (ArgoCD + Backstage)
 │   │   app-id, client-id, client-secret, installation-id, private-key
 │   ├── argocd/
-│   │   └── github-oauth    ← ArgoCD Dex OAuth (client-id, client-secret)
+│   │   └── github-oauth    ← no reader in this repo (was the ArgoCD Dex GitHub connector)
 │   ├── backstage/
 │   │   └── database        ← Backstage PostgreSQL credentials
 │   └── vault/

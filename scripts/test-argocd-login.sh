@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# End-to-end check of Argo CD's sign-in plumbing (argocd-server + Dex) on the
-# upgrade path the platform cluster actually takes (#1500).
+# End-to-end check of Argo CD's sign-in plumbing on the upgrade path the
+# platform cluster actually takes (#1500). Was test-argocd-dex.sh; Dex is gone
+# (#1500 phase 4) and the Dex checks went with it.
 #
-# The #1545 outage was invisible to tests that ran Dex alone: argocd-server
-# itself renders argocd-cm's dex.config and exits on a malformed one, and the
-# in-place server-side apply of argocd-dex-server failed on fields the
-# bootstrap Helm release co-owns. So this runs the real thing:
+# The #1545 outage was invisible to tests that rendered config alone: the
+# in-place server-side apply of chart objects failed on fields the bootstrap
+# Helm release co-owns. So this runs the real thing:
 #
 #   1. k3s at the cluster's version in Docker;
 #   2. Argo CD installed the way the cluster was bootstrapped: the argo-cd
@@ -17,14 +17,9 @@
 #      argocd-controller, force-conflicts, no prune);
 #   4. platform-gitops/argocd from the working tree, applied the same way.
 #
-# After step 4, argocd-server must be Ready without restarts, /api/dex served
-# through argocd-server must answer with issuer <url>/api/dex, and /auth/login
-# must redirect to /api/dex/auth, or to the ZITADEL authorize endpoint when
-# argocd-cm carries oidc.config instead of dex.config. While Argo CD still
-# signs in through Dex, Dex's token endpoint must accept the argo-cd client
-# secret argocd-server derives, and refuse a wrong one. Then a mutation run: Deployment `dex` scaled
-# to 0 must make /api/dex fail, proving argocd-server proxies to that Dex and
-# not to a leftover one; scaled back, it must recover.
+# After step 4, argocd-server must be Ready without restarts, no server-side
+# apply may have failed, and /auth/login must redirect to the authorize
+# endpoint of the oidc.config issuer (ZITADEL).
 #
 # Kinds whose CRDs this cluster lacks (ExternalSecret, ServiceMonitor) and the
 # self-managing Application are left out of steps 3 and 4, and so are Helm
@@ -32,8 +27,7 @@
 # ExternalSecret merges into argocd-secret are set to dummy values instead.
 #
 # Requires: docker, kubectl, helm, python3 with PyYAML, curl, git, and network
-# access (rancher/k3s, the argo-cd chart, the images, and Dex's upstream
-# discovery at https://app.mctl.ai/api/oidc-provider).
+# access (rancher/k3s, the argo-cd chart, the images).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,7 +42,7 @@ BASE_REF="${BASE_REF:-origin/main}"
 CANDIDATE_REF="${CANDIDATE_REF:-}"
 
 WORK="$(mktemp -d)"
-NAME="mctl-argocd-dex-$$"
+NAME="mctl-argocd-login-$$"
 PF_PID=""
 cleanup() {
   rc=$?
@@ -103,7 +97,7 @@ helm install argocd argo-cd --repo https://argoproj.github.io/argo-helm \
 # What ExternalSecret argocd-github-oauth merges into argocd-secret in the
 # cluster; dummies here.
 kubectl -n argocd patch secret argocd-secret --type merge -p \
-  '{"stringData":{"backstage-oidc-client-id":"dummy","backstage-oidc-client-secret":"dummy","argo-workflows-sso-client-secret":"dummy","webhook.github.secret":"dummy"}}' >/dev/null
+  '{"stringData":{"webhook.github.secret":"dummy"}}' >/dev/null
 
 # What the zitadel-iac Job writes into argocd-oidc-zitadel in the cluster;
 # dummies here, filled in once the Secret exists (see fill_oidc).
@@ -173,32 +167,13 @@ kubectl -n argocd port-forward svc/argocd-server 18080:80 >/dev/null 2>&1 &
 PF_PID=$!
 for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 1; done
 
-discovery() { curl -s -o "$WORK/disc.json" -w '%{http_code}' -H "Host: ${URL#https://}" http://127.0.0.1:18080/api/dex/.well-known/openid-configuration; }
+# The #1545 signal; checked before the login, which needs oidc.config.
+[ -z "$APPLY_ERRORS" ] || fail "server-side apply failed for:$APPLY_ERRORS"
 
-echo "== /api/dex through argocd-server"
-# Right after the rollout the first answers may still come from a pod that is
-# going away; every non-200 is printed with its body, and only one that does
-# not clear within a minute fails the run.
-code=""
-for _ in $(seq 1 12); do
-  code="$(discovery)"
-  [ "$code" = 200 ] && break
-  echo "   transient $code: $(head -c 200 "$WORK/disc.json") [$(kubectl -n argocd get pods -l 'app.kubernetes.io/name in (argocd-server,dex)' --no-headers 2>&1 | awk '{print $1":"$2":"$3}' | tr '\n' ' ')] argocd-server: $(kubectl -n argocd logs deploy/argocd-server --since=2m 2>/dev/null | grep -E 'restarting|serving on' | tail -2 | sed 's/.*msg=//' | tr '\n' ' ')"
-  sleep 5
-done
-[ "$code" = 200 ] || fail "/api/dex discovery returned $code"
-issuer="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["issuer"])' "$WORK/disc.json")"
-[ "$issuer" = "$URL/api/dex" ] || fail "issuer is $issuer, want $URL/api/dex"
-echo "   issuer $issuer"
-
-# Where Argo CD's own login must send the browser: Dex while argocd-cm has
-# dex.config, the oidc.config issuer once it has that instead.
+# Where Argo CD's own login must send the browser: the oidc.config issuer.
 OIDC_ISSUER="$(kubectl -n argocd get cm argocd-cm -o jsonpath='{.data.oidc\.config}' | sed -n 's/^issuer: *//p')"
-if [ -n "$OIDC_ISSUER" ]; then
-  EXPECT_LOGIN="$OIDC_ISSUER/oauth/v2/authorize?client_id=$OIDC_DUMMY_CLIENT_ID&"
-else
-  EXPECT_LOGIN="$URL/api/dex/auth?"
-fi
+[ -n "$OIDC_ISSUER" ] || fail "argocd-cm has no oidc.config issuer"
+EXPECT_LOGIN="$OIDC_ISSUER/oauth/v2/authorize?client_id=$OIDC_DUMMY_CLIENT_ID&"
 echo "== /auth/login redirects to $EXPECT_LOGIN"
 loc="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: ${URL#https://}" http://127.0.0.1:18080/auth/login)"
 case "$loc" in
@@ -206,48 +181,4 @@ case "$loc" in
   *) fail "/auth/login answered: $loc" ;;
 esac
 
-if [ -z "$OIDC_ISSUER" ]; then
-  # The only place argocd-server presents the argo-cd client secret is
-  # Dex's token endpoint; a discovery or authorize check cannot see a wrong
-  # one. Derive it from this cluster's server.secretkey exactly as
-  # argocd-server does (DexOAuth2ClientSecret), present it with a bogus code
-  # through argocd-server's proxy: client auth passing means invalid_grant,
-  # failing means invalid_client (Dex v2.45.1; older Dex answered an unknown
-  # code with invalid_request, so re-measure on a bump). Then the same with
-  # a wrong secret.
-  echo "== argo-cd client secret accepted by Dex (token endpoint)"
-  kubectl -n argocd get secret argocd-secret -o jsonpath='{.data.server\.secretkey}' > "$WORK/sk.b64"
-  token_error() { # <secret> -> Dex error code, or the status and body of a non-JSON answer
-    local code
-    code="$(curl -s -o "$WORK/tok.json" -w '%{http_code}' -u "argo-cd:$1" -H "Host: ${URL#https://}" \
-      -d grant_type=authorization_code -d code=bogus --data-urlencode "redirect_uri=$URL/auth/callback" \
-      http://127.0.0.1:18080/api/dex/token)" || true
-    python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["error"])' "$WORK/tok.json" 2>/dev/null \
-      || echo "http $code: $(head -c 200 "$WORK/tok.json" 2>/dev/null)"
-  }
-  derived="$(python3 -c 'import base64,hashlib,sys; k=base64.b64decode(open(sys.argv[1]).read()); print(base64.urlsafe_b64encode(hashlib.sha256(k).digest()).decode()[:40])' "$WORK/sk.b64")"
-  err="$(token_error "$derived")"
-  [ "$err" = invalid_grant ] || fail "argo-cd with the derived secret: $err (want invalid_grant)"
-  echo "   derived secret: $err"
-  err="$(token_error "wrong-${derived#??????}")"
-  [ "$err" = invalid_client ] || fail "argo-cd with a wrong secret: $err (want invalid_client)"
-  echo "   wrong secret:   $err"
-fi
-
-if kubectl -n argocd get deploy dex >/dev/null 2>&1; then
-  echo "== mutation: Deployment dex scaled to 0 must break /api/dex"
-  kubectl -n argocd scale deploy/dex --replicas=0 >/dev/null
-  kubectl -n argocd wait --for=delete pod -l app.kubernetes.io/name=dex --timeout=120s >/dev/null 2>&1 || true
-  code="$(discovery)"
-  [ "$code" != 200 ] || fail "/api/dex still answers 200 with dex scaled to 0: argocd-server is not using it"
-  echo "   /api/dex answered $code"
-  kubectl -n argocd scale deploy/dex --replicas=1 >/dev/null
-  kubectl -n argocd rollout status deploy/dex --timeout=120s >/dev/null
-  sleep 5
-  code="$(discovery)"
-  [ "$code" = 200 ] || fail "/api/dex did not recover after dex came back ($code)"
-  echo "   recovered: $code"
-fi
-
-[ -z "$APPLY_ERRORS" ] || fail "server-side apply failed for:$APPLY_ERRORS"
 echo "PASS"
