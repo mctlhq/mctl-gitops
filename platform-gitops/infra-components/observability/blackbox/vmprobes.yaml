@@ -160,9 +160,18 @@ spec:
 # The keep rule repeats externalManifestNamespaces.erpact.hostPattern from
 # bootstrap/values.yaml, which the admission policy already enforces on every
 # Ingress host in erpact. Restating it here means the probe can only ever go to
-# an erpact-*.mctl.ai name, whatever the tenant's repository writes. Every
-# Ingress host in erpact is taken to be a Frappe site: a non-site Ingress added
-# there later would fail /api/method/ping and needs a drop rule here.
+# an erpact-*.mctl.ai name, whatever the tenant's repository writes.
+# Two kinds of host in erpact are not Frappe sites and are dropped below,
+# because /api/method/ping can only fail on them:
+#   - an Ingress from any chart other than erpnext (erpact-deployer is the
+#     helm-deployer chart: its / answers 200, /api/method/ping 404);
+#   - a multi-site bench's own default host, which the erpnext chart puts on
+#     the Ingress whether or not a site of that name exists. erpact-shared
+#     serves its sites from the other hosts on the same Ingress, and its
+#     default erpact-shared-stteam.mctl.ai has no site in sites/, so Frappe
+#     answers 404 "does not exist" on every path.
+# Without these two drops ErpactSiteDown fired for both from the moment the
+# probe was merged (#1780).
 #
 # /api/method/ping is Frappe's unauthenticated liveness endpoint; it answers
 # 200 only when nginx, gunicorn and the site's database all work, so it covers
@@ -194,6 +203,12 @@ spec:
         - sourceLabels: [__meta_kubernetes_ingress_host]
           regex: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai'
           action: keep
+        - sourceLabels: [__meta_kubernetes_ingress_label_app_kubernetes_io_name]
+          regex: erpnext
+          action: keep
+        - sourceLabels: [__meta_kubernetes_ingress_host]
+          regex: 'erpact-shared-stteam\.mctl\.ai'
+          action: drop
         - sourceLabels: [__meta_kubernetes_ingress_host]
           targetLabel: __param_target
           replacement: https://${1}/api/method/ping
