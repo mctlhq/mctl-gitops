@@ -2,11 +2,9 @@
 # (mctl-api#486, cmd/api/main.go's erpactDeployer construction), gating the
 # three temporary /api/v1/tenants/erpact/sites* routes.
 #
-# Its own policy, not folded into mctl-api-openclaw-read: that one is scoped
-# to secret/data/teams/+/+/telegram across every tenant, and widening it to
-# also cover this single erpact path would let a future tenant's "+/+"
-# match land here too. A second, single-path policy keeps each grant exactly
-# as wide as the one handler that uses it.
+# A single-path policy on purpose: a wildcard such as teams/+/+ would let a
+# future tenant's path match here too. Each grant stays exactly as wide as
+# the one handler that uses it.
 path "secret/data/teams/erpact/deployer" {
   capabilities = ["read"]
 }

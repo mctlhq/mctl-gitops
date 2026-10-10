@@ -50,7 +50,7 @@ Fix patterns:
 - The limit must fit under the tenant's `ResourceQuota` `limits.cpu` (default
   3 CPU) and the per-container `LimitRange` `max` (1500m for legacy labs,
   2 for everything else).
-- For known bursty sidecars (e.g. openclaw `s3-sync` running `mc mirror` every
+- For known bursty sidecars (e.g. an `s3-sync` sidecar running `mc mirror` every
   10s), 1000m is the standard default — covers the burst, fits all quotas.
 
 Real platform components watch for the same trap: argo-workflows controller and
@@ -73,7 +73,6 @@ mctl_deploy_service(
   # increase memory limit in config
 )
 ```
-Or switch to a template with higher defaults (e.g. `openclaw` → 1Gi).
 
 ## ArgoCD Sync Stuck / OutOfSync
 
@@ -119,14 +118,6 @@ If `https://workflows.mctl.ai` returns 500 or UI fails to load archived workflow
 2. Manually fix schema in Postgres (use `jsonb` for workflow data, ensure all columns like `clustername`, `creationtimestamp`, `uid` exist).
 3. Update `schema_history` to a high version (e.g. 100) to stop broken automatic migrations.
 4. Scale back to 1.
-
-## Admin Access (OpenClaw)
-
-If a user gets "Access Denied" in Telegram:
-1. Check if `dbInitJob` was enabled in `values.yaml`.
-2. If not, enable it and set the correct Telegram ID.
-3. If the Job already ran but failed, ArgoCD will retry on next Sync.
-4. Manual fix: `kubectl exec` into Postgres and run the `INSERT` query from `values.yaml`.
 
 ## Domain Not Resolving
 

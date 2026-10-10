@@ -51,26 +51,14 @@ values. `vaultSecrets.token` and the `VAULT_TOKEN` key in the
 (reverting gitops#700 does both). No new token needs minting as long as the
 token below is still live.
 
-### mctl-api-openclaw-read
-Read-only access to the one path `mctl-api` actually reads:
-`secret/teams/{team}/{component}/telegram`, checked during OpenClaw
-onboarding preflight (`handlers_openclaw.go`) to confirm a Telegram bot
-token was saved. Scoped narrower than `backstage-teams-rw` on purpose — no
-write path, no reason to grant the rest of `secret/teams/*/*`.
-
-```bash
-vault policy write mctl-api-openclaw-read vault-policy-mctl-api-openclaw-read.hcl
-```
-
 ### mctl-api-erpact-deployer-read
 
 Read-only access to one tenant secret, `secret/teams/erpact/deployer`'s
 `DEPLOYER_API_TOKEN` property: the bearer token mctl-api uses to call the
 erpact tenant's own site-deployer (mctl-api#486, cmd/api/main.go's
 `erpactDeployer` construction), backing the temporary
-`/api/v1/tenants/erpact/sites*` routes. Read at request time through the
-same `VaultReader` the OpenClaw Telegram-token check above uses, not
-through an ExternalSecret env var -- the cluster-wide `vault-backend`
+`/api/v1/tenants/erpact/sites*` routes. Read at request time through
+mctl-api's own `VaultReader`, not through an ExternalSecret env var -- the cluster-wide `vault-backend`
 ClusterSecretStore's policy (`vault-policy-external-secrets-read.hcl`)
 deliberately denies all of `secret/data/teams/*`, since it is reachable
 from every namespace and any tenant path granted there becomes readable by
@@ -93,15 +81,16 @@ the mctl-api repo) — no new identity needed, just the Vault role:
 vault write auth/kubernetes/role/mctl-api \
   bound_service_account_names=mctl-api \
   bound_service_account_namespaces=mctl-api \
-  policies=mctl-api-openclaw-read,mctl-api-erpact-deployer-read \
+  policies=mctl-api-erpact-deployer-read \
   ttl=1h
 ```
 
 Not confirmed live yet. Once the image with the Kubernetes-auth support
 lands and this config change deploys: confirm `"auth":"kubernetes"` in the
 `vault client enabled` startup log line and `vault kubernetes auth
-succeeded` on first use, and exercise the OpenClaw onboarding preflight path
-(or at minimum confirm no `vault auth:` errors under load). Only after both
+succeeded` on first use, and exercise a route that reads Vault through it,
+such as the ERPact site routes (or at minimum confirm no `vault auth:`
+errors under load). Only after both
 Backstage AND mctl-api are confirmed on Kubernetes auth does revoking
 `secret/platform/backstage/vault-token` become safe — it is a shared
 credential between the two, not a Backstage-only concern.
@@ -425,7 +414,6 @@ secret/
         └── {service}       ← Service secrets (KEY=value, managed via Backstage UI)
             /database        ← DB credentials (written by wft-provision-database)
             /repo-pat        ← Private registry PAT (optional)
-            /telegram        ← Telegram bot token (optional, openclaw intake)
 ```
 
 Note the absence of a `platform/teams/...` branch. Nothing writes one; a

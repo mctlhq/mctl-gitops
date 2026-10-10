@@ -796,8 +796,9 @@ spec:
           - name: ISSUE_INVESTIGATOR_BUDGET_USD
             value: "8.00"
         resources:
-          # memory bumped 4Gi -> 8Gi: on the largest target repos (e.g.
-          # mctl-openclaw — a ~500 MB shallow clone over a 100k-file monorepo)
+          # memory bumped 4Gi -> 8Gi: on the largest target repos (the case was
+          # the since-archived mctl-openclaw — a ~500 MB shallow clone over a
+          # 100k-file monorepo)
           # the Claude SDK's `claude` CLI child was OOM-killed mid-run, so the
           # investigator never wrote the requirements/design/tasks triplet and
           # the pod exited 1. Smaller repos (e.g. mctl-telegram) fit in 4Gi.

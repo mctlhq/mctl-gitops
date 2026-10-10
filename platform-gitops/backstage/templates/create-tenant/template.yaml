@@ -7,7 +7,7 @@ metadata:
     Provision a new tenant on the mctl.ai platform.
     Creates a dedicated Kubernetes namespace with ResourceQuota, NetworkPolicy, and LimitRange.
     Also creates a scoped Vault policy and ArgoCD RBAC entry for the team.
-    Default quota profile is sized for 1 OpenClaw-capable tenant.
+    Default quota profile is sized for a small tenant running a few services.
 
   tags:
     - tenant
@@ -51,29 +51,29 @@ spec:
 
     - title: Resource Quotas
       description: |
-        Default values below are sized for 1 OpenClaw-capable tenant.
-        Increase them only if this workspace will run additional services beyond one OpenClaw deployment.
+        Default values below are sized for a small tenant running a few services.
+        Increase them only if this workspace will run larger or more numerous services.
       properties:
         quotaCpuReq:
           title: CPU Requests (total)
           type: string
           default: "500m"
-          description: "Default OpenClaw-capable profile: total CPU requests across the namespace."
+          description: "Default profile: total CPU requests across the namespace."
         quotaCpuLim:
           title: CPU Limits (total)
           type: string
           default: "3"
-          description: "Default OpenClaw-capable profile: total CPU limits across the namespace."
+          description: "Default profile: total CPU limits across the namespace."
         quotaMemoryReq:
           title: Memory Requests (total)
           type: string
           default: "1280Mi"
-          description: "Default OpenClaw-capable profile: total memory requests across the namespace."
+          description: "Default profile: total memory requests across the namespace."
         quotaMemoryLim:
           title: Memory Limits (total)
           type: string
           default: "4Gi"
-          description: "Default OpenClaw-capable profile: total memory limits across the namespace."
+          description: "Default profile: total memory limits across the namespace."
         quotaPods:
           title: Max Pods
           type: string
@@ -119,7 +119,7 @@ spec:
         content: "`${{ parameters.tenantName }}`"
       - title: Resource Quotas
         content: |
-          Profile: `1 OpenClaw-capable tenant`
+          Profile: `default (small tenant)`
           CPU: `${{ parameters.quotaCpuReq }}` req / `${{ parameters.quotaCpuLim }}` lim
           Memory: `${{ parameters.quotaMemoryReq }}` req / `${{ parameters.quotaMemoryLim }}` lim
           Pods: `${{ parameters.quotaPods }}`

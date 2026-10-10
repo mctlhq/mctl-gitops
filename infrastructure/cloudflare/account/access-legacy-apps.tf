@@ -14,7 +14,8 @@
 
 # --- Reusable policies -------------------------------------------------------
 
-# Admits any identity the account's Google provider asserts. Shared by the
+# Admits any identity the account's Google provider asserts
+# (var.projects_mcp_google_idp_id, declared in projects-mcp.tf). Shared by the
 # applications below and the App Launcher. Who that is, is decided by the
 # Google provider, not by this policy: the include names a login method,
 # not a list of users.
@@ -30,7 +31,7 @@ resource "cloudflare_zero_trust_access_policy" "google" {
   session_duration = "24h"
 
   include = [
-    { login_method = { id = local.google_idp_id } },
+    { login_method = { id = var.projects_mcp_google_idp_id } },
   ]
 
   # Stored by the dashboard on creation; meaningless on these self_hosted
@@ -62,11 +63,6 @@ resource "cloudflare_zero_trust_access_policy" "seerrsense_service_token" {
   ]
 }
 
-locals {
-  # The account's Google identity provider (also used by projects-mcp.tf).
-  google_idp_id = "bb581a63-79d5-477b-af43-dd5cd07ff12b"
-}
-
 # --- Applications --------------------------------------------------------------
 
 # Seerr (Overseerr) at media.mctl.ai, #1089 decision 1.
@@ -95,7 +91,7 @@ resource "cloudflare_zero_trust_access_application" "media" {
     },
   ]
 
-  allowed_idps               = [local.google_idp_id]
+  allowed_idps               = [var.projects_mcp_google_idp_id]
   app_launcher_visible       = true
   auto_redirect_to_identity  = false
   session_duration           = "24h"
@@ -127,81 +123,13 @@ resource "cloudflare_zero_trust_access_application" "jellyfin" {
     },
   ]
 
-  allowed_idps               = [local.google_idp_id]
+  allowed_idps               = [var.projects_mcp_google_idp_id]
   app_launcher_visible       = true
   auto_redirect_to_identity  = false
   session_duration           = "24h"
   enable_binding_cookie      = false
   http_only_cookie_attribute = false
   options_preflight_bypass   = false
-
-  policies = [
-    { id = cloudflare_zero_trust_access_policy.google.id, precedence = 1 },
-  ]
-}
-
-# --- To be deleted -------------------------------------------------------------
-#
-# Both are adopted only so that a follow-up change can delete them through
-# this root: an object OpenTofu never knew cannot be planned away.
-#   - openclaw-mashkoffdmitry: OpenClaw was removed from the platform
-#     (mctl-gitops#1730); the host behind it no longer exists.
-#     (#1089 decision 3 predates that removal.)
-#   - workflows (workflows1.mctl.me): a leftover from before Argo Workflows
-#     moved to mctl.ai; nothing serves that host.
-
-import {
-  to = cloudflare_zero_trust_access_application.openclaw_mashkoffdmitry
-  id = "accounts/${var.account_id}/ef6bc87b-90b3-429e-9ca5-5ce0dfa9051d"
-}
-
-resource "cloudflare_zero_trust_access_application" "openclaw_mashkoffdmitry" {
-  account_id = var.account_id
-  name       = "openclaw-mashkoffdmitry"
-  type       = "self_hosted"
-  domain     = "mashkoffdmitry-openclaw.mctl.ai"
-
-  destinations = [
-    {
-      type = "public"
-      uri  = "mashkoffdmitry-openclaw.mctl.ai"
-    },
-  ]
-
-  allowed_idps               = [local.google_idp_id]
-  app_launcher_visible       = true
-  auto_redirect_to_identity  = true
-  http_only_cookie_attribute = false
-  session_duration           = "24h"
-
-  policies = [
-    { id = cloudflare_zero_trust_access_policy.google.id, precedence = 1 },
-  ]
-}
-
-import {
-  to = cloudflare_zero_trust_access_application.workflows_mctl_me
-  id = "accounts/${var.account_id}/d1c810dd-1814-47e1-b47f-d00f25292977"
-}
-
-resource "cloudflare_zero_trust_access_application" "workflows_mctl_me" {
-  account_id = var.account_id
-  name       = "workflows"
-  type       = "self_hosted"
-  domain     = "workflows1.mctl.me"
-
-  destinations = [
-    {
-      type = "public"
-      uri  = "workflows1.mctl.me"
-    },
-  ]
-
-  allowed_idps               = [local.google_idp_id]
-  app_launcher_visible       = true
-  auto_redirect_to_identity  = true
-  http_only_cookie_attribute = false
-  session_duration           = "24h"
 
   policies = [
     { id = cloudflare_zero_trust_access_policy.google.id, precedence = 1 },

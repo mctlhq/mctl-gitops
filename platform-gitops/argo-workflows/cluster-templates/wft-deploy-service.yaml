@@ -81,21 +81,9 @@ spec:
         value: "ghcr.io/mctlhq"
       - name: config_patch
         value: ""
-        # yq expression to patch values.yaml (update-config only)
-        # e.g. '.configMaps["openclaw-config"]["openclaw.json"] |= (fromjson | .defaultModel = "openai-codex/gpt-5.4" | tojson)'
-      - name: default_model
-        value: "openai-codex/gpt-5.4"
-      - name: telegram_owner_id
-        value: ""
-        # Deprecated single-ID field. Prefer telegram_owner_ids_json.
-      - name: telegram_owner_ids_json
-        value: ""
-        # JSON array string with one or more Telegram user IDs authorized to
-        # talk to the bot, e.g. '["210408407","317748297"]'. If empty the
-        # commit template falls back to wrapping telegram_owner_id.
-      - name: telegram_bot_token
-        value: ""
-        # Telegram bot token — written to Vault at teams/{team}/{service}/telegram → telegram-bot-token
+        # yq expression to patch values.yaml (update-config only). Must be a
+        # pipeline of plain assignments under .resources, .env or .configMaps,
+        # e.g. '.resources.requests.cpu = "500m" | .resources.limits.memory = "1Gi"'
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
@@ -154,7 +142,7 @@ spec:
           # Step 2: write Vault secrets (skip if no secrets)
           - name: write-secrets
             dependencies: [validate]
-            when: "\"{{workflow.parameters.secret_env_vars}}\" != \"\" || \"{{workflow.parameters.telegram_bot_token}}\" != \"\""
+            when: "\"{{workflow.parameters.secret_env_vars}}\" != \"\""
             templateRef:
               name: tpl-vault-write
               clusterScope: true
@@ -167,8 +155,6 @@ spec:
                   value: "{{workflow.parameters.component_name}}"
                 - name: secret_env_vars
                   value: "{{workflow.parameters.secret_env_vars}}"
-                - name: telegram_bot_token
-                  value: "{{workflow.parameters.telegram_bot_token}}"
 
           # Step 3: provision database before publishing service manifests (optional)
           - name: provision-database
@@ -230,12 +216,6 @@ spec:
                   value: "{{workflow.parameters.service_template}}"
                 - name: config_patch
                   value: "{{workflow.parameters.config_patch}}"
-                - name: default_model
-                  value: "{{workflow.parameters.default_model}}"
-                - name: telegram_owner_id
-                  value: "{{workflow.parameters.telegram_owner_id}}"
-                - name: telegram_owner_ids_json
-                  value: "{{workflow.parameters.telegram_owner_ids_json}}"
 
           # Step 5: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling

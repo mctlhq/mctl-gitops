@@ -28,7 +28,7 @@ Store the token in a local file, then run in the chat prompt field:
 ```
 or per-repo:
 ```
-! for repo in mctl-telegram mctl-api mctl-gitops mctl-agent mctl-agents mctl-portal mctl-web mctl-openclaw mctl-docs mctl-design mctl-claude-remote mctl-trading-data mctl-mcp; do
+! for repo in mctl-telegram mctl-api mctl-gitops mctl-agent mctl-agents mctl-portal mctl-web mctl-docs mctl-design mctl-claude-remote mctl-trading-data mctl-mcp; do
     gh secret set CLAUDE_CODE_OAUTH_TOKEN_2 -R mctlhq/$repo < ~/.secrets/claude-review-token-2.txt && echo "OK: $repo" || echo "FAIL: $repo"
   done
 ```
@@ -75,7 +75,7 @@ done
 ## Repos covered (as of 2026-05-30)
 
 All repos with claude-review.yml:
-- mctl-gitops, mctl-telegram, mctl-web, mctl-openclaw, mctl-docs
+- mctl-gitops, mctl-telegram, mctl-web, mctl-docs
 - mctl-design, mctl-claude-remote, mctl-api, mctl-agent, mctl-agents
 - mctl-portal, mctl-trading-data, mctl-mcp
 
@@ -87,7 +87,7 @@ the skill.
 The primary token is per-repo (not org-level) because it was set with
 `claude setup-token`:
 ```
-! for repo in mctl-telegram mctl-api mctl-gitops mctl-agent mctl-agents mctl-portal mctl-web mctl-openclaw mctl-docs mctl-design mctl-claude-remote mctl-trading-data mctl-mcp; do
+! for repo in mctl-telegram mctl-api mctl-gitops mctl-agent mctl-agents mctl-portal mctl-web mctl-docs mctl-design mctl-claude-remote mctl-trading-data mctl-mcp; do
     gh secret set CLAUDE_CODE_OAUTH_TOKEN -R mctlhq/$repo < ~/.secrets/claude-review-token.txt && echo "OK: $repo" || echo "FAIL: $repo"
   done
 ```

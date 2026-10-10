@@ -281,17 +281,6 @@ spec:
         ensure: present
         passwordSecret:
           name: labs-kuptsi-app-db-creds
-      # openclaw was removed (2026-10-10). `ensure: absent` makes CNPG drop
-      # the three roles; the entries can go once the drop has been observed.
-      # Dropping a role fails while it still owns a database, so the matching
-      # Database objects in databases.yaml are set to `ensure: absent` too and
-      # CNPG retries the role until those are gone.
-      - name: ovk-openclaw
-        ensure: absent
-      - name: admins-openclaw
-        ensure: absent
-      - name: labs-openclaw
-        ensure: absent
       # Temporal server connects from the temporal namespace via shared-pg-rw.
       # Owns both the temporal (history+matching) and temporal_visibility databases.
       # Connection budget: 4 server roles (frontend/history/matching/worker)

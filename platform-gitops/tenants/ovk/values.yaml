@@ -13,11 +13,8 @@ tenant:
       role: owner
     - userId: mashkovd
       role: owner
-  # The tenant chart owns ghcr-credentials here again: services/ovk/openclaw
-  # used to own it via extraExternalSecrets and was removed with openclaw.
-  # Its Application's cascade deletes that ExternalSecret and its Secret; this
-  # one then (re)creates the Secret. Running pods are unaffected (pull secrets
-  # are read at image pull time only).
+  # The tenant chart owns ghcr-credentials here. No service in this tenant
+  # supplies it through extraExternalSecrets any more, so it must stay on.
   ghcrCredentials:
     enabled: true
   quotas:
