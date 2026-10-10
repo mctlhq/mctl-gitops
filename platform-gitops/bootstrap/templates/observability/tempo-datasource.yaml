@@ -42,7 +42,9 @@ data:
           # Trace -> logs (mctlhq/mctl-agent#97): a span's pod log stream,
           # around the span. The Collector stamps k8s.namespace.name and
           # k8s.pod.name on every span, and promtail labels the same pod with
-          # `namespace` and `pod`, so no mapping table is needed. Agent pods
+          # `namespace` and `pod`; the tag mapping renames one to the other
+          # and the mapped-tags variable (the documented form) renders the selector, so
+          # the link only appears when both attributes are present. Agent pods
           # log one `[trace] trace_id=...` anchor line; worker lines inside a
           # traced activity end in `trace_id=...`. The uid is Loki's
           # (loki-datasource.yaml).
@@ -52,8 +54,13 @@ data:
             spanEndTimeShift: '1m'
             filterByTraceID: false
             filterBySpanID: false
+            tags:
+              - key: k8s.namespace.name
+                value: namespace
+              - key: k8s.pod.name
+                value: pod
             customQuery: true
-            query: '{namespace="$${__span.tags["k8s.namespace.name"]}", pod="$${__span.tags["k8s.pod.name"]}"}'
+            query: '{$${__tags}}'
 {{- end }}
 {{- end }}
 {{- end }}

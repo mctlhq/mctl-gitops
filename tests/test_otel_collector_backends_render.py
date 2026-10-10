@@ -682,7 +682,12 @@ if derived:
 if committed_ds:
     t2l = yaml.safe_load(next(iter(committed_ds[0]["data"].values())))["datasources"][0].get("jsonData", {}).get("tracesToLogsV2", {})
     check(t2l.get("datasourceUid") == LOKI_UID, f"tracesToLogsV2 must point at the Loki uid, got {t2l!r}")
-    check("k8s.pod.name" in t2l.get("query", ""), "tracesToLogsV2 query must scope by the span's pod")
+    check(
+        {(t.get("key"), t.get("value")) for t in t2l.get("tags", [])}
+        == {("k8s.namespace.name", "namespace"), ("k8s.pod.name", "pod")},
+        f"tracesToLogsV2 must map the span's namespace and pod onto the promtail labels, got {t2l.get('tags')!r}",
+    )
+    check(t2l.get("query") == "{$${__tags}}", f"tracesToLogsV2 query must be the mapped-tags selector, got {t2l.get('query')!r}")
 
 loki_off = _loki_ds(default_docs)
 check(loki_off.get("uid") == LOKI_UID, "eval-off Loki datasource must keep the same uid")
