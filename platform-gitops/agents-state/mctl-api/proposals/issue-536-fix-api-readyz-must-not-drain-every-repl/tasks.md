@@ -1,0 +1,21 @@
+# Tasks: issue-536-fix-api-readyz-must-not-drain-every-repl
+
+- [ ] 1. In `internal/api/ready.go`, stop dependency probe failures from affecting `ready`/`code`. Compute the aggregate `dependencies` value (`ok` / `degraded` / `not_configured`) and add it to the body. Keep the concurrent fan-out with per-probe `readyCheckTimeout`, the `checks` keys and values, and the WARN log unchanged. — DoD: when every probe fails and stores are OK, the handler returns 200 with `checks.<dep> = "unavailable"` and `dependencies = "degraded"`.
+- [ ] 2. Add the `mctl_api_dependency_up{check}` GaugeVec to `internal/api/ready.go`, registered in `init()` the same way as `router.go:808`. Set it per configured probe (1 or 0). Skip unconfigured probes. (depends on 1) — DoD: the gauge appears on `/metrics` after a `/readyz` call with the correct values.
+- [ ] 3. Add `Draining func() bool` to `Options` in `internal/api/router.go`. In `handleReadyz`, return 503 with `checks.shutdown = "draining"` when it returns true. Update the `Options` doc comments for the four probes and the `ReadyCheck` comment. (depends on 1) — DoD: comments describe the new semantics, and a nil `Draining` changes nothing.
+- [ ] 4. In `cmd/api/main.go`, add an `atomic.Bool` that is set right after `<-rootCtx.Done()` and before `srv.Shutdown`, and pass `Draining: draining.Load`. (depends on 3) — DoD: `go build ./...` and `go vet ./...` are clean.
+- [ ] 5. Update `README.md` and `LLMS.md` with the `/readyz` semantics and the new metric. — DoD: the docs state that `/readyz` fails only on store init failure or drain.
+- [ ] 6. Write the PR description with the gitops follow-ups from design.md "Platform impact": a `MctlApiDependencyDown` rule, updated `MctlApiDown`/`MctlApiNoReadyReplicas` descriptions and test fixtures, and an optional dashboard panel. Do not edit mctl-gitops. — DoD: the follow-ups are listed in the PR body.
+- [ ] 7. Run `go fmt`, `go vet ./...`, `golangci-lint run` and `go test ./...`. — DoD: all pass.
+
+## Tests
+All tests go in `internal/api/ready_test.go`. Extend the `readyBody` struct with `Dependencies string`.
+- [ ] T1. `TestReadyz_AllDependenciesFailingStoresOKIsReady`: all four probes return errors, and `StoreInitFailures` returns nil. Assert 200, `status == "ready"`, each of gitops/postgres/dex/vault `== "unavailable"`, `checks.stores == "ok"` and `dependencies == "degraded"`. This test fails on revert, because the current code returns 503.
+- [ ] T2. `TestReadyz_StoreInitFailureWithHealthyDepsIs503`: keep the existing `TestReadyz_FailedStoreInitIsNotReady`. Add a variant where all probes fail and a store init failed, and assert 503 plus `failed_stores`. This proves stores still gate readiness on their own.
+- [ ] T3. Rewrite `TestReadyz_FailedProbeReturns503` as `TestReadyz_FailedProbeStaysReady` (expect 200, `gitops == "unavailable"`, `postgres == "ok"`). Change `TestReadyz_SlowProbeDoesNotStarveOthers` to expect 200, and add an elapsed-time assertion (`< readyCheckTimeout + 1s`) so a hanging probe cannot slow the response.
+- [ ] T4. `TestReadyz_DrainingIs503`: `Draining: func() bool { return true }` with all probes OK. Assert 503 and `checks.shutdown == "draining"`. Fails on revert, because the field does not exist today.
+- [ ] T5. `TestReadyz_DependencyGauge`: after a call with one failing and one passing probe, use `testutil.ToFloat64(dependencyUp.WithLabelValues(...))` to assert 0 and 1. Assert that unconfigured probes have no series (`testutil.CollectAndCount`).
+- [ ] T6. `TestReadyz_DependenciesAggregate`: when all probes are OK, `dependencies == "ok"`. With `Options{}`, `dependencies == "not_configured"`. Existing tests `TestReadyz_NoProbesConfiguredIsReady`, `TestReadyz_AllProbesOK`, the store tests and `TestSmoke_HealthChecks` must still pass unchanged.
+
+## Rollback
+Revert the PR and redeploy the previous mctl-api image tag (`mctl_rollback_service` or the gitops image tag). Nothing is persisted and no migration is involved. The only externally visible additions are the `dependencies` body key and the `mctl_api_dependency_up` series. If a gitops `MctlApiDependencyDown` rule was added as a follow-up, it simply goes to "no data" after a rollback and can be removed separately.
