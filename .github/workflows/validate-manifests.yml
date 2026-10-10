@@ -318,6 +318,8 @@ jobs:
           set -euo pipefail
           scripts/check-vm-rules.sh --selftest
           scripts/check-vm-rules.sh
+          scripts/check-dropped-metrics.sh --selftest
+          scripts/check-dropped-metrics.sh
 
       - name: Validate raw manifests (tenants, argo-workflows, mcp, infra-components)
         run: |

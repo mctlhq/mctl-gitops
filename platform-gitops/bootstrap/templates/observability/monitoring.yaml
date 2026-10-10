@@ -873,6 +873,35 @@ spec:
           prometheusOperator:
             enabled: true # Keep operator to manage CRDs (ServiceMonitors, VMAlerts)
 
+          # Drop apiserver/etcd histogram buckets nothing reads. Only
+          # apiserver_request_sli_duration_seconds_bucket (burnrate, availability
+          # and histogram rules) and apiserver_client_certificate_expiration_seconds_bucket
+          # (KubeClientCertificateExpiration) are consumed, so both are kept.
+          # _count/_sum series are untouched. Explicit names on purpose: a new
+          # consumer of a dropped metric must remove it from this list.
+          # Guarded by scripts/check-dropped-metrics.sh (repo rules/dashboards).
+          # On a victoria-metrics-k8s-stack bump, re-grep the chart's default
+          # rules and dashboards for apiserver_|etcd_|aggregator_ first.
+          # List is the design baseline; not yet checked against live
+          # /api/v1/status/tsdb output.
+          kubeApiServer:
+            enabled: true
+            vmScrape:
+              spec:
+                endpoints:
+                  # Helm replaces lists wholesale: this restates the chart 0.72.5
+                  # default endpoint and only adds metricRelabelConfigs.
+                  - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+                    port: https
+                    scheme: https
+                    tlsConfig:
+                      caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                      serverName: kubernetes
+                    metricRelabelConfigs:
+                      - action: drop
+                        sourceLabels: [__name__]
+                        regex: "apiserver_request_duration_seconds_bucket|apiserver_response_sizes_bucket|apiserver_request_body_size_bytes_bucket|apiserver_watch_events_sizes_bucket|apiserver_watch_list_duration_seconds_bucket|apiserver_watch_cache_read_wait_seconds_bucket|apiserver_admission_controller_admission_duration_seconds_bucket|apiserver_admission_step_admission_duration_seconds_bucket|apiserver_admission_webhook_admission_duration_seconds_bucket|apiserver_flowcontrol_request_wait_duration_seconds_bucket|apiserver_flowcontrol_request_execution_seconds_bucket|apiserver_flowcontrol_work_estimated_seats_bucket|apiserver_flowcontrol_priority_level_seat_utilization_bucket|apiserver_flowcontrol_priority_level_request_utilization_bucket|apiserver_flowcontrol_read_vs_write_current_requests_bucket|apiserver_flowcontrol_demand_seats_bucket|apiserver_crd_conversion_webhook_duration_seconds_bucket|etcd_request_duration_seconds_bucket"
+
           kubeControllerManager:
             enabled: false
           kubeEtcd:
