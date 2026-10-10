@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-10T19:44:14Z'
+status: rejected
+updated_at: '2026-10-10T20:34:01Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-4d519b36956ca24c
@@ -27,4 +27,8 @@ attempt:
   expires_at: '2026-10-10T21:16:11Z'
   finished_at: '2026-10-10T19:09:36Z'
 pr: https://github.com/mctlhq/mctl-agent/pull/163
-review_attempts: 2
+github:
+  state: closed
+  head_sha: ce69718d2d5e98016f5c92119122805ecaf2615d
+  observed_at: '2026-10-10T20:34:01Z'
+notes: PR was closed without merging.

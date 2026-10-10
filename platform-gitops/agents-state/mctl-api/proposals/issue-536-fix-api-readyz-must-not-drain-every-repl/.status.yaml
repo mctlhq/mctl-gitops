@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-10T19:40:17Z'
+updated_at: '2026-10-10T20:34:57Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-7776a413d0a084b0
@@ -27,3 +27,7 @@ attempt:
   expires_at: '2026-10-10T21:44:08Z'
   finished_at: '2026-10-10T19:40:17Z'
 pr: https://github.com/mctlhq/mctl-api/pull/542
+github:
+  state: open
+  head_sha: 70bf54f8ad1a76816687f0f0b101acb68f757fe9
+  observed_at: '2026-10-10T20:34:57Z'
