@@ -146,8 +146,8 @@ controls in env:
 - `AUTO_RESOLVE_STALE_AFTER` (default `24h`) — open tickets whose `UpdatedAt`
   has not advanced within the window are auto-resolved by the poller.
 - `ALERT_IGNORE_SERVICE_REGEX` — services matching the regex are dropped
-  before ticket creation (default covers `openclawpr\d+`, `*-demo\d*`,
-  `hooktest-*`, `svcprobe-*`, `external-agent-demo*`, `auto-remediation-demo`).
+  before ticket creation (default covers `*-demo\d*`, `hooktest-*`,
+  `svcprobe-*`, `external-agent-demo*`, `auto-remediation-demo`).
   Empty string explicitly disables the filter.
 
 Heartbeat contract — only ticket types and sources that emit `Touch` on

@@ -65,12 +65,6 @@ spec:
           WEBHOOK_ENABLED: "true"
           WEBHOOK_CALLBACK_URL: "https://agent.mctl.ai"
           WEBHOOK_DEFAULT_TTL: "15m"
-          # Bot username for the deeplink button on Telegram
-          # notifications. The button was built for OpenClaw, which is
-          # removed, but mctl-agent still reads this variable
-          # (internal/config/config.go) and falls back to a different bot
-          # without it, so it stays until mctl-agent drops the button.
-          OPENCLAW_BOT_USERNAME: "@MCTL_AI_bot"
           # LLM fallback skill disabled — Anthropic Console API key removed.
           # Deterministic skills cover all known alert types; TypeGeneric
           # alerts will remain open until MAX_ANALYZING_AGE expires.
