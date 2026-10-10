@@ -42,11 +42,9 @@ BASELINE: set[tuple[str, str, str]] = {
     for p in ("host", "dockerfile_repo", "image_tag", "git_tag", "service_template")
 } | {
     ("tpl-vault-write.yaml", "write-service-secrets", "secret_env_vars"),
-    ("tpl-vault-write.yaml", "write-service-secrets", "telegram_bot_token"),
     ("tpl-vault-write.yaml", "write-platform-secret", "json_data"),
     ("tpl-vault-write.yaml", "write-platform-secret", "vault_path"),
     ("tpl-git-commit.yaml", "commit-service", "config_patch"),
-    ("tpl-git-commit.yaml", "commit-service", "default_model"),
     ("wft-smoke-test.yaml", "run-onboard", "dockerfile_repo"),
     ("wft-smoke-test.yaml", "run-onboard", "git_tag"),
     ("wft-smoke-test.yaml", "run-onboard", "provision_database_on_onboard"),

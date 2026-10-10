@@ -37,31 +37,6 @@ mctl_deploy_service(
 → Service at https://my-team-hello-world.mctl.ai
 ```
 
-### Deploy OpenClaw (AI Gateway)
-```
-mctl_deploy_service(
-  action="onboard",
-  team_name="my-team",
-  component_name="openclaw",
-  dockerfile_repo="openclaw/openclaw",
-  git_tag="main",
-  service_template="openclaw"
-)
-→ Dashboard at https://my-team-openclaw.mctl.ai/#token={auto-generated}
-```
-
-The `openclaw` template pre-configures: 1Gi memory, 5min startup probe,
-gateway config (LAN bind, token auth, trusted K8s proxies), Control UI enabled.
-Deploy first, then connect a model provider in the OpenClaw UI. API keys are optional
-and should stay service-scoped under `teams/{team}/{service}` if used at all.
-The initial `auth-profiles.json` should be created by the OpenClaw OAuth flow itself and
-persisted to `platform-state/{team}/{service}/...`. During state-path migration, restore
-falls back from `platform-state/{team}/{service}/...` to the legacy
-`platform-state/{service}/{team}/...` layout.
-Known limitation: the current deployed OpenClaw image refreshes OAuth credentials in memory,
-but does not reliably persist refreshed state back to disk/S3; fixing that requires changes
-in the OpenClaw application image.
-
 ## Tool Reference
 
 ### Identity & Workspace
@@ -146,13 +121,14 @@ Credentials auto-injected: `DATABASE_URL`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_
 | Template | Port | Memory | Special Config |
 |----------|------|--------|----------------|
 | `default` | 8080 | 256Mi | Standard HTTP service |
-| `openclaw` | 18789 | 1Gi | Gateway config ConfigMap, 5min startup probe, `NODE_OPTIONS=--max-old-space-size=768` |
+| `worker` | — | 128Mi | No ingress (background worker) |
+| `spring-worker` | — | 128Mi | No ingress, Spring Boot actuator probes |
 
 ## Repo Access Patterns
 
 1. **Org repos** (mctlhq/*) → automatic via GitHub App
 2. **User public repos** → install GitHub App via `mctl_grant_repo_access` URL → `mctl_sync_repos`
-3. **External public repos** (e.g. `openclaw/openclaw`) → deploy directly, no registration needed
+3. **External public repos** (e.g. `someone/public-app`) → deploy directly, no registration needed
 4. **Private external repos** → store PAT in Vault: `secret/data/teams/{team}/{service}/repo-pat → {"pat": "ghp_..."}`
 
 ## Troubleshooting

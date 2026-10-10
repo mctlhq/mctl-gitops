@@ -6,7 +6,7 @@ imagePullSecrets:
 service:
   port: 8080
 replicaCount: 1
-# Single replica — Recreate avoids quota deadlocks (same reason as openclaw)
+# Single replica — Recreate avoids quota deadlocks
 strategy:
   type: Recreate
 # Give s3-sync sidecar time to flush workspace to MinIO on shutdown
@@ -345,9 +345,9 @@ extraContainers:
       limits:
         # s3-sync sidecar (not base-service, which throttles ~3%) CFS-throttles
         # on bursty `mc mirror` runs. 500m→1000m (2026-06-26) wasn't enough —
-        # still ~42% throttled — so raised 1000m→2000m on 2026-06-27, matching
-        # the openclaw tenants' s3-sync. Fits labs quota (limits.cpu 7.55/12)
-        # and the Container LimitRange max of 3000m.
+        # still ~42% throttled — so raised 1000m→2000m on 2026-06-27. Fits
+        # labs quota (limits.cpu 7.55/12) and the Container LimitRange max of
+        # 3000m.
         cpu: 2000m
         memory: 128Mi
     command: ["sh", "-c"]

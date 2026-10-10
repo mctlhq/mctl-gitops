@@ -6,7 +6,7 @@
 
 - **Strict Branch & PR Policy**: **NEVER commit directly to `main`**. Every change must flow through a feature branch (`feat/`, `fix/`, `docs/`, `chore/`) and a PR.
 - **Merge Strategy**: Always merge with `gh pr merge <N> --merge --delete-branch` (merge commit pattern, never `--squash`).
-- **Semantic Versioning & Tags**: Version format `MAJOR.MINOR.PATCH` without `v` prefix (e.g. `1.2.0`, except `mctl-openclaw` upstream forks).
+- **Semantic Versioning & Tags**: Version format `MAJOR.MINOR.PATCH` without `v` prefix (e.g. `1.2.0`).
 
 ## Structure & Layout
 
