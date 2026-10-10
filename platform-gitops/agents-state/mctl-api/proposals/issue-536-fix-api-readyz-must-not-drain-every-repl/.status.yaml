@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-10T20:42:34Z'
+status: merged
+updated_at: '2026-10-10T20:49:43Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-7776a413d0a084b0
@@ -28,12 +28,12 @@ attempt:
   finished_at: '2026-10-10T19:40:17Z'
 pr: https://github.com/mctlhq/mctl-api/pull/542
 github:
-  state: open
-  head_sha: 70bf54f8ad1a76816687f0f0b101acb68f757fe9
-  observed_at: '2026-10-10T20:34:57Z'
-refusals: 1
-refusals_head: 97cc87166b00d878b06abd1a87fdb7086cbb2ad3
+  state: merged
+  head_sha: 97cc87166b00d878b06abd1a87fdb7086cbb2ad3
+  observed_at: '2026-10-10T20:49:43Z'
 notes: 'implementer declined to act: Already addressed: commit 97cc871 adds a SHUTDOWN_DRAIN_DELAY
   (default 5s) time.Sleep between draining.Store(true)/stopSignals() and srv.Shutdown
   in cmd/api/main.go (lines ~969-971), so /readyz reports checks.shutdown=draining
   while the listener is still open.'
+merged_at: '2026-10-10T20:49:43Z'
+merge_commit: f5baa070ba0f94d648554fa4c171530b26b6a827
