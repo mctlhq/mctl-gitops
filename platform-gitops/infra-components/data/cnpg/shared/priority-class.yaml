@@ -1,0 +1,46 @@
+# PriorityClass for the platform data path (#1774, audit finding REL-103).
+#
+# Assigned to the pods every Postgres-backed service depends on: the
+# shared-pg Cluster instances (cluster.yaml), the shared-pg-pooler-rw
+# PgBouncer pods (pooler.yaml) and the CloudNativePG operator
+# (bootstrap/templates/data/cloudnative-pg.yaml). The cluster runs
+# memory-overcommitted (finding OPS-104), so under node memory pressure the
+# kubelet ranks eviction candidates by usage above requests and then by
+# priority; without a class these pods tie with every tenant workload at
+# priority 0.
+#
+# Why it lives in the shared-pg Application and not in root-app: the priority
+# admission plugin rejects a pod that names a class that does not exist yet,
+# and sync waves only order resources inside ONE Application. Here, wave -1
+# guarantees the class exists before this same sync touches the Cluster and
+# Pooler. Had it lived in root-app, shared-pg could pick up the new
+# priorityClassName from git first; CNPG would then delete the standby to
+# roll it and the replacement pod would be refused, leaving shared-pg without
+# HA until root-app caught up. The operator, by contrast, only needs the
+# class for a Deployment rollout: if root-app applies its values first, the
+# new pod is refused and retried while the old one keeps running
+# (maxUnavailable rounds to 0 at replicas: 1), so that race is harmless.
+#
+# Removing the shared-pg Application would prune this class; the operator's
+# next pod would then be refused. Move the class first if that ever happens.
+#
+# 100000000 is far below system-cluster-critical (2000000000) and
+# system-node-critical (2000001000), so kube-system and node agents still win,
+# and well under the 1000000000 ceiling for user-defined classes.
+#
+# preemptionPolicy is PreemptLowerPriority (the API default, set explicitly so
+# Argo CD does not diff against the defaulted field): if a node is lost, the
+# rescheduled data-path pods may displace priority-0 pods instead of sitting
+# Pending while the services that need Postgres are down.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: platform-data-critical
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+value: 100000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >-
+  Platform data-path components (CNPG operator, shared-pg instances,
+  shared-pg PgBouncer pooler). Below system-cluster-critical.

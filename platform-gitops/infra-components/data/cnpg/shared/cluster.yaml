@@ -58,6 +58,11 @@ spec:
     retentionPolicy: "14d"
     target: prefer-standby
 
+  # Data-path priority (#1774); class declared in
+  # priority-class.yaml (sync-wave -1). Changing it rolls the
+  # instances (standby first, then the primary per primaryUpdateMethod).
+  priorityClassName: platform-data-critical
+
   affinity:
     podAntiAffinityType: preferred
   enablePDB: true
