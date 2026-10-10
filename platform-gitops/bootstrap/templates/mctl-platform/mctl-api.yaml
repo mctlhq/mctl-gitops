@@ -75,6 +75,15 @@ spec:
             # off. Human sign-in is ZITADEL; Dex is gone (mctlhq/mctl-gitops#1500
             # phase 4).
             SELF_URL: https://api.mctl.ai
+            # GitHub Actions OIDC for CI deploys (mctlhq/mctl-api#530): a CI
+            # job's own OIDC token may deploy a new tag of the component whose
+            # catalog-info.yaml github.com/source-repo is that job's
+            # repository, and nothing else. Only repositories owned by the
+            # mctlhq org (id 169036271), from main or a tag, on push,
+            # workflow_dispatch or release. Requires mctl-api with #531.
+            # Rollback: delete this entry. The provider is then not registered
+            # and CI OIDC tokens get 401; human and PAT callers are unaffected.
+            MCTL_GITHUB_ACTIONS_OIDC: '{"audience":"https://api.mctl.ai","repository_owners":["mctlhq"],"repository_owner_ids":["169036271"],"branches":["refs/heads/main"]}'
             # In-cluster, not https://secrets.mctl.ai. On 2026-10-09 the pod's
             # /readyz Vault check timed out through the public, Cloudflare-
             # fronted hostname for five hours while Vault itself answered the
