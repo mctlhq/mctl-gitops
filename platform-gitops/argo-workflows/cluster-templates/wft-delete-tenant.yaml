@@ -5,7 +5,8 @@ metadata:
   annotations:
     workflows.argoproj.io/description: |
       Fully deletes a tenant from the platform:
-        1. validate        — checks tenant exists, not reserved
+        1. validate        — checks tenant not reserved and its namespaces
+                             are absent or carry mctl.me/tenant={name}
         2. delete-vault    — removes Vault policy + secrets under teams/{name}/
         3. delete-from-git — removes tenant dir + ArgoCD RBAC + Argo Workflows SSO ServiceAccount from gitops repo
         4. delete-k8s      — deletes ArgoCD app + K8s namespace
@@ -73,13 +74,22 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: alpine:3.19
+        image: alpine/k8s:1.33.12
         command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
 
           echo "Validating tenant: $TENANT"
+
+          if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            echo "ERROR: Tenant name '$TENANT' is invalid."
+            exit 1
+          fi
 
           # Reserved — cannot delete
           for reserved in admins argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring backstage platform-db; do
@@ -88,6 +98,74 @@ spec:
               exit 1
             fi
           done
+
+          # BEGIN tenant-ns-guard
+          # Shared by create-tenant, delete-tenant-safe and delete-tenant. Argo
+          # templates cannot share a script file, so the copies are kept
+          # byte-identical by tests/test_wft_create_tenant_existing.py.
+          #
+          # tenant_name_reserved NAME succeeds when NAME is a platform namespace a
+          # tenant must never take. Defence in depth only: a static list goes stale
+          # whenever a platform namespace is added, so every caller that can reach
+          # the API also checks the live cluster with tenant_ns_check.
+          tenant_name_reserved() {
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|observability-eval|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
+                return 0 ;;
+            esac
+            return 1
+          }
+
+          # tenant_ns_state NAMESPACE TENANT prints "absent", "owned" (the namespace
+          # carries mctl.me/tenant=TENANT, which the tenant chart puts on every
+          # namespace it renders) or "foreign". A failed lookup prints nothing and
+          # returns 2: "could not list namespaces" is never "does not exist". A list
+          # with a field selector is empty for an absent namespace and exits non-zero
+          # only on a real error, so no NotFound message has to be parsed.
+          tenant_ns_state() {
+            _tns_out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+              -o 'jsonpath={range .items[*]}{.metadata.name}={.metadata.labels.mctl\.me/tenant}{"\n"}{end}') \
+              || return 2
+            if [ -z "$_tns_out" ]; then
+              echo absent
+            elif [ "$_tns_out" = "$1=$2" ]; then
+              echo owned
+            else
+              echo foreign
+            fi
+          }
+
+          # tenant_ns_check TENANT fails unless both namespaces the tenant chart
+          # renders (TENANT and TENANT-preview) are absent or owned by TENANT.
+          tenant_ns_check() {
+            for _tns_ns in "$1" "$1-preview"; do
+              if ! _tns_state=$(tenant_ns_state "$_tns_ns" "$1"); then
+                echo "ERROR: could not list namespaces to check '$_tns_ns'; refusing."
+                return 1
+              fi
+              if [ "$_tns_state" = foreign ]; then
+                echo "ERROR: namespace '$_tns_ns' exists without label mctl.me/tenant=$1;"
+                echo "it is not a namespace of tenant '$1'."
+                return 1
+              fi
+              echo "Namespace '$_tns_ns': $_tns_state"
+            done
+          }
+          # END tenant-ns-guard
+
+          if tenant_name_reserved "$TENANT"; then
+            echo "ERROR: '$TENANT' is a reserved platform namespace name and cannot be deleted."
+            exit 1
+          fi
+
+          # Refuse before anything is retired or deleted: a namespace named
+          # after the tenant that does not carry mctl.me/tenant=$TENANT was
+          # not rendered by the tenant chart and is not this tenant's.
+          tenant_ns_check "$TENANT"
 
           echo "Tenant '$TENANT' passed validation."
 
@@ -308,16 +386,105 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: alpine:3.19
+        image: alpine/k8s:1.33.12
         command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          apk add --no-cache curl
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
 
-          # Download kubectl
-          curl -sLO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
-          chmod +x kubectl && mv kubectl /usr/local/bin/
+          # BEGIN tenant-ns-guard
+          # Shared by create-tenant, delete-tenant-safe and delete-tenant. Argo
+          # templates cannot share a script file, so the copies are kept
+          # byte-identical by tests/test_wft_create_tenant_existing.py.
+          #
+          # tenant_name_reserved NAME succeeds when NAME is a platform namespace a
+          # tenant must never take. Defence in depth only: a static list goes stale
+          # whenever a platform namespace is added, so every caller that can reach
+          # the API also checks the live cluster with tenant_ns_check.
+          tenant_name_reserved() {
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|observability-eval|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
+                return 0 ;;
+            esac
+            return 1
+          }
+
+          # tenant_ns_state NAMESPACE TENANT prints "absent", "owned" (the namespace
+          # carries mctl.me/tenant=TENANT, which the tenant chart puts on every
+          # namespace it renders) or "foreign". A failed lookup prints nothing and
+          # returns 2: "could not list namespaces" is never "does not exist". A list
+          # with a field selector is empty for an absent namespace and exits non-zero
+          # only on a real error, so no NotFound message has to be parsed.
+          tenant_ns_state() {
+            _tns_out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+              -o 'jsonpath={range .items[*]}{.metadata.name}={.metadata.labels.mctl\.me/tenant}{"\n"}{end}') \
+              || return 2
+            if [ -z "$_tns_out" ]; then
+              echo absent
+            elif [ "$_tns_out" = "$1=$2" ]; then
+              echo owned
+            else
+              echo foreign
+            fi
+          }
+
+          # tenant_ns_check TENANT fails unless both namespaces the tenant chart
+          # renders (TENANT and TENANT-preview) are absent or owned by TENANT.
+          tenant_ns_check() {
+            for _tns_ns in "$1" "$1-preview"; do
+              if ! _tns_state=$(tenant_ns_state "$_tns_ns" "$1"); then
+                echo "ERROR: could not list namespaces to check '$_tns_ns'; refusing."
+                return 1
+              fi
+              if [ "$_tns_state" = foreign ]; then
+                echo "ERROR: namespace '$_tns_ns' exists without label mctl.me/tenant=$1;"
+                echo "it is not a namespace of tenant '$1'."
+                return 1
+              fi
+              echo "Namespace '$_tns_ns': $_tns_state"
+            done
+          }
+          # END tenant-ns-guard
+
+          # Re-checked here, not only in validate: the namespace may have
+          # changed since, and the tenant app deleted below cascades to the
+          # resources it manages.
+          tenant_ns_check "$TENANT"
+
+          # Deletes NAMESPACE only while it is still owned by the tenant.
+          # A lookup error or a foreign namespace fails the step instead of
+          # being reported as "not found, skipping". A namespace already
+          # terminating (Argo CD's cascade from the tenant app) is left to
+          # finish.
+          delete_owned_ns() {
+            if ! state=$(tenant_ns_state "$1" "$TENANT"); then
+              echo "ERROR: could not list namespaces to check '$1'; refusing to continue."
+              exit 1
+            fi
+            case "$state" in
+              absent)
+                echo "Namespace $1 not found, skipping." ;;
+              owned)
+                if [ -n "$(kubectl get namespace "$1" -o jsonpath='{.metadata.deletionTimestamp}')" ]; then
+                  echo "Namespace $1 is already terminating."
+                else
+                  echo "Deleting namespace $1..."
+                  kubectl delete ns "$1" --ignore-not-found
+                fi
+                ;;
+              *)
+                echo "ERROR: namespace $1 does not carry mctl.me/tenant=$TENANT; refusing to delete it."
+                exit 1
+                ;;
+            esac
+          }
 
           # Delete ArgoCD Application (if exists)
           if kubectl get app -n argocd "tenant-${TENANT}" > /dev/null 2>&1; then
@@ -327,12 +494,7 @@ spec:
             echo "ArgoCD app tenant-${TENANT} not found, skipping."
           fi
 
-          # Delete K8s namespace (if exists)
-          if kubectl get ns "${TENANT}" > /dev/null 2>&1; then
-            echo "Deleting namespace ${TENANT}..."
-            kubectl delete ns "${TENANT}"
-          else
-            echo "Namespace ${TENANT} not found, skipping."
-          fi
+          # Delete K8s namespace (if it exists and is the tenant's)
+          delete_owned_ns "${TENANT}"
 
           echo "K8s cleanup complete for tenant ${TENANT}."
