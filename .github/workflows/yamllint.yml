@@ -58,6 +58,7 @@ jobs:
             platform-gitops/bootstrap/templates/projects/project-prod.yaml
             platform-gitops/bootstrap/templates/observability/eval-namespace.yaml
             platform-gitops/bootstrap/templates/observability/eval-candidates.yaml
+            platform-gitops/bootstrap/templates/observability/loki-datasource.yaml
             platform-gitops/bootstrap/templates/observability/tempo-datasource.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-evidence-writer.yaml
