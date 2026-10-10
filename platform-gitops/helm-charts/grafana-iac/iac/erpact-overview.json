@@ -371,7 +371,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"erpact\",container!=\"\",pod=~\"$pod\"}[5m]))",
+          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"erpact\",container!=\"\",metrics_path=\"/metrics/cadvisor\",pod=~\"$pod\"}[5m]))",
           "legendFormat": "{{pod}}",
           "datasource": {
             "type": "prometheus",
@@ -408,7 +408,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"erpact\",container!=\"\"}[5m]))",
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"erpact\",container!=\"\",metrics_path=\"/metrics/cadvisor\"}[5m]))",
           "legendFormat": "used",
           "datasource": {
             "type": "prometheus",
@@ -514,7 +514,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"erpact\",container!=\"\",pod=~\"$pod\"})",
+          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"erpact\",container!=\"\",metrics_path=\"/metrics/cadvisor\",pod=~\"$pod\"})",
           "legendFormat": "{{pod}}",
           "datasource": {
             "type": "prometheus",
@@ -551,7 +551,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(container_memory_working_set_bytes{namespace=\"erpact\",container!=\"\"})",
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"erpact\",container!=\"\",metrics_path=\"/metrics/cadvisor\"})",
           "legendFormat": "used",
           "datasource": {
             "type": "prometheus",
