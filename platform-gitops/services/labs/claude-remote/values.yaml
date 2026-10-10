@@ -394,6 +394,13 @@ initContainers:
           have=$(find /workspace -type f ! -path '/workspace/.mc/*' | wc -l)
           [ "$have" -ge "$want" ] \
             || fatal "restore from R2 incomplete: $have of $want files arrived"
+          # Without --preserve mc also drops file modes: everything comes back
+          # 0644. The OAuth credentials (and their last-good copy) were 0600
+          # and must stay that way; executables are re-chmodded where they
+          # matter (the entrypoint does .local/bin/claude).
+          for f in /workspace/.claude/.credentials.json /workspace/.claude/.credentials.json.lastgood; do
+            [ -f "$f" ] && chmod 600 "$f"
+          done
           echo "Restore complete ($have files)."
         else
           echo "No existing state in R2 — fresh start."
