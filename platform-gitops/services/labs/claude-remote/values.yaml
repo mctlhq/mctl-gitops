@@ -9,7 +9,7 @@ replicaCount: 1
 # Single replica — Recreate avoids quota deadlocks
 strategy:
   type: Recreate
-# Give s3-sync sidecar time to flush workspace to MinIO on shutdown
+# Give s3-sync sidecar time to flush workspace to R2 on shutdown
 terminationGracePeriodSeconds: 60
 resources:
   requests:
@@ -86,7 +86,7 @@ env:
   # native auto-updater ignores that pin: it keeps downloading releases into
   # /workspace/.local/share/claude/versions/ (~230 MB each, five of them on
   # 2026-09-23) and /workspace/.local/bin, which the s3-sync sidecar then
-  # persists to MinIO and restore-state pulls back on every cold start — the
+  # persists to R2 and restore-state pulls back on every cold start — the
   # debris that #892/#895/#900 added GC for, and the reason the TUI showed
   # "Update installed · Restart to update" for a version the pod already ran.
   # `autoUpdates: false` in .claude.json did not stop it; this env var does.
@@ -157,7 +157,7 @@ env:
 #
 # `claude --remote-control` needs a full-scope claude.ai login (from
 # `claude auth login`) saved as ~/.claude/.credentials.json, restored
-# here from MinIO by the restore-state initContainer. If CLAUDE_CODE_OAUTH_TOKEN
+# here from R2 by the restore-state initContainer. If CLAUDE_CODE_OAUTH_TOKEN
 # is set in env, claude prefers it over the on-disk credentials and rejects
 # remote control with:
 #   [WARN] Remote Control requires a full-scope login token. Long-lived
@@ -168,8 +168,28 @@ env:
 
 # ghcr-credentials is owned by the labs tenant chart — no second owner here.
 
-# MinIO credentials
+# Object-storage credentials.
+#
+# claude-remote-r2-creds: an R2 API token scoped to the claude-remote-state
+# bucket only (Object Read & Write), written by the owner to
+# secret/platform/mctl-claude-remote/r2 (access-key, secret-key). Platform
+# path, next to the service's other platform/mctl-claude-remote/* secrets.
+#
+# claude-remote-minio-creds is TRANSITIONAL: restore-state reads it once to
+# copy the existing state out of the in-cluster MinIO into R2 (see the
+# migration block there). It goes away with MinIO itself.
 extraExternalSecrets:
+  labs-claude-remote-r2:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    targetSecret: claude-remote-r2-creds
+    data:
+      - secretKey: access-key
+        remoteKey: platform/mctl-claude-remote/r2
+        property: access-key
+      - secretKey: secret-key
+        remoteKey: platform/mctl-claude-remote/r2
+        property: secret-key
   labs-claude-remote-minio:
     # Platform-scoped path — must use the cluster store; tenant-store only
     # resolves secret/data/teams/labs/*.
@@ -206,7 +226,7 @@ extraExternalSecrets:
       - secretKey: telegram-mcp-token
         remoteKey: platform/mctl-claude-remote/telegram-mcp
         property: worker-token
-# Workspace lives in emptyDir, persisted to MinIO by s3-sync sidecar
+# Workspace lives in emptyDir, persisted to R2 by s3-sync sidecar
 extraVolumes:
   - name: workspace
     emptyDir: {}
@@ -269,7 +289,7 @@ extraVolumeMounts:
   - name: events-secrets
     mountPath: /etc/mctl-events/secrets
     readOnly: true
-# Restore workspace from MinIO before claude starts
+# Restore workspace from R2 before claude starts
 initContainers:
   - name: restore-state
     image: ghcr.io/mctlhq/mc@sha256:b641ac54685b6dd7b21d680de7bae6160ae09b54c2ed32c42b383b95614b6b31
@@ -291,29 +311,109 @@ initContainers:
     command: ["sh", "-c"]
     args:
       - |
-        mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-        if [ -n "$(mc ls --recursive s3/platform-state/labs/claude-remote/ 2>/dev/null | head -1)" ]; then
-          echo "Restoring workspace from MinIO..."
+        # Fail closed on every read below: an R2 listing that errored is
+        # NOT an empty prefix. Treating it as one would start this pod with
+        # no credentials and let the s3-sync loop build on that blank state.
+        fatal() { echo "FATAL: $*" >&2; exit 1; }
+        mc alias set s3 "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" --api S3v4 --path on >/dev/null \
+          || fatal "cannot configure the R2 alias"
+        STATE=s3/claude-remote-state/labs/claude-remote/
+
+        # ---- One-time MinIO -> R2 migration. Remove together with MinIO. ----
+        # Runs in the FIRST pod of the new spec. The Recreate strategy means
+        # the old pod is gone by then, and its preStop has already flushed the
+        # final state to MinIO, so this copy is complete. The marker lives
+        # outside $STATE on purpose: the GC mirrors in s3-sync run with
+        # --remove against $STATE and would delete it.
+        MARKER_DIR=s3/claude-remote-state/migration/
+        markers=$(mc ls --recursive "$MARKER_DIR") \
+          || fatal "cannot list $MARKER_DIR on R2; refusing to guess whether MinIO state was migrated"
+        case "$markers" in
+          *labs-claude-remote-from-minio*)
+            echo "MinIO state already migrated to R2." ;;
+          *)
+            echo "Migrating workspace state MinIO -> R2 (one-time)..."
+            mc alias set minio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null \
+              || fatal "cannot configure the MinIO alias for the migration"
+            old=$(mc ls --recursive minio/platform-state/labs/claude-remote/) \
+              || fatal "cannot list the MinIO state; not marking the migration done"
+            if [ -n "$old" ]; then
+              mc mirror --overwrite --exclude '.mc/*' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
+                minio/platform-state/labs/claude-remote/ "$STATE" \
+                || fatal "MinIO -> R2 copy failed; the next start retries it"
+              # mc mirror exits 0 even when every transfer failed (seen on
+              # 2026-10-10: R2 rejected the listing, 0 B copied, exit 0, and
+              # the marker below sent the pod into an empty workspace). So the
+              # copy is proven by count, not by exit status: every source key
+              # outside the excluded prefixes must now exist on R2.
+              want=$(printf '%s\n' "$old" | sed 's/^.* STANDARD //' \
+                | grep -c -v -E '^(\.mc|go|\.cache|\.local/share/claude/versions|\.claude/backups)/') || true
+              copied=$(mc ls --recursive "$STATE") \
+                || fatal "cannot list $STATE on R2 after the copy; not marking the migration done"
+              have=$(printf '%s\n' "$copied" | grep -c ' STANDARD ') || true
+              # want=0 means every source key sits under an excluded prefix:
+              # there is nothing to copy, which is success, not a reason to
+              # crash-loop forever. A parse failure cannot produce 0 here: a
+              # line the sed does not strip is not filtered out, so it counts.
+              [ "$have" -ge "$want" ] \
+                || fatal "MinIO -> R2 copy incomplete: $have of $want objects on R2; not marking the migration done"
+              echo "Copied $have of $want objects to R2."
+            else
+              echo "MinIO holds no state for this service; nothing to copy."
+            fi
+            echo "migrated $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              | mc pipe "${MARKER_DIR}labs-claude-remote-from-minio" \
+              || fatal "cannot write the migration marker"
+            echo "Migration complete." ;;
+        esac
+        # ---- end of the migration block ----
+
+        listing=$(mc ls --recursive "$STATE") || fatal "cannot list $STATE on R2"
+        if [ -n "$listing" ]; then
+          echo "Restoring workspace from R2..."
           # --overwrite handles re-runs cleanly; --exclude '.mc/*' keeps mc's own
           # config (in $HOME=/workspace/.mc) out of the restore loop.
           #
-          # --preserve restores each file's ORIGINAL mtime instead of stamping it
-          # with the restore time. Without it /workspace is a fresh emptyDir on
-          # every restart, so every file looked seconds old and the GC's 24h
-          # recency window measured "time since this pod started" — and because
-          # the pod is restarted weekly, the window effectively never expired and
-          # the GC could never prune. Verified through a real MinIO round trip:
-          # with --preserve a 10-day-old file comes back dated 10 days ago;
-          # without it, dated now. Every mirror that writes to MinIO passes
-          # --preserve too, otherwise there is no stored mtime to restore.
-          mc mirror --overwrite --preserve --exclude '.mc/*' s3/platform-state/labs/claude-remote/ /workspace
-          echo "Restore complete."
+          # No --preserve, on any mirror against R2: R2 does not implement the
+          # ListObjectsV2 `metadata` extension that `mc mirror --preserve`
+          # lists with, and mc then copies NOTHING while still exiting 0
+          # (verified live, mc RELEASE.2025-08-13, 2026-10-10). The cost is
+          # that restored files carry the restore time, not their original
+          # mtime, so after a restart the GC's 24h recency window spares
+          # everything for one day; the size-triggered prune works again
+          # after that. The first sync after a restart re-uploads the
+          # restored files once, since they now look newer than R2's copy.
+          mc mirror --overwrite --exclude '.mc/*' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
+            "$STATE" /workspace \
+            || fatal "restore from R2 failed"
+          # Exit status proves nothing (see above), so count: every object on
+          # R2 must have arrived. The workspace is a fresh emptyDir, so local
+          # files outside .mc are exactly what was restored.
+          want=$(printf '%s\n' "$listing" | grep ' STANDARD ' | sed 's/^.* STANDARD //' \
+            | grep -c -v -E '^(\.mc|go|\.cache|\.local/share/claude/versions|\.claude/backups)/') || true
+          have=$(find /workspace -type f ! -path '/workspace/.mc/*' | wc -l)
+          [ "$have" -ge "$want" ] \
+            || fatal "restore from R2 incomplete: $have of $want files arrived"
+          echo "Restore complete ($have files)."
         else
-          echo "No existing state in MinIO — fresh start."
+          echo "No existing state in R2 — fresh start."
         fi
     env:
       - name: HOME
         value: /workspace
+      - name: S3_ENDPOINT
+        value: "https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com"
+      - name: S3_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            name: claude-remote-r2-creds
+            key: access-key
+      - name: S3_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: claude-remote-r2-creds
+            key: secret-key
+      # TRANSITIONAL: read only by the one-time migration block above.
       - name: MINIO_ENDPOINT
         value: "http://minio.minio.svc.cluster.local:9000"
       - name: MINIO_ACCESS_KEY
@@ -329,7 +429,7 @@ initContainers:
     volumeMounts:
       - name: workspace
         mountPath: /workspace
-# s3-sync sidecar — mirrors /workspace → MinIO every 60 s + sync on pod shutdown.
+# s3-sync sidecar — mirrors /workspace → R2 every 60 s + sync on pod shutdown.
 # Was 10s; the frequent `mc mirror` runs were the driver behind the CPU-limit
 # raises below. terminationGracePeriodSeconds: 60 already covers graceful
 # shutdown, so 10s only protected against an ungraceful pod death (OOM-kill,
@@ -353,7 +453,7 @@ extraContainers:
     command: ["sh", "-c"]
     args:
       - |
-        mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        mc alias set s3 "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" --api S3v4 --path on
         # GC keep-list: auth, config, native binary, git identity, and mc's
         # own state. Everything else under /workspace (cloned repos, caches,
         # build artifacts) is disposable and is pruned on schedule / size.
@@ -375,7 +475,7 @@ extraContainers:
         last_gc=$(date +%s)    # don't prune right after a (re)start
         i=0
         # Refuse to mirror an empty-token .credentials.json. The additive mirror
-        # below protects the MinIO backup from a local DELETE, but --overwrite
+        # below protects the R2 backup from a local DELETE, but --overwrite
         # happily propagates a REWRITE-IN-PLACE with empty strings: once that
         # lands, the good backup is gone and restore-state hands the broken file
         # back on every restart. That is exactly how labs/claude-remote sat
@@ -400,27 +500,37 @@ extraContainers:
           return 1
         }
         while true; do
+          # go/ (Go module cache) and .cache/ (go-build, gh, claude-cli) are
+          # never synced: ~64k mostly-cache files made each 60 s mirror cost
+          # ~2.8M R2 operations a month. Both rebuild on demand, so a restart
+          # only means a cold Go cache (owner decision, 2026-10-10).
+          # .local/share/claude/versions/ (1.6 GB of old self-update releases
+          # in MinIO) and .claude/backups/ (~10k .claude.json backups, 486 MB)
+          # are not synced either: the entrypoint only needs the pinned binary
+          # at .local/bin/claude, which stays synced so a restart skips the
+          # ~100 MB re-install (same owner decision).
+          #
           # Additive backup only -- NO --remove here, so a local logout that
-          # deletes ~/.claude/.credentials.json can never wipe the MinIO
+          # deletes ~/.claude/.credentials.json can never wipe the R2
           # credentials backup (root cause of the 2026-05-21 restart loop).
           if [ -e "$CRED" ] && ! cred_is_valid; then
             # Loud, every cycle: this is a silent-logout condition that no other
-            # signal reports. Keep the last known-good copy in MinIO untouched.
+            # signal reports. Keep the last known-good copy in R2 untouched.
             echo "[cred-guard] REFUSING to mirror $CRED -- tokens are empty/expired." \
-                 "MinIO keeps the last good copy; recover with 'claude auth login'" \
+                 "R2 keeps the last good copy; recover with 'claude auth login'" \
                  "in this pod (see mctl-claude-remote#40)."
-            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
+            mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
               --exclude '.claude/.credentials.json' \
-              /workspace s3/platform-state/labs/claude-remote/ || true
+              /workspace s3/claude-remote-state/labs/claude-remote/ || true
           else
-            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
-              /workspace s3/platform-state/labs/claude-remote/ || true
+            mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
+              /workspace s3/claude-remote-state/labs/claude-remote/ || true
             # Keep a last-known-good copy that a later wipe cannot overwrite:
             # it is only ever refreshed while the live file is valid. Recovery
             # then needs a copy, not an interactive browser login.
             if cred_is_valid; then
               mc cp --preserve "$CRED" \
-                s3/platform-state/labs/claude-remote/.claude/.credentials.json.lastgood \
+                s3/claude-remote-state/labs/claude-remote/.claude/.credentials.json.lastgood \
                 >/dev/null 2>&1 || true
             fi
           fi
@@ -460,8 +570,8 @@ extraContainers:
                   echo "[gc] rm old claude version: $vn"
                   rm -rf "$VDIR/$vn"
                 done
-                mc mirror --overwrite --preserve --remove "$VDIR" \
-                  s3/platform-state/labs/claude-remote/.local/share/claude/versions/ || true
+                # Local prune only: versions/ is not synced to R2 at all since
+                # the move off MinIO (see the exclude note on the sync loop).
               else
                 echo "[gc] skip version retention (active version unresolved): '$ACTIVE_VER'"
               fi
@@ -497,8 +607,8 @@ extraContainers:
               done
               # --remove SCOPED to .local/bin, same rationale as versions/
               # above: no credentials live here. Never widen this to /workspace.
-              mc mirror --overwrite --preserve --remove "$BINDIR" \
-                s3/platform-state/labs/claude-remote/.local/bin/ || true
+              mc mirror --overwrite --remove "$BINDIR" \
+                s3/claude-remote-state/labs/claude-remote/.local/bin/ || true
             else
               echo "[gc] skip .local/bin sweep (claude symlink missing or dangling)"
             fi
@@ -533,19 +643,9 @@ extraContainers:
                 echo "[gc] rm stale staging: $s"
                 rm -rf "$s"
               done
-              # Reconcile to MinIO with a --remove SCOPED to staging (no
-              # credentials here, same rationale as versions/ and bin/ above).
-              # Required, not cosmetic: this sweep runs OUTSIDE the size gate
-              # below, so freeing enough space to drop under the threshold
-              # means the root mirror never runs and the deletions never
-              # propagate. The normal sync loop and preStop flush are
-              # deliberately additive, and last_gc resets on every restart, so
-              # without this the objects survive in MinIO and restore-state
-              # downloads them all back on the next cold start — which is the
-              # path that used to OOM-kill it. MinIO currently holds staging
-              # dirs going back to 2.1.185, far more than the 14 left on disk.
-              mc mirror --overwrite --preserve --remove "$SDIR" \
-                s3/platform-state/labs/claude-remote/.cache/claude/staging/ || true
+              # No R2 reconcile here: .cache/ (like go/) is not synced to R2
+              # at all since the move off MinIO, so staging never reaches the
+              # bucket and restore-state never downloads it back.
             fi
             size_kb=$(du -sk /workspace 2>/dev/null)
             size_kb=${size_kb%%[!0-9]*}
@@ -574,9 +674,10 @@ extraContainers:
                 keep "$(basename "$entry")" && continue
                 # Spare anything modified within $ACTIVE -- likely active,
                 # uncommitted in-session work; only prune cold clutter.
-                # This now means what it says: mtimes survive restarts because
-                # restore-state and every upload mirror pass --preserve. Ages
-                # accumulate across restarts instead of resetting weekly.
+                # Since the move to R2 mtimes do NOT survive a restart (no
+                # --preserve on R2, see restore-state), so for the first 24h
+                # after a start everything restored counts as recent; ages
+                # then accumulate normally while the pod runs.
                 # Fail SAFE: if the recency check itself errors, skip the entry
                 # rather than risk rm -rf'ing active work.
                 #
@@ -608,16 +709,17 @@ extraContainers:
                 echo "[gc] rm -rf $entry"
                 rm -rf "$entry"
               done
-              # Reconcile the prune to MinIO. --remove clears the deleted
+              # Reconcile the prune to R2. --remove clears the deleted
               # paths, but every keep-list entry is excluded so a delete in
               # the narrow window between the rm loop and this mirror can
               # never propagate and wipe an auth/config backup.
-              mc mirror --overwrite --preserve --remove \
+              mc mirror --overwrite --remove \
                 --exclude '.mc/*' --exclude '.claude' --exclude '.claude/*' \
                 --exclude '.claude.json' --exclude 'CLAUDE.md' \
                 --exclude '.gitconfig' \
                 --exclude '.local' --exclude '.local/*' --exclude '*.tmp' \
-                /workspace s3/platform-state/labs/claude-remote/ || true
+                --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
+                /workspace s3/claude-remote-state/labs/claude-remote/ || true
               last_gc=$(date +%s)
             fi
           fi
@@ -626,17 +728,17 @@ extraContainers:
     env:
       - name: HOME
         value: /workspace
-      - name: MINIO_ENDPOINT
-        value: "http://minio.minio.svc.cluster.local:9000"
-      - name: MINIO_ACCESS_KEY
+      - name: S3_ENDPOINT
+        value: "https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com"
+      - name: S3_ACCESS_KEY
         valueFrom:
           secretKeyRef:
-            name: claude-remote-minio-creds
+            name: claude-remote-r2-creds
             key: access-key
-      - name: MINIO_SECRET_KEY
+      - name: S3_SECRET_KEY
         valueFrom:
           secretKeyRef:
-            name: claude-remote-minio-creds
+            name: claude-remote-r2-creds
             key: secret-key
     volumeMounts:
       - name: workspace
@@ -648,14 +750,14 @@ extraContainers:
             - sh
             - -c
             - |
-              mc alias set s3 "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+              mc alias set s3 "$S3_ENDPOINT" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" --api S3v4 --path on
               # Additive flush on shutdown -- NO --remove, same reason as the
-              # sync loop: never let teardown wipe the MinIO credentials backup.
+              # sync loop: never let teardown wipe the R2 credentials backup.
               #
               # The same empty-token guard as the sync loop, and it matters MORE
               # here: this hook runs on every termination, including the weekly
               # scheduled restart, so an unguarded flush would overwrite the good
-              # MinIO credentials moments before the replacement pod restores
+              # R2 credentials moments before the replacement pod restores
               # them -- which is exactly how the 2026-08-23 logout became
               # persistent. Duplicated rather than shared because a preStop exec
               # is its own process with no access to the sidecar's shell state.
@@ -673,12 +775,12 @@ extraContainers:
               }
               if [ -e "$CRED" ] && ! cred_is_valid; then
                 echo "[cred-guard] shutdown flush EXCLUDING $CRED -- tokens are empty/expired"
-                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
+                mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
                   --exclude '.claude/.credentials.json' \
-                  /workspace s3/platform-state/labs/claude-remote/
+                  /workspace s3/claude-remote-state/labs/claude-remote/
               else
-                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' \
-                  /workspace s3/platform-state/labs/claude-remote/
+                mc mirror --overwrite --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
+                  /workspace s3/claude-remote-state/labs/claude-remote/
               fi
   # log-tail sidecar — surfaces the steward's structured JSON log on its own
   # stdout so `kubectl logs <pod> -c steward-log` is clean. The base-service

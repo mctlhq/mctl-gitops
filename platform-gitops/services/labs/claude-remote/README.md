@@ -12,8 +12,8 @@ Device name registered with Anthropic: **`claude-remote`**.
 
 ## How state persists
 
-`/workspace` lives in an `emptyDir` volume, mirrored to MinIO every 10s by the
-`s3-sync` sidecar at prefix `s3://platform-state/labs/claude-remote/`. On pod
+`/workspace` lives in an `emptyDir` volume, mirrored to Cloudflare R2 every 60s by the
+`s3-sync` sidecar at prefix `s3://claude-remote-state/labs/claude-remote/`. On pod
 start the `restore-state` initContainer pulls everything back. This includes
 the rotating OAuth credentials (`.claude/.credentials.json`), so device
 identity survives pod restarts and Recreate rollouts.
@@ -39,7 +39,7 @@ credentials are sitting right there. We learned this the hard way (PR #259).
 `claude auth status` is the diagnostic — `authMethod: "oauth_token"` means
 the env var won; `authMethod: "claude.ai"` means credentials.json is in use.
 
-So the very first time this service is deployed (or after MinIO state for it
+So the very first time this service is deployed (or after R2 state for it
 is wiped), run `claude auth login` inside the pod once:
 
 ```sh
@@ -58,7 +58,7 @@ Follow the prompts:
 2. claude.ai shows a short code → paste into the terminal → enter.
 3. `Login successful.` — credentials written to
    `/workspace/.claude/.credentials.json` (mode 0600).
-4. Wait ~10s for `s3-sync` to mirror the file to MinIO.
+4. Wait up to ~60s for `s3-sync` to mirror the file to R2.
 5. Delete the pod so the running `claude --remote-control` re-reads
    credentials at startup:
 
@@ -79,10 +79,10 @@ one first.
 
 Symptom: base-service restart-loops, liveness fails, `claude auth status` →
 `authMethod: "none"`. Cause: the OAuth login was lost and the `s3-sync` mirror
-propagated the local logout to MinIO, so `restore-state` has nothing to pull.
+propagated the local logout to R2, so `restore-state` has nothing to pull.
 
 Recovery: re-run the **First-time bootstrap** `claude auth login` above in a
-real interactive TTY (`exec -it`), wait ~15s for the MinIO mirror, verify
+real interactive TTY (`exec -it`), wait ~60s for the R2 mirror, verify
 `.credentials.json` landed, then delete the pod.
 
 ### Mode B — websocket-wedge (pod healthy, claude.ai says "Remote Control disconnected")
@@ -137,14 +137,14 @@ POD=${POD#pod/}
    tell-tale.
 
 2. **Snapshot the recovery point.** Record the session UUID and confirm it is in
-   MinIO *before* any destructive step. A restart creates a *newer* blank
+   R2 *before* any destructive step. A restart creates a *newer* blank
    session, so a later resume must target this UUID explicitly — not "newest".
 
    ```sh
    kubectl --context mctl-preprod -n labs exec "$POD" -c base-service -- sh -lc \
      'ls -t /workspace/.claude/projects/*/*.jsonl | head -1'   # -> <UUID>.jsonl
    kubectl --context mctl-preprod -n labs exec "$POD" -c s3-sync -- sh -lc \
-     'mc ls s3/platform-state/labs/claude-remote/.claude/projects/-workspace/<UUID>.jsonl'
+     'mc ls s3/claude-remote-state/labs/claude-remote/.claude/projects/-workspace/<UUID>.jsonl'
    ```
 
 3. **(Historical) targeted PTY interrupt — skip it.** A single ESC into the PTY
@@ -156,7 +156,7 @@ POD=${POD#pod/}
    or go straight to the restart below; never spray ESC/Ctrl-C across `/proc`.
 
 4. **Graceful restart.** Once confirmed wedged and the transcript is verified in
-   MinIO:
+   R2:
 
    ```sh
    kubectl --context mctl-preprod -n labs delete pod "$POD"
@@ -174,19 +174,19 @@ POD=${POD#pod/}
 
 Post-recovery checks: `claude auth status` → `authMethod: claude.ai` /
 `subscriptionType: max`; pod `Ready` (so `/healthz` is 200); the resume-target
-transcript still present in MinIO; entrypoint log shows the resumed session id.
+transcript still present in R2; entrypoint log shows the resumed session id.
 
 ## Why this is OK from a GitOps perspective
 
 OAuth credentials are **rotating, stateful** secrets — the access token is
 refreshed each hour and the file gets rewritten. That makes them a bad fit
 for Vault + ExternalSecret (which would freeze the file at bootstrap and
-break login when the refresh-token rotation cycle starts). MinIO is the
+break login when the refresh-token rotation cycle starts). R2 is the
 correct state store: `s3-sync` continuously persists the rotation, and
 `restore-state` makes the bootstrap reproducible from pod-restart onwards.
 
 What lives in git: the contract (volumes, sidecar, init container,
-ingress). What lives in MinIO: the credentials themselves. The only
+ingress). What lives in R2: the credentials themselves. The only
 out-of-band action is the one-time human OAuth flow above.
 
 ## Why the npm-global vs native binary inconsistency
@@ -195,12 +195,12 @@ out-of-band action is the one-time human OAuth flow above.
 `/usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe`.
 A previous diagnostic also ran `claude install latest` inside the pod
 which placed a native build at `/workspace/.local/bin/claude` — this is
-persisted via MinIO and `claude doctor` will warn `Native installation
+persisted via R2 and `claude doctor` will warn `Native installation
 exists but ~/.local/bin is not in your PATH`. The warning is harmless;
 the entrypoint deliberately uses the npm-global `claude` to keep the
 binary in the image and avoid relying on workspace-state for the
 executable. Don't add `~/.local/bin` to PATH unless you also remove
-the bootstrap copy from MinIO.
+the bootstrap copy from R2.
 
 ## Connecting
 
@@ -209,6 +209,6 @@ the bootstrap copy from MinIO.
   session over Anthropic's cloud).
 
 The pod's REPL runs in `/workspace`. Anything written there is mirrored to
-MinIO; on next pod start it comes back. Don't put credentials for *other*
+R2; on next pod start it comes back. Don't put credentials for *other*
 systems in `/workspace` unprotected — anyone with `--remote claude-remote`
 access via your claude.ai account can read it.
