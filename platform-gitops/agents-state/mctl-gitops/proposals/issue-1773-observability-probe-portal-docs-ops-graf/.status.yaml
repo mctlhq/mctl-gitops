@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-10T17:25:46Z'
+updated_at: '2026-10-10T17:40:46Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-f7a8f3ca12c5f8d5
@@ -28,12 +28,12 @@ attempt:
   finished_at: '2026-10-10T16:37:52Z'
 pr: https://github.com/mctlhq/mctl-gitops/pull/1782
 review_attempts: 2
-refusals: 1
+refusals: 2
 refusals_head: 652fe9dd53aba5dcdf116286f1fe25e282e38b50
-notes: 'implementer declined to act: The only actionable finding asks for a PR-body
-  curl status table, which is PR metadata and not a repo change; the orchestrator
-  cannot take it from a commit. I verified all 5 platform-consoles targets from vmprobes.yaml
-  return a stable 200 (unauthenticated, no redirect): app.mctl.ai/.backstage/health/v1/readiness
-  200, docs.mctl.ai/ 200, ops.mctl.ai/healthz 200, grafana.mctl.ai/api/health 200,
-  agent.mctl.ai/healthz 200. A human should paste this table into the PR body. The
-  second finding is a Claude job-status line with no defect.'
+notes: 'implementer declined to act: The finding asks for a hand-curl''d status-code
+  table in the PR body, which is not a repo change; I cannot edit the PR body and
+  nothing in the code needs changing. I verified the targets unauthenticated from
+  here (no redirects followed): app.mctl.ai/.backstage/health/v1/readiness 200, docs.mctl.ai/
+  200, ops.mctl.ai/healthz 200, grafana.mctl.ai/api/health 200, agent.mctl.ai/healthz
+  200. All five are stable 2xx, so PlatformConsoleDown will not false-page. Orchestrator/human
+  should paste this table in the PR body.'
