@@ -447,11 +447,12 @@ spec:
               maxTeamsPerTenant: 1
             oidcProvider:
               issuer: https://app.mctl.ai/api/oidc-provider
-              # Canary (mctlhq/mctl-gitops#1500, phase 3): the sign-in page
-              # offers ZITADEL first and GitHub as "legacy". Rollback is
-              # `upstream: github` (the default), which ignores the zitadel
-              # block below.
-              upstream: both
+              # ZITADEL only (mctlhq/mctl-gitops#1500, phase 7): no GitHub
+              # sign-in for forward-auth hosts or relying parties, and the
+              # GitHub callback is refused. The github block below stays only
+              # so that rollback is one line: `upstream: both` (ZITADEL first,
+              # GitHub as "legacy").
+              upstream: zitadel
               zitadel:
                 issuer: https://auth.mctl.ai
                 clientId: ${OIDC_ZITADEL_CLIENT_ID}
