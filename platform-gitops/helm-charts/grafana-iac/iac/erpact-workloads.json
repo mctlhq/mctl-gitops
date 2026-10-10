@@ -192,7 +192,7 @@
             "type": "prometheus",
             "uid": "erpact-metrics"
           },
-          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{container!=\"\"}[5m]))",
+          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{container!=\"\",metrics_path=\"/metrics/cadvisor\"}[5m]))",
           "legendFormat": "{{pod}}"
         }
       ]
@@ -230,7 +230,7 @@
             "type": "prometheus",
             "uid": "erpact-metrics"
           },
-          "expr": "sum by (pod) (container_memory_working_set_bytes{container!=\"\"})",
+          "expr": "sum by (pod) (container_memory_working_set_bytes{container!=\"\",metrics_path=\"/metrics/cadvisor\"})",
           "legendFormat": "{{pod}}"
         }
       ]
