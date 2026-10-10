@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-10-10T17:55:47Z'
+status: rejected
+updated_at: '2026-10-10T18:54:10Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-f7a8f3ca12c5f8d5
@@ -27,14 +27,8 @@ attempt:
   expires_at: '2026-10-10T18:46:42Z'
   finished_at: '2026-10-10T16:37:52Z'
 pr: https://github.com/mctlhq/mctl-gitops/pull/1782
-review_attempts: 2
-refusals: 3
-refusals_head: 652fe9dd53aba5dcdf116286f1fe25e282e38b50
-notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
-  was never charged — the proposal is not at fault; a human must reconcile the review
-  with the operator decision. Last reason: Finding asks for a hand-curl''d status
-  table in the PR body, not a code change; I cannot edit the PR body. Verified live
-  from this run, all 5 platform-consoles targets return 200 (no auth redirect): app.mctl.ai/.backstage/health/v1/readiness
-  200, docs.mctl.ai/ 200, ops.mctl.ai/healthz 200, grafana.mctl.ai/api/health 200,
-  agent.mctl.ai/healthz 200. Orchestrator/human should paste this table into the PR
-  body. Second finding is only a bot job-status line with no actionable content.'
+notes: PR was closed without merging.
+github:
+  state: closed
+  head_sha: 652fe9dd53aba5dcdf116286f1fe25e282e38b50
+  observed_at: '2026-10-10T18:54:10Z'
