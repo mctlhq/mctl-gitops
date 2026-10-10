@@ -39,10 +39,13 @@ otel:
 ```
 
 Setting `otel.enabled: true` on a service's `values.yaml` renders
-`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`,
-`OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` into that Deployment's
-container env, alongside whatever `env:` the service already sets (`env:`
-wins on conflict — override any of the four explicitly if needed). No service
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`
+and `OTEL_RESOURCE_ATTRIBUTES` into that Deployment's container env, alongside
+whatever `env:` the service already sets (`env:` wins on conflict). It does
+not render `OTEL_SERVICE_NAME` unless the service sets `otel.serviceName`:
+`service.name` is the producer's own (`mctl-agent`, `mctl-agents-worker`), and
+the release fullname the chart used to put there overrode it
+(mctlhq/mctl-agent#97). No service
 has opted in as of this writing; every `platform-gitops/services/*/*/values.yaml`
 renders byte-identical to before this change until one does.
 
@@ -111,8 +114,9 @@ become a new place secrets could leak).
 ## Opting a service in
 
 Set `otel.enabled: true` in the service's `values.yaml`. The chart then renders
-`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`,
-`OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`; anything the service
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` and
+`OTEL_RESOURCE_ATTRIBUTES` (plus `OTEL_SERVICE_NAME` only from
+`otel.serviceName`); anything the service
 already sets under `env` wins and the default is not rendered at all, so the
 list never carries a duplicate name.
 

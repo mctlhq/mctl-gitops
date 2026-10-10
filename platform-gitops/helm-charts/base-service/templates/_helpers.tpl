@@ -153,9 +153,15 @@ which is a diff against every service that renders today for no reason.
 {{- $otelEnv := dict
     "OTEL_EXPORTER_OTLP_ENDPOINT" .Values.otel.endpoint
     "OTEL_EXPORTER_OTLP_PROTOCOL" "http/protobuf"
-    "OTEL_SERVICE_NAME" (include "base-service.fullname" .)
     "OTEL_RESOURCE_ATTRIBUTES" (printf "service.namespace=%s" .Release.Namespace)
 }}
+{{- /* service.name belongs to the producer (telemetry-attributes.md): render
+     it only when a service names itself here. The release fullname this used
+     to default to ("admins-mctl-agent-base-service") overrode every
+     producer's own name (mctlhq/mctl-agent#97). */ -}}
+{{- with .Values.otel.serviceName }}
+{{- $_ := set $otelEnv "OTEL_SERVICE_NAME" . }}
+{{- end }}
 {{- range $key, $value := $otelEnv }}
 {{- if not (or (hasKey $env $key) (hasKey $fromRefs $key)) }}
 - name: {{ $key }}
