@@ -426,10 +426,6 @@ spec:
               # refuses a token to anyone without one. role_attribute_strict
               # refuses a sign-in whose groups map to no role, so nobody
               # falls through to Viewer of this cluster-wide organization.
-              # Rollback: the Dex URLs (https://ops.mctl.ai/api/dex/{auth,token,userinfo}),
-              # client_id grafana with grafana-admin-secret/oidc-client-secret,
-              # the `groups` scope and the old role_attribute_path; Dex keeps
-              # its grafana client until it is removed.
               auth.generic_oauth:
                 enabled: true
                 name: MCTL

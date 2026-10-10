@@ -99,9 +99,9 @@ argo-cd:
       # rbac/tenants/<tenant>.csv). The zitadel-iac Job writes the client
       # credentials into argocd-oidc-zitadel (templates/oidc-zitadel.yaml).
       #
-      # No dex.config any more: Argo CD itself no longer signs in through
-      # Dex. Dex keeps running for Argo Workflows, Grafana and mctl-api
-      # (templates/dex.yaml), and argocd-server still proxies /api/dex to it.
+      # No dex.config: Argo CD signs in through ZITADEL only, and Dex is
+      # gone from the platform (#1500 phase 4), so argocd-server proxies
+      # nothing under /api/dex.
       #
       # `name` is only the login button label ("Log in via MCTL"); the
       # callback, the CLI SSO flow and RBAC do not read it.
@@ -117,13 +117,6 @@ argo-cd:
           - email
 
     params:
-      # Dex runs as Deployment `dex` (templates/dex.yaml) and serves plain
-      # HTTP inside the cluster. Argo CD's own Dex used self-signed TLS with
-      # strict verification off, so it authenticated nothing either.
-      # /api/dex is still proxied by argocd-server and TLS terminates at the
-      # Traefik Ingress.
-      server.dex.server: http://dex:5556
-      server.dex.server.plaintext: "true"
       # HTTP inside the cluster. TLS terminates at the Traefik Ingress
       # (server.ingress.tls + cert-manager letsencrypt-prod, secret argocd-tls,
       # hostname ops.mctl.ai). This is the standard Argo CD behind-ingress
@@ -267,10 +260,8 @@ argo-cd:
         # platform-gitops/argo-workflows/config/servicemonitor.yaml.
         interval: 30s
 
-  # The subchart's Dex is off: Dex runs from templates/dex.yaml (resources
-  # and probes there), so that its issuer stays https://ops.mctl.ai/api/dex
-  # when Argo CD's own login leaves it (#1500). The subchart's
-  # argocd-dex-server objects stay behind, unpruned, until removed by hand.
+  # The subchart's Dex stays off: nothing on the platform signs in through
+  # Dex any more (#1500 phase 4).
   dex:
     enabled: false
 

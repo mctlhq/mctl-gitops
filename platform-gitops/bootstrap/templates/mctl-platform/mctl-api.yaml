@@ -72,8 +72,8 @@ spec:
             BACKSTAGE_URL: https://app.mctl.ai
             # No DEX_ISSUER_URL: since mctl-api 4.72.0 (mctlhq/mctl-api#521)
             # an unset issuer turns the Dex verifier and its /readyz check
-            # off. Human sign-in is ZITADEL (mctlhq/mctl-gitops#1500 phase 4);
-            # Dex itself goes in a follow-up once nothing points at it.
+            # off. Human sign-in is ZITADEL; Dex is gone (mctlhq/mctl-gitops#1500
+            # phase 4).
             SELF_URL: https://api.mctl.ai
             # In-cluster, not https://secrets.mctl.ai. On 2026-10-09 the pod's
             # /readyz Vault check timed out through the public, Cloudflare-

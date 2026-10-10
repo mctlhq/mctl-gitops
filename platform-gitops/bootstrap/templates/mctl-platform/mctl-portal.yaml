@@ -460,11 +460,6 @@ spec:
                 clientId: ${AUTH_GITHUB_CLIENT_ID}
                 clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
               clients:
-                - clientId: ${OIDC_CLIENT_ID}
-                  clientSecret: ${OIDC_CLIENT_SECRET}
-                  redirectUris:
-                    - https://ops.mctl.ai/api/dex/callback
-                    - https://ops.mctl.ai/api/dex/callback
                 # mctl-rules (rules.mctl.ai) — confidential client + PKCE S256
                 - clientId: mctl-rules
                   clientSecret: ${OIDC_RULES_CLIENT_SECRET}
