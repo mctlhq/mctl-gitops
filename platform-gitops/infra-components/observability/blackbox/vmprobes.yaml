@@ -157,14 +157,26 @@ spec:
   module: http_2xx
   vmProberSpec:
     url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  # Sites are discovered from the Ingress objects in namespace erpact (the
+  # admission policy mctl-external-manifests-ingress-hosts limits them to
+  # erpact-*.mctl.ai), so a site created later is probed without a git change.
+  # ErpactSiteUnprobed (vm-rules/erpact-alerts.yaml) fires if discovery misses one.
   targets:
-    staticConfig:
-      targets:
-        - https://erpact-11112025.mctl.ai/api/method/ping
-        - https://erpact-25092026.mctl.ai/api/method/ping
-        - https://erpact-bar2.mctl.ai/api/method/ping
-        - https://erpact-01102026.mctl.ai/api/method/ping
-        - https://erpact-control.mctl.ai/api/method/ping
+    ingress:
+      namespaceSelector:
+        matchNames:
+          - erpact
+      selector: {}
+      relabelingConfigs:
+        # One target per host, whatever paths the Ingress lists.
+        - sourceLabels: [__meta_kubernetes_ingress_path]
+          regex: "/|/\\*|"
+          action: keep
+        - sourceLabels: [__address__]
+          targetLabel: __param_target
+          replacement: "https://${1}/api/method/ping"
+        - sourceLabels: [__param_target]
+          targetLabel: instance
 ---
 # mctl-api through the edge. On 2026-10-09 the single mctl-api pod lost
 # readiness at 07:23Z (its /readyz Vault check timed out from inside the pod

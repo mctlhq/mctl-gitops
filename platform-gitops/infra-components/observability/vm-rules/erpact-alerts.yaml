@@ -47,6 +47,27 @@ spec:
               ErpactSiteDown cannot fire. Check the erpact-sites VMProbe in the
               monitoring namespace and the blackbox-exporter deployment.
 
+        - alert: ErpactSiteUnprobed
+          # Discovery of erpact-sites targets is from Ingresses; this catches
+          # a host that has an Ingress but no probe series (RBAC, relabel error).
+          expr: |
+            group by (host) (kube_ingress_path{namespace="erpact"})
+            unless on (host)
+            group by (host) (
+              label_replace(probe_success{job="erpact-sites"}, "host", "$1", "instance", "https://([^/]+)/.*")
+            )
+          for: 15m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact site {{ $labels.host }} has no probe"
+            description: >-
+              Ingress host {{ $labels.host }} exists in namespace erpact but the
+              erpact-sites VMProbe reports nothing for it, so ErpactSiteDown
+              cannot fire for it. Check the VMProbe targets.ingress discovery
+              and vmagent RBAC on ingresses in erpact.
+
     # Memory of the one MariaDB that holds every site's database
     # (mctl-apps infra/mariadb.yaml). Its caches grow with each site: ~890
     # InnoDB tables per site. On 2026-10-10 it reached 1292Mi of a 1536Mi limit
