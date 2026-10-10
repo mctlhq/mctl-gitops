@@ -75,8 +75,8 @@ done
 ## Repos covered (as of 2026-10-10)
 
 Both `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN_2` exist as
-**org-level** secrets with `visibility: all`, so every repo inherits them and
-Option B is the rotation. Per-repo loops are only for repo-level overrides.
+**org-level** secrets with `visibility: all`, so every public repo inherits
+them and Option B is the rotation. Per-repo loops are for repo-level copies.
 
 Non-archived repos with `.github/workflows/claude-review.yml` (19):
 - .github, mctl-academy, mctl-agent, mctl-agents, mctl-alice, mctl-api
@@ -84,10 +84,11 @@ Non-archived repos with `.github/workflows/claude-review.yml` (19):
 - mctl-pairdesk, mctl-portal, mctl-telegram, mctl-web, newton-mcp-gateway
 - portfolio, projects-mcp, seerrsense
 
-Repo-level overrides: only **projects-mcp** sets both names itself. A repo
-secret shadows the org secret of the same name, so an org-only rotation
-leaves projects-mcp on the old token. Rotate it per-repo as well, or delete
-its copies (with the owner's OK) so it inherits the org secret.
+Repo-level copies: only **projects-mcp** sets both names itself, and it must
+keep them. It is private, and the org is on the GitHub Free plan, where org
+secrets are not available to private repos. Do not delete these copies. An
+org-only rotation leaves projects-mcp on the old token, so always rotate it
+per-repo as well.
 
 Not covered on purpose: the temporary `*-ghsa-*` advisory forks.
 
