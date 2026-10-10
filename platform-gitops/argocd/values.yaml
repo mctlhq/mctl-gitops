@@ -85,10 +85,16 @@ argo-cd:
         end
         return hs
 
-      # Ignore CNPG Cluster metadata annotations and status in global diff
+      # Ignore CNPG Cluster metadata annotations and status in global diff,
+      # except kubectl.kubernetes.io/restartedAt: bumping it in gitops is how
+      # a Cluster's instances are rolled (infra-components/data/cnpg/shared/
+      # cluster.yaml). This applies on top of each Application's own
+      # ignoreDifferences, so both must exempt it. Argo CD evaluates the
+      # expression as del(...); the index is evaluated against the resource
+      # root, and `// {}` keeps it valid when there are no annotations.
       resource.customizations.ignoreDifferences.postgresql.cnpg.io_Cluster: |
         jqPathExpressions:
-        - .metadata.annotations
+        - .metadata.annotations[(.metadata.annotations // {} | keys[] | select(. != "kubectl.kubernetes.io/restartedAt"))]
         - .status
 
       # Argo CD signs in through ZITADEL (#1500). Who may sign in and with
