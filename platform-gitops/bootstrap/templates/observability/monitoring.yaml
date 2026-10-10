@@ -631,6 +631,16 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "ErpactBackup.*|ErpactRestoreDrill.*"
+                  # Tenant erpact's site probes (vm-rules/erpact-alerts.yaml,
+                  # group erpact.availability; #1773). Telegram only, same
+                  # reasoning as the two routes above: a broken site is fixed
+                  # in Forgejo erpact/mctl-apps, which mctl-agent cannot write,
+                  # and until now ErpactSiteDown reached only the agent and
+                  # notified nobody. Prefix match so ErpactSiteProbeAbsent is
+                  # covered too.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ErpactSite.*"
                   # The lifecycle ownership rollout (ADR-010 §12,
                   # mctlhq/.github#57). Telegram only, no ticket, and the
                   # routing is load-bearing rather than a preference:
@@ -822,6 +832,18 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlApi.*"
+                  # The platform's web entry points (vm-rules/platform-web-alerts.yaml,
+                  # #1773): portal, docs, Argo CD, Grafana and mctl-agent, probed
+                  # from outside. agent.mctl.ai is mctl-agent itself, so an
+                  # agent-only route would report its outage to the component
+                  # that is down, and the 2026-10-10 portal outage was heard by
+                  # nobody. Same two-part shape as MctlApi.* above:
+                  # continue: true here, AND PlatformWebEndpoint.* in the
+                  # mctl-agent catch-all below, so the agent keeps its ticket.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "PlatformWebEndpoint.*"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
@@ -833,7 +855,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*"
+                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|PlatformWebEndpoint.*"
               receivers:
                 - name: "null"
                 - name: mctl-agent
