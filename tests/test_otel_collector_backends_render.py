@@ -693,9 +693,14 @@ check(
 
 # Tempo disabled with the sandbox open: no datasource pointing at nothing.
 tempo_off = _write_values(_eval_values(True, [dict(tempo_candidate, enabled=False)]))
+tempo_off_docs = helm_template(DEFAULT_VALUES, tempo_off)
 check(
-    not find(helm_template(DEFAULT_VALUES, tempo_off), "ConfigMap", name="tempo-eval-grafana-datasource"),
+    not find(tempo_off_docs, "ConfigMap", name="tempo-eval-grafana-datasource"),
     "a disabled tempo candidate must not emit the Tempo (eval) datasource",
+)
+check(
+    not _loki_ds(tempo_off_docs).get("jsonData", {}).get("derivedFields"),
+    "a disabled tempo candidate must not leave a Loki derived field pointing at tempo-eval",
 )
 
 if failures:
