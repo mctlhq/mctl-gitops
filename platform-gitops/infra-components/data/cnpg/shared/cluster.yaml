@@ -7,6 +7,8 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
     # The operator rolls the instances whenever this value changes; it is what
     # `kubectl cnpg restart` sets, kept here so the roll goes through review.
+    # It reaches the cluster only because bootstrap/templates/data/shared-pg.yaml
+    # exempts this one key from the Application's ignoreDifferences.
     # Set 2026-10-10 to apply priorityClassName (see below) to the running pods.
     kubectl.kubernetes.io/restartedAt: "2026-10-10T22:04:59Z"
 spec:

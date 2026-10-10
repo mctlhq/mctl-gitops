@@ -18,7 +18,12 @@ spec:
     - group: postgresql.cnpg.io
       kind: Cluster
       jqPathExpressions:
-        - .metadata.annotations
+        # Every annotation except restartedAt. That one is how gitops rolls
+        # the instances (see cluster.yaml); ignoring it too meant #1796's
+        # bump synced as a no-op, since RespectIgnoreDifferences keeps the
+        # live value of every ignored path. ArgoCD wraps this in del(), so
+        # the index must be a path; `// {}` keeps it valid with no annotations.
+        - .metadata.annotations[(.metadata.annotations // {} | keys[] | select(. != "kubectl.kubernetes.io/restartedAt"))]
         - .metadata.labels
         - .status
   syncPolicy:
