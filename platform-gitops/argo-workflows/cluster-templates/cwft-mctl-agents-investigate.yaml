@@ -785,7 +785,7 @@ spec:
           - name: ISSUE_INVESTIGATOR_MODEL
             value: "claude-opus-5-5"
           # Raised 3.00 -> 8.00 alongside the model above: $3 was already tight
-          # on Sonnet (see the 8Gi memory bump below, same class of headroom
+          # on Sonnet (see the memory note below, same class of headroom
           # problem on the largest repos) and Opus spends more per equivalent
           # investigation. Kept well under agent-platform/policy.yaml's
           # maxBudgetUsd ceiling of 25.00.
@@ -796,15 +796,14 @@ spec:
           - name: ISSUE_INVESTIGATOR_BUDGET_USD
             value: "8.00"
         resources:
-          # memory bumped 4Gi -> 8Gi: on the largest target repos (the case was
-          # the since-archived mctl-openclaw — a ~500 MB shallow clone over a
-          # 100k-file monorepo)
-          # the Claude SDK's `claude` CLI child was OOM-killed mid-run, so the
-          # investigator never wrote the requirements/design/tasks triplet and
-          # the pod exited 1. Smaller repos (e.g. mctl-telegram) fit in 4Gi.
-          # Mirrors the same 4Gi -> 8Gi bump on cwft-mctl-agents-implement.
+          # memory back to 4Gi (was 8Gi): the bump was for mctl-openclaw, a
+          # ~500 MB shallow clone over a 100k-file monorepo whose `claude` CLI
+          # child was OOM-killed mid-run. That repo is gone from the platform;
+          # the observed 30-day peak across all other targets is ~0.8 GiB
+          # (container_memory_working_set_bytes, 2026-10-10), so 4Gi keeps ~5x
+          # headroom. cwft-mctl-agents-implement keeps 8Gi: it does use it.
           requests: { cpu: 200m, memory: 1Gi, ephemeral-storage: 4Gi }
-          limits:   { cpu: 2000m, memory: 8Gi, ephemeral-storage: 5Gi }
+          limits:   { cpu: 2000m, memory: 4Gi, ephemeral-storage: 5Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
