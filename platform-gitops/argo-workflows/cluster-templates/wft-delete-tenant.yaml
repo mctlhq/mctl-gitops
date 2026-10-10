@@ -81,6 +81,33 @@ spec:
 
           echo "Validating tenant: $TENANT"
 
+          # BEGIN tenant-ns-guard
+          tenant_name_reserved() {   # $1 = name; returns 0 if reserved
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*) return 0 ;;
+            esac
+            return 1
+          }
+
+          # Prints "absent", "owned" or "foreign"; returns non-zero if the lookup itself failed.
+          tenant_ns_owner_state() {  # $1 = namespace, $2 = tenant
+            out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.mctl\.me/tenant}{"\n"}{end}') || return 2
+            [ -z "$out" ] && { echo absent; return 0; }
+            [ "$(printf '%s' "$out" | cut -f2)" = "$2" ] && { echo owned; return 0; }
+            echo foreign
+          }
+          # END tenant-ns-guard
+
+          if tenant_name_reserved "$TENANT"; then
+            echo "ERROR: '$TENANT' is a reserved or platform namespace name."
+            exit 1
+          fi
+
           # Reserved — cannot delete
           for reserved in admins argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring backstage platform-db; do
             if [ "$TENANT" = "$reserved" ]; then

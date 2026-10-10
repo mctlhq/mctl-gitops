@@ -74,6 +74,17 @@ def check_block(block):
     return errs
 
 
+def check_called(path, name):
+    """The guard must be invoked outside its own definition in every template."""
+    text = BLOCK_RE.sub("", open(path).read())
+    errs = []
+    if not re.search(r"\btenant_name_reserved\s+\"", text):
+        errs.append(f"{name}: tenant_name_reserved is defined but never called")
+    if name != "wft-delete-tenant.yaml" and not re.search(r"\$\(\s*tenant_ns_owner_state\s", text):
+        errs.append(f"{name}: tenant_ns_owner_state is defined but never called")
+    return errs
+
+
 def check_repo():
     errs, blocks = [], {}
     for f in FILES:
@@ -84,6 +95,7 @@ def check_repo():
         if len(set(found)) != 1:
             errs.append(f"{f}: guard blocks differ within the file")
         blocks[f] = found[0]
+        errs += check_called(os.path.join(CT, f), f)
     if len(set(blocks.values())) > 1:
         errs.append("tenant-ns-guard block differs between templates: " + ", ".join(blocks))
     if blocks:
