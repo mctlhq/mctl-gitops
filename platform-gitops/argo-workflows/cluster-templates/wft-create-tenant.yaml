@@ -17,6 +17,8 @@ metadata:
 
       Steps:
         1. validate           — name format + non-existence check
+           check-namespace    — refuses names whose namespace (or -preview) exists
+                                without the mctl.me/tenant=<name> label
         2. create-vault-policy — Vault policy scoped to teams/{name}/*
         3. commit-to-git      — tenant files + ArgoCD RBAC pushed to mctl-gitops
 
@@ -81,9 +83,20 @@ spec:
                 - name: reprovision
                   value: "{{workflow.parameters.reprovision}}"
 
-          # Step 2: create Vault policy (after validate)
+          # Step 1b: live cluster check that the name does not collide with a
+          # namespace the tenant does not own (SEC-N101)
+          - name: check-namespace
+            template: check-namespace-collision
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+                - name: reprovision
+                  value: "{{workflow.parameters.reprovision}}"
+
+          # Step 2: create Vault policy (after both checks)
           - name: create-vault-policy
-            dependencies: [validate]
+            dependencies: [validate, check-namespace]
             template: create-vault-policy
             arguments:
               parameters:
@@ -169,13 +182,32 @@ spec:
             exit 1
           fi
 
-          # Reserved names
-          for reserved in argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring; do
-            if [ "$TENANT" = "$reserved" ]; then
-              echo "ERROR: '$TENANT' is a reserved namespace name."
-              exit 1
-            fi
-          done
+          # BEGIN tenant-ns-guard
+          tenant_name_reserved() {   # $1 = name; returns 0 if reserved
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*) return 0 ;;
+            esac
+            return 1
+          }
+
+          # Prints "absent", "owned" or "foreign"; returns non-zero if the lookup itself failed.
+          tenant_ns_owner_state() {  # $1 = namespace, $2 = tenant
+            out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.mctl\.me/tenant}{"\n"}{end}') || return 2
+            [ -z "$out" ] && { echo absent; return 0; }
+            [ "$(printf '%s' "$out" | cut -f2)" = "$2" ] && { echo owned; return 0; }
+            echo foreign
+          }
+          # END tenant-ns-guard
+
+          if tenant_name_reserved "$TENANT"; then
+            echo "ERROR: '$TENANT' is a reserved or platform namespace name."
+            exit 1
+          fi
 
           case "$REPROVISION" in
             true|false) ;;
@@ -204,6 +236,77 @@ spec:
           fi
 
           echo "Tenant name '$TENANT' is valid."
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: check-namespace-collision
+      inputs:
+        parameters:
+          - name: tenant_name
+          - name: reprovision
+            value: "false"
+      script:
+        image: alpine/k8s:1.33.12
+        command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
+          - name: PARAM_REPROVISION
+            value: "{{inputs.parameters.reprovision}}"
+        source: |
+          set -e
+          TENANT="$PARAM_TENANT_NAME"
+
+          # BEGIN tenant-ns-guard
+          tenant_name_reserved() {   # $1 = name; returns 0 if reserved
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*) return 0 ;;
+            esac
+            return 1
+          }
+
+          # Prints "absent", "owned" or "foreign"; returns non-zero if the lookup itself failed.
+          tenant_ns_owner_state() {  # $1 = namespace, $2 = tenant
+            out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.mctl\.me/tenant}{"\n"}{end}') || return 2
+            [ -z "$out" ] && { echo absent; return 0; }
+            [ "$(printf '%s' "$out" | cut -f2)" = "$2" ] && { echo owned; return 0; }
+            echo foreign
+          }
+          # END tenant-ns-guard
+
+          if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            echo "ERROR: Tenant name '$TENANT' is invalid."
+            exit 1
+          fi
+
+          if tenant_name_reserved "$TENANT"; then
+            echo "ERROR: '$TENANT' is a reserved or platform namespace name."
+            exit 1
+          fi
+
+          # A failed lookup is never treated as "namespace absent".
+          for ns in "$TENANT" "${TENANT}-preview"; do
+            if ! state=$(tenant_ns_owner_state "$ns" "$TENANT"); then
+              echo "ERROR: could not list namespaces to check '$ns'; refusing."
+              exit 1
+            fi
+            case "$state" in
+              foreign)
+                echo "ERROR: namespace '$ns' already exists without label mctl.me/tenant=$TENANT."
+                echo "It is not owned by this tenant; refusing to adopt it."
+                exit 1
+                ;;
+              owned) echo "Namespace '$ns' is owned by tenant '$TENANT'." ;;
+              *) echo "Namespace '$ns' does not exist." ;;
+            esac
+          done
+
+          echo "Namespace check passed for '$TENANT'."
 
     # ────────────────────────────────────────────────────────────────────────
     - name: create-vault-policy

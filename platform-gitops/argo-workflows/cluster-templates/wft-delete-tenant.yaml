@@ -308,16 +308,36 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: alpine:3.19
+        image: alpine/k8s:1.33.12
         command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          apk add --no-cache curl
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
 
-          # Download kubectl
-          curl -sLO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
-          chmod +x kubectl && mv kubectl /usr/local/bin/
+          # BEGIN tenant-ns-guard
+          tenant_name_reserved() {   # $1 = name; returns 0 if reserved
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*) return 0 ;;
+            esac
+            return 1
+          }
+
+          # Prints "absent", "owned" or "foreign"; returns non-zero if the lookup itself failed.
+          tenant_ns_owner_state() {  # $1 = namespace, $2 = tenant
+            out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.mctl\.me/tenant}{"\n"}{end}') || return 2
+            [ -z "$out" ] && { echo absent; return 0; }
+            [ "$(printf '%s' "$out" | cut -f2)" = "$2" ] && { echo owned; return 0; }
+            echo foreign
+          }
+          # END tenant-ns-guard
 
           # Delete ArgoCD Application (if exists)
           if kubectl get app -n argocd "tenant-${TENANT}" > /dev/null 2>&1; then
@@ -328,11 +348,21 @@ spec:
           fi
 
           # Delete K8s namespace (if exists)
-          if kubectl get ns "${TENANT}" > /dev/null 2>&1; then
-            echo "Deleting namespace ${TENANT}..."
-            kubectl delete ns "${TENANT}"
-          else
-            echo "Namespace ${TENANT} not found, skipping."
+          # Only delete a namespace the tenant owns; a lookup error fails.
+          if ! NS_STATE=$(tenant_ns_owner_state "${TENANT}" "${TENANT}"); then
+            echo "ERROR: could not look up namespace ${TENANT}; refusing."
+            exit 1
           fi
+          case "$NS_STATE" in
+            owned)
+              echo "Deleting namespace ${TENANT}..."
+              kubectl delete ns "${TENANT}"
+              ;;
+            absent) echo "Namespace ${TENANT} not found, skipping." ;;
+            *)
+              echo "ERROR: namespace ${TENANT} lacks label mctl.me/tenant=${TENANT}; refusing to delete."
+              exit 1
+              ;;
+          esac
 
           echo "K8s cleanup complete for tenant ${TENANT}."

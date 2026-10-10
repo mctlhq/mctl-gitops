@@ -218,6 +218,13 @@ jobs:
           scripts/validate-implement-worker-singleton.py --selftest
           scripts/validate-implement-worker-singleton.py
 
+      - name: Validate tenant namespace guard
+        run: |
+          set -euo pipefail
+          # --selftest first: a detector never seen to fire is not known to work.
+          scripts/validate-tenant-ns-guard.py --selftest
+          scripts/validate-tenant-ns-guard.py
+
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
 

@@ -88,17 +88,59 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: alpine:3.19
+        image: alpine/k8s:1.33.12
         command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
+
+          # BEGIN tenant-ns-guard
+          tenant_name_reserved() {   # $1 = name; returns 0 if reserved
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*) return 0 ;;
+            esac
+            return 1
+          }
+
+          # Prints "absent", "owned" or "foreign"; returns non-zero if the lookup itself failed.
+          tenant_ns_owner_state() {  # $1 = namespace, $2 = tenant
+            out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.mctl\.me/tenant}{"\n"}{end}') || return 2
+            [ -z "$out" ] && { echo absent; return 0; }
+            [ "$(printf '%s' "$out" | cut -f2)" = "$2" ] && { echo owned; return 0; }
+            echo foreign
+          }
+          # END tenant-ns-guard
 
           echo "Validating tenant: $TENANT"
 
-          for reserved in admins argocd argo-workflows argo-events kube-system kube-public kube-node-lease default cert-manager traefik vault external-secrets monitoring backstage platform-db; do
-            if [ "$TENANT" = "$reserved" ]; then
-              echo "ERROR: '$TENANT' is a reserved/protected tenant and cannot be deleted."
+          if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            echo "ERROR: Tenant name '$TENANT' is invalid."
+            exit 1
+          fi
+
+          # admins is a real tenant, so it is protected here and not in the
+          # shared denylist (which would break reprovisioning it).
+          if [ "$TENANT" = "admins" ] || tenant_name_reserved "$TENANT"; then
+            echo "ERROR: '$TENANT' is a reserved/protected name and cannot be deleted."
+            exit 1
+          fi
+
+          for ns in "$TENANT" "${TENANT}-preview"; do
+            if ! state=$(tenant_ns_owner_state "$ns" "$TENANT"); then
+              echo "ERROR: could not list namespaces to check '$ns'; refusing."
+              exit 1
+            fi
+            if [ "$state" = "foreign" ]; then
+              echo "ERROR: namespace '$ns' exists without label mctl.me/tenant=$TENANT; refusing to delete."
               exit 1
             fi
           done
@@ -651,15 +693,56 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: alpine:3.19
+        image: alpine/k8s:1.33.12
         command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          apk add --no-cache curl
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
 
-          curl -sLO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
-          chmod +x kubectl && mv kubectl /usr/local/bin/
+          # BEGIN tenant-ns-guard
+          tenant_name_reserved() {   # $1 = name; returns 0 if reserved
+            case "$1" in
+              argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              temporal|backstage|minio|database|forgejo|zitadel|\
+              local-path-storage|system-upgrade|\
+              kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*) return 0 ;;
+            esac
+            return 1
+          }
+
+          # Prints "absent", "owned" or "foreign"; returns non-zero if the lookup itself failed.
+          tenant_ns_owner_state() {  # $1 = namespace, $2 = tenant
+            out=$(kubectl get namespaces --field-selector "metadata.name=$1" \
+                  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.mctl\.me/tenant}{"\n"}{end}') || return 2
+            [ -z "$out" ] && { echo absent; return 0; }
+            [ "$(printf '%s' "$out" | cut -f2)" = "$2" ] && { echo owned; return 0; }
+            echo foreign
+          }
+          # END tenant-ns-guard
+
+          # Delete a namespace only if the tenant owns it. Re-checked here
+          # (not only in validate) so a namespace changed in between is caught.
+          delete_owned_ns() {  # $1 = namespace
+            if ! state=$(tenant_ns_owner_state "$1" "$TENANT"); then
+              echo "ERROR: could not look up namespace $1; refusing."
+              exit 1
+            fi
+            case "$state" in
+              owned)
+                echo "Deleting namespace $1..."
+                kubectl delete ns "$1"
+                ;;
+              absent) echo "Namespace $1 not found, skipping." ;;
+              *)
+                echo "ERROR: namespace $1 lacks label mctl.me/tenant=${TENANT}; refusing to delete."
+                exit 1
+                ;;
+            esac
+          }
 
           echo "Refreshing ArgoCD ApplicationSets before deleting app CRs..."
           kubectl annotate applicationset apps -n argocd argocd.argoproj.io/refresh=hard --overwrite || true
@@ -681,19 +764,8 @@ spec:
             echo "ArgoCD app tenant-${TENANT} not found, skipping."
           fi
 
-          if kubectl get ns "${TENANT}" > /dev/null 2>&1; then
-            echo "Deleting namespace ${TENANT}..."
-            kubectl delete ns "${TENANT}"
-          else
-            echo "Namespace ${TENANT} not found, skipping."
-          fi
-
-          if kubectl get ns "${TENANT}-preview" > /dev/null 2>&1; then
-            echo "Deleting preview namespace ${TENANT}-preview..."
-            kubectl delete ns "${TENANT}-preview"
-          else
-            echo "Namespace ${TENANT}-preview not found, skipping."
-          fi
+          delete_owned_ns "${TENANT}"
+          delete_owned_ns "${TENANT}-preview"
 
           echo "Waiting for service apps, tenant app, and namespace to disappear..."
           for i in $(seq 1 60); do
@@ -703,16 +775,11 @@ spec:
             else
               TENANT_APP_RC=$?
             fi
-            if kubectl get ns "${TENANT}" > /dev/null 2>&1; then
-              NS_RC=0
-            else
-              NS_RC=$?
-            fi
-            if kubectl get ns "${TENANT}-preview" > /dev/null 2>&1; then
-              PREVIEW_NS_RC=0
-            else
-              PREVIEW_NS_RC=$?
-            fi
+            # A lookup error is not "gone": fail instead of counting it.
+            NS_STATE=$(tenant_ns_owner_state "${TENANT}" "${TENANT}") || { echo "ERROR: namespace lookup failed"; exit 1; }
+            PREVIEW_STATE=$(tenant_ns_owner_state "${TENANT}-preview" "${TENANT}") || { echo "ERROR: namespace lookup failed"; exit 1; }
+            if [ "${NS_STATE}" = "absent" ]; then NS_RC=1; else NS_RC=0; fi
+            if [ "${PREVIEW_STATE}" = "absent" ]; then PREVIEW_NS_RC=1; else PREVIEW_NS_RC=0; fi
             echo "  [${i}/60] serviceApps=${APP_COUNT} tenantAppRc=${TENANT_APP_RC} namespaceRc=${NS_RC} previewNsRc=${PREVIEW_NS_RC}"
             if [ "${APP_COUNT}" = "0" ] && [ "${TENANT_APP_RC}" -ne 0 ] && [ "${NS_RC}" -ne 0 ] && [ "${PREVIEW_NS_RC}" -ne 0 ]; then
               echo "K8s cleanup fully complete for tenant ${TENANT}."
