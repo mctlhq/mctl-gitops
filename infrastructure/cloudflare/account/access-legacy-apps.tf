@@ -168,10 +168,11 @@ resource "cloudflare_zero_trust_access_application" "openclaw_mashkoffdmitry" {
     },
   ]
 
-  allowed_idps              = [local.google_idp_id]
-  app_launcher_visible      = true
-  auto_redirect_to_identity = false
-  session_duration          = "24h"
+  allowed_idps               = [local.google_idp_id]
+  app_launcher_visible       = true
+  auto_redirect_to_identity  = true
+  http_only_cookie_attribute = false
+  session_duration           = "24h"
 
   policies = [
     { id = cloudflare_zero_trust_access_policy.google.id, precedence = 1 },
@@ -196,10 +197,11 @@ resource "cloudflare_zero_trust_access_application" "workflows_mctl_me" {
     },
   ]
 
-  allowed_idps              = [local.google_idp_id]
-  app_launcher_visible      = true
-  auto_redirect_to_identity = false
-  session_duration          = "24h"
+  allowed_idps               = [local.google_idp_id]
+  app_launcher_visible       = true
+  auto_redirect_to_identity  = true
+  http_only_cookie_attribute = false
+  session_duration           = "24h"
 
   policies = [
     { id = cloudflare_zero_trust_access_policy.google.id, precedence = 1 },
