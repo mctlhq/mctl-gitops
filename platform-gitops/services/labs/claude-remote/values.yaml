@@ -100,7 +100,13 @@ env:
   # and the adapter stopped reading. Sonnet is the model the round trip was
   # proven on (docs/claude-channels-spike.md). pr-steward is unaffected: its
   # ticks pass --model explicitly (PR_STEWARD_MODEL, default sonnet).
-  CLAUDE_REMOTE_MODEL: "sonnet"
+  # 2026-10-10: moved to Claude Haiku 5.5 (owner decision), pinned by full
+  # model ID rather than the `haiku` alias so the model cannot drift with the
+  # CLI's alias table. Needs image 0.13.4+ (Claude Code 2.1.296): 2.1.280 does
+  # not know this ID. The #66 failure was observed on Haiku 4.5, so the events
+  # round trip (a real ack_event call, inflight draining) is re-proven after
+  # this rolls; revert to "sonnet" if acknowledgements stop.
+  CLAUDE_REMOTE_MODEL: "claude-haiku-5-5"
   # Built-in scheduler (0.4.0+): fire a headless `claude -p "Run the pr-steward
   # skill"` tick every 20 min so the steward runs without a human prompting the
   # live remote-control session (closes the manual-trigger gap, gitops #276).
