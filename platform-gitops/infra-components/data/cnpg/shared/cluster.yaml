@@ -6,6 +6,8 @@ metadata:
     argocd.argoproj.io/compare-options: IgnoreExtraneous
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
+  # REL-103: rank the data path above tenant workloads for eviction/preemption.
+  priorityClassName: platform-data-critical
   # HA: primary + 1 hot standby. Two instances is the minimum that lets a node
   # drain succeed — CNPG promotes the standby and evicts the old primary,
   # instead of the drain deadlocking on the single-instance PDB (0 allowed

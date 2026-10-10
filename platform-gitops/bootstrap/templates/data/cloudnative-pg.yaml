@@ -15,6 +15,14 @@ spec:
       values: |
         crds:
           create: true
+        # REL-103: avoid BestEffort QoS and rank above tenant workloads.
+        priorityClassName: platform-data-critical
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            memory: 256Mi
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: cnpg-system

@@ -1,0 +1,15 @@
+# Data-path priority (REL-103). Above every tenant/default (0) workload,
+# below system-cluster-critical (2000000000), within the user range (<= 1e9).
+# Sync-wave -1 so it exists before consumer pods are created.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: platform-data-critical
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+value: 1000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >-
+  Shared Postgres data path: shared-pg instances, the PgBouncer pooler and the
+  CloudNativePG operator. Do not assign to tenant workloads.

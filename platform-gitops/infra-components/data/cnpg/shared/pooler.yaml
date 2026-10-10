@@ -7,6 +7,21 @@ spec:
     name: shared-pg
   instances: 2  # 2 PgBouncer pods for availability
   type: rw
+  # REL-103: without a template the pods are BestEffort (first evicted under
+  # node memory pressure). Values are design floors; live p95 was not available
+  # at implementation time. No CPU limit: PgBouncer is latency-sensitive.
+  template:
+    metadata: {}
+    spec:
+      priorityClassName: platform-data-critical
+      containers:
+        - name: pgbouncer  # CNPG merges by this name; must match exactly
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
   pgbouncer:
     poolMode: transaction
     parameters:
