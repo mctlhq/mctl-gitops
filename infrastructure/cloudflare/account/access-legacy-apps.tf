@@ -20,7 +20,7 @@
 # not a list of users.
 import {
   to = cloudflare_zero_trust_access_policy.google
-  id = "accounts/${var.account_id}/f4a14417-6d7e-44b8-8b6c-a957b3302e62"
+  id = "${var.account_id}/f4a14417-6d7e-44b8-8b6c-a957b3302e62"
 }
 
 resource "cloudflare_zero_trust_access_policy" "google" {
@@ -49,7 +49,7 @@ resource "cloudflare_zero_trust_access_policy" "google" {
 # imported token without one would plan a replacement.
 import {
   to = cloudflare_zero_trust_access_policy.seerrsense_service_token
-  id = "accounts/${var.account_id}/bb2e4dfd-1213-490d-81b7-37cbc869537b"
+  id = "${var.account_id}/bb2e4dfd-1213-490d-81b7-37cbc869537b"
 }
 
 resource "cloudflare_zero_trust_access_policy" "seerrsense_service_token" {
