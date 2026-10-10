@@ -265,12 +265,16 @@ rehearsed: plan it on a local Vault first.
 When ZITADEL is down, OIDC logins fail. Already-issued tokens keep working
 until they expire.
 
-The admin paths that do not depend on ZITADEL are unchanged:
-- the `github` auth method (`auth/github`, a user map). It is the current
-  human fallback and stays as it is: retiring it is a separate owner
-  decision, made once OIDC sign-in has been in use for a while;
+The admin paths that do not depend on ZITADEL:
 - an existing admin token;
-- a root token generated with the unseal keys (`vault operator generate-root`).
+- a root token generated with the unseal keys (`vault operator generate-root`,
+  a quorum of the Shamir unseal key holders).
+
+The `github` auth method (`auth/github`, a hand-configured user map that was
+never in IaC) used to be a third path. It was disabled on 2026-10-10, after
+human sign-in had run on ZITADEL for a week (mctlhq/mctl-gitops#1500,
+phase 7). Disabling it revoked every token it had issued. Do not re-enable it
+as a fallback: a method configured outside this repo is invisible to review.
 
 The Job never disables a mount: its policy has no `delete` on any `sys/auth/` path.
 To turn human OIDC sign-in off by hand, an admin runs
