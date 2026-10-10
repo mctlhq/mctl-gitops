@@ -205,14 +205,25 @@ exists to run.
 
 ### The evaluation namespace and the fixture emitter (issue #903 / #1280)
 
-`otelCollector.eval.enabled` (default `false`) gates two templates in
+`otelCollector.eval.enabled` gates two templates in
 `platform-gitops/bootstrap/templates/observability/`: `eval-namespace.yaml`
 (the disposable `observability-eval` Namespace and its NetworkPolicy set)
 and `eval-candidates.yaml` (one ArgoCD Application per entry in
-`otelCollector.eval.candidates`). With the key at its default, both render
-nothing — merging or reverting a change to either template changes no
-cluster state until an operator flips this key, which is `#1280`'s job, not
-this runbook's.
+`otelCollector.eval.candidates`), plus `tempo-datasource.yaml` while the
+`tempo` candidate is enabled. With the key `false`, all of them render
+nothing.
+
+**Current state (#1280, 2026-10-10): the sandbox is open with one
+candidate, Tempo.** The collector therefore exports every span it receives
+to `debug` **and** to `otlp/eval-tempo`
+(`tempo.observability-eval.svc.cluster.local:4317`). No workload emits OTLP
+to the collector yet, so in practice only the fixture emitter below reaches
+Tempo; when a producer is instrumented, its spans fan out to Tempo too, and
+that is a recorded amendment to the bake-off, not a side effect. Export
+problems towards Tempo raise `TempoEvalCollectorExportFailures` /
+`TempoEvalCollectorDroppedSpans` (Telegram only). Closing the sandbox
+(`otelCollector.eval.enabled: false`) removes the exporter in the same
+commit.
 
 `platform-gitops/argo-workflows/cluster-templates/wft-otel-trace-fixture.yaml`
 is a registered `ClusterWorkflowTemplate` (`otel-trace-fixture`) that POSTs

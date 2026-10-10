@@ -31,9 +31,7 @@ otelCollector:
   # The live spike (populating this list, deploying candidates) is
   # mctlhq/mctl-gitops#1280 -- see docs/adr/0001-agent-execution-trace-backend.md.
   backends: []
-  # Evaluation namespace and candidate Applications for the issue-903 spike,
-  # gated off by default so merging this key's templates changes no cluster
-  # state. Filled in and flipped on by mctlhq/mctl-gitops#1280, not here.
+  # Evaluation namespace and candidate Applications for the issue-903 spike.
   # Each candidates[] entry is {name, enabled, repoURL, chart,
   # targetRevision, manifestsPath, otlpEndpoint, insecure, values}. `enabled`
   # is the per-candidate flag (issue #1355): the outer eval.enabled guard
@@ -42,134 +40,185 @@ otelCollector:
   # candidate chart. `otlpEndpoint`, when set, drives the collector fan-out
   # in otel-collector.yaml (issue #1355) -- a candidate with no otlpEndpoint
   # is deployed but receives no spans.
+  #
+  # OPEN since mctlhq/mctl-gitops#1280's Tempo round: the bake-off was cut
+  # to ONE candidate (Tempo, single binary) by owner decision, see
+  # docs/runbooks/tracing-bake-off.md. teardownAfter is enforced by
+  # scripts/validate-eval-teardown-date.py (at most 14 days out, CI-red on
+  # main once it passes). Closing the sandbox is the one-commit teardown in
+  # that runbook's section 9: enabled: false here, every candidate's
+  # enabled: false, teardownAfter: "".
   eval:
-    enabled: false
-    teardownAfter: ""
+    enabled: true
+    teardownAfter: "2026-10-24"
     # issue #1355 / #1280: ResourceQuota (eval-namespace.yaml's
     # observability-eval-quota) rendered into observability-eval only while
-    # eval.enabled is true. The two mandated caps --
-    # persistentvolumeclaims/requests.storage -- exist because the sandbox's
-    # only measured precedent for a candidate's default PVC footprint is
-    # "whatever the chart ships", and this cluster's only current
-    # object-storage user is Loki on Cloudflare R2, not a candidate chart.
-    # Sized from the tenant chart's precedent
-    # (helm-charts/tenant/values.yaml:22-35), scaled up for a
-    # ClickHouse/Postgres-class candidate on three cx43 workers.
+    # eval.enabled is true. Sized for the one candidate actually deployed --
+    # a single Tempo pod (requests 100m/512Mi, limits 1 CPU/1Gi) -- with
+    # room for one rolling replacement, not for the ClickHouse-class
+    # candidates #1355 originally sized it for. persistentvolumeclaims and
+    # requests.storage are "0": Tempo's WAL is an emptyDir and its blocks
+    # live in object storage (Cloudflare R2), so a PVC here is a mistake
+    # this quota refuses at admission rather than a paid Hetzner volume
+    # nobody asked for. tests/test_otel_collector_backends_render.py pins
+    # both literally.
     quota:
-      requests.cpu: "4"
-      requests.memory: "12Gi"
-      limits.cpu: "8"
-      limits.memory: "20Gi"
-      # Kept close to the limits.cpu/limits.default.cpu ceiling (8
-      # max-limit containers), matching the tenant chart's own
-      # ~1.25x headroom precedent (helm-charts/tenant/values.yaml
-      # quotas.pods: "10" vs its 8 max-limit containers), not a
-      # loose 4x bound.
-      pods: "10"
-      persistentvolumeclaims: "4"
-      requests.storage: "40Gi"
+      requests.cpu: "1"
+      requests.memory: "1536Mi"
+      limits.cpu: "2"
+      limits.memory: "2Gi"
+      pods: "4"
+      persistentvolumeclaims: "0"
+      requests.storage: "0"
     # issue #1355 / #1280: LimitRange (eval-namespace.yaml's
     # observability-eval-limits) container defaults, same shape as
-    # helm-charts/tenant/values.yaml:70-81's limitRange block.
+    # helm-charts/tenant/values.yaml:70-81's limitRange block. Tempo sets
+    # its own requests/limits; these only catch a container that does not.
     limits:
       default:
-        cpu: "1"
-        memory: "2Gi"
+        cpu: "500m"
+        memory: "512Mi"
       defaultRequest:
-        cpu: "100m"
-        memory: "256Mi"
+        cpu: "50m"
+        memory: "128Mi"
       max:
-        cpu: "4"
-        memory: "8Gi"
-    # issue #1355: committed, pinned, disabled candidate catalogue. Every
-    # `enabled` below stays false in this proposal -- mctlhq/mctl-gitops#1280
-    # flips exactly the candidates it is actively soaking. Candidate F
-    # (agento11y) is intentionally absent: it has no self-managed shape to
-    # pin (confirmed at implementation time against
-    # https://github.com/grafana/agento11y -- an SDK that ships telemetry to
-    # Grafana Cloud, no Helm chart, Docker image or Kubernetes manifest of
-    # its own), so committing a candidate entry or a manifestsPath directory
-    # for it would be exactly the fabricated-pin outcome this proposal
-    # refuses. See docs/runbooks/tracing-bake-off.md's preconditions section.
+        cpu: "2"
+        memory: "1536Mi"
+    # Committed, pinned candidate catalogue (issue #1355). Only Tempo
+    # remains: the owner cut the bake-off to one candidate on 2026-10-10
+    # (Langfuse, SigNoz, Phoenix and Traceway are out of scope for this
+    # round, see docs/runbooks/tracing-bake-off.md), and agento11y has no
+    # self-managed shape to pin (an SDK that ships to Grafana Cloud).
     candidates:
       - name: tempo
-        enabled: false
-        repoURL: https://grafana.github.io/helm-charts
-        chart: tempo-distributed
-        # Resolved 2026-09-24 from
-        # https://grafana.github.io/helm-charts/index.yaml (generated
-        # 2026-09-21): chart 1.61.3, appVersion 2.9.0 -- the newest entry
-        # for tempo-distributed in that index at implementation time,
-        # matching the exact-pin convention every other chart in this repo
-        # uses (loki.yaml, otel-collector.yaml).
-        targetRevision: "1.61.3"
-        # No manifestsPath: every setting is the inline `values` below
-        # (helm.valuesObject) and tempo needs no supplemental manifests. A
-        # manifestsPath directory is synced as raw Kubernetes manifests, so it
-        # must hold only resources with apiVersion/kind. ArgoCD skips a
-        # non-resource YAML there in silence -- but hard-fails manifest
-        # generation on one whose bytes happen to contain apiVersion:, kind:
-        # and metadata: (comments count). Both are traps: a silently skipped
-        # file reads as configuration in force that is not.
-        # tests/test_otel_collector_backends_render.py rejects both.
-        # Matches `values.fullnameOverride` below, so this endpoint does not
-        # depend on the ArgoCD Application/Helm release name
-        # (otel-eval-tempo) the chart would otherwise derive the service
-        # name from.
-        otlpEndpoint: "tempo-distributed-distributor.observability-eval.svc.cluster.local:4317"
+        enabled: true
+        # The COMMUNITY chart, single binary. grafana/helm-charts' `tempo`
+        # and `tempo-distributed` are deprecated since January 2026; the
+        # maintained single-binary chart moved to grafana-community.
+        # Resolved 2026-10-10 from
+        # https://grafana-community.github.io/helm-charts/index.yaml
+        # (generated 2026-10-09): chart `tempo` 2.4.0 -> appVersion 2.10.8,
+        # digest sha256:fad57f9ddd7d65f46158ee3455d32b7de6b3c1e4a3ce35757d2a8c5b2eb4481b.
+        # 3.x (Tempo 3.0/3.1) exists and is deliberately not taken: this
+        # round evaluates the 2.10 line the owner approved.
+        repoURL: https://grafana-community.github.io/helm-charts
+        chart: tempo
+        targetRevision: "2.4.0"
+        # Raw manifests the chart does not ship: the ExternalSecret for the
+        # R2 credentials, Tempo's own ingress/egress NetworkPolicies and its
+        # VMServiceScrape. Resources only -- see the manifestsPath check in
+        # tests/test_otel_collector_backends_render.py.
+        manifestsPath: platform-gitops/infra-components/observability/eval/tempo
+        # Service name comes from fullnameOverride below, so it does not
+        # depend on the Helm release name (otel-eval-tempo).
+        otlpEndpoint: "tempo.observability-eval.svc.cluster.local:4317"
         insecure: true
         values:
-          fullnameOverride: tempo-distributed
-          traces:
-            otlp:
-              grpc:
-                # The collector's eval fan-out (otel-collector.yaml) sends
-                # OTLP/gRPC only. Off by chart default; every other
-                # ingestion path (Jaeger, Zipkin, OpenCensus) stays off too.
-                enabled: true
-          # Ephemeral local-disk block storage, not object storage: this is
-          # a disposable bake-off trial, not a production trace store, and
-          # `backend: local` is also the chart's own default -- stated
-          # explicitly so a later values edit cannot silently repoint this
-          # candidate at object storage without a reviewer seeing the diff.
-          storage:
-            trace:
-              backend: local
-          # One replica, not the chart's default three: a bake-off trial
-          # under the fixed quota above (persistentvolumeclaims: "4"), not
-          # an HA deployment. Replication is exactly what
-          # docs/adr/0001-rubric.yaml's `operations` dimension scores
-          # post-soak.
-          ingester:
-            replicas: 1
-            # Must match replicas above: the chart defaults
-            # ingester.config.replication_factor to 3, which a single
-            # ingester replica can never quorum-write against.
-            config:
-              replication_factor: 1
-            persistence:
-              enabled: true
-              size: 10Gi
-            # Explicit, not left at the chart's default true: zone-aware
-            # replication shards the ingester StatefulSet across zones, so
-            # even with replicas: 1 above the chart would still schedule
-            # roughly one ingester pod per zone. That silently multiplies
-            # pod and PVC usage against the fixed quota above (quota.pods
-            # now "10", tightened from "30" by this same change) -- pinned
-            # false because this bake-off trial wants exactly one ingester
-            # pod, not an HA/multi-zone deployment.
-            zoneAwareReplication:
-              enabled: false
-          # Explicitly disabled, not left at the chart's already-false
-          # default -- vmagent runs selectAllByDefault: true
-          # (monitoring.yaml:287), the #1159 double-scrape shape
-          # eval-candidates.yaml's header (lines 14-23) warns about.
-          # tempo-distributed has no separate PodMonitor toggle;
-          # ServiceMonitor is its only Prometheus-Operator integration
-          # point.
-          metaMonitoring:
-            serviceMonitor:
-              enabled: false
+          fullnameOverride: tempo
+          # Single binary (target=all): distributor, ingester, querier,
+          # query-frontend and compactor in one pod. The compactor is what
+          # enforces tempo.retention below, so it must not be split out.
+          replicas: 1
+          tempo:
+            # No phone-home; the namespace has no general internet egress
+            # anyway, only R2 (eval/tempo/networkpolicy.yaml).
+            reportingEnabled: false
+            # The chart passes -mem-ballast-size-mbs=1024 by default. A 1 GiB
+            # ballast counts as live heap for the Go GC, so with the 800MiB
+            # GOMEMLIMIT below the runtime would collect continuously. Off.
+            memBallastSizeMbs: 0
+            # block_retention, enforced by the compactor in this binary.
+            # 14 days, half the bucket's own 30-day lifecycle rule, so Tempo
+            # deletes its blocks (and its blocklist stays truthful) before
+            # the bucket expires them underneath it.
+            retention: 336h
+            # Expands ${VAR} in the rendered config from the container env.
+            # The bucket, the endpoint and the credentials all come from the
+            # tempo-r2 Secret (eval/tempo/externalsecret.yaml, Vault
+            # secret/platform/r2-tempo); none of them is in this repository.
+            extraArgs:
+              config.expand-env: "true"
+            extraEnvFrom:
+              - secretRef:
+                  name: tempo-r2
+            extraEnv:
+              # Soft limit below the 1Gi container limit: the Go runtime
+              # collects harder as it approaches this instead of letting
+              # the kernel OOM-kill the pod.
+              - name: GOMEMLIMIT
+                value: "800MiB"
+            resources:
+              requests:
+                cpu: 100m
+                memory: 512Mi
+              limits:
+                cpu: "1"
+                memory: 1Gi
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop:
+                  - ALL
+            # tempo.receivers is left at the chart default (OTLP gRPC/HTTP
+            # plus Jaeger). It cannot be narrowed through values: the
+            # chart's _ports.tpl dereferences every Jaeger and OTLP protocol
+            # key unconditionally, so nulling one fails the render. What
+            # actually reaches the pod is decided by the NetworkPolicies --
+            # 4317/4318 from `monitoring` (eval-namespace.yaml) and 3200
+            # from `monitoring` (eval/tempo/networkpolicy.yaml), nothing
+            # else -- and the collector fan-out sends OTLP/gRPC only.
+            storage:
+              trace:
+                backend: s3
+                s3:
+                  bucket: ${TEMPO_S3_BUCKET}
+                  endpoint: ${TEMPO_S3_ENDPOINT}
+                  access_key: ${TEMPO_S3_ACCESS_KEY}
+                  secret_key: ${TEMPO_S3_SECRET_KEY}
+                  # R2's S3 API takes region "auto"; path-style matches the
+                  # Loki and Argo artifact R2 clients in this repo.
+                  region: auto
+                  forcepathstyle: true
+                # The chart default `local:` block is only read by
+                # backend: local; nulled so the rendered config shows one
+                # storage backend, not two.
+                local: null
+                # WAL on the emptyDir below. It survives a container restart
+                # but not a pod deletion or reschedule: an ACCEPTED bake-off
+                # risk, see docs/runbooks/tracing-bake-off.md section 7.
+                wal:
+                  path: /var/tempo/wal
+            # Cut a block at most every 5 minutes (chart/Tempo default 30m),
+            # so a span sits in the WAL -- the part an evicted or rescheduled
+            # pod loses -- for minutes, not half an hour, before it is
+            # flushed to R2. Also what makes the synthetic proof in the
+            # runbook observable in the bucket within one sitting.
+            ingester:
+              max_block_duration: 5m
+            extraVolumeMounts:
+              - name: tempo-data
+                mountPath: /var/tempo
+          # No PVC (the namespace quota allows none). 2Gi caps the WAL plus
+          # the blocks the ingester holds before flushing to R2; past it the
+          # kubelet evicts the pod rather than filling the node's disk.
+          persistence:
+            enabled: false
+          extraVolumes:
+            - name: tempo-data
+              emptyDir:
+                sizeLimit: 2Gi
+          tempoQuery:
+            enabled: false
+          # Tempo never talks to the Kubernetes API.
+          serviceAccount:
+            automountServiceAccountToken: false
+          # Explicitly off, not left at the chart's already-false default:
+          # vmagent runs selectAllByDefault: true (monitoring.yaml:287), the
+          # #1159 double-scrape shape. The one scrape of Tempo is
+          # eval/tempo/servicescrape.yaml.
+          serviceMonitor:
+            enabled: false
 
 # Usage-writer principal for the FinOps usage ledger (mctlhq/.github#50,
 # variant B): service:mctl-agents-usage, which may only append usage records

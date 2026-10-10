@@ -1,0 +1,31 @@
+# The ONE scrape of the Tempo bake-off candidate (#1280). The chart's own
+# serviceMonitor is explicitly disabled in bootstrap/values.yaml, because
+# vmagent runs selectAllByDefault: true (monitoring.yaml:287) and would pick a
+# chart-rendered ServiceMonitor up as well -- the #1159 double-scrape.
+#
+# The chart renders two Services with identical selector labels, `tempo` and
+# `tempo-headless`; selecting both would scrape the one pod twice. The
+# headless one carries prometheus.io/service-monitor: "false", so the
+# DoesNotExist expression keeps exactly one target. Port by NAME
+# (tempo-prom-metrics, :3200), see pushgateway/servicescrape.yaml for why.
+#
+# job="tempo" (the Service name, the operator's default jobLabel) is what
+# vm-rules/tempo-eval-alerts.yaml matches on.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: tempo
+  namespace: observability-eval
+spec:
+  namespaceSelector:
+    matchNames:
+      - observability-eval
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+    matchExpressions:
+      - key: prometheus.io/service-monitor
+        operator: DoesNotExist
+  endpoints:
+    - port: tempo-prom-metrics
+      path: /metrics

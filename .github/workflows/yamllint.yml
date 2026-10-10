@@ -41,7 +41,9 @@ jobs:
           # (both checked). helm-charts/ is excluded wholesale for this; the
           # named files are the ones outside it that lead with a directive —
           # the two prod placeholders, the two issue-903 evaluation
-          # templates, the .github#50 usage-writer ExternalSecret, whose
+          # templates, the #1280 Tempo (eval) datasource (a template
+          # comment, so the eval-off render emits no document), the
+          # .github#50 usage-writer ExternalSecret, whose
           # entire body sits inside an `{{- if }}` gate, and the argocd chart's
           # argocd-rbac-cm template (gitops#1431), which leads with a template
           # comment and the `$rbac` binding.
@@ -56,6 +58,7 @@ jobs:
             platform-gitops/bootstrap/templates/projects/project-prod.yaml
             platform-gitops/bootstrap/templates/observability/eval-namespace.yaml
             platform-gitops/bootstrap/templates/observability/eval-candidates.yaml
+            platform-gitops/bootstrap/templates/observability/tempo-datasource.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-evidence-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-registry-publisher.yaml
