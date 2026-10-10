@@ -873,6 +873,72 @@ spec:
           prometheusOperator:
             enabled: true # Keep operator to manage CRDs (ServiceMonitors, VMAlerts)
 
+          # Drop apiserver/etcd histogram buckets that nothing reads (#1772).
+          # They were ~22% of vmsingle's active series while it ran at ~1.6Gi
+          # of its 2Gi limit.
+          #
+          # `endpoints` is a list, and Helm replaces lists rather than merging
+          # them, so the chart's (0.72.5) default endpoint is restated in full
+          # here. Only metricRelabelConfigs is new. If you bump the chart,
+          # compare this endpoint with its kubeApiServer.vmScrape default.
+          #
+          # This is an explicit list of names on purpose: no regex such as
+          # `apiserver_.*_bucket`. A family that is not listed is still
+          # stored, so a dashboard added later does not lose data without
+          # anyone noticing. Only `_bucket` is dropped. `_sum` and `_count`
+          # stay, because the API Server dashboard reads
+          # apiserver_request_duration_seconds_sum/_count.
+          #
+          # DO NOT add these two. Enabled default rules read them:
+          #   apiserver_request_sli_duration_seconds_bucket
+          #     kube-apiserver-burnrate.rules (apiserver_request:burnrate*,
+          #     which KubeAPIErrorBudgetBurn reads),
+          #     kube-apiserver-availability.rules, and
+          #     kube-apiserver-histogram.rules
+          #   apiserver_client_certificate_expiration_seconds_bucket
+          #     KubeClientCertificateExpiration
+          # Before you add a name to this list, grep for it in
+          # infra-components/observability/{vm-rules,grafana-dashboards} and
+          # in the chart's enabled default rules and dashboards.
+          kubeApiServer:
+            vmScrape:
+              spec:
+                endpoints:
+                  - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+                    port: https
+                    scheme: https
+                    tlsConfig:
+                      caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                      serverName: kubernetes
+                    metricRelabelConfigs:
+                      - action: drop
+                        sourceLabels: [__name__]
+                        # A list: VictoriaMetrics joins the items with `|` and anchors
+                        # the result, so each entry matches one metric name exactly.
+                        regex:
+                          - apiserver_request_duration_seconds_bucket
+                          - apiserver_request_slo_duration_seconds_bucket
+                          - apiserver_response_sizes_bucket
+                          - apiserver_request_body_size_bytes_bucket
+                          - apiserver_watch_events_sizes_bucket
+                          - apiserver_watch_list_duration_seconds_bucket
+                          - apiserver_watch_cache_read_wait_seconds_bucket
+                          - apiserver_request_filter_duration_seconds_bucket
+                          - apiserver_admission_controller_admission_duration_seconds_bucket
+                          - apiserver_admission_step_admission_duration_seconds_bucket
+                          - apiserver_admission_webhook_admission_duration_seconds_bucket
+                          - apiserver_crd_conversion_webhook_duration_seconds_bucket
+                          - apiserver_flowcontrol_request_wait_duration_seconds_bucket
+                          - apiserver_flowcontrol_request_execution_seconds_bucket
+                          - apiserver_flowcontrol_request_queue_length_after_enqueue_bucket
+                          - apiserver_flowcontrol_work_estimated_seats_bucket
+                          - apiserver_flowcontrol_watch_count_samples_bucket
+                          - apiserver_flowcontrol_priority_level_request_utilization_bucket
+                          - apiserver_flowcontrol_priority_level_seat_utilization_bucket
+                          - apiserver_flowcontrol_read_vs_write_current_requests_bucket
+                          - apiserver_flowcontrol_demand_seats_bucket
+                          - etcd_request_duration_seconds_bucket
+
           kubeControllerManager:
             enabled: false
           kubeEtcd:
