@@ -77,4 +77,10 @@ externalSecret:
 envFrom:
   - secretRef:
       name: coolify-mcp-secrets
+  # "Log in with MCTL account" (ZITADEL), mctl-gitops#1500 phase 6.3. The
+  # zitadel-iac Job writes the four ZITADEL_* keys (docs/runbooks/zitadel.md,
+  # "Labs apps sign-in"). Removing this entry turns the button off again.
+  - secretRef:
+      name: coolify-mcp-oidc-zitadel
+      optional: true
 extraContainers: []
