@@ -150,6 +150,9 @@ The namespace quota is sized for this one pod plus headroom for a rollout:
    `mctlhq/mctl-agents#195`, or `otel.enabled` on a base-service release)
    is its own change with its own review, and must be recorded on #1280 as
    an amendment to the declared volume **before** it lands, never after.
+   The one recorded so far is the ADR's "Producer amendment: DevLoop
+   traces": the `mctl-agents` DevLoop only, capped at 500,000 spans for the
+   window, with a stop rule.
 
 ## 5. Declare the soak — before any measurement
 
@@ -162,7 +165,8 @@ before the first measurement:
   default parameters (10 executions of `devloop-trace.json`, 2 traces and 24
   spans each, so about 240 spans per submission), submitted once for the
   proof and then at most once a day — under 5,000 spans for the whole
-  window. Real producer traffic: none.
+  window. Real producer traffic: none, until the ADR's "Producer amendment:
+  DevLoop traces" (the `mctl-agents` DevLoop only, at most 500,000 spans).
 
 A soak whose length or volume is chosen after looking at the data is not a
 measurement. A change to either is a recorded amendment with a reason,
