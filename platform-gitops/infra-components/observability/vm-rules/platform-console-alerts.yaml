@@ -1,0 +1,47 @@
+# Availability of the operator-facing consoles (blackbox/vmprobes.yaml, job
+# platform-consoles). Warning, not critical: none of them is a public front
+# door (that is PublicEndpointDown). Routed to Telegram only in
+# bootstrap/templates/observability/monitoring.yaml, because agent.mctl.ai is
+# mctl-agent itself and the others are outages mctl-agent cannot fix.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-platform-console-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: availability
+spec:
+  groups:
+    - name: mctl.platform-consoles
+      interval: 60s
+      rules:
+        - alert: PlatformConsoleDown
+          # Five consecutive failed probes at a 60s interval: rides out a
+          # normal rolling deploy.
+          expr: probe_success{job="platform-consoles"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: platform
+          annotations:
+            summary: "console {{ $labels.instance }} is down"
+            description: >-
+              {{ $labels.instance }} has not answered 2xx for 5 minutes. Check
+              probe_http_status_code, then the pod or Argo CD Application behind
+              the host (app: mctl-portal, docs: mctl-docs, ops: argocd-server,
+              grafana: monitoring, agent: mctl-agent).
+
+        - alert: PlatformConsoleProbeAbsent
+          # Without the series PlatformConsoleDown can never fire.
+          expr: absent(probe_success{job="platform-consoles"})
+          for: 15m
+          labels:
+            severity: warning
+            service: platform
+          annotations:
+            summary: "No probe_success series for job=platform-consoles"
+            description: >-
+              The platform-consoles VMProbe produces no data, so
+              PlatformConsoleDown cannot fire. Check the VMProbe in
+              observability/blackbox/vmprobes.yaml and vmagent targets.

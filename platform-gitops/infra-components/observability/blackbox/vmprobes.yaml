@@ -190,3 +190,34 @@ spec:
     staticConfig:
       targets:
         - https://api.mctl.ai/healthz
+---
+# The operator-facing consoles. Before this none of them was probed, so an
+# outage (the 2026-10-10 portal deploy outage) was noticed by a person. One job
+# for all five: they share severity, `for` and route
+# (vm-rules/platform-console-alerts.yaml), and `instance` names the host. Each
+# path is a real health endpoint that answers without a login, not a redirect
+# to a sign-in page:
+#   app.mctl.ai      Backstage readiness, the same path its pod probes use.
+#   docs.mctl.ai     the static site root.
+#   ops.mctl.ai      argocd-server /healthz, served unauthenticated.
+#   grafana.mctl.ai  /api/health, served unauthenticated.
+#   agent.mctl.ai    mctl-agent liveness /healthz.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: platform-consoles
+  namespace: monitoring
+spec:
+  jobName: platform-consoles
+  interval: 60s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://app.mctl.ai/.backstage/health/v1/readiness
+        - https://docs.mctl.ai/
+        - https://ops.mctl.ai/healthz
+        - https://grafana.mctl.ai/api/health
+        - https://agent.mctl.ai/healthz
