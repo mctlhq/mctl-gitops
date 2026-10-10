@@ -75,11 +75,21 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
 
           echo "Validating tenant: $TENANT"
+
+          # Format check: grep matches per line, so a multi-line value is refused first.
+          if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            echo "ERROR: Tenant name is invalid; must match ^[a-z0-9][a-z0-9-]{1,62}$"
+            exit 1
+          fi
 
           # BEGIN tenant-ns-guard
           tenant_name_reserved() {   # $1 = name; returns 0 if reserved

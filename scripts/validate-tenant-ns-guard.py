@@ -80,7 +80,7 @@ def check_called(path, name):
     errs = []
     if not re.search(r"\btenant_name_reserved\s+\"", text):
         errs.append(f"{name}: tenant_name_reserved is defined but never called")
-    if name != "wft-delete-tenant.yaml" and not re.search(r"\$\(\s*tenant_ns_owner_state\s", text):
+    if not re.search(r"\$\(\s*tenant_ns_owner_state\s", text):
         errs.append(f"{name}: tenant_ns_owner_state is defined but never called")
     return errs
 
@@ -104,15 +104,23 @@ def check_repo():
 
 
 def selftest():
+    errs = []
+    # check_called must fire when a template defines but never calls the helpers.
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "m.yaml")
+        with open(p, "w") as f:
+            f.write("# BEGIN tenant-ns-guard\ntenant_name_reserved() { :; }\ntenant_ns_owner_state() { :; }\n# END tenant-ns-guard\n")
+        if len(check_called(p, "m.yaml")) != 2:
+            errs.append("selftest: check_called did not catch uncalled helpers")
+
     good = extract(os.path.join(CT, FILES[0]))[0]
     if check_block(good):
-        return ["selftest: pristine block unexpectedly fails: %s" % check_block(good)]
+        return errs + ["selftest: pristine block unexpectedly fails: %s" % check_block(good)]
     mutants = {
         "dropped *-system pattern": good.replace("*-system|", ""),
         "dropped temporal": good.replace("temporal|", ""),
         "ignored kubectl exit code": good.replace("|| return 2", ""),
     }
-    errs = []
     for name, m in mutants.items():
         if m == good or not check_block(m):
             errs.append(f"selftest: checker did not catch mutant '{name}'")
