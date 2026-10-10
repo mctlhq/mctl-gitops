@@ -2,8 +2,9 @@
 # existed, adopted so that cloudflare-drift sees them (#1089 decided their
 # fate on 2026-09-09; this is the import). Every field is the live value, read
 # on 2026-10-10 from GET /accounts/{account_id}/access/apps/{id} and
-# /access/policies/{id}, with ONE deliberate change, called out below on
-# `media`.
+# /access/policies/{id}, with ONE deliberate change at import, called out
+# below on `media`. Since then both applications moved from Google to ZITADEL
+# (see "Applications" below).
 #
 # Out of scope here: the tunnel, DNS records and cache ruleset behind
 # jellyfin.mctl.ai and media.mctl.ai belong to mashkovd/mac-mini-infra (see
@@ -15,8 +16,8 @@
 # --- Reusable policies -------------------------------------------------------
 
 # Admits any identity the account's Google provider asserts
-# (var.projects_mcp_google_idp_id, declared in projects-mcp.tf). Shared by the
-# applications below and the App Launcher. Who that is, is decided by the
+# (var.projects_mcp_google_idp_id, declared in projects-mcp.tf). Used by the
+# App Launcher; the applications below no longer reference it. Who that is, is decided by the
 # Google provider, not by this policy: the include names a login method,
 # not a list of users.
 import {
@@ -64,10 +65,20 @@ resource "cloudflare_zero_trust_access_policy" "seerrsense_service_token" {
 }
 
 # --- Applications --------------------------------------------------------------
+#
+# Both applications admit ZITADEL logins only, through the shared
+# `zitadel_access_role` policy (portal-zitadel.tf): a user gets past ZITADEL
+# only with the `access` role of the `Cloudflare Access` project, which the
+# platform admins hold. They used to admit the `google` policy above, i.e. any
+# Google account, which made both effectively public behind a login. Access
+# request logs for the 90 days before the switch (2026-10-10) show no human
+# sign-in to either application, only seerrsense's service token on `media`.
+# There is no break-glass here, unlike the MCP portal: if ZITADEL is down,
+# media and Jellyfin are unreachable from outside, which is acceptable.
 
 # Seerr (Overseerr) at media.mctl.ai, #1089 decision 1.
 #
-# THE ONE CHANGE IN THIS FILE: live, this application points at
+# THE ONE CHANGE AT IMPORT: live, this application points at
 # 1media.mctl.ai -- moved there on 2026-09-12 as a test and never moved back,
 # which left media.mctl.ai itself without Access in front of it. The import
 # plans an in-place update back to media.mctl.ai. seerrsense already sends
@@ -91,7 +102,9 @@ resource "cloudflare_zero_trust_access_application" "media" {
     },
   ]
 
-  allowed_idps               = [var.projects_mcp_google_idp_id]
+  # ZITADEL only (see the note above `media`): the Google door admitted any
+  # Google account at all.
+  allowed_idps               = [cloudflare_zero_trust_access_identity_provider.zitadel.id]
   app_launcher_visible       = true
   auto_redirect_to_identity  = false
   session_duration           = "24h"
@@ -100,7 +113,7 @@ resource "cloudflare_zero_trust_access_application" "media" {
   options_preflight_bypass   = false
 
   policies = [
-    { id = cloudflare_zero_trust_access_policy.google.id, precedence = 1 },
+    { id = cloudflare_zero_trust_access_policy.zitadel_access_role.id, precedence = 1 },
     { id = cloudflare_zero_trust_access_policy.seerrsense_service_token.id, precedence = 2 },
   ]
 }
@@ -123,7 +136,7 @@ resource "cloudflare_zero_trust_access_application" "jellyfin" {
     },
   ]
 
-  allowed_idps               = [var.projects_mcp_google_idp_id]
+  allowed_idps               = [cloudflare_zero_trust_access_identity_provider.zitadel.id]
   app_launcher_visible       = true
   auto_redirect_to_identity  = false
   session_duration           = "24h"
@@ -132,6 +145,6 @@ resource "cloudflare_zero_trust_access_application" "jellyfin" {
   options_preflight_bypass   = false
 
   policies = [
-    { id = cloudflare_zero_trust_access_policy.google.id, precedence = 1 },
+    { id = cloudflare_zero_trust_access_policy.zitadel_access_role.id, precedence = 1 },
   ]
 }
