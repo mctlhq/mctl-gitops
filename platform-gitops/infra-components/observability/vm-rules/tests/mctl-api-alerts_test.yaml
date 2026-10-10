@@ -54,11 +54,12 @@ tests:
               description: >-
                 blackbox-exporter has had no 2xx from https://api.mctl.ai/healthz
                 for 3 minutes. A 503 with an empty body is Traefik with no Ready
-                endpoint: check `kubectl -n mctl-api get pods` and the pod's
-                `readyz probe failed` log lines, which name the failing
-                dependency (gitops, postgres, dex, vault). A pod that is Running
-                but not Ready recovers with
-                `kubectl -n mctl-api rollout restart deploy/mctl-api`.
+                endpoint: check `kubectl -n mctl-api get pods` and the `checks`
+                field of the pod's GET /readyz body. Only pod-local conditions
+                make a pod unready (stores=init_failed, gitops_sync=never_synced,
+                shutdown=draining); a shared dependency outage shows up in
+                MctlApiDependencyDown instead. A pod with stores=init_failed
+                recovers with `kubectl -n mctl-api rollout restart deploy/mctl-api`.
 
   - interval: 1m
     name: an outage fires critical once Ready less than half of 10m for 5m
@@ -89,10 +90,10 @@ tests:
                 fewer than 0.5 available replicas over the last ten minutes, so
                 Traefik has been answering api.mctl.ai with "no available
                 server" most of that time. Look at `kubectl -n mctl-api describe
-                pod` for the readiness probe result and at the pod log for
-                `readyz probe failed`; the `check` field names the dependency. A
-                restart of the deployment clears a pod that is stuck
-                Running-but-unready.
+                pod` for the readiness probe result and at the `checks` field of
+                GET /readyz: stores=init_failed clears only with a restart of the
+                deployment, gitops_sync=never_synced means the checkout cannot
+                clone, shutdown=draining means the pod is terminating.
 
   - interval: 1m
     name: a one-minute return to Ready inside a long outage does not clear the alert
@@ -119,10 +120,10 @@ tests:
                 fewer than 0.5 available replicas over the last ten minutes, so
                 Traefik has been answering api.mctl.ai with "no available
                 server" most of that time. Look at `kubectl -n mctl-api describe
-                pod` for the readiness probe result and at the pod log for
-                `readyz probe failed`; the `check` field names the dependency. A
-                restart of the deployment clears a pod that is stuck
-                Running-but-unready.
+                pod` for the readiness probe result and at the `checks` field of
+                GET /readyz: stores=init_failed clears only with a restart of the
+                deployment, gitops_sync=never_synced means the checkout cannot
+                clone, shutdown=draining means the pod is terminating.
       - eval_time: 21m
         alertname: MctlApiNoReadyReplicas
         exp_alerts:
@@ -138,10 +139,10 @@ tests:
                 fewer than 0.5 available replicas over the last ten minutes, so
                 Traefik has been answering api.mctl.ai with "no available
                 server" most of that time. Look at `kubectl -n mctl-api describe
-                pod` for the readiness probe result and at the pod log for
-                `readyz probe failed`; the `check` field names the dependency. A
-                restart of the deployment clears a pod that is stuck
-                Running-but-unready.
+                pod` for the readiness probe result and at the `checks` field of
+                GET /readyz: stores=init_failed clears only with a restart of the
+                deployment, gitops_sync=never_synced means the checkout cannot
+                clone, shutdown=draining means the pod is terminating.
       - eval_time: 25m
         alertname: MctlApiNoReadyReplicas
         exp_alerts:
@@ -157,10 +158,10 @@ tests:
                 fewer than 0.5 available replicas over the last ten minutes, so
                 Traefik has been answering api.mctl.ai with "no available
                 server" most of that time. Look at `kubectl -n mctl-api describe
-                pod` for the readiness probe result and at the pod log for
-                `readyz probe failed`; the `check` field names the dependency. A
-                restart of the deployment clears a pod that is stuck
-                Running-but-unready.
+                pod` for the readiness probe result and at the `checks` field of
+                GET /readyz: stores=init_failed clears only with a restart of the
+                deployment, gitops_sync=never_synced means the checkout cannot
+                clone, shutdown=draining means the pod is terminating.
 
   - interval: 1m
     name: a pod flapping Ready one minute in four still fires
@@ -186,10 +187,10 @@ tests:
                 fewer than 0.5 available replicas over the last ten minutes, so
                 Traefik has been answering api.mctl.ai with "no available
                 server" most of that time. Look at `kubectl -n mctl-api describe
-                pod` for the readiness probe result and at the pod log for
-                `readyz probe failed`; the `check` field names the dependency. A
-                restart of the deployment clears a pod that is stuck
-                Running-but-unready.
+                pod` for the readiness probe result and at the `checks` field of
+                GET /readyz: stores=init_failed clears only with a restart of the
+                deployment, gitops_sync=never_synced means the checkout cannot
+                clone, shutdown=draining means the pod is terminating.
 
   - interval: 1m
     name: a single container restart does not fire
@@ -266,7 +267,7 @@ tests:
                 it asks for over the last 15 minutes. The API still answers on
                 the remaining replica, but one more failure takes it down. Look
                 at `kubectl -n mctl-api get pods -o wide` for the pod that is
-                not Ready and at its `readyz probe failed` log lines.
+                not Ready and at the `checks` field of its GET /readyz body.
       - eval_time: 45m
         alertname: MctlApiNoReadyReplicas
         exp_alerts: []
@@ -294,4 +295,47 @@ tests:
                 it asks for over the last 15 minutes. The API still answers on
                 the remaining replica, but one more failure takes it down. Look
                 at `kubectl -n mctl-api get pods -o wide` for the pod that is
-                not Ready and at its `readyz probe failed` log lines.
+                not Ready and at the `checks` field of its GET /readyz body.
+
+  - interval: 1m
+    name: a dependency down on every replica fires after 5m
+    input_series:
+      - series: 'mctl_api_dependency_up{namespace="mctl-api",pod="mctl-api-a",check="vault"}'
+        values: '1x5 0x20'
+      - series: 'mctl_api_dependency_up{namespace="mctl-api",pod="mctl-api-b",check="vault"}'
+        values: '1x5 0x20'
+      - series: 'mctl_api_dependency_up{namespace="mctl-api",pod="mctl-api-a",check="postgres"}'
+        values: '1x25'
+      - series: 'mctl_api_dependency_up{namespace="mctl-api",pod="mctl-api-b",check="postgres"}'
+        values: '1x25'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MctlApiDependencyDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: MctlApiDependencyDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-api
+              check: vault
+            exp_annotations:
+              summary: mctl-api dependency vault has been down for 5 minutes
+              description: >-
+                Every mctl-api replica has failed its vault probe
+                for 5 minutes. The pods stay Ready and keep serving, so requests
+                that need vault fail while the rest of the API
+                works. The pod log line `readyz probe failed` with
+                check=vault carries the error.
+
+  - interval: 1m
+    name: a dependency down on one replica only does not fire
+    input_series:
+      - series: 'mctl_api_dependency_up{namespace="mctl-api",pod="mctl-api-a",check="vault"}'
+        values: '0x25'
+      - series: 'mctl_api_dependency_up{namespace="mctl-api",pod="mctl-api-b",check="vault"}'
+        values: '1x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MctlApiDependencyDown
+        exp_alerts: []
