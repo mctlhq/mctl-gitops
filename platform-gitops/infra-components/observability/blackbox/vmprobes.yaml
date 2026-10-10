@@ -140,12 +140,40 @@ spec:
         # healthy API with a dead login page still means nobody can sign in.
         - https://auth.mctl.ai/ui/v2/login/healthy
 ---
-# Tenant erpact: four sites on the shared bench and the control site, a
-# non-production environment.
+# Tenant erpact: every site, discovered from the Ingresses in namespace erpact
+# rather than listed here (#1773, audit finding OBS-012). The sites are created
+# by ERPact's site deployer, which commits them to the private Forgejo
+# repository git.mctl.ai/erpact/mctl-apps (bootstrap/templates/erpact/
+# applications.yaml); nothing in this repository learns about a new one. The
+# hand-kept list that used to be here had fallen three active sites behind,
+# and a site made by mctl_erpact_create_site was never added. An Ingress is the
+# one thing every site must have to be reachable at all, so following them
+# gives a new site its probe on the next service-discovery refresh and drops a
+# deleted site's probe with it, with no edit here.
+#
+# `ingress`, not the newer `kubernetes: [{role: ingress}]`: operator v0.68
+# (chart 0.72.5) accepts both, but the CRD schema kubeconform validates against
+# in CI knows only the older field, the same reason this file still uses
+# `staticConfig` rather than `static`. Both move together when the operator
+# reaches v0.71, which removes them.
+#
+# The keep rule repeats externalManifestNamespaces.erpact.hostPattern from
+# bootstrap/values.yaml, which the admission policy already enforces on every
+# Ingress host in erpact. Restating it here means the probe can only ever go to
+# an erpact-*.mctl.ai name, whatever the tenant's repository writes. Every
+# Ingress host in erpact is taken to be a Frappe site: a non-site Ingress added
+# there later would fail /api/method/ping and needs a drop rule here.
+#
 # /api/method/ping is Frappe's unauthenticated liveness endpoint; it answers
 # 200 only when nginx, gunicorn and the site's database all work, so it covers
-# the whole bench, not just the ingress. The erpact Grafana dashboard reads
-# job=~"erpact-.*"; alerts are in vm-rules/erpact-alerts.yaml.
+# the whole bench, not just the ingress. The target URL is rebuilt from the
+# host alone, so a site Ingress with several paths (or two Ingresses for one
+# host) still yields one target, and the `ingress` label the operator adds is
+# dropped for the same reason: one series per site. The operator also adds
+# namespace="erpact", which makes these series visible to the tenant's own
+# Grafana org (grafana-tenants/vmuser-erpact.yaml filters on it). The erpact
+# Grafana dashboard reads job=~"erpact-.*"; alerts are in
+# vm-rules/erpact-alerts.yaml.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMProbe
 metadata:
@@ -158,13 +186,24 @@ spec:
   vmProberSpec:
     url: blackbox-exporter.monitoring.svc.cluster.local:9115
   targets:
-    staticConfig:
-      targets:
-        - https://erpact-11112025.mctl.ai/api/method/ping
-        - https://erpact-25092026.mctl.ai/api/method/ping
-        - https://erpact-bar2.mctl.ai/api/method/ping
-        - https://erpact-01102026.mctl.ai/api/method/ping
-        - https://erpact-control.mctl.ai/api/method/ping
+    ingress:
+      namespaceSelector:
+        matchNames:
+          - erpact
+      relabelingConfigs:
+        - sourceLabels: [__meta_kubernetes_ingress_host]
+          regex: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai'
+          action: keep
+        - sourceLabels: [__meta_kubernetes_ingress_host]
+          targetLabel: __param_target
+          replacement: https://${1}/api/method/ping
+        # Redundant with operator v0.68, which copies __param_target into
+        # instance after these rules; stated so that the one-series-per-site
+        # identity does not depend on that ordering.
+        - sourceLabels: [__param_target]
+          targetLabel: instance
+        - regex: ingress
+          action: labeldrop
 ---
 # mctl-api through the edge. On 2026-10-09 the single mctl-api pod lost
 # readiness at 07:23Z (its /readyz Vault check timed out from inside the pod
@@ -190,3 +229,44 @@ spec:
     staticConfig:
       targets:
         - https://api.mctl.ai/healthz
+---
+# The platform's web entry points that had no probe (#1773, audit finding
+# OBS-003): the developer portal, the docs, Argo CD, Grafana and mctl-agent.
+# On 2026-10-10 the portal's own readiness probes timed out during the 09:51Z
+# deploy and nothing outside the cluster recorded it. One job for all five,
+# because they share one alert (PlatformWebEndpointDown in
+# vm-rules/platform-web-alerts.yaml, routed to Telegram) and the instance label
+# already names which one is down.
+#
+# Each target is an endpoint that answers without a session, so a healthy
+# service is a 2xx and not a login page:
+#   - app.mctl.ai: Backstage's root readiness check, the same path the pod's
+#     startup, liveness and readiness probes use (mctl-platform/
+#     mctl-portal.yaml). It answers 503 while the backend is starting or
+#     shutting down, which is the outage this exists for.
+#   - docs.mctl.ai: a static site (services/admins/mctl-docs); the page itself.
+#   - ops.mctl.ai: Argo CD server's /healthz, the path its own probes use.
+#   - grafana.mctl.ai: /api/health, which needs no session and answers non-2xx
+#     when Grafana cannot reach its database (shared-pg).
+#   - agent.mctl.ai: mctl-agent's liveness path. Liveness rather than /readyz
+#     for the reason mctl-api-healthz gives: Traefik only routes to Ready
+#     endpoints, so an unready pod fails this probe just as it fails callers.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: platform-web
+  namespace: monitoring
+spec:
+  jobName: platform-web
+  interval: 60s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://app.mctl.ai/.backstage/health/v1/readiness
+        - https://docs.mctl.ai/
+        - https://ops.mctl.ai/healthz
+        - https://grafana.mctl.ai/api/health
+        - https://agent.mctl.ai/healthz

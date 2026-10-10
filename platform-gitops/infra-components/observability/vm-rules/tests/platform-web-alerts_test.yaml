@@ -1,0 +1,109 @@
+# Unit tests for platform-web-alerts.yaml (group platform.web.availability).
+# rule_files is resolved relative to this file; generated/ is produced by
+# scripts/check-vm-rules.sh.
+rule_files:
+  - generated/platform-web-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: healthy endpoints stay quiet
+    input_series:
+      - series: 'probe_success{job="platform-web",instance="https://app.mctl.ai/.backstage/health/v1/readiness"}'
+        values: '1x30'
+      - series: 'probe_success{job="platform-web",instance="https://grafana.mctl.ai/api/health"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: PlatformWebEndpointDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: PlatformWebEndpointProbeAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: four failed probes stay under the 5m threshold
+    input_series:
+      - series: 'probe_success{job="platform-web",instance="https://app.mctl.ai/.backstage/health/v1/readiness"}'
+        values: '1 1 0 0 0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: PlatformWebEndpointDown
+        exp_alerts: []
+
+  - interval: 1m
+    name: an endpoint down for more than 5m fires a warning naming only it
+    input_series:
+      - series: 'probe_success{job="platform-web",instance="https://app.mctl.ai/.backstage/health/v1/readiness"}'
+        values: '1 1 0x18'
+      - series: 'probe_success{job="platform-web",instance="https://docs.mctl.ai/"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PlatformWebEndpointDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: platform
+              job: platform-web
+              instance: https://app.mctl.ai/.backstage/health/v1/readiness
+            exp_annotations:
+              summary: https://app.mctl.ai/.backstage/health/v1/readiness has failed its availability probe for 5 minutes
+              description: >-
+                blackbox-exporter has had no 2xx from https://app.mctl.ai/.backstage/health/v1/readiness for
+                5 minutes. The probe goes out through Cloudflare and back through
+                Traefik, so a pod that is not Ready, a broken ingress route, an
+                expired certificate and an edge failure all look the same here.
+                Check probe_http_status_code for the same instance: a 503 with an
+                empty body is Traefik with no Ready endpoint (look at the pods'
+                readiness in the service's namespace: backstage, admins, argocd
+                or monitoring), a 403 is the edge refusing the probe, and a 5xx
+                from the service itself names it.
+
+  - interval: 1m
+    name: other probe jobs failing do not fire it
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '0x20'
+      - series: 'probe_success{job="platform-web",instance="https://ops.mctl.ai/healthz"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PlatformWebEndpointDown
+        exp_alerts: []
+
+  - interval: 1m
+    name: a failing probe is not an absent probe
+    input_series:
+      - series: 'probe_success{job="platform-web",instance="https://agent.mctl.ai/healthz"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: PlatformWebEndpointProbeAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: no platform-web series fires the absence alert after 15m
+    input_series:
+      - series: 'probe_success{job="platform-public",instance="https://mctl.ai/"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PlatformWebEndpointProbeAbsent
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PlatformWebEndpointProbeAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: platform
+              job: platform-web
+            exp_annotations:
+              summary: No probe_success series for job=platform-web
+              description: >-
+                The platform-web VMProbe (infra-components/observability/
+                blackbox/vmprobes.yaml) has produced no probe_success series for
+                15 minutes, so PlatformWebEndpointDown is blind. Check that the
+                VMProbe exists, that vmagent picked it up, and that
+                blackbox-exporter is running.
