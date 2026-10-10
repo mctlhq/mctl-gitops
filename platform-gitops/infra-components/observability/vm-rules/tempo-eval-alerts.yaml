@@ -158,7 +158,11 @@ spec:
           # The collector side of the same pipe: spans otel-collector could
           # not hand to Tempo (unreachable, refused, timed out) after its
           # retries. Covers Tempo being down or scaled to zero.
-          expr: sum(increase(otelcol_exporter_send_failed_spans{exporter="otlp/eval-tempo"}[2m])) > 0
+          # The collector's own telemetry labels this exporter by its
+          # resolved type, otlp_grpc/eval-tempo, not by the config ID
+          # otlp/eval-tempo; the regex matches both so a collector upgrade
+          # that changes the alias cannot silently blind the rule.
+          expr: sum(increase(otelcol_exporter_send_failed_spans{exporter=~"otlp(_grpc)?/eval-tempo"}[2m])) > 0
           for: 5m
           labels:
             severity: warning
@@ -166,7 +170,7 @@ spec:
           annotations:
             summary: "otel-collector is failing to export spans to Tempo (bake-off)"
             description: >-
-              otelcol_exporter_send_failed_spans{exporter="otlp/eval-tempo"}
+              otelcol_exporter_send_failed_spans{exporter=~"otlp(_grpc)?/eval-tempo"}
               has been increasing for 5 minutes. Expected during the runbook's
               producer-isolation test (Tempo scaled to zero); otherwise check
               the tempo pod and TempoEvalIngestRefused.
@@ -174,7 +178,7 @@ spec:
         - alert: TempoEvalCollectorDroppedSpans
           # The exporter's sending_queue was full, so the collector dropped
           # the batch instead of queueing it (docs/runbooks/otel-collector.md).
-          expr: sum(increase(otelcol_exporter_enqueue_failed_spans{exporter="otlp/eval-tempo"}[2m])) > 0
+          expr: sum(increase(otelcol_exporter_enqueue_failed_spans{exporter=~"otlp(_grpc)?/eval-tempo"}[2m])) > 0
           for: 5m
           labels:
             severity: warning
@@ -182,7 +186,7 @@ spec:
           annotations:
             summary: "otel-collector is dropping spans bound for Tempo (bake-off)"
             description: >-
-              otelcol_exporter_enqueue_failed_spans{exporter="otlp/eval-tempo"}
+              otelcol_exporter_enqueue_failed_spans{exporter=~"otlp(_grpc)?/eval-tempo"}
               has been increasing for 5 minutes: the export queue to Tempo is
               full and new batches are dropped. Tempo is slow or unreachable.
 
