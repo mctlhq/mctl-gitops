@@ -35,25 +35,26 @@ func authStatus(w io.Writer) error {
 		return err
 	}
 	if os.Getenv("MCTL_TOKEN") != "" {
-		return tokenStatus(w, "MCTL_TOKEN", false)
+		return tokenStatus(w, "MCTL_TOKEN")
 	}
 	switch mode {
 	case auth.ModeZitadel:
 		return zitadelStatus(w)
 	case auth.ModeGitHub:
-		return tokenStatus(w, "GitHub token, MCTL_AUTH=github", false)
+		return tokenStatus(w, "GitHub token, MCTL_AUTH=github, deprecated")
 	}
 	_, expiry, err := auth.APILoginInfo()
 	if err == nil {
 		return apiStatus(w, expiry)
 	}
-	// Only "no sign-in" continues to the GitHub token; a sign-in that
-	// cannot be read is reported as such.
 	if !errors.Is(err, auth.ErrNoAPILogin) {
 		fmt.Fprintln(w, "❌ The stored sign-in could not be read")
 		return err
 	}
-	return tokenStatus(w, "GitHub token", true)
+	// No sign-in is not answered with the GitHub token: that is used only
+	// when MCTL_AUTH=github asks for it (mctlhq/mctl-api#525).
+	fmt.Fprintln(w, "❌ Not signed in. Run 'mctl auth login' to sign in with your MCTL account.")
+	return err
 }
 
 type whoami struct {
@@ -64,7 +65,7 @@ type whoami struct {
 
 // tokenStatus covers the credentials that are not a stored sign-in:
 // MCTL_TOKEN and the GitHub token. source names which one for the reader.
-func tokenStatus(w io.Writer, source string, suggestLogin bool) error {
+func tokenStatus(w io.Writer, source string) error {
 	token, err := auth.GetToken()
 	if err != nil {
 		fmt.Fprintln(w, "❌ Not authenticated")
@@ -76,9 +77,6 @@ func tokenStatus(w io.Writer, source string, suggestLogin bool) error {
 		return err
 	}
 	fmt.Fprintf(w, "✅ Authenticated to %s as %s (%s; groups: %v, admin: %v)\n", GetAPIURL(), who.ID, source, who.Groups, who.IsAdmin)
-	if suggestLogin {
-		fmt.Fprintln(w, "   Run 'mctl auth login' to sign in with your MCTL account instead.")
-	}
 	return nil
 }
 
@@ -115,7 +113,7 @@ func warnNoAccess(w io.Writer, who whoami) {
 	}
 	fmt.Fprintln(w, "⚠️  This sign-in has no team access, so deploy, status and logs will be refused.")
 	fmt.Fprintf(w, "   If you signed in with ZITADEL, link it to your existing account at %s/identity/link/zitadel\n", GetAPIURL())
-	fmt.Fprintln(w, "   Until then, MCTL_AUTH=github uses your GitHub token.")
+	fmt.Fprintln(w, "   Until then, MCTL_AUTH=github uses your GitHub token (deprecated, mctlhq/mctl-api#525).")
 }
 
 // zitadelStatus shows the stored ZITADEL login and asks the API who it is,

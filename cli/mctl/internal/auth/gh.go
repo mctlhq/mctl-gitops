@@ -14,12 +14,13 @@ import (
 type Mode int
 
 const (
-	// ModeDefault: the stored mctl sign-in (api.go); without one, the GitHub
-	// token, as before the sign-in existed.
+	// ModeDefault: the stored mctl sign-in (api.go). Without one there is
+	// no credential: the GitHub token is never picked implicitly.
 	ModeDefault Mode = iota
 	// ModeZitadel: the raw ZITADEL token (zitadel.go).
 	ModeZitadel
 	// ModeGitHub: the GitHub token, even when a mctl sign-in is stored.
+	// Deprecated (mctlhq/mctl-api#525): the API will stop accepting it.
 	ModeGitHub
 )
 
@@ -38,8 +39,8 @@ func AuthMode() (Mode, error) {
 	}
 }
 
-// legacyNotice is where the reminder that the GitHub token is the old way
-// goes; tests replace it.
+// legacyNotice is where the deprecation warning for MCTL_AUTH=github goes;
+// tests replace it.
 var (
 	legacyNotice     io.Writer = os.Stderr
 	legacyNoticeOnce sync.Once
@@ -47,9 +48,10 @@ var (
 
 // GetToken returns the bearer token for the mctl API.
 // Resolution order: MCTL_TOKEN; then what MCTL_AUTH selects (zitadel: the
-// stored ZITADEL login, github: the GitHub token); otherwise the stored mctl
-// sign-in (`mctl auth login`), and only when there is none, the GitHub token
-// (GITHUB_TOKEN, gh auth token).
+// stored ZITADEL login, github: the GitHub token, deprecated); otherwise the
+// stored mctl sign-in (`mctl auth login`). Without one it is an error: the
+// GitHub token (GITHUB_TOKEN, gh auth token) is sent only when MCTL_AUTH=github
+// asks for it.
 func GetToken() (string, error) {
 	if t := os.Getenv("MCTL_TOKEN"); t != "" {
 		return t, nil
@@ -62,30 +64,29 @@ func GetToken() (string, error) {
 	case ModeZitadel:
 		return ZitadelToken()
 	case ModeGitHub:
-		return githubToken()
+		tok, err := githubToken()
+		if err != nil {
+			return "", err
+		}
+		legacyNoticeOnce.Do(func() {
+			fmt.Fprintln(legacyNotice, "mctl: MCTL_AUTH=github is deprecated and will stop working (mctlhq/mctl-api#525); run 'mctl auth login' to sign in with your MCTL account.")
+		})
+		return tok, nil
 	}
 
 	tok, err := APIToken()
 	if err == nil {
 		return tok, nil
 	}
-	// Only "there is no sign-in" falls through to the GitHub token. A
-	// sign-in that exists but cannot be read or refreshed is an error: the
-	// user chose it, and quietly sending a different credential would hide
-	// that it stopped working.
-	if !errors.Is(err, ErrNoAPILogin) {
-		return "", err
-	}
-	tok, ghErr := githubToken()
-	if ghErr != nil {
+	// No sign-in is an error with the way to get one. There is no implicit
+	// GitHub fallback (mctlhq/mctl-api#525): sending a credential the user
+	// did not choose hides which identity a command runs as.
+	if errors.Is(err, ErrNoAPILogin) {
 		// err says why there is no sign-in, which matters when one exists
 		// for another API URL.
 		return "", fmt.Errorf("%w\n\nRun:\n  mctl auth login\n\nor set MCTL_TOKEN=<token>", err)
 	}
-	legacyNoticeOnce.Do(func() {
-		fmt.Fprintln(legacyNotice, "mctl: using your GitHub token. Run 'mctl auth login' to sign in with your MCTL account; set MCTL_AUTH=github to keep the GitHub token and silence this.")
-	})
-	return tok, nil
+	return "", err
 }
 
 // githubToken is the legacy credential: GITHUB_TOKEN, then gh auth token.

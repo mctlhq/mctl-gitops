@@ -6,7 +6,7 @@ Same operations as the Backstage UI, but from your terminal.
 ## Prerequisites
 
 - A browser on this machine for `mctl auth login`. The [gh CLI](https://cli.github.com/)
-  is only needed for the legacy GitHub-token path.
+  is only needed for the deprecated `MCTL_AUTH=github` path.
 - Go 1.26.9+ (for building from source). The `go` directive in `go.mod` is a
   minimum, not a pin, so a newer toolchain always satisfies it. The floor is
   1.26.9 because it closes the reachable `net/http`, `net/textproto` and
@@ -54,16 +54,17 @@ not sent, and you sign in again.
 Which credential a command sends, first match wins:
 
 1. `MCTL_TOKEN`, when set.
-2. What `MCTL_AUTH` selects: `github` for the GitHub token, `zitadel` for a
-   raw ZITADEL token (below). Any other value is an error.
+2. What `MCTL_AUTH` selects: `zitadel` for a raw ZITADEL token (below), or
+   `github` for the GitHub token (`GITHUB_TOKEN`, then `gh auth token`).
+   Any other value is an error. `MCTL_AUTH=github` is **deprecated**: it
+   prints a one-line warning on stderr and stops working once the API no
+   longer accepts GitHub tokens (mctlhq/mctl-api#525).
 3. The stored sign-in from `mctl auth login`.
-4. Only when there is no stored sign-in: the GitHub token (`GITHUB_TOKEN`,
-   then `gh auth token`), with a one-line reminder on stderr. This is the
-   previous default and will be removed once GitHub tokens stop being
-   accepted by the API.
 
-A stored sign-in that cannot be read or refreshed is an error, not a reason
-to fall back to the GitHub token.
+With none of these, the command fails and asks you to run `mctl auth login`.
+The GitHub token is never used implicitly: earlier versions fell back to it
+when there was no stored sign-in, and that fallback is gone. A stored sign-in
+that cannot be read or refreshed is an error as well.
 
 ### Raw ZITADEL token
 
