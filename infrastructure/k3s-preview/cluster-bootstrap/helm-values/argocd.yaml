@@ -7,8 +7,7 @@ nameOverride: argocd
 
 global:
   domain: ops.mctl.ai
-  # Argo CD images are public (quay.io/argoproj, ghcr.io/dexidp, public ECR
-  # for redis). No imagePullSecret is required; clear it explicitly so the
+  # Argo CD images are public (quay.io/argoproj, public ECR for redis). No imagePullSecret is required; clear it explicitly so the
   # field cannot inherit a stale ghcr-registry value from a prior release.
   imagePullSecrets: []
 
@@ -17,19 +16,11 @@ configs:
     admin.enabled: false
     timeout.reconciliation: 180s
 
-    # No dex.config here, deliberately. SSO is configured by
-    # argocd-self-managed from platform-gitops/argocd/values.yaml (an OIDC
-    # connector against Backstage), which replaces whatever this bootstrap
-    # release installed as soon as it first syncs.
-    #
-    # A GitHub connector used to sit here and could never have worked: it
-    # referenced $github-client-id / $github-client-secret, and those keys
-    # are written into argocd-secret by
-    # platform-gitops/argocd/templates/argocd-github-oauth.yaml — part of the
-    # self-managed chart, not of this release. During bootstrap the keys (and
-    # ESO itself, which arrives via root-app) do not exist yet, so dex cannot
-    # resolve them; by the time they do exist, the same sync has already
-    # replaced this dex.config with the Backstage one.
+    # No SSO here, deliberately. Sign-in is configured by argocd-self-managed
+    # from platform-gitops/argocd/values.yaml (oidc.config against ZITADEL,
+    # auth.mctl.ai), which replaces whatever this bootstrap release installed
+    # as soon as it first syncs. Its client secret comes through ESO, which
+    # does not exist yet during bootstrap, so nothing here could use it.
     #
     # So there is no SSO in the window between this release coming up and
     # argocd-self-managed syncing. That is not a regression — see the
@@ -97,6 +88,13 @@ configs:
   # values; only an explicit null unsets the key entirely.
   repositories: null
   credentialTemplates: null
+
+# Dex is gone from the platform (mctlhq/mctl-gitops#1500 phase 4) and the
+# self-managed chart keeps it off. The chart default would install it here,
+# and argocd-self-managed does not prune (prune: false), so a recovery would
+# leave a Dex running that nothing uses.
+dex:
+  enabled: false
 
 server:
   ingress:
