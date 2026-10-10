@@ -39,7 +39,7 @@ spec:
       - name: dry_run
         value: "false"
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.71.0
+        value: ghcr.io/mctlhq/mctl-agents:1.72.0
         # Bump alongside the other CWFTs' agent_image default; the registry's
         # resolved image_ref overrides this once a caller pins per-run.
 
