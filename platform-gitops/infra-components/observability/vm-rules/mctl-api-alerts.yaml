@@ -15,7 +15,9 @@
 #
 # Both are critical: when mctl-api is down the platform has no human or
 # agent entry point. MctlApiDependencyDown (warning) covers the shared
-# dependencies that, since mctl-api#542, no longer fail readiness. Routed to Telegram in
+# dependencies that, since mctl-api#542, no longer fail readiness.
+#
+# Every rule in this file is routed to Telegram in
 # bootstrap/templates/observability/monitoring.yaml (alertname =~ "MctlApi.*").
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
