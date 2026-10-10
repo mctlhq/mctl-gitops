@@ -88,6 +88,47 @@ tests:
                 so ErpactSiteDown cannot fire. Check the erpact-sites VMProbe in
                 the monitoring namespace and the blackbox-exporter deployment.
 
+  - interval: 1m
+    name: an ingress host without a probe series fires the unprobed alert
+    input_series:
+      - series: 'kube_ingress_path{namespace="erpact",host="erpact-bar2.mctl.ai",ingress="a"}'
+        values: '1x30'
+      - series: 'kube_ingress_path{namespace="erpact",host="erpact-control.mctl.ai",ingress="b"}'
+        values: '1x30'
+      - series: 'probe_success{job="erpact-sites",instance="https://erpact-control.mctl.ai/api/method/ping"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ErpactSiteUnprobed
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ErpactSiteUnprobed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: erpact
+              host: erpact-bar2.mctl.ai
+            exp_annotations:
+              summary: erpact site erpact-bar2.mctl.ai has no probe
+              description: >-
+                Ingress host erpact-bar2.mctl.ai exists in namespace erpact but
+                the erpact-sites VMProbe reports nothing for it, so
+                ErpactSiteDown cannot fire for it. Check the VMProbe
+                targets.ingress discovery and vmagent RBAC on ingresses in
+                erpact.
+
+  - interval: 1m
+    name: probed ingress hosts stay quiet for the unprobed alert
+    input_series:
+      - series: 'kube_ingress_path{namespace="erpact",host="erpact-bar2.mctl.ai",ingress="a"}'
+        values: '1x30'
+      - series: 'probe_success{job="erpact-sites",instance="https://erpact-bar2.mctl.ai/api/method/ping"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ErpactSiteUnprobed
+        exp_alerts: []
+
   # ---------------------------------------------------------------------
   # Backup (group erpact.backup, CronJob erpact/erpact-backup)
   # ---------------------------------------------------------------------

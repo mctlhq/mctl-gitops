@@ -65,6 +65,7 @@ tests:
           - exp_labels:
               severity: warning
               service: platform
+              job: platform-consoles
             exp_annotations:
               summary: "No probe_success series for job=platform-consoles"
               description: >-
