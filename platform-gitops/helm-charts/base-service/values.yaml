@@ -192,13 +192,18 @@ blueGreen:
 # -- Optional: OpenTelemetry OTLP trace export (issue #902). Default-off: no
 # services/*/*/values.yaml opts in here, so this changes nothing until a
 # service sets otel.enabled: true. When enabled, renders
-# OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL, OTEL_SERVICE_NAME
-# and OTEL_RESOURCE_ATTRIBUTES alongside `env` -- `env` wins on conflict, so a
-# service can override any of the four explicitly. See
+# OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL and
+# OTEL_RESOURCE_ATTRIBUTES alongside `env` -- `env` wins on conflict, so a
+# service can override any of them explicitly. See
 # docs/runbooks/otel-collector.md.
 otel:
   enabled: false
   endpoint: http://otel-collector.monitoring.svc.cluster.local:4318
+  # -- service.name is the producer's to set (mctl-docs telemetry-attributes.md).
+  # Left empty, OTEL_SERVICE_NAME is not rendered and the producer's own name
+  # stands (mctl-agent, mctl-agents-worker, ...). Set it only for a producer
+  # that names itself nothing better than the SDK's unknown_service.
+  serviceName: ""
 
 # -- Optional: Telegram work-context adapter wiring (mctlhq/mctl-telegram#443,
 # mctlhq/mctl-gitops#1405). Default-off, modelled on `otel` above: with
