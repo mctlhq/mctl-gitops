@@ -363,6 +363,13 @@ jobs:
         # deploy key.
         run: python3 tests/test_cwft_implement_shepherd_work_context_env.py
 
+      - name: Unit-test the mctl-agents CWFTs' execution-trace env
+        # mctl-agents#195: a container that exports OTLP must carry
+        # MCTL_TRACE_REQUIRE_PARENT=true and a parameter-sourced TRACEPARENT,
+        # so only runs a traced DevLoop submitted can export (ADR 0001,
+        # "Producer amendment: DevLoop traces").
+        run: python3 tests/test_cwft_execution_trace_env.py
+
       - name: Unit-test the k3s-preview apply guard
         # terraform.yml refuses a cluster plan that destroys infrastructure or
         # re-runs node provisioners (#1534). It only meets a real plan during

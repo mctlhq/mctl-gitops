@@ -145,6 +145,13 @@ spec:
         # Optional. The mctl-api execution request (xr_...) this run
         # fulfils, for correlation only: the execution identity is still
         # execution_id. Same rules as work_item_id.
+      - name: traceparent
+        value: ""
+        # Optional. W3C trace context of the Temporal activity that
+        # submitted this run (mctl-agents#195), sent by a traced worker
+        # behind MCTL_TRACE_ARGO_PARAM. Read only as the TRACEPARENT env
+        # below, never interpolated into a script. Empty means no parent,
+        # and with MCTL_TRACE_REQUIRE_PARENT the pod then stays untraced.
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # Was a 10Gi `volumeClaimTemplates` entry — the LAST one in the agent fleet
@@ -757,6 +764,20 @@ spec:
             value: "{{workflow.parameters.temporal_run_id}}"
           - name: WORKFLOW_EXECUTION_REQUEST_ID
             value: "{{workflow.parameters.execution_request_id}}"
+          # Execution traces (mctl-agents#195, docs/observability/
+          # execution-traces.md in mctl-agents). Inert here: no OTLP endpoint
+          # is set on this template, so nothing is exported. TRACEPARENT
+          # parents the pod's root span on the submitting activity.
+          # ARGO_WORKFLOW_NAME stamps mctl.argo.workflow.name.
+          # MCTL_TRACE_REQUIRE_PARENT keeps a pod that no traced DevLoop
+          # submitted (manual, sweep) inert once the endpoint is added,
+          # which bounds the rollout to the ADR 0001 producer amendment.
+          - name: TRACEPARENT
+            value: "{{workflow.parameters.traceparent}}"
+          - name: ARGO_WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: MCTL_TRACE_REQUIRE_PARENT
+            value: "true"
           # Soft cap per proposal. Raised 3.00 -> 10.00: large issue-driven
           # proposals (e.g. a full observability layer) blew the $3 cap and
           # the SDK raised error_max_budget_usd before opening a PR. Small
