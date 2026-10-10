@@ -610,6 +610,16 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "SeerrSense.*"
+                  # Tenant erpact's shared MariaDB (vm-rules/erpact-alerts.yaml,
+                  # group erpact.capacity). Telegram only, no ticket: the remedy
+                  # is raising mariadb-0's memory limit in Forgejo
+                  # erpact/mctl-apps infra/mariadb.yaml, a repo mctl-agent cannot
+                  # write. Unrouted, an OOM-risk warning for the database behind
+                  # every ERPact site reached only the agent and notified nobody.
+                  # Prefix match so the Absent twin is covered too.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ErpactMariadbMemory.*"
                   # The lifecycle ownership rollout (ADR-010 §12,
                   # mctlhq/.github#57). Telegram only, no ticket, and the
                   # routing is load-bearing rather than a preference:
