@@ -8,7 +8,7 @@ metadata:
       Weekly pod-restart for labs/claude-remote so the entrypoint's
       `claude install latest --force` step runs and refreshes the
       native claude binary at /workspace/.local/bin/claude (persisted
-      to R2).
+      to MinIO).
 
       Why a restart and not in-place `claude install`:
       The remote-control session is a long-running PID 1 (script
