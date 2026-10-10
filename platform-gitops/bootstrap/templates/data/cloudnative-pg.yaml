@@ -15,6 +15,22 @@ spec:
       values: |
         crds:
           create: true
+        # Data-path priority and resources (#1774). The class is declared in
+        # system/priority-classes.yaml. Chart default was no resources, i.e.
+        # BestEffort: first to be evicted under node memory pressure, and
+        # with it go failover, backups and role/database reconciliation for
+        # shared-pg. The memory limit is deliberately generous relative to
+        # the request: a limit reserves nothing on the node (only requests
+        # count for scheduling), while an OOMKill of the operator stalls
+        # every shared-pg reconcile. See the PR for the sizing basis.
+        priorityClassName: platform-data-critical
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: "1"
+            memory: 512Mi
   destination:
     server: {{ .Values.spec.destination.server }}
     namespace: cnpg-system

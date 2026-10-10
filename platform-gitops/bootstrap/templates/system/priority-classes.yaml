@@ -1,0 +1,35 @@
+# PriorityClass for the platform data path (#1774, audit finding REL-103).
+#
+# Assigned to the pods every Postgres-backed service depends on: the
+# CloudNativePG operator (data/cloudnative-pg.yaml), the shared-pg Cluster
+# instances and the shared-pg-pooler-rw PgBouncer pods
+# (infra-components/data/cnpg/shared/). The cluster runs memory-overcommitted
+# (finding OPS-104), so under node memory pressure the kubelet ranks eviction
+# candidates by usage above requests and then by priority; without a class
+# these pods tie with every tenant workload at priority 0.
+#
+# 100000000 is far below system-cluster-critical (2000000000) and
+# system-node-critical (2000001000), so kube-system and node agents still win,
+# and well under the 1000000000 ceiling for user-defined classes.
+#
+# preemptionPolicy is PreemptLowerPriority (the API default, set explicitly so
+# Argo CD does not diff against the defaulted field): if a node is lost, the
+# rescheduled data-path pods may displace priority-0 pods instead of sitting
+# Pending while the services that need Postgres are down.
+#
+# Rendered by root-app at sync-wave -1, ahead of the child Applications at
+# wave 0: the priority admission plugin rejects a pod that names a class that
+# does not exist yet, so the class must be in place before cloudnative-pg and
+# shared-pg reconcile pods that reference it.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: platform-data-critical
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+value: 100000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >-
+  Platform data-path components (CNPG operator, shared-pg instances,
+  shared-pg PgBouncer pooler). Below system-cluster-critical.

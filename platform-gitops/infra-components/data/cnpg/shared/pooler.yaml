@@ -15,3 +15,23 @@ spec:
       reserve_pool_size: "5"
       max_db_connections: "30"    # max backend connections PER database
       server_idle_timeout: "300"
+  # Every service on shared-pg connects through these two pods, and with no
+  # resources they ran as BestEffort -- first to be evicted under node memory
+  # pressure (#1774). The class is declared in
+  # bootstrap/templates/system/priority-classes.yaml.
+  template:
+    spec:
+      priorityClassName: platform-data-critical
+      containers:
+        - name: pgbouncer   # must match the container CNPG generates
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              # PgBouncer is single-threaded, so one core is its ceiling; a
+              # tighter cap would add CFS-throttling latency to every query.
+              cpu: "1"
+              # 400 client conns cost a few MiB in PgBouncer; the rest is the
+              # CNPG instance manager running in the same container.
+              memory: 256Mi
