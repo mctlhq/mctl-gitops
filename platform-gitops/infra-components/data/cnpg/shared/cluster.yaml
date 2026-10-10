@@ -9,8 +9,9 @@ metadata:
     # `kubectl cnpg restart` sets, kept here so the roll goes through review.
     # It reaches the cluster only because bootstrap/templates/data/shared-pg.yaml
     # exempts this one key from the Application's ignoreDifferences.
-    # Set 2026-10-10 to apply priorityClassName (see below) to the running pods.
-    kubectl.kubernetes.io/restartedAt: "2026-10-10T22:04:59Z"
+    # Set 2026-10-10 to apply priorityClassName (see below) to the running pods;
+    # bumped again the same night once primaryUpdateMethod became switchover.
+    kubectl.kubernetes.io/restartedAt: "2026-10-10T23:18:30Z"
 spec:
   # HA: primary + 1 hot standby. Two instances is the minimum that lets a node
   # drain succeed — CNPG promotes the standby and evicts the old primary,
@@ -68,7 +69,7 @@ spec:
   # priority-class.yaml (sync-wave -1). CNPG 1.25 does NOT roll the instances
   # when only this field changes: after #1783 the spec carried the class for
   # hours while shared-pg-1/-2 kept running without it. Bump the restartedAt
-  # annotation above to apply a change (standby first, then the primary per
+  # annotation above to apply a change (standby first, then a switchover per
   # primaryUpdateMethod).
   priorityClassName: platform-data-critical
 
@@ -82,7 +83,12 @@ spec:
   minSyncReplicas: 0
   postgresGID: 26
   postgresUID: 26
-  primaryUpdateMethod: restart
+  # switchover, not restart: `restart` only restarts Postgres inside the
+  # existing primary pod, so pod-level changes (priorityClassName on
+  # 2026-10-10) never reach the primary. switchover promotes the already
+  # updated standby, then recreates the old primary as a standby: a few
+  # seconds of write interruption instead of a full restart of the primary.
+  primaryUpdateMethod: switchover
   primaryUpdateStrategy: unsupervised
   replicationSlots:
     highAvailability:
