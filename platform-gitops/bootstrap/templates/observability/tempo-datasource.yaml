@@ -1,0 +1,43 @@
+{{- /*
+Grafana datasource for the Tempo bake-off candidate (#1280), provisioned
+the same way as loki-datasource.yaml: a ConfigMap labelled
+grafana_datasource: "1" that Grafana's datasource sidecar picks up.
+
+Rendered only while the sandbox is open AND the tempo candidate is enabled,
+so it cannot point Grafana at a Service that does not exist. The URL is
+Tempo's HTTP API (3200) on the Service named by the candidate's
+fullnameOverride (bootstrap/values.yaml); the NetworkPolicy that lets
+Grafana reach it is
+infra-components/observability/eval/tempo/networkpolicy.yaml.
+
+Teardown note: Grafana keeps a provisioned datasource in its database after
+the file disappears. The bake-off runbook's teardown step removes the
+"Tempo (eval)" datasource explicitly.
+
+A template comment rather than a YAML one, so the eval-off render emits
+no document at all.
+*/}}
+{{- if .Values.otelCollector.eval.enabled }}
+{{- range .Values.otelCollector.eval.candidates }}
+{{- if and .enabled (eq .name "tempo") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-eval-grafana-datasource
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  tempo-eval-datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Tempo (eval)
+        uid: tempo-eval
+        type: tempo
+        url: http://tempo.observability-eval.svc.cluster.local:3200
+        access: proxy
+        isDefault: false
+        editable: false
+{{- end }}
+{{- end }}
+{{- end }}

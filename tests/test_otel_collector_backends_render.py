@@ -6,8 +6,9 @@ Three checks against the `bootstrap` chart, each rendering
 template` and parsing the result -- no pytest, matching the plain
 `python3 tests/<file>.py` convention of `tests/test_base_service_otel_env.py`.
 
-T1. Default values (`otelCollector.backends: []`,
-    `otelCollector.eval.enabled: false`) must render the collector's
+T1. The eval-off baseline (committed values plus an overlay setting
+    `otelCollector.eval.enabled: false`, with `otelCollector.backends: []`)
+    must render the collector's
     OpenTelemetry Collector config byte-for-byte identical to the committed
     golden file `tests/fixtures/otel-collector-config-default.yaml` -- the
     mechanism that makes "this merge changes nothing" a check rather than a
@@ -26,7 +27,7 @@ T2. With two `otelCollector.backends` entries (from
     literally true.
 
 T5. Eval-manifest render. With `otelCollector.eval.enabled: false` (the
-    default) no `observability-eval` Namespace and no Application in that
+    eval-off baseline) no `observability-eval` Namespace and no Application in that
     namespace renders at all. With the example overlay: the Namespace
     carries both `mctl.ai/purpose` and `mctl.ai/teardown-after`; a
     `podSelector: {}` NetworkPolicy exists and its namespace is
@@ -34,6 +35,13 @@ T5. Eval-manifest render. With `otelCollector.eval.enabled: false` (the
     `automated.prune: true` and no `selfHeal` key; the entry without
     `manifestsPath` renders exactly one source; every Application's
     `targetRevision` is a concrete string.
+
+Committed default (#1280). bootstrap/values.yaml ships the sandbox OPEN
+    with exactly one candidate, tempo. The committed render must differ from
+    the eval-off baseline only by the appended `otlp/eval-tempo` exporter
+    (receivers and processors unchanged), and must emit the "Tempo (eval)"
+    Grafana datasource, whose host matches the candidate's otlpEndpoint host.
+    The baseline must emit no datasource.
 
 On failure, T1 prints the exact command that regenerates the golden file --
 any legitimate future edit to the collector config must regenerate it.
@@ -43,6 +51,7 @@ Run: python3 tests/test_otel_collector_backends_render.py
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 import yaml
 
@@ -95,9 +104,18 @@ def collector_config(docs):
     return yaml.safe_load(src["helm"]["values"])["config"]
 
 
-# --- T1: default render is the golden file ---------------------------------
+# --- T1: eval-off baseline render is the golden file -------------------------
+#
+# bootstrap/values.yaml ships otelCollector.eval.enabled: true while the
+# Tempo bake-off (#1280) runs, so the "nothing changes" baseline is rendered
+# with an explicit eval-off overlay. The committed default itself is checked
+# separately below ("Committed default").
 
-default_docs = helm_template(DEFAULT_VALUES)
+with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+    yaml.safe_dump({"otelCollector": {"eval": {"enabled": False}}}, fh)
+    EVAL_OFF = pathlib.Path(fh.name)
+
+default_docs = helm_template(DEFAULT_VALUES, EVAL_OFF)
 default_cfg = collector_config(default_docs)
 default_rendered = yaml.safe_dump(default_cfg, sort_keys=False, default_flow_style=False, width=100)
 
@@ -169,12 +187,10 @@ check(
 )
 
 # Legacy-scalar regression: backendEndpoint alone, and both set together.
-import tempfile
-
 with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
     yaml.safe_dump({"otelCollector": {"backendEndpoint": "otlp.example.com:4317"}}, fh)
     legacy_only = pathlib.Path(fh.name)
-legacy_docs = helm_template(DEFAULT_VALUES, legacy_only)
+legacy_docs = helm_template(DEFAULT_VALUES, EVAL_OFF, legacy_only)
 legacy_cfg = collector_config(legacy_docs)
 check(
     "otlp/backend" in legacy_cfg["exporters"] and list(legacy_cfg["exporters"].keys()) == ["debug", "otlp/backend"],
@@ -189,7 +205,7 @@ with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
         }
     }, fh)
     both_set = pathlib.Path(fh.name)
-both_docs = helm_template(DEFAULT_VALUES, both_set)
+both_docs = helm_template(DEFAULT_VALUES, EVAL_OFF, both_set)
 both_cfg = collector_config(both_docs)
 check(
     set(both_cfg["exporters"].keys()) == {"debug", "otlp/backend", "otlp/candidate-a"},
@@ -205,6 +221,10 @@ default_apps = [
 ]
 check(not default_ns, "default render must not emit the observability-eval Namespace")
 check(not default_apps, "default render must not emit any Application into observability-eval")
+check(
+    not find(default_docs, "ConfigMap", name="tempo-eval-grafana-datasource"),
+    "eval-off render must not emit the Tempo (eval) Grafana datasource",
+)
 
 eval_ns = find(fanout_docs, "Namespace", name="observability-eval")
 check(len(eval_ns) == 1, f"expected exactly one observability-eval Namespace, got {len(eval_ns)}")
@@ -258,16 +278,18 @@ eval_quota = find(fanout_docs, "ResourceQuota", name="observability-eval-quota",
 check(len(eval_quota) == 1, f"expected exactly one observability-eval-quota ResourceQuota, got {len(eval_quota)}")
 if eval_quota:
     hard = eval_quota[0].get("spec", {}).get("hard", {})
-    # The two caps the issue mandates, asserted literally: a later values
-    # edit that widens either one must fail this check, not just "the quota
-    # rendered something".
+    # The two storage caps, asserted literally: a later values edit that
+    # widens either one must fail this check, not just "the quota rendered
+    # something". #1280 pins both to zero -- the Tempo candidate keeps its WAL
+    # on an emptyDir and its blocks in object storage, and a PVC here would
+    # be a paid cloud volume.
     check(
-        hard.get("persistentvolumeclaims") == "4",
-        f"observability-eval-quota must cap persistentvolumeclaims at \"4\", got {hard.get('persistentvolumeclaims')!r}",
+        hard.get("persistentvolumeclaims") == "0",
+        f"observability-eval-quota must cap persistentvolumeclaims at \"0\", got {hard.get('persistentvolumeclaims')!r}",
     )
     check(
-        hard.get("requests.storage") == "40Gi",
-        f"observability-eval-quota must cap requests.storage at \"40Gi\", got {hard.get('requests.storage')!r}",
+        hard.get("requests.storage") == "0",
+        f"observability-eval-quota must cap requests.storage at \"0\", got {hard.get('requests.storage')!r}",
     )
 
 eval_limitrange = find(fanout_docs, "LimitRange", name="observability-eval-limits", namespace="observability-eval")
@@ -471,13 +493,16 @@ for candidate in committed_candidates:
         f"committed candidate {candidate.get('name')!r} has a header value that is not an ${{env:...}} expansion",
     )
 
-# --- Committed tempo candidate actually renders (issue #1355) ----------------
+# --- Committed tempo candidate actually renders (#1355, #1280) ---------------
 # Every check above only exercises fabricated candidates (cand-a, cand-b,
-# CANDIDATE_TEMPLATE). The one candidate this PR actually ships -- tempo,
+# CANDIDATE_TEMPLATE). The one candidate this repo actually ships -- tempo,
 # committed in bootstrap/values.yaml -- must be rendered through `helm
-# template` for real at least once, proving both that it renders at all and
-# that the ingester.config.replication_factor fix (issue #1355 finding 1)
-# actually reaches the rendered Application, not just the values.yaml source.
+# template` for real, and its pins asserted literally: the community
+# monolithic chart, 1 replica, 14-day retention, WAL on a size-capped
+# emptyDir, object-storage settings that are ${...} placeholders filled from
+# the tempo-r2 Secret at runtime (never a literal endpoint or bucket), and
+# no chart-rendered ServiceMonitor (the VMServiceScrape in its manifestsPath
+# is the one scrape).
 
 tempo_candidate = next(c for c in committed_candidates if c.get("name") == "tempo")
 tempo_enabled = dict(tempo_candidate, enabled=True)
@@ -492,22 +517,64 @@ if tempo_apps:
         tempo_app["metadata"]["name"] == "otel-eval-tempo",
         f"the tempo candidate's Application should be otel-eval-tempo, got {tempo_app['metadata']['name']}",
     )
+    sources = tempo_app["spec"].get("sources") or []
     check(
-        "sources" not in tempo_app["spec"] and "source" in tempo_app["spec"],
-        "otel-eval-tempo has no manifestsPath, so it should render a single chart source, "
-        f"got {sorted(tempo_app['spec'])!r}",
+        len(sources) == 2 and "source" not in tempo_app["spec"],
+        "otel-eval-tempo has a manifestsPath, so it should render exactly two sources, "
+        f"got {sorted(tempo_app['spec'])!r} with {len(sources)} sources",
     )
-    source = tempo_app["spec"].get("source") or {}
-    values_object = source.get("helm", {}).get("valuesObject", {})
+    source = sources[0] if sources else {}
     check(
-        values_object.get("ingester", {}).get("replicas") == 1,
-        f"tempo ingester.replicas should be 1, got {values_object.get('ingester', {}).get('replicas')!r}",
+        source.get("repoURL") == "https://grafana-community.github.io/helm-charts",
+        f"tempo chart repoURL should be the grafana-community repo, got {source.get('repoURL')!r}",
+    )
+    check(source.get("chart") == "tempo", f"tempo chart should be 'tempo' (monolithic), got {source.get('chart')!r}")
+    check(source.get("targetRevision") == "2.4.0", f"tempo chart should be pinned to 2.4.0, got {source.get('targetRevision')!r}")
+    if len(sources) == 2:
+        check(
+            sources[1].get("path") == tempo_candidate.get("manifestsPath"),
+            f"tempo's second source should be its manifestsPath, got {sources[1].get('path')!r}",
+        )
+    vo = source.get("helm", {}).get("valuesObject", {})
+    t = vo.get("tempo", {})
+    check(vo.get("replicas") == 1, f"tempo replicas should be 1, got {vo.get('replicas')!r}")
+    check(t.get("retention") == "336h", f"tempo retention should be 336h (14 days), got {t.get('retention')!r}")
+    check(t.get("memBallastSizeMbs") == 0, f"tempo memBallastSizeMbs should be 0 (GOMEMLIMIT governs), got {t.get('memBallastSizeMbs')!r}")
+    check(t.get("reportingEnabled") is False, "tempo usage reporting should be disabled")
+    env = {e.get("name"): e.get("value") for e in t.get("extraEnv", [])}
+    check(env.get("GOMEMLIMIT") == "800MiB", f"tempo GOMEMLIMIT should be 800MiB, got {env.get('GOMEMLIMIT')!r}")
+    check(
+        t.get("resources", {}).get("limits", {}).get("memory") == "1Gi",
+        f"tempo memory limit should be 1Gi, got {t.get('resources', {}).get('limits', {}).get('memory')!r}",
     )
     check(
-        values_object.get("ingester", {}).get("config", {}).get("replication_factor") == 1,
-        "tempo ingester.config.replication_factor should be 1, got "
-        f"{values_object.get('ingester', {}).get('config', {}).get('replication_factor')!r}",
+        t.get("extraArgs", {}).get("config.expand-env") == "true",
+        "tempo must run with -config.expand-env=true, or the ${...} storage placeholders are used verbatim",
     )
+    check(
+        [e.get("secretRef", {}).get("name") for e in t.get("extraEnvFrom", [])] == ["tempo-r2"],
+        "tempo must take its object-storage settings from the tempo-r2 Secret via envFrom",
+    )
+    check(vo.get("persistence", {}).get("enabled") is False, "tempo persistence must be disabled (quota allows no PVC)")
+    wal_vols = [v for v in vo.get("extraVolumes", []) if "emptyDir" in v]
+    check(
+        len(wal_vols) == 1 and wal_vols[0]["emptyDir"].get("sizeLimit") == "2Gi",
+        f"tempo WAL should be one emptyDir with sizeLimit 2Gi, got {wal_vols!r}",
+    )
+    check(vo.get("serviceMonitor", {}).get("enabled") is False, "the chart's ServiceMonitor must stay disabled")
+    s3 = t.get("storage", {}).get("trace", {}).get("s3", {})
+    check(t.get("storage", {}).get("trace", {}).get("backend") == "s3", "tempo trace backend should be s3")
+    for key, var in (
+        ("bucket", "TEMPO_S3_BUCKET"),
+        ("endpoint", "TEMPO_S3_ENDPOINT"),
+        ("access_key", "TEMPO_S3_ACCESS_KEY"),
+        ("secret_key", "TEMPO_S3_SECRET_KEY"),
+    ):
+        check(
+            s3.get(key) == "${" + var + "}",
+            f"tempo storage.trace.s3.{key} must be the ${{{var}}} placeholder, never a literal, got {s3.get(key)!r}",
+        )
+    check(s3.get("insecure") in (None, False), "tempo must reach object storage over TLS (s3.insecure unset/false)")
 
 # A manifestsPath directory becomes a second ArgoCD source synced as raw
 # Kubernetes manifests (no Chart.yaml), so every YAML document in it must be a
@@ -537,6 +604,56 @@ tempo_pipeline_exporters = tempo_fanout_cfg["service"]["pipelines"]["traces"]["e
 check(
     "otlp/eval-tempo" in tempo_pipeline_exporters,
     f"otlp/eval-tempo missing from traces pipeline exporters, got {tempo_pipeline_exporters}",
+)
+
+# --- Committed default (#1280) -----------------------------------------------
+# What bootstrap/values.yaml actually ships: the sandbox open with tempo as
+# the only candidate. Relative to the eval-off baseline the collector gains
+# exactly one exporter and nothing else; the Grafana datasource renders and
+# points at the same Service the collector exports to.
+
+committed_docs = helm_template(DEFAULT_VALUES)
+committed_cfg = collector_config(committed_docs)
+committed_traces = committed_cfg["service"]["pipelines"]["traces"]
+check(
+    list(committed_cfg["exporters"].keys()) == ["debug", "otlp/eval-tempo"],
+    f"committed exporters should be exactly [debug, otlp/eval-tempo], got {list(committed_cfg['exporters'].keys())}",
+)
+check(
+    committed_traces["exporters"] == ["debug", "otlp/eval-tempo"],
+    f"committed traces pipeline exporters should be [debug, otlp/eval-tempo], got {committed_traces['exporters']}",
+)
+check(
+    committed_traces["receivers"] == default_cfg["service"]["pipelines"]["traces"]["receivers"]
+    and committed_traces["processors"] == default_cfg["service"]["pipelines"]["traces"]["processors"],
+    "the committed default must not change the traces pipeline's receivers or processors",
+)
+check(
+    committed_cfg["receivers"] == default_cfg["receivers"] and committed_cfg["processors"] == default_cfg["processors"],
+    "the committed default must not change the collector's receivers or processors blocks",
+)
+check(
+    {k: v for k, v in committed_cfg["service"]["pipelines"].items() if k != "traces"}
+    == {k: v for k, v in default_cfg["service"]["pipelines"].items() if k != "traces"},
+    "the committed default must not change any non-traces pipeline",
+)
+
+committed_ds = find(committed_docs, "ConfigMap", name="tempo-eval-grafana-datasource", namespace="monitoring")
+check(len(committed_ds) == 1, f"committed default should emit one Tempo (eval) datasource, got {len(committed_ds)}")
+if committed_ds:
+    ds_doc = yaml.safe_load(next(iter(committed_ds[0]["data"].values())))
+    ds = ds_doc["datasources"][0]
+    check(committed_ds[0]["metadata"]["labels"].get("grafana_datasource") == "1", "datasource ConfigMap needs grafana_datasource: \"1\"")
+    check(ds.get("type") == "tempo" and ds.get("uid") == "tempo-eval", f"unexpected datasource type/uid: {ds!r}")
+    ds_host = ds.get("url", "").split("://", 1)[-1].rsplit(":", 1)[0]
+    otlp_host = tempo_candidate["otlpEndpoint"].rsplit(":", 1)[0]
+    check(ds_host == otlp_host, f"datasource host {ds_host!r} should match the tempo otlpEndpoint host {otlp_host!r}")
+
+# Tempo disabled with the sandbox open: no datasource pointing at nothing.
+tempo_off = _write_values(_eval_values(True, [dict(tempo_candidate, enabled=False)]))
+check(
+    not find(helm_template(DEFAULT_VALUES, tempo_off), "ConfigMap", name="tempo-eval-grafana-datasource"),
+    "a disabled tempo candidate must not emit the Tempo (eval) datasource",
 )
 
 if failures:

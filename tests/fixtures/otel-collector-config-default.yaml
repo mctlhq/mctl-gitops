@@ -3,7 +3,10 @@
 # opentelemetry-collector Application in
 # platform-gitops/bootstrap/templates/observability/otel-collector.yaml),
 # rendered from platform-gitops/bootstrap/values.yaml defaults
-# (otelCollector.backendEndpoint: "", otelCollector.backends: []).
+# (otelCollector.backendEndpoint: "", otelCollector.backends: []) with
+# otelCollector.eval.enabled forced to false -- the eval-off baseline. The
+# committed default (sandbox open, tempo fan-out) is asserted against this
+# baseline in the test rather than kept as a second golden file.
 #
 # tests/test_otel_collector_backends_render.py compares this file byte
 # for byte against a fresh render, so a legitimate edit to the collector

@@ -220,6 +220,53 @@ decision time:
    an `Abandoned` status and the reason -- never deleted -- so the next
    attempt starts from this screen rather than from zero.
 
+## Bake-off scope amendment (#1280, 2026-10-10)
+
+Recorded before any measurement, as the exit procedure above requires.
+
+**Scope: Tempo only.** The owner narrowed this round to a single candidate,
+Grafana Tempo, deployed monolithic (single binary, one replica) from the
+community chart `tempo` `2.4.0` (Tempo `2.10.8`) into `observability-eval`.
+Langfuse, SigNoz, Phoenix and Traceway are not deployed and their rubric
+cells stay null. Steps 1 and 2 of the exit procedure therefore apply to one
+candidate rather than to every Stage A survivor. A verdict that adopts an
+unmeasured candidate cannot be supported by this round's evidence; whether
+the remaining candidates get a later round is the owner's call on #1280.
+
+**Storage.** Tempo writes blocks to the Cloudflare R2 bucket `tempo-traces`
+through a bucket-scoped token read from Vault by an ExternalSecret; the WAL
+is on a 2Gi `emptyDir`, and no persistent volume is used. Retention is 14
+days (`block_retention: 336h`, enforced by the compactor), with the bucket's
+own 30-day lifecycle rule as a backstop.
+
+**Soak window and declared volume.** Declared here, before the first
+measurement:
+
+- Window: from the synthetic span proof (collector → Tempo → Grafana,
+  `docs/runbooks/tracing-bake-off.md` step 4.3, timestamp recorded on #1280)
+  until 2026-10-23 23:59 UTC, one day before the sandbox's `teardownAfter`
+  date of 2026-10-24.
+- Volume: synthetic only. The `otel-trace-fixture` workflow with default
+  parameters (about 240 spans per submission), submitted once for the proof
+  and then at most once a day: under 5,000 spans for the whole window. No
+  producer emits OTLP to the collector today (verified 2026-10-10), so real
+  producer traffic is declared as none. Instrumenting a producer during the
+  window is an amendment recorded here, with a reason, before it lands.
+
+**Accepted risks, for the bake-off only.** Spans not yet flushed are lost
+when the pod is deleted or rescheduled, because the WAL is on an
+`emptyDir` (a container restart keeps it). An R2 outage that lasts longer
+than the 2Gi WAL can absorb loses spans as well. Both are acceptable for an
+evaluation with synthetic traffic and would have to be revisited for any
+permanent deployment. The runbook lists the remaining, smaller ones.
+
+**Teardown.** If Tempo is not selected, the teardown commit removes the
+deployment, its alerts and its datasource (runbook step 9), and the
+`tempo-traces` bucket is emptied. If it is selected, nothing is promoted in
+place: a permanent tracing backend, and turning tracing on across
+production workloads, are each a separate owner gate after this ADR's
+verdict.
+
 ## Decision
 
 <!-- VERDICT: UNFILLED -->
