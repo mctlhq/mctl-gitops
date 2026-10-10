@@ -338,7 +338,7 @@ initContainers:
             old=$(mc ls --recursive minio/platform-state/labs/claude-remote/) \
               || fatal "cannot list the MinIO state; not marking the migration done"
             if [ -n "$old" ]; then
-              mc mirror --overwrite --preserve --exclude '.mc/*' --exclude 'go/*' --exclude '.cache/*' \
+              mc mirror --overwrite --preserve --exclude '.mc/*' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
                 minio/platform-state/labs/claude-remote/ "$STATE" \
                 || fatal "MinIO -> R2 copy failed; the next start retries it"
             else
@@ -366,7 +366,7 @@ initContainers:
           # with --preserve a 10-day-old file comes back dated 10 days ago;
           # without it, dated now. Every mirror that writes to the bucket passes
           # --preserve too, otherwise there is no stored mtime to restore.
-          mc mirror --overwrite --preserve --exclude '.mc/*' --exclude 'go/*' --exclude '.cache/*' \
+          mc mirror --overwrite --preserve --exclude '.mc/*' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
             "$STATE" /workspace \
             || fatal "restore from R2 failed"
           echo "Restore complete."
@@ -479,6 +479,11 @@ extraContainers:
           # never synced: ~64k mostly-cache files made each 60 s mirror cost
           # ~2.8M R2 operations a month. Both rebuild on demand, so a restart
           # only means a cold Go cache (owner decision, 2026-10-10).
+          # .local/share/claude/versions/ (1.6 GB of old self-update releases
+          # in MinIO) and .claude/backups/ (~10k .claude.json backups, 486 MB)
+          # are not synced either: the entrypoint only needs the pinned binary
+          # at .local/bin/claude, which stays synced so a restart skips the
+          # ~100 MB re-install (same owner decision).
           #
           # Additive backup only -- NO --remove here, so a local logout that
           # deletes ~/.claude/.credentials.json can never wipe the R2
@@ -489,11 +494,11 @@ extraContainers:
             echo "[cred-guard] REFUSING to mirror $CRED -- tokens are empty/expired." \
                  "R2 keeps the last good copy; recover with 'claude auth login'" \
                  "in this pod (see mctl-claude-remote#40)."
-            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' \
+            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
               --exclude '.claude/.credentials.json' \
               /workspace s3/claude-remote-state/labs/claude-remote/ || true
           else
-            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' \
+            mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
               /workspace s3/claude-remote-state/labs/claude-remote/ || true
             # Keep a last-known-good copy that a later wipe cannot overwrite:
             # it is only ever refreshed while the live file is valid. Recovery
@@ -540,8 +545,8 @@ extraContainers:
                   echo "[gc] rm old claude version: $vn"
                   rm -rf "$VDIR/$vn"
                 done
-                mc mirror --overwrite --preserve --remove "$VDIR" \
-                  s3/claude-remote-state/labs/claude-remote/.local/share/claude/versions/ || true
+                # Local prune only: versions/ is not synced to R2 at all since
+                # the move off MinIO (see the exclude note on the sync loop).
               else
                 echo "[gc] skip version retention (active version unresolved): '$ACTIVE_VER'"
               fi
@@ -687,7 +692,7 @@ extraContainers:
                 --exclude '.claude.json' --exclude 'CLAUDE.md' \
                 --exclude '.gitconfig' \
                 --exclude '.local' --exclude '.local/*' --exclude '*.tmp' \
-                --exclude 'go/*' --exclude '.cache/*' \
+                --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
                 /workspace s3/claude-remote-state/labs/claude-remote/ || true
               last_gc=$(date +%s)
             fi
@@ -744,11 +749,11 @@ extraContainers:
               }
               if [ -e "$CRED" ] && ! cred_is_valid; then
                 echo "[cred-guard] shutdown flush EXCLUDING $CRED -- tokens are empty/expired"
-                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' \
+                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
                   --exclude '.claude/.credentials.json' \
                   /workspace s3/claude-remote-state/labs/claude-remote/
               else
-                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' \
+                mc mirror --overwrite --preserve --exclude '.mc/*' --exclude '*.tmp' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
                   /workspace s3/claude-remote-state/labs/claude-remote/
               fi
   # log-tail sidecar — surfaces the steward's structured JSON log on its own
