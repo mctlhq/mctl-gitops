@@ -16,12 +16,17 @@ metadata:
     app.kubernetes.io/part-of: mctl-platform
 spec:
   groups:
+    # Usage is read from the kubelet's cAdvisor endpoint only. The kubelet
+    # exports container_cpu_usage_seconds_total and
+    # container_memory_working_set_bytes a second time under /metrics/resource,
+    # and summing both doubled usage, so these fired at ~42% of quota instead
+    # of 85% (found 2026-10-10).
     - name: mctl.tenant-quotas
       rules:
         - alert: TenantCPUQuotaHigh
           expr: |
             sum by (namespace) (
-              rate(container_cpu_usage_seconds_total{container!=""}[5m])
+              rate(container_cpu_usage_seconds_total{container!="", metrics_path="/metrics/cadvisor"}[5m])
             )
             /
             sum by (namespace) (
@@ -38,7 +43,7 @@ spec:
         - alert: TenantMemoryQuotaHigh
           expr: |
             sum by (namespace) (
-              container_memory_working_set_bytes{container!=""}
+              container_memory_working_set_bytes{container!="", metrics_path="/metrics/cadvisor"}
             )
             /
             sum by (namespace) (
