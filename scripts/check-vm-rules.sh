@@ -118,8 +118,10 @@ done
 # sets through it (#1771). Hooked here rather than as a separate workflow step
 # because this is the alerting check CI already runs. CHECK_AM_ROUTES=0 is
 # only for the self-test's fixture runs above, which have no real rules.
+# Unlike the promtool part, this step needs helm, pyyaml and (for the first
+# amtool download) network egress; validate-manifests.yml provides all three.
 if [ "${CHECK_AM_ROUTES:-1}" = "1" ]; then
-  if ! python3 "$ROOT/scripts/check-alertmanager-routes.py"; then
+  if ! RULES_DIR="$RULES_DIR" python3 "$ROOT/scripts/check-alertmanager-routes.py"; then
     fail=1
   fi
 fi
