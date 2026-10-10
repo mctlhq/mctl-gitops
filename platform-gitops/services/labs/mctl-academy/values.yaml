@@ -50,6 +50,12 @@ envFrom:
       name: "labs-mctl-academy-db-creds"
   - secretRef:
       name: mctl-academy-secrets
+  # "Log in with MCTL account" (ZITADEL), mctl-gitops#1500 phase 6.3. The
+  # zitadel-iac Job writes the four ZITADEL_* keys (docs/runbooks/zitadel.md,
+  # "Labs apps sign-in"). Removing this entry turns the button off again.
+  - secretRef:
+      name: mctl-academy-oidc-zitadel
+      optional: true
 externalSecret:
   targetSecret: mctl-academy-secrets
   data:
