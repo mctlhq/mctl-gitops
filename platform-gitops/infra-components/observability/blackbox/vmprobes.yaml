@@ -197,6 +197,11 @@ spec:
         - sourceLabels: [__meta_kubernetes_ingress_host]
           targetLabel: __param_target
           replacement: https://${1}/api/method/ping
+        # Redundant with operator v0.68, which copies __param_target into
+        # instance after these rules; stated so that the one-series-per-site
+        # identity does not depend on that ordering.
+        - sourceLabels: [__param_target]
+          targetLabel: instance
         - regex: ingress
           action: labeldrop
 ---
