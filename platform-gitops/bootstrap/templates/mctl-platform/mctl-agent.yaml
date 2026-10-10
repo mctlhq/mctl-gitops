@@ -47,7 +47,7 @@ spec:
           # the volume below are inert on older tags.
           GITHUB_TOKEN_FILE: /var/run/secrets/github/GITHUB_TOKEN
           POLL_INTERVAL: "5m"
-          # Flapping CPU throttling alerts (openclaw, etc.) oscillate every
+          # Flapping CPU throttling alerts oscillate every
           # 30m-4h, generating duplicate tickets each cycle. Default 10m
           # cooldown was too short — see 129 stale resource_limit tickets
           # on 2026-05-12. Observed re-fire spacing (6-17h for claude-remote)
@@ -65,10 +65,11 @@ spec:
           WEBHOOK_ENABLED: "true"
           WEBHOOK_CALLBACK_URL: "https://agent.mctl.ai"
           WEBHOOK_DEFAULT_TTL: "15m"
-          # Bot username for the "Ask OpenClaw" deeplink button on
-          # Telegram notifications. Must match the bot reachable in
-          # admins-openclaw chat — TELEGRAM_BOT_TOKEN in Vault has the
-          # corresponding token.
+          # Bot username for the deeplink button on Telegram
+          # notifications. The button was built for OpenClaw, which is
+          # removed, but mctl-agent still reads this variable
+          # (internal/config/config.go) and falls back to a different bot
+          # without it, so it stays until mctl-agent drops the button.
           OPENCLAW_BOT_USERNAME: "@MCTL_AI_bot"
           # LLM fallback skill disabled — Anthropic Console API key removed.
           # Deterministic skills cover all known alert types; TypeGeneric

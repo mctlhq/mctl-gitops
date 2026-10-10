@@ -94,48 +94,6 @@ spec:
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: labs-openclaw-db
-spec:
-  name: "labs-openclaw"
-  owner: "labs-openclaw"
-  # openclaw removed 2026-10-10: CNPG drops the database. Remove this object
-  # once the drop has been observed.
-  ensure: absent
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
-  name: admins-openclaw-db
-spec:
-  name: "admins-openclaw"
-  owner: "admins-openclaw"
-  # openclaw removed 2026-10-10: CNPG drops the database. Remove this object
-  # once the drop has been observed.
-  ensure: absent
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
-  name: ovk-openclaw-db
-spec:
-  name: "ovk-openclaw"
-  owner: "ovk-openclaw"
-  # openclaw removed 2026-10-10: CNPG drops the database. Remove this object
-  # once the drop has been observed.
-  ensure: absent
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
   name: labs-kuptsi-app-db
 spec:
   name: "labs-kuptsi-app"
