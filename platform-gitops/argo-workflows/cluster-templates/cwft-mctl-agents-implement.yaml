@@ -765,8 +765,7 @@ spec:
           - name: WORKFLOW_EXECUTION_REQUEST_ID
             value: "{{workflow.parameters.execution_request_id}}"
           # Execution traces (mctl-agents#195, docs/observability/
-          # execution-traces.md in mctl-agents). Inert here: no OTLP endpoint
-          # is set on this template, so nothing is exported. TRACEPARENT
+          # execution-traces.md in mctl-agents). TRACEPARENT
           # parents the pod's root span on the submitting activity.
           # ARGO_WORKFLOW_NAME stamps mctl.argo.workflow.name.
           # MCTL_TRACE_REQUIRE_PARENT keeps a pod that no traced DevLoop
@@ -778,6 +777,12 @@ spec:
             value: "{{workflow.name}}"
           - name: MCTL_TRACE_REQUIRE_PARENT
             value: "true"
+          # OTLP export (ADR 0001 producer amendment). Only a pod whose
+          # TRACEPARENT is sampled exports, per the gate above.
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: http://otel-collector.monitoring.svc.cluster.local:4318
+          - name: OTEL_EXPORTER_OTLP_PROTOCOL
+            value: http/protobuf
           # Soft cap per proposal. Raised 3.00 -> 10.00: large issue-driven
           # proposals (e.g. a full observability layer) blew the $3 cap and
           # the SDK raised error_max_budget_usd before opening a PR. Small

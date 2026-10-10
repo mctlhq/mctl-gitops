@@ -12,6 +12,11 @@ What this guards, for every container of every `cwft-mctl-agents-*.yaml`:
    with an empty default, so a submit without it still renders.
 3. The two templates the DevLoop traces, investigate and implement, carry
    the mapping, so the rollout cannot silently lose a hop.
+4. Exporting needs the scope code, which is mctl-agents >= MIN_SCOPED_VERSION.
+   An exporting CWFT's default `agent_image`, and the image of any mctl-agents
+   worker with `otel.enabled`, must be at least that version, because an
+   older image ignores both scope variables and would trace everything.
+   Such a worker must also set a non-empty `MCTL_TRACE_WORKFLOW_TYPES`.
 
 Read from the templates, never restated, so it fails when they drift.
 
@@ -27,6 +32,18 @@ TEMPLATES_DIR = ROOT / "platform-gitops/argo-workflows/cluster-templates"
 ENDPOINTS = ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
 TRACEPARENT_VALUE = "{{workflow.parameters.traceparent}}"
 TRACED = ("cwft-mctl-agents-investigate.yaml", "cwft-mctl-agents-implement.yaml")
+SERVICES_DIR = ROOT / "platform-gitops/services/admins"
+AGENTS_IMAGE = "ghcr.io/mctlhq/mctl-agents"
+# First mctl-agents release with MCTL_TRACE_WORKFLOW_TYPES /
+# MCTL_TRACE_REQUIRE_PARENT (mctlhq/mctl-agents#609).
+MIN_SCOPED_VERSION = (1, 71, 0)
+
+
+def version_of(tag):
+    try:
+        return tuple(int(part) for part in str(tag).split("."))
+    except ValueError:
+        return None
 
 failures = []
 
@@ -53,7 +70,10 @@ def main():
     files = sorted(TEMPLATES_DIR.glob("cwft-mctl-agents-*.yaml"))
     check("found the mctl-agents CWFTs", len(files) >= 2, str(files))
     for path in files:
-        doc = yaml.safe_load(path.read_text())
+        # A second `---` document would go unchecked by safe_load; refuse it.
+        docs = [d for d in yaml.safe_load_all(path.read_text()) if d is not None]
+        check(f"{path.name} is a single YAML document", len(docs) == 1, f"{len(docs)} documents")
+        doc = docs[0] if docs else {}
         spec = doc.get("spec") or {}
         params = {p.get("name"): p for p in (spec.get("arguments") or {}).get("parameters") or []}
         maps_traceparent = False
@@ -71,6 +91,16 @@ def main():
                           repr(env.get("MCTL_TRACE_REQUIRE_PARENT")))
                     check(f"{where} exports only with TRACEPARENT mapped",
                           env.get("TRACEPARENT") == TRACEPARENT_VALUE, repr(env.get("TRACEPARENT")))
+        exports = any(
+            any(env_of(c).get(name) for name in ENDPOINTS)
+            for t in spec.get("templates") or [] for c in containers(t)
+        )
+        if exports:
+            image = str((params.get("agent_image") or {}).get("value", ""))
+            repo, _, tag = image.rpartition(":")
+            ver = version_of(tag)
+            check(f"{path.name} exports only with an agent_image carrying the scope code",
+                  repo == AGENTS_IMAGE and ver is not None and ver >= MIN_SCOPED_VERSION, image)
         if maps_traceparent:
             param = params.get("traceparent")
             check(f"{path.name} declares the traceparent parameter", param is not None)
@@ -78,6 +108,19 @@ def main():
                   param is not None and param.get("value") == "", repr(param))
         if path.name in TRACED:
             check(f"{path.name} is wired for traces", maps_traceparent)
+
+    for values in sorted(SERVICES_DIR.glob("mctl-agents-worker*/values.yaml")):
+        doc = yaml.safe_load(values.read_text()) or {}
+        if not (doc.get("otel") or {}).get("enabled"):
+            continue
+        image = doc.get("image") or {}
+        ver = version_of(image.get("tag"))
+        name = values.parent.name
+        check(f"{name} traces only with an image carrying the scope code",
+              image.get("repository") == AGENTS_IMAGE and ver is not None and ver >= MIN_SCOPED_VERSION,
+              repr(image))
+        scope = str((doc.get("env") or {}).get("MCTL_TRACE_WORKFLOW_TYPES", "")).strip()
+        check(f"{name} traces only with MCTL_TRACE_WORKFLOW_TYPES set", bool(scope), repr(scope))
 
     if failures:
         print("\n".join(["", "FAILURES:"] + failures))

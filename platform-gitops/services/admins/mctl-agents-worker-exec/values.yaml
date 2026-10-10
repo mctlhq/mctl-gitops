@@ -75,6 +75,17 @@ env:
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents
   LOG_LEVEL: info
+  # Execution traces, DevLoop only (mctl-agents#195; ADR 0001 "Producer
+  # amendment: DevLoop traces", mctl-gitops#1280). otel.enabled below renders
+  # the OTLP endpoint. MCTL_TRACE_WORKFLOW_TYPES gives every other workflow
+  # type this worker runs (reconcile, incidents, sweep) an unsampled root,
+  # so nothing of theirs is recorded. MCTL_TRACE_ARGO_PARAM sends the
+  # traceparent that mctl-api (#538) and the CWFTs (#1789) declare.
+  # Kill switch: otel.enabled: false. Needs mctl-agents >= 1.71.0; an older
+  # image ignores the scope and would trace every workflow
+  # (tests/test_cwft_execution_trace_env.py enforces it).
+  MCTL_TRACE_WORKFLOW_TYPES: DevLoopWorkflow
+  MCTL_TRACE_ARGO_PARAM: "true"
 envFrom:
   - secretRef:
       name: mctl-agents-worker-exec-secrets
@@ -105,3 +116,7 @@ externalSecret:
     - secretKey: MCTL_TOKEN
       remoteKey: platform/mctl-agents
       property: mctl-token
+
+# Execution traces (mctl-agents#195): see MCTL_TRACE_WORKFLOW_TYPES in env.
+otel:
+  enabled: true
