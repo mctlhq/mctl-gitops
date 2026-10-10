@@ -351,7 +351,11 @@ initContainers:
               copied=$(mc ls --recursive "$STATE") \
                 || fatal "cannot list $STATE on R2 after the copy; not marking the migration done"
               have=$(printf '%s\n' "$copied" | grep -c ' STANDARD ') || true
-              [ "$have" -ge "$want" ] && [ "$want" -gt 0 ] \
+              # want=0 means every source key sits under an excluded prefix:
+              # there is nothing to copy, which is success, not a reason to
+              # crash-loop forever. A parse failure cannot produce 0 here: a
+              # line the sed does not strip is not filtered out, so it counts.
+              [ "$have" -ge "$want" ] \
                 || fatal "MinIO -> R2 copy incomplete: $have of $want objects on R2; not marking the migration done"
               echo "Copied $have of $want objects to R2."
             else
