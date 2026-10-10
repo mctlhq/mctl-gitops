@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-10T20:34:57Z'
+updated_at: '2026-10-10T20:42:34Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-7776a413d0a084b0
@@ -31,3 +31,9 @@ github:
   state: open
   head_sha: 70bf54f8ad1a76816687f0f0b101acb68f757fe9
   observed_at: '2026-10-10T20:34:57Z'
+refusals: 1
+refusals_head: 97cc87166b00d878b06abd1a87fdb7086cbb2ad3
+notes: 'implementer declined to act: Already addressed: commit 97cc871 adds a SHUTDOWN_DRAIN_DELAY
+  (default 5s) time.Sleep between draining.Store(true)/stopSignals() and srv.Shutdown
+  in cmd/api/main.go (lines ~969-971), so /readyz reports checks.shutdown=draining
+  while the listener is still open.'
