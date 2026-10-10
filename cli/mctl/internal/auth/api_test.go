@@ -199,7 +199,7 @@ func useFakeAPI(t *testing.T, f *fakeAPI) string {
 	t.Setenv("MCTL_TOKEN", "")
 	t.Setenv("MCTL_AUTH", "")
 	t.Setenv("GITHUB_TOKEN", "")
-	// No gh on PATH: the GitHub fallback must come from GITHUB_TOKEN alone.
+	// No gh on PATH: MCTL_AUTH=github must get its token from GITHUB_TOKEN.
 	t.Setenv("PATH", t.TempDir())
 	legacyNoticeOnce = sync.Once{}
 	prev := legacyNotice
@@ -277,15 +277,14 @@ func TestGetTokenOrder(t *testing.T) {
 		t.Errorf("no credential at all: err = %v, want a pointer to 'mctl auth login'", err)
 	}
 
+	// mctlhq/mctl-api#525: no sign-in is an error even with a GitHub token
+	// at hand; the GitHub token is never sent unless MCTL_AUTH=github.
 	t.Setenv("GITHUB_TOKEN", "gh-token")
-	if tok, err := GetToken(); err != nil || tok != "gh-token" {
-		t.Errorf("no sign-in: token = %q %v, want the GitHub token", tok, err)
+	if tok, err := GetToken(); err == nil || !strings.Contains(err.Error(), "mctl auth login") {
+		t.Errorf("no sign-in: token = %q err = %v, want an error pointing at 'mctl auth login'", tok, err)
 	}
-	if !strings.Contains(notice.String(), "mctl auth login") {
-		t.Errorf("the GitHub fallback must say how to sign in; notice = %q", notice.String())
-	}
-	if _, err := GetToken(); err != nil || strings.Count(notice.String(), "\n") != 1 {
-		t.Errorf("the notice must be printed once per process; notice = %q", notice.String())
+	if notice.Len() != 0 {
+		t.Errorf("the default path must not touch the GitHub token; notice = %q", notice.String())
 	}
 
 	if err := writeAPIToken(&storedAPIToken{
@@ -298,14 +297,15 @@ func TestGetTokenOrder(t *testing.T) {
 		t.Errorf("signed in: token = %q %v, want the mctl sign-in ahead of GITHUB_TOKEN", tok, err)
 	}
 
-	notice.Reset()
-	legacyNoticeOnce = sync.Once{}
 	t.Setenv("MCTL_AUTH", "github")
 	if tok, err := GetToken(); err != nil || tok != "gh-token" {
 		t.Errorf("MCTL_AUTH=github: token = %q %v, want the GitHub token", tok, err)
 	}
-	if notice.Len() != 0 {
-		t.Errorf("MCTL_AUTH=github is a choice and must not be nagged; notice = %q", notice.String())
+	if !strings.Contains(notice.String(), "deprecated") || !strings.Contains(notice.String(), "mctlhq/mctl-api#525") {
+		t.Errorf("MCTL_AUTH=github must warn that it is deprecated; notice = %q", notice.String())
+	}
+	if _, err := GetToken(); err != nil || strings.Count(notice.String(), "\n") != 1 {
+		t.Errorf("the warning must be one line, once per process; notice = %q", notice.String())
 	}
 
 	t.Setenv("MCTL_AUTH", "zitdel")
@@ -336,8 +336,43 @@ func TestAPITokenIsNotSentToAnotherAPI(t *testing.T) {
 		t.Errorf("GetToken = %q, want an error: the only credential belongs to another API", tok)
 	}
 	t.Setenv("GITHUB_TOKEN", "gh-token")
-	if tok, err := GetToken(); err != nil || tok != "gh-token" {
-		t.Errorf("GetToken = %q %v, want the GitHub token and never the other API's", tok, err)
+	if tok, err := GetToken(); err == nil {
+		t.Errorf("GetToken = %q, want an error: neither the other API's token nor the GitHub token", tok)
+	}
+}
+
+// The default path must not even run gh: a gh on PATH that would hand out a
+// token is never asked (mctlhq/mctl-api#525).
+func TestDefaultPathNeverRunsGH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake gh is a shell script")
+	}
+	f := newFakeAPI(t)
+	useFakeAPI(t, f)
+	bin := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "gh-ran")
+	// PATH holds only the fake, so the script uses shell builtins alone.
+	script := "#!/bin/sh\n: > '" + marker + "'\necho gh-cli-token\n"
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+
+	tok, err := GetToken()
+	if err == nil || !strings.Contains(err.Error(), "mctl auth login") {
+		t.Errorf("GetToken = %q %v, want an error pointing at 'mctl auth login'", tok, err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the default path ran gh")
+	}
+
+	// The same gh is used when asked for, which proves the fake works.
+	t.Setenv("MCTL_AUTH", "github")
+	if tok, err := GetToken(); err != nil || tok != "gh-cli-token" {
+		t.Errorf("MCTL_AUTH=github: token = %q %v, want the gh token", tok, err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("MCTL_AUTH=github did not run gh")
 	}
 }
 

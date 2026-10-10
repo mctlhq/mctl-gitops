@@ -528,8 +528,8 @@ func TestGetTokenUsesZitadelOnlyWhenOptedIn(t *testing.T) {
 	}
 
 	t.Setenv("MCTL_AUTH", "")
-	if tok, err := GetToken(); err != nil || tok != "gh-token" {
-		t.Errorf("default: token = %q %v, want the GitHub token", tok, err)
+	if tok, err := GetToken(); err == nil {
+		t.Errorf("default: token = %q, want an error: neither ZITADEL nor GitHub without MCTL_AUTH", tok)
 	}
 	t.Setenv("MCTL_AUTH", "zitadel")
 	if tok, err := GetToken(); err != nil || tok != "zitadel-token" {

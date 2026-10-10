@@ -66,19 +66,22 @@ func TestAuthStatusReportsTheCredentialInUse(t *testing.T) {
 			t.Errorf("out = %q err = %v, want the GitHub token identity", out, err)
 		}
 	})
-	t.Run("GitHub fallback", func(t *testing.T) {
+	t.Run("no sign-in ignores the GitHub token", func(t *testing.T) {
 		whoamiAPI(t)
 		t.Setenv("GITHUB_TOKEN", "gh-token")
 		out, err := status(t)
-		if err != nil || !strings.Contains(out, "id-of-gh-token") || !strings.Contains(out, "mctl auth login") {
-			t.Errorf("out = %q err = %v, want the GitHub identity and the sign-in hint", out, err)
+		if err == nil || !strings.Contains(out, "Not signed in") || !strings.Contains(out, "mctl auth login") {
+			t.Errorf("out = %q err = %v, want not signed in and the sign-in hint", out, err)
+		}
+		if strings.Contains(out, "id-of-gh-token") {
+			t.Errorf("status used the GitHub token without MCTL_AUTH=github: %q", out)
 		}
 	})
 	t.Run("nothing", func(t *testing.T) {
 		whoamiAPI(t)
 		out, err := status(t)
-		if err == nil || !strings.Contains(out, "Not authenticated") {
-			t.Errorf("out = %q err = %v, want not authenticated", out, err)
+		if err == nil || !strings.Contains(out, "Not signed in") {
+			t.Errorf("out = %q err = %v, want not signed in", out, err)
 		}
 	})
 	t.Run("refused", func(t *testing.T) {
