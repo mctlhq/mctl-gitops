@@ -169,12 +169,9 @@ argo-cd:
         # that used to sit here. It was always redundant with the group
         # grant above — mashkovd is in the "admins" tenant/group per
         # mctl-portal's membership table (confirmed via mctl_whoami:
-        # Admin=true, Teams=[admins ovk]) — and Dex-issued tokens' real email
-        # claim is always "<login>@mctl.me" (hardcoded in
-        # mctl-portal/plugins/oidc-provider-backend/src/router.ts, a
-        # deliberate internal-identity convention, not changed here), so any
-        # per-user binding on a different domain would just be dead config
-        # that looks like it matters but never matches a live token.
+        # Admin=true, Teams=[admins ovk]). Argo CD signs in through ZITADEL,
+        # whose `groups` claim carries the roles this policy binds, so a
+        # per-user binding would be dead config that never matches a token.
 
         # mctl-api service account: read all applications for status checks
         p, mctl-api, applications, get, */*, allow
