@@ -28,7 +28,7 @@ Store the token in a local file, then run in the chat prompt field:
 ```
 or per-repo:
 ```
-! for repo in mctl-telegram mctl-api mctl-gitops mctl-agent mctl-agents mctl-portal mctl-web mctl-docs mctl-design mctl-claude-remote mctl-trading-data mctl-mcp; do
+! for repo in .github mctl-academy mctl-agent mctl-agents mctl-alice mctl-api mctl-claude-remote mctl-design mctl-docs mctl-gitops mctl-loyalty mctl-pairdesk mctl-portal mctl-telegram mctl-web newton-mcp-gateway portfolio projects-mcp seerrsense; do
     gh secret set CLAUDE_CODE_OAUTH_TOKEN_2 -R mctlhq/$repo < ~/.secrets/claude-review-token-2.txt && echo "OK: $repo" || echo "FAIL: $repo"
   done
 ```
@@ -72,22 +72,41 @@ for repo in <target repos>; do
 done
 ```
 
-## Repos covered (as of 2026-05-30)
+## Repos covered (as of 2026-10-10)
 
-All repos with claude-review.yml:
-- mctl-gitops, mctl-telegram, mctl-web, mctl-docs
-- mctl-design, mctl-claude-remote, mctl-api, mctl-agent, mctl-agents
-- mctl-portal, mctl-trading-data, mctl-mcp
+Both `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN_2` exist as
+**org-level** secrets with `visibility: all`, so every repo inherits them and
+Option B is the rotation. Per-repo loops are only for repo-level overrides.
 
-When a new repo gets `claude-review.yml`, add its name to the loops and re-run
-the skill.
+Non-archived repos with `.github/workflows/claude-review.yml` (19):
+- .github, mctl-academy, mctl-agent, mctl-agents, mctl-alice, mctl-api
+- mctl-claude-remote, mctl-design, mctl-docs, mctl-gitops, mctl-loyalty
+- mctl-pairdesk, mctl-portal, mctl-telegram, mctl-web, newton-mcp-gateway
+- portfolio, projects-mcp, seerrsense
+
+Repo-level overrides: only **projects-mcp** sets both names itself. A repo
+secret shadows the org secret of the same name, so an org-only rotation
+leaves projects-mcp on the old token. Rotate it per-repo as well, or delete
+its copies (with the owner's OK) so it inherits the org secret.
+
+Not covered on purpose: the temporary `*-ghsa-*` advisory forks.
+
+Re-derive this list instead of trusting it:
+```bash
+for r in $(gh repo list mctlhq --no-archived --limit 200 --json name --jq '.[].name'); do
+  gh api "repos/mctlhq/$r/contents/.github/workflows/claude-review.yml" --jq .name >/dev/null 2>&1 \
+    && echo "$r $(gh api "repos/mctlhq/$r/actions/secrets" --jq '[.secrets[].name|select(test("CLAUDE"))]|join(",")')"
+done
+```
 
 ## Special case — CLAUDE_CODE_OAUTH_TOKEN (claude-review)
 
-The primary token is per-repo (not org-level) because it was set with
-`claude setup-token`:
+The token comes from `claude setup-token`. It is stored as an org-level
+secret, so the rotation is Option B with this name, plus the repo-level
+overrides listed above. The per-repo loop below is the fallback, for when an
+org-level secret is not an option:
 ```
-! for repo in mctl-telegram mctl-api mctl-gitops mctl-agent mctl-agents mctl-portal mctl-web mctl-docs mctl-design mctl-claude-remote mctl-trading-data mctl-mcp; do
+! for repo in .github mctl-academy mctl-agent mctl-agents mctl-alice mctl-api mctl-claude-remote mctl-design mctl-docs mctl-gitops mctl-loyalty mctl-pairdesk mctl-portal mctl-telegram mctl-web newton-mcp-gateway portfolio projects-mcp seerrsense; do
     gh secret set CLAUDE_CODE_OAUTH_TOKEN -R mctlhq/$repo < ~/.secrets/claude-review-token.txt && echo "OK: $repo" || echo "FAIL: $repo"
   done
 ```
