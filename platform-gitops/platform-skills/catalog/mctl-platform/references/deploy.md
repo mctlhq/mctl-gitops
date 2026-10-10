@@ -98,16 +98,46 @@ Onboarding checklist for Pattern A on a **new** repo:
   with `gh api --method POST repos/<owner>/<repo>/actions/runs/<id>/approve`
   (once per held run) rather than treating that as a review-bot problem.
 
-**Pattern B — direct per-push deploy (older/simpler repos: e.g.
-mctl-instruments).** A `deploy` job in the repo's own `ci.yml` POSTs
-straight to `https://api.mctl.ai/api/v1/operations/deploy-service/execute`
-on every push to `main`, authenticated with a classic PAT
-(`MCTL_GITHUB_TOKEN`, scope `read:user`) stored as a repo secret. No
-release-please, no semver tag gate — every merge to main deploys. This is
-what the scaffolding guide at docs.mctl.ai and `mctl_deploy_service`'s own
+**Pattern B — direct per-push deploy (older/simpler repos, e.g.
+mctl-rule).** A `deploy` job in the repo's own `ci.yml` POSTs straight to
+`https://api.mctl.ai/api/v1/operations/deploy-service/execute` on every
+push to `main`. No release-please, no semver tag gate — every merge to main
+deploys. This is what the scaffolding guide at docs.mctl.ai
+(`guides/scaffolding#ci-auto-deploy-job`) and `mctl_deploy_service`'s own
 onboarding instructions describe; it's the simplest path for a brand-new
 repo that doesn't need controlled/versioned releases, but do not assume an
 established service repo uses it — check first.
+
+The job authenticates with its own **GitHub Actions OIDC token**
+(mctl-api#530, enabled by mctl-gitops#1760), not a stored secret:
+`permissions: id-token: write`, then
+`curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.mctl.ai" | jq -r .value`.
+The principal (`ci:<owner>/<repo>`) can do exactly one thing, and every
+violation is a 403 `ci_deploy_denied` (or `ci_route_not_allowed`):
+- only `POST .../deploy-service/execute` with `action: deploy`;
+- a **flat** JSON body limited to `action`, `team_name`, `component_name`,
+  `dockerfile_repo`, `git_tag`, `dockerfile_path` (a nested `"parameters"`
+  object is a 400; env/secrets/host/scaling/`image_tag` are refused);
+- `git_tag` required, `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`;
+- `dockerfile_repo` must equal the token's repository AND the component's
+  `github.com/source-repo` annotation in
+  `platform-gitops/services/<team>/<component>/catalog-info.yaml`
+  (written at onboard from `dockerfile_repo`);
+- events `push`/`workflow_dispatch`/`release` from `main` or a tag only —
+  never `pull_request`;
+- the repo owner must be in mctl-api's `MCTL_GITHUB_ACTIONS_OIDC`
+  `repository_owners` (today `mctlhq`, set in
+  `bootstrap/templates/mctl-platform/mctl-api.yaml`); an owner outside it
+  gets 401 until a platform admin adds it.
+
+Send `dockerfile_path` on every deploy when the Dockerfile is not at the
+repo root: omitting it does not keep the onboarded value, it defaults to
+`Dockerfile`.
+
+The old method — a classic PAT stored as the repo secret
+`MCTL_GITHUB_TOKEN` — is deprecated and goes away with mctl-api's GitHub
+token bearer (mctl-api#525). When you meet it, migrate the job and tell the
+owner to delete the secret and revoke the PAT.
 
 ## Deploy Actions
 
