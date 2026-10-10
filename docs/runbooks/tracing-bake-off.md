@@ -133,9 +133,10 @@ The namespace quota is sized for this one pod plus headroom for a rollout:
    argo submit -n argo-workflows --from clusterworkflowtemplate/otel-trace-fixture
    ```
 
-   - In VictoriaMetrics: `otelcol_exporter_sent_spans{exporter="otlp/eval-tempo"}`
-     increases and `otelcol_exporter_send_failed_spans{exporter="otlp/eval-tempo"}`
-     does not.
+   - In VictoriaMetrics: `otelcol_exporter_sent_spans{exporter="otlp_grpc/eval-tempo"}`
+     increases and `otelcol_exporter_send_failed_spans{exporter="otlp_grpc/eval-tempo"}`
+     does not. (The collector's telemetry labels the exporter by its resolved
+     type, `otlp_grpc/eval-tempo`, not by the config ID `otlp/eval-tempo`.)
    - In Grafana → Explore → "Tempo (eval)": search for the fixture's
      service names and open one trace; the parent/child tree must be
      complete.
@@ -174,7 +175,7 @@ never a silent extension.
 | `trace_reconstruction` | 25 | "Tempo (eval)" in Grafana against the fixture traces submitted through `otel-trace-fixture` — parent/child tree, async/queue/Temporal/Argo visibility, search, error navigation. |
 | `ai_agent_observability` | 25 | `gen_ai.usage.*` counters on the fixture spans and what Grafana's Tempo views can group by (model/tool/session). If the redaction e2e check fails, record a `0`-with-reason cell. |
 | `data_ownership_portability` | 20 | Tempo's licence (recorded in `docs/adr/0001-rubric.yaml`'s `stage_a`), plus a live check that the blocks in the bucket are readable Parquet and that OTLP ingestion needed no producer-side change. |
-| `operations` | 15 | `otelcol_exporter_*{exporter="otlp/eval-tempo"}` and the `tempo_*` / `tempodb_*` series (job `tempo`) in VictoriaMetrics; the `TempoEval*` alerts that fired; `container_memory_rss` against the 1Gi limit; the quota's `status.used`. |
+| `operations` | 15 | `otelcol_exporter_*{exporter="otlp_grpc/eval-tempo"}` and the `tempo_*` / `tempodb_*` series (job `tempo`) in VictoriaMetrics; the `TempoEval*` alerts that fired; `container_memory_rss` against the 1Gi limit; the quota's `status.used`. |
 | `security_privacy` | 10 | `tests/test_otel_collector_redaction.py` (what is redacted before Tempo ever sees it) plus a look at what Tempo stores for the poisoned fixture `devloop-trace-redaction.json`. |
 | `evals_quality_loop` | 5 | Whether a score can be attached to an execution. Tempo has no native mechanism; record that with evidence rather than leaving the cell blank. |
 
