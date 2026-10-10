@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-10-10T15:04:43Z'
+status: implemented
+updated_at: '2026-10-10T15:07:45Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-f0e0be9d57816460
-  trace_id: 04c2c80aa82a0a5d8a33c5d5d1f00e55
-  agent: issue-investigator
+  context_id: ex-0842fa7743db1532
+  trace_id: 9bf443ac0ca8b5c45465f91d66cc64de
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -19,5 +19,11 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-10-10T15:04:43Z'
+attempt:
+  id: aed366875c02487e48f96f5a9e46468ba67c70be33f65b16a12eac6ab101c981
+  started_at: '2026-10-10T15:06:09Z'
+  expires_at: '2026-10-10T17:16:09Z'
+  finished_at: '2026-10-10T15:07:45Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/1769
