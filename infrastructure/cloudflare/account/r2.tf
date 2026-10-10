@@ -30,6 +30,19 @@ locals {
     "tempo-traces"             = "EEUR"
     "vault-backup"             = "EEUR"
   }
+
+  # Buckets this root CREATES, as opposed to adopting. They are kept out of
+  # local.r2_buckets because every key there gets an import block, and an
+  # import of a bucket that does not exist yet fails the plan.
+  #
+  # claude-remote-state: the persisted /workspace of labs/claude-remote
+  # (Claude Code OAuth credentials, session transcripts, the native claude
+  # binary, git config), moved off the in-cluster MinIO that is being
+  # decommissioned. It holds login state that cannot be regenerated without
+  # an interactive `claude auth login`, so it gets no expiry rule.
+  r2_buckets_created = {
+    "claude-remote-state" = "EEUR"
+  }
 }
 
 import {
@@ -39,7 +52,7 @@ import {
 }
 
 resource "cloudflare_r2_bucket" "this" {
-  for_each = local.r2_buckets
+  for_each = merge(local.r2_buckets, local.r2_buckets_created)
 
   account_id    = var.account_id
   name          = each.key
