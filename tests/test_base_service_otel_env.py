@@ -28,10 +28,12 @@ import tempfile
 import yaml
 
 CHART = pathlib.Path("platform-gitops/helm-charts/base-service")
+# What otel.enabled renders on its own. OTEL_SERVICE_NAME is not among them:
+# service.name is the producer's (see case 7), and the chart sets it only when
+# a service names itself through otel.serviceName.
 OTEL_KEYS = {
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_PROTOCOL",
-    "OTEL_SERVICE_NAME",
     "OTEL_RESOURCE_ATTRIBUTES",
 }
 
@@ -105,7 +107,7 @@ for extra, label in (({}, "no env key"),
 for values, label in (({**BASE}, "Deployment"),
                       ({**BASE, "blueGreen": {"enabled": True}}, "Rollout")):
     _, env = workload(render(values))
-    check(not (OTEL_KEYS & set(env)),
+    check(not ((OTEL_KEYS | {"OTEL_SERVICE_NAME"}) & set(env)),
           f"{label} carries OTEL vars without otel.enabled: "
           f"{sorted(OTEL_KEYS & set(env))}")
 
@@ -113,7 +115,7 @@ for values, label in (({**BASE}, "Deployment"),
 #    a duplicate name would be resolved by Kubernetes rather than by us.
 docs = render({
     **BASE,
-    "otel": {"enabled": True},
+    "otel": {"enabled": True, "serviceName": "chart-default"},
     "env": {"OTEL_SERVICE_NAME": "chosen-by-the-service"},
 })
 kind, env = workload(docs)
@@ -131,7 +133,7 @@ check(len(names) == len(set(names)),
 #     two entries do not even look alike in the rendered list.
 docs = render({
     **BASE,
-    "otel": {"enabled": True},
+    "otel": {"enabled": True, "serviceName": "chart-default"},
     "envValueFrom": {
         "OTEL_SERVICE_NAME": {"fieldRef": {"fieldPath": "metadata.name"}}},
 })
@@ -155,6 +157,18 @@ check(env.get("OTEL_EXPORTER_OTLP_ENDPOINT")
       f"unexpected endpoint {env.get('OTEL_EXPORTER_OTLP_ENDPOINT')!r}")
 check(env.get("OTEL_RESOURCE_ATTRIBUTES") == "service.namespace=labs",
       f"namespace not carried: {env.get('OTEL_RESOURCE_ATTRIBUTES')!r}")
+
+# 7. service.name is the producer's (mctl-docs telemetry-attributes.md). The
+#    chart used to render the release fullname ("admins-mctl-agent-base-
+#    service"), which overrode every producer's own name (mctlhq/mctl-agent#97).
+#    Unset, nothing is rendered; set, it is rendered as given, on both kinds.
+for extra, label in (({}, "Deployment"), ({"blueGreen": {"enabled": True}}, "Rollout")):
+    _, env = workload(render({**BASE, **extra, "otel": {"enabled": True}}, name="admins-mctl-agent"))
+    check("OTEL_SERVICE_NAME" not in env,
+          f"{label}: OTEL_SERVICE_NAME rendered without otel.serviceName: {env.get('OTEL_SERVICE_NAME')!r}")
+    _, env = workload(render({**BASE, **extra, "otel": {"enabled": True, "serviceName": "mctl-agent"}}))
+    check(env.get("OTEL_SERVICE_NAME") == "mctl-agent",
+          f"{label}: otel.serviceName not rendered: {env.get('OTEL_SERVICE_NAME')!r}")
 
 if failures:
     for f in failures:
