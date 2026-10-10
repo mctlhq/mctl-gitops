@@ -138,6 +138,13 @@ spec:
         # rule as work_item_id. Requires an issue-investigator release
         # containing mctl-agents#558 (1.66.0+); an earlier pin does not
         # recognise the flag and exits non-zero.
+      - name: traceparent
+        value: ""
+        # Optional. W3C trace context of the Temporal activity that
+        # submitted this run (mctl-agents#195), sent by a traced worker
+        # behind MCTL_TRACE_ARGO_PARAM. Read only as the TRACEPARENT env
+        # below, never interpolated into a script. Empty means no parent,
+        # and with MCTL_TRACE_REQUIRE_PARENT the pod then stays untraced.
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # This used to be a `volumeClaimTemplates` entry requesting 4Gi, which Argo
@@ -680,6 +687,20 @@ spec:
           # the same execution. Read only past WORK_CONTEXT_ROLLOUT_MODE=off.
           - name: WORKFLOW_NAME
             value: "{{workflow.name}}"
+          # Execution traces (mctl-agents#195, docs/observability/
+          # execution-traces.md in mctl-agents). Inert here: no OTLP endpoint
+          # is set on this template, so nothing is exported. TRACEPARENT
+          # parents the pod's root span on the submitting activity.
+          # ARGO_WORKFLOW_NAME stamps mctl.argo.workflow.name.
+          # MCTL_TRACE_REQUIRE_PARENT keeps a pod that no traced DevLoop
+          # submitted (manual, sweep) inert once the endpoint is added,
+          # which bounds the rollout to the ADR 0001 producer amendment.
+          - name: TRACEPARENT
+            value: "{{workflow.parameters.traceparent}}"
+          - name: ARGO_WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: MCTL_TRACE_REQUIRE_PARENT
+            value: "true"
           # The primary attempt is not final: the fallback always runs after
           # it fails, and the store never reopens an ended execution, so only
           # the fallback may mark it Failed.
