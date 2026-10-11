@@ -15,7 +15,7 @@ GitOps repository. ArgoCD source of truth for the entire mctl platform.
 
 ## Structure
 - `platform-gitops/bootstrap/` — App-of-Apps bootstrap (ArgoCD entry point)
-- `platform-gitops/services/` — per-tenant service values: `admins/`, `labs/`, `ovk/`
+- `platform-gitops/services/` — per-tenant service values: `admins/`, `labs/`
 - `platform-gitops/argo-workflows/cluster-templates/` — ClusterWorkflowTemplates and CronWorkflows
 - `platform-gitops/helm-charts/` — internal charts: `base-service`, `tenant`
 - `platform-gitops/backstage/templates/` — Backstage scaffolder templates

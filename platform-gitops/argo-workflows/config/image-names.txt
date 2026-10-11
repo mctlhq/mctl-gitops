@@ -72,10 +72,7 @@ grant labs portfolio
 grant labs projects-mcp
 grant labs seerrsense
 
-# ovk: runs mctl-academy from the same source repository as labs.
-grant ovk mctl-academy
-
-# openclaw: several teams hold a service of that name (labs, ovk, admins);
+# openclaw: several teams hold a service of that name (labs, admins);
 # each runs the fixed image mctl-openclaw (service-templates/openclaw), which
 # the mctl- prefix reserves, and deploy-service does not build for that
 # template. The image named openclaw itself was built only by mctl-openclaw's

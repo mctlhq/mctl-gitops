@@ -158,7 +158,7 @@ spec:
                 # which would have mangled every line had it ever been applied.
                 - cri: {}
                 - match:
-                    selector: '{namespace=~"labs|admins|ovk"}'
+                    selector: '{namespace=~"labs|admins"}'
                     stages:
                       # seerrsense (labs): the ChatGPT plugin-directory
                       # review needs a human to hear when a reviewer connects
@@ -213,7 +213,7 @@ spec:
                 #
                 # A SECOND match block, not extra stages in the one above,
                 # because the shepherd runs as an Argo step pod in
-                # `argo-workflows` and that selector covers labs|admins|ovk.
+                # `argo-workflows` and that selector covers labs|admins.
                 # Leaving the existing block untouched keeps its counters
                 # from silently changing scope.
                 #

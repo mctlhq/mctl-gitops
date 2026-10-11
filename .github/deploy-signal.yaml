@@ -48,12 +48,6 @@ services:
     sha_only: true  # bare commit sha, no main- prefix
 
   # --- deliberately held ---
-  - path: platform-gitops/services/ovk/mctl-academy/values.yaml
-    pinned_to: "0.1.0"
-    # The ovk tenant has never moved past 0.1.0 while labs is on 0.1.50.
-    # Whether that is deliberate is not recorded anywhere, so it is pinned
-    # here rather than declared healthy: if someone changes the deployed tag
-    # without deciding, this entry stops matching and the check fires.
 
   # --- not watched ---
   # These repositories publish no GitHub releases, so there is no release tag
