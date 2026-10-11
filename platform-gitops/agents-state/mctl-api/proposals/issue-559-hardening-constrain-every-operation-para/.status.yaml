@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-10-11T17:10:00Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-10-11T17:16:57Z'
+updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-383a0640ea7072db
-  trace_id: 3d9b7932b239c00cea9a6ddf9e5fdfaa
-  agent: issue-investigator
+  context_id: ex-689ca4892390f6c7
+  trace_id: 1f182b7b5c995f56ca7b1392cda7d66f
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -21,3 +21,9 @@ context:
 approval:
   approved_by: mashkovd
   approved_at: '2026-10-11T16:49:38Z'
+attempt:
+  id: 464b0dd5ce661e6643de680242728758e51c889eb2893e275d9f6c0b47a672a9
+  started_at: '2026-10-11T17:07:38Z'
+  expires_at: '2026-10-11T19:17:38Z'
+  finished_at: '2026-10-11T17:16:57Z'
+pr: https://github.com/mctlhq/mctl-api/pull/561
