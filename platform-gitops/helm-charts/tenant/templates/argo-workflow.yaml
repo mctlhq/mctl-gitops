@@ -135,11 +135,21 @@ roleRef:
   name: argo-workflow-smoke-verify
   apiGroup: rbac.authorization.k8s.io
 ---
-# SSO RBAC: give the team's SSO SA (in argo-workflows ns) access to workflows here
+# SSO RBAC: the team's SSO SA (in argo-workflows ns) may view workflows here,
+# never create or change them. Tenant workflows are submitted by the portal
+# and mctl-api with their own credentials, after their own team and input
+# checks, which a workflow created in the UI would skip. Platform admins keep
+# write access through the argo-workflows-admin SA ('admins' in groups,
+# argo-workflows/config/sa-and-rbac.yaml).
+# Named apart from the old sso-team-workflows binding (argo-workflows-admin)
+# because a RoleBinding's roleRef cannot change in place: Argo CD prunes the
+# old one and creates this one. argo-workflows-view (get/list/watch on the
+# Argo CRDs), like argo-workflows-admin, comes from the upstream
+# argo-workflows chart pinned in bootstrap/templates/core-infra/argo-workflows.yaml.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: sso-team-workflows
+  name: sso-team-workflows-view
   namespace: {{ $ns }}
   labels:
     {{- include "tenant.labels" $ | nindent 4 }}
@@ -149,7 +159,7 @@ subjects:
     namespace: argo-workflows
 roleRef:
   kind: ClusterRole
-  name: argo-workflows-admin
+  name: argo-workflows-view
   apiGroup: rbac.authorization.k8s.io
 ---
 # SSO RBAC: give the team's SSO SA access to events/secrets/pods/logs for log viewing
