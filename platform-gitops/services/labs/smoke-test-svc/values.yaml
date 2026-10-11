@@ -44,4 +44,9 @@ externalSecret:
       property: SMOKE_SECRET
 envFrom:
   - secretRef:
+      name: labs-smoke-test-svc-db-creds
+  - secretRef:
       name: smoke-test-svc-secrets
+dbSecret:
+  vaultPath: teams/labs/smoke-test-svc/database
+  secretName: labs-smoke-test-svc-db-creds
