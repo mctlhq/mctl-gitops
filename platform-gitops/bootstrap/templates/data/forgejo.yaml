@@ -220,6 +220,13 @@ spec:
                 ENABLED: false
               cron.update_checker:
                 ENABLED: false
+              # The container registry shares forgejo-data with the
+              # repositories (9.7G volume). A cap per owner (org or user)
+              # keeps one org's images from filling it; a push over the cap
+              # is refused. erpact-images.yaml also prunes to the newest
+              # versions per image (docs/runbooks/forgejo.md).
+              packages:
+                LIMIT_TOTAL_OWNER_SIZE: 4G
 
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
