@@ -45,7 +45,7 @@ m = re.search(r"^(reject_multiline\(\) \{\n.*?\n\})$", SOURCE, re.S | re.M)
 assert m, "could not extract reject_multiline() from the template"
 HELPER = m.group(1)
 
-m = re.search(r"while IFS='=' read -r key rest; do\n(.*?)\n *done << 'ENVEOF'",
+m = re.search(r"while IFS='=' read -r key rest; do\n(.*?)\n *done <<ENVEOF",
               SOURCE, re.S)
 assert m, "could not extract the env_vars loop from the template"
 BODY = dedent(m.group(1), 6)
@@ -57,8 +57,8 @@ DIR="$PWD"
 %s
 while IFS='=' read -r key rest; do
 %s
-done <<'ENVEOF'
-%s
+done <<ENVEOF
+$PARAM_ENV_VARS
 ENVEOF
 """
 
@@ -68,8 +68,8 @@ def run(payload):
         tmp = pathlib.Path(d)
         (tmp / "values.yaml").write_text(VALUES)
         proc = subprocess.run(
-            ["sh", "-c", SCRIPT % (HELPER, BODY, payload)],
-            cwd=tmp, capture_output=True, text=True,
+            ["sh", "-c", SCRIPT % (HELPER, BODY)],
+            cwd=tmp, env={**os.environ, "PARAM_ENV_VARS": payload}, capture_output=True, text=True,
         )
         tag = subprocess.run(
             ["yq", ".image.tag", "values.yaml"],
@@ -125,6 +125,15 @@ proc, tag, env = run("_UNDERSCORE=1\nA1=2")
 check("underscore and digit-bearing names are accepted",
       proc.returncode == 0 and '"_UNDERSCORE": "1"' in env and '"A1": "2"' in env,
       f"rc={proc.returncode} env={env} err={proc.stderr}")
+
+# 5b. A line equal to the here-document terminator is data, not shell: the
+#     value reaches the loop through the environment, never the script text.
+with tempfile.TemporaryDirectory() as d:
+    canary = pathlib.Path(d) / "canary"
+    proc, tag, env = run(f"GOOD=1\nENVEOF\ntouch {canary}")
+    check("a terminator line in env_vars does not execute", not canary.exists())
+    check("legitimate lines beside a terminator line are still written",
+          '"GOOD": "1"' in env, env)
 
 # 6. A dotted key would silently create a nested map under `.env.${key}`;
 #    the subscript form stores it flat, and the shape check rejects it first.

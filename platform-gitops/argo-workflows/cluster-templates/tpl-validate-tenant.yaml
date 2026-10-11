@@ -45,21 +45,40 @@ spec:
       script:
         image: alpine/git:2.43.0
         command: [sh]
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_ACTION
+            value: "{{inputs.parameters.action}}"
+          - name: PARAM_COMPONENT_TYPE
+            value: "{{inputs.parameters.component_type}}"
+          - name: PARAM_HOST
+            value: "{{inputs.parameters.host}}"
+          - name: PARAM_DOCKERFILE_REPO
+            value: "{{inputs.parameters.dockerfile_repo}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{inputs.parameters.image_tag}}"
+          - name: PARAM_GIT_TAG
+            value: "{{inputs.parameters.git_tag}}"
+          - name: PARAM_SERVICE_TEMPLATE
+            value: "{{inputs.parameters.service_template}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
         source: |
           set -e
 
-          TEAM="{{inputs.parameters.team_name}}"
-          SERVICE="{{inputs.parameters.component_name}}"
-          ACTION="{{inputs.parameters.action}}"
-          TYPE="{{inputs.parameters.component_type}}"
-          HOST="{{inputs.parameters.host}}"
-          REPO="{{inputs.parameters.dockerfile_repo}}"
-          IMAGE_TAG="{{inputs.parameters.image_tag}}"
-          GIT_TAG_RAW="{{inputs.parameters.git_tag}}"
-          SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
+          TEAM="$PARAM_TEAM_NAME"
+          SERVICE="$PARAM_COMPONENT_NAME"
+          ACTION="$PARAM_ACTION"
+          TYPE="$PARAM_COMPONENT_TYPE"
+          HOST="$PARAM_HOST"
+          REPO="$PARAM_DOCKERFILE_REPO"
+          IMAGE_TAG="$PARAM_IMAGE_TAG"
+          GIT_TAG_RAW="$PARAM_GIT_TAG"
+          SERVICE_TEMPLATE="$PARAM_SERVICE_TEMPLATE"
 
           # Normalize sentinels: "none" → empty (Backstage strips bare empty strings)
           [ "$HOST" = "none" ] && HOST=""
@@ -143,8 +162,8 @@ spec:
           echo "$TYPE" > /tmp/component_type
 
           # ── 8. Resolve image tag ─────────────────────────────────────────────
-          GIT_TAG="{{inputs.parameters.git_tag}}"
-          IMG_OVERRIDE="{{inputs.parameters.image_tag}}"
+          GIT_TAG="$PARAM_GIT_TAG"
+          IMG_OVERRIDE="$PARAM_IMAGE_TAG"
           # Normalize sentinel: "auto" → empty (Backstage strips bare empty strings)
           [ "$IMG_OVERRIDE" = "auto" ] && IMG_OVERRIDE=""
           if [ -n "$IMG_OVERRIDE" ]; then
