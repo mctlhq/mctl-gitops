@@ -23,10 +23,9 @@
 До 2026-07 `barmanObjectStore` писал в MinIO на PVC этого же кластера — при
 потере кластера пропадали и база, и её бэкапы. Теперь destination — R2
 (креды: ExternalSecret `cnpg-backup-r2` ← Vault `platform/vault/r2-backup`).
-Старые бэкапы в MinIO (`s3://postgres-backups/shared-pg`) остаются читаемыми
-для PITR на даты до переключения, пока MinIO жив. Первый базовый бэкап в R2
-делает одноразовый `Backup` CR `shared-pg-r2-initial` — до его завершения
-восстановление возможно только из MinIO.
+Старые бэкапы в MinIO (`s3://postgres-backups/shared-pg`) удалены вместе с
+самим MinIO (выведен из эксплуатации в 2026-10): PITR возможен только начиная
+с первого базового бэкапа в R2 (одноразовый `Backup` CR `shared-pg-r2-initial`).
 
 ## 1. CNPG / Postgres
 

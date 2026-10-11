@@ -226,7 +226,7 @@ spec:
       path: platform-gitops/infra-components/data/forgejo
 
   ignoreDifferences:
-    # Same ESO handling as minio.yaml / valkey.yaml: admission-injected
+    # Same ESO handling as valkey.yaml / zitadel.yaml: admission-injected
     # annotations and status only; never jq paths that index into spec arrays (#789).
     - group: external-secrets.io
       kind: ExternalSecret

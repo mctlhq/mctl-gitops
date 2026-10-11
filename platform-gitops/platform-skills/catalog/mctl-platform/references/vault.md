@@ -98,7 +98,6 @@ mctl_deploy_service(
 | `secret/platform/mctl-api/*` | API service secrets (argocd-token, backstage-token, etc.) |
 | `secret/platform/github-app` | GitHub OAuth client_id/secret |
 | `secret/platform/alertmanager` | Telegram bot token |
-| `secret/platform/minio` | MinIO root credentials (`root-user`, `root-password`) |
 | `secret/teams/{team}/{service}` | Per-service secrets (mctl-api-token, etc.) |
 | `secret/teams/{team}/{service}/database` | DB credentials (username, password, host, port, database) |
 
@@ -118,28 +117,12 @@ extraExternalSecrets:
 **Note:** ClusterSecretStore `vault-backend` adds `secret/data/` prefix automatically for KV v2.
 Use path WITHOUT `secret/data/` in `dbSecret.vaultPath`, WITH `secret/data/` in `extraExternalSecrets.remoteKey`.
 
-## MinIO Access
+## Object Storage (R2)
 
-Platform MinIO credentials live in Vault at `secret/platform/minio` and expose:
-- `root-user`
-- `root-password`
-
-For in-cluster workloads, use the existing cluster-local MinIO endpoint and buckets:
-- endpoint: `http://minio.minio.svc.cluster.local:9000`
-- cache bucket: `platform-cache`
-- state bucket: `platform-state`
-
-Typical bootstrap form for `install-whisper-cli` caching:
-
-```bash
-kubectl -n <namespace> create secret generic minio-cache-creds \
-  --from-literal=access-key=minio-admin \
-  --from-literal=secret-key=<secret> \
-  --from-literal=endpoint=http://minio.minio.svc.cluster.local:9000 \
-  --from-literal=bucket=platform-cache
-```
-
-The `platform-cache` MinIO bucket stores shared whisper artifacts:
-- `whisper/ffmpeg` — static ffmpeg binary
-- `whisper/ggml-base.bin` — whisper base model (~150MB)
-- `whisper/whisper-cli` — compiled whisper-cli binary
+The in-cluster MinIO (`secret/platform/minio`) was decommissioned in 2026-10;
+object storage is Cloudflare R2. Each consumer gets its own bucket-scoped R2
+API token in Vault under its platform path, e.g.
+`secret/platform/mctl-claude-remote/r2` (`access-key`, `secret-key`) or
+`secret/platform/r2-loki-argo`. Buckets are declared in
+`infrastructure/cloudflare/account/r2.tf`; tokens are created in the
+Cloudflare dashboard and written to Vault by an operator.

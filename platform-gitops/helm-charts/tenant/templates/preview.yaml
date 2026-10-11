@@ -261,9 +261,6 @@ spec:
               kubernetes.io/metadata.name: mctl-api
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: minio
-        - namespaceSelector:
-            matchLabels:
               kubernetes.io/metadata.name: temporal
 {{- end }}
 {{- if $networking.allowInternetEgress }}

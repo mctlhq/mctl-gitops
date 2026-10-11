@@ -24,7 +24,7 @@ spec:
             repository: grafana/loki
             tag: 2.9.17
           persistence:
-            enabled: false # Switched to MinIO (S3); /data is backed by emptyDir
+            enabled: false # Chunks and index live in R2 (S3); /data is backed by emptyDir
           resources:
             requests:
               cpu: 100m
