@@ -1,5 +1,5 @@
 status: merged
-updated_at: '2026-10-11T18:39:27Z'
+updated_at: '2026-10-11T18:34:42Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-689ca4892390f6c7
@@ -32,5 +32,9 @@ notes: 'implementer declined to act: Findings 1 and 2 (remove-custom-domain lega
   d41a4b7: internal/mcp/server.go:1411 submits normalizeDomain(domain), and :1383/:1385
   use the same helper for the row match; add path at :1516 also uses it. No further
   change needed.'
-merged_at: '2026-10-11T18:39:27Z'
+github:
+  state: merged
+  head_sha: d41a4b73f8b72b7b915266f11e0de2908b091ebb
+  observed_at: '2026-10-11T18:34:42Z'
+merged_at: '2026-10-11T18:34:42Z'
 merge_commit: a02d88513a35f5484bd830bb8ef60bd9b377b73b
