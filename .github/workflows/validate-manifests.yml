@@ -90,6 +90,32 @@ jobs:
           python3 -m pip install --quiet pyyaml
           scripts/validate-tenant-networkpolicy-allowlist.py --selftest "$tmpdir/bootstrap.yaml"
 
+      # Every Application must stay inside its AppProject's sourceRepos and
+      # destinations, and every literal project entry must still be used.
+      # Too narrow and Argo CD stops syncing the Application (for `default`,
+      # that is root-app and the whole platform tier); too wide and the
+      # project is no boundary. root-app owns the bootstrap render and
+      # argocd-self-managed the argocd render, so their resources' namespaces
+      # are checked too. The argocd chart is rendered with --namespace argocd
+      # because that is the namespace Argo CD renders it into. The eval
+      # overlay is checked as well: its candidates' chart repositories are
+      # derived into `default` by project-default.yaml.
+      # --selftest first: a detector never seen to fire is not known to work.
+      - name: Argo CD Applications stay inside their AppProjects
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml \
+            -f tests/fixtures/otel-eval-candidates.example-values.yaml > "$tmpdir/bootstrap-eval.yaml"
+          helm template argocd platform-gitops/argocd -f platform-gitops/argocd/values.yaml \
+            --namespace argocd > "$tmpdir/argocd.yaml"
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-argocd-project-scope.py --selftest --strict default \
+            "$tmpdir/bootstrap.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
+          scripts/validate-argocd-project-scope.py --strict default \
+            "$tmpdir/bootstrap-eval.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
+
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
       # templates and a multi-backend fan-out ever render in CI. Proves the
