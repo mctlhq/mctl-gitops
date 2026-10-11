@@ -672,11 +672,29 @@ spec:
         envFrom:
           - configMapRef:
               name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_COMPONENT_TYPE
+            value: "{{inputs.parameters.component_type}}"
         source: |
           set -e
-          TEAM="{{inputs.parameters.team_name}}"
-          SERVICE="{{inputs.parameters.component_name}}"
-          TYPE="{{inputs.parameters.component_type}}"
+          TEAM="$PARAM_TEAM_NAME"
+          SERVICE="$PARAM_COMPONENT_NAME"
+          TYPE="$PARAM_COMPONENT_TYPE"
+
+          # Both names become a path that is removed with `git rm -rf`, so
+          # only the shape the operations API enforces is accepted: one line,
+          # no slash, no dot.
+          for n in "$TEAM" "$SERVICE"; do
+            if [ "$(printf '%s' "$n" | wc -l)" -ne 0 ] \
+              || ! printf '%s' "$n" | grep -qE '^[a-z0-9][a-z0-9-]{0,30}$'; then
+              echo "❌ Invalid team or service name: '$n'"
+              exit 1
+            fi
+          done
 
           # Setup SSH
           apk add --no-cache openssl curl git openssh-client ca-certificates
@@ -713,8 +731,13 @@ spec:
 
           DIR="platform-gitops/services/${TEAM}/${SERVICE}"
 
+          # A missing directory is not an error: this is the first step of a
+          # retire that is not transactional, and a retry after a later step
+          # failed must get past it. What gets deleted afterwards is bounded
+          # by retire-service's preflight, which only lets an absent or
+          # team-owned Argo CD Application through.
           if [ ! -d "$DIR" ]; then
-            echo "⚠️  Service directory not found: $DIR — already deleted?"
+            echo "⚠️  Service directory not found: $DIR — already deleted by an earlier run?"
             exit 0
           fi
 

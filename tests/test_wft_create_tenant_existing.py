@@ -250,7 +250,7 @@ exit 3
 """
 
 
-def run_kube(script, tenant, namespaces, apps=(), fail=False):
+def run_kube(script, tenant, namespaces, apps=(), fail=False, wf_ns="argo-workflows"):
     """Run a template script against the stub. Returns (result, log, ns left)."""
     with tempfile.TemporaryDirectory() as d:
         tmp = pathlib.Path(d)
@@ -268,7 +268,7 @@ def run_kube(script, tenant, namespaces, apps=(), fail=False):
             (tmp / "bin" / tool).write_text(body)
             (tmp / "bin" / tool).chmod(0o755)
         env = {"PATH": f"{tmp / 'bin'}:{os.environ['PATH']}", "KSTATE": str(tmp),
-               "PARAM_TENANT_NAME": tenant}
+               "PARAM_TENANT_NAME": tenant, "WORKFLOW_NAMESPACE": wf_ns}
         r = subprocess.run(["sh", "-c", script], env=env, capture_output=True, text=True)
         left = sorted(p.name for p in (tmp / "ns").iterdir())
         return r, (tmp / "log").read_text(), left
@@ -348,6 +348,10 @@ for fname in ("wft-delete-tenant-safe.yaml", "wft-delete-tenant.yaml"):
     r, _, _ = run_kube(validate, "acme", {}, fail=True)
     check(f"{short}: validate fails when namespaces cannot be listed",
           r.returncode != 0, r.stdout)
+    r, log, _ = run_kube(validate, "acme", {"acme": "acme"}, wf_ns="labs")
+    check(f"{short}: validate refuses to run outside argo-workflows",
+          r.returncode != 0 and "must run in namespace argo-workflows" in r.stdout
+          and log == "", r.stdout + log)
 
     r, log, left = run_kube(delete, "acme", {"acme": "acme", "acme-preview": "acme"},
                             apps=("tenant-acme",))

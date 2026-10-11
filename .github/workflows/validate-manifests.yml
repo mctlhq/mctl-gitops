@@ -423,6 +423,14 @@ jobs:
         # fixture checkout, with git clone stubbed.
         run: python3 tests/test_wft_create_tenant_existing.py
 
+      - name: Unit-test retire-service's Argo CD Application guard
+        # retire-service deletes the Application <team>-<component>. The
+        # guard only lets through an absent Application or one the `apps`
+        # ApplicationSet generated for that team, and treats an unreadable
+        # one as an error. Runs the template's own script against a stub
+        # kubectl.
+        run: python3 tests/test_wft_retire_service_guard.py
+
       - name: Unit-test the shepherd's commit-and-push staging
         # commit-and-push is the only step that writes agents-state back to
         # git, and it stages through `git add` pathspecs. A pathspec that

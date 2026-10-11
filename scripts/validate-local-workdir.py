@@ -297,9 +297,11 @@ def validate_retire_cascade() -> None:
     templates = {
         template["name"]: template for template in retire["spec"]["templates"]
     }
-    source = templates["delete-argocd-app"]["script"]["source"]
-    wait = source.index("--wait=true --timeout=180s")
-    patch = source.index('"finalizers":null')
+    # The Application is deleted by the ownership guard in delete mode; the
+    # finalizer is only cleared after the bounded 180s wait for the cascade.
+    source = templates["argocd-app-guard"]["script"]["source"]
+    wait = source.index("wait_gone 36")
+    patch = source.index('"path":"/metadata/finalizers","value":[]')
     assert wait < patch
     assert "still exists after finalizer fallback" in source
 
