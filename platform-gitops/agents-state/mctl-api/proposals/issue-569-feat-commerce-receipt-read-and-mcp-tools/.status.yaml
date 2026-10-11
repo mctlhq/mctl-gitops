@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-11T19:58:32Z'
+updated_at: '2026-10-11T20:08:38Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-71535b81155d0457
@@ -27,7 +27,4 @@ attempt:
   expires_at: '2026-10-11T21:37:23Z'
   finished_at: '2026-10-11T19:36:48Z'
 pr: https://github.com/mctlhq/mctl-api/pull/573
-ci_blockers_head: f8ee3166c90a61c8d3b794682a680d9ecc7fbb89
-ci_blockers:
-- validate / lint
 review_attempts: 1
