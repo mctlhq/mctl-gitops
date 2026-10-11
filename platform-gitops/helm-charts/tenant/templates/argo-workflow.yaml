@@ -186,6 +186,41 @@ roleRef:
   name: argo-workflow-runner
   apiGroup: rbac.authorization.k8s.io
 ---
+# mctl-api hands secret workflow inputs (deploy-service secret_env_vars) to
+# the workflow through a Secret it creates here, owned by the Workflow, so
+# the values never become workflow parameters, which are plain data on the
+# Workflow object (mctl-api internal/operations/secret_handoff.go,
+# tpl-vault-write write-service-secrets-from-secret). create only: it cannot
+# read back, change or delete any Secret through this Role, and an existing
+# name makes the create fail rather than overwrite.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mctl-api-secret-handoff
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mctl-api-secret-handoff
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: mctl-api
+    namespace: mctl-api
+roleRef:
+  kind: Role
+  name: mctl-api-secret-handoff
+  apiGroup: rbac.authorization.k8s.io
+---
 # Helm deploy permissions for preview environments (helm install/uninstall in own namespace)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

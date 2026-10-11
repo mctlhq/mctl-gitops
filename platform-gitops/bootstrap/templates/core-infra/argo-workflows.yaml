@@ -146,6 +146,19 @@ spec:
               passwordSecret:
                 name: argo-workflows-db-creds
                 key: password
+          # Only Workflows that reference a (Cluster)WorkflowTemplate run;
+          # one that carries its own `templates` is refused, as is a
+          # podSpecPatch on a referencing Workflow. Every platform flow
+          # submits by reference (mctl-api executor, Backstage submit,
+          # mctl-agents through mctl-api, the CronWorkflows, the Workflows
+          # created by smoke-test and delete-tenant-safe). Not `Secure`:
+          # that also fails a running Workflow whenever its template changes,
+          # and Argo CD updates templates while deploys are in flight.
+          #
+          # One layer of defence, not the whole boundary: what a submitter may
+          # do is still decided by RBAC on Workflows and WorkflowTemplates.
+          workflowRestrictions:
+            templateReferencing: Strict
           workflowDefaults:
             spec:
               serviceAccountName: argo-workflow-sa

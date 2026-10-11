@@ -109,6 +109,111 @@ spec:
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
 
+    # Same result as write-service-secrets, but the values never pass
+    # through a workflow parameter. mctl-api puts them in a Kubernetes
+    # Secret in the workflow's namespace, owned by the Workflow (so it is
+    # deleted with it), and passes only that Secret's name. A parameter is
+    # plain data on the Workflow object and in the pod spec for as long as
+    # either exists; a mounted file is neither.
+    #
+    # Parsing matches write-service-secrets: KEY=value lines, blank lines
+    # and '#' lines skipped, key and value trimmed, one pair of matching
+    # surrounding quotes removed from the value. Differences, both
+    # deliberate: an invalid key fails the step before anything is written,
+    # and a read of the existing secret that is neither 200 nor 404 fails
+    # the step instead of overwriting every key already stored.
+    - name: write-service-secrets-from-secret
+      inputs:
+        parameters:
+          - name: team_name
+          - name: component_name
+          - name: secret_name   # Secret with key secret_env_vars
+      volumes:
+        - name: secret-env
+          secret:
+            secretName: "{{inputs.parameters.secret_name}}"
+            items:
+              - key: secret_env_vars
+                path: secret_env_vars
+      script:
+        image: python:3.12-alpine
+        command: [python3]
+        volumeMounts:
+          - name: secret-env
+            mountPath: /run/secret-env
+            readOnly: true
+        env:
+          - name: VAULT_ADDR
+            value: "http://vault.vault.svc.cluster.local:8200"
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+        source: |
+          import json, os, re, sys, urllib.error, urllib.request
+
+          VAULT_ADDR = os.environ["VAULT_ADDR"]
+          TEAM = os.environ["PARAM_TEAM_NAME"]
+          SERVICE = os.environ["PARAM_COMPONENT_NAME"]
+          NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+          if not NAME.match(TEAM) or not NAME.match(SERVICE):
+              sys.exit("invalid team_name or component_name")
+          PATH = f"secret/data/teams/{TEAM}/{SERVICE}"
+          KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+          with open("/run/secret-env/secret_env_vars", encoding="utf-8") as f:
+              text = f.read()
+          new = {}
+          for n, line in enumerate(text.splitlines(), 1):
+              key, _, value = line.partition("=")
+              key = key.strip()
+              if not key or key.startswith("#"):
+                  continue
+              if not KEY.match(key):
+                  sys.exit(f"line {n}: key is not a valid environment variable name")
+              value = value.strip()
+              if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                  value = value[1:-1]
+              new[key] = value
+          if not new:
+              sys.exit("no KEY=value lines in the handed-off secret")
+
+          def call(method, path, token=None, body=None):
+              req = urllib.request.Request(f"{VAULT_ADDR}/v1/{path}", method=method,
+                                           data=None if body is None else json.dumps(body).encode())
+              req.add_header("Content-Type", "application/json")
+              if token:
+                  req.add_header("X-Vault-Token", token)
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return resp.status, resp.read()
+              except urllib.error.HTTPError as e:
+                  return e.code, b""
+
+          with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
+              jwt = f.read().strip()
+          status, body = call("POST", "auth/kubernetes/login",
+                              body={"role": "argo-workflow", "jwt": jwt})
+          if status != 200:
+              sys.exit(f"Vault login failed (HTTP {status})")
+          token = json.loads(body)["auth"]["client_token"]
+
+          status, body = call("GET", PATH, token)
+          if status == 200:
+              existing = json.loads(body).get("data", {}).get("data") or {}
+              print("Merging with existing secrets")
+          elif status == 404:
+              existing = {}
+              print("Creating new secret path")
+          else:
+              sys.exit(f"Could not read existing secrets (HTTP {status}); not overwriting them")
+          existing.update(new)
+
+          status, _ = call("POST", PATH, token, {"data": existing})
+          if status not in (200, 204):
+              sys.exit(f"Failed to save secrets (HTTP {status})")
+          print(f"Saved {len(new)} key(s) to Vault at {PATH}: {', '.join(sorted(new))}")
+
     - name: write-platform-secret
       inputs:
         parameters:
