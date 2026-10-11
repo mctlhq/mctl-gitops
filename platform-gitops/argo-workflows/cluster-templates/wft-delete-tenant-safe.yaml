@@ -233,9 +233,12 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
             readOnly: true
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
 
           apk add --no-cache git openssh-client curl > /dev/null
 
@@ -378,9 +381,12 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
             readOnly: true
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
           CNPG_DIR="platform-gitops/infra-components/data/cnpg/shared"
 
           apk add --no-cache git openssh-client > /dev/null 2>&1
@@ -528,11 +534,13 @@ spec:
         image: hashicorp/vault:1.15
         command: [sh]
         env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
 
           echo "Authenticating to Vault via Kubernetes auth..."
           KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
@@ -617,9 +625,12 @@ spec:
           - name: deploy-key
             mountPath: /secrets/deploy-key
             readOnly: true
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
 
           apk add --no-cache openssl curl jq git openssh-client ca-certificates
           mkdir -p ~/.ssh
