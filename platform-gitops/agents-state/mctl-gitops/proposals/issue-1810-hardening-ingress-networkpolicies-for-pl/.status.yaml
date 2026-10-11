@@ -1,0 +1,20 @@
+status: proposed
+updated_at: '2026-10-11T16:42:44Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-8a631f0c1fedf3f4
+  trace_id: 77c549c918b7b41a6984095ce094aec9
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-gitops
+  issue: 1810
+  url: https://github.com/mctlhq/mctl-gitops/issues/1810
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-3e1cd997f696dfd5
+  content_hash: sha256:3e1cd997f696dfd5968835bc65875ba4244e3b2f888fd1f6991cd97c9b1f3361
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
