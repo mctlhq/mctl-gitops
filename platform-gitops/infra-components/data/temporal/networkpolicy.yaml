@@ -1,0 +1,72 @@
+# Ingress allowlist for the temporal namespace (mctl-gitops#1810).
+#
+# Threat: the Temporal frontend has no client authentication and tenant
+# namespaces may egress to all of RFC1918, so without this policy any tenant
+# pod can start, signal, query or terminate workflows in any Temporal
+# namespace, including the mctl-agents DevLoop namespace. Until client auth
+# exists (separate follow-up) the network is the only boundary.
+#
+# Clients of temporal-frontend.temporal.svc.cluster.local:7233:
+#   temporal-web, temporal-namespaces-bootstrap Job  (temporal)
+#       bootstrap/templates/data/temporal-web.yaml,
+#       infra-components/data/temporal/tenant-namespace-job.yaml
+#   mctl-api (TEMPORAL_NAMESPACE mctl-agents)
+#       bootstrap/templates/mctl-platform/mctl-api.yaml
+#   mctl-agents-worker, -exec, -implement            (admins)
+#       services/admins/mctl-agents-worker*/values.yaml
+#   kuptsi-app API + temporal-worker sidecar         (labs, tenant)
+#       services/labs/kuptsi-app/values.yaml
+#
+# Live probe after sync: from an ephemeral pod in a tenant namespace such as
+# ovk, `nc -zvw3 temporal-frontend.temporal.svc.cluster.local 7233` must time
+# out; from mctl-api, admins workers and the kuptsi-app pod it must connect.
+#
+# Rollback: delete this file (the Application prunes the policy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-temporal-ingress
+  namespace: temporal
+  annotations:
+    # Before the schema/bootstrap hooks so they are never raced.
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Server-internal frontend/history/matching/worker traffic, schema
+        # Job, namespaces bootstrap Job, temporal-web -> frontend.
+        - podSelector: {}
+        # temporal.mctl.ai UI (temporal-web:8080) via Traefik.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        # No scrape of the Temporal server today; kept so a future one works.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        # DevLoop start/signal/query (TEMPORAL_ADDRESS in mctl-api.yaml).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+        # mctl-agents-worker{,-exec,-implement} poll their task queues.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: admins
+    # The one tenant client: kuptsi-app API and its temporal-worker sidecar.
+    # Separate rule so the port restriction applies to it only.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: labs
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: labs-kuptsi-app
+      ports:
+        - protocol: TCP
+          port: 7233
