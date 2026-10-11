@@ -656,6 +656,13 @@ jobs:
           set -euo pipefail
           scripts/test-secret-allowlist-policy.sh
 
+      # Same toolchain, its own k3s: what tenant workflow ServiceAccounts may
+      # do to Argo CD Applications and ApplicationSets.
+      - name: Prove the tenant workflow SA Argo CD policies
+        run: |
+          set -euo pipefail
+          scripts/test-tenant-workflow-sa-argocd-policy.sh
+
   # The declarative ZITADEL root (#1520). The in-cluster Job applies it after
   # merge, so formatting, provider schema errors and a lock file that does not
   # match the pinned provider must fail here instead.

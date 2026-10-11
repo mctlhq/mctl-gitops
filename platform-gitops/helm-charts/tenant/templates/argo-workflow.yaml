@@ -286,8 +286,13 @@ spec:
         decodingStrategy: None
         metadataPolicy: None
 ---
-# Allow tenant-local argo-workflow-sa to manage ArgoCD Applications/ApplicationSets
-# in argocd namespace for deploy refresh and retire/delete workflows.
+# Allow tenant-local argo-workflow-sa to refresh Argo CD Applications and the
+# apps ApplicationSet, and to delete the tenant's own Applications on retire.
+# RBAC cannot scope Applications to the tenant's own (team label), so the
+# Application verbs stay namespace-wide; the admission policies
+# mctl-tenant-workflow-sa-argocd-* (bootstrap system/admission-policies.yaml)
+# restrict deletes to owned Applications and updates to refresh annotations.
+# list is for deploy-service's `get applications -l team=<ns>`.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -299,9 +304,11 @@ rules:
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
     verbs: ["get", "list", "patch", "delete"]
+  # Only deploy-service touches an ApplicationSet: a refresh of apps.
   - apiGroups: ["argoproj.io"]
     resources: ["applicationsets"]
-    verbs: ["get", "list", "patch"]
+    resourceNames: ["apps"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
