@@ -89,6 +89,9 @@ Why the metric only: `audit_logs.status` is user-visible (`get_my_audit_log`, ad
 
 ### Rollout order
 
+Owner decision 2026-10-12: the `mctl-telegram-slo-budget` group is a second mctl-gitops PR, merged no earlier than 2026-11-03 once each 28d ratio is checked against its objective (requirements.md, Decisions). The rest of section C ships first.
+
+
 Either order is safe: rules with `status=~"ok|error"` are identical to today while no `caller_error` series exists, and a released binary emitting `caller_error` under old rules simply moves those calls out of the numerator but keeps them in the denominator (SLI slightly optimistic until the rule change lands). Preferred: mctl-gitops rules first, then release mctl-telegram.
 
 ## Alternatives
