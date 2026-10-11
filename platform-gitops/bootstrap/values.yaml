@@ -295,7 +295,7 @@ surfacePortalToken:
 # Until the portal and mctl-api releases that use it are deployed, the token
 # is accepted by the portal but nothing calls it.
 repoBinding:
-  enabled: false
+  enabled: true
 
 # The surface:telegram principal's bearer token (mctlhq/mctl-telegram#443,
 # mctlhq/mctl-gitops#1405): mctl-api authenticates it from
