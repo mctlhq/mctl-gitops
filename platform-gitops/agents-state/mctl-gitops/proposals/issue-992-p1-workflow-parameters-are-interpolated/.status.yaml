@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-11T16:38:24Z'
+updated_at: '2026-10-11T16:55:23Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-edb7597be2229640
@@ -27,3 +27,4 @@ attempt:
   expires_at: '2026-10-11T18:46:30Z'
   finished_at: '2026-10-11T16:38:24Z'
 pr: https://github.com/mctlhq/mctl-gitops/pull/1812
+merge_owner: human-codeowner
