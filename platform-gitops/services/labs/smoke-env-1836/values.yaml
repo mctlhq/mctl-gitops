@@ -1,0 +1,53 @@
+# Worker: smoke-env-1836
+# Team: labs
+# Chart: base-service (ingress disabled)
+
+image:
+  repository: ghcr.io/mctlhq/smoke-env-1836
+  tag: "env1836-onboard2"
+imagePullSecrets:
+  - name: ghcr-credentials
+ingress:
+  enabled: false
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 15
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 60
+    periodSeconds: 15
+env:
+  SMOKE_A: alpha
+  SMOKE_SPACES: hello world
+  SMOKE_SEMI: a;b&&c|d
+  SMOKE_DOLLAR: $(echo not-run)
+  SMOKE_BACKTICK: '`id`'
+externalSecret:
+  targetSecret: smoke-env-1836-secrets
+  data:
+    - secretKey: SMOKE_SECRET_ONE
+      remoteKey: teams/labs/smoke-env-1836
+      property: SMOKE_SECRET_ONE
+    - secretKey: SMOKE_SECRET_TWO
+      remoteKey: teams/labs/smoke-env-1836
+      property: SMOKE_SECRET_TWO
+envFrom:
+  - secretRef:
+      name: smoke-env-1836-secrets
