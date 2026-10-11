@@ -1,0 +1,30 @@
+{{- if (default dict .Values.evidenceWriter).enabled }}
+# Bearer token of the evidence-writer principal (mctlhq/mctl-agents#199,
+# mctlhq/mctl-api#409): it may only append execution-evidence records.
+# Rendered only when evidenceWriter.enabled is true in bootstrap/values.yaml.
+#
+# Its own ExternalSecret and file for the same reasons as
+# mctl-api-usage-writer.yaml: a missing property must disable only this
+# principal, and a file that leads with a template directive is not YAML to
+# yamllint. Read from the same Vault property the agent runner pods get
+# through mctl-agents-secrets, so there is one value and nothing to keep in
+# step.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-api-evidence-writer
+  namespace: mctl-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-api-evidence-writer
+    creationPolicy: Owner
+  data:
+    - secretKey: MCTL_EVIDENCE_WRITER_TOKEN
+      remoteRef:
+        key: platform/mctl-agents
+        property: evidence-writer-token
+{{- end }}

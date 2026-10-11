@@ -1,0 +1,49 @@
+# Which ZITADEL identity each opted-in human Forgejo account answers to:
+# {"version": 1, "identities": {"<forgejo login>": "<ZITADEL user id>"}}
+# under key identities.json. The zitadel-iac Job writes it from the `forgejo`
+# field of Vault user entries (helm-charts/zitadel-iac/iac/forgejo.tf), and
+# the reconcile (reconcile.yaml) binds those accounts to their identity, so
+# the first MCTL sign-in lands on the account without a link step.
+#
+# Same pattern as oidc-zitadel.yaml: Argo CD creates the Secret without data
+# and never owns `.data` (ignoreDifferences in
+# bootstrap/templates/data/forgejo.yaml); the Job may only read and patch
+# this one Secret by name. It ships before the Job writes it, since the
+# Job's resource fails on a missing Secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: forgejo-identities
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: identities-zitadel
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-iac-identities
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: identities-zitadel
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["forgejo-identities"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-iac-identities
+  labels:
+    app.kubernetes.io/name: forgejo
+    app.kubernetes.io/component: identities-zitadel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-iac-identities
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-iac
+    namespace: zitadel

@@ -15,6 +15,7 @@ else.
 | Hand-off Secret, NetworkPolicies, pull secret | `platform-gitops/infra-components/identity/vault-human-auth-iac/` |
 | The Job's own Vault identity (applied once by hand) | `infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-vault-human-auth-iac.hcl`, README "vault-human-auth-iac" |
 | Image | `platform-gitops/images/vault-iac/Dockerfile` |
+| Audit log (the same Job enables the `stdout` audit device) | `iac/audit.tf`; queries and failure modes in [vault-audit.md](vault-audit.md) |
 
 ## How it fits together
 
@@ -36,7 +37,7 @@ vault-human-auth-iac Job ── Vault: auth/mctl, role `zitadel`,
 | `groups` value | Vault group | Policy |
 | --- | --- | --- |
 | `admins` | `human-admins` | `admin` (existing, hand-written, not managed here) |
-| `<tenant>` | `human-tenant-<tenant>` | `human-tenant-<tenant>`: read and write (create, update, patch, soft delete, undelete, list) on `secret/data/teams/<tenant>/*`, `read`+`list` on its metadata; `<service>/database` read only; no destroy, no metadata write or delete |
+| `<tenant>` | `human-tenant-<tenant>` | `human-tenant-<tenant>`: read and write (create, update, patch, soft delete, undelete, list) on `secret/data/teams/<tenant>/*`, `read`+`list` on its metadata; `list` only on exactly `secret/metadata/` and `secret/metadata/teams/` (browse); `<service>/database` read only; no destroy, no metadata write or delete |
 | anything else, or none | none | `default` only |
 
 - **Who is an admin.** The platform admins in `zitadel-iac/iac/admins.tf`
@@ -57,6 +58,21 @@ vault-human-auth-iac Job ── Vault: auth/mctl, role `zitadel`,
 - **`<service>/database` stays read only for tenants.** `wft-provision-database`
   generates it and the `cnpg-db-creds` store syncs it into the shared-pg role,
   so a human edit would break the database login.
+- **Tenants browse down to their folder in the UI.** In the UI, a tenant user
+  opens `secret/`, then `teams/`, then `<tenant>/`. To make that work, the
+  policy grants `list`, and nothing else, on exactly `secret/metadata/` and
+  `secret/metadata/teams/`, with no glob. Those two listings show the
+  top-level key names and the folder names under `teams/`, which are the
+  tenant names in `platform-gitops/tenants/` (public). Opening another
+  tenant's folder, or anything under `platform/`, is still 403. Before this,
+  `secret/` looked empty to a tenant, who had to type `teams/<tenant>/` into
+  "View secret" by hand. The CLI equivalent is
+  `vault kv list secret/teams/<tenant>/`.
+
+  Anything kept directly under `teams/` is therefore visible by name to every
+  tenant. Only tenant folders belong there; platform-owned secrets go under
+  `secret/platform/`. Per-tenant mounts, which would remove the shared listing
+  altogether, are tracked in #1670.
 - **Token lifetime.** Human tokens live 1h and cannot be renewed past that (`token_max_ttl` 1h); sign in again. Group membership is re-evaluated at every login, so removing the role or the flag takes effect at the user's next login.
 
 Verified before rollout on a local ZITADEL v4.19.2 and Vault 1.17.2, running
@@ -81,11 +97,27 @@ login:
 | `destroy`, `metadata delete`, `metadata put` | 403 |
 | `get` on `erpact/<svc>/database` | allowed |
 | `put`, `patch`, `delete` on `erpact/<svc>/database` | 403 |
-| any `labs` path, listing `secret/teams`, `secret/platform/...`, `secret/teams/erpactx/...` | 403 |
+| any `labs` path, listing `secret/teams` (before the browse rules below), `secret/platform/...`, `secret/teams/erpactx/...` | 403 |
 
 The test was also run against two broken policies. With the database rules
 removed, the tenant could overwrite `database`. With the old read-only policy,
 `put` returned 403. The next Job run reverted the edited policy (`update`).
+
+The browse rules were proven the same way, on a local Vault 1.17.2. The token
+held the rendered `human-tenant-erpact` policy, with a second tenant `other`
+and a `platform/` tree seeded:
+
+| Action | Result |
+| --- | --- |
+| list `secret/metadata/`, `secret/metadata/teams/`, `secret/metadata/teams/erpact/` | allowed |
+| list `secret/metadata/teams/other/` and `.../other/<svc>/`, list `secret/metadata/platform/` | 403 |
+| read `secret/metadata/teams` (not list), read data or metadata under `other/`, write at `teams/x` or a top-level key, delete `secret/metadata/teams` | 403 |
+| the tenant's own read and write, and the `database` and destroy rules | as above |
+
+The test was also run against two broken policies. Without the two browse
+rules, listing `secret/metadata/` and `secret/metadata/teams/` returned 403,
+which was the reported bug. With `secret/metadata/teams/*` in place of the
+exact path, the tenant could list `other/` and its subfolders.
 
 ## Rollout order
 
@@ -128,7 +160,8 @@ break-glass, when the personal account cannot sign in.
    - `meta` with `role=zitadel` and your `username`
 3. **UI login.** Open `https://secrets.mctl.ai/ui/`, choose the **mctl** tab,
    leave the role empty and sign in. You land on the dashboard and can open
-   `secret/`.
+   `secret/`. A tenant user sees `teams/` there, and inside it every tenant
+   folder, but can open only their own.
 4. **Tenant isolation, live.** Use a tenant user, for example your own user in
    a tenant organization:
    - Set `"vault": true` in that user's entry at
@@ -144,7 +177,8 @@ break-glass, when the personal account cannot sign in.
    vault token capabilities secret/data/teams/<tenant>/<svc>/database  # read
    vault token capabilities secret/destroy/teams/<tenant>/x     # deny
    vault token capabilities secret/data/teams/<other-tenant>/x  # deny
-   vault token capabilities secret/metadata/teams/              # deny
+   vault token capabilities secret/metadata/teams/              # list
+   vault token capabilities secret/metadata/teams/<other-tenant>/  # deny
    vault kv get secret/teams/<other-tenant>/<any>               # 403
    ```
 
@@ -198,12 +232,13 @@ owner applies the temporary remount grant to the Job's policy
 (cluster-bootstrap/vault-config/README.md) and it is diffed byte-identical
 against the file; (c) the root sets `path = "mctl"`, with the role listed in
 `allowedDeletes`; (d) cleanup drops the old redirect, empties
-`allowedDeletes`, and removes the remount grant.
+`allowedDeletes`, removes the remount grant and renames the policy's `oidc`
+paths to `mctl` (the owner re-applies the policy file).
 
-**Recovery, if (c) ever applies without the grant.** The Job destroys the role
-first and the remount then fails with a 403: the mount stays at `auth/oidc`
-with no login role, and later runs refuse to plan. Finish the move by hand
-(owner, admin token), after applying the grant:
+**Recovery, if (c) ever applies without the grant** (only before (d)). The Job
+destroys the role first and the remount then fails with a 403: the mount stays
+at `auth/oidc` with no login role, and later runs refuse to plan. Finish the
+move by hand (owner, admin token), after applying the grant:
 
 ```bash
 vault write sys/remount from=auth/oidc to=auth/mctl
@@ -211,24 +246,80 @@ vault write sys/remount from=auth/oidc to=auth/mctl
 
 The next Job run then creates the role and converges (verified locally).
 
-**Rolling the move back is owner-only.** The grant allows exactly
-`auth/oidc` to `auth/mctl`, so the Job is refused the reverse (403). To go
-back, the owner moves the mount by hand with an admin token
-(`vault write sys/remount from=auth/mctl to=auth/oidc`) and reverts (c) in
-git. Every human signs in again, as with the move itself. This path is not
+**Rolling the move back is owner-only.** After (d) the Job has no remount
+grant at all, and before it the grant allowed exactly `auth/oidc` to
+`auth/mctl`, so the Job is refused the reverse (403). To go back:
+
+1. Suspend the CronJob and set `allowedActions: "no-op read"`, so no run
+   plans against a mount that is moving under it.
+2. The owner moves the mount by hand with an admin token
+   (`vault write sys/remount from=auth/mctl to=auth/oidc`).
+3. Revert (c) and (d) in git; the policy then needs the `oidc` paths again,
+   re-applied by the owner.
+4. Expect a state fix-up before that run plans clean: the provider tracks
+   the mount by its path, so `tofu state rm vault_jwt_auth_backend.oidc`
+   and an import at `oidc` may be needed (not verified; rehearse it).
+5. Resume the CronJob and widen `allowedActions` again once a run re-plans
+   clean.
+
+Every human signs in again, as with the move itself. This path is not
 rehearsed: plan it on a local Vault first.
+
+## The move of `secret/teams/platform/` (2026-10-04)
+
+Once tenants could list `teams/` (above), a legacy `platform` folder showed
+up there next to the tenant folders. It held two keys, last written on
+2026-03-21 and referenced nowhere, because the `mctl-agent` consumers read
+`secret/platform/mctl-agent/*`. The audit log shows no reads between the
+audit device going live (its first entry is at 20:00:04Z that day) and the
+move; nothing older is observable. The owner approved moving the folder out
+of `teams/`.
+
+| From | To | Versions |
+| --- | --- | --- |
+| `secret/teams/platform/mctl-agent/database` | `secret/platform/legacy/teams-platform/mctl-agent/database` | latest (v2) copied; v1 and v2 removed |
+| `secret/teams/platform/mctl-agent/tokens` | `secret/platform/legacy/teams-platform/mctl-agent/tokens` | latest (v1) copied and removed |
+
+- **Before.** Nothing referenced the path. That was checked with
+  `gh search code` across the `mctlhq` default branches, the live cluster
+  (ExternalSecrets and their stores, workloads, ConfigMaps, Argo workflow
+  templates, Applications, pods), and every Vault policy and Kubernetes auth
+  role. The templated `teams/${TEAM}/...` paths only resolve for existing
+  tenants, and no tenant is called `platform`.
+- **Move (21:31Z).** Each latest version was piped from the old path to the
+  new one, and checked by comparing a SHA-256 of the sorted data on both
+  sides, without printing any value. The old paths were then removed with
+  `vault kv metadata delete`, because a plain `kv delete` leaves earlier
+  versions readable.
+- **Audit log.** The Loki query
+  `{namespace="vault",container="vault"} |= "teams/platform"` from 20:00Z to
+  the move returned 18 requests, all from the admin token that did the
+  inventory and the move, starting at 21:29:52Z. Throughout that window the
+  pipeline delivered 200 to 380 audit requests every 10 minutes, so an empty
+  result means no reads, not a missing log.
+- **After.**
+  - `secret/metadata/teams/` lists only tenant folders.
+  - Every old version returns 404.
+  - An admin reads the copies.
+  - A `human-tenant-erpact` token gets 403 on `platform/` and on both copies.
+
+Delete the copies once the owner confirms that nothing needs them.
 
 ## Break-glass
 
 When ZITADEL is down, OIDC logins fail. Already-issued tokens keep working
 until they expire.
 
-The admin paths that do not depend on ZITADEL are unchanged:
-- the `github` auth method (`auth/github`, a user map). It is the current
-  human fallback and stays as it is: retiring it is a separate owner
-  decision, made once OIDC sign-in has been in use for a while;
+The admin paths that do not depend on ZITADEL:
 - an existing admin token;
-- a root token generated with the unseal keys (`vault operator generate-root`).
+- a root token generated with the unseal keys (`vault operator generate-root`,
+  a quorum of the Shamir unseal key holders).
+
+The `github` auth method (`auth/github`, a hand-configured user map that was
+never in IaC) used to be a third path. It was disabled on 2026-10-10, after
+human sign-in had run on ZITADEL for a week (mctlhq/mctl-gitops#1500,
+phase 7). Disabling it revoked every token it had issued. Do not re-enable it
+as a fallback: a method configured outside this repo is invisible to review.
 
 The Job never disables a mount: its policy has no `delete` on any `sys/auth/` path.
 To turn human OIDC sign-in off by hand, an admin runs

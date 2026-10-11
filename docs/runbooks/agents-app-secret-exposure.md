@@ -10,6 +10,21 @@ Written for mctlhq/mctl-gitops#1033. Sibling to
 about a different lever: *who can read the raw key that mints tokens as
 that App at all*.
 
+## Update: the bump jobs left the App (mctlhq/mctl-agents#470)
+
+`gitops-bump.yaml` and the `bump` job of `release-deploy.yaml` no longer
+read `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY`. They push with a write
+deploy key held by the `gitops-bump` environment, which releases it only to
+jobs on `main`. Two consequences for the text below, which is kept as the
+record of the original finding:
+
+- The in-repo consumer table has two live call sites, not four; the two bump
+  rows are marked removed.
+- The worst outcome described under "The finding" (a token minted from the
+  raw key riding the `main-protection` bypass) only goes away once the
+  `mctl-agents` App is taken off that ruleset's bypass list. Until that
+  owner-confirmed step is done, the finding stands as written.
+
 ## The finding
 
 App-permission narrowing (#761, `docs/runbooks/github-app-scope-audit.md`,
@@ -54,8 +69,8 @@ Grep for `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY` across
 
 | Consumer | Mints for | `repositories:` | `permission-*` scoping (after this proposal) |
 |---|---|---|---|
-| `.github/workflows/gitops-bump.yaml:64-72` (`Generate GitHub App token` step, `bump` job) | Pushes a tag-bump commit directly to `main`, bypassing the `main-protection` ruleset (the App is on its `bypass_actors` list) | `mctl-gitops` | `permission-contents: write` (added by this proposal's task 1; previously unset, so the minted token carried the App's full installed set: `actions:write`, `pull_requests:write`, `issues:write`, `workflows:write`, `checks:read`) |
-| `.github/workflows/release-deploy.yaml:120-128` (`Generate GitHub App token` step, `bump` job) | Same as above — pushes an image-tag bump to `main` after a build succeeds | `mctl-gitops` | `permission-contents: write` (added by this proposal's task 2; same prior state as `gitops-bump.yaml`) |
+| `.github/workflows/gitops-bump.yaml`, `bump` job — **removed** (mctlhq/mctl-agents#470) | Used to mint an App token to push a tag bump to `main`; now pushes with the `gitops-bump` environment deploy key | n/a | n/a |
+| `.github/workflows/release-deploy.yaml`, `bump` job — **removed** (mctlhq/mctl-agents#470) | Used to mint an App token to push a tag bump to `main`; now pushes with the `gitops-bump` environment deploy key | n/a | n/a |
 | `.github/workflows/release-drift.yml:43-52` (`Generate read token` step, `check` job) | Reads release/tag/compare state across every mctlhq source repository via `.github/scripts/release-drift.sh` | none (deliberately unset — needs org-wide read) | `permission-contents: read`, `permission-actions: read`, `permission-metadata: read` — already correctly scoped before this proposal; left untouched |
 | `.github/workflows/cloudflare-drift.yml:375-391` (`Generate a read token for the private upstreams` step, `plan` job, portal root only) | Reads `docs/portal-allowlist.json` from the one private upstream in `PRIVATE_OWNERS` (`mctlhq/projects-mcp`), which `raw.githubusercontent.com` cannot serve without a token | `projects-mcp` | `permission-contents: read`, `permission-metadata: read` |
 

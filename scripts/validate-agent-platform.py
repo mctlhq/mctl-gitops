@@ -153,6 +153,8 @@ class Policy:
         self.known_skills = set(spec.get("knownSkills") or [])
         self.known_model_policy_tasks = set(spec.get("knownModelPolicyTasks") or [])
         self.known_policies = set(spec.get("knownPolicies") or [])
+        # Absent or empty means nobody is exempt (fails closed).
+        self.uncalled_profiles = set(spec.get("uncalledProfiles") or [])
         self.known_evidence_kinds = set(spec.get("knownEvidenceKinds") or [])
         self.mutation_scopes = {
             s["name"]: s for s in spec.get("knownMutationScopes") or []
@@ -363,6 +365,29 @@ def _iter_env_vars(node):
             yield from _iter_env_vars(item)
 
 
+def _env_value_by_name(doc, env_name: str, path: pathlib.Path):
+    """The single value of the env var named exactly `env_name`, or None.
+
+    For a template that runs several agents and therefore sets several
+    *_BUDGET_USD variables (cwft-mctl-agents-run.yaml: the service agents,
+    the mentor and the incident responder), where `_unique_env_by_suffix`
+    rightly refuses to pick one. The profile names its own variable in
+    spec.runtime.sandbox.budgetEnv and this reads exactly that one.
+
+    A name the template sets with two different values is ambiguous for the
+    same reason it is below, and is the same error.
+    """
+    values = {str(value) for name, value in _iter_env_vars(doc) if name == env_name}
+    if not values:
+        return None
+    if len(values) > 1:
+        raise CatalogValidationError(
+            f"{path.name} declares {env_name} with {len(values)} different values "
+            f"({', '.join(sorted(values))}); the effective value is ambiguous"
+        )
+    return next(iter(values))
+
+
 def _unique_env_by_suffix(doc, suffix: str, path: pathlib.Path):
     """The single value of the one env var ending in `suffix`, or None.
 
@@ -409,10 +434,42 @@ def _unique_env_by_suffix(doc, suffix: str, path: pathlib.Path):
     return next(iter(values))
 
 
+def _uncalled_needles(entrypoint: str) -> tuple[str, ...]:
+    """Every spelling a template could use to call an uncalled profile's agent.
+
+    From `orchestrator.run_authoring_canary:run_authoring_canary`: the module
+    (`run_authoring_canary`), the agent in snake and kebab case
+    (`authoring_canary`, `authoring-canary`) and in upper case, the form a
+    budget or timeout variable takes (`AUTHORING_CANARY`). The same three
+    lower-case spellings mctl-agents' inertness test scans for. A match on an
+    unrelated word fails the exemption, which is the safe direction.
+    """
+    module = entrypoint.split(":")[0].rsplit(".", 1)[-1]
+    agent = module.removeprefix("run_")
+    return tuple(dict.fromkeys(
+        (module, agent, agent.replace("_", "-"), agent.upper())
+    ))
+
+
 def validate_profile_against_cwft(
-    path: pathlib.Path, doc: dict, errors: list, cwft_dir: pathlib.Path
+    path: pathlib.Path,
+    doc: dict,
+    errors: list,
+    cwft_dir: pathlib.Path,
+    uncalled: bool = False,
 ) -> None:
     """Check budgetUsd/timeoutSeconds against the CWFT the profile names.
+
+    uncalled=True (profile listed in policy.yaml uncalledProfiles) skips only
+    the budget comparison, after verifying that the profile names no
+    budgetEnv and that no file in cwft_dir names the agent (see
+    _uncalled_needles). That proves no template or CronWorkflow calls the
+    agent DIRECTLY. It cannot see a call made inside the orchestrator, such
+    as a new mode of `python -m orchestrator.run_all`, which several agents
+    are reached through without appearing in any template; that direction
+    is guarded in mctl-agents, whose test suite fails when any module under
+    orchestrator/, tools/ or config/ names the entrypoint
+    (tests/test_authoring_canary.py for authoring-canary).
 
     The CWFT is derived from spec.runtime.sandbox.clusterWorkflowTemplate
     rather than from a profile->template table. A table would be a third
@@ -423,6 +480,33 @@ def validate_profile_against_cwft(
     name = doc["metadata"]["name"]
     cwft_name = spec["runtime"]["sandbox"]["clusterWorkflowTemplate"]
     cwft_path = cwft_dir / f"cwft-{cwft_name}.yaml"
+    if uncalled:
+        if spec["runtime"]["sandbox"].get("budgetEnv") is not None:
+            errors.append(
+                f"{path}: profile {name!r} is listed in uncalledProfiles but "
+                "declares sandbox.budgetEnv — an uncalled profile has no "
+                "budget variable to name"
+            )
+        needles = _uncalled_needles(spec["runtime"]["entrypoint"])
+        for template_path in sorted(cwft_dir.glob("*.yaml")):
+            # An unreadable template proves nothing either way, so it fails
+            # the exemption instead of aborting the run or passing it.
+            try:
+                text = template_path.read_text()
+            except Exception as exc:  # noqa: BLE001 - report and continue
+                errors.append(
+                    f"{path}: profile {name!r} is listed in uncalledProfiles "
+                    f"but {template_path.name} could not be read ({exc}); "
+                    "no caller cannot be proven"
+                )
+                continue
+            for needle in needles:
+                if needle in text:
+                    errors.append(
+                        f"{path}: profile {name!r} is listed in "
+                        f"uncalledProfiles but {template_path.name} references "
+                        f"{needle!r}; it has a caller"
+                    )
     if not cwft_path.exists():
         errors.append(
             f"{path}: names sandbox.clusterWorkflowTemplate {cwft_name!r} but "
@@ -434,7 +518,17 @@ def validate_profile_against_cwft(
         cwft = load_yaml(cwft_path)
         if not isinstance(cwft, dict):
             raise CatalogValidationError("not a YAML mapping")
-        budget = _unique_env_by_suffix(cwft, BUDGET_ENV_SUFFIX, cwft_path)
+        # A profile that names its budget variable is checked against that
+        # variable and no other. Without a name the template must set exactly
+        # one *_BUDGET_USD, as before: guessing among several is the failure
+        # `_unique_env_by_suffix` exists to refuse.
+        budget_env = spec["runtime"]["sandbox"].get("budgetEnv")
+        if uncalled:
+            budget = None  # never compared, see below
+        elif budget_env is not None:
+            budget = _env_value_by_name(cwft, budget_env, cwft_path)
+        else:
+            budget = _unique_env_by_suffix(cwft, BUDGET_ENV_SUFFIX, cwft_path)
         timeout_env = _unique_env_by_suffix(cwft, TIMEOUT_ENV_SUFFIX, cwft_path)
 
         # No *_TIMEOUT_SECONDS override means the pod-level deadline IS the
@@ -461,17 +555,24 @@ def validate_profile_against_cwft(
         errors.append(f"{path}: reading {cwft_path.name}: {exc}")
         return
 
-    if budget_value is None:
-        errors.append(
-            f"{path}: profile {name!r} declares budgetUsd {spec['budgetUsd']} but "
-            f"{cwft_path.name} sets no *{BUDGET_ENV_SUFFIX} — the profile's "
-            "effective value cannot be verified against anything"
-        )
-    elif budget_value != float(spec["budgetUsd"]):
-        errors.append(
-            f"{path}: budgetUsd {spec['budgetUsd']} does not match "
-            f"{cwft_path.name}'s {budget_value}"
-        )
+    if not uncalled:
+        if budget_value is None and budget_env is not None:
+            errors.append(
+                f"{path}: profile {name!r} names sandbox.budgetEnv {budget_env!r} but "
+                f"{cwft_path.name} does not set it — the profile's effective value "
+                "cannot be verified against anything"
+            )
+        elif budget_value is None:
+            errors.append(
+                f"{path}: profile {name!r} declares budgetUsd {spec['budgetUsd']} but "
+                f"{cwft_path.name} sets no *{BUDGET_ENV_SUFFIX} — the profile's "
+                "effective value cannot be verified against anything"
+            )
+        elif budget_value != float(spec["budgetUsd"]):
+            errors.append(
+                f"{path}: budgetUsd {spec['budgetUsd']} does not match "
+                f"{cwft_path.name}'s {budget_value}"
+            )
 
     if timeout_value is None:
         errors.append(
@@ -594,11 +695,21 @@ def validate_catalog(
     policy: Policy,
     errors: list,
     cwft_dir: pathlib.Path | None = None,
+    check_stale_exemptions: bool = True,
 ):
     profiles_by_name: dict[str, list[str]] = {}
+    # Names of every profile file on disk, valid or not, so an exempt profile
+    # with its own error is not also reported as a stale exemption.
+    names_on_disk: set[str] = set()
 
     profiles_dir = root / "execution-profiles"
     for profile_path in sorted(profiles_dir.glob("*/profile.yaml")) if profiles_dir.is_dir() else []:
+        try:
+            raw_name = (load_yaml(profile_path) or {}).get("metadata", {}).get("name")
+        except Exception:  # noqa: BLE001 - validate_profile_file reports it
+            raw_name = None
+        if isinstance(raw_name, str):
+            names_on_disk.add(raw_name)
         result = validate_profile_file(profile_path, profile_schema, policy, errors)
         if result is None:
             continue
@@ -612,8 +723,21 @@ def validate_catalog(
         # exercise this check ships its own cluster-templates/ instead.
         if cwft_dir is not None:
             validate_profile_against_cwft(
-                profile_path, load_yaml(profile_path), errors, cwft_dir
+                profile_path,
+                load_yaml(profile_path),
+                errors,
+                cwft_dir,
+                uncalled=name in policy.uncalled_profiles,
             )
+
+    # A fixture without its own policy.yaml borrows the real one, whose
+    # exemptions name real profiles the fixture does not contain.
+    stale_names = policy.uncalled_profiles - names_on_disk
+    for stale in sorted(stale_names if check_stale_exemptions else ()):
+        errors.append(
+            f"policy.yaml: uncalledProfiles names {stale!r}, which is not a "
+            "profile in the catalog (stale exemption)"
+        )
 
     # profiles_by_name maps name -> list of versions seen across every
     # execution-profiles/*/profile.yaml in this catalog root; more than one
@@ -653,8 +777,8 @@ def case_cwft_dir(case_dir: pathlib.Path) -> pathlib.Path | None:
 
     Without this the effective-value check would be unreachable from
     --selftest, and a weakened version of it could be merged green. Opting
-    in per fixture keeps the other 18 cases from being checked against
-    production templates they have nothing to do with.
+    in per fixture keeps every other case from being checked against
+    production templates it has nothing to do with.
     """
     fixture_cwfts = case_dir / "cluster-templates"
     return fixture_cwfts if fixture_cwfts.is_dir() else None
@@ -678,6 +802,7 @@ def run_selftest() -> list:
                 policy,
                 errors,
                 cwft_dir=case_cwft_dir(case_dir),
+                check_stale_exemptions=case_policy_path(case_dir) != CATALOG / "policy.yaml",
             )
         if errors:
             problems.append(f"valid fixture {case_dir.name} unexpectedly failed:")
@@ -696,6 +821,7 @@ def run_selftest() -> list:
                 policy,
                 errors,
                 cwft_dir=case_cwft_dir(case_dir),
+                check_stale_exemptions=case_policy_path(case_dir) != CATALOG / "policy.yaml",
             )
         if not errors:
             problems.append(f"invalid fixture {case_dir.name} unexpectedly passed (expected at least one error)")

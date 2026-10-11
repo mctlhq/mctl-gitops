@@ -5,6 +5,13 @@ metadata:
   annotations:
     argocd.argoproj.io/compare-options: IgnoreExtraneous
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # The operator rolls the instances whenever this value changes; it is what
+    # `kubectl cnpg restart` sets, kept here so the roll goes through review.
+    # It reaches the cluster only because bootstrap/templates/data/shared-pg.yaml
+    # exempts this one key from the Application's ignoreDifferences.
+    # Set 2026-10-10 to apply priorityClassName (see below) to the running pods;
+    # bumped again the same night once primaryUpdateMethod became switchover.
+    kubectl.kubernetes.io/restartedAt: "2026-10-10T23:18:30Z"
 spec:
   # HA: primary + 1 hot standby. Two instances is the minimum that lets a node
   # drain succeed — CNPG promotes the standby and evicts the old primary,
@@ -19,7 +26,8 @@ spec:
   # Backups go OFF-cluster to R2: the previous in-cluster MinIO target died
   # together with the very cluster/PVCs it was protecting against. Same R2
   # account+bucket as vault-backup and vmbackup; endpoint matches backend.tf.
-  # Old MinIO backups (s3://postgres-backups/shared-pg) age out on their own.
+  # The old MinIO backups (s3://postgres-backups/shared-pg) were deleted with
+  # MinIO itself; PITR reaches back only as far as the first R2 base backup.
   backup:
     barmanObjectStore:
       destinationPath: s3://vault-backup/postgres-backups/shared-pg
@@ -54,9 +62,17 @@ spec:
         immediateCheckpoint: true
     # 14d: 3d left no margin to notice data loss that survives a weekend or
     # a bad migration discovered late. WAL+base are gzip'd; 9 small tenant DBs
-    # fit comfortably in MinIO at this window.
+    # fit comfortably in the R2 bucket at this window.
     retentionPolicy: "14d"
     target: prefer-standby
+
+  # Data-path priority (#1774); class declared in
+  # priority-class.yaml (sync-wave -1). CNPG 1.25 does NOT roll the instances
+  # when only this field changes: after #1783 the spec carried the class for
+  # hours while shared-pg-1/-2 kept running without it. Bump the restartedAt
+  # annotation above to apply a change (standby first, then a switchover per
+  # primaryUpdateMethod).
+  priorityClassName: platform-data-critical
 
   affinity:
     podAntiAffinityType: preferred
@@ -68,7 +84,12 @@ spec:
   minSyncReplicas: 0
   postgresGID: 26
   postgresUID: 26
-  primaryUpdateMethod: restart
+  # switchover, not restart: `restart` only restarts Postgres inside the
+  # existing primary pod, so pod-level changes (priorityClassName on
+  # 2026-10-10) never reach the primary. switchover promotes the already
+  # updated standby, then recreates the old primary as a standby: a few
+  # seconds of write interruption instead of a full restart of the primary.
+  primaryUpdateMethod: switchover
   primaryUpdateStrategy: unsupervised
   replicationSlots:
     highAvailability:
@@ -134,9 +155,6 @@ spec:
       # - host <db_name> <role_name> all scram-sha-256
       # smoke-test-svc: ephemeral — added/removed by smoke-test CWT, not managed here
       - host mctl-agent mctl-agent all scram-sha-256
-      - host labs-openclaw labs-openclaw all scram-sha-256
-      - host admins-openclaw admins-openclaw all scram-sha-256
-      - host ovk-openclaw ovk-openclaw all scram-sha-256
       - host labs-kuptsi-app labs-kuptsi-app all scram-sha-256
       # Temporal — server (history/matching/visibility) and admintools schema setup
       - host temporal temporal all scram-sha-256
@@ -194,8 +212,14 @@ spec:
         # initialises, and at 20 the new pod hit "too many connections for
         # role" (2026-09-24 11:20Z); the agent registry, surface identities,
         # event outbox and domains stores then stayed disabled (503) until
-        # the next restart. Steady state is ~8; 40 covers two pods at init.
-        connectionLimit: 40
+        # the next restart.
+        # 64, not 40: mctl-api runs 2 replicas since gitops#1715, so a rolling
+        # update has three pods at once, each holding 11-15 connections
+        # (measured 2026-10-09: 15 + 13 + 11 = 39). At 40 the surge pod hit
+        # the limit again and its agent registry and domains stores stayed
+        # disabled, so it never became Ready. 64 covers three pods at init
+        # with headroom; mctl-api#508 tracks shrinking the per-store pools.
+        connectionLimit: 64
         ensure: present
         passwordSecret:
           name: mctl-api-db-creds
@@ -278,24 +302,6 @@ spec:
         ensure: present
         passwordSecret:
           name: labs-kuptsi-app-db-creds
-      - name: ovk-openclaw
-        login: true
-        connectionLimit: 10
-        ensure: present
-        passwordSecret:
-          name: ovk-openclaw-db-creds
-      - name: admins-openclaw
-        login: true
-        connectionLimit: 10
-        ensure: present
-        passwordSecret:
-          name: admins-openclaw-db-creds
-      - name: labs-openclaw
-        login: true
-        connectionLimit: 10
-        ensure: present
-        passwordSecret:
-          name: labs-openclaw-db-creds
       # Temporal server connects from the temporal namespace via shared-pg-rw.
       # Owns both the temporal (history+matching) and temporal_visibility databases.
       # Connection budget: 4 server roles (frontend/history/matching/worker)

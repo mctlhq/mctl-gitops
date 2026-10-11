@@ -1,0 +1,31 @@
+status: merged
+updated_at: '2026-10-11T13:16:42Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-a9d50aaeb23cf21d
+  trace_id: f526a872d8512a6346118ccc0fde0afe
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 457
+  url: https://github.com/mctlhq/mctl-api/issues/457
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-836e9c029c9829e2
+  content_hash: sha256:836e9c029c9829e25e242d2d217da9cad2c96f1f6e0bed9d6d5dce8f83fc5c28
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-11T12:55:14Z'
+attempt:
+  id: 64a95afc6de0c07220c4be2535d9541a4b55ea144363d83e234d5fef2f29241e
+  started_at: '2026-10-11T12:56:38Z'
+  expires_at: '2026-10-11T15:06:38Z'
+  finished_at: '2026-10-11T12:59:41Z'
+pr: https://github.com/mctlhq/mctl-api/pull/556
+merged_at: '2026-10-11T13:16:42Z'
+merge_commit: d3148117609695aef04fb2edbd54139fbcc889ea

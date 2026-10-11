@@ -28,7 +28,7 @@ A gateway-mode OpenTelemetry Collector runs in `monitoring`
 (`platform-gitops/bootstrap/templates/observability/otel-collector.yaml`),
 accepts OTLP on `otel-collector.monitoring.svc.cluster.local:4317/4318`,
 enriches spans with `mctl.team` / `mctl.component` / `k8s.*` /
-`deployment.environment`, redacts credential-shaped and prompt-shaped
+`deployment.environment.name`, redacts credential-shaped and prompt-shaped
 attributes, and exports to exactly one sink today: the `debug` exporter,
 whose stdout lands in Loki via promtail.
 `platform-gitops/bootstrap/values.yaml` holds `otelCollector.backendEndpoint:
@@ -219,6 +219,114 @@ decision time:
 6. If the spike is abandoned rather than concluded, this ADR is amended with
    an `Abandoned` status and the reason -- never deleted -- so the next
    attempt starts from this screen rather than from zero.
+
+## Bake-off scope amendment (#1280, 2026-10-10)
+
+Recorded before any measurement, as the exit procedure above requires.
+
+**Scope: Tempo only.** The owner narrowed this round to a single candidate,
+Grafana Tempo, deployed monolithic (single binary, one replica) from the
+community chart `tempo` `2.4.0` (Tempo `2.10.8`) into `observability-eval`.
+Langfuse, SigNoz, Phoenix and Traceway are not deployed and their rubric
+cells stay null. Steps 1 and 2 of the exit procedure therefore apply to one
+candidate rather than to every Stage A survivor. A verdict that adopts an
+unmeasured candidate cannot be supported by this round's evidence; whether
+the remaining candidates get a later round is the owner's call on #1280.
+
+**Storage.** Tempo writes blocks to the Cloudflare R2 bucket `tempo-traces`
+through a bucket-scoped token read from Vault by an ExternalSecret; the WAL
+is on a 2Gi `emptyDir`, and no persistent volume is used. Retention is 14
+days (`block_retention: 336h`, enforced by the compactor), with the bucket's
+own 30-day lifecycle rule as a backstop.
+
+**Soak window and declared volume.** Declared here, before the first
+measurement:
+
+- Window: from the synthetic span proof (collector → Tempo → Grafana,
+  `docs/runbooks/tracing-bake-off.md` step 4.3, timestamp recorded on #1280)
+  until 2026-10-23 23:59 UTC, one day before the sandbox's `teardownAfter`
+  date of 2026-10-24.
+- Volume: synthetic only. The `otel-trace-fixture` workflow with default
+  parameters (about 240 spans per submission), submitted once for the proof
+  and then at most once a day: under 5,000 spans for the whole window. No
+  producer emits OTLP to the collector today (verified 2026-10-10), so real
+  producer traffic is declared as none. Instrumenting a producer during the
+  window is an amendment recorded here, with a reason, before it lands.
+
+**Accepted risks, for the bake-off only.** Spans not yet flushed are lost
+when the pod is deleted or rescheduled, because the WAL is on an
+`emptyDir` (a container restart keeps it). An R2 outage that lasts longer
+than the 2Gi WAL can absorb loses spans as well. Both are acceptable for an
+evaluation with synthetic traffic and would have to be revisited for any
+permanent deployment. The runbook lists the remaining, smaller ones.
+
+**Teardown.** If Tempo is not selected, the teardown commit removes the
+deployment, its alerts and its datasource (runbook step 9), and the
+`tempo-traces` bucket is emptied. If it is selected, nothing is promoted in
+place: a permanent tracing backend, and turning tracing on across
+production workloads, are each a separate owner gate after this ADR's
+verdict.
+
+## Producer amendment: DevLoop traces (#1280, mctl-agents#195, 2026-10-10)
+
+Recorded before any producer emits, as the soak declaration above requires.
+It changes only the "real producer traffic" line. The window, the synthetic
+volume, storage, retention and the teardown date stay as declared.
+
+**Reason.** `mctlhq/mctl-agents#195` closes only on a real DevLoop rendered
+end to end, and this issue's preconditions say final scoring must use
+correctly exported live telemetry. A synthetic-only soak cannot fill the AI/agent
+observability cells from real data.
+
+**Producer, and only this producer.** The `mctl-agents` DevLoop:
+
+- the worker Deployments that run DevLoop activities, with
+  `MCTL_TRACE_WORKFLOW_TYPES=DevLoopWorkflow`. A run of any other workflow
+  type (reconcile, incidents, sweep, poller, schedules) gets an unsampled
+  root, and nothing under it is recorded;
+- the `mctl-agents-investigate` and `mctl-agents-implement` pods, with
+  `MCTL_TRACE_REQUIRE_PARENT=true`. A pod that a traced DevLoop did not
+  submit stays inert.
+
+`mctl-agent`, `mctl-api` and every other `base-service` release stay
+uninstrumented. Each of them would need its own amendment here.
+
+**Declared volume.**
+- **Rate:** 101 issue investigations in the 14 days to 2026-10-10 (about 7 a
+  day), with at most as many implementations.
+- **Spans per run:** an upper estimate of 1,000 for an investigation and
+  2,000 for an implementation. That is one span per model message plus one
+  per tool call, within the $8 budget.
+- **Bound:** about 21,000 spans a day, or about 300,000 over the rest of the
+  window.
+- **Cap:** 500,000 producer spans for the whole window, measured as
+  `tempo_distributor_spans_received_total` minus the fixture's
+  submissions. The synthetic declaration (under 5,000 spans) is unchanged
+  and counted separately.
+
+**Stop rule.** Any one of the following turns the producer off. The switch is
+a one-line revert of the workers' `otel.enabled`, and the pods then go inert
+because they no longer receive a sampled `traceparent`.
+- the cap is reached;
+- `tempo_discarded_spans_total` increases;
+- either collector exporter alert for the Tempo exporter fires;
+- Tempo's working set passes 80% of its 1Gi limit;
+- the leak check finds a single hit. That check is #195 checklist item 11:
+  grep the first exported trace for the issue body, proposal text,
+  credential shapes and the prompt.
+
+**Privacy.** Two layers redact on the way out: the producer's export guard
+(`mctl-agents/docs/observability/execution-traces.md`, "Redaction rules")
+and then the Collector's `redaction` processor. No prompt, completion, tool
+argument or result, body or command line is recorded. The Collector's
+`debug` exporter also writes up to one log line per span to Loki. That line
+carries span names, never attributes.
+
+**What this is not.** It is not an adoption of Tempo. It does not turn on
+tracing beyond the DevLoop path. It does not extend the window. The
+teardown commit (runbook step 9) also removes the producer's OTLP env and
+`otel.enabled`, so nothing keeps emitting into a Collector that has no trace
+backend.
 
 ## Decision
 

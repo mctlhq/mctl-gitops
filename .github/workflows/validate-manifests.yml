@@ -3,17 +3,10 @@ name: Validate Manifests
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
-  # Also run on main itself. The openclaw version-pin check below exists
-  # because of a drift (#1037) that arrives by a path with no pull request in
-  # it at all: gitops-bump.yaml and release-deploy.yaml's bump job commit tag
-  # bumps DIRECTLY to main under the main-protection ruleset bypass, and their
-  # rewrite patterns touch only the image reference, never a mirrored
-  # env.OPENCLAW_VERSION. A pull_request-only trigger therefore never sees the
-  # thing it was added to catch.
-  #
-  # This detects rather than prevents — the commit has already landed by the
-  # time it runs — so it is the complement to fixing the bump itself, tracked
-  # as #1057, not a replacement for it.
+  # Also run on main itself: gitops-bump.yaml and release-deploy.yaml's bump
+  # job commit tag bumps DIRECTLY to main under the main-protection ruleset
+  # bypass, so a pull_request-only trigger never sees those changes. The
+  # detectors here catch drift on that path after the fact (#1037, #1057).
   push:
     branches: [main]
 
@@ -96,6 +89,32 @@ jobs:
           # --selftest first: a detector never seen to fire is not known to work.
           python3 -m pip install --quiet pyyaml
           scripts/validate-tenant-networkpolicy-allowlist.py --selftest "$tmpdir/bootstrap.yaml"
+
+      # Every Application must stay inside its AppProject's sourceRepos and
+      # destinations, and every literal project entry must still be used.
+      # Too narrow and Argo CD stops syncing the Application (for `default`,
+      # that is root-app and the whole platform tier); too wide and the
+      # project is no boundary. root-app owns the bootstrap render and
+      # argocd-self-managed the argocd render, so their resources' namespaces
+      # are checked too. The argocd chart is rendered with --namespace argocd
+      # because that is the namespace Argo CD renders it into. The eval
+      # overlay is checked as well: its candidates' chart repositories are
+      # derived into `default` by project-default.yaml.
+      # --selftest first: a detector never seen to fire is not known to work.
+      - name: Argo CD Applications stay inside their AppProjects
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml \
+            -f tests/fixtures/otel-eval-candidates.example-values.yaml > "$tmpdir/bootstrap-eval.yaml"
+          helm template argocd platform-gitops/argocd -f platform-gitops/argocd/values.yaml \
+            --namespace argocd > "$tmpdir/argocd.yaml"
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-argocd-project-scope.py --selftest --strict default \
+            "$tmpdir/bootstrap.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
+          scripts/validate-argocd-project-scope.py --strict default \
+            "$tmpdir/bootstrap-eval.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
 
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
@@ -192,11 +211,6 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           scripts/validate-platform-skills.py
-          # Fails when a hand edit to catalog/bindings leaves a tenant's
-          # generated/platform-skills-values.yaml stale or orphaned. Lives in
-          # this PR (not the plumbing one) so the gate never precedes the
-          # workflows that keep the generated files in sync.
-          scripts/materialize-openclaw-platform-skills.py --check
 
       - name: Validate agent platform catalog
         run: |
@@ -219,17 +233,6 @@ jobs:
           scripts/validate-profile-version-bumps.py --selftest
           scripts/validate-profile-version-bumps.py
 
-      - name: Check openclaw image.tag and OPENCLAW_VERSION stay in sync
-        run: |
-          set -euo pipefail
-          # --selftest first, same reason as the other detectors in this job:
-          # a checker that has never been seen to fire is not known to work.
-          # gitops#1037: admins/labs had image.tag bumped without the paired
-          # OPENCLAW_VERSION env update, per the "Image bump recipe" in
-          # k8s.md ("both must stay in sync on every bump").
-          scripts/validate-openclaw-version-pin.py --selftest
-          scripts/validate-openclaw-version-pin.py
-
       - name: Check the implementation admission worker stays a single replica
         run: |
           set -euo pipefail
@@ -243,6 +246,12 @@ jobs:
 
       - name: Validate Argo local workdir invariants
         run: scripts/validate-local-workdir.py
+
+      - name: Validate agent pod security context
+        run: |
+          set -euo pipefail
+          scripts/validate-agent-pod-security.py --selftest
+          scripts/validate-agent-pod-security.py
 
       # A proposal committed as `accepted` while demanding an approval it does
       # not carry is unrunnable by every supported path, and nothing fails on
@@ -380,6 +389,13 @@ jobs:
         # deploy key.
         run: python3 tests/test_cwft_implement_shepherd_work_context_env.py
 
+      - name: Unit-test the mctl-agents CWFTs' execution-trace env
+        # mctl-agents#195: a container that exports OTLP must carry
+        # MCTL_TRACE_REQUIRE_PARENT=true and a parameter-sourced TRACEPARENT,
+        # so only runs a traced DevLoop submitted can export (ADR 0001,
+        # "Producer amendment: DevLoop traces").
+        run: python3 tests/test_cwft_execution_trace_env.py
+
       - name: Unit-test the k3s-preview apply guard
         # terraform.yml refuses a cluster plan that destroys infrastructure or
         # re-runs node provisioners (#1534). It only meets a real plan during
@@ -436,6 +452,24 @@ jobs:
         # that closes the string literal — by running the template's own
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
+
+      - name: Test workflow parameters cannot inject shell
+        run: python3 tests/test_shell_param_injection.py
+
+      - name: Unit-test create-tenant's existing-tenant checks
+        # create-tenant creates a tenant: an existing one fails validate unless
+        # reprovision=true, and the commit step refuses one that appeared
+        # after validate. Runs the template's own extracted blocks against a
+        # fixture checkout, with git clone stubbed.
+        run: python3 tests/test_wft_create_tenant_existing.py
+
+      - name: Unit-test retire-service's Argo CD Application guard
+        # retire-service deletes the Application <team>-<component>. The
+        # guard only lets through an absent Application or one the `apps`
+        # ApplicationSet generated for that team, and treats an unreadable
+        # one as an error. Runs the template's own script against a stub
+        # kubectl.
+        run: python3 tests/test_wft_retire_service_guard.py
 
       - name: Unit-test the shepherd's commit-and-push staging
         # commit-and-push is the only step that writes agents-state back to
@@ -594,17 +628,29 @@ jobs:
           scripts/validate-eval-teardown-date.py --selftest
           scripts/validate-eval-teardown-date.py
 
-      - name: Unit-test the otel-collector redaction processor (issue-1355)
-        # gen_ai.usage.*_tokens (the AI/agent-observability rubric
-        # dimension's evidence) are currently caught by the bare `token`
-        # alternative in blocked_key_patterns[0] -- mctlhq/mctl-gitops#1332.
-        # This makes that status a CI-visible fact (an expected failure that
-        # names the issue and exits 0) instead of a claim in a comment, while
-        # still hard-failing on the credential block list every run, marker
-        # or no marker.
+      - name: Unit-test the otel-collector redaction processor (issue-1355, #1332)
+        # Key classification against the committed ignored_key_patterns and
+        # blocked_key_patterns: credential-shaped keys (including ones inside
+        # the gen_ai.usage namespace the ignore list opens) are masked, the
+        # GenAI usage counters and cost-shaped keys survive.
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_otel_collector_redaction.py
+
+      - name: Run the redaction processor in the real collector (#1332)
+        # The key test above cannot see #1332's actual defect: a masked
+        # integer counter arrives as the string "****". This runs the pinned
+        # otelcol-contrib image with the rendered redaction/resource
+        # processors and checks the exported values and types. The
+        # --without-ignore run puts #1332 back and must fail first, so the
+        # detector is seen to fire on every run, not only once in review.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          if python3 tests/test_otel_collector_redaction_e2e.py --without-ignore; then
+            echo "::error::redaction e2e passed with ignored_key_patterns removed -- the detector does not detect #1332"
+            exit 1
+          fi
+          python3 tests/test_otel_collector_redaction_e2e.py
 
       - name: Validate storage & finops Grafana dashboards
         run: |
@@ -631,6 +677,12 @@ jobs:
         with:
           version: "v3.16.4"
 
+      # The k3s image is pulled with retries (scripts/lib/docker-pull-retry.sh);
+      # this proves the retry helper itself, with a stubbed docker, before the
+      # k3s scripts rely on it.
+      - name: Prove the Docker pull retry helper
+        run: scripts/test-docker-pull-retry.sh
+
       - name: Prove the reserved-host admission policies
         run: |
           set -euo pipefail
@@ -643,6 +695,14 @@ jobs:
         run: |
           set -euo pipefail
           scripts/test-secret-allowlist-policy.sh
+
+      # Same toolchain, its own k3s: what tenant workflow ServiceAccounts and
+      # the platform workflow tier (argo-workflows/argo-workflow-sa) may do to
+      # Argo CD Applications, ApplicationSets and the argocd Roles.
+      - name: Prove the tenant and platform workflow SA Argo CD policies
+        run: |
+          set -euo pipefail
+          scripts/test-tenant-workflow-sa-argocd-policy.sh
 
   # The declarative ZITADEL root (#1520). The in-cluster Job applies it after
   # merge, so formatting, provider schema errors and a lock file that does not
@@ -717,6 +777,28 @@ jobs:
               sys.exit(f"zitadel-iac-inputs is missing {missing}")
           print(f"zitadel-iac-inputs carries all {len(want)} root files")
           PY
+
+  # The Forgejo reconciler's scoped-team rule, evaluated by OpenTofu itself
+  # (main.tf lives in a ConfigMap, so no root here runs `tofu validate` on it).
+  # A packages-only team may name no repository; every other team must name
+  # repositories of its own org.
+  forgejo-reconcile-teams:
+    name: forgejo reconcile team rule
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: "1.13.1"
+          tofu_wrapper: false
+
+      - name: Scoped teams accept packages-only, refuse everything else without repos
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_forgejo_reconcile_teams.py
 
   # The declarative Vault human sign-in root. Like zitadel-iac, the in-cluster
   # Job applies it after merge, so formatting, provider schema errors and a

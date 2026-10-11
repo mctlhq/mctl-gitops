@@ -1,0 +1,63 @@
+# The OIDC clients of the public labs apps in ZITADEL ("Log in with MCTL
+# account"): coolify-mcp and mctl-academy. ZITADEL generates the client
+# secrets, and the zitadel-iac Job (helm-charts/zitadel-iac/iac/labs-apps.tf)
+# writes ZITADEL_ISSUER, ZITADEL_CLIENT_ID, ZITADEL_CLIENT_SECRET and
+# ZITADEL_DISPLAY_NAME here with server-side apply as field manager
+# `zitadel-iac`.
+#
+# Nothing reads these Secrets yet. An app offers the button once its
+# Deployment takes its Secret through an optional `envFrom` entry in
+# services/labs/<app>/values.yaml, which is a change of its own
+# (docs/runbooks/zitadel.md, "Labs apps sign-in").
+#
+# Declared here, not in the services' values: the "apps" project admits no
+# RBAC kind (see bootstrap/templates/system/labs-mctl-telegram-canary-rbac.yaml).
+# Argo CD creates the Secrets without data and never owns `.data`
+# (ignoreDifferences in bootstrap/templates/mctl-platform/labs-oidc-zitadel.yaml),
+# so a sync does not wipe what the Job wrote. The Job may only read and patch
+# these two Secrets by name: no create, no list, nothing else in this
+# namespace.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: coolify-mcp-oidc-zitadel
+  labels:
+    app.kubernetes.io/name: coolify-mcp
+    app.kubernetes.io/component: oidc-zitadel
+type: Opaque
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mctl-academy-oidc-zitadel
+  labels:
+    app.kubernetes.io/name: mctl-academy
+    app.kubernetes.io/component: oidc-zitadel
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/component: oidc-zitadel
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["coolify-mcp-oidc-zitadel", "mctl-academy-oidc-zitadel"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/component: oidc-zitadel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-iac-oidc-client
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-iac
+    namespace: zitadel

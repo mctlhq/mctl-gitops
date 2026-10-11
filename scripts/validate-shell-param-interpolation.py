@@ -29,39 +29,15 @@ PLACEHOLDER = re.compile(r"\{\{\s*(?:inputs|workflow)\.parameters\.([A-Za-z0-9_.
 
 # (file, template, parameter) still interpolated. Every entry is a known
 # injection site tracked in gitops#992 — shrink this list, never grow it.
-# The `tpl-*` entries are the harder half: `env_vars` / `secret_env_vars` are
-# free-form multi-line user input by design, and one site feeds a quoted
-# heredoc whose terminator a crafted value can reproduce, so converting them
-# changes the surrounding shell rather than one assignment.
+# tpl-validate-tenant, tpl-git-commit, tpl-vault-write and the assert-attempt
+# templates are converted; wft-smoke-test is the remaining family.
 BASELINE: set[tuple[str, str, str]] = {
-    ("tpl-git-commit.yaml", "commit-service", p)
-    for p in ("image_tag", "port", "host", "env_vars", "secret_env_vars",
-              "dockerfile_repo", "service_template")
-} | {
-    ("tpl-validate-tenant.yaml", "validate", p)
-    for p in ("host", "dockerfile_repo", "image_tag", "git_tag", "service_template")
-} | {
-    ("tpl-vault-write.yaml", "write-service-secrets", "secret_env_vars"),
-    ("tpl-vault-write.yaml", "write-service-secrets", "telegram_bot_token"),
-    ("tpl-vault-write.yaml", "write-platform-secret", "json_data"),
-    ("tpl-vault-write.yaml", "write-platform-secret", "vault_path"),
-    ("tpl-git-commit.yaml", "commit-service", "config_patch"),
-    ("tpl-git-commit.yaml", "commit-service", "default_model"),
     ("wft-smoke-test.yaml", "run-onboard", "dockerfile_repo"),
     ("wft-smoke-test.yaml", "run-onboard", "git_tag"),
     ("wft-smoke-test.yaml", "run-onboard", "provision_database_on_onboard"),
     ("wft-smoke-test.yaml", "run-deploy", "dockerfile_repo"),
     ("wft-smoke-test.yaml", "run-deploy", "git_tag"),
     ("wft-smoke-test.yaml", "check-pod-running", "previous_generation"),
-} | {
-    # Internal template parameters whose origin has NOT been traced to a
-    # caller-supplied value. They are listed rather than excluded because
-    # "looks internal" is the assumption that lets one of these turn out to
-    # be user input; each still needs its origin confirmed under gitops#992.
-    (f, "assert-attempt", p)
-    for f in ("cwft-mctl-agents-implement.yaml", "cwft-mctl-agents-investigate.yaml",
-              "cwft-mctl-agents-run.yaml", "cwft-mctl-agents-shepherd.yaml")
-    for p in ("primary", "fallback")
 }
 
 # Parameters the operations registry constrains with an anchored Pattern or an

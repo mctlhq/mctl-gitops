@@ -1,6 +1,6 @@
 {{- /*
   The OpenTofu root lives as real files under iac/ so CI can fmt and validate
-  it; this ConfigMap carries it into the Job. The lock file is named
+  it; this ConfigMap carries it into the Job, the dashboards (*.json) with it. The lock file is named
   explicitly because the glob takes only *.tf, and it gets a key without the
   leading dot; the Job copies it back to .terraform.lock.hcl.
 
@@ -20,7 +20,7 @@ metadata:
 data:
   allowed-actions: {{ .Values.allowedActions | quote }}
   allowed-deletes: {{ .Values.allowedDeletes | default "" | quote }}
-  {{- range $path, $_ := .Files.Glob "iac/*.tf" }}
+  {{- range $path, $_ := .Files.Glob "iac/*.{tf,json}" }}
   {{ base $path }}: |
     {{- $.Files.Get $path | nindent 4 }}
   {{- end }}

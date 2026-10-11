@@ -1,4 +1,4 @@
-# Unit tests for mctl-alerts.yaml (group mctl.argocd).
+# Unit tests for mctl-alerts.yaml (groups mctl.argocd, mctl.tenant-quotas and the node alerts).
 #
 # rule_files is resolved relative to this file. generated/ is produced by
 # scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so
@@ -206,3 +206,59 @@ tests:
       - eval_time: 35m
         alertname: ContainerOOMKilled
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # mctl.tenant-quotas. The kubelet exports container usage twice
+  # (/metrics/cadvisor and /metrics/resource); only the cAdvisor copy counts.
+  # Quota: limits.cpu 12, limits.memory 9Gi = 9663676416 bytes.
+  - interval: 1m
+    name: usage at 44-46% of quota exported on both kubelet paths stays quiet
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+        values: '4294967296x20'
+      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
+        values: '4294967296x20'
+      - series: 'container_cpu_usage_seconds_total{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+        values: '0+330x20'
+      - series: 'container_cpu_usage_seconds_total{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/resource"}'
+        values: '0+330x20'
+      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.memory"}'
+        values: '9663676416x20'
+      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.cpu"}'
+        values: '12x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantMemoryQuotaHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantCPUQuotaHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: usage above 85% of quota fires for the namespace
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+        values: '8589934592x20'
+      - series: 'container_cpu_usage_seconds_total{namespace="erpact",pod="mariadb-0",container="mariadb",metrics_path="/metrics/cadvisor"}'
+        values: '0+660x20'
+      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.memory"}'
+        values: '9663676416x20'
+      - series: 'kube_resourcequota{namespace="erpact",resourcequota="erpact-quota",type="hard",resource="limits.cpu"}'
+        values: '12x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantMemoryQuotaHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: erpact
+            exp_annotations:
+              summary: Namespace erpact memory usage is at 88.89% of quota
+      - eval_time: 20m
+        alertname: TenantCPUQuotaHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: erpact
+            exp_annotations:
+              summary: Namespace erpact CPU usage is at 91.67% of quota

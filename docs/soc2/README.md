@@ -16,8 +16,8 @@ mctl-agents, mctl-portal, mctl-web, mctl-docs, mctl-gitops, in-cluster
 Vault / CNPG / Argo CD / Argo Workflows / Traefik / observability.
 
 **Out:** customer-deployed workloads in tenant namespaces (isolation is in
-scope; the apps are not), mctl-academy, mctl-telegram product, mctl-openclaw,
-loyalty, pairdesk.
+scope; the apps are not), mctl-academy, mctl-telegram product, loyalty,
+pairdesk.
 
 ## Index
 

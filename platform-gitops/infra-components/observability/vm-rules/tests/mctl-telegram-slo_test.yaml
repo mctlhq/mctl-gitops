@@ -261,3 +261,105 @@ tests:
         exp_samples:
           - labels: 'mctl_telegram:session_borrow_success:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
             value: 0
+
+  # --- Short-window error ratios: zero-fill -----------------------------
+  # The 1h/6h error ratios feed the burn-rate alerts and the Grafana panels.
+  # Their numerators select only failures, and a healthy service has no
+  # failure series at all: a counter child is created on its first increment,
+  # so after a rollout `result="error"` does not exist until something fails.
+  # Without the zero-fill the ratio then records NOTHING, and "no errors" is
+  # indistinguishable from "the metric is gone". Observed on 2026-10-07:
+  # session_borrow_errors:ratio_rate6h went absent six hours after 0.79.2
+  # rolled out with 302 ok borrows and no error.
+  #
+  # Each case below fails against the pre-zero-fill expressions.
+  - interval: 1m
+    name: tool error ratios record 0, not nothing, when no call has failed
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="ok"}'
+        values: "0+1x420"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_errors:ratio_rate1h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate1h{job="mctl-telegram",namespace="labs"}'
+            value: 0
+      - expr: mctl_telegram:tool_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
+            value: 0
+
+  - interval: 1m
+    name: oauth 5xx ratios record 0, not nothing, when there is no 5xx series
+    input_series:
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",route="/oauth/token",status_code="200"}'
+        values: "0+1x420"
+    promql_expr_test:
+      - expr: mctl_telegram:oauth_5xx:ratio_rate1h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:oauth_5xx:ratio_rate1h{job="mctl-telegram",namespace="labs"}'
+            value: 0
+      - expr: mctl_telegram:oauth_5xx:ratio_rate6h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:oauth_5xx:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
+            value: 0
+
+  # flood_wait and call_error are present on purpose: they are what a healthy
+  # pod actually exports since mctl-telegram 0.79.2, and neither may be
+  # counted as an error.
+  - interval: 1m
+    name: session borrow error ratios record 0, not nothing, when no borrow has failed
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",result="ok"}'
+        values: "0+1x420"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",result="flood_wait"}'
+        values: "0+1x420"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",result="call_error"}'
+        values: "0+1x420"
+    promql_expr_test:
+      - expr: mctl_telegram:session_borrow_errors:ratio_rate1h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_errors:ratio_rate1h{job="mctl-telegram",namespace="labs"}'
+            value: 0
+      - expr: mctl_telegram:session_borrow_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_errors:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
+            value: 0
+
+  # The zero-fill must not invent a measurement. With no ok|error borrow in
+  # the window there is nothing to divide by, and the ratio has to stay
+  # absent: a recorded 0 here would report a service that served nothing as
+  # perfectly healthy. Fails if the fill is applied to the finished ratio
+  # (`(errors / total) or 0 * anything`) instead of to the numerator.
+  - interval: 1m
+    name: session borrow error ratio stays absent when there was no borrow to measure
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",result="expired_idle"}'
+        values: "0+1x420"
+    promql_expr_test:
+      - expr: mctl_telegram:session_borrow_errors:ratio_rate1h
+        eval_time: 420m
+        exp_samples: []
+      - expr: mctl_telegram:session_borrow_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples: []
+
+  # The fill is `or`, so a real error ratio must pass through untouched.
+  - interval: 1m
+    name: session borrow error ratio is unchanged by the zero-fill when borrows do fail
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",result="ok"}'
+        values: "0+3x420"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",result="error"}'
+        values: "0+1x420"
+    promql_expr_test:
+      - expr: mctl_telegram:session_borrow_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_errors:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
+            value: 0.25

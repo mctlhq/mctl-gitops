@@ -1,0 +1,43 @@
+# Platform-owned manifests in namespace backstage for the portal's sign-in
+# through ZITADEL (mctlhq/mctl-portal#150, #1500 phase 3): the Secret the
+# zitadel-iac Job fills and the Role that lets it do so
+# (infra-components/mctl-platform/mctl-portal/oidc-zitadel.yaml).
+#
+# Its own Application, not a source of admins-mctl-portal and not a template
+# of this chart: admins-mctl-portal is the upstream backstage chart alone,
+# and root-app deliberately runs without RespectIgnoreDifferences
+# (templates/bootstrap/root-app.yaml), which this needs so a sync never
+# applies the empty `.data` over what the Job wrote. Same shape as
+# erpact-oidc-zitadel (templates/erpact/oidc-zitadel.yaml).
+#
+# No CreateNamespace: backstage belongs to admins-mctl-portal.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mctl-portal-oidc-zitadel
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    targetRevision: main
+    path: platform-gitops/infra-components/mctl-platform/mctl-portal
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: backstage
+  ignoreDifferences:
+    # Written by the zitadel-iac Job, not by Argo CD.
+    - kind: Secret
+      name: backstage-oidc-zitadel
+      jsonPointers:
+        - /data
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

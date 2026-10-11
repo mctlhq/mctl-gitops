@@ -119,8 +119,9 @@ enrol again.
 `iac/admins.tf` holds the one list of platform admins. Each of them holds
 every admin grant: Argo CD `admins`, Vault `admins` and Cloudflare Access
 `access`. The MCTL API project has no roles, so there is nothing to grant
-there: any `MCTL` user gets its token, and mctl-api grants nothing based on
-ZITADEL roles yet.
+there: any `MCTL` user, and any user of a tenant organization (see "mctl-api
+audience"), gets its token, and mctl-api grants nothing based on ZITADEL
+roles yet.
 
 - **Break-glass.** `mctl-admin` is in `break_glass_admins` and is looked up
   by its login name. It is not created by this root.
@@ -130,9 +131,10 @@ ZITADEL roles yet.
   (no `@`, never `mctl-admin`): it addresses the user and its grants. The
   value is a JSON object
   `{"email", "first_name", "last_name", "preferred_language", "username"}`,
-  where `preferred_language` is optional and defaults to `en`, and
+  where `preferred_language` is optional and defaults to `en`,
   `username`, optional, is the login name when it should differ from the key
-  (same pattern; login names must be unique). ExternalSecret
+  (same pattern; login names must be unique), and `github_login`, optional,
+  is the admin's GitHub login (see "GitHub login claim"). ExternalSecret
   `zitadel-iac-admins` extracts the secret into `admins.json`, and the pod
   passes it on as `TF_VAR_platform_admins`. The owner writes the secret;
   it is never in git:
@@ -188,9 +190,12 @@ ZITADEL roles yet.
 
 - **Source.** One Vault secret per tenant, `secret/platform/zitadel/users/<tenant>`.
   Each field is one user: the field name is the user name, the value a JSON
-  object `{"email", "first_name", "last_name", "preferred_language", "argocd"}`
-  (`preferred_language` is optional, default `en`; `argocd` is optional,
-  default `false`, see "Argo CD sign-in" below). This repository is public,
+  object `{"email", "first_name", "last_name", "preferred_language", "argocd",
+  "vault", "workflows", "frappe", "github_login"}` (`preferred_language` is
+  optional, default `en`; `argocd`, `vault` and `workflows` are optional,
+  default `false`, see "Argo CD sign-in" and "Vault sign-in" below, and
+  `iac/workflows.tf`; `frappe` is for tenant `erpact` only, see "ERPact copy
+  sign-in"; `github_login` is optional, see "GitHub login claim"). This repository is public,
   so the list is never in git. ExternalSecret `zitadel-iac-users` finds every
   secret under the path and folds them into `users.json` for the pod.
 - **Result.** One organization per tenant secret, named after the tenant, and
@@ -288,9 +293,9 @@ what. Vault's own side (the `auth/mctl` mount, groups, policies) is the
   requesting client's project only (see the comment in `argocd.tf`).
 - **Client `vault`.** A web client with a client secret and code flow. Vault
   adds PKCE S256 itself. The same client serves both:
-  - the UI, at `https://secrets.mctl.ai/ui/vault/auth/oidc/oidc/callback`,
-    and at `.../ui/vault/auth/mctl/oidc/callback` while the Vault mount moves
-    from `auth/oidc` to `auth/mctl` (the old one is removed after the move);
+  - the UI, at `https://secrets.mctl.ai/ui/vault/auth/mctl/oidc/callback`
+    (the Vault mount path; it was `auth/oidc` before the move, and that
+    callback is removed);
   - the CLI, at `http://localhost:8250/oidc/callback`. ZITADEL accepts this
     plain-http loopback redirect for a confidential code-flow client without
     dev mode, matched exactly.
@@ -330,9 +335,16 @@ on ZITADEL tokens:
   PKCE, authorization code + refresh token, JWT access tokens, redirects
   `http://127.0.0.1/callback` and `http://localhost/callback`. ZITADEL
   matches loopback redirects of a native app on path and query only, so the
-  CLI's ephemeral port needs no entry and `dev_mode` stays off. The project
-  sets `has_project_check`: only `MCTL` users obtain a token; tenant
-  organizations are not granted the project.
+  CLI's ephemeral port needs no entry and `dev_mode` stays off.
+- **Who gets a token.** The project sets `has_project_check`: only users of
+  `MCTL` and of an organization the project is granted to obtain one.
+  `zitadel_project_grant.mctl_api_tenant` grants it, with no role keys, to
+  every tenant organization, so tenant users can link (`mctl-api-link`) and
+  later sign in to mctl-api through ZITADEL (#1500). ZITADEL accepts a grant
+  to the user's organization alone; no user grant is needed while
+  `project_role_check` stays off. Any other organization of the instance is
+  refused. A token is authentication only: mctl-api resolves it to the
+  linked principal, or to a new principal with no tenant or admin access.
 - **Client `mctl-api-link`** (mctl-api#435, owner decision B): confidential
   web app, client secret plus PKCE, redirect
   `https://api.mctl.ai/identity/link/zitadel/callback` only. mctl-api signs a
@@ -340,6 +352,23 @@ on ZITADEL tokens:
   principal they already have; it reads the ID token only. Its id and secret
   go into the same Secret as `ZITADEL_LINK_CLIENT_ID` /
   `ZITADEL_LINK_CLIENT_SECRET` (chart value `zitadelLinkSecret`).
+- **Client `mctl-api-oauth`** (mctl-api#467): confidential web app, client
+  secret (HTTP Basic) plus PKCE, redirect
+  `https://api.mctl.ai/oauth/zitadel/callback` only, opaque access token,
+  `preferred_username` in the ID token. It is the ZITADEL upstream of
+  `/oauth/authorize`, which every MCP connector signs in through: with
+  `OAUTH_UPSTREAM=zitadel` or `both`, mctl-api signs a person in here,
+  resolves the ZITADEL identity to the principal it is linked to, and issues
+  its own code for that principal's GitHub login, with the same groups as a
+  GitHub sign-in. A person who is not linked is sent to the link flow; no
+  principal is created. Its id and secret go into the same Secret as
+  `OAUTH_ZITADEL_CLIENT_ID` / `OAUTH_ZITADEL_CLIENT_SECRET` (chart value
+  `oauthZitadelSecret`). Nothing reads them while `OAUTH_UPSTREAM` is
+  `github`, the default; `zitadel` and `both` refuse to start without them.
+  It is separate from `mctl-api-link` so that neither flow accepts the
+  other's codes and either secret can be rotated alone. Rollback of the
+  upstream: set `OAUTH_UPSTREAM` back to `github` (or remove it) in
+  `bootstrap/templates/mctl-platform/mctl-api.yaml`.
 - **Output.** The Job writes the complete `MCTL_OIDC_PROVIDERS` JSON (name
   `zitadel`, issuer `https://auth.mctl.ai`, audience = that client id) into
   `mctl-api/mctl-api-oidc-zitadel`, plus `MCTL_CLI_ZITADEL_CLIENT_ID`, which
@@ -370,6 +399,82 @@ ZITADEL is offered as an Access identity provider:
   not a secret. The project and the application carry `prevent_destroy`,
   because a recreate changes the id and breaks the Access login until the
   copy is updated.
+
+### GitHub login claim (#1500 phase 1)
+
+`iac/github-login.tf` gives the applications that still identify people by
+GitHub login (the portal and its OIDC provider) that login, as declared by
+an admin. Its first client is the portal's OIDC provider (see "Portal
+sign-in" below).
+
+- **Source.** Optional field `github_login` in a user's Vault entry,
+  `secret/platform/zitadel/users/<tenant>` or `secret/platform/zitadel/admins`:
+
+  ```sh
+  vault kv patch secret/platform/zitadel/users/<tenant> \
+    <user_name>='{"email": "...", "first_name": "...", "last_name": "...", "github_login": "<login>"}'
+  ```
+
+  `kv patch` replaces the whole field, so the JSON must carry the user's
+  other attributes too. The value must be a GitHub login: 1-39 letters,
+  digits and single inner hyphens. Anything else, including `null` or an
+  empty string, fails variable validation and stops the run; leave the field
+  out instead. The same login twice (ignoring case), across all tenants and
+  the admins, fails the plan. Never derive it from the e-mail: it is the
+  admin's statement that this ZITADEL user is that GitHub account.
+- **Storage.** User metadata `github_login` on the user, its value the login
+  as a JSON string, marked sensitive in the plan.
+- **Claim.** The Actions v1 action `mctlGithubLogin`, in every organization's
+  `PRE_USERINFO_CREATION` trigger next to `argocdGroups`, sets
+  `mctl:github_login` only when the client is in
+  `local.github_login_clients` (the portal's clients, by reference in
+  `portal.tf`, plus the variable `github_login_client_ids`, empty by
+  default) and the user is one whose login this root manages (their IDs are in the script). It checks the value again and
+  leaves the claim out if it is not a login. It may fail
+  (`allowed_to_fail`), which leaves the claim out: a consumer must treat a
+  missing claim as "not mapped" and refuse, never fall back to the e-mail.
+  The claim is in userinfo, and in the ID token for a client with
+  `id_token_userinfo_assertion`.
+- **Who can write the metadata.** Not the user: on v4.19.2 the auth API has
+  only `ListMyMetadata` and `GetMyMetadata`, and user v2 `SetUserMetadata`
+  requires `user.write` with self-management off
+  (`internal/api/grpc/user/v2/metadata.go`). Holders of `user.write` on the
+  user's organization can (IAM owners; no organization members are declared
+  here), and so can the organization's Actions, all declared here. Because
+  the action trusts only the users listed in it, a key set on any other user
+  is ignored, and a value changed out of band on a listed user is put back by
+  the next run of the hourly CronJob.
+- **Removing** a user's `github_login` plans a delete of
+  `zitadel_user_metadata.github_login_tenant["<tenant>/<user_name>"]`
+  (`github_login_admin["<key>"]` for an admin), which needs that address in
+  `allowedDeletes`. Changing it is an in-place update.
+
+### Portal sign-in (#1500 phase 3)
+
+`iac/portal.tf` lets the portal (app.mctl.ai) sign people in through ZITADEL
+instead of GitHub (mctlhq/mctl-portal#150). The portal keeps identifying a
+person by GitHub login, which it reads from `mctl:github_login`; a ZITADEL
+user without the claim is refused there, never matched by e-mail.
+
+- **Project `MCTL Portal`**, owned by MCTL, `has_project_check` on, no
+  roles. One `zitadel_project_grant.portal_tenant` per tenant organization,
+  without role keys, is what lets a tenant's users obtain a token; removing a
+  tenant plans a destroy of its grant, which needs the address in
+  `allowedDeletes`.
+- **Client `portal-oidc-provider`**: the upstream of the portal's OIDC
+  provider (`plugins/oidc-provider-backend`). Confidential web app, client
+  secret plus PKCE, authorization code only, the single redirect
+  `https://app.mctl.ai/api/oidc-provider/zitadel/callback`, opaque access
+  token, `id_token_userinfo_assertion` on so the claim reaches the ID token.
+- **Secret.** The Job writes `OIDC_ZITADEL_CLIENT_ID` and
+  `OIDC_ZITADEL_CLIENT_SECRET` into `backstage/backstage-oidc-zitadel`,
+  which the `mctl-portal-oidc-zitadel` Application pre-creates empty
+  (`infra-components/mctl-platform/mctl-portal/oidc-zitadel.yaml`).
+- **Switch.** Creating the client changes nothing in the portal: it signs
+  people in at GitHub until its `oidcProvider.upstream` is set to `both` or
+  `zitadel`, a separate change in
+  `bootstrap/templates/mctl-platform/mctl-portal.yaml` that also has to
+  reference the Secret. Setting it back to `github` is the rollback.
 
 ## Sync hooks instead of Helm hooks
 
@@ -417,8 +522,21 @@ restart both Deployments.
 the copy only) sign their users in through ZITADEL:
 
 - **Project `ERPact`** owned by organization `erpact`, with
-  `has_project_check`, no roles and no grants: only users of `erpact` get a
-  token, and the path confers no Argo CD, mctl-api or tenant-admin rights.
+  `has_project_check` and one role, `frappe`, granted to the MCTL
+  organization (project grant) for platform admins: only users of `erpact`
+  and of MCTL get a token, and the path confers no Argo CD, mctl-api or
+  tenant-admin rights. Every `erpact` user holds `frappe`; an admin holds it
+  only with a `frappe` field in `secret/platform/zitadel/admins`. The role
+  gates sign-in once `project_role_check` is on, a separate change made
+  after the grants exist.
+- **Admins sign in with a second key.** The `mctl` key's
+  `urn:zitadel:iam:org:id:<erpact>` scope makes ZITADEL refuse any user of
+  another organization, grant or not, so admins use the Social Login Key
+  `mctl_admin` (provider name "MCTL Admin", button "Login with MCTL Admin"),
+  scoped to the MCTL organization
+  (`admin_org_id` in `erpact/erpact-oidc-zitadel`; a second redirect URI per
+  site, `.../custom/mctl_admin`). Their Frappe user is the one under the MCTL
+  account's e-mail.
 - **Application `erpact-frappe`**: web, `client_secret_post` (what Frappe's
   rauth client sends), opaque access token read at userinfo; one redirect URI
   per site, `https://<site>/api/method/frappe.integrations.oauth2_logins.custom/mctl`.
@@ -426,10 +544,12 @@ the copy only) sign their users in through ZITADEL:
   `erpact/erpact-oidc-zitadel` (`infra-components/erpact/oidc-zitadel.yaml`).
 - **Verified e-mail only.** Frappe matches users by the `email` claim alone,
   without `email_verified` and without the stored `sub`. The action
-  `erpactVerifiedEmail` (`erpact` organization, `PRE_USERINFO_CREATION`,
-  first in the same trigger as `argocdGroups`, not allowed to fail) refuses
-  userinfo for this client unless the user's e-mail is verified. It returns
-  at once for every other client.
+  `erpactVerifiedEmail` (`PRE_USERINFO_CREATION`, in the same trigger as
+  `argocdGroups`, not allowed to fail, so it aborts userinfo wherever it runs
+  in the trigger) refuses userinfo for this client
+  unless the user's e-mail is verified. It returns at once for every other
+  client. It is declared in both `erpact` and MCTL: an action only runs for
+  users of its own organization.
 - **Frappe side** (git.mctl.ai/erpact/mctl-apps, the restore Jobs' `sso`
   step): Social Login Key `mctl` per site, sign-up of unknown users disabled
   (v15 `sign_ups = Deny`; v14 Website Settings `disable_signup`), users
@@ -454,9 +574,69 @@ checks it both ways before anyone else is pointed at it:
    existing Frappe user.
 2. An `erpact` user whose e-mail is not verified is refused at the userinfo
    step (Frappe shows an error; nobody is signed in).
-3. A user of `MCTL` is refused by ZITADEL (`has_project_check`).
-4. An `erpact` user with no matching Frappe user gets Frappe's 403 "Signup is
+3. A user of `MCTL` on the `mctl` key is refused by ZITADEL ("User is no
+   member of the required organization"), grant or not.
+4. A platform admin with a `frappe` field signs in on the `mctl_admin` key
+   and lands on `/app` as the Frappe user of their MCTL e-mail.
+5. A user of `MCTL` without the `frappe` grant, on the `mctl_admin` key: until
+   `project_role_check` is on, ZITADEL issues the token and Frappe refuses
+   (no such user, sign-up disabled); once it is on, ZITADEL refuses
+   (`Errors.User.GrantRequired`).
+6. An `erpact` user with no matching Frappe user gets Frappe's 403 "Signup is
    disabled".
+
+### Labs apps sign-in ("Log in with MCTL account")
+
+`iac/labs-apps.tf` gives the public labs apps a ZITADEL client each, for an
+extra sign-in button next to their own GitHub/Google sign-in (never instead
+of it). Creating the clients turns nothing on.
+
+- **Projects `Coolify MCP` and `MCTL Academy`** in MCTL, one per app, with
+  `has_project_check` on and a grant to every tenant organization: users of
+  MCTL and of the declared tenants may sign in, nobody else. No roles.
+  Nothing of the platform's is granted: a ZITADEL user gets a personal
+  coolify-mcp tenant record or an academy learner account, keyed by the
+  ZITADEL `sub` alone and never matched to a GitHub or Google user by
+  e-mail.
+- **Applications `coolify-mcp`** (redirect
+  `https://coolify.mctl.ai/auth/zitadel/callback`) and **`mctl-academy`**
+  (`https://academy.mctl.ai/api/auth/oauth2/callback/zitadel`): web,
+  `client_secret_basic`, code flow (the apps add PKCE), opaque access token,
+  user info in the ID token.
+- The Job writes `ZITADEL_ISSUER`, `ZITADEL_CLIENT_ID`,
+  `ZITADEL_CLIENT_SECRET` and `ZITADEL_DISPLAY_NAME` into
+  `labs/coolify-mcp-oidc-zitadel` and `labs/mctl-academy-oidc-zitadel`
+  (`infra-components/labs/oidc-zitadel.yaml`, Application
+  `labs-oidc-zitadel`).
+- **Turning it on**, per app, is a separate change with its own owner
+  approval. The app's image must contain the feature (mctl-coolify-mcp#10,
+  mctl-academy#279). Then add to `envFrom` in
+  `services/labs/<app>/values.yaml`:
+
+  ```yaml
+  - secretRef:
+      name: <app>-oidc-zitadel
+      optional: true
+  ```
+
+  The Deployment rolls and the button appears. Both apps refuse to start on
+  a half-set configuration, and the Job writes all keys in one apply, so
+  check the Secret has its four keys before wiring it.
+- **Turning it off** is removing that entry. People who signed in through
+  ZITADEL keep their records but cannot reach them until it is back; GitHub
+  and Google users are unaffected either way.
+- **Who can get an account** is set by `login_policy.tf`: with
+  `allow_register = false` nobody can create one, so the button serves the
+  platform admins and tenant users this repository creates. A newcomer who
+  clicks it reaches the ZITADEL login page, has no way to register, and goes
+  back to GitHub.
+- The academy refuses a ZITADEL sign-in whose verified e-mail already
+  belongs to an academy user (it never links accounts by e-mail), so a
+  person who already uses the academy through GitHub with the same address
+  keeps using GitHub.
+- Moderators and stats admins of the academy are listed by GitHub login; a
+  ZITADEL user is listed only as `zitadel:<sub>` in
+  `MCTL_ACADEMY_MODERATORS` / `MCTL_ACADEMY_STATS_ADMINS`.
 
 ## Known risk: same site as tenant workloads
 

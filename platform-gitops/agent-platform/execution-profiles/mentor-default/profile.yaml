@@ -1,0 +1,87 @@
+# ExecutionProfile for mentor (ADR 007, mctl-agents#470). Describes what runs
+# today and changes none of it: nothing reads this file at run time. The
+# mentor is a v1alpha1 agent, started by `python -m orchestrator.run_all`
+# with RUN_MODE=full (after the service agents) or RUN_MODE=mentor-only, and
+# its options come from orchestrator/options.py alone. Only the release gate
+# (mctl-agents tools/check_binding_hash.py evaluate_promotion) reads this
+# profile, and only its name and spec.version.
+#
+# Source of each value:
+#   tools            build_mentor_options: Read, Glob, Grep, Write, Edit, plus
+#                    mcp__mctl__* when MCTL_TOKEN is set.
+#   modelPolicyRef   agents/_manifests/mentor/agent.yaml: task mentor_digest
+#                    (MENTOR_MODEL in config/settings.py). No env override.
+#   budgetUsd        cwft-mctl-agents-run.yaml MENTOR_BUDGET_USD, "10.00".
+#                    Equal to the options.py default.
+#   timeoutSeconds   cwft-mctl-agents-run.yaml spec.activeDeadlineSeconds,
+#                    3600. No MENTOR_TIMEOUT_SECONDS exists. In mode=full the
+#                    service agents run first inside the same 3600 seconds, so
+#                    this is the mentor's ceiling, not time reserved for it.
+#   sandbox          mctl-agents-run. The mentor's manifest and
+#                    docs/agent-inventory.yaml both say mctl-agents-daily, but
+#                    that is a CronWorkflow which submits mctl-agents-run with
+#                    mode=full. It is not a ClusterWorkflowTemplate and sets
+#                    no budget or deadline. This field names the template the
+#                    mentor's pod is created from. The manifest's own value is
+#                    left alone: editing it changes the hash the binding pins.
+#   permissions      orchestrator/run_mentor.py's prompt,
+#                    build_mentor_options' docstring and
+#                    docs/agent-inventory.yaml ("writes:
+#                    agents/_mentor/digest/<week>.md").
+#
+# The mentor reads every agent's directory (cwd is agents/) and writes only
+# its digest, which entrypoint.sh links to agents-state/_mentor/digest/. The
+# template's own commit-and-push step pushes it, so every repository write
+# permission below is false.
+#
+# Write and Edit are confined to the digest directory by the prompt, not by
+# options.py, as the manifest's own comment says. The tool grant is the
+# workspace-wide one every writing agent has. This profile states the grant
+# and does not claim a narrower one.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: mentor-default
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: mentor_digest
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools:
+    - Read
+    - Glob
+    - Grep
+    - Write
+    - Edit
+    - "mcp__mctl__*"
+  policyRef: digest-authoring
+  permissions:
+    repository:
+      read: true
+      branchCreate: false
+      commit: false
+      pullRequestCreate: false
+      merge: false
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes:
+      - mentor-digest-write
+  budgetUsd: 10.00
+  timeoutSeconds: 3600
+  runtime:
+    entrypoint: orchestrator.run_mentor:run_mentor
+    optionsBuilder: orchestrator.options:build_mentor_options
+    sandbox:
+      backend: argo
+      clusterWorkflowTemplate: mctl-agents-run
+      # mctl-agents-run sets three *_BUDGET_USD variables. This names the one
+      # budgetUsd above is compared with.
+      budgetEnv: MENTOR_BUDGET_USD
+      approved: true
+  approval:
+    requiredBefore: []
+  evidence:
+    required:
+      - digest

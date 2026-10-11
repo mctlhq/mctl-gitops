@@ -24,8 +24,8 @@ Tenant creation writes desired state to `mctl-gitops/platform-gitops/tenants/<te
 
 ### Default Tenant Quotas
 
-`mctl_create_tenant` provisions a `ResourceQuota` sized for one OpenClaw pod
-plus headroom:
+`mctl_create_tenant` provisions a `ResourceQuota` sized for a small tenant
+running a few services:
 
 | key | default |
 |---|---|
@@ -50,49 +50,6 @@ The defaults live in three places that must stay in sync:
 - `mctl-gitops/platform-gitops/argo-workflows/cluster-templates/wft-create-tenant.yaml`
 - `mctl-gitops/platform-gitops/backstage/templates/create-tenant/template.yaml`
 - `mctl-api/internal/operations/registry.go` (`quota_cpu_lim` default)
-- `mctl-api/internal/api/handlers_openclaw.go` (`openClawStartupQuotaFloor`)
-
-### Deploy OpenClaw (AI Gateway)
-```
-mctl_deploy_service(
-  action="onboard",
-  team_name="my-team",
-  component_name="openclaw",
-  service_template="openclaw",
-  telegram_owner_id="<user_telegram_id>",    # optional: auto-approve owner
-  telegram_bot_token="<bot_token>"           # optional: per-tenant Telegram bot
-)
-→ Dashboard at https://my-team-openclaw.mctl.ai/#token={auto-generated}
-```
-> `dockerfile_repo` is NOT required when `service_template` is set to anything other than `default`.
-> The template provides the image source — no GitHub build step is triggered.
-
-> OpenClaw now deploys in OAuth-first mode. Primary UX is:
-> deploy first, then connect a provider in the Control UI.
-> A model API key is not required at onboard time.
-
-> Initial `auth-profiles.json` should be created by the OpenClaw OAuth flow itself.
-> Operators should not seed S3 manually for normal tenant onboarding. Persisted state lives
-> under `platform-state/{team}/{service}/...`, with fallback restore from the legacy
-> `platform-state/{service}/{team}/...` layout during migration.
-
-> Current image limitation: the deployed OpenClaw build can refresh OAuth credentials in memory,
-> but does not reliably persist the refreshed `auth-profiles.json` back to state.
-> That requires an application-level fix in the OpenClaw image, not just GitOps changes.
-
-> If a team wants headless setup or a non-OAuth provider, an API key can still be
-> passed via `secret_env_vars`. Store it only at `secret/data/teams/{team}/{service}`,
-> never in a platform-wide shared secret.
-
-**Optional: preconfigure or add a key later**
-```
-mctl_deploy_service(
-  action="update-config",
-  team_name="my-team",
-  component_name="openclaw",
-  secret_env_vars="OPENAI_API_KEY=<openai-codex-api-key>"
-)
-```
 
 ## Release → Auto-Deploy Patterns
 
@@ -141,16 +98,46 @@ Onboarding checklist for Pattern A on a **new** repo:
   with `gh api --method POST repos/<owner>/<repo>/actions/runs/<id>/approve`
   (once per held run) rather than treating that as a review-bot problem.
 
-**Pattern B — direct per-push deploy (older/simpler repos: e.g.
-mctl-instruments).** A `deploy` job in the repo's own `ci.yml` POSTs
-straight to `https://api.mctl.ai/api/v1/operations/deploy-service/execute`
-on every push to `main`, authenticated with a classic PAT
-(`MCTL_GITHUB_TOKEN`, scope `read:user`) stored as a repo secret. No
-release-please, no semver tag gate — every merge to main deploys. This is
-what the scaffolding guide at docs.mctl.ai and `mctl_deploy_service`'s own
+**Pattern B — direct per-push deploy (older/simpler repos, e.g.
+mctl-rule).** A `deploy` job in the repo's own `ci.yml` POSTs straight to
+`https://api.mctl.ai/api/v1/operations/deploy-service/execute` on every
+push to `main`. No release-please, no semver tag gate — every merge to main
+deploys. This is what the scaffolding guide at docs.mctl.ai
+(`guides/scaffolding#ci-auto-deploy-job`) and `mctl_deploy_service`'s own
 onboarding instructions describe; it's the simplest path for a brand-new
 repo that doesn't need controlled/versioned releases, but do not assume an
 established service repo uses it — check first.
+
+The job authenticates with its own **GitHub Actions OIDC token**
+(mctl-api#530, enabled by mctl-gitops#1760), not a stored secret:
+`permissions: id-token: write`, then
+`curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.mctl.ai" | jq -r .value`.
+The principal (`ci:<owner>/<repo>`) can do exactly one thing, and every
+violation is a 403 `ci_deploy_denied` (or `ci_route_not_allowed`):
+- only `POST .../deploy-service/execute` with `action: deploy`;
+- a **flat** JSON body limited to `action`, `team_name`, `component_name`,
+  `dockerfile_repo`, `git_tag`, `dockerfile_path` (a nested `"parameters"`
+  object is a 400; env/secrets/host/scaling/`image_tag` are refused);
+- `git_tag` required, `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`;
+- `dockerfile_repo` must equal the token's repository AND the component's
+  `github.com/source-repo` annotation in
+  `platform-gitops/services/<team>/<component>/catalog-info.yaml`
+  (written at onboard from `dockerfile_repo`);
+- events `push`/`workflow_dispatch`/`release` from `main` or a tag only —
+  never `pull_request`;
+- the repo owner must be in mctl-api's `MCTL_GITHUB_ACTIONS_OIDC`
+  `repository_owners` (today `mctlhq`, set in
+  `bootstrap/templates/mctl-platform/mctl-api.yaml`); an owner outside it
+  gets 401 until a platform admin adds it.
+
+Send `dockerfile_path` on every deploy when the Dockerfile is not at the
+repo root: omitting it does not keep the onboarded value, it defaults to
+`Dockerfile`.
+
+The old method — a classic PAT stored as the repo secret
+`MCTL_GITHUB_TOKEN` — is deprecated and goes away with mctl-api's GitHub
+token bearer (mctl-api#525). When you meet it, migrate the job and tell the
+owner to delete the secret and revoke the PAT.
 
 ## Deploy Actions
 
@@ -165,18 +152,19 @@ established service repo uses it — check first.
 | Template | Port | Memory | dockerfile_repo required? | Special Config |
 |----------|------|--------|-----------------------------|----------------|
 | `default` | 8080 | 256Mi | Yes | Standard HTTP service |
-| `openclaw` | 18789 | 1Gi | No | Gateway config ConfigMap, 5min startup probe, `NODE_OPTIONS=--max-old-space-size=768` |
+| `worker` | — | 128Mi | Yes | No ingress (also picked automatically for `component_type=worker-service`) |
+| `spring-worker` | — | 128Mi | Yes | No ingress, Spring Boot actuator probes |
 
-The `openclaw` template pre-configures: LAN bind, token auth, trusted K8s proxies, Control UI enabled.
-
-**Rule:** when `service_template != "default"`, `dockerfile_repo` is optional. The platform uses the
-pre-built image from the template. No GitHub Actions build is triggered.
+Templates live in `platform-gitops/argo-workflows/service-templates/<name>/values.yaml.tpl`.
+When `service_template != "default"`, validation does not insist on `dockerfile_repo`, but
+every remaining template still needs an image: pass `dockerfile_repo` + `git_tag` or a
+pre-built `image_tag`.
 
 ## Repo Access Patterns
 
 1. **Org repos** (`mctlhq/*`) — automatic via GitHub App, no setup needed
 2. **User public repos** — install GitHub App: `mctl_grant_repo_access(team, repo)` → open URL → `mctl_sync_repos`
-3. **External public repos** (e.g. `openclaw/openclaw`) — deploy directly, no registration needed
+3. **External public repos** (e.g. `someone/public-app`) — deploy directly, no registration needed
 4. **Private external repos** — store PAT in Vault:
    ```
    secret/data/teams/{team}/{service}/repo-pat → {"pat": "ghp_..."}
@@ -185,7 +173,7 @@ pre-built image from the template. No GitHub Actions build is triggered.
 ## Vault Secrets Structure
 
 - **Root Path:** `secret/` (KV version 2).
-- **Platform Secrets:** System components use `platform/` (e.g., `platform/minio`, `platform/argo-workflows/database`).
+- **Platform Secrets:** System components use `platform/` (e.g., `platform/valkey`, `platform/argo-workflows/database`).
 - **Team Secrets:** Tenant apps use `teams/{team}/{service}/database`.
 - **Internal URL:** `http://vault.vault.svc.cluster.local:8200`.
 - **ExternalSecret:** Synced to K8s automatically via `ExternalSecret` resources.

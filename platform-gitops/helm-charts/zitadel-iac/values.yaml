@@ -53,6 +53,39 @@ image:
 #   language, 15): no new action; all creates. Removing a language from
 #   login_texts.json plans a destroy, which allowedDeletes refuses until the
 #   address is listed.
+#   ERPact access for platform admins (erpact.tf: Frappe role, project grant
+#   to MCTL, user grants, the verified e-mail action in the MCTL
+#   organization): no new action; creates, plus in-place updates of the
+#   erpact-frappe redirect URIs, of erpact/erpact-oidc-zitadel and of the
+#   MCTL organization's userinfo trigger. The action's address move is a
+#   no-op.
+#   GitHub login claim (github-login.tf: the mctlGithubLogin action in each
+#   organization, and user metadata for users whose Vault entry declares
+#   github_login): no new action; creates, plus in-place updates of every
+#   organization's userinfo trigger; adding or changing a login later updates
+#   the metadata and the action in place. Dropping a user's github_login plans a
+#   delete of its metadata, which allowedDeletes refuses until listed.
+#   Tenant access to MCTL API (mctl-api.tf: one project grant per tenant
+#   organization, no role keys): no new action; all creates. Removing a
+#   tenant plans a destroy of its grant, which allowedDeletes refuses until
+#   the address is listed.
+#   mctl-api#467 (mctl-api.tf: the mctl-api-oauth web client of
+#   /oauth/authorize's ZITADEL upstream, in the MCTL API project): no new
+#   action; a create, plus an in-place update of the data of
+#   mctl-api/mctl-api-oidc-zitadel (two keys added).
+#   Labs apps sign-in (labs-apps.tf: a project and an OIDC application each
+#   for coolify-mcp and mctl-academy, one grant of each project per tenant
+#   organization with no role keys, the data of labs/coolify-mcp-oidc-zitadel
+#   and labs/mctl-academy-oidc-zitadel): no new action; all creates. Removing
+#   a tenant plans a destroy of its two grants, which allowedDeletes refuses
+#   until the addresses are listed.
+#   Portal sign-in (portal.tf: the MCTL Portal project, one project grant
+#   per tenant organization, the portal-oidc-provider web client, the data
+#   of backstage/backstage-oidc-zitadel): no new action; all creates, plus an
+#   in-place update of the mctlGithubLogin action's script in every
+#   organization (the portal's client id joins its allowlist). Removing a
+#   tenant plans a destroy of its grant, which allowedDeletes refuses until
+#   the address is listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"

@@ -1,0 +1,34 @@
+status: implemented
+updated_at: '2026-10-11T17:17:12Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-9a3cb602987869bc
+  trace_id: b624f728d86ad115721277e2a5977d68
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-gitops
+  issue: 1809
+  url: https://github.com/mctlhq/mctl-gitops/issues/1809
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-d4f1bd2d861f1d02
+  content_hash: sha256:d4f1bd2d861f1d02c3ebb90a9e8f910cbe25e4e8239b48547f2f179eb6302916
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-11T16:49:39Z'
+attempt:
+  id: c189a3db59cf396c53f2f52c59cbca4ad3ccb91a500f38bd0cf282540ddb197c
+  started_at: '2026-10-11T16:59:05Z'
+  expires_at: '2026-10-11T19:09:05Z'
+  finished_at: '2026-10-11T17:00:30Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/1814
+github:
+  state: open
+  head_sha: e162f1aa94b1b2101c22ba45c5b117fcd329f59d
+  observed_at: '2026-10-11T17:09:16Z'
+merge_owner: human-codeowner

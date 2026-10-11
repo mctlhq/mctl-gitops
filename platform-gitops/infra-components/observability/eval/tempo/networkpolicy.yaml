@@ -1,0 +1,94 @@
+# Tempo-specific additions to observability-eval's NetworkPolicy set
+# (bootstrap/templates/observability/eval-namespace.yaml: default-deny-all,
+# allow-intra-namespace, allow-cluster-egress, allow-ingress-from-monitoring).
+# Scoped to the Tempo pod only, never `podSelector: {}`, so they open nothing
+# for any other workload in the namespace.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Tempo's HTTP API (3200) from `monitoring`: Grafana's Tempo datasource
+#    (bootstrap/templates/observability/tempo-datasource.yaml) queries it and
+#    vmagent scrapes /metrics on it (servicescrape.yaml next to this file).
+#    The namespace-wide allow-ingress-from-monitoring admits only the OTLP
+#    ports 4317/4318, so without this rule every Tempo alert would be blind
+#    and the datasource would time out.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tempo-allow-http-from-monitoring
+  namespace: observability-eval
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 3200
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. HTTPS egress to object storage. Tempo writes its blocks to a Cloudflare
+#    R2 bucket, which the namespace's allow-cluster-egress (cluster CIDRs
+#    only, no public internet) does not reach. Opened for the Tempo pod only,
+#    TCP 443 only, and only to Cloudflare's published IPv4 ranges -- the R2
+#    S3 endpoint resolves inside them -- rather than to 0.0.0.0/0.
+#
+#    Source: https://www.cloudflare.com/ips-v4, fetched 2026-10-10; identical
+#    to the list in
+#    infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl.
+#    If Cloudflare ever moves R2 outside these ranges, the symptom is
+#    TempoEvalObjectStorageErrors / TempoEvalFlushFailures
+#    (vm-rules/tempo-eval-alerts.yaml), not silent loss.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tempo-allow-egress-object-storage
+  namespace: observability-eval
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 173.245.48.0/20
+        - ipBlock:
+            cidr: 103.21.244.0/22
+        - ipBlock:
+            cidr: 103.22.200.0/22
+        - ipBlock:
+            cidr: 103.31.4.0/22
+        - ipBlock:
+            cidr: 141.101.64.0/18
+        - ipBlock:
+            cidr: 108.162.192.0/18
+        - ipBlock:
+            cidr: 190.93.240.0/20
+        - ipBlock:
+            cidr: 188.114.96.0/20
+        - ipBlock:
+            cidr: 197.234.240.0/22
+        - ipBlock:
+            cidr: 198.41.128.0/17
+        - ipBlock:
+            cidr: 162.158.0.0/15
+        - ipBlock:
+            cidr: 104.16.0.0/13
+        - ipBlock:
+            cidr: 104.24.0.0/14
+        - ipBlock:
+            cidr: 172.64.0.0/13
+        - ipBlock:
+            cidr: 131.0.72.0/22
+      ports:
+        - protocol: TCP
+          port: 443

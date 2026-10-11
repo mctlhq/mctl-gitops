@@ -7,4 +7,3 @@ owner: platform
 runtimes:
   - mcp
   - codex
-  - openclaw

@@ -47,6 +47,16 @@ spec:
       kind: ServiceAccount
     - group: ""
       kind: PersistentVolumeClaim
+    # Pod and ReplicaSet are listed for visibility, not because the
+    # repository ships them: Argo CD drops every kind the project does not
+    # permit from the resource tree, so without them a Deployment or Job has
+    # no child Pod in the UI and the LOGS tab never appears, for any user.
+    # A bare Pod synced from git is still bound by the Secret/ServiceAccount
+    # allowlist above, which admits Pods themselves, not their controllers.
+    - group: ""
+      kind: Pod
+    - group: apps
+      kind: ReplicaSet
     - group: apps
       kind: Deployment
     - group: apps

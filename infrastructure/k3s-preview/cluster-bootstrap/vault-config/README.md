@@ -51,15 +51,22 @@ values. `vaultSecrets.token` and the `VAULT_TOKEN` key in the
 (reverting gitops#700 does both). No new token needs minting as long as the
 token below is still live.
 
-### mctl-api-openclaw-read
-Read-only access to the one path `mctl-api` actually reads:
-`secret/teams/{team}/{component}/telegram`, checked during OpenClaw
-onboarding preflight (`handlers_openclaw.go`) to confirm a Telegram bot
-token was saved. Scoped narrower than `backstage-teams-rw` on purpose — no
-write path, no reason to grant the rest of `secret/teams/*/*`.
+### mctl-api-erpact-deployer-read
+
+Read-only access to one tenant secret, `secret/teams/erpact/deployer`'s
+`DEPLOYER_API_TOKEN` property: the bearer token mctl-api uses to call the
+erpact tenant's own site-deployer (mctl-api#486, cmd/api/main.go's
+`erpactDeployer` construction), backing the temporary
+`/api/v1/tenants/erpact/sites*` routes. Read at request time through
+mctl-api's own `VaultReader`, not through an ExternalSecret env var -- the cluster-wide `vault-backend`
+ClusterSecretStore's policy (`vault-policy-external-secrets-read.hcl`)
+deliberately denies all of `secret/data/teams/*`, since it is reachable
+from every namespace and any tenant path granted there becomes readable by
+every other tenant. This policy, bound only to mctl-api's own Kubernetes
+auth role below, is the narrow alternative.
 
 ```bash
-vault policy write mctl-api-openclaw-read vault-policy-mctl-api-openclaw-read.hcl
+vault policy write mctl-api-erpact-deployer-read vault-policy-mctl-api-erpact-deployer-read.hcl
 ```
 
 ### mctl-api auth: Kubernetes auth (migration in progress)
@@ -74,15 +81,16 @@ the mctl-api repo) — no new identity needed, just the Vault role:
 vault write auth/kubernetes/role/mctl-api \
   bound_service_account_names=mctl-api \
   bound_service_account_namespaces=mctl-api \
-  policies=mctl-api-openclaw-read \
+  policies=mctl-api-erpact-deployer-read \
   ttl=1h
 ```
 
 Not confirmed live yet. Once the image with the Kubernetes-auth support
 lands and this config change deploys: confirm `"auth":"kubernetes"` in the
 `vault client enabled` startup log line and `vault kubernetes auth
-succeeded` on first use, and exercise the OpenClaw onboarding preflight path
-(or at minimum confirm no `vault auth:` errors under load). Only after both
+succeeded` on first use, and exercise a route that reads Vault through it,
+such as the ERPact site routes (or at minimum confirm no `vault auth:`
+errors under load). Only after both
 Backstage AND mctl-api are confirmed on Kubernetes auth does revoking
 `secret/platform/backstage/vault-token` become safe — it is a shared
 credential between the two, not a Backstage-only concern.
@@ -187,6 +195,51 @@ work here, as it only fires from the default branch.
 `vault policy delete github-actions-repo-pat`. No workflow change is needed —
 `build-image.yaml` falls back to the GitHub App token on its own, which is
 exactly what it did for the whole period this role did not exist.
+`auth/jwt` also carries `erpact-images` (below), which has no fallback:
+disabling the mount stops those builds.
+
+### erpact-images (GitHub OIDC JWT)
+
+`erpact-images.yaml` builds the ERPact copy's images and pushes them to the
+Forgejo registry `git.mctl.ai/erpact/*`. It logs into `auth/jwt` as role
+`erpact-images` and can read exactly `secret/platform/forgejo/erpact-images`:
+
+| Key | Content |
+|---|---|
+| `user` | the Forgejo bot account (`erpact-ci`) |
+| `source-token` | its token with scope `read:repository`; the only credential the build sees |
+| `registry-token` | its token with scope `write:package`; used by the push step only |
+
+The role is bound to the workflow file **on main** (`@refs/heads/main`, not
+`@*` as `github-actions` is): a modified copy of the workflow dispatched from
+another branch gets no token. The workflow has no fallback, so a failed
+login is a failed run. The account and its teams are declared in the Forgejo
+reconcile manifest (docs/runbooks/forgejo.md, "Container registry").
+
+One-time apply (Vault admin token):
+
+```bash
+vault policy write github-actions-erpact-images \
+  infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-github-actions-erpact-images.hcl
+
+vault write auth/jwt/role/erpact-images -<<'EOF'
+{
+  "role_type": "jwt",
+  "user_claim": "sub",
+  "bound_audiences": "https://github.com/mctlhq",
+  "bound_claims_type": "string",
+  "bound_claims": {
+    "repository": "mctlhq/mctl-gitops",
+    "job_workflow_ref": "mctlhq/mctl-gitops/.github/workflows/erpact-images.yaml@refs/heads/main"
+  },
+  "policies": ["github-actions-erpact-images"],
+  "ttl": "10m"
+}
+EOF
+```
+
+**Rollback:** `vault delete auth/jwt/role/erpact-images` plus
+`vault policy delete github-actions-erpact-images`.
 
 ### vault-backup
 Used by the `vault-backup` CronJob (namespace `vault`) to take a raft snapshot.
@@ -269,7 +322,7 @@ until fixed live, then backported to the `.hcl` file above.
 
 ### vault-human-auth-iac (human sign-in through ZITADEL)
 
-Humans sign in to Vault through ZITADEL (`auth.mctl.ai`) on the `auth/oidc`
+Humans sign in to Vault through ZITADEL (`auth.mctl.ai`) on the `auth/mctl`
 mount, and get access from the `groups` claim: `admins` maps to the `admin`
 policy, a tenant name to `human-tenant-<tenant>`: read and write on
 `secret/teams/<tenant>/*`. That policy grants no destroy and no metadata
@@ -281,9 +334,11 @@ their aliases and the tenant policies with OpenTofu, and re-applies hourly.
 
 The only hand-applied part is the Job's own identity: the policy
 `vault-human-auth-iac` and the Kubernetes auth role that hands it out. The
-policy covers `sys/auth/oidc` (no delete), `auth/oidc/{config,role/*}`, `identity/group*`,
-`identity/group-alias*` and `sys/policies/acl/human-tenant-*`, and no secret
-data. It cannot write the `admin` policy, create tokens, or touch any other
+policy covers `sys/auth/mctl` (no delete), `sys/mounts/auth/mctl` (+`tune`),
+`auth/mctl/{config,role/*}`, `identity/group*`,
+`identity/group-alias*`, `sys/policies/acl/human-tenant-*`, and the audit
+device at `sys/audit/stdout` (plus listing `sys/audit`; no delete), and no
+secret data. It cannot write the `admin` policy, create tokens, or touch any other
 auth mount. It is still admin-equivalent in effect, since it decides which
 identity lands in which policy group; read the header of the `.hcl`.
 
@@ -313,34 +368,26 @@ removes a tenant, and rotates the client; reading any `secret/` path, reading
 or writing any other policy (`admin` included), disabling the mount, enabling
 another auth method, writing a Kubernetes auth role and creating a token are
 all refused (403). Each grant was checked by removing it: without
-`sys/mounts/auth/oidc` the apply fails, while `read` on `sys/auth/oidc`,
-`sudo` on `sys/mounts/auth/oidc`, `list` anywhere and `create` on the
+`sys/mounts/auth/mctl` the apply fails, while `read` on `sys/auth/mctl`,
+`sudo` on `sys/mounts/auth/mctl`, `list` anywhere and `create` on the
 `identity/*/id` paths turned out unneeded and are not granted.
 
-**Temporary: the move from `auth/oidc` to `auth/mctl`.** The Vault UI labels
-the login tab with the mount path, so the owner approved moving the mount.
-The policy carries, for the move only, `sys/remount` (`update`, `sudo`, with
-`allowed_parameters` limited to `from=auth/oidc`, `to=auth/mctl`),
-`sys/remount/status/*` (read), and `sys/mounts/auth/mctl` (read),
-`sys/mounts/auth/mctl/tune`, `auth/mctl/config` and `auth/mctl/role/*` on the
-new path. Proven on a local Vault 1.17.2 with the Job's image and guard: with
-exactly these blocks the move applies (role replaced, mount moved, accessor
-kept, re-plan clean), and without any one of them it fails with a 403
-mid-apply. `sys/auth/mctl` turned out unneeded for the move. Any other
-remount (`auth/mctl` to `auth/oidc`, `auth/token` to `auth/mctl`) is refused.
-The cleanup step removes `sys/remount*` and replaces the `oidc` paths with
-`mctl`, so the Job keeps no standing remount ability.
+**The audit device** (`iac/audit.tf`, docs/runbooks/vault-audit.md) added
+`read`+`sudo` on `sys/audit` and `update`+`sudo` on `sys/audit/stdout`.
+Proven the same way on a local Vault 1.17.2 with a token holding only this
+policy: the root enables the device, re-plans clean, and re-enables it after
+root disables it; removing any one of the four capabilities makes the apply
+fail with 403; disabling `stdout`, enabling any other audit path, and
+re-enabling `stdout` with other options (`log_raw=true`) are all refused.
 
-Apply (owner, admin token), **before** the vault-human-auth-iac change that
-sets `path = "mctl"` merges:
-
-```bash
-vault policy write vault-human-auth-iac \
-  infrastructure/k3s-preview/cluster-bootstrap/vault-config/vault-policy-vault-human-auth-iac.hcl
-```
-
-Then check that `vault policy read vault-human-auth-iac` is byte-identical to
-the file.
+**The move from `auth/oidc` to `auth/mctl`** (docs/runbooks/vault-human-auth.md)
+needed a temporary `sys/remount` grant, limited by `allowed_parameters` to
+`from=auth/oidc`, `to=auth/mctl`. The cleanup step removed it and renamed the
+`oidc` paths to `mctl`, so the Job keeps no remount ability. The owner
+applied that file before the cleanup change merged, as above, and it was
+diffed byte-identical (the Job touches only `mctl` paths by then). The end
+state was proven on a local Vault 1.17.2: the root re-plans clean, and
+`sys/remount` gets a 403.
 
 **Rollback:** `vault delete auth/kubernetes/role/vault-human-auth-iac` and
 `vault policy delete vault-human-auth-iac`. The Job then fails at login and
@@ -402,7 +449,7 @@ secret/
 │   ├── github-app          ← GitHub App credentials (ArgoCD + Backstage)
 │   │   app-id, client-id, client-secret, installation-id, private-key
 │   ├── argocd/
-│   │   └── github-oauth    ← ArgoCD Dex OAuth (client-id, client-secret)
+│   │   └── github-oauth    ← no reader in this repo (was the ArgoCD Dex GitHub connector)
 │   ├── backstage/
 │   │   └── database        ← Backstage PostgreSQL credentials
 │   └── vault/
@@ -412,7 +459,6 @@ secret/
         └── {service}       ← Service secrets (KEY=value, managed via Backstage UI)
             /database        ← DB credentials (written by wft-provision-database)
             /repo-pat        ← Private registry PAT (optional)
-            /telegram        ← Telegram bot token (optional, openclaw intake)
 ```
 
 Note the absence of a `platform/teams/...` branch. Nothing writes one; a

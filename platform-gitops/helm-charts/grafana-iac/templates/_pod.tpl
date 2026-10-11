@@ -45,7 +45,12 @@ containers:
         GRAFANA_AUTH="$(cat /grafana-admin/admin-user):$(cat /grafana-admin/admin-password)"
         case "$GRAFANA_AUTH" in :*|*:) echo "grafana-iac: the admin credential is empty; refusing"; exit 1 ;; esac
         export GRAFANA_AUTH
-        cp /iac-root/*.tf /work/
+        # VMAuth user erpact's password for the erpact org's datasource
+        # (iac/erpact.tf), as a sensitive variable: never in a plan or log.
+        TF_VAR_erpact_metrics_password="$(cat /tenant-erpact/metrics-password)"
+        [ -n "$TF_VAR_erpact_metrics_password" ] || { echo "grafana-iac: the erpact metrics password is empty; refusing"; exit 1; }
+        export TF_VAR_erpact_metrics_password
+        cp /iac-root/*.tf /iac-root/*.json /work/
         cp /iac-root/terraform.lock.hcl /work/.terraform.lock.hcl
         cd /work
         tofu init -lockfile=readonly -no-color
@@ -101,6 +106,9 @@ containers:
       - name: admin
         mountPath: /grafana-admin
         readOnly: true
+      - name: tenant-erpact
+        mountPath: /tenant-erpact
+        readOnly: true
       - name: work
         mountPath: /work
       - name: tmp
@@ -115,6 +123,11 @@ volumes:
   - name: admin
     secret:
       secretName: grafana-iac-admin
+  # VMAuth user erpact's password (Vault platform/grafana-tenants/erpact),
+  # through the ExternalSecret grafana-iac-tenant-erpact. Not optional.
+  - name: tenant-erpact
+    secret:
+      secretName: grafana-iac-tenant-erpact
   - name: work
     emptyDir: {}
   - name: tmp

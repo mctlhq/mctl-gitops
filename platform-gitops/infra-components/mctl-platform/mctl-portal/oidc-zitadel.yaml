@@ -1,0 +1,51 @@
+# The portal's OIDC client in ZITADEL (mctlhq/mctl-portal#150, #1500 phase
+# 3). ZITADEL generates the client id and secret, so they are not written in
+# git: the zitadel-iac Job (helm-charts/zitadel-iac/iac/portal.tf) writes
+# OIDC_ZITADEL_CLIENT_ID and OIDC_ZITADEL_CLIENT_SECRET here with server-side
+# apply as field manager `zitadel-iac`.
+#
+# Argo CD creates the Secret without data and never owns `.data`
+# (ignoreDifferences in
+# bootstrap/templates/mctl-platform/mctl-portal-oidc-zitadel.yaml), so a sync
+# does not wipe what the Job wrote. The Job may only read and patch this one
+# Secret by name: no create, no list, nothing else in this namespace.
+#
+# Nothing reads this Secret until the portal's Deployment references it, in
+# a separate change made after the Job has filled it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backstage-oidc-zitadel
+  labels:
+    app.kubernetes.io/name: backstage
+    app.kubernetes.io/component: oidc-zitadel
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/name: backstage
+    app.kubernetes.io/component: oidc-zitadel
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["backstage-oidc-zitadel"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-iac-oidc-client
+  labels:
+    app.kubernetes.io/name: backstage
+    app.kubernetes.io/component: oidc-zitadel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-iac-oidc-client
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-iac
+    namespace: zitadel

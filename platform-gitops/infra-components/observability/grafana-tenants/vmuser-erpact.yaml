@@ -1,0 +1,44 @@
+# Tenant erpact's read access to metrics, used only by the erpact Grafana
+# org's datasource (step 4).
+#
+# extra_label=namespace=erpact is appended to every proxied request.
+# VictoriaMetrics applies it as an AND filter on every series selector of
+# query, query_range, series, labels and label values, so a query can only
+# narrow it: a client-supplied extra_label or extra_filters[] is ANDed with
+# it, never ORed (proof table in the PR that added this file).
+#
+# Only these read paths are routed; export, federate, admin, vmui, metadata
+# and the TSDB status endpoints are not, and vmauth answers them with an
+# error.
+#
+# The password comes from Vault (externalsecret-erpact.yaml);
+# disable_secret_creation stops the operator from copying it into a second
+# Secret.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMUser
+metadata:
+  name: grafana-tenant-erpact
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: grafana-tenants
+spec:
+  username: erpact
+  passwordRef:
+    name: grafana-tenant-erpact-metrics
+    key: password
+  disable_secret_creation: true
+  targetRefs:
+    - crd:
+        kind: VMSingle
+        name: monitoring-victoria-metrics-k8s-stack
+        namespace: monitoring
+      paths:
+        - /api/v1/query
+        - /api/v1/query_range
+        - /api/v1/series
+        - /api/v1/labels
+        - /api/v1/label/[^/]+/values
+      query_args:
+        - name: extra_label
+          values:
+            - namespace=erpact

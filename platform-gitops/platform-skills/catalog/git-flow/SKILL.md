@@ -42,7 +42,7 @@ If unsure whether a repo qualifies, use the PR workflow.
 - If rebase or merge surfaces a conflict with user changes, stop and resolve carefully rather than discarding anything.
 - When a deployment pipeline consumes a repository tag, do not reuse an old tag. Create a fresh tag that points at the intended release commit and push it explicitly.
 - If the user only asked for code changes and did not ask for commit/push, do not force the full workflow.
-- Tags use semantic versioning without a `v` prefix (`1.3.0`, not `v1.3.0`); exception: mctl-openclaw keeps upstream `v`-prefixed tags.
+- Tags use semantic versioning without a `v` prefix (`1.3.0`, not `v1.3.0`).
 
 ## Expected Result
 

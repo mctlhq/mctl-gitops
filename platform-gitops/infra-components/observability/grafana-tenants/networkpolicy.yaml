@@ -1,0 +1,35 @@
+# vmauth grafana-tenants admits:
+#   - Grafana's pod on the proxy port (8427), the only client: tenant orgs'
+#     datasources proxy through Grafana's backend;
+#   - vmagent on the internal port (8426), which scrapes vmauth's /metrics
+#     (the operator's VMServiceScrape moves to that port with
+#     internalListenPort).
+# Everything else is denied. Kubelet probes are not affected.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vmauth-grafana-tenants-ingress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vmauth
+      app.kubernetes.io/instance: grafana-tenants
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: monitoring
+              app.kubernetes.io/name: grafana
+      ports:
+        - protocol: TCP
+          port: 8427
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vmagent
+      ports:
+        - protocol: TCP
+          port: 8426

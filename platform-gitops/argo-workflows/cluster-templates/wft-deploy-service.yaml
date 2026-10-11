@@ -50,7 +50,15 @@ spec:
         # KEY=value newline-separated plaintext
       - name: secret_env_vars
         value: ""
-        # KEY=value newline-separated (stored in Vault)
+        # KEY=value newline-separated (stored in Vault). When
+        # secret_env_secret is set, this carries the key NAMES only (one per
+        # line) and the values come from that Secret.
+      - name: secret_env_secret
+        value: ""
+        # Name of a Secret in the workflow's namespace holding the values
+        # under key secret_env_vars. Set by mctl-api, which creates it owned
+        # by this Workflow so the values never become a workflow parameter.
+        # Empty = legacy callers that still pass values in secret_env_vars.
       - name: provision_database
         value: "false"
       - name: clear_env
@@ -81,21 +89,9 @@ spec:
         value: "ghcr.io/mctlhq"
       - name: config_patch
         value: ""
-        # yq expression to patch values.yaml (update-config only)
-        # e.g. '.configMaps["openclaw-config"]["openclaw.json"] |= (fromjson | .defaultModel = "openai-codex/gpt-5.4" | tojson)'
-      - name: default_model
-        value: "openai-codex/gpt-5.4"
-      - name: telegram_owner_id
-        value: ""
-        # Deprecated single-ID field. Prefer telegram_owner_ids_json.
-      - name: telegram_owner_ids_json
-        value: ""
-        # JSON array string with one or more Telegram user IDs authorized to
-        # talk to the bot, e.g. '["210408407","317748297"]'. If empty the
-        # commit template falls back to wrapping telegram_owner_id.
-      - name: telegram_bot_token
-        value: ""
-        # Telegram bot token — written to Vault at teams/{team}/{service}/telegram → telegram-bot-token
+        # yq expression to patch values.yaml (update-config only). Must be a
+        # pipeline of plain assignments under .resources, .env or .configMaps,
+        # e.g. '.resources.requests.cpu = "500m" | .resources.limits.memory = "1Gi"'
 
   templates:
     # ────────────────────────────────────────────────────────────────────────
@@ -164,10 +160,29 @@ spec:
                 - name: component_name
                   value: "{{workflow.parameters.component_name}}"
 
-          # Step 2: write Vault secrets (skip if no secrets)
+          # Step 2: write Vault secrets (skip if no secrets). Two variants,
+          # at most one runs: write-secrets-handoff reads the values from the
+          # Secret named by secret_env_secret (mctl-api); write-secrets takes
+          # them from the parameter, for callers that still send them there.
+          - name: write-secrets-handoff
+            dependencies: [validate]
+            when: "\"{{workflow.parameters.secret_env_secret}}\" != \"\""
+            templateRef:
+              name: tpl-vault-write
+              clusterScope: true
+              template: write-service-secrets-from-secret
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: secret_name
+                  value: "{{workflow.parameters.secret_env_secret}}"
+
           - name: write-secrets
             dependencies: [validate]
-            when: "\"{{workflow.parameters.secret_env_vars}}\" != \"\" || \"{{workflow.parameters.telegram_bot_token}}\" != \"\""
+            when: "\"{{workflow.parameters.secret_env_secret}}\" == \"\" && \"{{workflow.parameters.secret_env_vars}}\" != \"\""
             templateRef:
               name: tpl-vault-write
               clusterScope: true
@@ -180,8 +195,6 @@ spec:
                   value: "{{workflow.parameters.component_name}}"
                 - name: secret_env_vars
                   value: "{{workflow.parameters.secret_env_vars}}"
-                - name: telegram_bot_token
-                  value: "{{workflow.parameters.telegram_bot_token}}"
 
           # Step 3: provision database before publishing service manifests (optional)
           - name: provision-database
@@ -199,10 +212,10 @@ spec:
                   value: "{{workflow.parameters.component_name}}"
 
           # Step 4: generate manifests + git commit
-          # Depends on validate (always) + build-image, write-secrets, and
-          # provision-database (all optional).
+          # Depends on validate (always) + build-image, write-secrets(-handoff),
+          # and provision-database (all optional).
           - name: commit
-            dependencies: [validate, build-image, write-secrets, provision-database]
+            dependencies: [validate, build-image, write-secrets, write-secrets-handoff, provision-database]
             templateRef:
               name: tpl-git-commit
               clusterScope: true
@@ -243,12 +256,6 @@ spec:
                   value: "{{workflow.parameters.service_template}}"
                 - name: config_patch
                   value: "{{workflow.parameters.config_patch}}"
-                - name: default_model
-                  value: "{{workflow.parameters.default_model}}"
-                - name: telegram_owner_id
-                  value: "{{workflow.parameters.telegram_owner_id}}"
-                - name: telegram_owner_ids_json
-                  value: "{{workflow.parameters.telegram_owner_ids_json}}"
 
           # Step 5: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling

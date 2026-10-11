@@ -11,13 +11,15 @@ tenant:
   members:
     - userId: mashkoffdmitry
       role: owner
-  # labs already owns ghcr-credentials via services/labs/openclaw/values.yaml
-  # extraExternalSecrets. A second Owner ExternalSecret here would fight it
-  # for ownership of the same Secret — the exact collision that held the
-  # admins-openclaw Application Degraded for 684 reconciliations over 7 days
-  # (see services/admins/openclaw/values.yaml's extraExternalSecrets comment).
+    # The owner signs in through ZITADEL, which maps them to this login
+    # only (mctl:github_login); mashkoffdmitry has no ZITADEL mapping
+    # (mctlhq/mctl-gitops#1500).
+    - userId: mashkovd
+      role: owner
+  # The tenant chart owns ghcr-credentials here. No service in this tenant
+  # supplies it through extraExternalSecrets any more, so it must stay on.
   ghcrCredentials:
-    enabled: false
+    enabled: true
   quotas:
     # Bumped 2026-09-19 (3rd): projects-mcp deploy-service workflow's validate
     # pod (needs limits.cpu=1) went Pending — used was 11300m/12000m with 16

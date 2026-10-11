@@ -69,9 +69,8 @@ spec:
                 - admins-temporal-web.mctl.ai
           forwardAuth:
             enabled: true
-            # Backstage-hosted OIDC forward-auth used across the platform
-            # (see services/<tenant>/openclaw/values.yaml for the same
-            # provider). Tenant=admins because Temporal UI is platform-level.
+            # Backstage-hosted OIDC forward-auth used across the platform.
+            # Tenant=admins because Temporal UI is platform-level.
             address: "http://backstage.backstage.svc.cluster.local:7007/api/oidc-provider/forward-auth?tenant=admins&service=temporal-web"
             trustForwardHeader: false
 

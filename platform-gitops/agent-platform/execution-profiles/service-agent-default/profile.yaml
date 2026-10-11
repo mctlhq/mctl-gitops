@@ -1,0 +1,93 @@
+# ExecutionProfile for service-agent (ADR 007, mctl-agents#470). Describes
+# what runs today and changes none of it: nothing reads this file at run
+# time. The service agent is a v1alpha1 agent, started by
+# `python -m orchestrator.run_all` with RUN_MODE=full or
+# RUN_MODE=single-service, and its options come from orchestrator/options.py
+# alone. Only the release gate (mctl-agents tools/check_binding_hash.py
+# evaluate_promotion) reads this profile, and only its name and spec.version.
+#
+# Source of each value:
+#   tools            build_service_agent_options: Read, Write, Edit, Glob,
+#                    Grep, WebSearch, WebFetch, Bash, plus mcp__mctl__* when
+#                    MCTL_TOKEN is set.
+#   modelPolicyRef   agents/_manifests/service-agent/agent.yaml: task
+#                    service_agent (SERVICE_AGENT_MODEL). No env override.
+#   budgetUsd        cwft-mctl-agents-run.yaml SERVICE_AGENT_BUDGET_USD,
+#                    "5.00". Equal to the options.py default. It is the cap
+#                    for one service's run; mode=full starts one run per
+#                    rotating service, each with its own $5.00.
+#   timeoutSeconds   cwft-mctl-agents-run.yaml spec.activeDeadlineSeconds,
+#                    3600. No SERVICE_AGENT_TIMEOUT_SECONDS exists.
+#                    SERVICE_AGENT_DRAIN_TIMEOUT_SECONDS is a sub-deadline
+#                    inside one run and no profile field pins it.
+#   sandbox          mctl-agents-run, as the manifest says. Submitted by the
+#                    mctl-agents-daily CronWorkflow (mode=full) and by
+#                    mctl_trigger_agents_run / mctl_trigger_single_service.
+#   permissions      orchestrator/run_service_agent.py's PROMPT and
+#                    docs/agent-inventory.yaml ("writes: gitops inbox/
+#                    findings + proposals (status=proposed)").
+#
+# Each service agent writes its findings to agents-state/<service>/inbox/ and
+# its proposals to agents-state/<service>/proposals/ (entrypoint.sh links
+# both into the agent's directory). The template's own commit-and-push step
+# pushes them, so every repository write permission below is false, as it is
+# for issue-investigator-default, which holds the same Write/Edit/Bash grant.
+#
+# repository.read is true for more than its own checkout: the researcher
+# reads other mctlhq repositories through GITHUB_TOKEN, and for mctl-docs
+# build_service_agent_options adds the sibling mctl-* checkouts through
+# add_dirs. Both are reads.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: service-agent-default
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: service_agent
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools:
+    - Read
+    - Write
+    - Edit
+    - Glob
+    - Grep
+    - WebSearch
+    - WebFetch
+    - Bash
+    - "mcp__mctl__*"
+  # The investigator's policy, and for its reason: the agent drafts
+  # proposals (status=proposed) for a human to accept and does not touch the
+  # repository the proposal is about.
+  policyRef: scoped-proposal-authoring
+  permissions:
+    repository:
+      read: true
+      branchCreate: false
+      commit: false
+      pullRequestCreate: false
+      merge: false
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes:
+      - agents-state-inbox-write
+      - proposal-directory-write
+  budgetUsd: 5.00
+  timeoutSeconds: 3600
+  runtime:
+    entrypoint: orchestrator.run_service_agent:run_service_agent
+    optionsBuilder: orchestrator.options:build_service_agent_options
+    sandbox:
+      backend: argo
+      clusterWorkflowTemplate: mctl-agents-run
+      # mctl-agents-run sets three *_BUDGET_USD variables. This names the one
+      # budgetUsd above is compared with.
+      budgetEnv: SERVICE_AGENT_BUDGET_USD
+      approved: true
+  approval:
+    requiredBefore: []
+  evidence:
+    required:
+      - proposal

@@ -166,8 +166,13 @@ resource "zitadel_action" "argocd_groups" {
 
 # Userinfo, and with id_token_userinfo_assertion the ID token Argo CD reads.
 # One trigger per organization and flow holds every action of it, so the
-# erpact organization's also runs the Frappe sites' verified e-mail check
-# (erpact.tf), first; that action returns at once for any other client.
+# triggers of the organizations whose users can sign in to the Frappe sites
+# (erpact and MCTL, erpact.tf) also run their verified e-mail check; that
+# action returns at once for any other client. action_ids is a set, so the
+# order is not ours to choose, and need not be: an action that may not fail
+# aborts userinfo wherever it runs (runUserinfoActionFlows, v4.19.2). The
+# GitHub login claim (github-login.tf) runs in every organization; it returns
+# at once for any client not in local.github_login_clients (portal.tf).
 resource "zitadel_trigger_actions" "argocd_groups" {
   for_each = local.argocd_claim_orgs
 
@@ -175,8 +180,9 @@ resource "zitadel_trigger_actions" "argocd_groups" {
   flow_type    = "FLOW_TYPE_CUSTOMISE_TOKEN"
   trigger_type = "TRIGGER_TYPE_PRE_USERINFO_CREATION"
   action_ids = concat(
-    each.key == local.erpact_tenant ? [zitadel_action.erpact_verified_email.id] : [],
+    contains(keys(local.erpact_frappe_user_orgs), each.key) ? [zitadel_action.erpact_verified_email[each.key].id] : [],
     [zitadel_action.argocd_groups[each.key].id],
+    [zitadel_action.github_login[each.key].id],
   )
 }
 

@@ -220,13 +220,20 @@ spec:
                 ENABLED: false
               cron.update_checker:
                 ENABLED: false
+              # The container registry shares forgejo-data with the
+              # repositories (9.7G volume). A cap per owner (org or user)
+              # keeps one org's images from filling it; a push over the cap
+              # is refused. erpact-images.yaml also prunes to the newest
+              # versions per image (docs/runbooks/forgejo.md).
+              packages:
+                LIMIT_TOTAL_OWNER_SIZE: 4G
 
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/data/forgejo
 
   ignoreDifferences:
-    # Same ESO handling as minio.yaml / valkey.yaml: admission-injected
+    # Same ESO handling as valkey.yaml / zitadel.yaml: admission-injected
     # annotations and status only; never jq paths that index into spec arrays (#789).
     - group: external-secrets.io
       kind: ExternalSecret
@@ -237,6 +244,11 @@ spec:
     # Written by the zitadel-iac Job, not by Argo CD (oidc-zitadel.yaml).
     - kind: Secret
       name: forgejo-oidc-zitadel
+      jsonPointers:
+        - /data
+    # Written by the zitadel-iac Job, not by Argo CD (identities-zitadel.yaml).
+    - kind: Secret
+      name: forgejo-identities
       jsonPointers:
         - /data
   destination:

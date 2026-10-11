@@ -1,0 +1,62 @@
+# Scrape Traefik's own /metrics.
+#
+# Traefik has exposed Prometheus metrics on its `metrics` entrypoint (:9100)
+# since the cluster was built -- the kube-hetzner chart values turn on
+# --metrics.prometheus and annotate the pods with prometheus.io/scrape -- but
+# nothing here reads annotations, so no traefik_* series ever reached
+# VictoriaMetrics. Confirmed on 2026-10-06: the label-values listing for
+# __name__ holds no name starting with traefik.
+#
+# That gap decided how far the 2026-10-06 03:41 UTC incident could be
+# explained. All three replicas restarted during a short inbound burst
+# (mctlhq/mctl-gitops#1691). cAdvisor showed the burst in bytes, CPU throttling
+# and memory, and nothing else: which hostname was hit, which backend, and with
+# which response codes could not be answered from inside the cluster, because
+# access logs are off and these counters were not collected.
+#
+# VMPodScrape rather than VMServiceScrape because the only Service in the
+# namespace is the LoadBalancer, which publishes 80 and 443 and deliberately
+# not 9100. Pod-level is the only handle, and it also gives one target per
+# replica, which is what a per-pod restart investigation needs.
+#
+# Lives here, next to promtail-podscrape.yaml, rather than under vm-rules/,
+# whose kind guard rejects scrape objects.
+#
+# VMAgent runs with selectAllByDefault, so no label is needed for it to pick
+# this up; `release: monitoring` is carried for consistency with the other
+# hand-written scrapes.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: traefik
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  namespaceSelector:
+    matchNames:
+      - traefik
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik
+      app.kubernetes.io/instance: traefik-traefik
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      metricRelabelConfigs:
+        # Go runtime and process internals: cAdvisor already reports CPU and
+        # memory per container, and nothing here reads the rest.
+        - sourceLabels: [__name__]
+          regex: "go_.*|process_.*"
+          action: drop
+        # Per-backend latency histograms are a third of the exposition (420
+        # of 1259 series on one pod on 2026-10-06) and multiply by the number
+        # of replicas, which the HPA takes to 10 under load. The entrypoint
+        # histogram stays and answers "was the edge slow"; per-backend
+        # _sum and _count stay too, so an average per backend is still there.
+        - sourceLabels: [__name__]
+          regex: "traefik_service_request_duration_seconds_bucket"
+          action: drop

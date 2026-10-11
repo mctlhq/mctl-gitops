@@ -17,7 +17,7 @@ GitOps repository. ArgoCD source of truth for the entire mctl platform.
 - `platform-gitops/bootstrap/` — App-of-Apps bootstrap (ArgoCD entry point)
 - `platform-gitops/services/` — per-tenant service values: `admins/`, `labs/`, `ovk/`
 - `platform-gitops/argo-workflows/cluster-templates/` — ClusterWorkflowTemplates and CronWorkflows
-- `platform-gitops/helm-charts/` — internal charts: `base-service`, `tenant`, `openclaw-skills`
+- `platform-gitops/helm-charts/` — internal charts: `base-service`, `tenant`
 - `platform-gitops/backstage/templates/` — Backstage scaffolder templates
 - `infrastructure/k3s-preview/` — Terraform: preprod cluster on Hetzner (kube-hetzner module)
 - `cli/mctl/` — Go CLI tool
@@ -43,8 +43,10 @@ directly to `main` with no PR:
 - `release-deploy.yaml` — bumps `image.tag` after `mctl_deploy_service` /
   a release tag.
 
-This is intentional: both use their own scoped `GITHUB_TOKEN` with
-`contents: write` and only ever touch a single `image.tag` field, which is
+This is intentional: both push with a write deploy key that only the
+`gitops-bump` environment holds (released to jobs on `main` only; deploy
+keys are the bypass actor on the `main-protection` ruleset) and only ever
+touch a single `image.tag` field, which is
 the same class of change the human "trivial changes — merge immediately"
 rule already allows to skip review. Requiring a PR (and therefore a human
 or Claude review) for every automated image bump would add review latency

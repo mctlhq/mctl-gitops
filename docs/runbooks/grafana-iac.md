@@ -1,18 +1,18 @@
 # Grafana configuration as code (grafana.mctl.ai)
 
-Grafana state that its Helm values cannot express (folder permissions now;
-tenant organizations, their datasources and dashboards next, per
+Grafana state that its Helm values cannot express (folder permissions, and
+the tenant organizations with their datasources and dashboards, per
 mctlhq/mctl-gitops#1601) is declared in an OpenTofu root and applied by an
 in-cluster Job, not clicked in the UI.
 
 | Piece | Where |
 | --- | --- |
-| OpenTofu root (folder ACLs) | `platform-gitops/helm-charts/grafana-iac/iac/` |
+| OpenTofu root (folder ACLs, tenant orgs, their dashboards as `*.json`) | `platform-gitops/helm-charts/grafana-iac/iac/` |
 | Job, CronJob, guard | `platform-gitops/helm-charts/grafana-iac/` |
 | Argo CD Application, namespace `grafana-iac` | `platform-gitops/bootstrap/templates/observability/grafana-iac.yaml` |
-| Admin credential and pull secret (ExternalSecrets), the Job's NetworkPolicies | `platform-gitops/infra-components/observability/grafana-iac/` |
+| Admin credential, tenant metrics passwords and pull secret (ExternalSecrets), the Job's NetworkPolicies | `platform-gitops/infra-components/observability/grafana-iac/` |
 | Authorization strip on the Ingress, Grafana's NetworkPolicy | `platform-gitops/infra-components/observability/grafana-access/` |
-| `[auth.basic]`, brute-force protection, Ingress annotation | `platform-gitops/bootstrap/templates/observability/monitoring.yaml` |
+| `[auth.basic]`, brute-force protection, no external snapshots or public dashboards, Ingress annotation | `platform-gitops/bootstrap/templates/observability/monitoring.yaml` |
 | Image | `platform-gitops/images/grafana-iac/Dockerfile` |
 
 ## How the Job authenticates
@@ -43,8 +43,25 @@ Basic auth is only usable in-cluster, from this Job:
 | --- | --- |
 | Main Org folder `Internal` permissions | Admin role only; the default Viewer and Editor items are removed. The folder itself is created by the dashboards sidecar from the `grafana_folder` annotation. |
 
-The folder permission resource is authoritative: a permission added in the UI
-is reverted by the next hourly run (`:47`).
+| Org `erpact` | Created here; members are NOT managed here (see below). |
+| Its datasource `VictoriaMetrics` (uid `erpact-metrics`) | The org's only and default datasource: VMAuth user `erpact` (`vmauth-grafana-tenants.monitoring.svc:8427`), which adds `namespace="erpact"` to every query. Password from Vault `platform/grafana-tenants/erpact` (`metrics-password`) as a sensitive variable. |
+| Its folder `ERPact`, with the dashboards `erpact-overview.json` and `erpact-workloads.json` | Members (Editor) can view, not edit; their own dashboards go to General. `erpact-overview.json` is the same dashboard Main Org gets from `erpact-tenant-dashboard-configmap.yaml`; change both. |
+
+The folder permissions, the datasource and the dashboards are authoritative: a
+change made in the UI is reverted by the next hourly run (`:47`).
+
+**Tenant org membership is the ZITADEL sign-in's job** (`org_mapping`, #1601
+step 5). The provider reads every member back into `admins` / `editors` /
+`viewers`, so `grafana_organization` ignores those lists: left in the plan,
+they would remove signed-in members and print their email addresses in the
+Job log. Until step 5 maps the tenant roles, nobody but the server admin is
+in the org.
+
+**Tenant isolation lives in VMAuth, not in Grafana.** An Editor can query the
+datasource freely (Explore, the datasource proxy, `/api/ds/query`), but every
+request reaches VictoriaMetrics with `extra_label=namespace=erpact`. Editors
+cannot add or change a datasource in OSS (403), so they cannot point a query
+anywhere else. The org has no logs yet (Loki multi-tenancy, #1601 step 3).
 
 ## Guard
 
@@ -61,6 +78,9 @@ list again once it has applied.
   is the converged state.
 - Edge: `curl -s -o /dev/null -w '%{http_code}' -u admin:x https://grafana.mctl.ai/api/org`
   must be `401` with any password (the header never arrives).
+- Tenant isolation, from inside the Grafana pod as VMAuth user `erpact`:
+  `kube_pod_info{namespace="monitoring"}` must return no series, and
+  `/api/v1/label/namespace/values` only `["erpact"]`.
 
 ## Rollback
 
@@ -69,5 +89,8 @@ list again once it has applied.
 - Basic auth: `auth.basic.enabled: false` in `monitoring.yaml`. The Job then
   fails with a 401 and changes nothing. Keep the strip and the NetworkPolicy;
   they cost nothing with basic auth off.
+- A tenant org: list `grafana_organization.erpact` and everything in it
+  (datasource, folder, folder permission, dashboards) in `allowedDeletes` in
+  the revert PR; deleting the org deletes its members' dashboards too.
 - The whole root: delete the Application. State stays in the
   `tfstate-default-grafana-iac` Secret until the namespace goes.

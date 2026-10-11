@@ -80,7 +80,7 @@ spec:
         # https://github.com/mctlhq/mctl-telegram/issues/123
         # run-investigator fails fast with a clear message if empty.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.67.0
+        value: ghcr.io/mctlhq/mctl-agents:1.74.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -138,6 +138,13 @@ spec:
         # rule as work_item_id. Requires an issue-investigator release
         # containing mctl-agents#558 (1.66.0+); an earlier pin does not
         # recognise the flag and exits non-zero.
+      - name: traceparent
+        value: ""
+        # Optional. W3C trace context of the Temporal activity that
+        # submitted this run (mctl-agents#195), sent by a traced worker
+        # behind MCTL_TRACE_ARGO_PARAM. Read only as the TRACEPARENT env
+        # below, never interpolated into a script. Empty means no parent,
+        # and with MCTL_TRACE_REQUIRE_PARENT the pod then stays untraced.
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # This used to be a `volumeClaimTemplates` entry requesting 4Gi, which Argo
@@ -245,6 +252,25 @@ spec:
     # ghcr.io/mctlhq/mctl-agents:1.11.0 — pin >=1.11.0; earlier tags lack
     # the module and crash with ImportError.
     - name: run-investigator
+      # Least privilege: this step needs neither the Kubernetes API nor Vault.
+      # The pod runs as an identity with no role bindings and mounts no API
+      # token into the agent or clone containers; only Argo's own init/wait
+      # containers get the executor token, to report the step result. See
+      # config/sa-and-rbac.yaml. Template-level on purpose: the other steps
+      # keep the workflow-level account.
+      serviceAccountName: mctl-agents-runner
+      automountServiceAccountToken: false
+      executor:
+        serviceAccountName: mctl-agents-executor
+      # Restricted pod posture for the step that runs model-driven shell
+      # (mctl-gitops#1717). Template-level: the helper steps are root images.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       inputs:
         parameters:
           - name: oauth-key
@@ -295,6 +321,17 @@ spec:
       initContainers:
         - name: clone-gitops
           image: alpine/git:2.43.0
+          # Root on purpose: apk add + chown -R 1000:1000 /workdir hand-off
+          # (validate-local-workdir.py). Escalation is off and every capability
+          # except the file-ownership ones is dropped (mctl-gitops#1717).
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
           command: [sh, -c]
           args:
             - |
@@ -344,6 +381,11 @@ spec:
               mountPath: /secrets/deploy-key
       container:
         image: "{{workflow.parameters.agent_image}}"
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
@@ -645,6 +687,25 @@ spec:
           # the same execution. Read only past WORK_CONTEXT_ROLLOUT_MODE=off.
           - name: WORKFLOW_NAME
             value: "{{workflow.name}}"
+          # Execution traces (mctl-agents#195, docs/observability/
+          # execution-traces.md in mctl-agents). TRACEPARENT
+          # parents the pod's root span on the submitting activity.
+          # ARGO_WORKFLOW_NAME stamps mctl.argo.workflow.name.
+          # MCTL_TRACE_REQUIRE_PARENT keeps a pod that no traced DevLoop
+          # submitted (manual, sweep) inert once the endpoint is added,
+          # which bounds the rollout to the ADR 0001 producer amendment.
+          - name: TRACEPARENT
+            value: "{{workflow.parameters.traceparent}}"
+          - name: ARGO_WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: MCTL_TRACE_REQUIRE_PARENT
+            value: "true"
+          # OTLP export (ADR 0001 producer amendment). Only a pod whose
+          # TRACEPARENT is sampled exports, per the gate above.
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: http://otel-collector.monitoring.svc.cluster.local:4318
+          - name: OTEL_EXPORTER_OTLP_PROTOCOL
+            value: http/protobuf
           # The primary attempt is not final: the fallback always runs after
           # it fails, and the store never reopens an ended execution, so only
           # the fallback may mark it Failed.
@@ -720,6 +781,21 @@ spec:
                 name: mctl-agents-secrets
                 key: usage-writer-token
                 optional: true
+          # Bearer token of the evidence-writer principal (mctlhq/mctl-agents#199,
+          # ADR 018): the producer posts one sealed execution-evidence envelope
+          # per governed run to mctl-api and may do nothing else there.
+          # Optional and never fatal: absent, the producer logs once and posts
+          # nothing; the run itself is unaffected.
+          - name: MCTL_EVIDENCE_WRITER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: evidence-writer-token
+                optional: true
+          # ADR 018 Amendment 2 blocks (versions, subject, tool_calls,
+          # provenance). mctl-api accepts them since 4.66.0 (mctl-api#473).
+          - name: MCTL_EVIDENCE_AMENDMENT_2
+            value: "true"
           # The investigator authors the requirements/design/tasks triplet the
           # implementer then treats as its specification, so its output quality
           # compounds through every downstream step. Pinned to Opus here rather
@@ -735,7 +811,7 @@ spec:
           - name: ISSUE_INVESTIGATOR_MODEL
             value: "claude-opus-5-5"
           # Raised 3.00 -> 8.00 alongside the model above: $3 was already tight
-          # on Sonnet (see the 8Gi memory bump below, same class of headroom
+          # on Sonnet (see the memory note below, same class of headroom
           # problem on the largest repos) and Opus spends more per equivalent
           # investigation. Kept well under agent-platform/policy.yaml's
           # maxBudgetUsd ceiling of 25.00.
@@ -746,14 +822,14 @@ spec:
           - name: ISSUE_INVESTIGATOR_BUDGET_USD
             value: "8.00"
         resources:
-          # memory bumped 4Gi -> 8Gi: on the largest target repos (e.g.
-          # mctl-openclaw — a ~500 MB shallow clone over a 100k-file monorepo)
-          # the Claude SDK's `claude` CLI child was OOM-killed mid-run, so the
-          # investigator never wrote the requirements/design/tasks triplet and
-          # the pod exited 1. Smaller repos (e.g. mctl-telegram) fit in 4Gi.
-          # Mirrors the same 4Gi -> 8Gi bump on cwft-mctl-agents-implement.
+          # memory back to 4Gi (was 8Gi): the bump was for mctl-openclaw, a
+          # ~500 MB shallow clone over a 100k-file monorepo whose `claude` CLI
+          # child was OOM-killed mid-run. That repo is gone from the platform;
+          # the observed 30-day peak across all other targets is ~0.8 GiB
+          # (container_memory_working_set_bytes, 2026-10-10), so 4Gi keeps ~5x
+          # headroom. cwft-mctl-agents-implement keeps 8Gi: it does use it.
           requests: { cpu: 200m, memory: 1Gi, ephemeral-storage: 4Gi }
-          limits:   { cpu: 2000m, memory: 8Gi, ephemeral-storage: 5Gi }
+          limits:   { cpu: 2000m, memory: 4Gi, ephemeral-storage: 5Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
@@ -1072,9 +1148,14 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        env:
+          - name: PARAM_PRIMARY
+            value: "{{inputs.parameters.primary}}"
+          - name: PARAM_FALLBACK
+            value: "{{inputs.parameters.fallback}}"
         source: |
-          PRIMARY='{{inputs.parameters.primary}}'
-          FALLBACK='{{inputs.parameters.fallback}}'
+          PRIMARY="$PARAM_PRIMARY"
+          FALLBACK="$PARAM_FALLBACK"
           echo "primary attempt: ${PRIMARY:-<none>}   fallback attempt: ${FALLBACK:-<none>}"
           if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
             echo "✓ An attempt succeeded — workflow status reflects real work."

@@ -6,7 +6,7 @@
 #
 # Sidecar in monitoring/grafana auto-discovers ConfigMaps labeled
 # `grafana_dashboard: "1"` and mounts them — same pattern as the existing
-# mctl-platform / openclaw-llm-usage dashboards.
+# mctl-platform dashboard.
 apiVersion: v1
 kind: ConfigMap
 metadata:

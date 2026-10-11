@@ -1,0 +1,43 @@
+# Platform-owned manifests in namespace labs for the public labs apps'
+# ZITADEL sign-in: the Secrets the zitadel-iac Job fills and the Role that
+# lets it do so (infra-components/labs/oidc-zitadel.yaml).
+#
+# Its own Application in project default: the "apps" project that deploys
+# the labs services admits no RBAC kind, and root-app deliberately runs
+# without RespectIgnoreDifferences (templates/bootstrap/root-app.yaml), which
+# this needs so a sync never applies the empty `.data` over what the Job
+# wrote. Same shape as erpact-oidc-zitadel (templates/erpact/oidc-zitadel.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: labs-oidc-zitadel
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    targetRevision: main
+    path: platform-gitops/infra-components/labs
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: labs
+  ignoreDifferences:
+    # Written by the zitadel-iac Job, not by Argo CD.
+    - kind: Secret
+      name: coolify-mcp-oidc-zitadel
+      jsonPointers:
+        - /data
+    - kind: Secret
+      name: mctl-academy-oidc-zitadel
+      jsonPointers:
+        - /data
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

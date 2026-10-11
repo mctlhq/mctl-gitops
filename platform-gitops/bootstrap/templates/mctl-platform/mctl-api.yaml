@@ -13,9 +13,36 @@ spec:
       helm:
         releaseName: mctl-api
         values: |
+          # Two replicas since mctl-api 4.70.0 (mctl-api#503), after the
+          # 2026-10-09 outage in which the single pod sat unready for five
+          # hours. OAuth sign-ins keep their in-flight state (pending
+          # authorizations, codes) in Postgres and work on any replica. The
+          # identity link flow keeps its challenges in the memory of the pod
+          # that started them, so the Service gets a sticky cookie: every
+          # link step is a browser request and stays on one pod (without it a
+          # link fails safe with "start again"). Rate limiters are per pod, so
+          # their effective ceilings double. The spread keeps the replicas on
+          # different nodes; ScheduleAnyway, so a node down for maintenance
+          # never blocks scheduling.
+          replicaCount: 2
+          service:
+            annotations:
+              traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+              traefik.ingress.kubernetes.io/service.sticky.cookie.name: mctl_api_affinity
+              traefik.ingress.kubernetes.io/service.sticky.cookie.secure: "true"
+              traefik.ingress.kubernetes.io/service.sticky.cookie.httponly: "true"
+              traefik.ingress.kubernetes.io/service.sticky.cookie.samesite: lax
+          topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: mctl-api
+
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.61.0"
+            tag: "4.78.0"
 
           ingress:
             enabled: true
@@ -43,10 +70,31 @@ spec:
             ADMIN_USERS: mashkovd
             AUTH_REQUIRED: "true"
             BACKSTAGE_URL: https://app.mctl.ai
-            DEX_ISSUER_URL: https://ops.mctl.ai/api/dex
-            DEX_CLIENT_ID: mctl-api
+            # No DEX_ISSUER_URL: since mctl-api 4.72.0 (mctlhq/mctl-api#521)
+            # an unset issuer turns the Dex verifier and its /readyz check
+            # off. Human sign-in is ZITADEL; Dex is gone (mctlhq/mctl-gitops#1500
+            # phase 4).
             SELF_URL: https://api.mctl.ai
-            VAULT_ADDR: https://secrets.mctl.ai
+            # GitHub Actions OIDC for CI deploys (mctlhq/mctl-api#530): a CI
+            # job's own OIDC token may deploy a new tag of the component whose
+            # catalog-info.yaml github.com/source-repo is that job's
+            # repository, and nothing else. Only repositories owned by the
+            # mctlhq org (id 169036271), from main or a tag, on push,
+            # workflow_dispatch or release. Requires mctl-api with #531.
+            # Rollback: delete this entry. The provider is then not registered
+            # and CI OIDC tokens get 401; human and PAT callers are unaffected.
+            MCTL_GITHUB_ACTIONS_OIDC: '{"audience":"https://api.mctl.ai","repository_owners":["mctlhq"],"repository_owner_ids":["169036271"],"branches":["refs/heads/main"]}'
+            # In-cluster, not https://secrets.mctl.ai. On 2026-10-09 the pod's
+            # /readyz Vault check timed out through the public, Cloudflare-
+            # fronted hostname for five hours while Vault itself answered the
+            # same URL from outside; readiness took the whole API down with
+            # it. Every other in-cluster consumer (ESO, Argo Workflows,
+            # vault-backup) already talks to the service directly. The
+            # listener is plain HTTP (vault.yaml, tls_disable = 1); the
+            # mctl-api namespace is allowed by the vault namespace's
+            # allow-vault-ingress policy. vault-active routes to the leader,
+            # so reads skip the standby-forwarding hop.
+            VAULT_ADDR: http://vault-active.vault.svc.cluster.local:8200
             # Kubernetes auth (mirrors the Backstage migration, gitops#699):
             # the mctl-api ServiceAccount authenticates with its own
             # projected token via the `mctl-api` Vault role. Confirmed live
@@ -71,42 +119,56 @@ spec:
             # rather than an exact path because the callback path is not documented
             # and has to survive client updates.
             #
-            # *-openclaw.mctl.ai: each OpenClaw tenant panel runs the OAuth
-            # dance from its own hostname. It re-registers via DCR on every
-            # connect attempt, so nothing here is about a stale registration:
             # /oauth/register validates with IsRedirectURIAllowed("", uri) --
             # an EMPTY client id, by design, so that registration cannot mint a
             # client for an arbitrary attacker callback (internal/api/
             # oauth_handlers.go, SOC hardening 8422446). On that path only this
             # list and RFC 8252 loopback count; a client's own redirect_uris do
-            # not. A tenant panel is not loopback, so without an entry here it
-            # is refused before it ever receives a client id:
-            # redirect_uri "https://admins-openclaw.mctl.ai/overview?mctl_oauth=1"
-            # is not allowed -- which is what blocks mctlhq/mctl-gitops#571.
-            # Listed per tenant because IsRedirectURIAllowed matches a string
-            # prefix, not a host wildcard -- a general host-suffix rule is
-            # mctlhq/mctl-api#290. The list is the tenants under
-            # platform-gitops/services/; my-team-openclaw.mctl.ai still appears
-            # in docs examples but the tenant was deleted in af03d315, and a
-            # decommissioned host must not stay authorized here.
+            # not.
             #
-            # Exact URIs, deliberately NOT "<host>/*". The panel builds the
-            # callback deterministically as <origin><basePath>/overview with
-            # ?mctl_oauth=1 (ui/src/ui/controllers/mctl-connect.ts), and no
-            # tenant sets basePath, so the exact string is knowable. A path
-            # wildcard would authorize every path on the panel host, which
-            # turns any open redirect or XSS there into code interception --
-            # and PKCE does not help, because an attacker who starts the flow
-            # holds the verifier. If a tenant ever moves under a basePath this
-            # entry stops matching, which fails loudly and is the safer way to
-            # find out.
-            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://admins-openclaw.mctl.ai/overview?mctl_oauth=1,https://labs-openclaw.mctl.ai/overview?mctl_oauth=1,https://ovk-openclaw.mctl.ai/overview?mctl_oauth=1,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api"
+            # Prefer exact URIs over "<host>/*". A path wildcard would authorize
+            # every path on that host, which turns any open redirect or XSS
+            # there into code interception -- and PKCE does not help, because an
+            # attacker who starts the flow holds the verifier.
+            #
+            # IDE clients (2026-10-08). /oauth/register refuses a registration
+            # as a whole when any one of its redirect_uris is not allowed, and
+            # these clients send their full set every time, so their loopback
+            # entry alone never got them in:
+            #   VS Code  -- https://vscode.dev/redirect,
+            #               https://insiders.vscode.dev/redirect, plus two
+            #               127.0.0.1 entries (src/vs/base/common/oauth.ts,
+            #               fetchDynamicRegistration).
+            #   Cursor   -- cursor://anysphere.cursor-mcp/oauth/callback,
+            #               https://www.cursor.com/agents/mcp/oauth/callback,
+            #               plus http://localhost:8787/callback (read from the
+            #               3.19.16 bundle).
+            # Exact strings, for the reason given above. The two vscode.dev
+            # pages and the cursor:// scheme hand the code to the editor on the
+            # user's own machine; www.cursor.com is Cursor's hosted agent
+            # callback, the same class of entry as claude.ai and chatgpt.com.
+            # Windsurf needs nothing here: it registers a loopback callback.
+            OAUTH_ALLOWED_REDIRECT_URIS: "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,http://localhost:6274/oauth/callback,http://localhost:6274/oauth/callback/debug,https://chatgpt.com/connector/oauth/*,https://antigravity.google/*,https://mcp.mctl.ai/servers-callback,https://dash.cloudflare.com/6a09f637d20e1f66a8e9d45ebe778058/one/access-controls/ai-controls/mcp-server/oauth-callback/api,https://vscode.dev/redirect,https://insiders.vscode.dev/redirect,cursor://anysphere.cursor-mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback"
             # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
             # `cloudflare-portal-mcp` (mctlhq/mctl-api#278) was retired on
             # 2026-09-26 after the `api` upstream moved to automatic (DCR)
             # mode. The portal now registers itself through /oauth/register,
             # persisted since mctlhq/mctl-api#400, with the two callbacks
             # above (mctlhq/mctl-gitops#1363).
+            # Upstream identity provider of /oauth/authorize
+            # (mctlhq/mctl-api#467, canary for mctlhq/mctl-gitops#1500 phase 2).
+            # `zitadel`: ZITADEL (auth.mctl.ai) is the only sign-in. The canary
+            # on `both` was proven end to end on 2026-10-06. A person whose
+            # ZITADEL identity is not linked gets a 403 page that leads to the
+            # link flow (/identity/link/zitadel); that flow still signs them in
+            # with GitHub once to prove the old account, in any mode. Sessions
+            # that already exist keep working: refresh never goes upstream.
+            # Needs OAUTH_ZITADEL_CLIENT_ID/SECRET from oauthZitadelSecret
+            # below; mctl-api refuses to start in this mode without them.
+            # mctl-issued tokens and group resolution are unchanged: the
+            # ZITADEL identity maps to the linked GitHub login.
+            # Rollback: set this back to `both`.
+            OAUTH_UPSTREAM: "zitadel"
             # Browser origins permitted by CORS. Distinct from the redirect URIs
             # above: those govern where the OAuth dance may hand a code back,
             # this governs which page may read an authenticated API response.
@@ -231,11 +293,34 @@ spec:
           # enforced. The zitadel-iac Job builds the value from the client id
           # ZITADEL generated (helm-charts/zitadel-iac/iac/mctl-api.tf) and
           # writes it into this Secret, which the second source below
-          # pre-creates. The chart (mctl-api >= #440) reads it optionally, so
-          # an empty Secret is the Dex-only configuration. Dex is unaffected:
-          # with no entry named `dex`, the DEX_* shim above still applies.
+          # pre-creates. The chart (mctl-api >= #440) reads it optionally; with
+          # Dex gone (no DEX_ISSUER_URL above), an empty Secret means no
+          # federated OIDC tokens are accepted at all.
           # Rollback: delete this line.
           oidcProvidersSecret: mctl-api-oidc-zitadel
+
+          # ZITADEL_LINK_CLIENT_ID / ZITADEL_LINK_CLIENT_SECRET for the
+          # identity-link browser flow (mctlhq/mctl-api#435, chart #447):
+          # the confidential `mctl-api-link` client that zitadel-iac writes
+          # into the same Secret (helm-charts/zitadel-iac/iac/mctl-api.tf).
+          # The issuer comes from the `zitadel` entry above
+          # (ZITADEL_LINK_PROVIDER defaults to it). Both refs are optional,
+          # so a Secret without the keys leaves the flow off (503) and the
+          # rest of mctl-api unaffected. Rollback: delete this line.
+          zitadelLinkSecret: mctl-api-oidc-zitadel
+
+          # OAUTH_ZITADEL_CLIENT_ID / OAUTH_ZITADEL_CLIENT_SECRET for the
+          # ZITADEL upstream of /oauth/authorize (mctlhq/mctl-api#467, chart
+          # #469): the confidential `mctl-api-oauth` client that zitadel-iac
+          # writes into the same Secret (helm-charts/zitadel-iac/iac/
+          # mctl-api.tf). This line alone changes no behaviour: OAUTH_UPSTREAM
+          # is not set, so it is `github`, and in that mode mctl-api reads
+          # neither variable. Both refs are optional, so a Secret without the
+          # keys still starts the pod. Selecting the upstream is a separate
+          # change (OAUTH_UPSTREAM: both, then zitadel, under env above), and
+          # that one does need the keys: mctl-api refuses to start in those
+          # modes without them. Rollback: delete this line.
+          oauthZitadelSecret: mctl-api-oidc-zitadel
           {{- if .Values.usageWriter.enabled }}
 
           # The usage-writer token (mctlhq/.github#50), from the
@@ -244,6 +329,24 @@ spec:
           # reference is optional, so a Secret that has not synced yet
           # leaves the principal disabled instead of failing the pod.
           usageWriterTokenSecret: mctl-api-usage-writer
+          {{- end }}
+          {{- if (default dict .Values.evidenceWriter).enabled }}
+
+          # The evidence-writer token (mctlhq/mctl-agents#199), from the
+          # mctl-api-evidence-writer ExternalSecret. Gated with it on
+          # evidenceWriter.enabled in bootstrap/values.yaml; the chart's
+          # reference is optional, so a Secret that has not synced yet leaves
+          # the principal disabled instead of failing the pod.
+          evidenceWriterTokenSecret: mctl-api-evidence-writer
+          {{- end }}
+          {{- if (default dict .Values.registryPublisher).enabled }}
+
+          # The registry-publisher token (mctlhq/mctl-agents#470), from the
+          # mctl-api-registry-publisher ExternalSecret. Gated with it on
+          # registryPublisher.enabled in bootstrap/values.yaml; the chart's
+          # reference is optional, so a Secret that has not synced yet leaves
+          # the principal disabled instead of failing the pod.
+          registryPublisherTokenSecret: mctl-api-registry-publisher
           {{- end }}
           {{- if (default dict .Values.surfaceTelegramToken).enabled }}
 

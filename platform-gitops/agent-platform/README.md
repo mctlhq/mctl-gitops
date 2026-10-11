@@ -64,6 +64,52 @@ always the `orchestrator/options.py` Python default:
 | implementer | 20.00 | 2400 | `cwft-mctl-agents-implement.yaml` `IMPLEMENTER_BUDGET_USD` / `IMPLEMENTER_TIMEOUT_SECONDS` -- these CWFT overrides win over the Python defaults ($3 / 900s) |
 | shepherd | 5.00 | 7200 | `cwft-mctl-agents-shepherd.yaml` `SHEPHERD_BUDGET_USD` (raised from the Tier 3 spec's $1.00 default); no per-tick timeout override exists, so `activeDeadlineSeconds: 7200` is the effective ceiling |
 
+Four more profiles were added for mctl-agents#470
+(`incident-responder-default`, `mentor-default`, `service-agent-default`,
+and later `authoring-canary-default`), under the same rule. All four name
+`mctl-agents-run`. The first three run there, which is why each names its own
+budget variable in `sandbox.budgetEnv` (see "Effective values are checked
+against the deployed template" below); authoring-canary has no caller and
+names none (see "Profiles with no caller" below):
+
+| Agent | budgetUsd | timeoutSeconds | Source |
+|---|---|---|---|
+| incident-responder | 20.00 | 3600 | `cwft-mctl-agents-run.yaml` `INCIDENT_RESPONDER_BUDGET_USD` -- the CWFT override wins over the Python default ($5); no per-agent timeout exists, so `activeDeadlineSeconds: 3600` is the effective ceiling |
+| mentor | 10.00 | 3600 | `cwft-mctl-agents-run.yaml` `MENTOR_BUDGET_USD`; `activeDeadlineSeconds: 3600` |
+| service-agent | 5.00 | 3600 | `cwft-mctl-agents-run.yaml` `SERVICE_AGENT_BUDGET_USD`, per service run; `activeDeadlineSeconds: 3600` |
+| authoring-canary | 0.01 | 3600 | The agent's `agent.yaml` `execution.budgetUsd`; no template carries it (see "Profiles with no caller"). `activeDeadlineSeconds: 3600` |
+
+Those four agents are `agents.mctl.ai/v1alpha1` and never go through the
+runtime resolver, so nothing reads their profiles or bindings at run time.
+They exist for mctl-agents' production promotion gate
+(`tools/check_binding_hash.py` `evaluate_promotion`), which refuses to
+promote a release whose `agent.yaml` does not hash to the binding's
+`spec.sourceManifest.contentHash`. Editing one of those `agent.yaml` files
+therefore needs its binding re-pinned here first; the procedure is
+mctl-agents `docs/runbooks/agent-yaml-binding-repin.md`.
+
+#### Profiles with no caller
+
+`authoring-canary` (mctl-agents#596/#598) is inert: no ClusterWorkflowTemplate
+or CronWorkflow runs it, so no template holds its budget. A profile listed in
+`policy.yaml` `spec.uncalledProfiles` skips only the `budgetUsd` comparison
+with the template; `timeoutSeconds` is still compared. The claim is checked,
+not trusted: the profile must not declare `sandbox.budgetEnv`; no file under
+`argo-workflows/cluster-templates/` (templates and CronWorkflows) may contain
+the entrypoint module or the agent's name in snake, kebab or upper case
+(`run_authoring_canary`, `authoring_canary`, `authoring-canary`,
+`AUTHORING_CANARY`); an unreadable template fails the exemption; and an entry
+naming no profile is an error. Giving the agent a caller means removing it
+from the list and declaring `budgetEnv` in the same PR.
+
+What this repository cannot see: a call made inside the orchestrator. The
+`mctl-agents-run` template runs `python -m orchestrator.run_all`, which
+dispatches to several agents that no template names. Wiring the canary in as
+a new `run_all` mode would change no file here. That direction is guarded in
+mctl-agents: `tests/test_authoring_canary.py` fails when any module under
+`orchestrator/`, `tools/` or `config/` names the entrypoint, and a manifest
+change there needs a human merge.
+
 Any future profile bump must state which side (Python default vs. deployed
 CWFT override) it is changing, and why -- silently reverting to the Python
 default would be a behavior change this issue is explicitly scoped not to
@@ -73,7 +119,7 @@ make.
 
 Every `ReleaseBindingIntent` fixture under `releases/` today has
 `spec.bindingSource: compatibility-fixture` and `spec.promotable: false`.
-There is no real mctl-api-published v1alpha2 version of any of these three
+There is no real mctl-api-published v1alpha2 version of any of these
 agents or profiles yet -- that publish step, and the runtime resolver that
 would actually consume a real binding (mctl-agents #227), are both
 follow-up work. Until they land:
@@ -122,7 +168,20 @@ expectation:
 | effective budget/timeout match the CWFT | `invalid/cwft-budget-mismatch/` |
 | conflicting values for one CWFT variable rejected | `invalid/cwft-conflicting-budget-values/` |
 | non-numeric CWFT value degrades to a file-scoped error | `invalid/cwft-non-numeric-budget/` |
+| several budget variables and no `budgetEnv` rejected | `invalid/cwft-several-budgets-without-budget-env/` |
+| `budgetEnv` reads the named variable, not another one | `invalid/cwft-budget-env-mismatch/` |
+| `budgetEnv` naming a variable the CWFT does not set rejected | `invalid/cwft-budget-env-not-set/` |
+| `budgetEnv` variable set twice with different values rejected, whichever value the profile declares | `invalid/cwft-budget-env-conflicting-values-declares-first/`, `...-declares-second/` |
+| `budgetEnv` must be a `*_BUDGET_USD` name | `invalid/budget-env-not-a-budget-variable/` |
+| `budgetEnv` selects one of several budget variables | `valid/cwft-budget-env-selects-one-of-several/` |
 | exact-pair rollback accepted | `valid/rollback-replay/` |
+| uncalled profile skips only the budget comparison | `valid/uncalled-profile-without-budget-env/` |
+| uncalled profile with a caller in a template rejected | `invalid/uncalled-profile-with-caller/` |
+| uncalled profile named by agent, not module, rejected | `invalid/uncalled-profile-with-caller-by-agent-name/` |
+| uncalled profile naming `budgetEnv` rejected | `invalid/uncalled-profile-with-budget-env/` |
+| uncalled profile's timeout still checked | `invalid/uncalled-profile-timeout-mismatch/` |
+| stale `uncalledProfiles` entry rejected | `invalid/uncalled-profiles-stale-entry/` |
+| profile not listed in `uncalledProfiles` validated as before | `invalid/unlisted-profile-without-budget-env/` |
 
 ### Effective values are checked against the deployed template
 
@@ -139,6 +198,28 @@ correctly declares `$20.00` because `cwft-mctl-agents-implement.yaml` sets
 `IMPLEMENTER_BUDGET_USD` to `"20.00"`, while `orchestrator/options.py`
 defaults to `$3.00`. A check written against the defaults would fire
 immediately and be wrong.
+
+A template that runs one agent sets one `*_BUDGET_USD` variable, and the
+check finds it by suffix. `mctl-agents-run` runs three agents and sets three,
+and the check refuses to pick among them. A profile for such a template names
+its variable in `spec.runtime.sandbox.budgetEnv`, and `budgetUsd` is then
+compared with that variable alone. The field only says which variable is
+checked. It configures nothing, and no agent reads it.
+
+Nothing here checks that a profile names its own agent's variable. Which
+variable an agent reads is decided in mctl-agents (`budgetEnv` in its
+`docs/agent-inventory.yaml`). By convention it is the agent's name in upper
+snake case plus `_BUDGET_USD`, and all six deployed variables follow that, so
+a new profile should too. The convention is not enforced: an agent may
+legitimately read a differently named variable, and a check built on the
+name would then refuse a correct profile.
+
+There is no `timeoutEnv` counterpart. `mctl-agents-run` sets no
+`*_TIMEOUT_SECONDS` today, so its three profiles all take
+`activeDeadlineSeconds`. Adding a per-agent `*_TIMEOUT_SECONDS` to a template
+that several profiles name needs that counterpart first: one such variable
+would be read as the timeout of every profile naming the template, and two
+would fail them all as ambiguous.
 
 For timeouts: a `*_TIMEOUT_SECONDS` env var wins when present, otherwise
 the workflow-level `spec.activeDeadlineSeconds` is the effective timeout —

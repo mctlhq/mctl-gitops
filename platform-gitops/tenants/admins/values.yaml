@@ -10,9 +10,8 @@ tenant:
   # admins already owns ghcr-credentials via the platform-level
   # mctl-agent-ghcr ExternalSecret (bootstrap/templates/mctl-platform/
   # mctl-agent-secrets.yaml). A second Owner ExternalSecret here would
-  # fight it for ownership — this exact collision held the admins-openclaw
-  # Application Degraded for 684 reconciliations over 7 days (see
-  # services/admins/openclaw/values.yaml's extraExternalSecrets comment).
+  # fight it for ownership — this exact collision once held an Application
+  # Degraded for 684 reconciliations over 7 days.
   ghcrCredentials:
     enabled: false
   # cwft-rotate-github-token force-refreshes these ExternalSecrets after minting

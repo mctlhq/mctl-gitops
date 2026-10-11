@@ -233,7 +233,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "topk(10, sum by(pod, namespace) (container_memory_working_set_bytes{container!=\"\"}))",
+              "expr": "topk(10, sum by(pod, namespace) (container_memory_working_set_bytes{container!=\"\",metrics_path=\"/metrics/cadvisor\"}))",
               "legendFormat": "{{namespace}}/{{pod}}"
             }
           ]

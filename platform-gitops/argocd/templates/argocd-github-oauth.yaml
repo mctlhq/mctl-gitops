@@ -8,6 +8,8 @@ metadata:
   # config with the Backstage OIDC connector). No GitHub credentials here any
   # more. The name is kept because renaming an ExternalSecret means deleting
   # and recreating it, and this one merges into argocd-secret.
+  # The Dex client secrets it used to carry went with Dex (#1500 phase 4);
+  # creationPolicy Merge leaves those keys in argocd-secret, unused.
   name: argocd-github-oauth
   namespace: argocd
   annotations:
@@ -31,27 +33,6 @@ spec:
   # rule go away. Keep them in sync if ESO ever changes its defaults — a
   # mismatch shows up immediately as OutOfSync rather than silently.
   data:
-    - secretKey: argo-workflows-sso-client-secret
-      remoteRef:
-        key: platform/argo-workflows/sso
-        property: client-secret
-        conversionStrategy: Default
-        decodingStrategy: None
-        metadataPolicy: None
-    - secretKey: backstage-oidc-client-id
-      remoteRef:
-        key: platform/backstage/github-oauth
-        property: client-id
-        conversionStrategy: Default
-        decodingStrategy: None
-        metadataPolicy: None
-    - secretKey: backstage-oidc-client-secret
-      remoteRef:
-        key: platform/backstage/github-oauth
-        property: client-secret
-        conversionStrategy: Default
-        decodingStrategy: None
-        metadataPolicy: None
     # Shared secret for the GitHub push webhook on mctlhq/mctl-gitops →
     # https://ops.mctl.ai/api/webhook. Argo CD reads exactly this key from
     # argocd-secret (util/settings: webhook.github.secret). Until it is set

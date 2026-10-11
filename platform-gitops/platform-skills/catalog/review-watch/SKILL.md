@@ -70,10 +70,10 @@ copy regardless of what the grep would have said.)
 # Watches claude[bot] (claude-review.yml GH Action) and the agy reviewer.
 # chatgpt-codex-connector[bot] was dropped 2026-09-23: its GitHub App was
 # uninstalled from the org, so it can no longer post.
-# Args: <repo>           e.g. mctlhq/mctl-openclaw
+# Args: <repo>           e.g. mctlhq/mctl-api
 #       <pr>             e.g. 5
-#       <result-file>    e.g. ~/.claude/tmp/review-watch-mctl-openclaw-5.result
-#       <log-file>       e.g. ~/.claude/tmp/review-watch-mctl-openclaw-5.log
+#       <result-file>    e.g. ~/.claude/tmp/review-watch-mctl-api-5.result
+#       <log-file>       e.g. ~/.claude/tmp/review-watch-mctl-api-5.log
 #       [baseline-ts]    optional explicit baseline, e.g. 2026-07-12T08:04:47Z —
 #                        pass the fix-up push time to ignore everything older
 set -u
@@ -132,12 +132,10 @@ notify() {
 # exists. But across every mctlhq repo, claude-review.yml's base trigger is
 # `pull_request: [opened, reopened, synchronize, ready_for_review]` — i.e. the
 # FIRST review always auto-fires on PR open, and re-reviews after a fix-up
-# push auto-fire too (synchronize is already in that trigger list). Only 7/16
-# repos (mctl-gitops, mctl-api, mctl-portal, mctl-web, mctl-agents, mctl-docs,
-# mctl-telegram) additionally wire up `issue_comment` as a manual rerun path;
-# the other 9 (incl. mctl-claude-remote, mctl-openclaw, mctl-design, ...) have
-# no comment listener at all, so a posted "@claude review" there is a no-op.
-# A missing trigger comment is therefore the COMMON case, not an error — fall
+# push auto-fire too (synchronize is already in that trigger list). Every
+# caller repo also wires `issue_comment` as a manual rerun path (re-verified
+# on GitHub 2026-10-10), but that path is only needed for a rerun on an
+# unchanged head. A missing trigger comment is therefore the COMMON case, not an error — fall
 # back to "now" and rely on the caller launching the watcher right after the
 # open/push event it wants to observe.
 #
@@ -302,7 +300,7 @@ disown $PID 2>/dev/null
 echo "watcher pid=$PID"
 ```
 
-`<repo-stem>` = repo name without owner (e.g. `mctl-openclaw`). Multiple PRs ⇒ launch each in its own `nohup ... &` invocation, all in parallel from a single Bash call.
+`<repo-stem>` = repo name without owner (e.g. `mctl-api`). Multiple PRs ⇒ launch each in its own `nohup ... &` invocation, all in parallel from a single Bash call.
 
 **When to pass `baseline-ts`:** whenever the review you're waiting for was triggered by a PUSH (PR open or fix-up push on an auto-fire repo), pass that push's timestamp explicitly — e.g. `git log -1 --format=%cI` converted to UTC, or `date -u +%Y-%m-%dT%H:%M:%SZ` right after pushing. Without it, auto-detect anchors on the latest `@claude review` comment, which may be days old and would false-hit on the bot's previous review. Omit the arg only when you have JUST posted a fresh `@claude review` comment (auto-detect then finds exactly it, and the 👍-reaction path stays active).
 
@@ -375,8 +373,8 @@ Single Bash call launching multiple `nohup` background processes is fine — eac
 ## Argument parsing
 
 Accepted forms from the user:
-- `mctlhq/mctl-openclaw#5`
-- `https://github.com/mctlhq/mctl-openclaw/pull/5`
+- `mctlhq/mctl-api#5`
+- `https://github.com/mctlhq/mctl-api/pull/5`
 - `5` (only if the user has just opened exactly one PR in conversation context — pick the most recent)
 
 If args are ambiguous, ask which PRs in one short AskUserQuestion before launching.

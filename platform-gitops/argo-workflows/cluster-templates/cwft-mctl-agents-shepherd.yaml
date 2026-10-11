@@ -121,7 +121,7 @@ spec:
         # subprocess and does NOT call `gh pr merge`. Useful for
         # operator dry runs and local smoke tests.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.67.0
+        value: ghcr.io/mctlhq/mctl-agents:1.74.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -316,6 +316,25 @@ spec:
     # mid-flight is never raced — only CLOSED-unmerged PRs trigger the
     # flip-to-rejected path. 1.9.0 was the first tag with the orchestrator.
     - name: run-shepherd
+      # Least privilege: this step needs neither the Kubernetes API nor Vault.
+      # The pod runs as an identity with no role bindings and mounts no API
+      # token into the agent or clone containers; only Argo's own init/wait
+      # containers get the executor token, to report the step result. See
+      # config/sa-and-rbac.yaml. Template-level on purpose: the other steps
+      # keep the workflow-level account.
+      serviceAccountName: mctl-agents-runner
+      automountServiceAccountToken: false
+      executor:
+        serviceAccountName: mctl-agents-executor
+      # Restricted pod posture for the step that runs model-driven shell
+      # (mctl-gitops#1717). Template-level: the helper steps are root images.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       outputs:
         artifacts:
           # The `.status.yaml` flips and adopted-prs/pr-<n>/.prref.yaml records
@@ -355,6 +374,17 @@ spec:
       initContainers:
         - name: clone-gitops
           image: alpine/git:2.43.0
+          # Root on purpose: apk add + chown -R 1000:1000 /workdir hand-off
+          # (validate-local-workdir.py). Escalation is off and every capability
+          # except the file-ownership ones is dropped (mctl-gitops#1717).
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
           command: [sh, -c]
           args:
             - |
@@ -420,6 +450,11 @@ spec:
             value: "false"
       container:
         image: "{{workflow.parameters.agent_image}}"
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         imagePullPolicy: IfNotPresent
         command: ["/entrypoint.sh"]
         args:
@@ -708,6 +743,21 @@ spec:
                 name: mctl-agents-secrets
                 key: usage-writer-token
                 optional: true
+          # Bearer token of the evidence-writer principal (mctlhq/mctl-agents#199,
+          # ADR 018): the producer posts one sealed execution-evidence envelope
+          # per governed run to mctl-api and may do nothing else there.
+          # Optional and never fatal: absent, the producer logs once and posts
+          # nothing; the run itself is unaffected.
+          - name: MCTL_EVIDENCE_WRITER_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: evidence-writer-token
+                optional: true
+          # ADR 018 Amendment 2 blocks (versions, subject, tool_calls,
+          # provenance). mctl-api accepts them since 4.66.0 (mctl-api#473).
+          - name: MCTL_EVIDENCE_AMENDMENT_2
+            value: "true"
           # The Argo run name, the join key of this run's usage records to
           # its agent_executions row (argo_workflow_name). Read by nothing
           # else in this runner.
@@ -1308,9 +1358,14 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        env:
+          - name: PARAM_PRIMARY
+            value: "{{inputs.parameters.primary}}"
+          - name: PARAM_FALLBACK
+            value: "{{inputs.parameters.fallback}}"
         source: |
-          PRIMARY='{{inputs.parameters.primary}}'
-          FALLBACK='{{inputs.parameters.fallback}}'
+          PRIMARY="$PARAM_PRIMARY"
+          FALLBACK="$PARAM_FALLBACK"
           echo "shepherd attempt: ${PRIMARY:-<none>}   fallback attempt: ${FALLBACK:-<none>}"
           if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
             echo "✓ An attempt succeeded — workflow status reflects real work."

@@ -60,3 +60,24 @@
 # machines do, unreviewed. That is the ruleset's DeployKey bypass, not
 # something a CODEOWNERS entry can reach.
 platform-gitops/agents-state/*/proposals/*/.status.yaml @mashkovd
+
+# ---------------------------------------------------------------------------
+# Agent platform catalog
+# ---------------------------------------------------------------------------
+# ExecutionProfiles, release bindings, the catalog policy and their schemas.
+# A release binding is what lets a released agent definition be promoted to
+# production (mctl-agents `tools/publish_agent_release.py` refuses a
+# definition whose binding here is missing or does not match), and a profile
+# states what an agent may do. A change under this path is therefore a
+# decision about which agent exists and with what authority, not a
+# configuration tweak (mctl-agents#470).
+#
+# As with the proposal status files above, the repository default already
+# routes this path. The entry records the reason at the path it applies to,
+# so that narrowing the default later does not drop it.
+#
+# What it does not do: the `main-protection` ruleset does not require a code
+# owner's review, so this line names the owner without making the review
+# mandatory, and a bypass actor on the ruleset is not reached by it at all.
+# Both are ruleset matters, tracked in mctl-agents#470.
+platform-gitops/agent-platform/** @mashkovd

@@ -1,0 +1,55 @@
+# ReleaseBindingIntent for mentor (mctl-agents#470). It binds the agent.yaml
+# that is released today to mentor-default, so the production promotion gate
+# (mctl-agents tools/check_binding_hash.py evaluate_promotion) has something
+# to compare a release with. Before this the agent had no binding and was
+# promoted unchecked.
+#
+# bindingSource and promotable are the same as the three older bindings, and
+# not by choice: mctl-agents' parse_release_binding accepts only
+# compatibility-fixture with promotable: false, and validate-agent-platform.py
+# rejects a fixture marked promotable. No mctl-api v1alpha2 version of this
+# agent exists that a `registry` binding could name. releases/shadow/ is the
+# only binding catalog; the gate reads it for the production promotion.
+#
+# Nothing reads this file at run time. mentor is a v1alpha1 agent
+# and never goes through orchestrator/resolver.py.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: mentor
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/mentor/agent.yaml
+    # A real commit, unlike the placeholder the older bindings carry: the
+    # mctlhq/mctl-agents#629 head whose agent.yaml contentHash was computed
+    # from (sandbox mctl-agents-daily -> mctl-agents-run). Nothing verifies
+    # it; contentHash is the pin.
+    gitSha: "ee3071ee3fbcf19c5a7816d5adad690ca3b51a4c"
+    # sha256 of the exact bytes of `path` at gitSha, as mctl-agents'
+    # resolver.definition_content_hash computes it. Editing that agent.yaml
+    # requires re-pinning this value first, or the release that carries the
+    # edit is refused promotion (mctl-agents
+    # docs/runbooks/agent-yaml-binding-repin.md).
+    contentHash: "sha256:dab2a7dea2726ab9ef1610e4f1c3a8f84efbbe1a65376c36b4daa5bacf305f0f"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: mentor
+    # As in the older bindings, a label that names no bytes: contentHash
+    # above is what pins the definition.
+    version: "1"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: mentor-default
+    version: "1.0.0"
+  bindingRevision: 2
+  previousBindingRevision: 1
+  history:
+    - bindingRevision: 1
+      definition: {name: mentor, version: "1"}
+      profile: {name: mentor-default, version: "1.0.0"}

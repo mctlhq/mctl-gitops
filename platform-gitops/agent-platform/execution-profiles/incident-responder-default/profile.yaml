@@ -1,0 +1,93 @@
+# ExecutionProfile for incident-responder (ADR 007, mctl-agents#470).
+# Describes what runs today and changes none of it: nothing reads this file
+# at run time. The responder is a v1alpha1 agent, started by
+# `python -m orchestrator.run_all` with RUN_MODE=incident-responder, and its
+# options come from orchestrator/options.py alone. Only the release gate
+# (mctl-agents tools/check_binding_hash.py evaluate_promotion) reads this
+# profile, and only its name and spec.version.
+#
+# Source of each value:
+#   tools            build_incident_responder_options: Read, Write, Glob, plus
+#                    mcp__mctl__* when MCTL_TOKEN is set. No Bash, on purpose
+#                    (mctl-agents#183): the agent reads alert text and service
+#                    logs an outsider can influence.
+#   modelPolicyRef   agents/_manifests/incident-responder/agent.yaml:
+#                    task service_agent, legacyEnvOverride
+#                    INCIDENT_RESPONDER_MODEL.
+#   budgetUsd        cwft-mctl-agents-run.yaml INCIDENT_RESPONDER_BUDGET_USD,
+#                    "20.00". The CWFT override wins over the $5.00 default in
+#                    options.py that the manifest's execution.budgetUsd
+#                    mirrors, exactly as implementer-default's $20.00 does.
+#   timeoutSeconds   cwft-mctl-agents-run.yaml spec.activeDeadlineSeconds,
+#                    3600. No INCIDENT_RESPONDER_TIMEOUT_SECONDS exists, in the
+#                    template or in the code.
+#   sandbox          mctl-agents-run, as the manifest says. Submitted by
+#                    cronworkflow-mctl-agents-incidents and by
+#                    mctl_trigger_incident_responder, both with
+#                    mode=incident-responder.
+#   permissions      orchestrator/run_incident_responder.py's prompt and
+#                    docs/agent-inventory.yaml ("writes: gitops proposals
+#                    (status=accepted) + resolves mctl incidents").
+#
+# The agent writes files only under agents-state/. The template's own
+# commit-and-push step pushes them, so every repository write permission
+# below is false, as it is for issue-investigator-default.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: incident-responder-default
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: service_agent
+    # RESPONDER_MODEL = os.getenv("INCIDENT_RESPONDER_MODEL", SERVICE_AGENT_MODEL)
+    # in run_incident_responder.py, so this variable outranks `task` when
+    # set. cwft-mctl-agents-run.yaml deliberately does not set it, so `task`
+    # is what the responder runs on today.
+    legacyEnvOverride: INCIDENT_RESPONDER_MODEL
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools:
+    - Read
+    - Write
+    - Glob
+    - "mcp__mctl__*"
+  policyRef: incident-response
+  permissions:
+    repository:
+      read: true
+      branchCreate: false
+      commit: false
+      pullRequestCreate: false
+      merge: false
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes:
+      # requirements.md, design.md, tasks.md and .status.yaml under
+      # agents-state/<target_service>/proposals/incident-<slug>/.
+      - proposal-directory-write
+      # .status.yaml is written with `status: accepted`. No human accepts
+      # it: the implementer picks the proposal up on its next run.
+      - proposal-status
+      # mctl_resolve_incident, after the proposal is written.
+      - incident-resolve
+  budgetUsd: 20.00
+  timeoutSeconds: 3600
+  runtime:
+    entrypoint: orchestrator.run_incident_responder:run_incident_responder
+    optionsBuilder: orchestrator.options:build_incident_responder_options
+    sandbox:
+      backend: argo
+      clusterWorkflowTemplate: mctl-agents-run
+      # mctl-agents-run sets three *_BUDGET_USD variables. This names the one
+      # budgetUsd above is compared with.
+      budgetEnv: INCIDENT_RESPONDER_BUDGET_USD
+      approved: true
+  approval:
+    # None exists today: the responder accepts its own proposal and resolves
+    # the incident with no human step. Recorded as it is, not as it should be.
+    requiredBefore: []
+  evidence:
+    required:
+      - proposal

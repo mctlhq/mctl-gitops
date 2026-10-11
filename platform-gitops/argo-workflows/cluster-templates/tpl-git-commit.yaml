@@ -43,67 +43,65 @@ spec:
             default: "default"
           - name: config_patch
             default: ""
-          - name: default_model
-            default: "openai-codex/gpt-5.4"
-          - name: telegram_owner_id
-            default: ""
-            # Single Telegram user ID. Deprecated: prefer telegram_owner_ids_json.
-            # Kept for backward-compat with callers that pre-date multi-owner support.
-          - name: telegram_owner_ids_json
-            default: ""
-            # JSON array of Telegram user IDs — substitutes __TELEGRAM_OWNER_IDS_JSON__
-            # in the service template. If empty, the script falls back to wrapping
-            # telegram_owner_id in a single-element array.
       script:
         image: alpine:3.19
         command: [sh]
-        # telegram_owner_ids_json carries a JSON string with embedded double
-        # quotes (e.g. ["a","b"]), which the shell parser would otherwise
-        # consume when substituted inline. Pass it (and the legacy single-ID
-        # sibling) as env vars so the container runtime injects the values
-        # opaquely. Other params stay interpolated because their values are
-        # kebab-case / numeric and don't contain shell metacharacters.
         env:
-          - name: TELEGRAM_OWNER_ID
-            value: "{{inputs.parameters.telegram_owner_id}}"
-          - name: TELEGRAM_OWNER_IDS_JSON
-            value: "{{inputs.parameters.telegram_owner_ids_json}}"
           - name: HEALTH_CHECK_PATH
             value: "{{inputs.parameters.health_check_path}}"
+          - name: PARAM_ENV_VARS
+            value: "{{inputs.parameters.env_vars}}"
+          - name: PARAM_SECRET_ENV_VARS
+            value: "{{inputs.parameters.secret_env_vars}}"
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_COMPONENT_TYPE
+            value: "{{inputs.parameters.component_type}}"
+          - name: PARAM_ACTION
+            value: "{{inputs.parameters.action}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{inputs.parameters.image_tag}}"
+          - name: PARAM_PORT
+            value: "{{inputs.parameters.port}}"
+          - name: PARAM_HOST
+            value: "{{inputs.parameters.host}}"
+          - name: PARAM_DOCKERFILE_REPO
+            value: "{{inputs.parameters.dockerfile_repo}}"
+          - name: PARAM_PROVISION_DATABASE
+            value: "{{inputs.parameters.provision_database}}"
+          - name: PARAM_CLEAR_ENV
+            value: "{{inputs.parameters.clear_env}}"
+          - name: PARAM_CLEAR_SECRETS
+            value: "{{inputs.parameters.clear_secrets}}"
+          - name: PARAM_SERVICE_TEMPLATE
+            value: "{{inputs.parameters.service_template}}"
+          - name: PARAM_CONFIG_PATCH
+            value: "{{inputs.parameters.config_patch}}"
+          - name: PARAM_SKIP_HEALTH_CHECK
+            value: "{{inputs.parameters.skip_health_check}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
         source: |
           set -e
 
-          TEAM="{{inputs.parameters.team_name}}"
-          SERVICE="{{inputs.parameters.component_name}}"
-          TYPE="{{inputs.parameters.component_type}}"
-          ACTION="{{inputs.parameters.action}}"
-          TAG="{{inputs.parameters.image_tag}}"
-          PORT="{{inputs.parameters.port}}"
-          HOST="{{inputs.parameters.host}}"
-          ENV_VARS="{{inputs.parameters.env_vars}}"
-          SECRET_VARS="{{inputs.parameters.secret_env_vars}}"
-          REPO="{{inputs.parameters.dockerfile_repo}}"
-          PROVISION_DB="{{inputs.parameters.provision_database}}"
-          CLEAR_ENV="{{inputs.parameters.clear_env}}"
-          CLEAR_SECRETS="{{inputs.parameters.clear_secrets}}"
-          SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
-          CONFIG_PATCH="{{inputs.parameters.config_patch}}"
-          DEFAULT_MODEL="{{inputs.parameters.default_model}}"
-          # TELEGRAM_OWNER_ID / TELEGRAM_OWNER_IDS_JSON arrive via env: above.
-
-          # Compute final JSON array for __TELEGRAM_OWNER_IDS_JSON__.
-          # Prefer the explicit JSON array when provided; otherwise wrap the
-          # legacy single ID. Empty → empty array (no owner).
-          if [ -n "$TELEGRAM_OWNER_IDS_JSON" ]; then
-            TELEGRAM_OWNER_IDS_EFFECTIVE="$TELEGRAM_OWNER_IDS_JSON"
-          elif [ -n "$TELEGRAM_OWNER_ID" ]; then
-            TELEGRAM_OWNER_IDS_EFFECTIVE="[\"$TELEGRAM_OWNER_ID\"]"
-          else
-            TELEGRAM_OWNER_IDS_EFFECTIVE="[]"
-          fi
+          TEAM="$PARAM_TEAM_NAME"
+          SERVICE="$PARAM_COMPONENT_NAME"
+          TYPE="$PARAM_COMPONENT_TYPE"
+          ACTION="$PARAM_ACTION"
+          TAG="$PARAM_IMAGE_TAG"
+          PORT="$PARAM_PORT"
+          HOST="$PARAM_HOST"
+          ENV_VARS="$PARAM_ENV_VARS"
+          SECRET_VARS="$PARAM_SECRET_ENV_VARS"
+          REPO="$PARAM_DOCKERFILE_REPO"
+          PROVISION_DB="$PARAM_PROVISION_DATABASE"
+          CLEAR_ENV="$PARAM_CLEAR_ENV"
+          CLEAR_SECRETS="$PARAM_CLEAR_SECRETS"
+          SERVICE_TEMPLATE="$PARAM_SERVICE_TEMPLATE"
+          CONFIG_PATCH="$PARAM_CONFIG_PATCH"
 
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
@@ -119,7 +117,7 @@ spec:
             HOST="${TEAM}-${SERVICE}.${PLATFORM_DOMAIN}"
             echo "Auto-generated domain: ${HOST}"
           fi
-          SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
+          SKIP_HEALTH="$PARAM_SKIP_HEALTH_CHECK"
 
           # ── 0a. Validate everything that reaches a yq or sed program ──────────
           # Second layer, not the only one: every yq call below now passes its
@@ -140,8 +138,10 @@ spec:
 
           # config_patch is a raw yq PROGRAM, not a value: there is no strenv()
           # shape for it, because the expression itself is the parameter. Its
-          # only producer is mctl-api's OpenClaw resource-profile handler,
-          # which builds it server-side as a pipeline of plain assignments:
+          # only producer was a mctl-api resource-profile handler that was
+          # removed in mctlhq/mctl-api#520; nothing sends it today. The
+          # validator stays so that any future producer is held to
+          # the same shape, a pipeline of plain assignments:
           #
           #   .resources.requests.cpu = "500m" | ... | .env.NODE_OPTIONS = "..."
           #
@@ -172,8 +172,8 @@ spec:
           #                                          expressions
           #
           # Both rewrote .image.tag on a fixture. `(`, `)` and `,` are therefore
-          # rejected outright; the only producer (mctl-api's
-          # openClawConfigPatch) emits neither (agy P1 on this PR).
+          # rejected outright; the plain-assignment shape above needs
+          # neither (agy P1 on this PR).
           validate_config_patch() {
             reject_multiline "config_patch" "$1"
             # No escapes into the environment, the filesystem, or a subshell.
@@ -254,34 +254,9 @@ spec:
           # about. `port` carries no Pattern in the operations registry and is
           # not checked by tpl-validate-tenant either, so it arrives exactly as
           # a caller sent it (agy P1 on this PR).
-          #
-          # default_model and the telegram owner ids are not declared on
-          # deploy-service at all, so after mctlhq/mctl-api#246 they can only be
-          # set server-side by the OpenClaw handler - checked here anyway,
-          # because "only an internal caller sets it" is a claim about a call
-          # chain rather than about this line.
           reject_multiline "port" "$PORT"
           echo "$PORT" | grep -qE '^[0-9]{1,5}$' || {
             echo "❌ Invalid port: ${PORT}"; exit 1; }
-
-          if [ -n "$DEFAULT_MODEL" ]; then
-            reject_multiline "default_model" "$DEFAULT_MODEL"
-            echo "$DEFAULT_MODEL" | grep -qE '^[A-Za-z0-9._/-]+$' || {
-              echo "❌ Invalid default_model: ${DEFAULT_MODEL}"; exit 1; }
-          fi
-
-          if [ -n "$TELEGRAM_OWNER_ID" ]; then
-            reject_multiline "telegram_owner_id" "$TELEGRAM_OWNER_ID"
-            echo "$TELEGRAM_OWNER_ID" | grep -qE '^[0-9]+$' || {
-              echo "❌ Invalid telegram_owner_id: ${TELEGRAM_OWNER_ID}"; exit 1; }
-          fi
-
-          # The EFFECTIVE value, not the raw parameter: it is what reaches the
-          # sed program, and validating only the input would miss the branch
-          # that builds the array from TELEGRAM_OWNER_ID.
-          reject_multiline "telegram_owner_ids_json" "$TELEGRAM_OWNER_IDS_EFFECTIVE"
-          echo "$TELEGRAM_OWNER_IDS_EFFECTIVE" | grep -qE '^\[("[0-9]+"(,"[0-9]+")*)?\]$' || {
-            echo "❌ Invalid telegram_owner_ids_json: ${TELEGRAM_OWNER_IDS_EFFECTIVE}"; exit 1; }
 
           # ── 0. Install dependencies ───────────────────────────────────────────
           apk add --no-cache openssl curl git ca-certificates openssh-client
@@ -373,9 +348,6 @@ spec:
               -e "s|__IMAGE_TAG__|${TAG}|g" \
               -e "s|__PORT__|${PORT}|g" \
               -e "s|__HOST__|${HOST}|g" \
-              -e "s|__DEFAULT_MODEL__|${DEFAULT_MODEL}|g" \
-              -e "s|__TELEGRAM_OWNER_ID__|${TELEGRAM_OWNER_ID}|g" \
-              -e "s|__TELEGRAM_OWNER_IDS_JSON__|${TELEGRAM_OWNER_IDS_EFFECTIVE}|g" \
               "$TPL" > "${DIR}/values.yaml"
 
             # Auto-add mirror domain (alternate ↔ primary) + TLS
@@ -438,8 +410,8 @@ spec:
                   echo "❌ Invalid env var name: ${key}"; exit 1; }
                 export KEY="$key" VALUE="$value"
                 yq eval -i '.env[strenv(KEY)] = strenv(VALUE)' "${DIR}/values.yaml"
-              done << 'ENVEOF'
-          {{inputs.parameters.env_vars}}
+              done <<ENVEOF
+          $PARAM_ENV_VARS
           ENVEOF
             fi
 
@@ -458,8 +430,8 @@ spec:
                   echo "❌ Invalid secret env var name: ${key}"; exit 1; }
                 export KEY="$key" REMOTE_KEY="teams/${TEAM}/${SERVICE}"
                 yq eval -i '.externalSecret.data += [{"secretKey": strenv(KEY), "remoteKey": strenv(REMOTE_KEY), "property": strenv(KEY)}]' "${DIR}/values.yaml"
-              done << 'SECRETEOF'
-          {{inputs.parameters.secret_env_vars}}
+              done <<SECRETEOF
+          $PARAM_SECRET_ENV_VARS
           SECRETEOF
               yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
             fi
@@ -511,24 +483,7 @@ spec:
           elif [ "$ACTION" = "deploy" ]; then
             export TAG
             yq eval -i '.image.tag = strenv(TAG)' "${DIR}/values.yaml"
-            # Keep any openclaw setup init container pinned to the same
-            # image tag so the Layer-2 overlay copy (/app/mctl-skills +
-            # /app/mctl-identity) runs from the same code the main
-            # container serves. noop on services that don't define a
-            # setup init in .initContainers.
             export REPO="$(yq eval '.image.repository' "${DIR}/values.yaml")"
-            # Only sync the setup init image when it already uses the
-            # same repository as the main container (openclaw Layer-2
-            # overlay tenants). A legacy setup init using busybox or
-            # any other image is left alone — its bootstrap script is
-            # written for that runtime and replacing the image could
-            # break it.
-            CURRENT_SETUP=$(yq eval '(.initContainers[]? | select(.name == "setup") | .image) // ""' "${DIR}/values.yaml")
-            case "$CURRENT_SETUP" in
-              "${REPO}:"*)
-                yq eval -i '(.initContainers[]? | select(.name == "setup") | .image) = strenv(REPO) + ":" + strenv(TAG)' "${DIR}/values.yaml"
-                ;;
-            esac
 
             # Sync any extraContainers riding the same image repo to the
             # new tag — kuptsi-app and similar services run a sibling
@@ -568,8 +523,8 @@ spec:
                   echo "❌ Invalid env var name: ${key}"; exit 1; }
                 export KEY="$key" VALUE="$value"
                 yq eval -i '.env[strenv(KEY)] = strenv(VALUE)' "${DIR}/values.yaml"
-              done << 'ENVEOF3'
-          {{inputs.parameters.env_vars}}
+              done <<ENVEOF3
+          $PARAM_ENV_VARS
           ENVEOF3
             fi
 
@@ -600,8 +555,8 @@ spec:
                 if [ -z "$EXISTS" ]; then
                   yq eval -i '.externalSecret.data += [{"secretKey": strenv(KEY), "remoteKey": strenv(REMOTE_KEY), "property": strenv(KEY)}]' "${DIR}/values.yaml"
                 fi
-              done << 'SECRETEOF3'
-          {{inputs.parameters.secret_env_vars}}
+              done <<SECRETEOF3
+          $PARAM_SECRET_ENV_VARS
           SECRETEOF3
               yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
             fi
@@ -637,8 +592,8 @@ spec:
                   echo "❌ Invalid env var name: ${key}"; exit 1; }
                 export KEY="$key" VALUE="$value"
                 yq eval -i '.env[strenv(KEY)] = strenv(VALUE)' "${DIR}/values.yaml"
-              done << 'ENVEOF2'
-          {{inputs.parameters.env_vars}}
+              done <<ENVEOF2
+          $PARAM_ENV_VARS
           ENVEOF2
               CHANGED=true
             fi
@@ -670,8 +625,8 @@ spec:
                 if [ -z "$EXISTS" ]; then
                   yq eval -i '.externalSecret.data += [{"secretKey": strenv(KEY), "remoteKey": strenv(REMOTE_KEY), "property": strenv(KEY)}]' "${DIR}/values.yaml"
                 fi
-              done << 'SECRETEOF2'
-          {{inputs.parameters.secret_env_vars}}
+              done <<SECRETEOF2
+          $PARAM_SECRET_ENV_VARS
           SECRETEOF2
               yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
               CHANGED=true
@@ -679,15 +634,16 @@ spec:
 
             # config_patch is a raw yq PROGRAM, not a value: there is no
             # strenv() shape for it, because the expression itself is the
-            # parameter. Its only intended producer is mctl-api's OpenClaw
-            # resource-profile handler, which builds it server-side.
+            # parameter. Its only producer was a mctl-api resource-profile
+            # handler that was removed in mctlhq/mctl-api#520; nothing sends
+            # it today.
             #
             # mctl-api now drops parameters an operation does not declare, and
             # config_patch is not declared on deploy-service, so it can no
             # longer arrive from a request body (mctlhq/mctl-api#246). This is
-            # the second layer: the patch may only touch the configMaps subtree
-            # the OpenClaw profile owns, so a regression on the API side cannot
-            # rewrite .image or .externalSecret from here.
+            # the second layer: validate_config_patch only lets the patch
+            # assign into .resources, .env and .configMaps, so a regression on
+            # the API side cannot rewrite .image or .externalSecret from here.
             if [ -n "$CONFIG_PATCH" ]; then
               validate_config_patch "$CONFIG_PATCH"
               yq eval -i "$CONFIG_PATCH" "${DIR}/values.yaml"
@@ -748,11 +704,29 @@ spec:
         envFrom:
           - configMapRef:
               name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_COMPONENT_TYPE
+            value: "{{inputs.parameters.component_type}}"
         source: |
           set -e
-          TEAM="{{inputs.parameters.team_name}}"
-          SERVICE="{{inputs.parameters.component_name}}"
-          TYPE="{{inputs.parameters.component_type}}"
+          TEAM="$PARAM_TEAM_NAME"
+          SERVICE="$PARAM_COMPONENT_NAME"
+          TYPE="$PARAM_COMPONENT_TYPE"
+
+          # Both names become a path that is removed with `git rm -rf`, so
+          # only the shape the operations API enforces is accepted: one line,
+          # no slash, no dot.
+          for n in "$TEAM" "$SERVICE"; do
+            if [ "$(printf '%s' "$n" | wc -l)" -ne 0 ] \
+              || ! printf '%s' "$n" | grep -qE '^[a-z0-9][a-z0-9-]{0,30}$'; then
+              echo "❌ Invalid team or service name: '$n'"
+              exit 1
+            fi
+          done
 
           # Setup SSH
           apk add --no-cache openssl curl git openssh-client ca-certificates
@@ -789,8 +763,13 @@ spec:
 
           DIR="platform-gitops/services/${TEAM}/${SERVICE}"
 
+          # A missing directory is not an error: this is the first step of a
+          # retire that is not transactional, and a retry after a later step
+          # failed must get past it. What gets deleted afterwards is bounded
+          # by retire-service's preflight, which only lets an absent or
+          # team-owned Argo CD Application through.
           if [ ! -d "$DIR" ]; then
-            echo "⚠️  Service directory not found: $DIR — already deleted?"
+            echo "⚠️  Service directory not found: $DIR — already deleted by an earlier run?"
             exit 0
           fi
 

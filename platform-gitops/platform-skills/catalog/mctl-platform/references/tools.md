@@ -15,7 +15,7 @@ Complete reference for all `mctl_*` tools.
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| `mctl_deploy_service` | `action, team_name, component_name, [dockerfile_repo], [git_tag], [service_template], [image_tag], [telegram_owner_id], [telegram_bot_token]` | Onboard / deploy / update-config. `dockerfile_repo` not required when `service_template != "default"` |
+| `mctl_deploy_service` | `action, team_name, component_name, [dockerfile_repo], [git_tag], [service_template], [image_tag]` | Onboard / deploy / update-config. `dockerfile_repo` not required when `service_template != "default"` |
 | `mctl_get_service_status` | `team_name, service_name` | Sync state + health from ArgoCD |
 | `mctl_get_service_config` | `team_name, service_name` | Full Helm values from GitOps |
 | `mctl_get_service_logs` | `team_name, service_name, [lines], [since]` | Logs from Loki |

@@ -47,6 +47,76 @@ spec:
               ErpactSiteDown cannot fire. Check the erpact-sites VMProbe in the
               monitoring namespace and the blackbox-exporter deployment.
 
+    # Memory of the one MariaDB that holds every site's database
+    # (mctl-apps infra/mariadb.yaml). Its caches grow with each site: ~890
+    # InnoDB tables per site. On 2026-10-10 it reached 1292Mi of a 1536Mi limit
+    # with 8 sites, and the limit was raised to 2560Mi (mctl-apps#12). An OOM
+    # kill stops every site at once, and the OOMKilled alert only fires after
+    # that has happened; this alert gives warning before it. The working set
+    # is read from the cAdvisor endpoint only: the kubelet exports the same
+    # series again under /metrics/resource, and summing both doubles the value.
+    - name: erpact.capacity
+      interval: 60s
+      rules:
+        - alert: ErpactMariadbMemoryHigh
+          expr: |
+            max by (namespace, pod, container) (
+              container_memory_working_set_bytes{
+                namespace="erpact", container="mariadb",
+                metrics_path="/metrics/cadvisor"
+              }
+            )
+            /
+            max by (namespace, pod, container) (
+              kube_pod_container_resource_limits{
+                namespace="erpact", container="mariadb", resource="memory"
+              }
+            ) > 0.85
+          for: 15m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact MariaDB is at {{ $value | humanizePercentage }} of its memory limit"
+            description: >-
+              {{ $labels.pod }} has used over 85% of its memory limit for 15
+              minutes. When it reaches the limit, the kernel kills it and every
+              erpact site answers 500 until it restarts. Raise the limit in
+              git.mctl.ai/erpact/mctl-apps infra/mariadb.yaml (the change
+              restarts MariaDB, ~20 s of 500s), and check the tenant quota
+              limits.memory first.
+
+        - alert: ErpactMariadbMemoryMetricAbsent
+          # Without this, a renamed container, a missing limit or a lost
+          # scrape would leave ErpactMariadbMemoryHigh silent instead of red.
+          expr: |
+            absent(
+              max by (namespace, pod, container) (
+                container_memory_working_set_bytes{
+                  namespace="erpact", container="mariadb",
+                  metrics_path="/metrics/cadvisor"
+                }
+              )
+              /
+              max by (namespace, pod, container) (
+                kube_pod_container_resource_limits{
+                  namespace="erpact", container="mariadb", resource="memory"
+                }
+              )
+            )
+          for: 30m
+          labels:
+            severity: warning
+            service: erpact
+          annotations:
+            summary: "erpact MariaDB memory usage cannot be computed"
+            description: >-
+              The working set of container mariadb in namespace erpact, or its
+              memory limit, has been missing for 30 minutes, so
+              ErpactMariadbMemoryHigh cannot fire. Check that pod mariadb-0
+              exists and still has a memory limit, and check the kubelet
+              cAdvisor and kube-state-metrics scrapes.
+
     # Daily off-cluster backup of the copy (git.mctl.ai/erpact/mctl-apps
     # infra/backup.yaml, CronJob erpact-backup at 03:45 UTC, to R2 bucket
     # erpact-backups). Same three-way split as the Forgejo backup alerts in

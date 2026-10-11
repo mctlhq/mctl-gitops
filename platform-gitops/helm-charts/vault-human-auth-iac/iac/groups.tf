@@ -41,9 +41,15 @@ resource "vault_identity_group_alias" "admins" {
 #     generates it and the cnpg-db-creds store syncs it into the shared-pg
 #     role, so a human edit or delete would desynchronise the database login.
 #     The `+` rules are more specific than `/*` and take precedence.
+#   - Browse: list, and nothing else, on exactly secret/metadata/ and
+#     secret/metadata/teams/, so the UI can walk secret/ -> teams/ ->
+#     <tenant>/. The paths have no glob: they match only those two listings,
+#     which show the top-level key names and the tenant folder names (both
+#     public in this repo's platform-gitops/tenants/), never what is inside
+#     another tenant's folder.
 #
 # The trailing `/*` stops a tenant name from matching another that starts
-# with it. Nothing outside secret/{data,metadata,delete,undelete}/teams/<tenant>/.
+# with it. Nothing else outside secret/{data,metadata,delete,undelete}/teams/<tenant>/.
 resource "vault_policy" "tenant" {
   for_each = local.tenants
 
@@ -79,6 +85,15 @@ resource "vault_policy" "tenant" {
 
     path "secret/undelete/teams/${each.key}/+/database" {
       capabilities = ["deny"]
+    }
+
+    # Browse down to the tenant folder in the UI; exact paths, list only.
+    path "secret/metadata/" {
+      capabilities = ["list"]
+    }
+
+    path "secret/metadata/teams/" {
+      capabilities = ["list"]
     }
   EOT
 }

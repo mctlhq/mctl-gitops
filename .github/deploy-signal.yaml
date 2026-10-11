@@ -65,12 +65,6 @@ services:
   # the actual source repository and release convention for each, which is not
   # recorded anywhere in this repository — guessing it would produce a check
   # that fires on nothing.
-  - path: platform-gitops/services/admins/openclaw/values.yaml
-    unmapped: "mctlhq/mctl-openclaw publishes no GitHub releases"
-  - path: platform-gitops/services/labs/openclaw/values.yaml
-    unmapped: "mctlhq/mctl-openclaw publishes no GitHub releases"
-  - path: platform-gitops/services/ovk/openclaw/values.yaml
-    unmapped: "mctlhq/mctl-openclaw publishes no GitHub releases"
   - path: platform-gitops/services/labs/claude-remote/values.yaml
     unmapped: "mctlhq/mctl-claude-remote publishes no GitHub releases"
   - path: platform-gitops/services/labs/genai-leader/values.yaml

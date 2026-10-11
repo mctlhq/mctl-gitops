@@ -1,0 +1,69 @@
+# Availability of the platform's web entry points that had no outside-in probe
+# until #1773 (2026-10-10 platform audit, finding OBS-003): the developer
+# portal (app.mctl.ai), the docs (docs.mctl.ai), Argo CD (ops.mctl.ai),
+# Grafana (grafana.mctl.ai) and mctl-agent (agent.mctl.ai). The probe is the
+# platform-web VMProbe in blackbox/vmprobes.yaml, which also says which path
+# is probed on each host and why.
+#
+# On 2026-10-10 the portal's readiness probes timed out during the 09:51Z
+# deploy and nothing recorded the outage from outside. These rules make that
+# visible.
+#
+# Warning, not critical: none of these is on the request path of a deployed
+# tenant service or of mctl-api, so an outage is worth an operator's attention
+# but is not PublicEndpointDown's "the platform is unreachable". Routed to
+# Telegram in bootstrap/templates/observability/monitoring.yaml
+# (alertname =~ "PlatformWebEndpoint.*"), with mctl-agent still getting its
+# ticket: agent.mctl.ai is mctl-agent itself, so an agent-only route would
+# report its own outage to the component that is down.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: platform-web-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: availability
+spec:
+  groups:
+    - name: platform.web.availability
+      interval: 60s
+      rules:
+        - alert: PlatformWebEndpointDown
+          # Probed every 60s; 5m is five consecutive failures. Rides out a
+          # single edge hiccup and a normal rolling update, but not a deploy
+          # whose new pod never becomes Ready.
+          expr: probe_success{job="platform-web"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: platform
+          annotations:
+            summary: "{{ $labels.instance }} has failed its availability probe for 5 minutes"
+            description: >-
+              blackbox-exporter has had no 2xx from {{ $labels.instance }} for
+              5 minutes. The probe goes out through Cloudflare and back through
+              Traefik, so a pod that is not Ready, a broken ingress route, an
+              expired certificate and an edge failure all look the same here.
+              Check probe_http_status_code for the same instance: a 503 with an
+              empty body is Traefik with no Ready endpoint (look at the pods'
+              readiness in the service's namespace: backstage, admins, argocd
+              or monitoring), a 403 is the edge refusing the probe, and a 5xx
+              from the service itself names it.
+
+        - alert: PlatformWebEndpointProbeAbsent
+          # Without the series PlatformWebEndpointDown can never fire: same
+          # reasoning as BlackboxProbeMetricAbsent in blackbox-alerts.yaml.
+          expr: absent(probe_success{job="platform-web"})
+          for: 15m
+          labels:
+            severity: warning
+            service: platform
+          annotations:
+            summary: "No probe_success series for job=platform-web"
+            description: >-
+              The platform-web VMProbe (infra-components/observability/
+              blackbox/vmprobes.yaml) has produced no probe_success series for
+              15 minutes, so PlatformWebEndpointDown is blind. Check that the
+              VMProbe exists, that vmagent picked it up, and that
+              blackbox-exporter is running.

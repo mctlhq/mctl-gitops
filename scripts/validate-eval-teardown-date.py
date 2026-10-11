@@ -19,9 +19,7 @@ While `eval.enabled` is not `true`, this passes regardless of
 `--today YYYY-MM-DD` injects the reference date (used by --selftest, so the
 selftest fixtures are deterministic and do not go stale as real time moves
 on). Because `.github/workflows/validate-manifests.yml` also triggers on
-`push: [main]`, an expired sandbox turns main red even with no open PR --
-the same reasoning the workflow's header comment gives for the openclaw
-version-pin check.
+`push: [main]`, an expired sandbox turns main red even with no open PR.
 
 Run with --selftest to prove the detector still detects (all five T3
 branches from the proposal's tasks.md).

@@ -45,7 +45,7 @@ if [ "${1:-}" = "--selftest" ]; then
 
   printf 'apiVersion: operator.victoriametrics.com/v1beta1\nkind: VMPodScrape\nmetadata:\n  name: selftest\n' \
     >"$st_dir/fixture.yaml"
-  st_out=$(RULES_DIR="$st_dir" TESTS_DIR="$st_dir/tests" "$0" 2>&1) && st_rc=0 || st_rc=$?
+  st_out=$(CHECK_AM_ROUTES=0 RULES_DIR="$st_dir" TESTS_DIR="$st_dir/tests" "$0" 2>&1) && st_rc=0 || st_rc=$?
   if [ "${st_rc:-0}" -eq 0 ]; then
     echo "self-test FAILED: a VMPodScrape under vm-rules/ exited 0" >&2
     st_fail=1
@@ -59,7 +59,7 @@ if [ "${1:-}" = "--selftest" ]; then
 
   printf 'apiVersion: operator.victoriametrics.com/v1beta1\nkind: VMRule\nmetadata:\n  name: selftest\nspec:\n  groups: []\n' \
     >"$st_dir/fixture.yaml"
-  st_out=$(RULES_DIR="$st_dir" TESTS_DIR="$st_dir/tests" "$0" 2>&1) || true
+  st_out=$(CHECK_AM_ROUTES=0 RULES_DIR="$st_dir" TESTS_DIR="$st_dir/tests" "$0" 2>&1) || true
   case "$st_out" in
     *"non-VMRule object"*)
        echo "self-test FAILED: a VMRule was rejected by the kind guard. Got:" >&2
@@ -68,6 +68,12 @@ if [ "${1:-}" = "--selftest" ]; then
   esac
 
   [ "$st_fail" -eq 0 ] && echo "check-vm-rules.sh self-test: kind guard rejects non-VMRule, accepts VMRule"
+
+  # The Alertmanager routing check below has its own self-test: it breaks the
+  # routing tree in the ways #1771 fixed and asserts each break is caught.
+  if ! python3 "$ROOT/scripts/check-alertmanager-routes.py" --selftest; then
+    st_fail=1
+  fi
   exit "$st_fail"
 fi
 
@@ -105,5 +111,19 @@ for t in "$TESTS_DIR"/*_test.yaml; do
     fail=1
   fi
 done
+
+# Who these rules page is decided by the Alertmanager routing tree in the
+# bootstrap chart, which nothing else in CI evaluates: render it, run
+# `amtool check-config`, and route every rule above plus fixed sample label
+# sets through it (#1771). Hooked here rather than as a separate workflow step
+# because this is the alerting check CI already runs. CHECK_AM_ROUTES=0 is
+# only for the self-test's fixture runs above, which have no real rules.
+# Unlike the promtool part, this step needs helm, pyyaml and (for the first
+# amtool download) network egress; validate-manifests.yml provides all three.
+if [ "${CHECK_AM_ROUTES:-1}" = "1" ]; then
+  if ! RULES_DIR="$RULES_DIR" python3 "$ROOT/scripts/check-alertmanager-routes.py"; then
+    fail=1
+  fi
+fi
 
 exit "$fail"

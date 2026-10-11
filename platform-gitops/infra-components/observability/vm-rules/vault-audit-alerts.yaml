@@ -1,0 +1,90 @@
+# Vault's audit log (the `stdout` file device, helm-charts/vault-human-auth-iac
+# iac/audit.tf) must keep flowing into Loki. Both counters come from the
+# Promtail metrics stage in bootstrap/templates/observability/loki.yaml, on
+# the vault containers' log streams; Vault itself exposes no metrics here
+# (its telemetry stanza is not configured, so vault.audit.* is not scraped).
+#
+#   vault_audit_entries_total   one per request or response entry on stdout
+#   vault_audit_failures_total  one per "core: failed to audit request|
+#                               response" line on stderr
+#
+# Only the active node writes entries (standbys forward), so the entries
+# counter lives on whichever Promtail runs beside the leader, and moves with
+# it; every rule sums across pods. Live traffic is ~0.4 requests/s (ESO
+# refreshes, Kubernetes logins, the IaC Jobs), so ten quiet minutes is not a
+# quiet cluster, it is a broken audit trail.
+#
+# Silent and Absent are separate on purpose. A device that was disabled
+# leaves the counter flat (Silent); a Promtail or scrape that lost the series
+# leaves nothing to compare (Absent). The second is "could not observe", not
+# "observed quiet", and is reported as such rather than folded into the first.
+#
+# Routed straight to Telegram in monitoring.yaml (alertname VaultAudit.*):
+# mctl-agent cannot re-enable an audit device. Runbook:
+# docs/runbooks/vault-audit.md.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-vault-audit-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: vault
+spec:
+  groups:
+    - name: mctl.vault-audit
+      interval: 60s
+      rules:
+        - alert: VaultAuditLogSilent
+          expr: |
+            sum(increase(vault_audit_entries_total{namespace="vault"}[10m])) < 1
+          for: 5m
+          labels:
+            severity: critical
+            service: vault
+          annotations:
+            summary: "No Vault audit entries reached Loki in 15 minutes"
+            description: >-
+              The vault_audit_entries_total counter has not moved for 15
+              minutes, while Vault normally serves several requests a second.
+              Either the stdout audit device is gone (`vault audit list`; the
+              vault-human-auth-iac Job re-enables it at :37, or at once on a
+              sync), Vault is down, or Promtail stopped reading the leader's
+              log. Anything Vault served meanwhile is not in the audit trail.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/vault-audit.md
+        - alert: VaultAuditLogAbsent
+          # Without the series VaultAuditLogSilent cannot fire: the sum of
+          # nothing is no result, not zero.
+          expr: absent(vault_audit_entries_total{namespace="vault"})
+          for: 15m
+          labels:
+            severity: warning
+            service: vault
+          annotations:
+            summary: "No vault_audit_entries_total series for 15 minutes"
+            description: >-
+              Nothing counts Vault audit entries, so whether the audit log is
+              flowing is unknown and VaultAuditLogSilent cannot fire. Either
+              the audit device has never been enabled, the Promtail match
+              block in loki.yaml no longer selects the vault containers, or
+              vmagent is not scraping Promtail (VMPodScrape
+              loki-stack-promtail).
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/vault-audit.md
+        - alert: VaultAuditWriteFailures
+          expr: |
+            sum(increase(vault_audit_failures_total{namespace="vault"}[5m])) > 0
+          for: 0m
+          labels:
+            severity: critical
+            service: vault
+          annotations:
+            summary: "Vault failed to write {{ $value | humanize }} audit entries in 5 minutes"
+            description: >-
+              Vault logged "failed to audit request/response". With a single
+              audit device, a request it cannot audit is refused with a 500,
+              so Vault is failing requests, and even `vault audit disable`
+              is refused the same way. Find the pod in Loki
+              ({namespace="vault", container="vault"} |= "failed to audit")
+              and, if it is the active node, delete that pod so a standby
+              takes over with a fresh stdout.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/vault-audit.md

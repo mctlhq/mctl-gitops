@@ -153,15 +153,19 @@ spec:
                       from: pod
 
               # action: insert (never upsert): if a producer already set
-              # k8s.cluster.name or deployment.environment, the producer wins.
-              # This is what satisfies issue #902's "preserve execution-specific
-              # attributes rather than rewriting them destructively".
+              # k8s.cluster.name or deployment.environment.name, the producer
+              # wins. This is what satisfies issue #902's "preserve
+              # execution-specific attributes rather than rewriting them
+              # destructively". deployment.environment.name is the stable
+              # upstream key; the deprecated deployment.environment is not
+              # emitted alongside it because no trace backend has ever stored
+              # the old key, so nothing queries it (#1332).
               resource:
                 attributes:
                   - key: k8s.cluster.name
                     value: {{ .Values.otelCollector.clusterName | quote }}
                     action: insert
-                  - key: deployment.environment
+                  - key: deployment.environment.name
                     value: {{ .Values.otelCollector.environment | quote }}
                     action: insert
 
@@ -171,10 +175,27 @@ spec:
               # attribute names nobody has invented yet. blocked_values covers
               # credential *shapes* that can appear under an innocuous key --
               # T7 in the proposal's tasks.md exercises this with a benign key
-              # whose value looks like a GitHub token. summary is left unset so
-              # the collector does not itself log which keys it redacted.
+              # whose value looks like a GitHub token.
+              #
+              # ignored_key_patterns is evaluated before every other rule
+              # (processAttrs in processor/redactionprocessor at v0.160.0), and
+              # an ignored key is left untouched -- value and type. It exempts
+              # exactly the GenAI usage counters from the bare `token`
+              # alternative below, which otherwise rewrote every integer
+              # counter to the string "****" (#1332). The pattern is anchored
+              # and enumerates the counter names, so a credential-shaped key in
+              # the same namespace (gen_ai.usage.access_token) is still masked;
+              # tests/test_otel_collector_redaction.py and the live-collector
+              # check tests/test_otel_collector_redaction_e2e.py pin both sides.
+              #
+              # summary: info adds redaction.masked.count / redaction.redacted.count
+              # (counts only, never key names) so masking is countable on the
+              # span instead of silent; `debug` would add the key lists too.
               redaction:
                 allow_all_keys: true
+                summary: info
+                ignored_key_patterns:
+                  - '^gen_ai\.usage\.((cache_read|cache_creation)[._])?(input|output|reasoning|prompt|completion|total)_tokens$'
                 blocked_key_patterns:
                   - '(?i).*(authorization|cookie|api[-_]?key|token|secret|password|credential).*'
                   - '(?i)^vault\..*'

@@ -1,0 +1,224 @@
+# Agent platform policy ceilings and reference catalogs (ADR 007,
+# mctlhq/mctl-agents docs/adr/007-agent-definition-execution-profile-contract.md).
+#
+# This is the single source of "what an ExecutionProfile or
+# ReleaseBindingIntent is allowed to claim" for scripts/validate-agent-platform.py.
+# Every reference an ExecutionProfile or ReleaseBindingIntent makes (tool,
+# skill, policyRef, mutation scope, model-policy task, runtime, sandbox) is
+# checked against a list here. An entry not present in the matching list
+# fails validation closed — see requirements.md's "Unknown tool/action/
+# policy/permission/model/skill/runtime references fail closed."
+#
+# Tools are never authorization by themselves (a tool grants SDK-level
+# capability; a permission scope plus its approval rule grants the right to
+# use it mutably). See knownTools[].category below — "mutating" tools still
+# require the profile to declare a matching permission scope AND approval
+# rule before they can touch anything outside the sandbox pod.
+
+apiVersion: agents.mctl.ai/v1alpha2
+kind: AgentPlatformPolicy
+metadata:
+  name: platform-default
+  owner: platform
+
+spec:
+  # Hard ceilings. An ExecutionProfile's budgetUsd/timeoutSeconds must be
+  # <= these. Raising a ceiling is itself a reviewed mctl-gitops PR.
+  limits:
+    maxBudgetUsd: 25.00
+    maxTimeoutSeconds: 7200
+
+  # Every SDK tool name an ExecutionProfile.spec.tools entry may reference.
+  # "category" is informational classification only (read/write/exec/mcp/capability) —
+  # it does not grant capability. Actual mutation capability comes from
+  # spec.permissions + spec.approval, checked independently below.
+  knownTools:
+    - name: Read
+      category: read
+    - name: Grep
+      category: read
+    - name: Glob
+      category: read
+    - name: WebSearch
+      category: network
+    - name: WebFetch
+      category: network
+    - name: Write
+      category: write
+    - name: Edit
+      category: write
+    - name: Bash
+      category: exec
+    - name: "mcp__mctl__*"
+      category: mcp
+    # A capability entry, not an SDK tool name (mctl-agents#333, ADR 013):
+    # mctl-agents' resolver reads it from spec.tools as the grant for the
+    # durable human-clarification primitive and strips it from the SDK
+    # allow-list, and validate_manifest.py's _CAPABILITY_TOOLS excuses exactly
+    # this literal from its tool-list equality check. Listing it here grants
+    # nothing; a profile still has to name it in spec.tools (mctl-gitops#1277).
+    - name: human.request_input
+      category: capability
+
+  # Platform-skill references an ExecutionProfile.spec.skills entry may
+  # name. Source of truth for skill *content* stays
+  # platform-gitops/platform-skills/catalog/ (see
+  # scripts/validate-platform-skills.py) — this list is only the subset
+  # sanctioned for agent-platform execution profiles to reference.
+  knownSkills:
+    - mctl-platform
+    - git-flow
+
+  # model-policy "task" names an ExecutionProfile.spec.modelPolicyRef.task
+  # may reference. The model-policy versions/profiles themselves are owned
+  # by mctl-agents config/model-policy.yaml; this catalog only enumerates
+  # which task keys mctl-gitops profiles are allowed to point at, so a typo
+  # fails closed here instead of resolving to an unintended model tier at
+  # runtime.
+  # These must be keys that exist under `tasks:` in mctl-agents
+  # config/model-policy.yaml. Until 2026-09-03 this list held
+  # `issue_investigator` and `shepherd`, neither of which is a task there --
+  # so the allowlist blessed two names that make resolve_model() raise, and
+  # the comment above claiming a typo "fails closed here" was false in the
+  # only direction that mattered: nothing compared this list to the file it
+  # claims to mirror. mctl-agents' validate_manifest.py now does
+  # (check_catalog_profiles_match_builders), which is why this list can be
+  # trusted from now on rather than merely asserted.
+  knownModelPolicyTasks:
+    - service_agent
+    - mentor_digest
+    - review_findings_normalize
+
+  # policyRef values an ExecutionProfile may declare. Each is a named,
+  # externally-enforced behavior policy (prompt/guardrail scope) — this
+  # catalog is the GitOps-reviewed registry of policy *names*, not their
+  # content.
+  knownPolicies:
+    # Replaced read-only-investigation on 2026-09-02: the investigator's
+    # real tool grant includes Write/Edit/Bash, so a policy name asserting
+    # read-only was false where it mattered most (mctl-agents#277). The name
+    # says what is actually scoped -- authoring a proposal, not touching the
+    # target repository, which permissions.repository states and enforces.
+    - scoped-proposal-authoring
+    - production-code-author
+    - pr-shepherd
+    # Added with the incident-responder and mentor profiles
+    # (mctl-agents#470). Names only, like every entry here; each records
+    # what the agent already does and grants nothing.
+    #
+    # incident-response: diagnose an incident, write a proposal that is
+    # already `accepted`, resolve the incident. scoped-proposal-authoring
+    # would understate it: that policy drafts for a human to accept.
+    - incident-response
+    # digest-authoring: read every agent's proposals, write the weekly
+    # digest. It authors no proposal, so the investigator's name does not fit.
+    - digest-authoring
+    # inert-read-only: reads the workspace, writes nothing, has no caller
+    # (authoring-canary, mctl-agents#596/#598). Unlike every name above it
+    # does not name a write, which is exactly why none of them fits.
+    - inert-read-only
+
+  # Profiles whose agent has no caller: no ClusterWorkflowTemplate or
+  # CronWorkflow runs them, so no template carries their budget and
+  # budgetUsd cannot be compared with one. validate-agent-platform.py skips
+  # only that comparison, and only after proving the claim: no file under
+  # argo-workflows/cluster-templates/ may mention the profile's entrypoint
+  # module. Giving the agent a caller means removing it from this list and
+  # declaring sandbox.budgetEnv in the same PR.
+  uncalledProfiles: []
+
+  # Mutation scopes an ExecutionProfile.spec.permissions.mutationScopes
+  # entry may declare. "mutating: true" scopes require the profile's
+  # spec.approval.requiredBefore to include the mapped approval gate below
+  # — see requirements.md's "Mutation requires both a scoped permission and
+  # the applicable approval rule."
+  knownMutationScopes:
+    - name: proposal-status
+      mutating: true
+      requiresApproval: null # gitops-agents writes its own status; no human gate
+    - name: proposal-directory-write
+      mutating: true
+      requiresApproval: null # proposal drafting, not yet code/merge
+    - name: issue-comment
+      mutating: true
+      requiresApproval: null
+    # The three below were added with the incident-responder, mentor and
+    # service-agent profiles (mctl-agents#470). Each names a write those
+    # agents already perform, so their profiles do not have to understate
+    # it. `requiresApproval: null` records that no human gate exists today.
+    # It is a description of the present, not a decision that none should.
+    #
+    # agents-state/<service>/inbox/<date>.md, the service agents' findings.
+    - name: agents-state-inbox-write
+      mutating: true
+      requiresApproval: null
+    # agents-state/_mentor/digest/<year>-W<week>.md, and the mentor's
+    # rotation of old digests into digest/archive/.
+    - name: mentor-digest-write
+      mutating: true
+      requiresApproval: null
+    # mctl_resolve_incident over the mctl MCP: the responder closes the
+    # incident it has just written a proposal for.
+    #
+    # Unlike the two scopes above, this one changes state outside this
+    # repository: an incident record in mctl-api, which a revert commit does
+    # not bring back. On incident-responder-default it sits next to
+    # proposal-status, so the whole chain (diagnose, accept the proposal,
+    # close the incident) runs with no human step. `null` below says that is
+    # how it works today. Whether it should have a gate is undecided.
+    - name: incident-resolve
+      mutating: true
+      requiresApproval: null
+    - name: target-repository-branch
+      mutating: true
+      requiresApproval: code-authoring
+    - name: pull-request-create
+      mutating: true
+      requiresApproval: code-authoring
+    - name: pull-request-merge
+      mutating: true
+      requiresApproval: merge
+    - name: gitops-main-write
+      mutating: true
+      requiresApproval: gitops-main-write
+
+  # Approval gate names an ExecutionProfile.spec.approval.requiredBefore
+  # entry may reference.
+  knownApprovalGates:
+    - code-authoring
+    - merge
+    - gitops-main-write
+
+  # Approved sandbox backends and, per backend, the exact
+  # ClusterWorkflowTemplates a profile's spec.runtime.sandbox may name.
+  # Mirrors the templates actually deployed under
+  # platform-gitops/argo-workflows/cluster-templates/. An
+  # ExecutionProfile with sandbox.approved: true but a CWFT not listed
+  # here fails closed.
+  approvedSandboxes:
+    - backend: argo
+      clusterWorkflowTemplates:
+        - mctl-agents-investigate
+        - mctl-agents-implement
+        - mctl-agents-shepherd
+        # The template the service agents, the mentor and the incident
+        # responder already run in (orchestrator.run_all, selected by
+        # RUN_MODE). Listed now because their profiles name it
+        # (mctl-agents#470); it has been deployed all along.
+        #
+        # mctl-agents-daily and mctl-agents-incidents are deliberately not
+        # listed: both are CronWorkflows that submit this template, not
+        # ClusterWorkflowTemplates, and set no budget or deadline of their
+        # own.
+        - mctl-agents-run
+
+  # Evidence kinds an ExecutionProfile.spec.evidence.required entry may
+  # name.
+  knownEvidenceKinds:
+    - proposal
+    - diff
+    - tests
+    - pull-request
+    - issue-comment
+    # The mentor's weekly digest file: its only output (mctl-agents#470).
+    - digest

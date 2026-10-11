@@ -45,7 +45,7 @@ m = re.search(r"^(reject_multiline\(\) \{\n.*?\n\})$", SOURCE, re.S | re.M)
 assert m, "could not extract reject_multiline() from the template"
 HELPER = m.group(1)
 
-m = re.search(r"while IFS='=' read -r key rest; do\n(.*?)\n *done << 'ENVEOF'",
+m = re.search(r"while IFS='=' read -r key rest; do\n(.*?)\n *done <<ENVEOF",
               SOURCE, re.S)
 assert m, "could not extract the env_vars loop from the template"
 BODY = dedent(m.group(1), 6)
@@ -57,8 +57,8 @@ DIR="$PWD"
 %s
 while IFS='=' read -r key rest; do
 %s
-done <<'ENVEOF'
-%s
+done <<ENVEOF
+$PARAM_ENV_VARS
 ENVEOF
 """
 
@@ -68,8 +68,8 @@ def run(payload):
         tmp = pathlib.Path(d)
         (tmp / "values.yaml").write_text(VALUES)
         proc = subprocess.run(
-            ["sh", "-c", SCRIPT % (HELPER, BODY, payload)],
-            cwd=tmp, capture_output=True, text=True,
+            ["sh", "-c", SCRIPT % (HELPER, BODY)],
+            cwd=tmp, env={**os.environ, "PARAM_ENV_VARS": payload}, capture_output=True, text=True,
         )
         tag = subprocess.run(
             ["yq", ".image.tag", "values.yaml"],
@@ -126,6 +126,15 @@ check("underscore and digit-bearing names are accepted",
       proc.returncode == 0 and '"_UNDERSCORE": "1"' in env and '"A1": "2"' in env,
       f"rc={proc.returncode} env={env} err={proc.stderr}")
 
+# 5b. A line equal to the here-document terminator is data, not shell: the
+#     value reaches the loop through the environment, never the script text.
+with tempfile.TemporaryDirectory() as d:
+    canary = pathlib.Path(d) / "canary"
+    proc, tag, env = run(f"GOOD=1\nENVEOF\ntouch {canary}")
+    check("a terminator line in env_vars does not execute", not canary.exists())
+    check("legitimate lines beside a terminator line are still written",
+          '"GOOD": "1"' in env, env)
+
 # 6. A dotted key would silently create a nested map under `.env.${key}`;
 #    the subscript form stores it flat, and the shape check rejects it first.
 proc, tag, env = run("a.b=1")
@@ -178,7 +187,8 @@ m = re.search(r"^(validate_config_patch\(\) \{\n.*?\n\})$", SOURCE, re.S | re.M)
 assert m, "could not extract validate_config_patch() from the template"
 VALIDATOR = m.group(1)
 
-# What mctl-api's openClawConfigPatch() actually emits — the only producer.
+# The plain-assignment shape the validator is written for: a resource
+# profile expressed as a pipeline of assignments under allowed roots.
 REAL_PATCH = ('.resources.requests.cpu = "500m" | .resources.requests.memory = "1Gi" | '
               '.resources.limits.cpu = "2" | .resources.limits.memory = "4Gi" | '
               '.env.NODE_OPTIONS = "--max-old-space-size=3072"')
@@ -190,7 +200,7 @@ def validate_patch(patch):
                           capture_output=True, text=True)
 
 
-check("the real OpenClaw resource-profile patch is accepted",
+check("a plain-assignment resource-profile patch is accepted",
       validate_patch(REAL_PATCH).returncode == 0,
       validate_patch(REAL_PATCH).stdout + validate_patch(REAL_PATCH).stderr)
 
@@ -226,22 +236,19 @@ check("config_patch rejects a multi-line payload",
       validate_patch('.resources.requests.cpu = "1"\n.image.tag = "pwned"').returncode != 0)
 
 # --- sed-bound parameters --------------------------------------------------
-# Not every sink in this file is yq. PORT, DEFAULT_MODEL and the telegram
-# owner ids are interpolated into a `sed` PROGRAM whose substitution delimiter
-# is `|`, so a value carrying one closes the s/// and the remainder is read as
-# further sed commands — `s|.*|x|g` rewrites the whole rendered manifest.
+# Not every sink in this file is yq. PORT is interpolated into a `sed`
+# PROGRAM whose substitution delimiter is `|`, so a value carrying one closes
+# the s/// and the remainder is read as further sed commands — `s|.*|x|g` rewrites the whole rendered manifest.
 # `port` carries no Pattern in the operations registry (agy P1 on this PR).
 GUARDS = re.search(r"^(# The values below reach a `sed` PROGRAM.*?"
-                   r"Invalid telegram_owner_ids_json.*?\n)",
+                   r"Invalid port.*?\n)",
                    SOURCE, re.S | re.M)
 assert GUARDS, "could not extract the sed-bound parameter guards"
 
 
-def validate_sed_params(port="8080", model="", owner="", owners="[]"):
+def validate_sed_params(port="8080"):
     script = (f"set -e\n{HELPER}\n"
-              f'PORT={shlex_quote(port)}\nDEFAULT_MODEL={shlex_quote(model)}\n'
-              f'TELEGRAM_OWNER_ID={shlex_quote(owner)}\n'
-              f'TELEGRAM_OWNER_IDS_EFFECTIVE={shlex_quote(owners)}\n'
+              f'PORT={shlex_quote(port)}\n'
               + GUARDS.group(1))
     return subprocess.run(["sh", "-c", script], capture_output=True, text=True)
 
@@ -251,16 +258,6 @@ check("a normal port is accepted", validate_sed_params().returncode == 0,
 check("a port that closes the sed substitution is rejected",
       validate_sed_params(port='8080|g; s|.*|pwned|g').returncode != 0)
 check("a non-numeric port is rejected", validate_sed_params(port="80a").returncode != 0)
-check("a real default_model is accepted",
-      validate_sed_params(model="openai-codex/gpt-5.4").returncode == 0,
-      validate_sed_params(model="openai-codex/gpt-5.4").stderr)
-check("a default_model carrying a sed delimiter is rejected",
-      validate_sed_params(model="a|g; s|.*|pwned|g").returncode != 0)
-check("a real owner id list is accepted",
-      validate_sed_params(owners='["123","456"]').returncode == 0,
-      validate_sed_params(owners='["123","456"]').stderr)
-check("an owner id list carrying a sed delimiter is rejected",
-      validate_sed_params(owners='["1"]|g; s|.*|pwned|g').returncode != 0)
 
 if failures:
     print("\n".join(["", "FAILURES:"] + failures), file=sys.stderr)

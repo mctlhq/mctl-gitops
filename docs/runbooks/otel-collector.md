@@ -39,10 +39,13 @@ otel:
 ```
 
 Setting `otel.enabled: true` on a service's `values.yaml` renders
-`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`,
-`OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` into that Deployment's
-container env, alongside whatever `env:` the service already sets (`env:`
-wins on conflict — override any of the four explicitly if needed). No service
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`
+and `OTEL_RESOURCE_ATTRIBUTES` into that Deployment's container env, alongside
+whatever `env:` the service already sets (`env:` wins on conflict). It does
+not render `OTEL_SERVICE_NAME` unless the service sets `otel.serviceName`:
+`service.name` is the producer's own (`mctl-agent`, `mctl-agents-worker`), and
+the release fullname the chart used to put there overrode it
+(mctlhq/mctl-agent#97). No service
 has opted in as of this writing; every `platform-gitops/services/*/*/values.yaml`
 renders byte-identical to before this change until one does.
 
@@ -67,7 +70,7 @@ It also attaches `k8s.namespace.name`, `k8s.pod.name`, `k8s.node.name` and
 namespaces, replicasets — no secrets, no write verbs).
 
 `k8s.cluster.name` (`otelCollector.clusterName`, currently `mctl-preprod`) and
-`deployment.environment` (`otelCollector.environment`, currently `preprod`) in
+`deployment.environment.name` (`otelCollector.environment`, currently `preprod`) in
 `platform-gitops/bootstrap/values.yaml` are added with **`action: insert`, not
 `upsert`** — if a producer already set either attribute, the producer's value
 survives. Do not change this to `upsert`; it would silently overwrite
@@ -111,8 +114,9 @@ become a new place secrets could leak).
 ## Opting a service in
 
 Set `otel.enabled: true` in the service's `values.yaml`. The chart then renders
-`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`,
-`OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`; anything the service
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` and
+`OTEL_RESOURCE_ATTRIBUTES` (plus `OTEL_SERVICE_NAME` only from
+`otel.serviceName`); anything the service
 already sets under `env` wins and the default is not rendered at all, so the
 list never carries a duplicate name.
 
@@ -205,14 +209,25 @@ exists to run.
 
 ### The evaluation namespace and the fixture emitter (issue #903 / #1280)
 
-`otelCollector.eval.enabled` (default `false`) gates two templates in
+`otelCollector.eval.enabled` gates two templates in
 `platform-gitops/bootstrap/templates/observability/`: `eval-namespace.yaml`
 (the disposable `observability-eval` Namespace and its NetworkPolicy set)
 and `eval-candidates.yaml` (one ArgoCD Application per entry in
-`otelCollector.eval.candidates`). With the key at its default, both render
-nothing — merging or reverting a change to either template changes no
-cluster state until an operator flips this key, which is `#1280`'s job, not
-this runbook's.
+`otelCollector.eval.candidates`), plus `tempo-datasource.yaml` while the
+`tempo` candidate is enabled. With the key `false`, all of them render
+nothing.
+
+**Current state (#1280, 2026-10-10): the sandbox is open with one
+candidate, Tempo.** The collector therefore exports every span it receives
+to `debug` **and** to `otlp/eval-tempo`
+(`tempo.observability-eval.svc.cluster.local:4317`). No workload emits OTLP
+to the collector yet, so in practice only the fixture emitter below reaches
+Tempo; when a producer is instrumented, its spans fan out to Tempo too, and
+that is a recorded amendment to the bake-off, not a side effect. Export
+problems towards Tempo raise `TempoEvalCollectorExportFailures` /
+`TempoEvalCollectorDroppedSpans` (Telegram only). Closing the sandbox
+(`otelCollector.eval.enabled: false`) removes the exporter in the same
+commit.
 
 `platform-gitops/argo-workflows/cluster-templates/wft-otel-trace-fixture.yaml`
 is a registered `ClusterWorkflowTemplate` (`otel-trace-fixture`) that POSTs
@@ -256,7 +271,7 @@ kubectl get clusterrole otel-collector -o yaml
 #   {namespace="monitoring"} | filtered to the otel-collector pod
 # and check k8s.namespace.name / k8s.pod.name / k8s.deployment.name /
 # k8s.node.name / mctl.team / mctl.component / k8s.cluster.name /
-# deployment.environment are present, and that authorization/cookie/token/
+# deployment.environment.name are present, and that authorization/cookie/token/
 # etc. attributes are absent or masked.
 ```
 

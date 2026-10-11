@@ -1,0 +1,315 @@
+name: ERPact Images
+run-name: "erpact-images: ${{ inputs.image }}:${{ inputs.version }} (${{ inputs.source_ref }})"
+
+# Builds the images of the ERPact copy (tenant namespace `erpact`) from their
+# source in Forgejo and pushes them to the private Forgejo registry
+# git.mctl.ai/erpact/<image>. docs/runbooks/forgejo.md, "Container registry".
+#
+#   frappe-customer, frappe-control  recipe in erpact/mctl-apps, images/
+#   site-deployer                    erpact/site-deployer, its own Dockerfile
+#
+# Separate from build-image.yaml on purpose: that workflow builds GitHub
+# repositories into ghcr.io/mctlhq, where every image is readable with one
+# org-wide credential. These images are a customer's code and stay in a
+# registry whose pull credential reaches the erpact org only.
+#
+# Credentials (Vault secret/platform/forgejo/erpact-images, one Forgejo bot
+# account, two tokens):
+#   source-token    read:repository - the only credential the build sees
+#                   (BuildKit secret in the fetch step of the recipe)
+#   registry-token  write:package - used only by the push step, after the
+#                   build has finished; the build never sees it
+# They are read through GitHub OIDC -> Vault role `erpact-images`, which is
+# bound to this file on main: a run of a modified copy on another ref gets no
+# token.
+#
+# git.mctl.ai is proxied by Cloudflare, which rejects request bodies over
+# 100 MB, and Traefik ends any request whose body takes over 60 s. A plain
+# `docker push` sends each layer in one request (413 on a 260 MB layer), so
+# the image is built to an OCI archive and pushed by regctl in 20 MB chunks
+# (measured 2026-10-04: 300 MB layer, 15 chunks, OK).
+#
+# Versions are immutable: the run refuses a tag that already exists. After a
+# push the run keeps the newest KEEP_VERSIONS semver tags of the image and
+# deletes older ones (Forgejo's own cleanup rules exist only in its web UI).
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Image to build"
+        required: true
+        type: choice
+        options:
+          - frappe-customer
+          - frappe-control
+          - site-deployer
+      version:
+        description: "Image tag, semver without v (e.g. 1.76.0)"
+        required: true
+        type: string
+      source_ref:
+        description: "Branch, tag or commit of the source (mctl-apps for frappe-*, site-deployer for site-deployer)"
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # One build per image at a time, so two runs cannot both pass the
+  # "tag absent" check and race to push the same tag.
+  group: erpact-images-${{ inputs.image }}
+  cancel-in-progress: false
+
+env:
+  FORGEJO: https://git.mctl.ai
+  REGISTRY: git.mctl.ai
+  ORG: erpact
+  REGCTL_VERSION: v0.11.6
+  REGCTL_SHA256: 8e0e62a497fcdb8048d18aa927a139613176ba0531f412bc541044e28f9856bd
+  # 20 MB: well under Cloudflare's 100 MB, and finishes inside Traefik's 60 s
+  # at anything above ~0.35 MB/s.
+  CHUNK_BYTES: "20971520"
+  # Older semver tags of the same image are deleted after a successful push.
+  # A rollback target older than this has to be rebuilt from its source.
+  KEEP_VERSIONS: "10"
+
+jobs:
+  build:
+    name: Build & push
+    runs-on: ubuntu-latest
+    # Vault's role is bound to main as well; this only fails earlier and
+    # with a readable message.
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 90
+    steps:
+      - name: Check inputs
+        id: inputs
+        env:
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          for v in "$IMAGE" "$VERSION" "$SOURCE_REF"; do
+            if [ "$(printf '%s' "$v" | wc -l)" -ne 0 ]; then
+              echo "::error::inputs must be single-line"; exit 1
+            fi
+          done
+          echo "$VERSION" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+            echo "::error::version must be MAJOR.MINOR.PATCH without a v prefix, got: $VERSION"; exit 1; }
+          if ! echo "$SOURCE_REF" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$' || echo "$SOURCE_REF" | grep -q '\.\.'; then
+            echo "::error::invalid source_ref: $SOURCE_REF"; exit 1
+          fi
+          case "$IMAGE" in
+            frappe-customer) repo=mctl-apps;     context=images; variant=customer ;;
+            frappe-control)  repo=mctl-apps;     context=images; variant=control ;;
+            site-deployer)   repo=site-deployer; context=.;      variant= ;;
+            *) echo "::error::unknown image: $IMAGE"; exit 1 ;;
+          esac
+          {
+            echo "repo=$repo"
+            echo "context=$context"
+            echo "variant=$variant"
+            echo "ref=$REGISTRY/$ORG/$IMAGE:$VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Read credentials from Vault
+        run: |
+          set -euo pipefail
+          VAULT_ADDR="https://secrets.mctl.ai"
+          oidc=$(curl -fsS \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https%3A%2F%2Fgithub.com%2Fmctlhq" \
+            | jq -r '.value // empty')
+          [ -n "$oidc" ] || { echo "::error::could not mint a GitHub OIDC token"; exit 1; }
+          login=$(jq -n --arg jwt "$oidc" '{role: "erpact-images", jwt: $jwt}')
+          unset oidc
+          vault_token=$(curl -fsS -X POST -H 'Content-Type: application/json' -d "$login" \
+            "$VAULT_ADDR/v1/auth/jwt/login" | jq -r '.auth.client_token // empty')
+          unset login
+          [ -n "$vault_token" ] || { echo "::error::Vault JWT login as erpact-images failed"; exit 1; }
+          echo "::add-mask::$vault_token"
+          secret=$(curl -fsS -H "X-Vault-Token: $vault_token" \
+            "$VAULT_ADDR/v1/secret/data/platform/forgejo/erpact-images")
+          curl -fsS -X POST -H "X-Vault-Token: $vault_token" "$VAULT_ADDR/v1/auth/token/revoke-self" >/dev/null || true
+          unset vault_token
+          user=$(jq -r '.data.data.user // empty' <<<"$secret")
+          source_token=$(jq -r '.data.data["source-token"] // empty' <<<"$secret")
+          registry_token=$(jq -r '.data.data["registry-token"] // empty' <<<"$secret")
+          unset secret
+          # No fallback: a missing key is a failed run, never an anonymous one.
+          [ -n "$user" ] && [ -n "$source_token" ] && [ -n "$registry_token" ] || {
+            echo "::error::secret/platform/forgejo/erpact-images lacks user, source-token or registry-token"; exit 1; }
+          echo "::add-mask::$source_token"
+          echo "::add-mask::$registry_token"
+          umask 077
+          printf '%s:%s' "$user" "$source_token" > "$RUNNER_TEMP/source-auth"
+          printf '%s' "$user" > "$RUNNER_TEMP/registry-user"
+          printf '%s' "$registry_token" > "$RUNNER_TEMP/registry-token"
+
+      - name: Install regctl
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/regctl" \
+            "https://github.com/regclient/regclient/releases/download/${REGCTL_VERSION}/regctl-linux-amd64"
+          echo "${REGCTL_SHA256}  $RUNNER_TEMP/regctl" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/regctl"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Refuse an existing tag
+        env:
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Only 404 means absent. Any other answer (401, 5xx, a network
+          # error) is a failed read and stops the run.
+          user=$(cat "$RUNNER_TEMP/registry-user")
+          token=$(curl -fsS -u "$user:$(cat "$RUNNER_TEMP/registry-token")" \
+            "$FORGEJO/v2/token?service=container_registry&scope=repository:$ORG/$IMAGE:pull" \
+            | jq -r '.token // empty')
+          [ -n "$token" ] || { echo "::error::registry token request failed"; exit 1; }
+          echo "::add-mask::$token"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -I \
+            -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            "$FORGEJO/v2/$ORG/$IMAGE/manifests/$VERSION" || echo 000)
+          case "$code" in
+            404) echo "$REGISTRY/$ORG/$IMAGE:$VERSION does not exist yet" ;;
+            200) echo "::error::$REGISTRY/$ORG/$IMAGE:$VERSION already exists; versions are immutable"; exit 1 ;;
+            *)   echo "::error::could not check $REGISTRY/$ORG/$IMAGE:$VERSION (HTTP $code)"; exit 1 ;;
+          esac
+
+      - name: Fetch source
+        id: source
+        env:
+          REPO: ${{ steps.inputs.outputs.repo }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          # Credentials only in this process's environment, never in .git/config.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.$FORGEJO/.extraHeader"
+          GIT_CONFIG_VALUE_0="Authorization: Basic $(base64 -w0 < "$RUNNER_TEMP/source-auth")"
+          export GIT_CONFIG_VALUE_0
+          git init -q src
+          git -C src remote add origin "$FORGEJO/$ORG/$REPO.git"
+          git -C src fetch -q --depth 1 origin "$SOURCE_REF"
+          git -C src checkout -q FETCH_HEAD
+          sha=$(git -C src rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Building $ORG/$REPO@$sha ($SOURCE_REF)"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build
+        env:
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+          REPO: ${{ steps.inputs.outputs.repo }}
+          CONTEXT: ${{ steps.inputs.outputs.context }}
+          VARIANT: ${{ steps.inputs.outputs.variant }}
+          SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cd "src/$CONTEXT"
+          args=(
+            --platform linux/amd64
+            --label "org.opencontainers.image.source=$FORGEJO/$ORG/$REPO"
+            --label "org.opencontainers.image.revision=$SHA"
+            --label "org.opencontainers.image.version=$VERSION"
+            # One plain manifest per tag: no attestation index whose
+            # untagged children pruning would leave behind.
+            --provenance=false
+            --sbom=false
+            --output "type=oci,dest=$RUNNER_TEMP/image.tar"
+          )
+          if [ -n "$VARIANT" ]; then
+            # build.env is KEY=VALUE per line; read as data, never sourced.
+            while IFS= read -r line; do
+              case "$line" in ''|'#'*) continue ;; esac
+              echo "$line" | grep -qE '^[A-Z][A-Z0-9_]*=[A-Za-z0-9@:._,/+-]*$' || {
+                echo "::error::unexpected line in $VARIANT/build.env: $line"; exit 1; }
+              args+=(--build-arg "$line")
+            done < "$VARIANT/build.env"
+            args+=(-f Containerfile --secret "id=forgejo_auth,src=$RUNNER_TEMP/source-auth")
+          fi
+          docker buildx build "${args[@]}" .
+          rm -f "$RUNNER_TEMP/source-auth"
+          ls -la "$RUNNER_TEMP/image.tar"
+
+      - name: Push
+        id: push
+        env:
+          REF: ${{ steps.inputs.outputs.ref }}
+        run: |
+          set -euo pipefail
+          regctl registry set "$REGISTRY" --blob-chunk "$CHUNK_BYTES" --blob-max "$CHUNK_BYTES"
+          regctl registry login "$REGISTRY" -u "$(cat "$RUNNER_TEMP/registry-user")" --pass-stdin < "$RUNNER_TEMP/registry-token"
+          regctl image import "$REF" "$RUNNER_TEMP/image.tar"
+          digest=$(regctl image digest "$REF")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          regctl registry logout "$REGISTRY"
+
+      - name: Prune old versions
+        env:
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          auth="$(cat "$RUNNER_TEMP/registry-user"):$(cat "$RUNNER_TEMP/registry-token")"
+          # The whole listing or nothing: a failed page fails the step before
+          # anything is deleted, never "fewer versions".
+          : > versions.txt
+          page=1
+          while :; do
+            body=$(curl -fsS -u "$auth" \
+              "$FORGEJO/api/v1/packages/$ORG?type=container&q=$IMAGE&limit=50&page=$page")
+            n=$(jq 'length' <<<"$body")
+            jq -r --arg n "$IMAGE" '.[] | select(.name == $n) | .version' <<<"$body" >> versions.txt
+            [ "$n" -lt 50 ] && break
+            page=$((page + 1))
+          done
+          grep -qxF "$VERSION" versions.txt || {
+            echo "::error::the listing does not show $VERSION just pushed; not pruning"; exit 1; }
+          # Only semver tags; digest-named versions are left alone.
+          grep -E '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' versions.txt \
+            | sort -t. -k1,1nr -k2,2nr -k3,3nr > semver.txt || true
+          tail -n +"$((KEEP_VERSIONS + 1))" semver.txt > prune.txt
+          while read -r old; do
+            [ "$old" = "$VERSION" ] && continue
+            echo "delete $ORG/$IMAGE:$old"
+            curl -fsS -X DELETE -u "$auth" "$FORGEJO/api/v1/packages/$ORG/container/$IMAGE/$old"
+          done < prune.txt
+          echo "semver tags: $(wc -l < semver.txt), deleted: $(wc -l < prune.txt)"
+
+      - name: Summary
+        env:
+          REF: ${{ steps.inputs.outputs.ref }}
+          REPO: ${{ steps.inputs.outputs.repo }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          SHA: ${{ steps.source.outputs.sha }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "## Image pushed"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Image | \`$REF\` |"
+            echo "| Digest | \`$DIGEST\` |"
+            echo "| Source | \`$ORG/$REPO@$SHA\` ($SOURCE_REF) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove credentials
+        if: always()
+        # regctl keeps its login in ~/.regctl until logout, which a failed
+        # import never reaches.
+        run: rm -rf "$RUNNER_TEMP/source-auth" "$RUNNER_TEMP/registry-user" "$RUNNER_TEMP/registry-token" "$HOME/.regctl"

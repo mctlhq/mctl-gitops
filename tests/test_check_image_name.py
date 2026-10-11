@@ -14,6 +14,7 @@ services/ tree. This runs that script:
 and checks that the three callers (deploy-service validation, preview-deploy,
 build-image.yaml) actually run it before anything is built or pushed.
 """
+import textwrap
 import pathlib
 import re
 import shutil
@@ -258,6 +259,11 @@ if m:
     (tdir / "team-named").mkdir()
     (tdir / "team-named/values.yaml.tpl").write_text(
         "image:\n  repository: ghcr.io/mctlhq/__TEAM_NAME__-__SERVICE_NAME__\n")
+    # A template that runs a fixed image of its own (as the retired openclaw
+    # template ran mctl-openclaw).
+    (tdir / "runs-fixed").mkdir()
+    (tdir / "runs-fixed/values.yaml.tpl").write_text(
+        "image:\n  repository: ghcr.io/mctlhq/fixed-image\n")
     (tdir / "odd").mkdir()
     (tdir / "odd/values.yaml.tpl").write_text(
         "image:\n  repository: ghcr.io/mctlhq/__OTHER__\n")
@@ -280,8 +286,8 @@ if m:
         (("update-config", "labs", "own"), "false", "update-config never builds"),
         (("deploy", "labs", "own", ""), "false", "no dockerfile_repo, nothing to build"),
         (("onboard", "labs", "brand-new"), "true", "onboard builds the new service"),
-        (("onboard", "ovk", "claw", "org/repo", "openclaw"), "false",
-         "the openclaw template runs mctl-openclaw"),
+        (("onboard", "ovk", "claw", "org/repo", "runs-fixed"), "false",
+         "a template that runs a fixed image does not build the service's name"),
         (("deploy", "labs", "own"), "true", "the service runs <registry>/<name>"),
         (("deploy", "labs", "quoted"), "true", "a quoted repository still matches"),
         (("deploy", "ovk", "openclaw"), "false",
@@ -422,10 +428,15 @@ check(dtasks["build-image"]["when"] == '"{{tasks.validate.outputs.parameters.bui
       "deploy-service must build exactly when validate decided to (and checked with --build)")
 
 ct = (REPO / "platform-gitops/argo-workflows/cluster-templates/wft-create-tenant.yaml").read_text()
-reserved_line = [ln for ln in ct.splitlines() if "for reserved in" in ln][0]
-reserved_names = reserved_line.split("for reserved in", 1)[1].split(";")[0].split()
-check("platform" in reserved_names,
-      "wft-create-tenant must reserve the tenant name 'platform' (image-names.txt grants to it)")
+# Run the shared guard itself (BEGIN/END tenant-ns-guard) rather than parse
+# its case patterns.
+guard = textwrap.dedent(ct.split("# BEGIN tenant-ns-guard", 1)[1]
+                        .split("# END tenant-ns-guard", 1)[0])
+for name, want in (("platform", 0), ("platformx", 1)):
+    rc = subprocess.run(["sh", "-c", guard + '\ntenant_name_reserved "$1"', "sh", name]).returncode
+    check(rc == want,
+          f"tenant_name_reserved {name}: want {want}, got {rc} "
+          "(wft-create-tenant must reserve 'platform': image-names.txt grants to it)")
 
 # Direct dispatchers of build-image.yaml outside Argo, as found on each
 # repository's default branch (all other organisation workflows call

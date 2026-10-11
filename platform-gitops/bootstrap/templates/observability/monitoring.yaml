@@ -371,7 +371,11 @@ spec:
               # (#1601). Credentials come from env (envValueFrom above).
               # ssl_mode require as mctl-api and the academy datasource use
               # it: CNPG serves TLS with its own CA, which is not verified.
-              # max_open_conn stays under the role's connectionLimit (10).
+              # max_open_conn keeps two pods under the role's connectionLimit
+              # (10): a rolling update runs the old and the new pod together.
+              # At 8 each the new pod exited on "too many connections for role
+              # grafana" (live 2026-10-04 15:46, and 2 of 3 local trials); at
+              # 4 each, 0 of 9.
               # Rollback: drop this section and the two GF_DATABASE_* env
               # entries; Grafana starts on an empty SQLite again.
               database:
@@ -379,7 +383,7 @@ spec:
                 host: shared-pg-rw.platform-db.svc.cluster.local:5432
                 name: grafana
                 ssl_mode: require
-                max_open_conn: 8
+                max_open_conn: 4
                 max_idle_conn: 2
               # #1560: Secure on every cookie, and a __Host- session cookie a
               # tenant host on *.mctl.ai cannot shadow (it would need
@@ -391,6 +395,15 @@ spec:
                 # only password path is basic auth from the grafana-iac Job
                 # (auth.basic below); the login form is disabled.
                 disable_brute_force_login_protection: false
+              # Nothing leaves the cluster from a dashboard, now that tenant
+              # members (Editor in their own org, #1601) can share them: no
+              # snapshot published to snapshots.raintank.io, and no public
+              # (anonymous-link) dashboards. Local snapshots stay, behind
+              # sign-in. Both were on (Grafana's defaults) until now.
+              snapshots:
+                external_enabled: false
+              public_dashboards:
+                enabled: false
               auth:
                 disable_login_form: true
                 oauth_auto_login: true
@@ -413,10 +426,6 @@ spec:
               # refuses a token to anyone without one. role_attribute_strict
               # refuses a sign-in whose groups map to no role, so nobody
               # falls through to Viewer of this cluster-wide organization.
-              # Rollback: the Dex URLs (https://ops.mctl.ai/api/dex/{auth,token,userinfo}),
-              # client_id grafana with grafana-admin-secret/oidc-client-secret,
-              # the `groups` scope and the old role_attribute_path; Dex keeps
-              # its grafana client until it is removed.
               auth.generic_oauth:
                 enabled: true
                 name: MCTL
@@ -533,6 +542,12 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "VaultBackupStale|VaultBackupMetricAbsent|VaultBackupSuspended"
+                  # The same for the audit trail (vm-rules/vault-audit-alerts.yaml):
+                  # re-enabling an audit device or replacing a Vault pod that
+                  # cannot write one is an operator's job.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "VaultAudit.*"
                   # A stale agents pipeline usually means its own model/auth
                   # path is unavailable, so route directly to an operator.
                   - receiver: telegram
@@ -595,6 +610,37 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "SeerrSense.*"
+                  # Tenant erpact's shared MariaDB (vm-rules/erpact-alerts.yaml,
+                  # group erpact.capacity). Telegram only, no ticket: the remedy
+                  # is raising mariadb-0's memory limit in Forgejo
+                  # erpact/mctl-apps infra/mariadb.yaml, a repo mctl-agent cannot
+                  # write. Unrouted, an OOM-risk warning for the database behind
+                  # every ERPact site reached only the agent and notified nobody.
+                  # Prefix match so the Absent twin is covered too.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ErpactMariadbMemory.*"
+                  # Tenant erpact's off-cluster backup and its daily restore
+                  # drill (vm-rules/erpact-alerts.yaml, group erpact.backup).
+                  # Telegram only, same reasoning as the MariaDB route above:
+                  # both CronJobs live in Forgejo erpact/mctl-apps, which
+                  # mctl-agent cannot write, and a backup that stopped or does
+                  # not restore is the one failure nobody notices until it is
+                  # needed. Prefix matches cover the Stale, NeverSucceeded and
+                  # MetricAbsent variants of each.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ErpactBackup.*|ErpactRestoreDrill.*"
+                  # Tenant erpact's site probes (vm-rules/erpact-alerts.yaml,
+                  # group erpact.availability; #1773). Telegram only, same
+                  # reasoning as the two routes above: a broken site is fixed
+                  # in Forgejo erpact/mctl-apps, which mctl-agent cannot write,
+                  # and until now ErpactSiteDown reached only the agent and
+                  # notified nobody. Prefix match so ErpactSiteProbeAbsent is
+                  # covered too.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ErpactSite.*"
                   # The lifecycle ownership rollout (ADR-010 §12,
                   # mctlhq/.github#57). Telegram only, no ticket, and the
                   # routing is load-bearing rather than a preference:
@@ -637,6 +683,17 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "MctlAgentsScheduledDispatch.*"
+                  # The Tempo tracing bake-off (#1280,
+                  # vm-rules/tempo-eval-alerts.yaml). Telegram only, no
+                  # ticket: every remedy is an operator's (resize Tempo,
+                  # restore R2 access, end the bake-off), and the runbook's
+                  # producer-isolation step scales Tempo to zero on purpose.
+                  # Prefix match so the next TempoEval alert does not default
+                  # to agent-only. Remove with that file once the bake-off is
+                  # decided.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "TempoEval.*"
                   # Platform/infra Applications (projects default + platform)
                   # also page a human, in ADDITION to mctl-agent — hence
                   # continue: true, which lets the catch-all route below still
@@ -746,33 +803,158 @@ spec:
                   #
                   # The other four alerts ported in mctl-telegram#555 —
                   # PoolNearCapacity, FloodWaitSpike, OAuthPendingStuck,
-                  # BridgeDaemonsFlapping — are deliberately agent-only. They
-                  # describe load and capacity conditions the agent can
+                  # BridgeDaemonsFlapping — are deliberately not on this route.
+                  # They describe load and capacity conditions the agent can
                   # triage, and none of them implicates the agent itself.
                   # They are NOT listed in the catch-all below, and must not
-                  # be added "for symmetry": matching no child route at all,
-                  # they already reach mctl-agent through the root default
-                  # receiver, and the catch-all route carries no grouping or
-                  # timing of its own. Verified with `amtool config routes
-                  # test`: mctl-agent before the change and after it, in both
-                  # forms. An entry would read as a routing decision while
-                  # changing nothing.
+                  # be added "for symmetry": they reach mctl-agent through
+                  # the matcher-less route at the end of this list (formerly
+                  # the root default receiver), and the catch-all route
+                  # carries no grouping or timing of its own. An entry would
+                  # read as a routing decision while changing nothing.
+                  # PoolNearCapacity and FloodWaitSpike are severity=critical,
+                  # so since #1771 the severity route further down pages them
+                  # on Telegram as well — every critical alert does, by design.
                   - receiver: telegram
                     continue: true
                     matchers:
                       - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
+                  # mctl-api availability (vm-rules/mctl-api-alerts.yaml): the
+                  # same circularity as the three above, one layer down.
+                  # mctl-agent files its incidents through mctl-api, so an
+                  # agent-only route for "mctl-api is down" is a ticket raised
+                  # with the component that is down. On 2026-10-09 the one pod
+                  # sat Running-but-unready for five hours and nobody heard:
+                  # api.mctl.ai was not probed and nothing routed here. Same
+                  # two-part shape: continue: true here, AND MctlApi.* in the
+                  # mctl-agent catch-all below. Prefix match so the next alert
+                  # added to the VMRule cannot fall back to agent-only silently.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlApi.*"
+                  # The platform's web entry points (vm-rules/platform-web-alerts.yaml,
+                  # #1773): portal, docs, Argo CD, Grafana and mctl-agent, probed
+                  # from outside. agent.mctl.ai is mctl-agent itself, so an
+                  # agent-only route would report its outage to the component
+                  # that is down, and the 2026-10-10 portal outage was heard by
+                  # nobody. Same two-part shape as MctlApi.* above:
+                  # continue: true here, AND PlatformWebEndpoint.* in the
+                  # mctl-agent catch-all below, so the agent keeps its ticket.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "PlatformWebEndpoint.*"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
                     matchers:
                       - alertname =~ "ArgoLocalWorkdirPodPending|ArgoLocalWorkdirQuotaHigh|ArgoLocalWorkdirQuotaCritical|NodeDiskSpaceCritical|NodeFilesystemCollectorFailed"
+                  # ---- Direct paging by severity and for the alerting path (#1771)
+                  #
+                  # Everything above is an allowlist of alertnames. Before
+                  # these routes, a critical alert that was not on it —
+                  # KubeAPIDown, KubeletDown, AlertmanagerClusterDown, and 10
+                  # of the 25 platform-owned critical rules — reached a human
+                  # only if mctl-agent was up and chose to escalate. That
+                  # includes the alerts about the notification path itself,
+                  # which were routed to the component they are about.
+                  #
+                  # Placement is load-bearing. These sit AFTER every route
+                  # that stops evaluation (the "null" mutes, e.g. the k3s
+                  # KubeControllerManagerDown/KubeSchedulerDown/KubeProxyDown
+                  # false positives, and the telegram-only routes, which have
+                  # already paged), and BEFORE the mctl-agent catch-alls.
+                  # All of them are continue: true, so the agent still gets its
+                  # ticket: through the catch-alls below, or through the
+                  # matcher-less mctl-agent route at the very end.
+                  #
+                  # No alert may reach Telegram twice: two routes to the same
+                  # receiver are two notification pipelines and two messages.
+                  # So these routes partition on severity — the critical
+                  # route pages every critical alert, and the alerting-path
+                  # routes page only the non-critical ones — and the critical
+                  # route excludes exactly the alertnames already paged by an
+                  # earlier continue: true telegram route (canary, Access login,
+                  # SLO fast-burn, communication agent, mctl-api). Adding a new
+                  # continue: true telegram route for an alert that can be
+                  # critical means adding its names to that exclusion too.
+                  # scripts/check-alertmanager-routes.py fails CI on a
+                  # platform rule that would page twice, but only where its
+                  # STATIC labels decide the routing; a route gated on a
+                  # query-result label (project, namespace, job) needs a CASES
+                  # entry in that script to be covered.
+                  #
+                  # The ArgoCD platform-app route is not excluded: both of its
+                  # alerts are severity=warning, and excluding them by name
+                  # would also drop tenant-project apps, which that route does
+                  # not page. Raising either to critical would page
+                  # project=default|platform twice, and the static-label check
+                  # cannot see that (no project label): add a project-scoped
+                  # exclusion here at the same time.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - severity = "critical"
+                      - alertname !~ "MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*"
+                  # The alerting path itself pages regardless of severity:
+                  # when Alertmanager, vmalert or mctl-agent is what broke, the
+                  # alert about it must not depend on it. Critical ones are
+                  # already paged by the route above, hence severity != critical
+                  # here (which also matches alerts with no severity label).
+                  # Alertmanager.* covers the upstream alertmanager.rules group
+                  # and vmalert's AlertmanagerErrors; MctlAgentMetricsAbsent is
+                  # mctl-agent's own liveness signal. VMAlert.*/vmalert.* match
+                  # no alert shipped today (vmalert's own rules have generic
+                  # names, handled below); they are kept, as #1771 asked, so a
+                  # future rule named after the component is paged too.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "Alertmanager.*|VMAlert.*|vmalert.*|MctlAgentMetricsAbsent"
+                      - severity != "critical"
+                  # vmalert's own rules have generic names
+                  # (ConfigurationReloadFailure also exists in the vmagent
+                  # group), so they are matched by the alertgroup label vmalert
+                  # adds to every alert unless -disableAlertgroupLabel is set
+                  # (it is not here); the group is named "vmalert" in the
+                  # victoria-metrics-k8s-stack 0.72.5 rule files, so re-check
+                  # both on a chart bump. RecordingRulesError/NoData and the
+                  # RemoteWrite* alerts are left out: they concern recording
+                  # rules and state persistence, not alert delivery. The vm
+                  # ServiceDown alert is scoped to the alerting components by
+                  # job (vmalert-*, vmalertmanager-*); it is critical upstream,
+                  # so this branch only matters if that is ever downgraded.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertgroup = "vmalert"
+                      - alertname =~ "ConfigurationReloadFailure|AlertingRulesError|TooManyMissedIterations"
+                      - severity != "critical"
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname = "ServiceDown"
+                      - job =~ ".*(vmalert|alertmanager).*"
+                      - severity != "critical"
                   - receiver: mctl-agent
                     matchers:
                       - alertname =~ "RecordingRulesNoData|ScrapePoolHasNoTargets|TooManyScrapeErrors|TooManyLogs"
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|MinioBucketUsageHigh|MinioBucketUsageCritical|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|OpenclawCodexTokenRefreshFailed|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
+                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|PlatformWebEndpoint.*"
+                  # Restores the root default for everything that got this far.
+                  # The root receiver fires only when NO child route matched,
+                  # and the continue: true direct-paging routes above count as
+                  # a match — without this route KubeAPIDown or
+                  # AlertmanagerFailedToSendAlerts would reach Telegram and stop
+                  # reaching mctl-agent. An alert that matched no route at all
+                  # lands here too, which is what the root default did for it.
+                  # Every alert reaching this point used to reach mctl-agent
+                  # (via the root default or the catch-alls above), so this
+                  # adds no agent traffic.
+                  - receiver: mctl-agent
               receivers:
                 - name: "null"
                 - name: mctl-agent
@@ -812,6 +994,72 @@ spec:
           prometheusOperator:
             enabled: true # Keep operator to manage CRDs (ServiceMonitors, VMAlerts)
 
+          # Drop apiserver/etcd histogram buckets that nothing reads (#1772).
+          # They were ~22% of vmsingle's active series while it ran at ~1.6Gi
+          # of its 2Gi limit.
+          #
+          # `endpoints` is a list, and Helm replaces lists rather than merging
+          # them, so the chart's (0.72.5) default endpoint is restated in full
+          # here. Only metricRelabelConfigs is new. If you bump the chart,
+          # compare this endpoint with its kubeApiServer.vmScrape default.
+          #
+          # This is an explicit list of names on purpose: no regex such as
+          # `apiserver_.*_bucket`. A family that is not listed is still
+          # stored, so a dashboard added later does not lose data without
+          # anyone noticing. Only `_bucket` is dropped. `_sum` and `_count`
+          # stay, because the API Server dashboard reads
+          # apiserver_request_duration_seconds_sum/_count.
+          #
+          # DO NOT add these two. Enabled default rules read them:
+          #   apiserver_request_sli_duration_seconds_bucket
+          #     kube-apiserver-burnrate.rules (apiserver_request:burnrate*,
+          #     which KubeAPIErrorBudgetBurn reads),
+          #     kube-apiserver-availability.rules, and
+          #     kube-apiserver-histogram.rules
+          #   apiserver_client_certificate_expiration_seconds_bucket
+          #     KubeClientCertificateExpiration
+          # Before you add a name to this list, grep for it in
+          # infra-components/observability/{vm-rules,grafana-dashboards} and
+          # in the chart's enabled default rules and dashboards.
+          kubeApiServer:
+            vmScrape:
+              spec:
+                endpoints:
+                  - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+                    port: https
+                    scheme: https
+                    tlsConfig:
+                      caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                      serverName: kubernetes
+                    metricRelabelConfigs:
+                      - action: drop
+                        sourceLabels: [__name__]
+                        # A list: VictoriaMetrics joins the items with `|` and anchors
+                        # the result, so each entry matches one metric name exactly.
+                        regex:
+                          - apiserver_request_duration_seconds_bucket
+                          - apiserver_request_slo_duration_seconds_bucket
+                          - apiserver_response_sizes_bucket
+                          - apiserver_request_body_size_bytes_bucket
+                          - apiserver_watch_events_sizes_bucket
+                          - apiserver_watch_list_duration_seconds_bucket
+                          - apiserver_watch_cache_read_wait_seconds_bucket
+                          - apiserver_request_filter_duration_seconds_bucket
+                          - apiserver_admission_controller_admission_duration_seconds_bucket
+                          - apiserver_admission_step_admission_duration_seconds_bucket
+                          - apiserver_admission_webhook_admission_duration_seconds_bucket
+                          - apiserver_crd_conversion_webhook_duration_seconds_bucket
+                          - apiserver_flowcontrol_request_wait_duration_seconds_bucket
+                          - apiserver_flowcontrol_request_execution_seconds_bucket
+                          - apiserver_flowcontrol_request_queue_length_after_enqueue_bucket
+                          - apiserver_flowcontrol_work_estimated_seats_bucket
+                          - apiserver_flowcontrol_watch_count_samples_bucket
+                          - apiserver_flowcontrol_priority_level_request_utilization_bucket
+                          - apiserver_flowcontrol_priority_level_seat_utilization_bucket
+                          - apiserver_flowcontrol_read_vs_write_current_requests_bucket
+                          - apiserver_flowcontrol_demand_seats_bucket
+                          - etcd_request_duration_seconds_bucket
+
           kubeControllerManager:
             enabled: false
           kubeEtcd:
@@ -836,6 +1084,19 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/observability/grafana-access
+
+    # Per-tenant metrics access for Grafana tenant orgs (#1601, step 2): a
+    # vmauth that adds each tenant's namespace filter to every query, and its
+    # VMUsers. Nothing reads through it until the tenant orgs exist (step 4).
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/grafana-tenants
+
+    # VMSingle's NetworkPolicy: only the inventoried clients reach it, so a
+    # tenant cannot query it around vmauth (#1601).
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/vmsingle-access
 
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main

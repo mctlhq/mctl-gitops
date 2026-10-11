@@ -6,7 +6,7 @@ Access one — different roots, different blockers.
 
 ## Scope
 
-23 objects: 13 DNS records, the `http_request_firewall_custom` ruleset, seven
+23 objects: 13 DNS records, the `http_request_firewall_custom` ruleset (two rules), seven
 Email Routing forward rules, the catch-all, and the worker route
 `mctl.ai/api/*` → `mctl-landing-form` (`workers.tf`, #1179). The route is owned
 here; the worker script and its secrets stay in Wrangler (`mctlhq/mctl-web`,
@@ -40,6 +40,19 @@ The host list is narrow and therefore fragile in one direction: a host that
 belongs on it and is missing does not fail at the edge, it surfaces as an
 unexplained `403` inside whichever service made the call. `../../README.md`
 records where the list came from and which caller each entry serves.
+
+## The archive-probe block
+
+The second rule in the same ruleset blocks requests for archive and dump
+extensions (`zip`, `sql`, `gz`, `tar`, `bak`, ...) on the apex host `mctl.ai`.
+The landing site serves none, and its HTML is never cached at the edge, so a
+backup-file scanner's burst used to reach Traefik in full: on 2026-10-06 one
+client sent 3,223 such requests in a minute and every Traefik replica restarted.
+
+The rule names the apex host only. `git.mctl.ai` serves repository archives and
+tenant apps serve downloads with the same extensions; widening the host match
+to the zone would break them. If the landing site ever publishes a downloadable
+archive, remove its extension from the list in the same change.
 
 ## State
 

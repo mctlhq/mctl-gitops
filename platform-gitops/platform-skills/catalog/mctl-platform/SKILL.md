@@ -97,8 +97,8 @@ materialized copy of the skill; the MCP read tool serves only this SKILL.md):
 - `references/deploy.md` — deploy/onboard flows, tenant quotas and LimitRange
   defaults, env var handling, workflow tracking.
 - `references/k8s.md` — direct Kubernetes operations when MCP tools don't
-  cover it: cluster identity, namespace map, OpenClaw pod anatomy, safe
-  rollout and state-flush recipes, historical outage anti-patterns.
+  cover it: cluster identity, namespace map, routine operator
+  commands, historical outage anti-patterns.
 - `references/tools.md` — `mctl_*` MCP tool catalog notes.
 - `references/troubleshooting.md` — CPU throttling / LimitRange traps,
   incident diagnosis patterns.

@@ -1,0 +1,34 @@
+status: rejected
+updated_at: '2026-10-10T18:54:05Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-0842fa7743db1532
+  trace_id: 9bf443ac0ca8b5c45465f91d66cc64de
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-gitops
+  issue: 1768
+  url: https://github.com/mctlhq/mctl-gitops/issues/1768
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-e7dca21e57688fe4
+  content_hash: sha256:e7dca21e57688fe42def08a41dfff3c316b96a5f3e37bbf736c132f9fbc982df
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-10T15:04:43Z'
+attempt:
+  id: aed366875c02487e48f96f5a9e46468ba67c70be33f65b16a12eac6ab101c981
+  started_at: '2026-10-10T15:06:09Z'
+  expires_at: '2026-10-10T17:16:09Z'
+  finished_at: '2026-10-10T15:07:45Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/1769
+notes: PR was closed without merging.
+github:
+  state: closed
+  head_sha: cf0460ce58831c8a0631fddc2f7a4ed38fc37af1
+  observed_at: '2026-10-10T18:54:05Z'

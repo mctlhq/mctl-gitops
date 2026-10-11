@@ -146,12 +146,30 @@ spec:
 
   templates:
     - name: bootstrap
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       # The clone scaffolding is the shepherd CWFT's, minus everything
       # SDK- and budget-related: no OAuth token, no per-tick cost cap, no
       # implementer subprocess, and therefore no TMPDIR clone directory.
       initContainers:
         - name: clone-gitops
           image: alpine/git:2.43.0
+          # Root on purpose: apk add + chown -R 1000:1000 /workdir hand-off.
+          # Escalation is off and every capability except the file-ownership
+          # ones is dropped (mctl-gitops#1717).
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
           command: [sh, -c]
           args:
             - |
@@ -191,6 +209,11 @@ spec:
       container:
         image: "{{workflow.parameters.agent_image}}"
         imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         command: ["/entrypoint.sh"]
         args:
           - "sh"
