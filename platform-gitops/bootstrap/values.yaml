@@ -282,6 +282,21 @@ registryPublisher:
 surfacePortalToken:
   enabled: true
 
+# Static token for mctl-api's repository-binding lookups against the portal's
+# github-app-connect plugin (subject mctl-api-repo-binding, restricted to that
+# plugin). Vault: secret/platform/mctl-portal/repo-binding-token, property
+# token (no trailing newline, distinct from every other token). Read by both
+# mctl-api (BACKSTAGE_GITHUB_APP_CONNECT_TOKEN) and backstage
+# (MCTL_API_REPO_BINDING_TOKEN) through mctl-api-repo-binding.yaml.
+# Owner steps, in this order:
+#   1. Write the value to Vault.
+#   2. Set enabled: true below. The portal pod reads the token at startup,
+#      so it restarts once the backstage-repo-binding Secret has synced.
+# Until the portal and mctl-api releases that use it are deployed, the token
+# is accepted by the portal but nothing calls it.
+repoBinding:
+  enabled: false
+
 # The surface:telegram principal's bearer token (mctlhq/mctl-telegram#443,
 # mctlhq/mctl-gitops#1405): mctl-api authenticates it from
 # MCTL_SURFACE_TELEGRAM_TOKEN (internal/auth/oidc.go, surfaceTokenEnv maps
