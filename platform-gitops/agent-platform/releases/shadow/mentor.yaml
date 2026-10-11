@@ -22,16 +22,17 @@ spec:
   sourceManifest:
     repo: mctlhq/mctl-agents
     path: agents/_manifests/mentor/agent.yaml
-    # A real commit, unlike the placeholder the older bindings carry:
-    # mctlhq/mctl-agents main when contentHash was computed. Nothing verifies
+    # A real commit, unlike the placeholder the older bindings carry: the
+    # mctlhq/mctl-agents#629 head whose agent.yaml contentHash was computed
+    # from (sandbox mctl-agents-daily -> mctl-agents-run). Nothing verifies
     # it; contentHash is the pin.
-    gitSha: "bd93190b0a35a5401b93a274760f19c961ea3dea"
+    gitSha: "ee3071ee3fbcf19c5a7816d5adad690ca3b51a4c"
     # sha256 of the exact bytes of `path` at gitSha, as mctl-agents'
     # resolver.definition_content_hash computes it. Editing that agent.yaml
     # requires re-pinning this value first, or the release that carries the
     # edit is refused promotion (mctl-agents
     # docs/runbooks/agent-yaml-binding-repin.md).
-    contentHash: "sha256:e6e373fe7ca2f07a0842f7eca46d353d834b614236fc8527570d9a70113f109e"
+    contentHash: "sha256:dab2a7dea2726ab9ef1610e4f1c3a8f84efbbe1a65376c36b4daa5bacf305f0f"
   bindingSource: compatibility-fixture
   promotable: false
   registryLifecycle:
@@ -46,4 +47,9 @@ spec:
   profile:
     name: mentor-default
     version: "1.0.0"
-  bindingRevision: 1
+  bindingRevision: 2
+  previousBindingRevision: 1
+  history:
+    - bindingRevision: 1
+      definition: {name: mentor, version: "1"}
+      profile: {name: mentor-default, version: "1.0.0"}
