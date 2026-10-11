@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-11T17:39:27Z'
+updated_at: '2026-10-11T17:49:41Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-689ca4892390f6c7
@@ -30,3 +30,7 @@ pr: https://github.com/mctlhq/mctl-api/pull/561
 ci_blockers_head: 62a992642403706574b53102450801f75ea94843
 ci_blockers:
 - validate / lint
+github:
+  state: open
+  head_sha: 60a1b1ecf2be12bf257771c0c75596ae80ce826c
+  observed_at: '2026-10-11T17:49:41Z'
