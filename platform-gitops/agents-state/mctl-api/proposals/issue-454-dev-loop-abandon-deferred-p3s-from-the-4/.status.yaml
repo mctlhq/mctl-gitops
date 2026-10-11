@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-10-11T18:12:24Z'
+status: implemented
+updated_at: '2026-10-11T18:17:40Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-bff02bdc2fd0eb46
-  trace_id: 86e05dc5151d86c1462f501f1d357c2f
-  agent: issue-investigator
+  context_id: ex-681b48cc77279413
+  trace_id: e9adf6d7c3bf6d380de2696a780c9b58
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -19,5 +19,11 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-10-11T18:12:24Z'
+attempt:
+  id: d0c456beecb4035b9a5c5afb71c803250e89b882a93912734b544d7fe2847423
+  started_at: '2026-10-11T18:13:47Z'
+  expires_at: '2026-10-11T20:23:47Z'
+  finished_at: '2026-10-11T18:17:40Z'
+pr: https://github.com/mctlhq/mctl-api/pull/566
