@@ -1,0 +1,89 @@
+# Image names under the registry below that a team may build into and run.
+#
+# Tenant builds push <registry>/<component_name>, and tenant services run
+# <registry>/<component_name>, so the component name IS the image name.
+# platform-gitops/argo-workflows/scripts/check-image-name.sh decides, for a
+# team T and a name N, in this order:
+#
+#   0. tenant callers (Argo) only: T must be an existing tenant
+#      (platform-gitops/tenants/T/) and not "platform"   else refused
+#   1. `grant T N`                                       -> allowed
+#   2. `reserved N`, or N starts with a `reserved-prefix` -> refused
+#   3. `shared N`: allowed to run; refused to build (only a granted team
+#      may push to a shared name)
+#   4. another team already has services/<other>/N, or a values.yaml under
+#      services/<other>/ runs <registry>/N             -> refused
+#   5. otherwise                                         -> allowed
+#
+# Read by the deploy-service and preview-deploy validation (Argo) and by
+# .github/workflows/build-image.yaml before it pushes. A line the script does
+# not understand, a wildcard grant, or a registry other than the caller's
+# makes every check refuse, so keep to the forms below.
+# tests/test_check_image_name.py keeps this file complete: every image the
+# platform references outside platform-gitops/services/ must be reserved here,
+# and every service that exists today must pass.
+
+registry ghcr.io/mctlhq
+
+# --- Platform images: built by release-deploy or by hand, never by a tenant.
+reserved-prefix mctl-
+reserved grafana-iac
+reserved mc
+reserved newton-mcp-gateway
+reserved openclaw-whisper-builder
+reserved pfeifenpatenschaft-backend
+reserved portfolio
+reserved projects-mcp
+reserved seerrsense
+reserved vault-iac
+reserved zitadel-iac
+
+# --- Reviewed grants. Each one is an existing service whose name is reserved
+# --- above or shared between teams; add a line here only in review.
+
+# Platform images built from platform-gitops/images/ and dispatched by hand
+# to build-image.yaml with team "platform". Unreachable from tenant workflows:
+# their check runs with --tenant, which refuses "platform" and any team
+# without platform-gitops/tenants/<team>/ (and wft-create-tenant refuses to
+# create a tenant of that name).
+grant platform grafana-iac
+grant platform mc
+grant platform mctl-agent
+grant platform vault-iac
+grant platform zitadel-iac
+
+# admins: the platform's own services.
+grant admins mctl-agents-worker
+grant admins mctl-agents-worker-exec
+grant admins mctl-agents-worker-implement
+grant admins mctl-design
+grant admins mctl-docs
+grant admins mctl-web
+
+# labs: platform-owned products deployed as labs services.
+grant labs mctl-academy
+grant labs mctl-alice
+grant labs mctl-loyalty
+grant labs mctl-pairdesk
+grant labs mctl-telegram
+grant labs mctl-telegram-preview
+grant labs pfeifenpatenschaft-backend
+grant labs portfolio
+grant labs projects-mcp
+grant labs seerrsense
+
+# ovk: runs mctl-academy from the same source repository as labs.
+grant ovk mctl-academy
+
+# openclaw: several teams hold a service of that name (labs, ovk, admins);
+# each runs the fixed image mctl-openclaw (service-templates/openclaw), which
+# the mctl- prefix reserves, and deploy-service does not build for that
+# template. The image named openclaw itself was built only by mctl-openclaw's
+# upstream-sync workflow; that repository is archived and nothing in this
+# repository runs the image. Shared, so the service name stays available to
+# every team, and with no grant no team may build it. That includes an
+# onboard or a preview with a git_ref that would push openclaw itself:
+# preview-deploy checks in build mode whenever it builds, so such a preview
+# is refused for every team. A successor sync that builds the image again
+# needs a reviewed grant line here.
+shared openclaw

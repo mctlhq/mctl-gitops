@@ -222,10 +222,13 @@ spec:
           # reserved because the tenant chart's argocd Role and RoleBinding,
           # argo-workflow-argocd-<tenant>, would take the platform tier's own
           # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
+          # platform is the team image-names.txt grants the platform's own images
+          # to. It is never a tenant, which keeps those grants unreachable from
+          # tenant workflows (check-image-name.sh --tenant).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
-              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|platform|\
               temporal|backstage|minio|database|forgejo|zitadel|\
               local-path-storage|system-upgrade|observability-eval|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
@@ -357,10 +360,13 @@ spec:
           # reserved because the tenant chart's argocd Role and RoleBinding,
           # argo-workflow-argocd-<tenant>, would take the platform tier's own
           # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
+          # platform is the team image-names.txt grants the platform's own images
+          # to. It is never a tenant, which keeps those grants unreachable from
+          # tenant workflows (check-image-name.sh --tenant).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
-              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|platform|\
               temporal|backstage|minio|database|forgejo|zitadel|\
               local-path-storage|system-upgrade|observability-eval|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
