@@ -101,6 +101,17 @@ spec:
           # only: allow-mctl-agent-to-mctl-telegram-bot-start in labs admits this
           # pod on 8080; the Service is not exposed through any Ingress route.
           BOT_START_FORWARD_URL: "http://labs-mctl-telegram-base-service.labs.svc:8080/internal/bot-start-observations"
+        # OTLP trace export through the platform Collector (mctl-agent#38,
+        # #97): renders OTEL_EXPORTER_OTLP_ENDPOINT/_PROTOCOL and
+        # OTEL_RESOURCE_ATTRIBUTES. The agent sets service.name=mctl-agent
+        # itself. With mctl-agent >= the #97 release, each ticket's log lines
+        # carry trace_id/span_id as JSON fields (not Loki labels) and the
+        # ticket stores its trace_id. Older tags emit spans only. Spans go to
+        # the Collector, never to a backend directly; where they land is the
+        # Collector's choice (today the #1280 Tempo eval). Turning this off
+        # restores the untraced agent, which works unchanged.
+        otel:
+          enabled: true
         envFrom:
           - secretRef:
               name: mctl-agent-secrets
