@@ -35,6 +35,7 @@ probes:
     periodSeconds: 15
 env:
   SMOKE_ENV: deploy_action
+  SMOKE_TEST: "true"
 extraContainers: []
 externalSecret:
   targetSecret: smoke-test-svc-secrets
