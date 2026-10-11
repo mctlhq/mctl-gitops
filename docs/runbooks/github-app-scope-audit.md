@@ -62,12 +62,14 @@ App — and every widening silently landed on customers too. See #761 for the
 
 The tag-bump workflows no longer push as `mctl-agents`: since
 mctlhq/mctl-agents#470 they push with a write deploy key held by the
-`gitops-bump` environment (released only to jobs on `main`). The App is
-still on the `main-protection` ruleset's `bypass_actors` list (ruleset
-`18465404`) until a separate, owner-confirmed change removes it; nothing in
-this repository depends on that entry any more. It has to go because the
-agents run with this App's token, so an App that can bypass the ruleset
-means every agent can.
+`gitops-bump` environment (released only to jobs on `main`). The App has
+since been removed from the `main-protection` ruleset's `bypass_actors`
+list (ruleset `18465404`): its only bypass actor is now `DeployKey`
+(mode `always`), checked 2026-10-11 with
+`gh api repos/mctlhq/mctl-gitops/rulesets/18465404 --jq .bypass_actors`.
+The entry had to go because the agents run with this App's token, so an
+App that could bypass the ruleset meant every agent could. If it ever
+reappears on that list, treat it as a regression.
 
 ## Consumers
 
