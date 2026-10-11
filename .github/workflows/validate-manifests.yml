@@ -656,9 +656,10 @@ jobs:
           set -euo pipefail
           scripts/test-secret-allowlist-policy.sh
 
-      # Same toolchain, its own k3s: what tenant workflow ServiceAccounts may
-      # do to Argo CD Applications and ApplicationSets.
-      - name: Prove the tenant workflow SA Argo CD policies
+      # Same toolchain, its own k3s: what tenant workflow ServiceAccounts and
+      # the platform workflow tier (argo-workflows/argo-workflow-sa) may do to
+      # Argo CD Applications, ApplicationSets and the argocd Roles.
+      - name: Prove the tenant and platform workflow SA Argo CD policies
         run: |
           set -euo pipefail
           scripts/test-tenant-workflow-sa-argocd-policy.sh

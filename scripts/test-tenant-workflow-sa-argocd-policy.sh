@@ -17,7 +17,10 @@
 #   rbac   writes the narrowed Role must refuse before admission runs
 #
 # plus the platform workflow tier (argo-workflows/argo-workflow-sa), which
-# the policies must not match.
+# the tenant policies must not match and the mctl-platform-workflow-sa-argocd-*
+# policies narrow, proven the same way: admit what create-tenant and
+# delete-tenant(-safe) send, deny every other write by policy, and the
+# narrowed Role in argo-workflows/config/sa-and-rbac.yaml.
 #
 # TEST_KUBECONFIG=<file> runs against an existing throwaway API server
 # instead of starting k3s (for hosts without Docker). It must point at
@@ -32,7 +35,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURES="$ROOT/tests/fixtures/tenant-workflow-sa-argocd"
 POLICY=mctl-tenant-workflow-sa-argocd
-POLICIES="mctl-tenant-workflow-sa-argocd-applications mctl-tenant-workflow-sa-argocd-applicationsets"
+PLATFORM_POLICY=mctl-platform-workflow-sa-argocd
+POLICIES="$POLICY-applications $POLICY-applicationsets $PLATFORM_POLICY-applications $PLATFORM_POLICY-applicationsets $PLATFORM_POLICY-rbac"
 # Keep in step with the platform cluster and the other policy scripts.
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.33.13-k3s1}"
 # The Argo CD version the cluster runs (argocd-server image).
@@ -103,11 +107,12 @@ helm template test "$ROOT/platform-gitops/bootstrap" -f "$ROOT/platform-gitops/b
   > "$WORK/bootstrap.yaml"
 # Exactly one policy and one binding per name in $POLICIES: a policy added to
 # the chart but not here would go untested.
-python3 - "$WORK/bootstrap.yaml" "$POLICY" "$POLICIES" > "$WORK/policy.yaml" <<'PY'
+python3 - "$WORK/bootstrap.yaml" "$POLICY $PLATFORM_POLICY" "$POLICIES" > "$WORK/policy.yaml" <<'PY'
 import sys, yaml
+prefixes = tuple(p + "-" for p in sys.argv[2].split())
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d
         and d.get("kind") in ("ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding")
-        and d["metadata"]["name"].startswith(sys.argv[2] + "-")]
+        and d["metadata"]["name"].startswith(prefixes)]
 want = sorted(sys.argv[3].split())
 for kind in ("ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"):
     got = sorted(d["metadata"]["name"] for d in docs if d["kind"] == kind)
@@ -154,6 +159,22 @@ PY
 kubectl apply -f "$WORK/rbac.yaml" >/dev/null
 kubectl apply -f "$FIXTURES/setup.yaml" >/dev/null
 
+# The ApplicationSet controller marks what it generates with a controller
+# ownerReference; give the fixtures that stand for generated Applications the
+# same, pointing at the real fixture ApplicationSets (a dangling owner would
+# be garbage-collected on k3s). karabu-outside-apps gets one too, so the
+# project check is what refuses it.
+owner() { # application, applicationset
+  local uid
+  uid="$(kubectl get applicationset "$2" -n argocd -o jsonpath='{.metadata.uid}')"
+  kubectl patch application "$1" -n argocd --type merge -p \
+    "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"argoproj.io/v1alpha1\",\"kind\":\"ApplicationSet\",\"name\":\"$2\",\"uid\":\"$uid\",\"controller\":true}]}}" >/dev/null
+}
+owner karabu-web apps
+owner labs-web apps
+owner karabu-outside-apps apps
+owner tenant-karabu tenants
+
 # Live Applications carry a status of up to ~700 KB (resources, history,
 # operationState). Application has no status subresource, so every refresh
 # annotation re-compares that whole status: give the refreshable fixtures one
@@ -196,10 +217,14 @@ done
 [ "$ready" = 1 ] || { echo "FAIL: $POLICY binding never took effect: $(cat "$WORK/err")"; exit 1; }
 
 fail=0
-as_sa() { # run kubectl as the tenant SA; mutating verbs as server-side dry-runs
+# AS and POL select the identity the cases run as and the policy prefix a
+# refusal must name: the tenant SA first, the platform tier further down.
+AS="$SA"
+POL="$POLICY"
+as_sa() { # run kubectl as $AS; mutating verbs as server-side dry-runs
   case "$1" in
-    get) kubectl --as="$SA" -n argocd "$@" ;;
-    *)   kubectl --as="$SA" -n argocd "$@" --dry-run=server ;;
+    get) kubectl --as="$AS" -n argocd "$@" ;;
+    *)   kubectl --as="$AS" -n argocd "$@" --dry-run=server ;;
   esac
 }
 admit() { # description, then the kubectl arguments (run as the tenant SA)
@@ -215,8 +240,8 @@ deny() { # description, expected message, then the kubectl arguments;
   local what="$1" expect="$2"; shift 2
   if as_sa "$@" >/dev/null 2>"$WORK/err"; then
     echo "FAIL deny  $what: admitted"; fail=1
-  elif ! grep -q "$POLICY" "$WORK/err"; then
-    echo "FAIL deny  $what: refused, but not by $POLICY: $(cat "$WORK/err")"; fail=1
+  elif ! grep -q "$POL" "$WORK/err"; then
+    echo "FAIL deny  $what: refused, but not by $POL: $(cat "$WORK/err")"; fail=1
   elif ! grep -qF "$expect" "$WORK/err"; then
     echo "FAIL deny  $what: refused for another reason than '$expect': $(cat "$WORK/err")"; fail=1
   else
@@ -227,7 +252,7 @@ rbac() { # description, then the kubectl arguments; must be refused by RBAC
   local what="$1"; shift
   if as_sa "$@" >/dev/null 2>"$WORK/err"; then
     echo "FAIL rbac  $what: admitted"; fail=1
-  elif ! grep -q "Forbidden\|forbidden" "$WORK/err" || grep -q "$POLICY" "$WORK/err"; then
+  elif ! grep -q "Forbidden\|forbidden" "$WORK/err" || grep -q "ValidatingAdmissionPolicy" "$WORK/err"; then
     echo "FAIL rbac  $what: not an RBAC refusal: $(cat "$WORK/err")"; fail=1
   else
     echo "ok   rbac  $what"
@@ -360,11 +385,114 @@ deny "create an ApplicationSet (Role widened)" "may not create or delete Applica
 kubectl delete rolebinding widened-create -n argocd >/dev/null
 kubectl delete role widened-create -n argocd >/dev/null
 
-# The platform workflow tier is not matched.
-if kubectl --as="$PLATFORM_SA" -n argocd delete application tenant-karabu --dry-run=server >/dev/null 2>"$WORK/err"; then
-  echo "ok   admit platform tier: delete tenant-karabu"
-else
-  echo "FAIL admit platform tier: delete tenant-karabu: $(cat "$WORK/err")"; fail=1
-fi
+# The platform workflow tier: the tenant policies do not match it, its own do.
+AS="$PLATFORM_SA"
+POL="$PLATFORM_POLICY"
+ready=0
+for _ in $(seq 1 60); do
+  if ! kubectl --as="$AS" -n argocd delete application root-app --dry-run=server >/dev/null 2>"$WORK/err" \
+     && grep -q "$POL" "$WORK/err"; then
+    ready=1; break
+  fi
+  sleep 1
+done
+[ "$ready" = 1 ] || { echo "FAIL: $POL binding never took effect: $(cat "$WORK/err")"; fail=1; }
+
+# What create-tenant, delete-tenant(-safe) and mctl-agents-shepherd send.
+admit "create-tenant/shepherd: list Applications"            get applications
+admit "create-tenant: get tenant-karabu"                     get application tenant-karabu
+admit "create-tenant: refresh ApplicationSet tenants" \
+  annotate applicationset tenants argocd.argoproj.io/refresh=hard --overwrite
+admit "delete-tenant-safe: refresh ApplicationSet apps" \
+  annotate applicationset apps argocd.argoproj.io/refresh=hard --overwrite
+admit "refresh ApplicationSet apps with the merge patch deploy-service uses" \
+  patch applicationset apps --type merge -p "$REFRESH"
+admit "delete-tenant-safe: delete a service app the apps ApplicationSet generated" \
+  delete application karabu-web
+admit "delete-tenant-safe: delete another tenant's generated service app" \
+  delete application labs-web
+admit "delete-tenant: delete tenant-karabu" \
+  delete application tenant-karabu
+admit "delete-tenant: delete Role argo-workflow-argocd-karabu" \
+  delete role argo-workflow-argocd-karabu
+admit "delete-tenant: delete RoleBinding argo-workflow-argocd-karabu" \
+  delete rolebinding argo-workflow-argocd-karabu
+admit "orphan cleanup: delete Role argo-workflow-argocd-ttt" \
+  delete role argo-workflow-argocd-ttt
+admit "orphan cleanup: delete RoleBinding argo-workflow-argocd-ttt" \
+  delete rolebinding argo-workflow-argocd-ttt
+
+# Deletes of anything the tenant ApplicationSets did not generate.
+DEL_APP="may only delete tenant Applications generated by the"
+deny "platform: delete root-app"            "$DEL_APP" delete application root-app
+deny "platform: delete shared-pg"           "$DEL_APP" delete application shared-pg
+deny "platform: delete temporal (project platform)" "$DEL_APP" delete application temporal
+deny "platform: delete team-labelled app outside project apps" "$DEL_APP" \
+  delete application karabu-outside-apps
+deny "platform: delete a service-shaped app nothing generated" "$DEL_APP" \
+  delete application karabu-handmade
+deny "platform: delete a tenant-shaped app nothing generated" "$DEL_APP" \
+  delete application tenant-labs
+DEL_RBAC="may only delete the tenant chart's argo-workflow-argocd-"
+deny "platform: delete its own Role argo-workflow-argocd-sync" "$DEL_RBAC" \
+  delete role argo-workflow-argocd-sync
+deny "platform: delete Argo CD's Role argocd-server" "$DEL_RBAC" delete role argocd-server
+deny "platform: delete a tenant-labelled RoleBinding under another name" "$DEL_RBAC" \
+  delete rolebinding karabu-extra
+
+# ApplicationSet updates beyond the refresh annotations.
+deny "platform: change ApplicationSet apps' template project" \
+  "may not change an ApplicationSet's spec" \
+  patch applicationset apps --type merge -p '{"spec":{"template":{"spec":{"project":"default"}}}}'
+deny "platform: label ApplicationSet tenants" "may not change an ApplicationSet's labels" \
+  label applicationset tenants example.invalid/x=y
+deny "platform: set another annotation on ApplicationSet tenants" "may only change the annotations" \
+  annotate applicationset tenants argocd.argoproj.io/tracking-id=x --overwrite
+
+# What the narrowed Role refuses before admission.
+rbac "platform: patch an Application" \
+  annotate application tenant-karabu argocd.argoproj.io/refresh=hard --overwrite
+rbac "platform: patch ApplicationSet openclaw-skills" \
+  patch applicationset openclaw-skills --type merge -p "$REFRESH"
+rbac "platform: list ApplicationSets"    get applicationsets
+rbac "platform: delete ApplicationSet apps" delete applicationset apps
+rbac "platform: server-side apply creates an Application" apply --server-side -f "$WORK/new-app.yaml"
+rbac "platform: get Roles"               get roles
+
+# The policies refuse on their own, so a later widening of the Role does not
+# reopen any of this: grant the verbs for the duration of these cases.
+kubectl create role widened-platform -n argocd \
+  --verb=get,create,update,patch,delete \
+  --resource=applications.argoproj.io,applicationsets.argoproj.io,roles.rbac.authorization.k8s.io >/dev/null
+kubectl create rolebinding widened-platform -n argocd --role=widened-platform \
+  --serviceaccount="argo-workflows:argo-workflow-sa" >/dev/null
+for _ in $(seq 1 30); do
+  kubectl auth can-i create applications.argoproj.io -n argocd --as="$AS" >/dev/null 2>&1 && break
+  sleep 1
+done
+deny "platform: create an Application (Role widened)" "may not create or modify Applications" \
+  create -f "$WORK/new-app.yaml"
+deny "platform: refresh an Application (Role widened)" "may not create or modify Applications" \
+  annotate application tenant-karabu argocd.argoproj.io/refresh=hard --overwrite
+deny "platform: create an ApplicationSet (Role widened)" "may not create or delete ApplicationSets" \
+  create -f "$WORK/new-appset.yaml"
+deny "platform: delete ApplicationSet apps (Role widened)" "may not create or delete ApplicationSets" \
+  delete applicationset apps
+deny "platform: refresh ApplicationSet openclaw-skills (Role widened)" \
+  "may only refresh the ApplicationSets apps and tenants" \
+  patch applicationset openclaw-skills --type merge -p "$REFRESH"
+# No rules, so RBAC's escalation check has nothing to refuse.
+cat > "$WORK/new-role.yaml" <<'YAML'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: made-by-platform
+  namespace: argocd
+rules: []
+YAML
+deny "platform: create a Role (Role widened)" "may not create or modify Roles" \
+  create -f "$WORK/new-role.yaml"
+kubectl delete rolebinding widened-platform -n argocd >/dev/null
+kubectl delete role widened-platform -n argocd >/dev/null
 
 exit "$fail"

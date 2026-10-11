@@ -119,6 +119,16 @@ spec:
           # tenant must never take. Defence in depth only: a static list goes stale
           # whenever a platform namespace is added, so every caller that can reach
           # the API also checks the live cluster with tenant_ns_check.
+          #
+          # The second group reserves names that collide with platform Argo CD
+          # Applications. A tenant's services become Applications named
+          # <tenant>-<service> and the tenant itself tenant-<tenant>, all in
+          # namespace argocd, so a tenant named after a platform Application, or
+          # after a hyphen-prefix of one (root for root-app, shared for
+          # shared-pg), shares that Application's name space. Mirrors
+          # IsReservedTenantName in mctl-api internal/operations/
+          # reserved_tenant.go; change both together. create-tenant also checks
+          # the live Application list (check-application-collision).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
@@ -126,6 +136,10 @@ spec:
               temporal|backstage|minio|database|forgejo|zitadel|\
               local-path-storage|system-upgrade|observability-eval|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
+                return 0 ;;
+              tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
+              root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
+              tenant-*|otel-*)
                 return 0 ;;
             esac
             return 1
@@ -415,6 +429,16 @@ spec:
           # tenant must never take. Defence in depth only: a static list goes stale
           # whenever a platform namespace is added, so every caller that can reach
           # the API also checks the live cluster with tenant_ns_check.
+          #
+          # The second group reserves names that collide with platform Argo CD
+          # Applications. A tenant's services become Applications named
+          # <tenant>-<service> and the tenant itself tenant-<tenant>, all in
+          # namespace argocd, so a tenant named after a platform Application, or
+          # after a hyphen-prefix of one (root for root-app, shared for
+          # shared-pg), shares that Application's name space. Mirrors
+          # IsReservedTenantName in mctl-api internal/operations/
+          # reserved_tenant.go; change both together. create-tenant also checks
+          # the live Application list (check-application-collision).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
@@ -422,6 +446,10 @@ spec:
               temporal|backstage|minio|database|forgejo|zitadel|\
               local-path-storage|system-upgrade|observability-eval|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
+                return 0 ;;
+              tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
+              root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
+              tenant-*|otel-*)
                 return 0 ;;
             esac
             return 1
@@ -504,6 +532,29 @@ spec:
           else
             echo "ArgoCD app tenant-${TENANT} not found, skipping."
           fi
+
+          # BEGIN tenant-argocd-rbac-cleanup
+          # The tenants ApplicationSet renders tenant-<T> without Argo CD's
+          # resources finalizer, so deleting that Application does not cascade.
+          # The tenant's namespaces are deleted explicitly below, but the tenant
+          # chart also puts one Role and one RoleBinding,
+          # argo-workflow-argocd-<T>, in namespace argocd, and those outlived
+          # every deleted tenant. Remove them once tenant-<T> is gone, so Argo CD
+          # cannot re-create them. The admission policy for this
+          # ServiceAccount only admits the delete when the object carries
+          # mctl.me/tenant=<T>. Kept byte-identical between delete-tenant and
+          # delete-tenant-safe by tests/test_wft_create_tenant_existing.py.
+          delete_tenant_argocd_rbac() {
+            for _tar_kind in rolebinding role; do
+              if ! kubectl delete "$_tar_kind" "argo-workflow-argocd-$1" -n argocd --ignore-not-found; then
+                echo "ERROR: could not delete $_tar_kind argo-workflow-argocd-$1 in namespace argocd."
+                return 1
+              fi
+            done
+          }
+          # END tenant-argocd-rbac-cleanup
+
+          delete_tenant_argocd_rbac "${TENANT}" || exit 1
 
           # Delete K8s namespace (if it exists and is the tenant's)
           delete_owned_ns "${TENANT}"
