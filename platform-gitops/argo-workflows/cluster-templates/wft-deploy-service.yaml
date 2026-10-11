@@ -50,7 +50,15 @@ spec:
         # KEY=value newline-separated plaintext
       - name: secret_env_vars
         value: ""
-        # KEY=value newline-separated (stored in Vault)
+        # KEY=value newline-separated (stored in Vault). When
+        # secret_env_secret is set, this carries the key NAMES only (one per
+        # line) and the values come from that Secret.
+      - name: secret_env_secret
+        value: ""
+        # Name of a Secret in the workflow's namespace holding the values
+        # under key secret_env_vars. Set by mctl-api, which creates it owned
+        # by this Workflow so the values never become a workflow parameter.
+        # Empty = legacy callers that still pass values in secret_env_vars.
       - name: provision_database
         value: "false"
       - name: clear_env
@@ -139,10 +147,29 @@ spec:
                 - name: component_name
                   value: "{{workflow.parameters.component_name}}"
 
-          # Step 2: write Vault secrets (skip if no secrets)
+          # Step 2: write Vault secrets (skip if no secrets). Two variants,
+          # at most one runs: write-secrets-handoff reads the values from the
+          # Secret named by secret_env_secret (mctl-api); write-secrets takes
+          # them from the parameter, for callers that still send them there.
+          - name: write-secrets-handoff
+            dependencies: [validate]
+            when: "\"{{workflow.parameters.secret_env_secret}}\" != \"\""
+            templateRef:
+              name: tpl-vault-write
+              clusterScope: true
+              template: write-service-secrets-from-secret
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: secret_name
+                  value: "{{workflow.parameters.secret_env_secret}}"
+
           - name: write-secrets
             dependencies: [validate]
-            when: "\"{{workflow.parameters.secret_env_vars}}\" != \"\""
+            when: "\"{{workflow.parameters.secret_env_secret}}\" == \"\" && \"{{workflow.parameters.secret_env_vars}}\" != \"\""
             templateRef:
               name: tpl-vault-write
               clusterScope: true
@@ -172,10 +199,10 @@ spec:
                   value: "{{workflow.parameters.component_name}}"
 
           # Step 4: generate manifests + git commit
-          # Depends on validate (always) + build-image, write-secrets, and
-          # provision-database (all optional).
+          # Depends on validate (always) + build-image, write-secrets(-handoff),
+          # and provision-database (all optional).
           - name: commit
-            dependencies: [validate, build-image, write-secrets, provision-database]
+            dependencies: [validate, build-image, write-secrets, write-secrets-handoff, provision-database]
             templateRef:
               name: tpl-git-commit
               clusterScope: true
