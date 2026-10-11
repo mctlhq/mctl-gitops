@@ -77,12 +77,11 @@ spec:
             value: "{{inputs.parameters.git_tag}}"
           - name: PARAM_SERVICE_TEMPLATE
             value: "{{inputs.parameters.service_template}}"
+          - name: PARAM_CONTAINER_REGISTRY
+            value: "{{inputs.parameters.container_registry}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
-        env:
-          - name: PARAM_CONTAINER_REGISTRY
-            value: "{{inputs.parameters.container_registry}}"
         source: |
           set -e
 
