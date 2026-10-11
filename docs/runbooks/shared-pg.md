@@ -94,9 +94,17 @@ Safety rules:
 
 **Safe actions.** Raise `storage.size` in cluster.yaml now.
 
+## SharedPgInstanceMetricsIncomplete
+
+**Meaning.** A reachable instance exports `cnpg_collector_up` but not `max_connections` (`cnpg_pg_settings_setting`) or `cnpg_pg_replication_in_recovery`. SharedPgConnectionsHigh, SharedPgNoPrimary and the primary-joined rules cannot see that pod while this lasts.
+
+**First checks.** The pod's `/metrics` on port `metrics`; a CNPG operator upgrade that renamed a default query; a custom `monitoring.customQueriesConfigMap` that replaced the defaults.
+
+**Safe actions.** Restore the metric. Until then, check connections and role on that pod directly.
+
 ## SharedPgMetricsAbsent
 
-**Meaning.** No cnpg_collector_up series; all other SharedPg alerts are blind.
+**Meaning.** No cnpg_collector_up series; all other SharedPg alerts are blind. SharedPgNoPrimary deliberately stays quiet here: with no in_recovery series the role is unknown, not "zero primaries".
 
 **First checks.** VMPodScrape/shared-pg, vmagent targets, pod port `metrics`.
 
