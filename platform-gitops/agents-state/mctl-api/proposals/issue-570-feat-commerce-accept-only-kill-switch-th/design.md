@@ -100,7 +100,9 @@ func (h *Handlers) refuseIfAcceptDisabled(w http.ResponseWriter, r *http.Request
 	h.logAudit(r, audit.Entry{UserID: user.ID, Operation: operation, Status: "denied",
 		RiskLevel: string(operations.RiskMedium), Parameters: map[string]string{"tenant": tenant},
 		Message: "COMMERCE_ACCEPT_DISABLED is on; new paid acceptances are refused"})
-	writeErrorCode(w, http.StatusServiceUnavailable, commerce.ReasonUnsupportedExecution,
+	// 422, not 503 (owner decision 2026-10-11): mctl-agents reads every 5xx
+	// as "ledger unknown", and this is a final refusal with nothing held.
+	writeErrorCode(w, http.StatusUnprocessableEntity, commerce.ReasonUnsupportedExecution,
 		"commerce is not accepting new paid invocations", nil)
 	return true
 }
