@@ -1,10 +1,10 @@
 status: implemented
-updated_at: '2026-10-11T17:04:53Z'
+updated_at: '2026-10-11T17:09:20Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-e1cb5cd81deabda4
-  trace_id: 74c04a32faa3a66172e77d7ab7f327e1
-  agent: implementer
+  context_id: ex-8d1f7bd003037608
+  trace_id: 19f733c914ed0e2e216534b669a4449e
+  agent: issue-investigator
   version: ''
 source:
   type: github_issue
@@ -21,9 +21,8 @@ context:
 approval:
   approved_by: mashkovd
   approved_at: '2026-10-11T16:56:06Z'
-attempt:
-  id: dee7fffcefa9b9dbbafae60a05758aa08f2485247bdde5e14c8eb6ddb5182a6f
-  started_at: '2026-10-11T17:04:27Z'
-  expires_at: '2026-10-11T19:14:27Z'
-  finished_at: '2026-10-11T17:04:53Z'
 pr: https://github.com/mctlhq/mctl-gitops/pull/1817
+github:
+  state: open
+  head_sha: b163590352e86bc009dca0a7543005c3fd38505c
+  observed_at: '2026-10-11T17:09:20Z'
