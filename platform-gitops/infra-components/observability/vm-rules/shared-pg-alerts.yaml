@@ -24,9 +24,13 @@ spec:
       interval: 60s
       rules:
         - alert: SharedPgNoPrimary
-          #  Counts primaries cluster-wide, so a replica cannot trip it.
+          # Counts primaries cluster-wide, so a replica cannot trip it.
+          # No `or vector(0)`: with no in_recovery series at all we cannot
+          # observe the role, which is SharedPgMetricsAbsent's to report, not
+          # a "no primary" page. One pod missing the series while the other
+          # reports it is SharedPgInstanceMetricsIncomplete.
           expr: |
-            (sum(cnpg_pg_replication_in_recovery{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == bool 0) or vector(0)) != 1
+            sum(cnpg_pg_replication_in_recovery{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == bool 0) != 1
           for: 5m
           labels:
             severity: critical
@@ -159,6 +163,33 @@ spec:
             description: >-
               PVC {{ $labels.persistentvolumeclaim }} is above 90% used. A full volume stops PostgreSQL.
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgvolumealmostfull
+        - alert: SharedPgInstanceMetricsIncomplete
+          # An exporter that is up but lacks a series another rule divides by
+          # or counts on leaves that rule silently blind for the pod:
+          # SharedPgConnectionsHigh needs max_connections, SharedPgNoPrimary
+          # and the primary joins need in_recovery. collector_up == 0 is
+          # SharedPgInstanceDown, so only reachable instances are checked.
+          expr: |
+            (
+              cnpg_collector_up{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == 1
+                unless on(namespace, pod)
+              cnpg_pg_settings_setting{namespace="platform-db", pod=~"shared-pg-[0-9]+", name="max_connections"}
+            )
+              or
+            (
+              cnpg_collector_up{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == 1
+                unless on(namespace, pod)
+              cnpg_pg_replication_in_recovery{namespace="platform-db", pod=~"shared-pg-[0-9]+"}
+            )
+          for: 15m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg instance {{ $labels.pod }} is missing CNPG metrics other alerts depend on"
+            description: >-
+              {{ $labels.pod }} exports cnpg_collector_up but not max_connections or in_recovery, so SharedPgConnectionsHigh, SharedPgNoPrimary and the primary-joined rules cannot see it.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpginstancemetricsincomplete
         - alert: SharedPgMetricsAbsent
           expr: |
             absent(cnpg_collector_up{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
