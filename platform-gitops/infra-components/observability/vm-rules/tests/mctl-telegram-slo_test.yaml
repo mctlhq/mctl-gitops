@@ -414,4 +414,128 @@ tests:
     alert_rule_test:
       - eval_time: 90m
         alertname: MctlTelegramToolAvailabilityFastBurn
+
+  # --- Error-budget exhaustion (mctl-telegram#757) ----------------------
+  # Each budget alert fires once its 28d ratio has been under the objective
+  # for longer than for: 1h, stays quiet just above the objective, and does
+  # not fire for a dip shorter than for:.
+  - interval: 1m
+    name: tool availability budget alert fires at 98% for over an hour
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="ok"}'
+        values: "0+98x150"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="error"}'
+        values: "0+2x150"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MctlTelegramToolAvailabilityErrorBudgetExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: MCP tool availability error budget exhausted (28d)"
+              description: "MCP tool availability over the rolling 28 days is 98%, below the 99.5% objective: the error budget is spent. Apply the error-budget policy (only reliability and security PRs merge; deploy only while the 6h burn rate is below 1x) until the ratio is back above target with at least half the budget left. https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md#error-budget-policy"
+
+  - interval: 1m
+    name: tool availability budget alert stays quiet at 99.9%
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="ok"}'
+        values: "0+999x150"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="error"}'
+        values: "0+1x150"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MctlTelegramToolAvailabilityErrorBudgetExhausted
+        exp_alerts: []
+
+  # A burst of errors at 61-80m drags the 28d ratio under 99.5% from about
+  # 64m; a tenfold rise in successful traffic from 81m lifts it back above at
+  # about 112m. Under the objective for under 50 minutes: still pending at
+  # 100m (it would be firing with for: 0m) and resolved by 180m.
+  - interval: 1m
+    name: tool availability budget alert ignores a dip shorter than for
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="ok"}'
+        values: "0+100x80 9000+1000x100"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="error"}'
+        values: "0x60 10+10x19 200x100"
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: MctlTelegramToolAvailabilityErrorBudgetExhausted
+        exp_alerts: []
+      - eval_time: 180m
+        alertname: MctlTelegramToolAvailabilityErrorBudgetExhausted
+        exp_alerts: []
+
+  - interval: 1m
+    name: oauth budget alert fires at 99% for over an hour
+    input_series:
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",pod="a",method="POST",route="/oauth/token",status_code="200"}'
+        values: "0+99x150"
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",pod="a",method="POST",route="/oauth/token",status_code="502"}'
+        values: "0+1x150"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MctlTelegramOAuthAvailabilityErrorBudgetExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: OAuth token endpoint error budget exhausted (28d)"
+              description: "Non-5xx share of /oauth/token and /oauth/telegram/callback over the rolling 28 days is 99%, below the 99.9% objective: the error budget is spent. Apply the error-budget policy (only reliability and security PRs merge; deploy only while the 6h burn rate is below 1x) until the ratio is back above target with at least half the budget left. https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md#error-budget-policy"
+
+  - interval: 1m
+    name: oauth budget alert stays quiet at 99.95%
+    input_series:
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",pod="a",method="POST",route="/oauth/token",status_code="200"}'
+        values: "0+1999x150"
+      - series: 'mctl_http_requests_total{job="mctl-telegram",namespace="labs",pod="a",method="POST",route="/oauth/token",status_code="502"}'
+        values: "0+1x150"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MctlTelegramOAuthAvailabilityErrorBudgetExhausted
+        exp_alerts: []
+
+  # flood_wait and call_error borrows are outside the SLI: 95 ok and 5 error
+  # is 95% however many of them there are.
+  - interval: 1m
+    name: session borrow budget alert fires at 95% for over an hour
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="ok"}'
+        values: "0+95x150"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="error"}'
+        values: "0+5x150"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="flood_wait"}'
+        values: "0+50x150"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MctlTelegramSessionBorrowErrorBudgetExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: session borrow error budget exhausted (28d)"
+              description: "Pool.Borrow() success over the rolling 28 days, excluding TTL expirations, flood waits and caller errors, is 95%, below the 99% objective: the error budget is spent. Apply the error-budget policy (only reliability and security PRs merge; deploy only while the 6h burn rate is below 1x) until the ratio is back above target with at least half the budget left. https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md#error-budget-policy"
+
+  - interval: 1m
+    name: session borrow budget alert stays quiet at 99.5% despite flood waits
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="ok"}'
+        values: "0+199x150"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="error"}'
+        values: "0+1x150"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="flood_wait"}'
+        values: "0+100x150"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MctlTelegramSessionBorrowErrorBudgetExhausted
         exp_alerts: []
