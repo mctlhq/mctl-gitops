@@ -121,6 +121,11 @@ spec:
         env:
           - name: PARAM_DOCKERFILE_PATH
             value: "{{workflow.parameters.dockerfile_path}}"
+          # A tag unique to this run and step. base-service pulls with
+          # IfNotPresent, so a reused tag (git_tag "main") can start a stale
+          # image a node cached from an earlier smoke run.
+          - name: SMOKE_RUN
+            value: "{{workflow.name}}"
         source: |
           set -e
           TEAM="{{workflow.parameters.team_name}}"
@@ -155,7 +160,7 @@ spec:
               - {name: provision_database, value: "${PROVISION_DB}"}
               - {name: skip_health_check,  value: "false"}
               - {name: dockerfile_path,    value: "${PARAM_DOCKERFILE_PATH}"}
-              - {name: image_tag,          value: ""}
+              - {name: image_tag,          value: "${SMOKE_RUN}-onboard"}
           EOF
           )
           echo "Submitted: ${WF_NAME}"
@@ -204,6 +209,11 @@ spec:
         env:
           - name: PARAM_DOCKERFILE_PATH
             value: "{{workflow.parameters.dockerfile_path}}"
+          # A tag unique to this run and step. base-service pulls with
+          # IfNotPresent, so a reused tag (git_tag "main") can start a stale
+          # image a node cached from an earlier smoke run.
+          - name: SMOKE_RUN
+            value: "{{workflow.name}}"
         source: |
           set -e
           TEAM="{{workflow.parameters.team_name}}"
@@ -248,7 +258,7 @@ spec:
               - {name: provision_database, value: "false"}
               - {name: skip_health_check,  value: "false"}
               - {name: dockerfile_path,    value: "${PARAM_DOCKERFILE_PATH}"}
-              - {name: image_tag,          value: ""}
+              - {name: image_tag,          value: "${SMOKE_RUN}-deploy"}
           EOF
           )
           echo "Submitted: ${WF_NAME}"
