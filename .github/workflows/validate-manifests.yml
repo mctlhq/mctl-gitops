@@ -275,6 +275,15 @@ jobs:
           scripts/validate-shell-param-interpolation.py --selftest
           scripts/validate-shell-param-interpolation.py
 
+      - name: Check GitHub Actions run steps for expression injection
+        run: |
+          set -euo pipefail
+          # Same invariant for GitHub Actions: expression interpolation of inputs or
+          # event data inside run: is shell text, not data (gitops#1809). Use env:.
+          # --selftest first, same reason.
+          scripts/validate-gha-expression-injection.py --selftest
+          scripts/validate-gha-expression-injection.py
+
       - name: Check for shell interpolation of yq expressions
         run: |
           set -euo pipefail
@@ -423,6 +432,12 @@ jobs:
         # control/execution workers) is exactly where a silent miss pins one
         # of them forever.
         run: python3 tests/test_release_deploy_bump.py
+
+      - name: Unit-test the release-deploy input validation
+        # validate-inputs gates build and bump; this runs its bash against
+        # valid and hostile inputs and keeps its prefix list equal to the
+        # bump script's ALLOWED_PREFIXES.
+        run: python3 tests/test_release_deploy_validate_inputs.py
 
       - name: Unit-test the App-token scope validation
         # rotate-github-app-tokens narrows mctl-api's installation token to one

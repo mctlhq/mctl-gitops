@@ -17,11 +17,13 @@ jobs:
     steps:
       - name: Request Copilot review
         run: |
-          gh pr edit ${{ github.event.pull_request.number }} \
+          gh pr edit "$PR" \
             --add-reviewer copilot \
-            --repo ${{ github.repository }}
+            --repo "$REPO"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
 
   auto-merge:
     runs-on: ubuntu-latest
@@ -80,9 +82,12 @@ jobs:
       - name: Merge PR
         if: steps.guard.outputs.merge == 'true'
         run: |
-          gh pr merge ${{ github.event.pull_request.number }} \
+          gh pr merge "$PR" \
             --merge --delete-branch \
-            --match-head-commit "${{ steps.guard.outputs.head_sha }}" \
-            --repo ${{ github.repository }}
+            --match-head-commit "$HEAD_SHA" \
+            --repo "$REPO"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
