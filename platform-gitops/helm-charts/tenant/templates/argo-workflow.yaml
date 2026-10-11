@@ -143,7 +143,9 @@ roleRef:
 # argo-workflows/config/sa-and-rbac.yaml).
 # Named apart from the old sso-team-workflows binding (argo-workflows-admin)
 # because a RoleBinding's roleRef cannot change in place: Argo CD prunes the
-# old one and creates this one.
+# old one and creates this one. argo-workflows-view (get/list/watch on the
+# Argo CRDs), like argo-workflows-admin, comes from the upstream
+# argo-workflows chart pinned in bootstrap/templates/core-infra/argo-workflows.yaml.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
