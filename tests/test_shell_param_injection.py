@@ -37,7 +37,8 @@ CASES = [
     ("wft-deploy-service.yaml", "refresh-apps-appset", "echo \"Triggering hard refresh"),
     ("wft-provision-database.yaml", "do-provision", "# ── Authenticate with Vault",
      "TEAM=\"$PARAM_TEAM_NAME\""),
-    ("wft-retire-service.yaml", "cleanup-db-from-gitops", "# ── Set up SSH for git"),
+    ("wft-retire-service.yaml", "cleanup-db-from-gitops", "# ── Set up SSH for git",
+     "TEAM=\"$PARAM_TEAM_NAME\""),
 ]
 
 
