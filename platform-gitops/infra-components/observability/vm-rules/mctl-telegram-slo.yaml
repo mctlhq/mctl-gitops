@@ -25,7 +25,13 @@
 #
 # Metric provenance (every series below was checked against the registrations
 # in mctl-telegram internal/metrics/metrics.go, not against the source YAML):
-#   mctl_tool_invocations_total{tool,status}          metrics.go New() — status is "ok"|"error"
+#   mctl_tool_invocations_total{tool,status}          metrics.go New() — status is
+#                                                      "ok"|"error"|"caller_error"
+#                                                      (caller_error since mctl-telegram#757:
+#                                                      a request Telegram or argument/scope
+#                                                      validation refused as the caller's
+#                                                      mistake; outside the SLI, so every
+#                                                      tool ratio uses status=~"ok|error")
 #   mctl_http_requests_total{method,route,status_code} metrics.go New() — route is the chi
 #                                                      pattern; /oauth/token and
 #                                                      /oauth/telegram/callback are registered
@@ -90,19 +96,19 @@ spec:
             (
               sum by (job, namespace) (rate(mctl_tool_invocations_total{status="error"}[1h]))
               or
-              0 * sum by (job, namespace) (rate(mctl_tool_invocations_total[1h]))
+              0 * sum by (job, namespace) (rate(mctl_tool_invocations_total{status=~"ok|error"}[1h]))
             )
             /
-            sum by (job, namespace) (rate(mctl_tool_invocations_total[1h]))
+            sum by (job, namespace) (rate(mctl_tool_invocations_total{status=~"ok|error"}[1h]))
         - record: mctl_telegram:tool_errors:ratio_rate6h
           expr: |
             (
               sum by (job, namespace) (rate(mctl_tool_invocations_total{status="error"}[6h]))
               or
-              0 * sum by (job, namespace) (rate(mctl_tool_invocations_total[6h]))
+              0 * sum by (job, namespace) (rate(mctl_tool_invocations_total{status=~"ok|error"}[6h]))
             )
             /
-            sum by (job, namespace) (rate(mctl_tool_invocations_total[6h]))
+            sum by (job, namespace) (rate(mctl_tool_invocations_total{status=~"ok|error"}[6h]))
 
         # --- OAuth token-endpoint availability (99.9% objective) ---
         # Route set is the one docs/slo.md names: the token exchange and the
@@ -193,10 +199,10 @@ spec:
             (
               sum by (job, namespace) (rate(mctl_tool_invocations_total{status="ok"}[28d]))
               or
-              0 * sum by (job, namespace) (rate(mctl_tool_invocations_total[28d]))
+              0 * sum by (job, namespace) (rate(mctl_tool_invocations_total{status=~"ok|error"}[28d]))
             )
             /
-            sum by (job, namespace) (rate(mctl_tool_invocations_total[28d]))
+            sum by (job, namespace) (rate(mctl_tool_invocations_total{status=~"ok|error"}[28d]))
         # Counts successes directly rather than `1 - (5xx / total)`. The
         # subtractive form breaks in the HEALTHY case: with traffic served and
         # no 5xx at all, the `status_code=~"5.."` selector matches nothing, the
