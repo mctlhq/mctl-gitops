@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-11T17:54:27Z'
+updated_at: '2026-10-11T18:25:06Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-689ca4892390f6c7
@@ -27,3 +27,10 @@ attempt:
   expires_at: '2026-10-11T19:17:38Z'
   finished_at: '2026-10-11T17:16:57Z'
 pr: https://github.com/mctlhq/mctl-api/pull/561
+refusals: 1
+refusals_head: 6279ce193e350a7a1943c81b55c3e3478883738d
+notes: 'implementer declined to act: Findings 1 and 2 (remove-custom-domain legacy
+  fallback passing unnormalized hostname) are already fixed on this branch by commit
+  d41a4b7: internal/mcp/server.go:1411 submits normalizeDomain(domain), and :1383/:1385
+  use the same helper for the row match; add path at :1516 also uses it. No further
+  change needed.'
