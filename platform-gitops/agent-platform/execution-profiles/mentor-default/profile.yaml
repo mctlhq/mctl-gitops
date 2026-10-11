@@ -17,10 +17,13 @@
 #                    3600. No MENTOR_TIMEOUT_SECONDS exists. In mode=full the
 #                    service agents run first inside the same 3600 seconds, so
 #                    this is the mentor's ceiling, not time reserved for it.
-#   sandbox          mctl-agents-run, as the manifest says since
-#                    mctl-agents#629. The mctl-agents-daily CronWorkflow
-#                    submits it with mode=full; a CronWorkflow is not a
-#                    ClusterWorkflowTemplate and sets no budget or deadline.
+#   sandbox          mctl-agents-run. The mentor's manifest and
+#                    docs/agent-inventory.yaml both say mctl-agents-daily, but
+#                    that is a CronWorkflow which submits mctl-agents-run with
+#                    mode=full. It is not a ClusterWorkflowTemplate and sets
+#                    no budget or deadline. This field names the template the
+#                    mentor's pod is created from. The manifest's own value is
+#                    left alone: editing it changes the hash the binding pins.
 #   permissions      orchestrator/run_mentor.py's prompt,
 #                    build_mentor_options' docstring and
 #                    docs/agent-inventory.yaml ("writes:
