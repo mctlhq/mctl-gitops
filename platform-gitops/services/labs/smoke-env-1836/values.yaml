@@ -34,11 +34,13 @@ probes:
     initialDelaySeconds: 60
     periodSeconds: 15
 env:
-  SMOKE_A: alpha
+  SMOKE_A: alpha2
   SMOKE_SPACES: hello world
   SMOKE_SEMI: a;b&&c|d
   SMOKE_DOLLAR: $(echo not-run)
   SMOKE_BACKTICK: '`id`'
+  SMOKE_NEW: x;touch /tmp/pwned
+  SMOKE_SUB: $(id)`whoami`
 externalSecret:
   targetSecret: smoke-env-1836-secrets
   data:
@@ -48,6 +50,9 @@ externalSecret:
     - secretKey: SMOKE_SECRET_TWO
       remoteKey: teams/labs/smoke-env-1836
       property: SMOKE_SECRET_TWO
+    - secretKey: SMOKE_SECRET_THREE
+      remoteKey: teams/labs/smoke-env-1836
+      property: SMOKE_SECRET_THREE
 envFrom:
   - secretRef:
       name: smoke-env-1836-secrets
