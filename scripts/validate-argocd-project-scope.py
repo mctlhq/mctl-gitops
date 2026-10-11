@@ -23,13 +23,16 @@ Reverse (every permission is used), for each literal entry:
   - each destination namespace is the destination of at least one
     Application, or holds at least one resource an owner in that project
     renders.
-  Wildcard entries (`*`) are exempt from the reverse check, except that the
-  projects named with --strict may not use them in sourceRepos or in the
-  destination server at all.
+  Entries containing a wildcard (`*`) are exempt from the reverse check, so
+  the projects named with --strict may not contain one anywhere: not in
+  sourceRepos, not in a destination server, not in a destination namespace.
 
 Matching follows Argo CD's: repository URLs are compared lowercased with a
 trailing `.git` removed, as globs in which `*` does not cross `/` and `**`
-does; destination server and namespace are plain globs.
+does, and a bare `*` permits any repository; destination server and
+namespace are plain globs. A trailing `/` is significant, as it is in Argo
+CD's own normalization, so the pinned entries are written exactly as the
+Applications spell them.
 
 Something that cannot be read (no AppProject, a source with no repoURL) is an
 error, exit 2, never a pass.
@@ -103,6 +106,8 @@ def normalize_repo(url: str) -> str:
 
 
 def repo_matches(pattern: str, url: str) -> bool:
+    if pattern.strip() in ("*", "**"):
+        return True
     return bool(_glob_regex(normalize_repo(pattern), "/").match(normalize_repo(url)))
 
 
@@ -226,10 +231,10 @@ def violations(projects: dict[str, Project], apps: list[App], strict: list[str])
         if proj is None:
             found.append(f"strict project {name!r} is not defined in the render")
             continue
-        if any(p == "*" or p == "**" for p in proj.source_repos):
+        if any("*" in p for p in proj.source_repos):
             found.append(f"AppProject {name}: sourceRepos must not contain a wildcard")
-        if any(s == "*" for s, _ in proj.destinations):
-            found.append(f"AppProject {name}: destination server must not be a wildcard")
+        if any("*" in s or "*" in n for s, n in proj.destinations):
+            found.append(f"AppProject {name}: destinations must not contain a wildcard")
 
     for app in apps:
         label = f"{app.kind} {app.name}"
@@ -322,17 +327,25 @@ def selftest(projects: dict[str, Project], apps: list[App], strict: list[str]) -
               next(e for e in p[proj_name].source_repos if repo_matches(e, target.sources[0]))),
           "removing an entry an Application uses")
     if strict:
-        fires(lambda p, a: p[strict[0]].source_repos.append("*"), "a wildcard in a strict project")
+        fires(lambda p, a: p[strict[0]].source_repos.append("*"), "a bare wildcard in a strict project")
+        fires(lambda p, a: p[strict[0]].source_repos.append("https://github.com/**"),
+              "a glob sourceRepos entry in a strict project")
+        fires(lambda p, a: p[strict[0]].destinations.append((target.server, "*")),
+              "a namespace wildcard in a strict project")
+        fires(lambda p, a: p[strict[0]].destinations.append(("*", target.namespace)),
+              "a server wildcard in a strict project")
     # Matching semantics: `.git` and case are normalized, `*` does not cross `/`.
     assert repo_matches("https://github.com/mctlhq/mctl-gitops.git", "https://GitHub.com/mctlhq/mctl-gitops")
     assert not repo_matches("https://github.com/mctlhq/*", "https://github.com/mctlhq/a/b")
     assert repo_matches("https://github.com/mctlhq/**", "https://github.com/mctlhq/a/b")
+    assert repo_matches("*", "https://github.com/mctlhq/a/b")
+    assert Project("p", ["*"], []).repo_permitted("https://example.invalid/x/y")
     assert not repo_matches("https://github.com/mctlhq/mctl-gitops.git", "https://github.com/mctlhq/mctl-gitops-fork.git")
     print("selftest OK: clean render passes; unlisted source, namespace, resource namespace, server, "
           "undefined project, unused entries, a removed entry and a wildcard all fire")
 
 
-def live(apps_json: str, projects: dict[str, Project], strict: list[str]) -> int:
+def live(apps_json: str, projects: dict[str, Project]) -> int:
     try:
         with open(apps_json) as fh:
             items = json.load(fh)["items"]
@@ -349,6 +362,12 @@ def live(apps_json: str, projects: dict[str, Project], strict: list[str]) -> int
         sources = _sources(spec, f"live Application {name}")
         res_ns = {r["namespace"] for r in (it.get("status") or {}).get("resources") or [] if r.get("namespace")}
         proj = projects.get(project)
+        if "server" not in dest:
+            # Same stance as the render path: not evaluated, so not a verdict.
+            rows.append((name, project, "; ".join(sources), dest.get("namespace", ""), "-",
+                         "UNKNOWN (name-only destination)"))
+            bad += 1
+            continue
         if proj is None:
             # Projects this branch does not render (none today) are reported, not guessed.
             rows.append((name, project, "; ".join(sources), dest.get("namespace", ""), "-", "UNKNOWN (project not rendered)"))
@@ -393,11 +412,13 @@ def main(argv: list[str]) -> int:
             rest.append(a)
     try:
         projects, apps, _ = parse_inputs(rest)
-        if live_json:
-            return live(live_json, projects, strict)
         if do_selftest:
             selftest(projects, apps, strict)
         found = violations(projects, apps, strict)
+        if live_json and not found:
+            # The live table is only meaningful for projects that pass the
+            # render checks (strict included), so those run first.
+            return live(live_json, projects)
     except CheckError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

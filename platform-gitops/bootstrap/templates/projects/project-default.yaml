@@ -22,6 +22,18 @@
 #     operators, so they legitimately own CRDs, ClusterRoles, webhooks,
 #     admission policies, StorageClasses and PriorityClasses.
 #
+# Both lists are the UNION over every Application in this project. They
+# bound the platform tier as a whole, not each Application: any of them may
+# use any listed repository and namespace. Per-Application scoping would need
+# a project per Application.
+#
+# The git entry comes from .Values.spec.source.repoURL, while
+# argocd-self-managed (platform-gitops/argocd) spells the same URL as a
+# literal. CI renders platform-gitops/bootstrap/values.yaml only, so a
+# bootstrap values file for another cluster that names a different
+# repository must keep the two in step, or argocd-self-managed stops
+# syncing.
+#
 # Changing either list: scripts/validate-argocd-project-scope.py (CI,
 # validate-manifests.yml) renders this chart and the argocd chart and
 # fails when an Application's source or destination is not covered by its
