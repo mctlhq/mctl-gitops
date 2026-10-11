@@ -77,3 +77,44 @@ tests:
                 More than 10% of MCP tool invocations are returning errors over
                 the last 15 minutes. Check mctl-telegram logs for the specific
                 tools failing (tool label on mctl_tool_invocations_total).
+
+  # caller_error (mctl-telegram#757) is outside the ratio. A tenth of the
+  # calls refused as the caller's mistake is not "tool calls are failing".
+  - interval: 1m
+    name: HighToolErrorRate ignores caller_error calls
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="caller_error"}'
+        values: '0+5x30'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="ok"}'
+        values: '0+4x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HighToolErrorRate
+        exp_alerts: []
+
+  # ...and caller_error volume must not dilute real errors either: 1 error
+  # against 4 ok is 20% of the calls that count. The old bare-counter
+  # denominator read the same input as 1 in 25 (4%) and stayed quiet.
+  - interval: 1m
+    name: HighToolErrorRate still fires on errors hidden among caller_error calls
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="send_message",status="error"}'
+        values: '0+1x30'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="send_message",status="ok"}'
+        values: '0+4x30'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="caller_error"}'
+        values: '0+20x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HighToolErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: mctl-telegram
+              instance: prod
+            exp_annotations:
+              summary: "mctl-telegram: more than 10% of tool calls are failing"
+              description: >-
+                More than 10% of MCP tool invocations are returning errors over
+                the last 15 minutes. Check mctl-telegram logs for the specific
+                tools failing (tool label on mctl_tool_invocations_total).

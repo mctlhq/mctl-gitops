@@ -73,6 +73,10 @@ spec:
           # Verified with promtool against 5 errors in 155 calls (3.2%):
           # the old expression returns 1, the new one 0.032.
           #
+          # The denominator is status=~"ok|error" (mctl-telegram#757):
+          # caller_error calls are requests refused as the caller's mistake,
+          # which say nothing about the service's health either way.
+          #
           # Aggregating away `tool` (not by tool) is deliberate: the
           # threshold is about the service's overall health, and a single
           # rarely-used tool failing twice should not read as "10% of tool
@@ -85,7 +89,7 @@ spec:
             )
             /
             sum without(tool, status) (
-              rate(mctl_tool_invocations_total[15m])
+              rate(mctl_tool_invocations_total{status=~"ok|error"}[15m])
             ) > 0.1
           for: 5m
           labels:
