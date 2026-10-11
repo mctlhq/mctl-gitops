@@ -102,14 +102,16 @@ def main() -> int:
     check(re.search(r"@sha256:[0-9a-f]{64}$", c["image"]) is not None, "C2 the image is pinned by digest", c["image"])
 
     es = load(EXTERNALSECRET)
-    es_secret = es["spec"]["target"]["name"]
+    es_target = es["spec"]["target"]["name"]
     es_keys = {d["secretKey"] for d in es["spec"]["data"]}
     env = {e["name"]: e for e in c.get("env", [])}
-    tok = env.get("CLOUDFLARE_API_TOKEN", {})
-    ref = (tok.get("valueFrom") or {}).get("secretKeyRef") or {}
-    check("value" not in tok and ref.get("name") == es_secret and ref.get("key") in es_keys,
+    api_env = env.get("CLOUDFLARE_API_TOKEN", {})
+    ref = (api_env.get("valueFrom") or {}).get("secretKeyRef") or {}
+    check("value" not in api_env and ref.get("name") == es_target and ref.get("key") in es_keys,
           "C3 the token comes only from the ExternalSecret's Secret and key",
-          f"secretKeyRef {ref!r}, ExternalSecret writes {es_secret!r} {sorted(es_keys)}")
+          # Names only: an inline value, if one were ever set, is never printed.
+          f"secretKeyRef name={ref.get('name')!r} key={ref.get('key')!r}, "
+          f"ExternalSecret writes {es_target!r} {sorted(es_keys)}")
     check(not ref.get("optional"), "C3 the token reference is not optional")
 
     with open(WORKFLOW, encoding="utf-8") as f:
