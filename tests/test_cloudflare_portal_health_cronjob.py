@@ -109,9 +109,9 @@ def main() -> int:
     ref = (api_env.get("valueFrom") or {}).get("secretKeyRef") or {}
     check("value" not in api_env and ref.get("name") == es_target and ref.get("key") in es_keys,
           "C3 the token comes only from the ExternalSecret's Secret and key",
-          # Names only: an inline value, if one were ever set, is never printed.
-          f"secretKeyRef name={ref.get('name')!r} key={ref.get('key')!r}, "
-          f"ExternalSecret writes {es_target!r} {sorted(es_keys)}")
+          # Nothing read from the token's env entry is printed: CodeQL treats
+          # all of it as sensitive, and an inline value must never reach a log.
+          f"expected secretKeyRef to {es_target!r} with a key in {sorted(es_keys)}")
     check(not ref.get("optional"), "C3 the token reference is not optional")
 
     with open(WORKFLOW, encoding="utf-8") as f:
