@@ -33,32 +33,48 @@ spec:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   suspend: false
+  # The steps live in ClusterWorkflowTemplate labs-claude-remote-restart (below in this
+  # file): the controller runs with templateReferencing: Strict, which
+  # refuses a Workflow that carries its own templates.
   workflowSpec:
-    serviceAccountName: argo-workflow-sa
-    entrypoint: restart
-    activeDeadlineSeconds: 600
-    ttlStrategy:
-      secondsAfterCompletion: 86400
-      secondsAfterSuccess: 86400
-      secondsAfterFailure: 259200
-    templates:
-      - name: restart
-        # alpine/k8s publishes full-semver tags matching k8s patch releases.
-        # Pinned within ±1 minor of cluster (currently k3s 1.33.x).
-        container:
-          image: alpine/k8s:1.33.12
-          command: ["sh", "-c"]
-          args:
-            - |
-              set -e
-              echo "[$(date -u +%FT%TZ)] restarting labs/claude-remote deployment for weekly claude-code refresh"
-              kubectl -n labs rollout restart deployment/labs-claude-remote-base-service
-              kubectl -n labs rollout status deployment/labs-claude-remote-base-service --timeout=5m
-              echo "[$(date -u +%FT%TZ)] restart complete — pod will run 'claude install latest --force' from entrypoint"
-          resources:
-            requests:
-              cpu: 10m
-              memory: 32Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
+    workflowTemplateRef:
+      name: labs-claude-remote-restart
+      clusterScope: true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: labs-claude-remote-restart
+  annotations:
+    workflows.argoproj.io/description: |
+      Steps of CronWorkflow argo-workflows/labs-claude-remote-restart (above). See its
+      description; kept here so the CronWorkflow only references them.
+spec:
+  serviceAccountName: argo-workflow-sa
+  entrypoint: restart
+  activeDeadlineSeconds: 600
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+    secondsAfterSuccess: 86400
+    secondsAfterFailure: 259200
+  templates:
+    - name: restart
+      # alpine/k8s publishes full-semver tags matching k8s patch releases.
+      # Pinned within ±1 minor of cluster (currently k3s 1.33.x).
+      container:
+        image: alpine/k8s:1.33.12
+        command: ["sh", "-c"]
+        args:
+          - |
+            set -e
+            echo "[$(date -u +%FT%TZ)] restarting labs/claude-remote deployment for weekly claude-code refresh"
+            kubectl -n labs rollout restart deployment/labs-claude-remote-base-service
+            kubectl -n labs rollout status deployment/labs-claude-remote-base-service --timeout=5m
+            echo "[$(date -u +%FT%TZ)] restart complete — pod will run 'claude install latest --force' from entrypoint"
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi

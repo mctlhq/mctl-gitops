@@ -28,8 +28,11 @@ CWFT = pathlib.Path(
 
 
 def embedded_python() -> str:
-    doc = yaml.safe_load(CWFT.read_text())
-    source = doc["spec"]["workflowSpec"]["templates"][0]["script"]["source"]
+    # The CronWorkflow only references the steps; they live in the
+    # ClusterWorkflowTemplate of the same name in the same file.
+    doc = next(d for d in yaml.safe_load_all(CWFT.read_text())
+               if d["kind"] == "ClusterWorkflowTemplate")
+    source = doc["spec"]["templates"][0]["script"]["source"]
     start = source.index("<< 'PYEOF'")
     return source[source.index("\n", start) + 1:source.rindex("PYEOF")]
 
