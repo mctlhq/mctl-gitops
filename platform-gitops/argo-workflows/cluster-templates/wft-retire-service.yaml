@@ -255,7 +255,10 @@ spec:
           BODY=$(mktemp)
           printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' \
             "$APP_UID" > "$BODY"
-          if ! kubectl delete --raw "$APP_URI" -f "$BODY" >/dev/null; then
+          DELETE_RC=0
+          kubectl delete --raw "$APP_URI" -f "$BODY" >/dev/null || DELETE_RC=$?
+          rm -f "$BODY"
+          if [ "$DELETE_RC" -ne 0 ]; then
             if [ "$(app_state || echo unreadable)" = absent ]; then
               echo "✅ ArgoCD Application already gone"
               exit 0
