@@ -712,3 +712,200 @@ spec:
         - key: kubernetes.io/metadata.name
           operator: In
           values: {{ keys (.Values.externalManifestNamespaces | default dict) | sortAlpha | default (list "none.invalid") | toJson }}
+---
+# Tenant workflow ServiceAccounts and Argo CD objects.
+#
+# Each tenant's <ns>/argo-workflow-sa holds a Role in namespace argocd
+# (tenant chart, argo-workflow.yaml) because its workflows refresh, and on
+# retire delete, that tenant's own Applications. RBAC cannot express "only
+# Applications labelled team=<ns>", so the Role covers every Application in
+# the namespace; these two policies narrow what the verbs may actually do.
+#
+# What tenant workflows legitimately send, all traced in cluster-templates/:
+#   deploy-service  merge-patch on ApplicationSet apps: refresh annotations
+#   smoke-test      annotate <team>-<svc> and shared-pg: refresh annotation
+#   retire-service  delete <team>-<svc>; on timeout, clear its finalizers
+#
+# So, for argo-workflow-sa in any namespace except argo-workflows (the
+# platform's own workflow tier, which creates and deletes tenants and keeps
+# its broader rights; follow-up):
+#   DELETE  only an Application labelled team=<ns> in project apps
+#   UPDATE  nothing but the refresh annotations may change, except that an
+#           owned Application's finalizers may be removed (retire fallback)
+#
+# Argo CD's controllers write status and operation under their own
+# ServiceAccounts and are not matched. A patch arrives as UPDATE carrying
+# the whole new object, so whole-field comparison sees every change.
+#
+# Two policies, because the API server type-checks each expression against
+# every matched kind's schema: Application has operation and a status
+# without a subresource, ApplicationSet has neither.
+#
+# Proven both ways against a real API server by
+# scripts/test-tenant-workflow-sa-argocd-policy.sh.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-tenant-workflow-sa-argocd-applications
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["argoproj.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE", "DELETE"]
+        resources: ["applications"]
+  matchConditions:
+    - name: tenant-workflow-sa
+      expression: >-
+        request.userInfo.username.startsWith('system:serviceaccount:') &&
+        request.userInfo.username.endsWith(':argo-workflow-sa') &&
+        size(request.userInfo.username.split(':')) == 4 &&
+        request.userInfo.username.split(':')[2] != 'argo-workflows'
+  variables:
+    - name: tenant
+      expression: "request.userInfo.username.split(':')[2]"
+    - name: refreshKeys
+      expression: "['argocd.argoproj.io/refresh', 'mctl.ai/refresh-ts']"
+    - name: isUpdate
+      expression: "request.operation == 'UPDATE'"
+    - name: owned
+      expression: >-
+        has(oldObject.metadata.labels) && 'team' in oldObject.metadata.labels &&
+        oldObject.metadata.labels['team'] == variables.tenant &&
+        has(oldObject.spec.project) && oldObject.spec.project == 'apps'
+    # Variables are evaluated lazily, so `object` (null on DELETE) is only
+    # read below behind isUpdate.
+    - name: oldAnnotations
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    - name: newAnnotations
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+    - name: oldFinalizers
+      expression: "has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers : []"
+    - name: newFinalizers
+      expression: "has(object.metadata.finalizers) ? object.metadata.finalizers : []"
+  validations:
+    - expression: "variables.isUpdate || variables.owned"
+      messageExpression: >-
+        "argo-workflow-sa of namespace " + variables.tenant +
+        " may only delete Applications labelled team=" + variables.tenant + " in project apps"
+      reason: Forbidden
+    - expression: "!variables.isUpdate || object.spec == oldObject.spec"
+      message: "tenant workflows may not change an Application's spec"
+      reason: Forbidden
+    - expression: >-
+        !variables.isUpdate ||
+        (has(object.operation) ? has(oldObject.operation) && object.operation == oldObject.operation : !has(oldObject.operation))
+      message: "tenant workflows may not start or change an Application operation"
+      reason: Forbidden
+    - expression: >-
+        !variables.isUpdate ||
+        (has(object.status) ? has(oldObject.status) && object.status == oldObject.status : !has(oldObject.status))
+      message: "tenant workflows may not change an Application's status"
+      reason: Forbidden
+    - expression: >-
+        !variables.isUpdate ||
+        ((has(object.metadata.labels) ? object.metadata.labels : {}) ==
+         (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) &&
+         (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) ==
+         (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : []))
+      message: "tenant workflows may not change an Application's labels or ownerReferences"
+      reason: Forbidden
+    - expression: >-
+        !variables.isUpdate ||
+        (variables.newAnnotations.all(k, k in variables.refreshKeys ||
+           (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k])) &&
+         variables.oldAnnotations.all(k, k in variables.refreshKeys || k in variables.newAnnotations))
+      messageExpression: >-
+        "tenant workflows may only change the annotations " + variables.refreshKeys.join(", ") + " on an Application"
+      reason: Forbidden
+    - expression: >-
+        !variables.isUpdate || variables.newFinalizers == variables.oldFinalizers ||
+        (variables.owned && variables.newFinalizers.all(f, f in variables.oldFinalizers))
+      message: "tenant workflows may only remove finalizers, and only from their own Applications (team label, project apps)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-tenant-workflow-sa-argocd-applications
+spec:
+  policyName: mctl-tenant-workflow-sa-argocd-applications
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: ["argocd"]
+---
+# The ApplicationSet half; see the comment above. Tenant workflows never
+# delete an ApplicationSet (the Role grants no delete either), and may only
+# touch the refresh annotations of one.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mctl-tenant-workflow-sa-argocd-applicationsets
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["argoproj.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE", "DELETE"]
+        resources: ["applicationsets"]
+  matchConditions:
+    - name: tenant-workflow-sa
+      expression: >-
+        request.userInfo.username.startsWith('system:serviceaccount:') &&
+        request.userInfo.username.endsWith(':argo-workflow-sa') &&
+        size(request.userInfo.username.split(':')) == 4 &&
+        request.userInfo.username.split(':')[2] != 'argo-workflows'
+  variables:
+    - name: refreshKeys
+      expression: "['argocd.argoproj.io/refresh', 'mctl.ai/refresh-ts']"
+    - name: isUpdate
+      expression: "request.operation == 'UPDATE'"
+    - name: oldAnnotations
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    - name: newAnnotations
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+  validations:
+    - expression: "variables.isUpdate"
+      message: "tenant workflows may not delete ApplicationSets"
+      reason: Forbidden
+    - expression: "!variables.isUpdate || object.spec == oldObject.spec"
+      message: "tenant workflows may not change an ApplicationSet's spec"
+      reason: Forbidden
+    - expression: >-
+        !variables.isUpdate ||
+        ((has(object.metadata.labels) ? object.metadata.labels : {}) ==
+         (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) &&
+         (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) ==
+         (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : []) &&
+         (has(object.metadata.finalizers) ? object.metadata.finalizers : []) ==
+         (has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers : []))
+      message: "tenant workflows may not change an ApplicationSet's labels, ownerReferences or finalizers"
+      reason: Forbidden
+    - expression: >-
+        !variables.isUpdate ||
+        (variables.newAnnotations.all(k, k in variables.refreshKeys ||
+           (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k])) &&
+         variables.oldAnnotations.all(k, k in variables.refreshKeys || k in variables.newAnnotations))
+      messageExpression: >-
+        "tenant workflows may only change the annotations " + variables.refreshKeys.join(", ") + " on an ApplicationSet"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mctl-tenant-workflow-sa-argocd-applicationsets
+spec:
+  policyName: mctl-tenant-workflow-sa-argocd-applicationsets
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: ["argocd"]

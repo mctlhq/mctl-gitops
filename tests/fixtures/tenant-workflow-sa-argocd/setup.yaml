@@ -1,0 +1,174 @@
+# Objects the policy test acts on, created for real before the dry-runs.
+# Shapes follow the live cluster: ApplicationSet-generated service apps carry
+# team=<ns> and project apps; platform apps sit in project default or
+# platform without a team label.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: karabu-web
+  namespace: argocd
+  labels:
+    team: karabu
+    env: apps
+  annotations:
+    argocd.argoproj.io/tracking-id: "root-app:argoproj.io/Application:argocd/karabu-web"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: apps
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    path: platform-gitops/helm-charts/base-service
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: karabu
+---
+# Labelled for karabu but outside project apps: not owned.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: karabu-outside-apps
+  namespace: argocd
+  labels:
+    team: karabu
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    path: platform-gitops/helm-charts/base-service
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: karabu
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: labs-web
+  namespace: argocd
+  labels:
+    team: labs
+    env: apps
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: apps
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    path: platform-gitops/helm-charts/base-service
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: labs
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    path: platform-gitops/bootstrap
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shared-pg
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    path: platform-gitops/shared-pg
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: shared-pg
+---
+# Named after the tenant, but a platform app without a team label.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tenant-karabu
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    path: platform-gitops/helm-charts/tenant
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: karabu
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: apps
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/tracking-id: "root-app:argoproj.io/ApplicationSet:argocd/apps"
+spec:
+  goTemplate: true
+  generators:
+    - list:
+        elements: []
+  template:
+    metadata:
+      name: "{{ .name }}"
+    spec:
+      project: apps
+      source:
+        repoURL: https://github.com/mctlhq/mctl-gitops.git
+        path: platform-gitops/helm-charts/base-service
+        targetRevision: main
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ .name }}"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: tenants
+  namespace: argocd
+spec:
+  goTemplate: true
+  generators:
+    - list:
+        elements: []
+  template:
+    metadata:
+      name: "tenant-{{ .name }}"
+    spec:
+      project: platform
+      source:
+        repoURL: https://github.com/mctlhq/mctl-gitops.git
+        path: platform-gitops/helm-charts/tenant
+        targetRevision: main
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ .name }}"
+---
+# The platform workflow tier keeps its broad rights; the policy must not
+# match it. Its Role and RoleBinding are taken from
+# argo-workflows/config/sa-and-rbac.yaml by the test script.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflow-sa
+  namespace: argo-workflows
