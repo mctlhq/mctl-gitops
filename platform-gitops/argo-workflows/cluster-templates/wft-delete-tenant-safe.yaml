@@ -94,11 +94,22 @@ spec:
         env:
           - name: PARAM_TENANT_NAME
             value: "{{inputs.parameters.tenant_name}}"
+          - name: WORKFLOW_NAMESPACE
+            value: "{{workflow.namespace}}"
         source: |
           set -e
           TENANT="$PARAM_TENANT_NAME"
 
           echo "Validating tenant: $TENANT"
+
+          # Tenant deletion is a platform operation: the API submits it in
+          # argo-workflows only. Its steps run as the namespace's
+          # argo-workflow-sa, so a copy submitted anywhere else would act
+          # with that namespace's credentials on another tenant's resources.
+          if [ "$WORKFLOW_NAMESPACE" != "argo-workflows" ]; then
+            echo "ERROR: tenant deletion must run in namespace argo-workflows, not '$WORKFLOW_NAMESPACE'."
+            exit 1
+          fi
 
           if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
             || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then

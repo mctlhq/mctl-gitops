@@ -34,8 +34,27 @@ spec:
     - name: retire-pipeline
       dag:
         tasks:
+          # Step 0: confirm the target before anything is removed. The names
+          # must have the shape the operations API enforces, the workflow
+          # must run in the team's own namespace (or the platform's
+          # argo-workflows namespace), and the Argo CD Application
+          # <team>-<component> must be either absent or one the `apps`
+          # ApplicationSet generated for this team. Every other step
+          # depends on this one.
+          - name: preflight
+            template: argocd-app-guard
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: mode
+                  value: "check"
+
           # Step 1: delete Vault secrets (parallel with git delete)
           - name: delete-vault-secrets
+            dependencies: [preflight]
             when: "\"{{workflow.parameters.delete_vault_secrets}}\" == \"true\""
             templateRef:
               name: tpl-vault-write
@@ -50,6 +69,7 @@ spec:
 
           # Step 2: remove service directory + DB resources from shared CNPG config + git commit
           - name: delete-from-git
+            dependencies: [preflight]
             templateRef:
               name: tpl-git-commit
               clusterScope: true
@@ -74,53 +94,209 @@ spec:
                 - name: component_name
                   value: "{{workflow.parameters.component_name}}"
 
-          # Step 3: Delete ArgoCD Application to ensure in-cluster cleanup
+          # Step 3: Delete ArgoCD Application to ensure in-cluster cleanup.
+          # Same template as preflight: the ownership check is repeated
+          # immediately before the delete, and the delete itself carries
+          # the verified UID as a precondition.
           - name: delete-argocd-app
             dependencies: [cleanup-db-resources]
-            template: delete-argocd-app
+            template: argocd-app-guard
             arguments:
               parameters:
                 - name: team_name
                   value: "{{workflow.parameters.team_name}}"
                 - name: component_name
                   value: "{{workflow.parameters.component_name}}"
+                - name: mode
+                  value: "delete"
 
-    - name: delete-argocd-app
+    # ─── Argo CD Application ownership guard (check | delete) ─────────────
+    # tests/test_wft_retire_service_guard.py runs this script against a stub
+    # kubectl; keep the two in step.
+    - name: argocd-app-guard
       inputs:
         parameters:
           - name: team_name
           - name: component_name
+          - name: mode
       script:
         image: alpine/k8s:1.33.12
         command: [sh]
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_MODE
+            value: "{{inputs.parameters.mode}}"
+          - name: WORKFLOW_NAMESPACE
+            value: "{{workflow.namespace}}"
         source: |
-          set -e
-          APP_NAME="{{inputs.parameters.team_name}}-{{inputs.parameters.component_name}}"
+          set -eu
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          MODE="$PARAM_MODE"
+          APP_NAME="${TEAM}-${COMPONENT}"
+          APP_URI="/apis/argoproj.io/v1alpha1/namespaces/argocd/applications/${APP_NAME}"
+
+          # name_ok NAME: one line, the shape the operations API enforces for
+          # team_name and component_name. Checked here as well because a
+          # workflow can be submitted without going through the API.
+          name_ok() {
+            [ "$(printf '%s' "$1" | wc -l)" -eq 0 ] \
+              && printf '%s' "$1" | grep -qE '^[a-z0-9][a-z0-9-]{0,30}$'
+          }
+
+          # app_state prints one of:
+          #   absent         no Application named $APP_NAME exists
+          #   owned <uid>    it exists and is this team's service Application
+          #   foreign <why>  it exists and is anything else
+          # and returns 2, printing nothing, when the Application could not be
+          # read. A failed or unparseable read is never "absent": only an
+          # empty list from a successful field-selector query is, so no
+          # NotFound error text has to be parsed.
+          #
+          # "This team's service Application" is what the `apps`
+          # ApplicationSet renders for platform-gitops/services/<team>/<svc>:
+          # name <team>-<svc>, label team=<team>, label
+          # backstage.io/kubernetes-id=<svc>, project apps, destination
+          # namespace <team>, and the ApplicationSet as controlling owner.
+          app_state() {
+            _as_json=$(kubectl get applications.argoproj.io -n argocd \
+              --field-selector "metadata.name=${APP_NAME}" -o json) || return 2
+            [ -n "$_as_json" ] || return 2
+            printf '%s' "$_as_json" | jq -r \
+              --arg name "$APP_NAME" --arg team "$TEAM" --arg svc "$COMPONENT" '
+              if (.items | type) != "array" then error("no items array")
+              elif (.items | length) == 0 then "absent"
+              elif (.items | length) > 1 then error("more than one match")
+              else .items[0] as $a
+                | ($a.metadata.labels // {}) as $l
+                | [ $a.metadata.ownerReferences[]?
+                    | select(.kind == "ApplicationSet" and .name == "apps"
+                             and .controller == true) ] as $owner
+                | if $a.metadata.name != $name then "foreign name=\($a.metadata.name)"
+                  elif $l.team != $team then "foreign label team=\($l.team // "<none>")"
+                  elif $l["backstage.io/kubernetes-id"] != $svc then
+                    "foreign label backstage.io/kubernetes-id=\($l["backstage.io/kubernetes-id"] // "<none>")"
+                  elif $a.spec.project != "apps" then "foreign project=\($a.spec.project // "<none>")"
+                  elif $a.spec.destination.namespace != $team then
+                    "foreign destination namespace=\($a.spec.destination.namespace // "<none>")"
+                  elif ($owner | length) != 1 then "foreign not generated by ApplicationSet apps"
+                  elif ($a.metadata.uid | type) != "string"
+                       or ($a.metadata.uid | test("^[0-9a-f-]{36}$") | not) then error("bad uid")
+                  else "owned \($a.metadata.uid)"
+                  end
+              end' || return 2
+          }
+
+          for n in "$TEAM" "$COMPONENT"; do
+            if ! name_ok "$n"; then
+              echo "❌ Invalid team or component name: '$n'"
+              exit 1
+            fi
+          done
+          case "$WORKFLOW_NAMESPACE" in
+            "$TEAM"|argo-workflows) ;;
+            *)
+              echo "❌ Workflow namespace '$WORKFLOW_NAMESPACE' does not belong to team '$TEAM'; refusing."
+              exit 1 ;;
+          esac
+          case "$MODE" in
+            check|delete) ;;
+            *) echo "❌ Unknown mode '$MODE'"; exit 1 ;;
+          esac
+
+          if ! STATE=$(app_state); then
+            echo "❌ Could not read Argo CD Application ${APP_NAME}; refusing to continue."
+            exit 1
+          fi
+          case "$STATE" in
+            absent)
+              echo "ℹ️  Argo CD Application ${APP_NAME} does not exist — nothing to delete."
+              exit 0 ;;
+            "owned "*)
+              APP_UID="${STATE#owned }" ;;
+            *)
+              echo "❌ Argo CD Application ${APP_NAME} is not a service Application of team ${TEAM} (${STATE}); refusing."
+              exit 1 ;;
+          esac
+          echo "✅ ${APP_NAME} is team ${TEAM}'s service Application (uid ${APP_UID})"
+          if [ "$MODE" = check ]; then
+            exit 0
+          fi
+
+          # wait_gone ATTEMPTS: 0 once the verified object is gone, 1 on
+          # timeout, 3 if a different object now holds the name. A read that
+          # fails is retried, never counted as gone.
+          wait_gone() {
+            _wg_i=0
+            while [ "$_wg_i" -lt "$1" ]; do
+              if _wg_state=$(app_state); then
+                case "$_wg_state" in
+                  absent) return 0 ;;
+                  "owned ${APP_UID}") ;;
+                  *)
+                    echo "❌ ${APP_NAME} was replaced by another object (${_wg_state})"
+                    return 3 ;;
+                esac
+              else
+                echo "⚠️  Could not read ${APP_NAME}; retrying"
+              fi
+              _wg_i=$((_wg_i + 1))
+              sleep 5
+            done
+            return 1
+          }
+
           echo "🗑️ Deleting ArgoCD Application: ${APP_NAME}"
+          # The delete carries the verified UID as a precondition, so the API
+          # server rejects it if the name now belongs to a different object.
+          BODY=$(mktemp)
+          printf '{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"%s"}}' \
+            "$APP_UID" > "$BODY"
+          if ! kubectl delete --raw "$APP_URI" -f "$BODY" >/dev/null; then
+            if [ "$(app_state || echo unreadable)" = absent ]; then
+              echo "✅ ArgoCD Application already gone"
+              exit 0
+            fi
+            echo "❌ Delete of ${APP_NAME} was rejected"
+            exit 1
+          fi
 
           # Keep Argo CD's resources finalizer long enough to cascade-delete
           # the Deployment, Service, and ExternalSecrets. Only clear a stuck
           # finalizer after a bounded wait; the smoke test then verifies that
           # no runtime resources were orphaned by the fallback.
-          if kubectl delete application "${APP_NAME}" -n argocd \
-            --ignore-not-found=true --wait=true --timeout=180s; then
-            echo "✅ ArgoCD Application and managed resources deleted"
-            exit 0
-          fi
+          rc=0
+          wait_gone 36 || rc=$?
+          case "$rc" in
+            0) echo "✅ ArgoCD Application and managed resources deleted"; exit 0 ;;
+            1) ;;
+            *) exit 1 ;;
+          esac
 
           echo "⚠️  Application deletion timed out after 180s; clearing stuck finalizer"
-          kubectl patch application "${APP_NAME}" -n argocd \
-            -p '{"metadata":{"finalizers":null}}' --type=merge || true
-          kubectl delete application "${APP_NAME}" -n argocd \
-            --ignore-not-found=true --wait=false
-
-          for i in $(seq 1 12); do
-            if ! kubectl get application "${APP_NAME}" -n argocd >/dev/null 2>&1; then
-              echo "✅ Stuck Application object removed"
+          # JSON-patch test operations make the API server apply the patch
+          # only to the object verified above, still labelled for this team
+          # and still in project apps.
+          PATCH=$(printf '[{"op":"test","path":"/metadata/uid","value":"%s"},{"op":"test","path":"/metadata/labels/team","value":"%s"},{"op":"test","path":"/spec/project","value":"apps"},{"op":"add","path":"/metadata/finalizers","value":[]}]' \
+            "$APP_UID" "$TEAM")
+          if ! kubectl patch application "${APP_NAME}" -n argocd --type=json -p "$PATCH" >/dev/null; then
+            if [ "$(app_state || echo unreadable)" = absent ]; then
+              echo "✅ Application removed while the finalizer was being cleared"
               exit 0
             fi
-            sleep 5
-          done
+            echo "❌ Could not clear the finalizer of ${APP_NAME}"
+            exit 1
+          fi
+
+          rc=0
+          wait_gone 12 || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "✅ Stuck Application object removed"
+            exit 0
+          fi
           echo "❌ Application ${APP_NAME} still exists after finalizer fallback"
           exit 1
 
