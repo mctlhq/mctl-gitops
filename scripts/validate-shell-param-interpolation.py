@@ -7,9 +7,10 @@ runs as a command, in pods that are root and hold the gitops deploy key, a
 Vault token, or GITHUB_PAT. Binding the value through `env:` and reading it as
 `"$PARAM_X"` removes the exposure regardless of what the API accepts.
 
-This check is a ratchet, not a clean bill of health. BASELINE below records the
-sites that still interpolate, each one tracked in gitops#992; the check fails
-on anything NOT in that list, so the count can go down and never up.
+This check is a ban, not a ratchet: any `inputs.parameters` or
+`workflow.parameters` placeholder (or `{{= ... }}` expression mentioning them)
+in a shell block fails, with no allow-list. Which parameters the API happens to
+constrain is a claim about another repository; this check does not rely on it.
 
 Run with --selftest to prove the detector still detects.
 """
@@ -27,31 +28,10 @@ TEMPLATES = ROOT / "platform-gitops/argo-workflows/cluster-templates"
 
 PLACEHOLDER = re.compile(r"\{\{\s*(?:inputs|workflow)\.parameters\.([A-Za-z0-9_.-]+)\s*\}\}")
 
-# (file, template, parameter) still interpolated. Every entry is a known
-# injection site tracked in gitops#992 — shrink this list, never grow it.
-# tpl-validate-tenant, tpl-git-commit, tpl-vault-write and the assert-attempt
-# templates are converted; wft-smoke-test is the remaining family.
-BASELINE: set[tuple[str, str, str]] = {
-    ("wft-smoke-test.yaml", "run-onboard", "dockerfile_repo"),
-    ("wft-smoke-test.yaml", "run-onboard", "git_tag"),
-    ("wft-smoke-test.yaml", "run-onboard", "provision_database_on_onboard"),
-    ("wft-smoke-test.yaml", "run-deploy", "dockerfile_repo"),
-    ("wft-smoke-test.yaml", "run-deploy", "git_tag"),
-    ("wft-smoke-test.yaml", "check-pod-running", "previous_generation"),
-}
-
-# Parameters the operations registry constrains with an anchored Pattern or an
-# Enum, mirrored here because mctl-api is a different repository and a check
-# that silently skips when the other repo is absent is not a check at all.
-# Keep in sync with internal/operations/registry.go; an entry here is a claim
-# that the API rejects a value the shell would otherwise execute.
-CONSTRAINED = {
-    "team_name", "tenant_name", "component_name", "service_name", "app_name",
-    "component_type", "action", "slug", "service", "skill_name", "file_name",
-    "clear_env", "clear_secrets", "provision_database", "skip_health_check",
-    "autoscaling_enabled", "allow_internet_egress", "delete_vault_secrets",
-    "mode", "dry_run", "issue_url", "max_proposals", "target_tag_pattern",
-}
+# `{{= ... }}` expression tags are evaluated by Argo before the shell runs, so
+# one that reads a parameter is the same exposure as a plain placeholder.
+EXPRESSION = re.compile(r"\{\{=(.*?)\}\}", re.S)
+EXPR_PARAM = re.compile(r"parameters\.(\w+)|parameters\[['\"](\w+)")
 
 
 def shell_blocks(tmpl: dict):
@@ -79,6 +59,37 @@ def shell_blocks(tmpl: dict):
             for i, arg in enumerate(c.get(field) or []):
                 if isinstance(arg, str):
                     out.append((f"initContainers[{c.get('name')}].{field}[{i}]", arg))
+    for s in tmpl.get("sidecars") or []:
+        for field in ("command", "args"):
+            for i, arg in enumerate(s.get(field) or []):
+                if isinstance(arg, str):
+                    out.append((f"sidecars[{s.get('name')}].{field}[{i}]", arg))
+    for c in (tmpl.get("containerSet") or {}).get("containers") or []:
+        for field in ("command", "args"):
+            for i, arg in enumerate(c.get(field) or []):
+                if isinstance(arg, str):
+                    out.append((f"containerSet[{c.get('name')}].{field}[{i}]", arg))
+    return out
+
+
+def specs(tmpl: dict):
+    """Every container-like spec of a template, as (label, spec, text)."""
+    out = []
+    for key in ("script", "container"):
+        spec = tmpl.get(key)
+        if spec:
+            parts = [spec.get("source") or ""]
+            for field in ("command", "args"):
+                parts += [a for a in spec.get(field) or [] if isinstance(a, str)]
+            out.append((key, spec, "\n".join(parts)))
+    groups = [("initContainers", tmpl.get("initContainers") or []),
+              ("sidecars", tmpl.get("sidecars") or []),
+              ("containerSet", (tmpl.get("containerSet") or {}).get("containers") or [])]
+    for label, items in groups:
+        for c in items:
+            parts = [a for f in ("command", "args") for a in c.get(f) or []
+                     if isinstance(a, str)]
+            out.append((f"{label}[{c.get('name')}]", c, "\n".join(parts)))
     return out
 
 
@@ -101,19 +112,19 @@ def check_env_bindings(directory: Path):
             if not doc:
                 continue
             for tmpl in (doc.get("spec") or {}).get("templates") or []:
-                script = tmpl.get("script") or {}
-                source = script.get("source")
-                if not source:
-                    continue
-                defined = [e["name"] for e in script.get("env") or []]
-                used = set(PARAM_REF.findall(source)) | set(PARAM_PY_REF.findall(source))
-                for name in sorted(used - set(defined)):
-                    problems.append(
-                        f"{path.name} / {tmpl.get('name')}: reads ${name}, "
-                        f"but this template's env does not define it")
-                for name in sorted({e for e in defined if defined.count(e) > 1}):
-                    problems.append(
-                        f"{path.name} / {tmpl.get('name')}: env defines {name} twice")
+                for label, spec, text in specs(tmpl):
+                    if not text.strip():
+                        continue
+                    defined = [e["name"] for e in spec.get("env") or []]
+                    used = set(PARAM_REF.findall(text)) | set(PARAM_PY_REF.findall(text))
+                    for name in sorted(used - set(defined)):
+                        problems.append(
+                            f"{path.name} / {tmpl.get('name')} / {label}: reads ${name}, "
+                            f"but this spec's env does not define it")
+                    for name in sorted({e for e in defined if defined.count(e) > 1}):
+                        problems.append(
+                            f"{path.name} / {tmpl.get('name')} / {label}: "
+                            f"env defines {name} twice")
     return problems
 
 
@@ -132,6 +143,12 @@ def scan(directory: Path):
                 for where, text in shell_blocks(tmpl):
                     for m in PLACEHOLDER.finditer(text):
                         yield path.name, tmpl.get("name", "?"), where, m.group(1)
+                    for m in EXPRESSION.finditer(text):
+                        if not re.search(r"(?:inputs|workflow)\.parameters", m.group(1)):
+                            continue
+                        p = EXPR_PARAM.search(m.group(1))
+                        name = (p.group(1) or p.group(2)) if p else "<expression>"
+                        yield path.name, tmpl.get("name", "?"), where, name
 
 
 def selftest() -> int:
@@ -154,29 +171,43 @@ def selftest() -> int:
         print(f"❌ selftest: detector did not fire; got {found}", file=sys.stderr)
         return 1
 
-    # Single-line `command:` — the shape the old length filter missed.
-    doc_cmd = {"spec": {"templates": [{
-        "name": "t",
-        "container": {"command": ["sh", "-c", "echo {{inputs.parameters.host}}"]},
-    }]}}
+    def fires(tmpl, want):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "x.yaml").write_text(
+                yaml.dump({"spec": {"templates": [dict(tmpl, name="t")]}}))
+            return any(p == want for _, _, _, p in scan(Path(d)))
+
+    cases = {
+        "an inline command": ({"container": {
+            "command": ["sh", "-c", "echo {{inputs.parameters.host}}"]}}, "host"),
+        "a here-document body": ({"script": {
+            "source": "cat <<'EOF'\n{{inputs.parameters.x}}\nEOF\n"}}, "x"),
+        "a {{= }} expression": ({"script": {
+            "source": "echo {{=sprig.trim(inputs.parameters.x)}}\n"}}, "x"),
+        "a sidecar arg": ({"sidecars": [{
+            "name": "s", "args": ["{{workflow.parameters.x}}"]}]}, "x"),
+        "a containerSet arg": ({"containerSet": {"containers": [{
+            "name": "c", "args": ["{{workflow.parameters.x}}"]}]}}, "x"),
+    }
+    for what, (tmpl, want) in cases.items():
+        if not fires(tmpl, want):
+            print(f"❌ selftest: detector missed {what}", file=sys.stderr)
+            return 1
+
     # A script reading a PARAM_* its own env does not define.
     doc_env = {"spec": {"templates": [{
         "name": "t",
         "script": {"source": 'X="$PARAM_MISSING"\n', "env": [{"name": "PARAM_OTHER"}]},
     }]}}
     with tempfile.TemporaryDirectory() as d:
-        (Path(d) / "cmd.yaml").write_text(yaml.dump(doc_cmd))
-        if not any(p == "host" for _, _, _, p in scan(Path(d))):
-            print("❌ selftest: detector missed an inline command:", file=sys.stderr)
-            return 1
-    with tempfile.TemporaryDirectory() as d:
         (Path(d) / "env.yaml").write_text(yaml.dump(doc_env))
         if not check_env_bindings(Path(d)):
             print("❌ selftest: unbound PARAM_* not reported", file=sys.stderr)
             return 1
 
-    print("✅ selftest: detector fires on an interpolated parameter, on an "
-          "inline command, and on an unbound PARAM_*")
+    print("✅ selftest: detector fires on script.source, an inline command, "
+          "a here-document, a {{= }} expression, a sidecar arg, a containerSet arg "
+          "and an unbound PARAM_*")
     return 0
 
 
@@ -187,13 +218,7 @@ def main() -> int:
         print(f"❌ {TEMPLATES} not found — refusing to pass vacuously", file=sys.stderr)
         return 2
 
-    new, stale = [], set(BASELINE)
-    for fname, tname, where, param in scan(TEMPLATES):
-        key = (fname, tname, param)
-        stale.discard(key)
-        if key in BASELINE or param in CONSTRAINED:
-            continue
-        new.append((fname, tname, where, param))
+    new = list(scan(TEMPLATES))
 
     if new:
         print("❌ Workflow parameters interpolated into a script's text:\n", file=sys.stderr)
@@ -220,14 +245,7 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    if stale:
-        print("❌ BASELINE lists sites that no longer exist — remove them:\n", file=sys.stderr)
-        for entry in sorted(stale):
-            print(f"   {entry}", file=sys.stderr)
-        print("\n   A baseline that outlives its sites stops being a ratchet.\n", file=sys.stderr)
-        return 1
-
-    print(f"✅ No new shell interpolation ({len(BASELINE)} known sites remain, gitops#992)")
+    print("✅ No workflow parameter is interpolated into any shell block")
     return 0
 
 

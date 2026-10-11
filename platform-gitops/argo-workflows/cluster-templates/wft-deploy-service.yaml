@@ -397,11 +397,16 @@ spec:
       script:
         image: alpine/k8s:1.33.12
         command: [sh]
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
         source: |
           set -euo pipefail
 
-          TEAM="{{inputs.parameters.team_name}}"
-          COMPONENT="{{inputs.parameters.component_name}}"
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
           APP_NAME="${TEAM}-${COMPONENT}"
           TS="$(date +%s)"
 
