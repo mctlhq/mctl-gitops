@@ -20,9 +20,9 @@ spec:
         source: |
           set -e
           apk add --no-cache curl python3 > /dev/null 2>&1
-          TEAM="{{inputs.parameters.team_name}}"
-          SERVICE="{{inputs.parameters.component_name}}"
-          SECRET_TEXT="{{inputs.parameters.secret_env_vars}}"
+          TEAM="$PARAM_TEAM_NAME"
+          SERVICE="$PARAM_COMPONENT_NAME"
+          SECRET_TEXT="$PARAM_SECRET_ENV_VARS"
           VAULT_PATH="secret/data/teams/${TEAM}/${SERVICE}"
 
           echo "🔐 Authenticating with Vault (Kubernetes auth)..."
@@ -60,8 +60,8 @@ spec:
             else
               JSON_DATA="${JSON_DATA},\"${key}\":\"${value_escaped}\""
             fi
-          done << 'SECRETS_EOF'
-          {{inputs.parameters.secret_env_vars}}
+          done <<SECRETS_EOF
+          $PARAM_SECRET_ENV_VARS
           SECRETS_EOF
 
           JSON_DATA="${JSON_DATA}}"
@@ -108,6 +108,12 @@ spec:
         env:
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
+          - name: PARAM_SECRET_ENV_VARS
+            value: "{{inputs.parameters.secret_env_vars}}"
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
 
     # Same result as write-service-secrets, but the values never pass
     # through a workflow parameter. mctl-api puts them in a Kubernetes
@@ -233,22 +239,34 @@ spec:
             grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
           export VAULT_TOKEN
 
-          HTTP_CODE=$(curl -sS -o /tmp/vault-write.json -w "%{http_code}" \
+          # vault_path lands in a URL: reject anything but a plain relative path.
+          case "$PARAM_VAULT_PATH" in
+            ""|/*|*..*|*[!A-Za-z0-9/_-]*)
+              echo "❌ invalid vault_path"
+              exit 1
+              ;;
+          esac
+
+          HTTP_CODE=$(printf '{"data":%s}' "$PARAM_JSON_DATA" | curl -sS -o /tmp/vault-write.json -w "%{http_code}" \
             -X POST \
             -H "X-Vault-Token: $VAULT_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"data\":{{inputs.parameters.json_data}}}" \
-            "${VAULT_ADDR}/v1/secret/data/{{inputs.parameters.vault_path}}")
+            --data-binary @- \
+            "${VAULT_ADDR}/v1/secret/data/${PARAM_VAULT_PATH}")
 
           if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
             echo "❌ Vault write failed (HTTP $HTTP_CODE)"
             cat /tmp/vault-write.json || true
             exit 1
           fi
-          echo "✅ Saved to Vault: {{inputs.parameters.vault_path}}"
+          echo "✅ Saved to Vault: ${PARAM_VAULT_PATH}"
         env:
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
+          - name: PARAM_VAULT_PATH
+            value: "{{inputs.parameters.vault_path}}"
+          - name: PARAM_JSON_DATA
+            value: "{{inputs.parameters.json_data}}"
 
     - name: delete-service-secrets
       inputs:
@@ -261,8 +279,8 @@ spec:
         source: |
           set -e
           apk add --no-cache curl > /dev/null 2>&1
-          TEAM="{{inputs.parameters.team_name}}"
-          SERVICE="{{inputs.parameters.component_name}}"
+          TEAM="$PARAM_TEAM_NAME"
+          SERVICE="$PARAM_COMPONENT_NAME"
 
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
           VAULT_TOKEN=$(curl -sS -X POST \
@@ -295,3 +313,7 @@ spec:
         env:
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"

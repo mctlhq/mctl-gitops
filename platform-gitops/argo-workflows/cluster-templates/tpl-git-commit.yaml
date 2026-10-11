@@ -49,27 +49,59 @@ spec:
         env:
           - name: HEALTH_CHECK_PATH
             value: "{{inputs.parameters.health_check_path}}"
+          - name: PARAM_ENV_VARS
+            value: "{{inputs.parameters.env_vars}}"
+          - name: PARAM_SECRET_ENV_VARS
+            value: "{{inputs.parameters.secret_env_vars}}"
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
+          - name: PARAM_COMPONENT_TYPE
+            value: "{{inputs.parameters.component_type}}"
+          - name: PARAM_ACTION
+            value: "{{inputs.parameters.action}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{inputs.parameters.image_tag}}"
+          - name: PARAM_PORT
+            value: "{{inputs.parameters.port}}"
+          - name: PARAM_HOST
+            value: "{{inputs.parameters.host}}"
+          - name: PARAM_DOCKERFILE_REPO
+            value: "{{inputs.parameters.dockerfile_repo}}"
+          - name: PARAM_PROVISION_DATABASE
+            value: "{{inputs.parameters.provision_database}}"
+          - name: PARAM_CLEAR_ENV
+            value: "{{inputs.parameters.clear_env}}"
+          - name: PARAM_CLEAR_SECRETS
+            value: "{{inputs.parameters.clear_secrets}}"
+          - name: PARAM_SERVICE_TEMPLATE
+            value: "{{inputs.parameters.service_template}}"
+          - name: PARAM_CONFIG_PATCH
+            value: "{{inputs.parameters.config_patch}}"
+          - name: PARAM_SKIP_HEALTH_CHECK
+            value: "{{inputs.parameters.skip_health_check}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
         source: |
           set -e
 
-          TEAM="{{inputs.parameters.team_name}}"
-          SERVICE="{{inputs.parameters.component_name}}"
-          TYPE="{{inputs.parameters.component_type}}"
-          ACTION="{{inputs.parameters.action}}"
-          TAG="{{inputs.parameters.image_tag}}"
-          PORT="{{inputs.parameters.port}}"
-          HOST="{{inputs.parameters.host}}"
-          ENV_VARS="{{inputs.parameters.env_vars}}"
-          SECRET_VARS="{{inputs.parameters.secret_env_vars}}"
-          REPO="{{inputs.parameters.dockerfile_repo}}"
-          PROVISION_DB="{{inputs.parameters.provision_database}}"
-          CLEAR_ENV="{{inputs.parameters.clear_env}}"
-          CLEAR_SECRETS="{{inputs.parameters.clear_secrets}}"
-          SERVICE_TEMPLATE="{{inputs.parameters.service_template}}"
-          CONFIG_PATCH="{{inputs.parameters.config_patch}}"
+          TEAM="$PARAM_TEAM_NAME"
+          SERVICE="$PARAM_COMPONENT_NAME"
+          TYPE="$PARAM_COMPONENT_TYPE"
+          ACTION="$PARAM_ACTION"
+          TAG="$PARAM_IMAGE_TAG"
+          PORT="$PARAM_PORT"
+          HOST="$PARAM_HOST"
+          ENV_VARS="$PARAM_ENV_VARS"
+          SECRET_VARS="$PARAM_SECRET_ENV_VARS"
+          REPO="$PARAM_DOCKERFILE_REPO"
+          PROVISION_DB="$PARAM_PROVISION_DATABASE"
+          CLEAR_ENV="$PARAM_CLEAR_ENV"
+          CLEAR_SECRETS="$PARAM_CLEAR_SECRETS"
+          SERVICE_TEMPLATE="$PARAM_SERVICE_TEMPLATE"
+          CONFIG_PATCH="$PARAM_CONFIG_PATCH"
 
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
@@ -85,7 +117,7 @@ spec:
             HOST="${TEAM}-${SERVICE}.${PLATFORM_DOMAIN}"
             echo "Auto-generated domain: ${HOST}"
           fi
-          SKIP_HEALTH="{{inputs.parameters.skip_health_check}}"
+          SKIP_HEALTH="$PARAM_SKIP_HEALTH_CHECK"
 
           # ── 0a. Validate everything that reaches a yq or sed program ──────────
           # Second layer, not the only one: every yq call below now passes its
@@ -378,8 +410,8 @@ spec:
                   echo "❌ Invalid env var name: ${key}"; exit 1; }
                 export KEY="$key" VALUE="$value"
                 yq eval -i '.env[strenv(KEY)] = strenv(VALUE)' "${DIR}/values.yaml"
-              done << 'ENVEOF'
-          {{inputs.parameters.env_vars}}
+              done <<ENVEOF
+          $PARAM_ENV_VARS
           ENVEOF
             fi
 
@@ -398,8 +430,8 @@ spec:
                   echo "❌ Invalid secret env var name: ${key}"; exit 1; }
                 export KEY="$key" REMOTE_KEY="teams/${TEAM}/${SERVICE}"
                 yq eval -i '.externalSecret.data += [{"secretKey": strenv(KEY), "remoteKey": strenv(REMOTE_KEY), "property": strenv(KEY)}]' "${DIR}/values.yaml"
-              done << 'SECRETEOF'
-          {{inputs.parameters.secret_env_vars}}
+              done <<SECRETEOF
+          $PARAM_SECRET_ENV_VARS
           SECRETEOF
               yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
             fi
@@ -491,8 +523,8 @@ spec:
                   echo "❌ Invalid env var name: ${key}"; exit 1; }
                 export KEY="$key" VALUE="$value"
                 yq eval -i '.env[strenv(KEY)] = strenv(VALUE)' "${DIR}/values.yaml"
-              done << 'ENVEOF3'
-          {{inputs.parameters.env_vars}}
+              done <<ENVEOF3
+          $PARAM_ENV_VARS
           ENVEOF3
             fi
 
@@ -523,8 +555,8 @@ spec:
                 if [ -z "$EXISTS" ]; then
                   yq eval -i '.externalSecret.data += [{"secretKey": strenv(KEY), "remoteKey": strenv(REMOTE_KEY), "property": strenv(KEY)}]' "${DIR}/values.yaml"
                 fi
-              done << 'SECRETEOF3'
-          {{inputs.parameters.secret_env_vars}}
+              done <<SECRETEOF3
+          $PARAM_SECRET_ENV_VARS
           SECRETEOF3
               yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
             fi
@@ -560,8 +592,8 @@ spec:
                   echo "❌ Invalid env var name: ${key}"; exit 1; }
                 export KEY="$key" VALUE="$value"
                 yq eval -i '.env[strenv(KEY)] = strenv(VALUE)' "${DIR}/values.yaml"
-              done << 'ENVEOF2'
-          {{inputs.parameters.env_vars}}
+              done <<ENVEOF2
+          $PARAM_ENV_VARS
           ENVEOF2
               CHANGED=true
             fi
@@ -593,8 +625,8 @@ spec:
                 if [ -z "$EXISTS" ]; then
                   yq eval -i '.externalSecret.data += [{"secretKey": strenv(KEY), "remoteKey": strenv(REMOTE_KEY), "property": strenv(KEY)}]' "${DIR}/values.yaml"
                 fi
-              done << 'SECRETEOF2'
-          {{inputs.parameters.secret_env_vars}}
+              done <<SECRETEOF2
+          $PARAM_SECRET_ENV_VARS
           SECRETEOF2
               yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
               CHANGED=true

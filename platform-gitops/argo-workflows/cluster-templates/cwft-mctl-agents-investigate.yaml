@@ -1148,9 +1148,14 @@ spec:
       script:
         image: alpine:3.19
         command: [sh]
+        env:
+          - name: PARAM_PRIMARY
+            value: "{{inputs.parameters.primary}}"
+          - name: PARAM_FALLBACK
+            value: "{{inputs.parameters.fallback}}"
         source: |
-          PRIMARY='{{inputs.parameters.primary}}'
-          FALLBACK='{{inputs.parameters.fallback}}'
+          PRIMARY="$PARAM_PRIMARY"
+          FALLBACK="$PARAM_FALLBACK"
           echo "primary attempt: ${PRIMARY:-<none>}   fallback attempt: ${FALLBACK:-<none>}"
           if [ "$PRIMARY" = "Succeeded" ] || [ "$FALLBACK" = "Succeeded" ]; then
             echo "✓ An attempt succeeded — workflow status reflects real work."

@@ -442,6 +442,9 @@ jobs:
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
 
+      - name: Test workflow parameters cannot inject shell
+        run: python3 tests/test_shell_param_injection.py
+
       - name: Unit-test create-tenant's existing-tenant checks
         # create-tenant creates a tenant: an existing one fails validate unless
         # reprovision=true, and the commit step refuses one that appeared
