@@ -251,3 +251,44 @@ spec:
               The CronJob was removed or is not scraped, and the other drill
               alerts are blind while this lasts.
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
+        # shared-pg backups (#1811 / #1830). max by (namespace) across the
+        # instances: backups run on the standby (prefer-standby) or primary, but
+        # the replica reports 0 for these metrics, and a backup is a property of
+        # the cluster, not of a pod. Per-pod rules would fire permanently.
+        - alert: SharedPgBackupStale
+          expr: |
+            time() - max by (namespace) (cnpg_collector_last_available_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"}) > 93600
+          for: 15m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg has no successful backup for over 26 hours"
+            description: >-
+              The newest shared-pg backup is older than 26h (daily at 02:00 UTC). If every instance reports 0, this also fires.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgbackupstale
+        - alert: SharedPgBackupFailed
+          expr: |
+            max by (namespace) (cnpg_collector_last_failed_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
+              > max by (namespace) (cnpg_collector_last_available_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
+          for: 15m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg last backup failed"
+            description: >-
+              The last failed shared-pg backup is newer than the last successful one.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgbackupfailed
+        - alert: SharedPgBackupMetricAbsent
+          expr: |
+            absent(cnpg_collector_last_available_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
+          for: 1h
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "no shared-pg backup metrics"
+            description: >-
+              No cnpg_collector_last_available_backup_timestamp series. Backup alerts are blind; the in-tree backup metrics may have been removed by an operator upgrade.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgbackupmetricabsent

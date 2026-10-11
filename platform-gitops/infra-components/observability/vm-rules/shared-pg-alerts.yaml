@@ -1,0 +1,173 @@
+# Alerts for the shared CloudNativePG cluster shared-pg (namespace platform-db),
+# #1811 / #1830. The scrape is VMPodScrape/shared-pg in
+# infra-components/data/cnpg/shared/vmpodscrape.yaml.
+#
+# REPLICA CAVEAT: on a healthy cluster the standby reports
+# cnpg_pg_stat_archiver_seconds_since_last_archival in the tens of thousands
+# and growing, streaming_replicas = 0 and last_available_backup_timestamp = 0.
+# These values mean something only on the primary. Rules for them are joined
+# with `cnpg_pg_replication_in_recovery == 0` (the primary) so that they do not
+# fire permanently. Do not "simplify" the joins away. The primary moves on
+# every switchover, so no pod name is hardcoded.
+# Backup rules are in backup-alerts.yaml (SharedPgBackup*).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-shared-pg-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: shared-pg
+spec:
+  groups:
+    - name: mctl.shared-pg
+      interval: 60s
+      rules:
+        - alert: SharedPgNoPrimary
+          #  Counts primaries cluster-wide, so a replica cannot trip it.
+          expr: |
+            (sum(cnpg_pg_replication_in_recovery{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == bool 0) or vector(0)) != 1
+          for: 5m
+          labels:
+            severity: critical
+            service: shared-pg
+          annotations:
+            summary: "shared-pg does not have exactly one primary"
+            description: >-
+              Counting instances with in_recovery == 0 across platform-db/shared-pg gives something other than 1 (no primary, or split brain). mctl-api, Temporal, Backstage and the other dependants lose their database.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgnoprimary
+        - alert: SharedPgInstanceMissing
+          # Mirrors instances: 2 in infra-components/data/cnpg/shared/cluster.yaml; update both together.
+          expr: |
+            (count(up{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == 1) or vector(0)) < 2
+          for: 10m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg has fewer than 2 scrapeable instances"
+            description: >-
+              Fewer than two shared-pg pods are up. HA is lost.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpginstancemissing
+        - alert: SharedPgInstanceDown
+          expr: |
+            cnpg_collector_up{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg instance {{ $labels.pod }} cannot reach its PostgreSQL"
+            description: >-
+              The CNPG metrics exporter on {{ $labels.pod }} reports PostgreSQL as unreachable.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpginstancedown
+        - alert: SharedPgReplicationLagHigh
+          # A healthy replica reports a real lag (0), so this is safe per pod.
+          expr: |
+            max by (namespace, pod) (cnpg_pg_replication_lag{namespace="platform-db", pod=~"shared-pg-[0-9]+"}) > 300
+          for: 10m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg instance {{ $labels.pod }} replication lag above 300s"
+            description: >-
+              {{ $labels.pod }} lags the primary by more than 5 minutes.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgreplicationlaghigh
+        - alert: SharedPgStandbyNotStreaming
+          # Joined with the primary: a replica legitimately reports 0 streaming replicas.
+          expr: |
+            cnpg_pg_replication_streaming_replicas{namespace="platform-db", pod=~"shared-pg-[0-9]+"} < 1
+              and
+            on(namespace, pod) cnpg_pg_replication_in_recovery{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg primary has no streaming standby"
+            description: >-
+              The shared-pg primary {{ $labels.pod }} has no streaming replica. A replica always reports 0 here, hence the join on the primary.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgstandbynotstreaming
+        - alert: SharedPgWALArchivingFailing
+          # Primary only: see header.
+          expr: |
+            cnpg_pg_stat_archiver_last_failed_time{namespace="platform-db", pod=~"shared-pg-[0-9]+"}
+              > cnpg_pg_stat_archiver_last_archived_time{namespace="platform-db", pod=~"shared-pg-[0-9]+"}
+              and
+            on(namespace, pod) cnpg_pg_replication_in_recovery{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == 0
+          for: 15m
+          labels:
+            severity: critical
+            service: shared-pg
+          annotations:
+            summary: "shared-pg WAL archiving is failing"
+            description: >-
+              The last WAL archive attempt on the primary {{ $labels.pod }} failed after the last success. WAL accumulates on the volume and PITR is at risk.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgwalarchivingfailing
+        - alert: SharedPgWALArchivingStale
+          # Primary only: see header.
+          expr: |
+            cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="platform-db", pod=~"shared-pg-[0-9]+"} > 7200
+              and
+            on(namespace, pod) cnpg_pg_replication_in_recovery{namespace="platform-db", pod=~"shared-pg-[0-9]+"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg has not archived WAL for over 2 hours"
+            description: >-
+              The primary {{ $labels.pod }} has not archived WAL for over 2h (archive_timeout is 15min). A replica reports a huge, growing value and is masked by the join.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgwalarchivingstale
+        - alert: SharedPgConnectionsHigh
+          expr: |
+            sum by (namespace, pod) (cnpg_backends_total{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
+              / on(namespace, pod)
+            max by (namespace, pod) (cnpg_pg_settings_setting{namespace="platform-db", pod=~"shared-pg-[0-9]+", name="max_connections"})
+              > 0.8
+          for: 10m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg instance {{ $labels.pod }} is above 80% of max_connections"
+            description: >-
+              {{ $labels.pod }} uses more than 80% of max_connections (200).
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgconnectionshigh
+        - alert: SharedPgVolumeFillingUp
+          expr: |
+            kubelet_volume_stats_used_bytes{namespace="platform-db", persistentvolumeclaim=~"shared-pg-[0-9]+"} / kubelet_volume_stats_capacity_bytes{namespace="platform-db", persistentvolumeclaim=~"shared-pg-[0-9]+"} > 0.8
+          for: 15m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg volume {{ $labels.persistentvolumeclaim }} is above 80% full"
+            description: >-
+              PVC {{ $labels.persistentvolumeclaim }} is above 80% used.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgvolumefillingup
+        - alert: SharedPgVolumeAlmostFull
+          expr: |
+            kubelet_volume_stats_used_bytes{namespace="platform-db", persistentvolumeclaim=~"shared-pg-[0-9]+"} / kubelet_volume_stats_capacity_bytes{namespace="platform-db", persistentvolumeclaim=~"shared-pg-[0-9]+"} > 0.9
+          for: 5m
+          labels:
+            severity: critical
+            service: shared-pg
+          annotations:
+            summary: "shared-pg volume {{ $labels.persistentvolumeclaim }} is above 90% full"
+            description: >-
+              PVC {{ $labels.persistentvolumeclaim }} is above 90% used. A full volume stops PostgreSQL.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgvolumealmostfull
+        - alert: SharedPgMetricsAbsent
+          expr: |
+            absent(cnpg_collector_up{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
+          for: 15m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "no CNPG metrics for shared-pg"
+            description: >-
+              No cnpg_collector_up series for platform-db/shared-pg. Every other SharedPg alert is blind while this lasts. Check VMPodScrape/shared-pg.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgmetricsabsent
