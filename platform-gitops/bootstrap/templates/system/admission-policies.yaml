@@ -729,9 +729,12 @@ spec:
 # So, for argo-workflow-sa in any namespace except argo-workflows (the
 # platform's own workflow tier, which creates and deletes tenants and keeps
 # its broader rights; follow-up):
-#   DELETE  only an Application labelled team=<ns> in project apps
-#   UPDATE  nothing but the refresh annotations may change, except that an
-#           owned Application's finalizers may be removed (retire fallback)
+#   CREATE  never. The Role grants no create, but server-side apply is
+#           authorized as patch and can create; refusing it here closes that.
+#   DELETE  only an Application labelled team=<ns> in project apps (owned)
+#   UPDATE  nothing but the refresh annotations may change, and only on owned
+#           Applications, shared-pg and the ApplicationSet apps; an owned
+#           Application's finalizers may also be removed (retire fallback)
 #
 # Argo CD's controllers write status and operation under their own
 # ServiceAccounts and are not matched. A patch arrives as UPDATE carrying
@@ -753,7 +756,7 @@ spec:
     resourceRules:
       - apiGroups: ["argoproj.io"]
         apiVersions: ["*"]
-        operations: ["UPDATE", "DELETE"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["applications"]
   matchConditions:
     - name: tenant-workflow-sa
@@ -774,8 +777,12 @@ spec:
         has(oldObject.metadata.labels) && 'team' in oldObject.metadata.labels &&
         oldObject.metadata.labels['team'] == variables.tenant &&
         has(oldObject.spec.project) && oldObject.spec.project == 'apps'
-    # Variables are evaluated lazily, so `object` (null on DELETE) is only
-    # read below behind isUpdate.
+    # The Applications tenant workflows refresh: their own and shared-pg.
+    - name: refreshable
+      expression: "variables.owned || oldObject.metadata.name == 'shared-pg'"
+    # Variables are evaluated lazily, so `oldObject` (null on CREATE) and
+    # `object` (null on DELETE) are only read below behind the operation
+    # checks.
     - name: oldAnnotations
       expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
     - name: newAnnotations
@@ -785,7 +792,10 @@ spec:
     - name: newFinalizers
       expression: "has(object.metadata.finalizers) ? object.metadata.finalizers : []"
   validations:
-    - expression: "variables.isUpdate || variables.owned"
+    - expression: "request.operation != 'CREATE'"
+      message: "tenant workflows may not create Applications"
+      reason: Forbidden
+    - expression: "request.operation != 'DELETE' || variables.owned"
       messageExpression: >-
         "argo-workflow-sa of namespace " + variables.tenant +
         " may only delete Applications labelled team=" + variables.tenant + " in project apps"
@@ -812,12 +822,14 @@ spec:
       message: "tenant workflows may not change an Application's labels or ownerReferences"
       reason: Forbidden
     - expression: >-
-        !variables.isUpdate ||
-        (variables.newAnnotations.all(k, k in variables.refreshKeys ||
+        !variables.isUpdate || variables.newAnnotations == variables.oldAnnotations ||
+        (variables.refreshable &&
+         variables.newAnnotations.all(k, k in variables.refreshKeys ||
            (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k])) &&
          variables.oldAnnotations.all(k, k in variables.refreshKeys || k in variables.newAnnotations))
       messageExpression: >-
-        "tenant workflows may only change the annotations " + variables.refreshKeys.join(", ") + " on an Application"
+        "tenant workflows may only change the annotations " + variables.refreshKeys.join(", ") +
+        ", and only on their own Applications and shared-pg"
       reason: Forbidden
     - expression: >-
         !variables.isUpdate || variables.newFinalizers == variables.oldFinalizers ||
@@ -840,8 +852,8 @@ spec:
           values: ["argocd"]
 ---
 # The ApplicationSet half; see the comment above. Tenant workflows never
-# delete an ApplicationSet (the Role grants no delete either), and may only
-# touch the refresh annotations of one.
+# create or delete an ApplicationSet (the Role grants neither), and may only
+# touch the refresh annotations of apps.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -852,7 +864,7 @@ spec:
     resourceRules:
       - apiGroups: ["argoproj.io"]
         apiVersions: ["*"]
-        operations: ["UPDATE", "DELETE"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["applicationsets"]
   matchConditions:
     - name: tenant-workflow-sa
@@ -872,7 +884,7 @@ spec:
       expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
   validations:
     - expression: "variables.isUpdate"
-      message: "tenant workflows may not delete ApplicationSets"
+      message: "tenant workflows may not create or delete ApplicationSets"
       reason: Forbidden
     - expression: "!variables.isUpdate || object.spec == oldObject.spec"
       message: "tenant workflows may not change an ApplicationSet's spec"
@@ -887,13 +899,17 @@ spec:
          (has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers : []))
       message: "tenant workflows may not change an ApplicationSet's labels, ownerReferences or finalizers"
       reason: Forbidden
+    # The Role already limits patch to apps; repeated here so the policy does
+    # not rest on it.
     - expression: >-
-        !variables.isUpdate ||
-        (variables.newAnnotations.all(k, k in variables.refreshKeys ||
+        !variables.isUpdate || variables.newAnnotations == variables.oldAnnotations ||
+        (oldObject.metadata.name == 'apps' &&
+         variables.newAnnotations.all(k, k in variables.refreshKeys ||
            (k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k])) &&
          variables.oldAnnotations.all(k, k in variables.refreshKeys || k in variables.newAnnotations))
       messageExpression: >-
-        "tenant workflows may only change the annotations " + variables.refreshKeys.join(", ") + " on an ApplicationSet"
+        "tenant workflows may only change the annotations " + variables.refreshKeys.join(", ") +
+        ", and only on the ApplicationSet apps"
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

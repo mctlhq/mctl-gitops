@@ -88,7 +88,14 @@ for crd in application applicationset; do
   curl -fsSL --retry 3 --retry-delay 2 "$ARGOCD_CRDS/$crd-crd.yaml" -o "$WORK/$crd-crd.yaml"
   kubectl apply --server-side -f "$WORK/$crd-crd.yaml" >/dev/null
 done
-kubectl wait --for=condition=Established --timeout=60s \
+# `kubectl wait` errors out instead of waiting while a fresh CRD has no
+# status.conditions yet, so retry it.
+for _ in $(seq 1 30); do
+  kubectl wait --for=condition=Established --timeout=10s \
+    crd/applications.argoproj.io crd/applicationsets.argoproj.io >/dev/null 2>&1 && break
+  sleep 2
+done
+kubectl wait --for=condition=Established --timeout=10s \
   crd/applications.argoproj.io crd/applicationsets.argoproj.io >/dev/null
 
 echo "== policies from the rendered bootstrap chart"
@@ -147,15 +154,46 @@ PY
 kubectl apply -f "$WORK/rbac.yaml" >/dev/null
 kubectl apply -f "$FIXTURES/setup.yaml" >/dev/null
 
+# Live Applications carry a status of up to ~700 KB (resources, history,
+# operationState). Application has no status subresource, so every refresh
+# annotation re-compares that whole status: give the refreshable fixtures one
+# of about 1 MB so the admit cases below run against that cost, not against
+# an empty status.
+python3 - > "$WORK/status.json" <<'PY'
+import json
+msg = "x" * 1500
+res = [{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "karabu",
+        "name": f"r{i}", "status": "Synced", "health": {"status": "Healthy", "message": msg}}
+       for i in range(250)]
+sync = [{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "karabu",
+         "name": f"r{i}", "status": "Synced", "message": msg, "syncPhase": "Sync"}
+        for i in range(250)]
+hist = [{"id": i, "revision": f"{i:040x}", "deployedAt": "2026-10-11T00:00:00Z",
+         "source": {"repoURL": "https://github.com/mctlhq/mctl-gitops.git", "path": "p", "targetRevision": "main"}}
+        for i in range(10)]
+print(json.dumps({"status": {
+    "resources": res, "history": hist,
+    "sync": {"status": "Synced", "revision": "0" * 40},
+    "health": {"status": "Healthy"},
+    "operationState": {"phase": "Succeeded", "message": msg, "startedAt": "2026-10-11T00:00:00Z",
+                       "operation": {"sync": {"revision": "0" * 40}},
+                       "syncResult": {"revision": "0" * 40, "resources": sync}}}}))
+PY
+for app in karabu-web shared-pg root-app; do
+  kubectl patch application "$app" -n argocd --type merge --patch-file "$WORK/status.json" >/dev/null
+done
+
 # The binding is eventually consistent: wait until a known-bad delete is refused
 # by the policy.
+ready=0
 for _ in $(seq 1 60); do
   if ! kubectl --as="$SA" -n argocd delete application root-app --dry-run=server >/dev/null 2>"$WORK/err" \
      && grep -q "$POLICY" "$WORK/err"; then
-    break
+    ready=1; break
   fi
   sleep 1
 done
+[ "$ready" = 1 ] || { echo "FAIL: $POLICY binding never took effect: $(cat "$WORK/err")"; exit 1; }
 
 fail=0
 as_sa() { # run kubectl as the tenant SA; mutating verbs as server-side dry-runs
@@ -211,6 +249,34 @@ admit "retire-service: delete own Application" \
 admit "retire-service: clear own Application's finalizers" \
   patch application karabu-web --type merge -p '{"metadata":{"finalizers":null}}'
 
+# Creates. The Role grants no create, and the API server checks create for a
+# server-side apply that would create the object, so RBAC refuses it today.
+cat > "$WORK/new-app.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: karabu-new
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://example.invalid/x.git
+    path: .
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: karabu
+YAML
+rbac "server-side apply creates an Application" apply --server-side -f "$WORK/new-app.yaml"
+
+# Refresh annotations only where the templates send them.
+deny "refresh root-app" "and only on their own Applications and shared-pg" \
+  annotate application root-app argocd.argoproj.io/refresh=hard --overwrite
+deny "refresh another tenant's app" "and only on their own Applications and shared-pg" \
+  annotate application labs-web argocd.argoproj.io/refresh=hard --overwrite
+deny "refresh tenant-karabu" "and only on their own Applications and shared-pg" \
+  annotate application tenant-karabu mctl.ai/refresh-ts=1 --overwrite
+
 # Deletes of anything not owned (team=karabu AND project apps).
 deny "delete root-app" "may only delete Applications labelled" delete application root-app
 deny "delete shared-pg" "may only delete Applications labelled" delete application shared-pg
@@ -226,7 +292,7 @@ deny "move own Application to another project" "may not change an Application's 
 deny "start an operation on root-app" "may not start or change an Application operation" \
   patch application root-app --type merge -p '{"operation":{"sync":{"revision":"HEAD"}}}'
 deny "write status on root-app" "may not change an Application's status" \
-  patch application root-app --type merge -p '{"status":{"sync":{"status":"Synced"}}}'
+  patch application root-app --type merge -p '{"status":{"health":{"status":"Degraded"}}}'
 deny "relabel own Application to another team" "may not change an Application's labels" \
   label application karabu-web team=labs --overwrite
 deny "label root-app as owned" "may not change an Application's labels" \
@@ -254,6 +320,45 @@ deny "set another annotation on ApplicationSet apps" "may only change the annota
 rbac "patch ApplicationSet tenants"  patch applicationset tenants --type merge -p "$REFRESH"
 rbac "delete ApplicationSet apps"    delete applicationset apps
 rbac "list ApplicationSets"          get applicationsets
+cat > "$WORK/new-appset.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: karabu-new
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements: []
+  template:
+    metadata:
+      name: x
+    spec:
+      project: default
+      source:
+        repoURL: https://example.invalid/x.git
+        path: .
+      destination:
+        server: https://kubernetes.default.svc
+YAML
+rbac "server-side apply creates an ApplicationSet" apply --server-side -f "$WORK/new-appset.yaml"
+
+# The policies refuse creates on their own, so a later widening of the Role
+# does not reopen them: grant create for the duration of these two cases.
+kubectl create role widened-create -n argocd --verb=create \
+  --resource=applications.argoproj.io,applicationsets.argoproj.io >/dev/null
+kubectl create rolebinding widened-create -n argocd --role=widened-create \
+  --serviceaccount="$TENANT:argo-workflow-sa" >/dev/null
+for _ in $(seq 1 30); do
+  kubectl auth can-i create applications.argoproj.io -n argocd --as="$SA" >/dev/null 2>&1 && break
+  sleep 1
+done
+deny "create an Application (Role widened)" "may not create Applications" \
+  create -f "$WORK/new-app.yaml"
+deny "create an ApplicationSet (Role widened)" "may not create or delete ApplicationSets" \
+  create -f "$WORK/new-appset.yaml"
+kubectl delete rolebinding widened-create -n argocd >/dev/null
+kubectl delete role widened-create -n argocd >/dev/null
 
 # The platform workflow tier is not matched.
 if kubectl --as="$PLATFORM_SA" -n argocd delete application tenant-karabu --dry-run=server >/dev/null 2>"$WORK/err"; then
