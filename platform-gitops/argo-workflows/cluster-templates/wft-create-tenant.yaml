@@ -20,6 +20,7 @@ metadata:
       Steps:
         1. validate           — name format + non-existence check
            check-namespace    — live namespace collision check (parallel)
+           check-applications — live Argo CD Application collision check (parallel)
         2. create-vault-policy — Vault policy scoped to teams/{name}/*
         3. commit-to-git      — tenant files + ArgoCD RBAC pushed to mctl-gitops
 
@@ -99,10 +100,21 @@ spec:
                 - name: tenant_name
                   value: "{{workflow.parameters.tenant_name}}"
 
-          # Step 2: create Vault policy (after both checks; nothing is
-          # written to Vault or git unless both pass)
+          # Step 1c: refuse a new name that collides with a live Argo CD
+          # Application (see check-application-collision).
+          - name: check-applications
+            template: check-application-collision
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+                - name: reprovision
+                  value: "{{workflow.parameters.reprovision}}"
+
+          # Step 2: create Vault policy (after every check; nothing is
+          # written to Vault or git unless all of them pass)
           - name: create-vault-policy
-            dependencies: [validate, check-namespace]
+            dependencies: [validate, check-namespace, check-applications]
             template: create-vault-policy
             arguments:
               parameters:
@@ -197,6 +209,19 @@ spec:
           # tenant must never take. Defence in depth only: a static list goes stale
           # whenever a platform namespace is added, so every caller that can reach
           # the API also checks the live cluster with tenant_ns_check.
+          #
+          # The second group reserves names that collide with platform Argo CD
+          # Applications. A tenant's services become Applications named
+          # <tenant>-<service> and the tenant itself tenant-<tenant>, all in
+          # namespace argocd, so a tenant named after a platform Application, or
+          # after a hyphen-prefix of one (root for root-app, shared for
+          # shared-pg), shares that Application's name space. Mirrors
+          # IsReservedTenantName in mctl-api internal/operations/
+          # reserved_tenant.go; change both together. create-tenant also checks
+          # the live Application list (check-application-collision). sync is
+          # reserved because the tenant chart's argocd Role and RoleBinding,
+          # argo-workflow-argocd-<tenant>, would take the platform tier's own
+          # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
@@ -204,6 +229,10 @@ spec:
               temporal|backstage|minio|database|forgejo|zitadel|\
               local-path-storage|system-upgrade|observability-eval|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
+                return 0 ;;
+              tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
+              root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
+              tenant-*|otel-*|sync)
                 return 0 ;;
             esac
             return 1
@@ -315,6 +344,19 @@ spec:
           # tenant must never take. Defence in depth only: a static list goes stale
           # whenever a platform namespace is added, so every caller that can reach
           # the API also checks the live cluster with tenant_ns_check.
+          #
+          # The second group reserves names that collide with platform Argo CD
+          # Applications. A tenant's services become Applications named
+          # <tenant>-<service> and the tenant itself tenant-<tenant>, all in
+          # namespace argocd, so a tenant named after a platform Application, or
+          # after a hyphen-prefix of one (root for root-app, shared for
+          # shared-pg), shares that Application's name space. Mirrors
+          # IsReservedTenantName in mctl-api internal/operations/
+          # reserved_tenant.go; change both together. create-tenant also checks
+          # the live Application list (check-application-collision). sync is
+          # reserved because the tenant chart's argocd Role and RoleBinding,
+          # argo-workflow-argocd-<tenant>, would take the platform tier's own
+          # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
@@ -322,6 +364,10 @@ spec:
               temporal|backstage|minio|database|forgejo|zitadel|\
               local-path-storage|system-upgrade|observability-eval|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
+                return 0 ;;
+              tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
+              root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
+              tenant-*|otel-*|sync)
                 return 0 ;;
             esac
             return 1
@@ -376,6 +422,79 @@ spec:
           tenant_ns_check "$TENANT"
 
           echo "No namespace collision for tenant '$TENANT'."
+
+    # ────────────────────────────────────────────────────────────────────────
+    # The structural half of the reserved-name rule, against the live
+    # Application list instead of a static one: a new tenant N is refused
+    # when an Application named N, or named N-<anything>, already exists in
+    # namespace argocd. Its services would become Applications <N>-<service>
+    # and could spell that Application's name. This is the rule mctl-api
+    # applies to its platform list (collidesWithPlatformApplication) and to
+    # existing tenants (TenantNameCollision), taken from the cluster so a
+    # platform Application added later is covered without a list edit.
+    #
+    # On reprovision the tenant's own <N>-<service> Applications, and the
+    # platform Applications deployed for it (admins-mctl-api, erpact-infra),
+    # are expected, so only the exact name is checked there; the prefix space
+    # was settled when the tenant was created.
+    #
+    # Fails closed: a listing that errors, or that does not contain root-app
+    # (every cluster has it, so its absence means the read did not see the
+    # real namespace), refuses the name. Read-only; runnable on its own:
+    #   argo submit --from clusterworkflowtemplate/create-tenant \
+    #     --entrypoint check-application-collision -p tenant_name=<name>
+    - name: check-application-collision
+      inputs:
+        parameters:
+          - name: tenant_name
+          - name: reprovision
+            value: "false"
+      script:
+        image: alpine/k8s:1.33.12
+        command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
+          - name: PARAM_REPROVISION
+            value: "{{inputs.parameters.reprovision}}"
+        source: |
+          set -e
+          TENANT="$PARAM_TENANT_NAME"
+          REPROVISION="$PARAM_REPROVISION"
+
+          if [ "$(printf '%s' "$TENANT" | wc -l)" -ne 0 ] \
+            || ! printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            echo "ERROR: Tenant name '$TENANT' is invalid."
+            exit 1
+          fi
+          case "$REPROVISION" in
+            true|false) ;;
+            *) echo "ERROR: reprovision must be \"true\" or \"false\", got: $REPROVISION"; exit 1 ;;
+          esac
+
+          if ! APPS=$(kubectl get applications.argoproj.io -n argocd \
+               -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}'); then
+            echo "ERROR: could not list Argo CD Applications; refusing."
+            exit 1
+          fi
+          if ! printf '%s\n' "$APPS" | grep -qx 'root-app'; then
+            echo "ERROR: the Application listing has no root-app; it is not a complete read. Refusing."
+            exit 1
+          fi
+
+          if [ "$REPROVISION" = true ]; then
+            HITS=$(printf '%s\n' "$APPS" | awk -v n="$TENANT" '$0 == n')
+          else
+            # A new tenant also becomes tenant-<T>; a leftover one (a tenant
+            # deleted only partly) is not this tenant's to take over.
+            HITS=$(printf '%s\n' "$APPS" | awk -v n="$TENANT" '$0 == n || $0 == "tenant-" n || index($0, n "-") == 1')
+          fi
+          if [ -n "$HITS" ]; then
+            echo "ERROR: tenant name '$TENANT' collides with existing Argo CD Applications:"
+            printf '%s\n' "$HITS" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "No Application collision for tenant '$TENANT' (reprovision=$REPROVISION)."
 
     # ────────────────────────────────────────────────────────────────────────
     - name: create-vault-policy
