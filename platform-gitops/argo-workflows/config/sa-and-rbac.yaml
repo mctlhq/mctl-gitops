@@ -215,8 +215,8 @@ roleRef:
 #                       refresh annotation on ApplicationSet tenants
 #   delete-tenant(-safe) list Applications team=<T>, delete them and
 #                       tenant-<T>, refresh annotation on ApplicationSets apps
-#                       and tenants, delete Role/RoleBinding
-#                       argo-workflow-argocd-<T>
+#                       and tenants, list and delete the Roles/RoleBindings
+#                       labelled mctl.me/tenant=<T> (argo-workflow-argocd-<ns>)
 #   mctl-agents-shepherd list Applications (post-deploy verify)
 # deploy-service, smoke-test and retire-service run in tenant namespaces under
 # the tenant's own argo-workflow-sa, not here. Nothing in this tier patches an
@@ -224,7 +224,9 @@ roleRef:
 # and tenants. Delete cannot be narrowed by name in RBAC (the names depend on
 # the tenant), so the admission policies mctl-platform-workflow-sa-argocd-*
 # (bootstrap/templates/system/admission-policies.yaml) limit which objects
-# these verbs may act on.
+# these verbs may act on. Those policies ship with root-app (bootstrap) and
+# this Role with argo-workflows-config, so neither sync orders the other; the
+# only identity holding the grant in between is this tier itself.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -240,7 +242,7 @@ rules:
     verbs: ["get", "patch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
-    verbs: ["delete"]
+    verbs: ["list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

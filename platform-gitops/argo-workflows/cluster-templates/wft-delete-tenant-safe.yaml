@@ -891,28 +891,33 @@ spec:
           # BEGIN tenant-argocd-rbac-cleanup
           # The tenants ApplicationSet renders tenant-<T> without Argo CD's
           # resources finalizer, so deleting that Application does not cascade.
-          # The tenant's namespaces are deleted explicitly below, but the tenant
-          # chart also puts one Role and one RoleBinding,
-          # argo-workflow-argocd-<T>, in namespace argocd, and those outlived
-          # every deleted tenant. Remove them once tenant-<T> is gone, so Argo CD
-          # cannot re-create them. The admission policy for this
-          # ServiceAccount only admits the delete when the object carries
-          # mctl.me/tenant=<T>. Kept byte-identical between delete-tenant and
-          # delete-tenant-safe by tests/test_wft_create_tenant_existing.py.
+          # The tenant's namespaces are deleted explicitly, but the tenant chart
+          # also puts a Role and a RoleBinding in namespace argocd for every
+          # tenant namespace (argo-workflow-argocd-<ns>: <T>, or <T>-<team> when
+          # tenant.teams is set), all labelled mctl.me/tenant=<T>, and those
+          # outlived every deleted tenant. Remove them by that label once
+          # tenant-<T> is gone, so Argo CD cannot re-create them. The admission
+          # policy for this ServiceAccount only admits deleting objects named
+          # argo-workflow-argocd-<T> or argo-workflow-argocd-<T>-* that carry
+          # the label. A failed list or delete returns non-zero; "No resources
+          # found" is the API's empty listing, not an error. Kept byte-identical
+          # between delete-tenant and delete-tenant-safe by
+          # tests/test_wft_create_tenant_existing.py.
           delete_tenant_argocd_rbac() {
-            for _tar_kind in rolebinding role; do
-              if ! kubectl delete "$_tar_kind" "argo-workflow-argocd-$1" -n argocd --ignore-not-found; then
-                echo "ERROR: could not delete $_tar_kind argo-workflow-argocd-$1 in namespace argocd."
-                return 1
-              fi
-            done
+            if ! kubectl delete rolebinding,role -n argocd -l "mctl.me/tenant=$1"; then
+              echo "ERROR: could not delete the argocd Roles/RoleBindings labelled mctl.me/tenant=$1."
+              return 1
+            fi
           }
           # END tenant-argocd-rbac-cleanup
 
-          delete_tenant_argocd_rbac "${TENANT}" || exit 1
-
           delete_owned_ns "${TENANT}"
           delete_owned_ns "${TENANT}-preview"
+
+          # After the namespaces, so a failure here cannot leave them running
+          # with nothing in git or Argo CD; it still fails the step below.
+          RBAC_CLEANUP_FAILED=0
+          delete_tenant_argocd_rbac "${TENANT}" || RBAC_CLEANUP_FAILED=1
 
           echo "Waiting for service apps, tenant app, and namespace to disappear..."
           for i in $(seq 1 60); do
@@ -927,6 +932,10 @@ spec:
             PREVIEW_NS_STATE=$(tenant_ns_state "${TENANT}-preview" "${TENANT}") || PREVIEW_NS_STATE=lookup-error
             echo "  [${i}/60] serviceApps=${APP_COUNT} tenantAppRc=${TENANT_APP_RC} namespace=${NS_STATE} previewNamespace=${PREVIEW_NS_STATE}"
             if [ "${APP_COUNT}" = "0" ] && [ "${TENANT_APP_RC}" -ne 0 ] && [ "${NS_STATE}" = absent ] && [ "${PREVIEW_NS_STATE}" = absent ]; then
+              if [ "${RBAC_CLEANUP_FAILED}" = 1 ]; then
+                echo "ERROR: tenant ${TENANT} is gone, but its argocd Roles/RoleBindings could not be deleted."
+                exit 1
+              fi
               echo "K8s cleanup fully complete for tenant ${TENANT}."
               exit 0
             fi

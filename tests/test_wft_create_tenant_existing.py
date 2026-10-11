@@ -278,7 +278,7 @@ case "$1 $2" in
   "get applications.argoproj.io")
     [ -e "$S/appfail" ] && { echo "Error from server (Forbidden)" >&2; exit 1; }
     ls "$S/apps"; exit 0 ;;
-  "delete role"|"delete rolebinding")
+  "delete rolebinding,role")
     [ -e "$S/rbacfail" ] && { echo "Error from server (Forbidden)" >&2; exit 1; }
     exit 0 ;;
 esac
@@ -446,22 +446,27 @@ for fname in ("wft-delete-tenant-safe.yaml", "wft-delete-tenant.yaml"):
     check(f"{short}: delete removes the tenant's own namespace",
           r.returncode == 0 and "acme" not in left, r.stdout + r.stderr + log)
     lines = log.splitlines()
-    want = ["kubectl delete rolebinding argo-workflow-argocd-acme -n argocd --ignore-not-found",
-            "kubectl delete role argo-workflow-argocd-acme -n argocd --ignore-not-found"]
+    want = "kubectl delete rolebinding,role -n argocd -l mctl.me/tenant=acme"
     app_del = next((i for i, l in enumerate(lines) if l.startswith("kubectl delete app")), None)
-    rbac_del = [i for i, l in enumerate(lines) if l in want]
-    check(f"{short}: delete removes the tenant's Role and RoleBinding in argocd",
-          len(rbac_del) == 2, log)
-    check(f"{short}: ...after tenant-<T> is deleted",
-          app_del is not None and rbac_del and min(rbac_del) > app_del, log)
+    ns_del = [i for i, l in enumerate(lines) if l.startswith("kubectl delete ns")]
+    rbac_del = [i for i, l in enumerate(lines) if l == want]
+    check(f"{short}: delete removes the tenant's argocd Roles/RoleBindings by label",
+          len(rbac_del) == 1, log)
+    check(f"{short}: ...after tenant-<T> and the namespaces are deleted",
+          app_del is not None and ns_del and rbac_del
+          and rbac_del[0] > app_del and rbac_del[0] > max(ns_del), log)
 
     r, log, _ = run_kube(delete, "acme", {}, apps=())
     check(f"{short}: delete removes the argocd RBAC even when tenant-<T> is already gone",
-          r.returncode == 0 and all(w in log for w in want), r.stdout + r.stderr + log)
+          r.returncode == 0 and want in log, r.stdout + r.stderr + log)
 
-    r, log, _ = run_kube(delete, "acme", {"acme": "acme"}, apps=("tenant-acme",),
-                         rbacfail=True)
-    check(f"{short}: delete fails when the argocd RBAC cannot be removed",
+    r, log, left = run_kube(delete, "acme", {"acme": "acme", "acme-preview": "acme"},
+                            apps=("tenant-acme",), rbacfail=True)
+    # (legacy delete-tenant never deleted <T>-preview; that is unchanged)
+    check(f"{short}: a failed argocd RBAC cleanup still deletes the namespaces",
+          "acme" not in left and (short == "delete-tenant" or "acme-preview" not in left),
+          r.stdout + log)
+    check(f"{short}: ...and fails the step",
           r.returncode != 0 and "could not delete" in r.stdout, r.stdout + r.stderr + log)
 
     r, log, left = run_kube(delete, "payments", {"payments": ""},

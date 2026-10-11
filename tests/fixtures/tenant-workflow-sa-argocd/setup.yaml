@@ -317,3 +317,26 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: argocd-server
+---
+# The pair the tenant chart renders for a team namespace (<T>-<team>) when
+# tenant.teams is set: named after the namespace, labelled with the tenant.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-argocd-karabu-web
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    mctl.me/tenant: karabu
+rules: []
+---
+# Labelled karabu, and its name starts with the tenant's, but without the
+# hyphen: another tenant's (karaburu) name space, not karabu's.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-argocd-karaburu
+  namespace: argocd
+  labels:
+    mctl.me/tenant: karabu
+rules: []
