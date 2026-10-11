@@ -1,0 +1,115 @@
+# AppProject `default`: the project every platform Application runs under
+# (root-app, argocd-self-managed, vault, zitadel, shared-pg, the operators,
+# the observability stack, ...).
+#
+# Until this file existed, `default` was the object Argo CD creates for
+# itself on first start and nobody owned: sourceRepos ['*'], destinations
+# */*, clusterResourceWhitelist */*. A project is the boundary Argo CD
+# enforces on an Application's sources and destinations, so with those
+# values the boundary for the whole platform tier was "anything". This file
+# makes it an explicit, reviewed list.
+#
+# What is pinned and what is not:
+#   - sourceRepos: exactly the git repository and the Helm/OCI chart
+#     repositories the platform Applications use today. An Application in
+#     this project whose source is not on the list gets a ComparisonError
+#     ("application repo ... is not permitted in project 'default'") and
+#     stops syncing; its existing resources are left as they are.
+#   - destinations: the in-cluster API server only, and exactly the
+#     namespaces platform Applications deploy into (their destination
+#     namespace plus the namespaces their resources name explicitly).
+#   - clusterResourceWhitelist stays */*: these Applications install
+#     operators, so they legitimately own CRDs, ClusterRoles, webhooks,
+#     admission policies, StorageClasses and PriorityClasses.
+#
+# Changing either list: scripts/validate-argocd-project-scope.py (CI,
+# validate-manifests.yml) renders this chart and the argocd chart and
+# fails when an Application's source or destination is not covered by its
+# project, or when an entry here is no longer used by any Application.
+# Adding a platform Application with a new chart repository or namespace
+# therefore means adding it here in the same PR. Eval candidates
+# (otelCollector.eval) are derived below, so opening or tearing one down
+# stays a single values edit.
+#
+# Rollout and rollback: root-app itself is in this project and syncs from
+# {{ .Values.spec.source.repoURL }}, which is always on the list, so root-app
+# can always sync a revert of this file. Argo CD never deletes the `default`
+# project's Applications or resources because of a scope mismatch; it only
+# stops syncing them.
+{{- $sourceRepos := list
+      .Values.spec.source.repoURL
+      "https://argoproj.github.io/argo-helm"
+      "https://backstage.github.io/charts"
+      "https://charts.external-secrets.io"
+      "https://charts.zitadel.com"
+      "https://cloudnative-pg.github.io/charts"
+      "code.forgejo.org/forgejo-helm"
+      "https://emberstack.github.io/helm-charts"
+      "https://grafana.github.io/helm-charts"
+      "https://helm.releases.hashicorp.com"
+      "https://open-telemetry.github.io/opentelemetry-helm-charts"
+      "https://victoriametrics.github.io/helm-charts/"
+}}
+{{- $namespaces := list
+      "admins"
+      "argo-rollouts"
+      "argo-workflows"
+      "argocd"
+      "backstage"
+      "cnpg-system"
+      "default"
+      "erpact"
+      "external-secrets"
+      "forgejo"
+      "grafana-iac"
+      "kube-system"
+      "labs"
+      "local-path-storage"
+      "mctl-api"
+      "monitoring"
+      "platform-db"
+      "platform-events"
+      "reflector-system"
+      "traefik"
+      "vault"
+      "vault-human-auth-iac"
+      "zitadel"
+}}
+{{- if .Values.otelCollector.eval.enabled }}
+{{- $namespaces = append $namespaces "observability-eval" }}
+{{- range .Values.otelCollector.eval.candidates }}
+{{- if .enabled }}
+{{- $sourceRepos = append $sourceRepos .repoURL }}
+{{- end }}
+{{- end }}
+{{- end }}
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: default
+  namespace: argocd
+  annotations:
+    # Before the Applications in the same sync, like the other projects.
+    argocd.argoproj.io/sync-wave: "-2"
+    # Never pruned or deleted by root-app: removing this file, or deleting
+    # root-app with its cascading finalizer, must not delete the project
+    # every platform Application belongs to. (Argo CD would recreate an
+    # empty, fully permissive `default` on its next restart.)
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  description: Platform components (root-app and everything it installs)
+
+  sourceRepos:
+    {{- range $sourceRepos | uniq }}
+    - {{ . | quote }}
+    {{- end }}
+
+  destinations:
+    {{- range $namespaces | uniq | sortAlpha }}
+    - server: {{ $.Values.spec.destination.server }}
+      namespace: {{ . | quote }}
+    {{- end }}
+
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"

@@ -46,7 +46,11 @@ jobs:
           # .github#50 usage-writer ExternalSecret, whose
           # entire body sits inside an `{{- if }}` gate, and the argocd chart's
           # argocd-rbac-cm template (gitops#1431), which leads with a template
-          # comment and the `$rbac` binding.
+          # comment and the `$rbac` binding, and AppProject `default`
+          # (projects/project-default.yaml), which builds its source and
+          # namespace lists, eval candidates included, in leading `$`
+          # bindings. Its rendered output is parsed and checked by
+          # scripts/validate-argocd-project-scope.py in validate-manifests.
           #
           # Named files rather than excluding bootstrap/templates/ as a
           # directory: that would drop 54 currently-linted templates to spare
@@ -56,6 +60,7 @@ jobs:
             platform-gitops/helm-charts/
             platform-gitops/bootstrap/templates/bootstrap/applicationset-prod.yaml
             platform-gitops/bootstrap/templates/projects/project-prod.yaml
+            platform-gitops/bootstrap/templates/projects/project-default.yaml
             platform-gitops/bootstrap/templates/observability/eval-namespace.yaml
             platform-gitops/bootstrap/templates/observability/eval-candidates.yaml
             platform-gitops/bootstrap/templates/observability/loki-datasource.yaml
