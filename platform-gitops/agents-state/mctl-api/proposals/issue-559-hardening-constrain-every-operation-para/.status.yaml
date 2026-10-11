@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-10-11T16:49:38Z'
+status: needs-triage
+updated_at: '2026-10-11T16:57:28Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-383a0640ea7072db
@@ -19,5 +19,15 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-10-11T16:49:38Z'
+attempt:
+  id: 51b223dbb6f179bf4565fa082049332635d4e4a43d8eda7df4a812f23369685e
+  started_at: '2026-10-11T16:57:23Z'
+  expires_at: '2026-10-11T19:07:23Z'
+  finished_at: '2026-10-11T16:57:28Z'
+failure:
+  code: no-commits
+  stage: agent
+  message: implementer produced no commits
+notes: 'agent: implementer produced no commits'
