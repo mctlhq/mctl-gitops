@@ -31,8 +31,8 @@ settlement can bring every non-terminal invocation to a terminal phase.
 
 - WHEN the process starts with `COMMERCE_ACCEPT_DISABLED` set to a value that `killSwitchOn` reads as on THE SYSTEM SHALL record the accept-only switch as on and log a warning naming the variable.
 - WHEN `COMMERCE_ACCEPT_DISABLED` is unset or set to a value `killSwitchOn` reads as off (`""`, `false`, `f`, `0`, `no`, `off`) THE SYSTEM SHALL behave exactly as it does today.
-- WHILE the accept-only switch is on and the commerce store is configured, WHEN an authorized caller sends `POST /api/v1/commerce/tenants/{tenant}/quotes` THE SYSTEM SHALL refuse with HTTP 503 and error code `unsupported-execution`, and SHALL NOT call `commerce.Store.MintQuote`.
-- WHILE the accept-only switch is on and the commerce store is configured, WHEN an authorized caller sends `POST /api/v1/commerce/tenants/{tenant}/invocations` THE SYSTEM SHALL refuse with HTTP 503 and error code `unsupported-execution`, and SHALL NOT call `commerce.Store.AcceptInvocation`. This includes a request that would have replayed an existing row.
+- WHILE the accept-only switch is on and the commerce store is configured, WHEN an authorized caller sends `POST /api/v1/commerce/tenants/{tenant}/quotes` THE SYSTEM SHALL refuse with HTTP 422 and error code `unsupported-execution`, and SHALL NOT call `commerce.Store.MintQuote`.
+- WHILE the accept-only switch is on and the commerce store is configured, WHEN an authorized caller sends `POST /api/v1/commerce/tenants/{tenant}/invocations` THE SYSTEM SHALL refuse with HTTP 422 and error code `unsupported-execution`, and SHALL NOT call `commerce.Store.AcceptInvocation`. This includes a request that would have replayed an existing row.
 - WHILE the accept-only switch is on THE SYSTEM SHALL keep the existing authentication, tenant-access (404) and identity (`identity-unresolved`) checks ahead of the switch refusal, so the refusal reveals nothing about a tenant the caller cannot see.
 - WHILE the accept-only switch is on THE SYSTEM SHALL write a `denied` audit entry for each refused quote or accept, with operation `commerce-quote-mint` or `commerce-invocation-accept` and a message naming the switch.
 - WHILE the accept-only switch is on THE SYSTEM SHALL serve every other `/api/v1/commerce*` route (terms, quote/invocation/transition reads, budget routes, `…/reserve`, `…/dispatch`, `…/finalize`, `…/release`, `…/transitions`, `/invocations/overdue`, `/reconcile/expired`, `/dispatch-keys`) exactly as when the switch is off.
@@ -49,6 +49,12 @@ settlement can bring every non-terminal invocation to a terminal phase.
 - Blocking `…/reserve` or `…/dispatch` on rows accepted before the switch was turned on. The issue says everything else stays unchanged, and those rows are existing liability that must be allowed to complete or release.
 - Turning the switch on in the deployed environment. This proposal only adds the capability; the deployed values stay off.
 - An automatic reconciler schedule. `POST /reconcile/expired` stays operator- or cron-driven, as today.
+
+## Owner decisions (2026-10-11)
+
+- The accept-only refusal is HTTP **422** with code `unsupported-execution`, not 503. The mctl-agents commerce client classifies every 5xx as `UNKNOWN` (`orchestrator/commerce.py::_classify`), so a 503 would be reported to the agent as `outcome-unknown` / ledger unreachable while nothing is held. This resolves the first open question below.
+- Refusing replayed accepts while paused is accepted: the C4 gateway resumes through `GET …/invocations?idempotency_key=…` (`_find`) before it ever re-accepts.
+- Reserve/dispatch of rows accepted before the switch stay allowed, as proposed.
 
 ## Open questions
 

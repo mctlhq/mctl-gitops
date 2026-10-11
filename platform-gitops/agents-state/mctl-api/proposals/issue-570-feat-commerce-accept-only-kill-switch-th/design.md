@@ -115,16 +115,17 @@ The gate sits in the HTTP layer, not in `commerce.Store`, because it is a
 deployment policy for this API surface, not a ledger invariant. The store's
 tests and its phase machine stay as they are.
 
-Status code: 503. The refusal is temporary and operator-controlled, like
-`dispatch-unavailable`. The code is `unsupported-execution`, per the owner's
-decision. This choice is flagged under Open questions in requirements.md.
+Status code: **422** (owner decision 2026-10-11, replacing the 503 first
+proposed). The mctl-agents client reads every 5xx as `UNKNOWN`, which would
+report a paused acceptance as `outcome-unknown`; a 422 carrying the code is
+a clean `unsupported-execution` refusal. The code is `unsupported-execution`.
 
 ### 4. Documentation
 
 - `docs/commerce-ledger.md` "Configuration": add a row for
   `COMMERCE_ACCEPT_DISABLED`. Add a new section, "Pausing acceptance",
   covering:
-  - What is refused (the two POSTs, 503 `unsupported-execution`, audited
+  - What is refused (the two POSTs, 422 `unsupported-execution`, audited
     `denied`) and what stays live (every other route, listed).
   - Precedence: `COMMERCE_DISABLED` wins.
   - **Disable order:**
@@ -186,8 +187,8 @@ decision. This choice is flagged under Open questions in requirements.md.
   - *Partial rollout (2 replicas):* one pod may still accept during the
     rollout. The docs say acceptance stops only once every replica has
     rolled.
-  - *The gateway retries a 503 in a loop:* this is bounded by the gateway's
-    own retry policy. The status choice is an open question for the reviewer.
+  - *The gateway retries a 5xx as unknown:* avoided by answering 422, which
+    the gateway treats as a final refusal (owner decision 2026-10-11).
   - *Dispatch-key validation still runs under the accept switch, so a bad key
     still refuses boot:* this is intended, because dispatch stays live. The
     escape hatch remains `COMMERCE_DISABLED`.
