@@ -77,3 +77,14 @@ services:
     unmapped: "no source repository recorded"
   - path: platform-gitops/services/labs/pfeifenpatenschaft-backend/values.yaml
     unmapped: "no source repository recorded"
+  # Added 2026-10-11, verified the same way (`gh api repos/mctlhq/<name>/releases`).
+  - path: platform-gitops/services/karabu/draw-with-friends/values.yaml
+    unmapped: "no source repository recorded"
+  - path: platform-gitops/services/labs/coolify-mcp/values.yaml
+    unmapped: "mctlhq/mctl-coolify-mcp publishes no GitHub releases"
+  - path: platform-gitops/services/labs/mctl-alice/values.yaml
+    unmapped: "mctlhq/mctl-alice publishes no GitHub releases"
+  - path: platform-gitops/services/labs/pelican-proxy-staging/values.yaml
+    unmapped: "no source repository recorded; deployed from staging-<n> builds"
+  - path: platform-gitops/services/labs/projects-mcp/values.yaml
+    unmapped: "mctlhq/projects-mcp releases stop at 0.1.1 while deploys follow tags"
