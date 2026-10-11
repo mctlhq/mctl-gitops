@@ -62,7 +62,14 @@ Rules and alerts (mctl-gitops):
 - Back-filling or rewriting historical `status="error"` samples; the 28d ratio converges on its own within 28 days.
 - Deploying `deploy/alerts/mctl-telegram.rules.yaml` (it stays a non-deployed reference, updated only for consistency).
 
-## Open questions
+## Decisions (owner, 2026-10-12)
+
+- **Budget alerts ship separately and late.** The `mctl-telegram-slo-budget` group goes in its own mctl-gitops PR, opened together with the rest but merged no earlier than 2026-11-03. Until then the 28d window still holds pre-#746 FLOOD_WAIT retries (session borrow 92.83%) and pre-#757 caller errors (tool availability 99.44%). Both alerts would fire on deploy and stay firing for weeks, and the `mctl-agent` receiver turns a firing warning into a ticket (mctl-agent `internal/monitor/alerthandler.go`). Before merging that PR, check each 28d ratio against its objective; if one is still below, wait for it rather than adding a silence.
+- **420 / FLOOD_WAIT after retries stays `error`**, as proposed.
+- **All Telegram 403 replies are `caller_error`**, consistent with #746.
+- **`for: 1h`** on the budget alerts, as proposed.
+
+## Open questions (original, answered above)
 
 - 420 / FLOOD_WAIT that survives `borrowWithRetry`: the issue does not list it. This proposal keeps it `error` (conservative; the session-borrow SLI also excludes it only per attempt). Reviewer may prefer `caller_error`.
 - Argument-validation and scope refusals in the labs log lines are mostly early returns that never reach `Server.audit`; they are already `synthesized` and already excluded from the metric. Only the audit-staged subset changes. So the measured improvement on labs will come mainly from the Telegram 400 replies; the reviewer should not expect all 31 errors to disappear.
