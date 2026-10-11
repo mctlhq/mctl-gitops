@@ -37,8 +37,8 @@ locals {
   #
   # claude-remote-state: the persisted /workspace of labs/claude-remote
   # (Claude Code OAuth credentials, session transcripts, the native claude
-  # binary, git config), moved off the in-cluster MinIO that is being
-  # decommissioned. It holds login state that cannot be regenerated without
+  # binary, git config), moved off the in-cluster MinIO (decommissioned
+  # 2026-10). It holds login state that cannot be regenerated without
   # an interactive `claude auth login`, so it gets no expiry rule.
   r2_buckets_created = {
     "claude-remote-state" = "EEUR"

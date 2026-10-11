@@ -10,7 +10,7 @@
 # Apply:
 #   vault policy write external-secrets-read vault-policy-external-secrets-read.hcl
 
-# Read platform infrastructure secrets (ArgoCD, Backstage, Vault, GHCR, MinIO/R2)
+# Read platform infrastructure secrets (ArgoCD, Backstage, Vault, GHCR, R2)
 path "secret/data/platform/*" {
   capabilities = ["read"]
 }

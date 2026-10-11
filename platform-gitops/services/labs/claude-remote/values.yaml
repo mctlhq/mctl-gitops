@@ -180,10 +180,6 @@ env:
 # bucket only (Object Read & Write), written by the owner to
 # secret/platform/mctl-claude-remote/r2 (access-key, secret-key). Platform
 # path, next to the service's other platform/mctl-claude-remote/* secrets.
-#
-# claude-remote-minio-creds is TRANSITIONAL: restore-state reads it once to
-# copy the existing state out of the in-cluster MinIO into R2 (see the
-# migration block there). It goes away with MinIO itself.
 extraExternalSecrets:
   labs-claude-remote-r2:
     store: vault-backend
@@ -196,19 +192,6 @@ extraExternalSecrets:
       - secretKey: secret-key
         remoteKey: platform/mctl-claude-remote/r2
         property: secret-key
-  labs-claude-remote-minio:
-    # Platform-scoped path — must use the cluster store; tenant-store only
-    # resolves secret/data/teams/labs/*.
-    store: vault-backend
-    storeKind: ClusterSecretStore
-    targetSecret: claude-remote-minio-creds
-    data:
-      - secretKey: access-key
-        remoteKey: platform/minio
-        property: root-user
-      - secretKey: secret-key
-        remoteKey: platform/minio
-        property: root-password
   # pr-steward GitHub App private key (RS256 PEM). Mounted on tmpfs, 0440,
   # never in env — gh-app-token mints a 1h installation token from it.
   mctl-claude-remote-github-app:
@@ -325,55 +308,6 @@ initContainers:
           || fatal "cannot configure the R2 alias"
         STATE=s3/claude-remote-state/labs/claude-remote/
 
-        # ---- One-time MinIO -> R2 migration. Remove together with MinIO. ----
-        # Runs in the FIRST pod of the new spec. The Recreate strategy means
-        # the old pod is gone by then, and its preStop has already flushed the
-        # final state to MinIO, so this copy is complete. The marker lives
-        # outside $STATE on purpose: the GC mirrors in s3-sync run with
-        # --remove against $STATE and would delete it.
-        MARKER_DIR=s3/claude-remote-state/migration/
-        markers=$(mc ls --recursive "$MARKER_DIR") \
-          || fatal "cannot list $MARKER_DIR on R2; refusing to guess whether MinIO state was migrated"
-        case "$markers" in
-          *labs-claude-remote-from-minio*)
-            echo "MinIO state already migrated to R2." ;;
-          *)
-            echo "Migrating workspace state MinIO -> R2 (one-time)..."
-            mc alias set minio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null \
-              || fatal "cannot configure the MinIO alias for the migration"
-            old=$(mc ls --recursive minio/platform-state/labs/claude-remote/) \
-              || fatal "cannot list the MinIO state; not marking the migration done"
-            if [ -n "$old" ]; then
-              mc mirror --overwrite --exclude '.mc/*' --exclude 'go/*' --exclude '.cache/*' --exclude '.local/share/claude/versions/*' --exclude '.claude/backups/*' \
-                minio/platform-state/labs/claude-remote/ "$STATE" \
-                || fatal "MinIO -> R2 copy failed; the next start retries it"
-              # mc mirror exits 0 even when every transfer failed (seen on
-              # 2026-10-10: R2 rejected the listing, 0 B copied, exit 0, and
-              # the marker below sent the pod into an empty workspace). So the
-              # copy is proven by count, not by exit status: every source key
-              # outside the excluded prefixes must now exist on R2.
-              want=$(printf '%s\n' "$old" | sed 's/^.* STANDARD //' \
-                | grep -c -v -E '^(\.mc|go|\.cache|\.local/share/claude/versions|\.claude/backups)/') || true
-              copied=$(mc ls --recursive "$STATE") \
-                || fatal "cannot list $STATE on R2 after the copy; not marking the migration done"
-              have=$(printf '%s\n' "$copied" | grep -c ' STANDARD ') || true
-              # want=0 means every source key sits under an excluded prefix:
-              # there is nothing to copy, which is success, not a reason to
-              # crash-loop forever. A parse failure cannot produce 0 here: a
-              # line the sed does not strip is not filtered out, so it counts.
-              [ "$have" -ge "$want" ] \
-                || fatal "MinIO -> R2 copy incomplete: $have of $want objects on R2; not marking the migration done"
-              echo "Copied $have of $want objects to R2."
-            else
-              echo "MinIO holds no state for this service; nothing to copy."
-            fi
-            echo "migrated $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              | mc pipe "${MARKER_DIR}labs-claude-remote-from-minio" \
-              || fatal "cannot write the migration marker"
-            echo "Migration complete." ;;
-        esac
-        # ---- end of the migration block ----
-
         listing=$(mc ls --recursive "$STATE") || fatal "cannot list $STATE on R2"
         if [ -n "$listing" ]; then
           echo "Restoring workspace from R2..."
@@ -425,19 +359,6 @@ initContainers:
         valueFrom:
           secretKeyRef:
             name: claude-remote-r2-creds
-            key: secret-key
-      # TRANSITIONAL: read only by the one-time migration block above.
-      - name: MINIO_ENDPOINT
-        value: "http://minio.minio.svc.cluster.local:9000"
-      - name: MINIO_ACCESS_KEY
-        valueFrom:
-          secretKeyRef:
-            name: claude-remote-minio-creds
-            key: access-key
-      - name: MINIO_SECRET_KEY
-        valueFrom:
-          secretKeyRef:
-            name: claude-remote-minio-creds
             key: secret-key
     volumeMounts:
       - name: workspace
@@ -559,7 +480,7 @@ extraContainers:
             # (the .local/bin/claude symlink target) plus the 2 newest by mtime;
             # delete the rest locally and propagate with a --remove SCOPED to the
             # versions dir only — no credentials live there, so it's safe (unlike
-            # the additive main mirror). minio/mc has no grep/sed/awk; uses only
+            # the additive main mirror). Written for minio/mc, which had no grep/sed/awk; uses only
             # readlink/ls/head/basename. Fail-safe: if the active version can't
             # be resolved, skip entirely rather than risk deleting it.
             VDIR=/workspace/.local/share/claude/versions
