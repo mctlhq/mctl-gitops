@@ -275,17 +275,33 @@ spec:
             # ZITADEL client of the portal's OIDC provider (OIDC_ZITADEL_CLIENT_ID
             # and _SECRET), filled by the zitadel-iac Job (portal.tf).
             - backstage-oidc-zitadel
-          {{- if (default dict .Values.surfacePortalToken).enabled }}
-          # surface:portal token for plugins/work-items-backend
-          # (workItems.surfaceToken). optional: a Secret that has not synced
-          # yet leaves the plugin answering 503 instead of failing the pod.
+          {{- if or (default dict .Values.surfacePortalToken).enabled (default dict .Values.repoBinding).enabled }}
+          # One extraEnvVars list for every gated entry: two keys would leave
+          # only the last one (YAML last-wins).
           extraEnvVars:
+            {{- if (default dict .Values.surfacePortalToken).enabled }}
+            # surface:portal token for plugins/work-items-backend
+            # (workItems.surfaceToken). optional: a Secret that has not synced
+            # yet leaves the plugin answering 503 instead of failing the pod.
             - name: MCTL_SURFACE_PORTAL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: backstage-surface-portal
                   key: MCTL_SURFACE_PORTAL_TOKEN
                   optional: true
+            {{- end }}
+            {{- if (default dict .Values.repoBinding).enabled }}
+            # Token of the mctl-api-repo-binding externalAccess entry below.
+            # optional so the pod spec is valid before the Secret syncs; the
+            # backend needs the value at startup, so enable repoBinding only
+            # after the Vault write (bootstrap/values.yaml).
+            - name: MCTL_API_REPO_BINDING_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backstage-repo-binding
+                  key: MCTL_API_REPO_BINDING_TOKEN
+                  optional: true
+            {{- end }}
           {{- end }}
           startupProbe:
             httpGet:
@@ -340,6 +356,18 @@ spec:
                       subject: mctl-api
                     accessRestrictions:
                       - plugin: custom-domains
+                  {{- if (default dict .Values.repoBinding).enabled }}
+                  # mctl-api's repository-binding lookups (GET
+                  # /api/github-app-connect/repo-binding). Its own token and
+                  # subject, restricted to github-app-connect, so it grants
+                  # nothing the custom-domains token does and vice versa.
+                  - type: static
+                    options:
+                      token: ${MCTL_API_REPO_BINDING_TOKEN}
+                      subject: mctl-api-repo-binding
+                    accessRestrictions:
+                      - plugin: github-app-connect
+                  {{- end }}
               reading:
                 allow:
                   - host: app.mctl.ai
@@ -403,6 +431,10 @@ spec:
               appId: ${GITHUB_APP_ID}
               privateKey: ${GITHUB_APP_PRIVATE_KEY}
               webhookSecret: ${GITHUB_WEBHOOK_SECRET}
+              {{- if (default dict .Values.repoBinding).enabled }}
+              # The only subject /repo-binding answers; unset, it refuses all.
+              bindingCheckSubject: mctl-api-repo-binding
+              {{- end }}
             vaultSecrets:
               endpoint: ${VAULT_ADDR}
               # Kubernetes auth (mctl-portal#53): the backstage ServiceAccount

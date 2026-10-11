@@ -367,6 +367,14 @@ spec:
           # lands the chart ignores the unknown key.
           surfacePortalTokenSecret: mctl-api-surface-portal
           {{- end }}
+          {{- if (default dict .Values.repoBinding).enabled }}
+
+          # Token for the portal's github-app-connect repo-binding lookup, from
+          # the mctl-api-repo-binding ExternalSecret. Needs the mctl-api chart's
+          # optional repoBindingTokenSecret; until it lands the chart ignores the
+          # unknown key.
+          repoBindingTokenSecret: mctl-api-repo-binding
+          {{- end }}
 
           resources:
             requests:
