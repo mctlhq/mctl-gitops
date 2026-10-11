@@ -50,7 +50,11 @@ spec:
       - name: component_name
         value: "smoke-test-svc"
       - name: dockerfile_repo
-        value: "mctlhq/spring-test"
+        value: "mctlhq/mctl-gitops"
+      # Built from this repository so the smoke test does not depend on an
+      # external sample app (mctlhq/spring-test was deleted).
+      - name: dockerfile_path
+        value: "platform-gitops/images/smoke-app/Dockerfile"
       - name: component_type
         value: "worker-service"
       - name: git_tag
@@ -114,6 +118,9 @@ spec:
       script:
         image: alpine/k8s:1.33.12
         command: [bash]
+        env:
+          - name: PARAM_DOCKERFILE_PATH
+            value: "{{workflow.parameters.dockerfile_path}}"
         source: |
           set -e
           TEAM="{{workflow.parameters.team_name}}"
@@ -147,7 +154,7 @@ spec:
               - {name: secret_env_vars,    value: ""}
               - {name: provision_database, value: "${PROVISION_DB}"}
               - {name: skip_health_check,  value: "false"}
-              - {name: dockerfile_path,    value: Dockerfile}
+              - {name: dockerfile_path,    value: "${PARAM_DOCKERFILE_PATH}"}
               - {name: image_tag,          value: ""}
           EOF
           )
@@ -194,6 +201,9 @@ spec:
       script:
         image: alpine/k8s:1.33.12
         command: [bash]
+        env:
+          - name: PARAM_DOCKERFILE_PATH
+            value: "{{workflow.parameters.dockerfile_path}}"
         source: |
           set -e
           TEAM="{{workflow.parameters.team_name}}"
@@ -237,7 +247,7 @@ spec:
               - {name: secret_env_vars,    value: "SMOKE_SECRET=smoke_secret_value"}
               - {name: provision_database, value: "false"}
               - {name: skip_health_check,  value: "false"}
-              - {name: dockerfile_path,    value: Dockerfile}
+              - {name: dockerfile_path,    value: "${PARAM_DOCKERFILE_PATH}"}
               - {name: image_tag,          value: ""}
           EOF
           )
