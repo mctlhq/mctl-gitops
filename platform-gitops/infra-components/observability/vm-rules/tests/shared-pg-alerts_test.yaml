@@ -1,0 +1,99 @@
+# Unit tests for shared-pg-alerts.yaml (group mctl.shared-pg).
+# The healthy fixture carries the live replica values from the #1811 check:
+# the standby reports a huge growing archiver age and streaming_replicas 0.
+# A per-pod (non-primary-joined) rule fails it at the first evaluation.
+rule_files:
+  - generated/shared-pg-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: healthy cluster with a standby reporting replica-only values is quiet
+    input_series:
+      - series: 'up{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x180'
+      - series: 'up{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x180'
+      - series: 'cnpg_collector_up{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x180'
+      - series: 'cnpg_collector_up{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x180'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x180'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-2"}'
+        values: '0x180'
+      - series: 'cnpg_pg_replication_lag{namespace="platform-db",pod="shared-pg-1"}'
+        values: '0x180'
+      - series: 'cnpg_pg_replication_lag{namespace="platform-db",pod="shared-pg-2"}'
+        values: '0x180'
+      - series: 'cnpg_pg_replication_streaming_replicas{namespace="platform-db",pod="shared-pg-1"}'
+        values: '0x180'
+      - series: 'cnpg_pg_replication_streaming_replicas{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x180'
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="platform-db",pod="shared-pg-1"}'
+        values: '71390+60x180'
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="platform-db",pod="shared-pg-2"}'
+        values: '506x180'
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="platform-db",pod="shared-pg-1"}'
+        values: '2000x180'
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1000x180'
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="platform-db",pod="shared-pg-2"}'
+        values: '2000x180'
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1000x180'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="a"}'
+        values: '1x180'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-2",datname="a"}'
+        values: '88x180'
+      - series: 'cnpg_pg_settings_setting{namespace="platform-db",pod="shared-pg-1",name="max_connections"}'
+        values: '200x180'
+      - series: 'cnpg_pg_settings_setting{namespace="platform-db",pod="shared-pg-2",name="max_connections"}'
+        values: '200x180'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-1"}'
+        values: '50x180'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-2"}'
+        values: '50x180'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-1"}'
+        values: '100x180'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-2"}'
+        values: '100x180'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: SharedPgNoPrimary, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgNoPrimary, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgInstanceMissing, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgInstanceMissing, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgInstanceDown, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgReplicationLagHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgStandbyNotStreaming, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgStandbyNotStreaming, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgWALArchivingFailing, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgWALArchivingFailing, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgWALArchivingStale, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgWALArchivingStale, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgConnectionsHigh, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgVolumeFillingUp, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgVolumeAlmostFull, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgMetricsAbsent, exp_alerts: []}
+
+  - interval: 1m
+    name: a missing primary fires SharedPgNoPrimary after 5m
+    input_series:
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x60'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 3m, alertname: SharedPgNoPrimary, exp_alerts: []}
+      - eval_time: 10m
+        alertname: SharedPgNoPrimary
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: shared-pg
+            exp_annotations:
+              summary: "shared-pg does not have exactly one primary"
+              description: >-
+                Counting instances with in_recovery == 0 across platform-db/shared-pg gives something other than 1 (no primary, or split brain). mctl-api, Temporal, Backstage and the other dependants lose their database.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgnoprimary

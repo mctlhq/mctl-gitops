@@ -18,6 +18,7 @@ spec:
   # instead of the drain deadlocking on the single-instance PDB (0 allowed
   # disruptions) that left worker-cx43-fsn1-ftx cordoned for 13 days during a
   # k3s upgrade. podAntiAffinity (preferred) spreads the two across nodes.
+  # Mirrored by SharedPgInstanceMissing in observability/vm-rules/shared-pg-alerts.yaml.
   instances: 2
 
   # CNPG operator defaults (explicitly set to prevent ArgoCD OutOfSync)
