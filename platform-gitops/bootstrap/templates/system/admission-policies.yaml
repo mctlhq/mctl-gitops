@@ -1098,8 +1098,10 @@ spec:
 # The Role/RoleBinding half; see the comment above. delete-tenant(-safe)
 # removes the tenant chart's argo-workflow-argocd-<ns> pairs, which deleting
 # tenant-<T> leaves behind (no cascade). <ns> is <T>, or <T>-<team> for each
-# team when tenant.teams is set; the label is <T> either way. Roles and RoleBindings are matched
-# together: only metadata is read.
+# team when tenant.teams is set; the label is <T> either way. Roles and
+# RoleBindings are matched together: only metadata is read. The tier's own
+# argo-workflow-argocd-sync pair is refused whatever its labels say (the tenant
+# name sync is reserved for the same reason).
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -1124,7 +1126,8 @@ spec:
       reason: Forbidden
     - expression: >-
         request.operation != 'DELETE' ||
-        ('mctl.me/tenant' in variables.labels && variables.labels['mctl.me/tenant'] != '' &&
+        (oldObject.metadata.name != 'argo-workflow-argocd-sync' &&
+         'mctl.me/tenant' in variables.labels && variables.labels['mctl.me/tenant'] != '' &&
          (oldObject.metadata.name == 'argo-workflow-argocd-' + variables.labels['mctl.me/tenant'] ||
           oldObject.metadata.name.startsWith('argo-workflow-argocd-' + variables.labels['mctl.me/tenant'] + '-')))
       message: >-

@@ -218,7 +218,10 @@ spec:
           # shared-pg), shares that Application's name space. Mirrors
           # IsReservedTenantName in mctl-api internal/operations/
           # reserved_tenant.go; change both together. create-tenant also checks
-          # the live Application list (check-application-collision).
+          # the live Application list (check-application-collision). sync is
+          # reserved because the tenant chart's argocd Role and RoleBinding,
+          # argo-workflow-argocd-<tenant>, would take the platform tier's own
+          # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
@@ -229,7 +232,7 @@ spec:
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
               root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
-              tenant-*|otel-*)
+              tenant-*|otel-*|sync)
                 return 0 ;;
             esac
             return 1
@@ -350,7 +353,10 @@ spec:
           # shared-pg), shares that Application's name space. Mirrors
           # IsReservedTenantName in mctl-api internal/operations/
           # reserved_tenant.go; change both together. create-tenant also checks
-          # the live Application list (check-application-collision).
+          # the live Application list (check-application-collision). sync is
+          # reserved because the tenant chart's argocd Role and RoleBinding,
+          # argo-workflow-argocd-<tenant>, would take the platform tier's own
+          # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
@@ -361,7 +367,7 @@ spec:
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
               root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
-              tenant-*|otel-*)
+              tenant-*|otel-*|sync)
                 return 0 ;;
             esac
             return 1
@@ -479,7 +485,9 @@ spec:
           if [ "$REPROVISION" = true ]; then
             HITS=$(printf '%s\n' "$APPS" | awk -v n="$TENANT" '$0 == n')
           else
-            HITS=$(printf '%s\n' "$APPS" | awk -v n="$TENANT" '$0 == n || index($0, n "-") == 1')
+            # A new tenant also becomes tenant-<T>; a leftover one (a tenant
+            # deleted only partly) is not this tenant's to take over.
+            HITS=$(printf '%s\n' "$APPS" | awk -v n="$TENANT" '$0 == n || $0 == "tenant-" n || index($0, n "-") == 1')
           fi
           if [ -n "$HITS" ]; then
             echo "ERROR: tenant name '$TENANT' collides with existing Argo CD Applications:"

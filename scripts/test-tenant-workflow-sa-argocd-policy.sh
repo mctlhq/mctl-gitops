@@ -440,6 +440,13 @@ deny "platform: delete a tenant-shaped app nothing generated" "$DEL_APP" \
 DEL_RBAC="may only delete the tenant chart's argo-workflow-argocd-"
 deny "platform: delete its own Role argo-workflow-argocd-sync" "$DEL_RBAC" \
   delete role argo-workflow-argocd-sync
+# Even when its labels say it belongs to a tenant named sync.
+kubectl label role,rolebinding argo-workflow-argocd-sync -n argocd mctl.me/tenant=sync >/dev/null
+deny "platform: delete its own Role even when labelled tenant sync" "$DEL_RBAC" \
+  delete role argo-workflow-argocd-sync
+deny "platform: delete its own RoleBinding even when labelled tenant sync" "$DEL_RBAC" \
+  delete rolebinding argo-workflow-argocd-sync
+kubectl label role,rolebinding argo-workflow-argocd-sync -n argocd mctl.me/tenant- >/dev/null
 deny "platform: delete Argo CD's Role argocd-server" "$DEL_RBAC" delete role argocd-server
 deny "platform: delete a tenant-labelled RoleBinding under another name" "$DEL_RBAC" \
   delete rolebinding karabu-extra

@@ -203,6 +203,8 @@ MUST_REJECT = [
     "otel", "reflector", "valkey", "root-app", "shared-pg", "cloudnative-pg",
     "loki-stack", "temporal-web", "tenant-x", "tenant-admins", "otel-collector",
     "otel-eval-tempo", "argocd-self-managed", "argo-workflows-config",
+    # The tenant chart's argocd pair would be argo-workflow-argocd-sync.
+    "sync",
 ]
 # Existing tenants must stay accepted: the guard also runs when create-tenant
 # re-provisions them and when delete-tenant removes them.
@@ -228,6 +230,20 @@ structural = sorted(n for n in structural if len(n) >= 2)
 got = reserved(structural)
 check("the denylist refuses every platform Application name and hyphen-prefix",
       got == set(structural), f"not refused: {sorted(set(structural) - got)}")
+
+# The tenant chart puts argo-workflow-argocd-<tenant> Roles and RoleBindings in
+# argocd; a tenant whose name completes one of the platform tier's own names
+# there would take that object over.
+own = set()
+for d in yaml.safe_load_all(open("platform-gitops/argo-workflows/config/sa-and-rbac.yaml")):
+    if d and d["kind"] in ("Role", "RoleBinding") and d["metadata"].get("namespace") == "argocd":
+        n = d["metadata"]["name"]
+        if n.startswith("argo-workflow-argocd-"):
+            own.add(n[len("argo-workflow-argocd-"):])
+check("sa-and-rbac.yaml still has the platform tier's argocd pair", own == {"sync"}, str(own))
+got = reserved(own)
+check("the denylist refuses every tenant name that would take a platform argocd Role/RoleBinding",
+      got == own, f"not refused: {sorted(own - got)}")
 
 got = reserved(MUST_REJECT)
 check("the denylist refuses every platform namespace name and pattern",
@@ -372,7 +388,7 @@ check("create: the Application check receives tenant_name and reprovision",
 APP_CHECK = TEMPLATES["check-application-collision"]["script"]["source"]
 LIVE_APPS = ("root-app", "shared-pg", "temporal-web", "admins-mctl-api",
              "admins-mctl-web", "labs-mctl-telegram", "erpact-infra",
-             "tenant-labs", "tenant-admins", "my-team-web")
+             "tenant-labs", "tenant-admins", "my-team-web", "tenant-gone")
 for name, reprov, want, why in [
         ("fresh", "false", True, "a name no Application uses passes"),
         ("lab", "false", True, "a name that is only a string prefix (lab/labs-x) passes"),
@@ -382,7 +398,9 @@ for name, reprov, want, why in [
         ("labs", "true", True, "reprovision: the tenant's own <T>-<svc> apps pass"),
         ("admins", "true", True, "reprovision: platform apps under the tenant prefix pass"),
         ("shared-pg", "true", False, "reprovision: an exact Application name is still refused"),
-        ("labs", "false", False, "without reprovision an existing tenant's prefix is refused")]:
+        ("labs", "false", False, "without reprovision an existing tenant's prefix is refused"),
+        ("gone", "false", False, "a leftover tenant-<T> Application refuses the name"),
+        ("gone", "true", True, "reprovision: the tenant's own tenant-<T> passes")]:
     r, _, _ = run_kube(APP_CHECK, name, {}, apps=LIVE_APPS, reprovision=reprov)
     check(f"create: {why}", (r.returncode == 0) == want, r.stdout + r.stderr)
 r, _, _ = run_kube(APP_CHECK, "fresh", {}, apps=LIVE_APPS, appfail=True)

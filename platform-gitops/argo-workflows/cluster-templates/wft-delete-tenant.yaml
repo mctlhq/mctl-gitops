@@ -128,7 +128,10 @@ spec:
           # shared-pg), shares that Application's name space. Mirrors
           # IsReservedTenantName in mctl-api internal/operations/
           # reserved_tenant.go; change both together. create-tenant also checks
-          # the live Application list (check-application-collision).
+          # the live Application list (check-application-collision). sync is
+          # reserved because the tenant chart's argocd Role and RoleBinding,
+          # argo-workflow-argocd-<tenant>, would take the platform tier's own
+          # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
@@ -139,7 +142,7 @@ spec:
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
               root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
-              tenant-*|otel-*)
+              tenant-*|otel-*|sync)
                 return 0 ;;
             esac
             return 1
@@ -438,7 +441,10 @@ spec:
           # shared-pg), shares that Application's name space. Mirrors
           # IsReservedTenantName in mctl-api internal/operations/
           # reserved_tenant.go; change both together. create-tenant also checks
-          # the live Application list (check-application-collision).
+          # the live Application list (check-application-collision). sync is
+          # reserved because the tenant chart's argocd Role and RoleBinding,
+          # argo-workflow-argocd-<tenant>, would take the platform tier's own
+          # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
@@ -449,7 +455,7 @@ spec:
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
               root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
-              tenant-*|otel-*)
+              tenant-*|otel-*|sync)
                 return 0 ;;
             esac
             return 1
@@ -544,7 +550,9 @@ spec:
           # tenant-<T> is gone, so Argo CD cannot re-create them. The admission
           # policy for this ServiceAccount only admits deleting objects named
           # argo-workflow-argocd-<T> or argo-workflow-argocd-<T>-* that carry
-          # the label. A failed list or delete returns non-zero; "No resources
+          # the label, so the selector and the policy must stay in step: a
+          # labelled object under any other name fails the whole delete. A
+          # failed list or delete returns non-zero; "No resources
           # found" is the API's empty listing, not an error. Kept byte-identical
           # between delete-tenant and delete-tenant-safe by
           # tests/test_wft_create_tenant_existing.py.
