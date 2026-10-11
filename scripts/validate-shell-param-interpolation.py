@@ -12,6 +12,16 @@ This check is a ban, not a ratchet: any `inputs.parameters` or
 in a shell block fails, with no allow-list. Which parameters the API happens to
 constrain is a claim about another repository; this check does not rely on it.
 
+Scope: shell and Python blocks only (`script.source` and `command`/`args` of
+every container-like spec). Two other places Argo substitutes into are out of
+scope on purpose, so do not read this ban as total:
+- `when:` expressions reach govaluate, not a shell; tracked as a follow-up of
+  gitops#992 (task 9).
+- `image:` (e.g. `{{workflow.parameters.agent_image}}` in cwft-mctl-agents-*)
+  selects what runs rather than being parsed by it.
+`envFrom` is not checked by check_env_bindings(); no template reads a PARAM_*
+from a ConfigMap today.
+
 Run with --selftest to prove the detector still detects.
 """
 

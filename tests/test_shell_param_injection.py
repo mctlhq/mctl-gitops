@@ -27,8 +27,10 @@ PH = re.compile(r"\{\{\s*(?:inputs|workflow)\.parameters\.([A-Za-z0-9_.-]+)\s*\}
 CASES = [
     ("tpl-validate-tenant.yaml", "validate", "# ── 3. Clone"),
     ("tpl-git-commit.yaml", "commit-service", "apk add"),
-    ("tpl-vault-write.yaml", "write-service-secrets", "echo \"🔐 Authenticating"),
-    ("tpl-vault-write.yaml", "delete-service-secrets", "SA_TOKEN="),
+    ("tpl-vault-write.yaml", "write-service-secrets", "echo \"🔐 Authenticating",
+     "TEAM=\"$PARAM_TEAM_NAME\""),
+    ("tpl-vault-write.yaml", "delete-service-secrets", "SA_TOKEN=",
+     "TEAM=\"$PARAM_TEAM_NAME\""),
     ("wft-smoke-test.yaml", "run-onboard", "WF_NAME=$(kubectl create"),
     ("wft-smoke-test.yaml", "check-pod-running", "check_missing_secret_reference()"),
     ("wft-create-tenant.yaml", "create-vault-policy", "echo \"Authenticating"),
@@ -40,6 +42,18 @@ CASES = [
     ("wft-retire-service.yaml", "cleanup-db-from-gitops", "# ── Set up SSH for git",
      "TEAM=\"$PARAM_TEAM_NAME\""),
 ]
+
+
+# Valid values per parameter for the liveness run below; anything not listed
+# gets BENIGN_DEFAULT. A prelude must reach its end with these, which proves the
+# payload runs actually execute the parameter reads instead of dying on an
+# earlier command (an `apk add` before the first PARAM_* line made three cases
+# pass without reading a single parameter, #1838).
+BENIGN_DEFAULT = "okname"
+BENIGN = {"dockerfile_repo": "org/repo", "host": "svc.example.com", "port": "8080", "previous_generation": "7",
+          "git_tag": "v1.2.3", "image_tag": "auto", "min_replicas": "1",
+          "max_replicas": "2", "cpu_threshold": "80"}
+SENTINEL = "__PRELUDE_END__"
 
 
 def payloads(canary):
@@ -88,9 +102,11 @@ with tempfile.TemporaryDirectory() as d:
                      "dockerfile_repo", "git_tag", "port", "host", "env_vars",
                      "secret_env_vars", "provision_database", "skip_health_check",
                      "dockerfile_path", "image_tag"]
-    have_jq = shutil.which("jq") is not None
-    if not have_jq:
-        print("SKIP  jq not installed: child-workflow.json assertions not run")
+    # run-onboard's prelude needs jq; without it the case would silently stop
+    # before the child-workflow.json assertions, so a missing jq is a failure.
+    if shutil.which("jq") is None:
+        sys.exit("jq is required: run-onboard's child-workflow.json checks need it")
+    have_jq = True
 
     for fname, name, stop, *rest in CASES:
         tmpl = template(fname, name)
@@ -102,15 +118,26 @@ with tempfile.TemporaryDirectory() as d:
         first = 0
         if rest:
             first = next(i for i, l in enumerate(lines) if l.strip().startswith(rest[0]))
-        prelude = "\n".join(lines[:first] + lines[first:idx] if not rest
-                             else ["set -e"] + lines[first:idx])
+        body = lines[first:idx]
+        prelude = "\n".join(["set -e"] + body if rest else body)
+
+        benign = dict(base_env)
+        for e in tmpl["script"].get("env") or []:
+            benign[e["name"]] = PH.sub(lambda m: BENIGN.get(m.group(1), BENIGN_DEFAULT),
+                                       e.get("value", ""))
+        r = run_sh(prelude + f"\necho {SENTINEL}", benign, work, shell)
+        check(f"{name}: prelude reaches its end with valid values (case is live)",
+              SENTINEL in r.stdout, f"rc={r.returncode} {r.stderr.strip()[-300:]}")
+        (work / "child-workflow.json").unlink(missing_ok=True)
         for payload in payloads(canary):
             env = dict(base_env)
             for e in tmpl["script"].get("env") or []:
                 env[e["name"]] = PH.sub(lambda m: payload, e.get("value", ""))
-            # `set -e` in the prelude may stop it early on a validation
+            # Render the source the way Argo does, so a placeholder that comes
+            # back into the script text trips the canary, not only the static
+            # check above. `set -e` may stop the prelude early on a validation
             # failure; that is fine, only the canary matters.
-            r = run_sh(prelude, env, work, shell)
+            r = run_sh(PH.sub(lambda m: payload, prelude), env, work, shell)
             check(f"{name}: payload {payload.splitlines()[0]!r} is data",
                   not canary.exists())
             canary.unlink(missing_ok=True)
