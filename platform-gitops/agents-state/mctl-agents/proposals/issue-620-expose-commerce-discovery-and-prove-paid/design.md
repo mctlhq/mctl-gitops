@@ -248,9 +248,10 @@ liability with `list_invocations`, and the `reconciliation_deadline` alert.
 
 ## Platform impact
 
-- **Migrations:** none in this repo. mctl-api read endpoints, MCP tools, the
-  kill switch and an optional simulated-authorizer fault hook are cross-repo
-  prerequisites, tracked in mctl-api issues linked from #620.
+- **Migrations:** none in this repo. The mctl-api receipt read and MCP tools
+  (mctlhq/mctl-api#569) and the accept-only kill switch (mctlhq/mctl-api#570)
+  are cross-repo prerequisites. Owner decision 2026-10-11: no
+  simulated-authorizer fault hook; settlement-only retry is offline-only.
 - **Backward compatibility:** legacy descriptors produce byte-identical
   search and describe output. Sealed-set `content_hash` is untouched (no
   descriptor change). The env flag defaults off, so deploying this changes

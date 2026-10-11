@@ -88,6 +88,16 @@ payouts and payment rails are explicitly excluded.
 - Implementing ledger, reservation or receipt storage in mctl-agents. mctl-api owns all commerce state (ADR 020 sec. 14). This proposal only consumes and references the mctl-api endpoints and MCP tools.
 - Changing ADR 020's encodings, reason-code vocabulary or state machine.
 
+## Owner decisions (2026-10-11)
+
+These resolve the open questions below; where they differ, the decisions win.
+
+1. Proof tenant: a dedicated new tenant `commerce-proof`, created by an operator with the owner's OK. Never `admins`.
+2. Accept-only kill switch reason code: `unsupported-execution`. No ADR 020 amendment, no `commerce-disabled` code.
+3. Settlement-only retry: proven offline only against the `FakeLedger` harness. mctl-api gets no fault-injection hook. The evidence bundle marks the scenario `offline-only`.
+4. `approval_expected` stays in discovery, advisory, as specified.
+5. Routes: see tasks.md task 3 (mctlhq/mctl-api#569 receipt + MCP tools, mctlhq/mctl-api#570 accept-only switch).
+
 ## Open questions
 
 - Which tenant hosts the single-tenant proof? None of the existing tenants (admins, erpact, karabu, labs, mctl, ovk) is designated. Assumption: a dedicated proof tenant created by an operator. Using `admins` would mix it with platform operations.
