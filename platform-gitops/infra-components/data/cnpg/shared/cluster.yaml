@@ -358,4 +358,4 @@ spec:
         name: backstage-db-creds
 
   monitoring:
-    enablePodMonitor: false  # enable when Prometheus is added
+    enablePodMonitor: false  # scraped via vmpodscrape.yaml; true would add a converted duplicate scrape
