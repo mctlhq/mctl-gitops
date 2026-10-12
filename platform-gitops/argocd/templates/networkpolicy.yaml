@@ -1,0 +1,115 @@
+# Ingress allowlist for the argocd namespace (mctl-gitops#1810 phase 2).
+#
+# Threat: with no policy, any pod in the cluster (tenant namespaces included)
+# reaches argocd-server's API, the repo-server (which renders any repo it is
+# asked for with the controller's credentials) and redis directly.
+#
+# Who talks to Argo CD, derived from config and live traffic (2026-10-12):
+#   Same namespace     controller/server/applicationset/notifications ->
+#                      repo-server :8081 and redis :6379.
+#   traefik            ops.mctl.ai -> argocd-server :8080. Every API caller
+#                      seen in argocd-server's logs over 72h goes through it:
+#                      mctl-api (ARGOCD_URL https://ops.mctl.ai, ~3.2k calls),
+#                      the argocd-freshness GitHub workflow (ci-freshness),
+#                      UI users signed in through ZITADEL, the blackbox probe
+#                      of ops.mctl.ai/healthz, and GitHub's /api/webhook.
+#                      There is no cloudflared tunnel in the cluster.
+#   erpact-deployer    tenant erpact, ARGOCD_URL
+#                      http://argocd-server.argocd.svc.cluster.local: the one
+#                      in-cluster client of the API (ERPact site tools).
+#   vmagent            scrapes the controller :8082, server :8083 and
+#                      repo-server :8084 (VMServiceScrape argocd-*).
+#
+# Scoped to vmagent, not the whole monitoring namespace: a namespaceSelector
+# also matches hostNetwork pods, whose address is their node's, and
+# monitoring runs node-exporter on the host network of every node (#1818).
+# kubelet probes need no rule: k3s' kube-router accepts traffic from the
+# pod's own node before any policy chain ("from local node").
+#
+# Not listed, on purpose: the applicationset webhook :7000 and the
+# notifications metrics :9001 have no caller; kubectl port-forward does not
+# cross the pod network.
+#
+# Rollback: argocd-self-managed runs with prune: false, so reverting this
+# file leaves the four policies in place. Revert, then delete them:
+#   kubectl -n argocd delete networkpolicy default-deny-ingress \
+#     allow-argocd-same-namespace allow-argocd-server-clients \
+#     allow-argocd-metrics-scrape
+# The controller and repo-server talk inside the namespace, which stays
+# open, so Argo CD can always sync the revert itself.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: argocd
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-argocd-same-namespace
+  namespace: argocd
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-argocd-server-clients
+  namespace: argocd
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: erpact
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: erpact-deployer
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-argocd-metrics-scrape
+  namespace: argocd
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vmagent
+      ports:
+        - protocol: TCP
+          port: 8082
+        - protocol: TCP
+          port: 8083
+        - protocol: TCP
+          port: 8084
