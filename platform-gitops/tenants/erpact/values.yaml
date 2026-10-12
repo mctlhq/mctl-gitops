@@ -8,14 +8,18 @@ tenant:
   contactEmail: ""
   members:
     - userId: mashkovd
+      principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
       role: owner
     # GitHub logins, lowercased: the portal stores and looks them up in
     # lowercase, and mctl-api compares case-insensitively.
     - userId: obukhov23
+      principalId: prn_01M45DR1GWC87109EH88VBJX25
       role: owner
     - userId: grerik
+      principalId: prn_01M45DR1SXGTWB2FSYTFYFDAW4
       role: developer
     - userId: octongues
+      principalId: prn_01M4FPVPKVJ5X0PGREH9WYG8JN
       role: developer
   # Sized for two Frappe benches + MariaDB + Valkey + the site deployer
   # (requests ~550m/2.5Gi steady, ~840m/4.1Gi with every Job running at
