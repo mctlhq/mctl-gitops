@@ -29,10 +29,11 @@ ARGOCD_SERVER="${ARGOCD_SERVER:-https://ops.mctl.ai}"
 # of every Application that points at this repository's main branch.
 # <failed-phase> is the last operation's phase (Error / Failed) when that
 # operation failed AND the app is still not Synced, empty otherwise: a failed
-# operation on an app that has since converged is history, not drift. Sources and
-# status.sync.revisions are parallel arrays; single-source apps expose
-# spec.source / status.sync.revision instead, so both shapes are folded
-# into the same list-of-sources form first.
+# operation on an app that has since converged is history, not drift.
+#
+# Sources and status.sync.revisions are parallel arrays; single-source apps
+# expose spec.source / status.sync.revision instead, so both shapes are
+# folded into the same list-of-sources form first.
 tracked_sources() {
   jq -r --arg re "$REPO_RE" '
     .items[]
