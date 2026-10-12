@@ -102,7 +102,59 @@ cluster (no ClickHouse runs anywhere in
 `platform-gitops/infra-components/data/` today, which makes this a decidable
 criterion rather than a taste judgement).
 
-### Decision rule
+### Producer amendment: mctl-agent incident traces (#1280, mctl-agent#97, recorded 2026-10-12, after the fact)
+
+**Recorded after the producer started.** The soak declaration requires a
+producer amendment before the producer lands. `mctlhq/mctl-gitops#1828`
+turned on OTLP export for `admins-mctl-agent` (merged 2026-10-11 21:02:42Z,
+exporter up at 21:03:11Z) without one, and the DevLoop amendment above
+explicitly excludes `mctl-agent`. This section records it retroactively. It
+changes only the "real producer traffic" line. The window, the synthetic
+volume, the 500,000 cap, storage, retention and the teardown date stay as
+declared.
+
+**Reason.** `mctlhq/mctl-agent#97` needs incident traces linked to Loki, and
+the epic (`.github#55`) needs one `mctl-agent` incident diagnosis visible as
+a trace.
+
+**Producer, and only this producer.** `admins-mctl-agent`
+(`service.name=mctl-agent`). Its spans are `mctl_agent.process_ticket`,
+`collect_evidence`, `match_skills`, one `diagnose` per skill tried, and
+`fix` when a fix runs: 4 to 6 spans per ticket.
+
+**Observed volume before this record** (2026-10-12 16:50Z): 2 traces, 7
+spans (tickets `1ac833c4…` and `6ebe8c19…`). The Collector's accepted count,
+its sent count and Tempo's received count were all 1,589. That total is 240
+fixture spans, 12 DevLoop spans from before gitops#1791, 1,330 DevLoop spans
+and 7 `mctl-agent` spans.
+
+**Declared volume.** 110 tickets in the 14 days to 2026-10-12, with a peak
+of 28 in one day. At 6 spans per ticket that is under 200 spans a day. These
+spans count inside the existing 500,000 producer cap, measured the same
+way.
+
+**Stop rule.** The same five conditions as the DevLoop amendment. The
+switch is removing the `otel` block from `admins-mctl-agent` in
+`platform-gitops/bootstrap/templates/mctl-platform/mctl-agent.yaml`. When
+recorded, no condition had been met:
+- 1,349 of 500,000 producer spans;
+- 0 discarded spans and 0 failed flushes;
+- no Collector or Tempo alert had fired;
+- Tempo's peak working set was 484 MiB of its 1 GiB limit;
+- the leak check found 0 hits across all 19 real-producer traces.
+
+**Privacy.** The span attributes are the ticket id, type and outcome, the
+skill name, and the diagnosis confidence and fixability. They carry no
+alert text, evidence content, prompt or completion. The Collector's
+`redaction` processor applies as for every producer.
+
+**What this is not.** It is not an adoption of Tempo, and it does not
+extend the window. The teardown commit (runbook step 9) also removes this
+`otel` block, unless the verdict keeps a backend that it should keep
+exporting to. In that case keeping it is part of the separate adoption
+change.
+
+## Decision rule
 
 1. One candidate wins outright on both trace reconstruction and AI/agent
    observability and is not last on operations -> **single backend**.

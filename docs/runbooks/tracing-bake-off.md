@@ -152,7 +152,9 @@ The namespace quota is sized for this one pod plus headroom for a rollout:
    an amendment to the declared volume **before** it lands, never after.
    The one recorded so far is the ADR's "Producer amendment: DevLoop
    traces": the `mctl-agents` DevLoop only, capped at 500,000 spans for the
-   window, with a stop rule.
+   window, with a stop rule. The second, "Producer amendment: mctl-agent
+   incident traces", was recorded after the fact on 2026-10-12. It admits
+   `admins-mctl-agent` inside the same cap.
 
 ## 5. Declare the soak — before any measurement
 
@@ -236,6 +238,10 @@ commit**:
    `bootstrap/templates/observability/monitoring.yaml`. (The rules are
    silent with the sandbox gone, so leaving them for a follow-up is safe,
    but they should not outlive the decision.)
+5. Unless the verdict keeps a backend for them, remove the real producers'
+   export as the ADR's producer amendments require: `otel.enabled` on the
+   `mctl-agents` DevLoop workers and the `otel` block on
+   `admins-mctl-agent`.
 
 Because the bootstrap Application syncs with `prune: true` and the candidate
 Application carries `resources-finalizer.argocd.argoproj.io` and
