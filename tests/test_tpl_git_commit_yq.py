@@ -17,6 +17,7 @@ strenv() covers the value; it does NOT substitute in a path, which is why the
 key is both shape-checked and written through the `.env[strenv(KEY)]`
 subscript. Both halves are exercised here.
 """
+import json
 import os
 import re
 import shutil
@@ -41,11 +42,14 @@ def dedent(block, width):
                      for ln in block.split("\n"))
 
 
-m = re.search(r"^(reject_multiline\(\) \{\n.*?\n\})$", SOURCE, re.S | re.M)
-assert m, "could not extract reject_multiline() from the template"
-HELPER = m.group(1)
+HELPERS = []
+for fn in ("trim", "unquote", "reject_multiline"):
+    m = re.search(r"^(%s\(\) \{\n.*?\n\})$" % fn, SOURCE, re.S | re.M)
+    assert m, f"could not extract {fn}() from the template"
+    HELPERS.append(m.group(1))
+HELPER = "\n".join(HELPERS)
 
-m = re.search(r"while IFS='=' read -r key rest; do\n(.*?)\n *done <<ENVEOF",
+m = re.search(r"while IFS= read -r line; do\n(.*?)\n *done <<ENVEOF",
               SOURCE, re.S)
 assert m, "could not extract the env_vars loop from the template"
 BODY = dedent(m.group(1), 6)
@@ -55,7 +59,7 @@ VALUES = 'image:\n  tag: "1.0.0"\nenv:\n  EXISTING: "keep"\n'
 SCRIPT = """set -e
 DIR="$PWD"
 %s
-while IFS='=' read -r key rest; do
+while IFS= read -r line; do
 %s
 done <<ENVEOF
 $PARAM_ENV_VARS
@@ -63,12 +67,12 @@ ENVEOF
 """
 
 
-def run(payload):
+def run(payload, body=None):
     with tempfile.TemporaryDirectory() as d:
         tmp = pathlib.Path(d)
         (tmp / "values.yaml").write_text(VALUES)
         proc = subprocess.run(
-            ["sh", "-c", SCRIPT % (HELPER, BODY)],
+            ["sh", "-c", SCRIPT % (HELPER, BODY if body is None else body)],
             cwd=tmp, env={**os.environ, "PARAM_ENV_VARS": payload}, capture_output=True, text=True,
         )
         tag = subprocess.run(
@@ -158,9 +162,9 @@ CODE = "\n".join(ln for ln in SOURCE.splitlines()
 check("no env write interpolates the key into the path",
       ".env.${key}" not in CODE, "a loop still writes .env.${key}")
 check("every env write uses the subscript form",
-      SOURCE.count(SUBSCRIPT) == SOURCE.count("read -r key rest") - 3,
+      SOURCE.count(SUBSCRIPT) == SOURCE.count("read -r line") - 3,
       f"{SOURCE.count(SUBSCRIPT)} subscript writes for "
-      f"{SOURCE.count('read -r key rest')} key loops")
+      f"{SOURCE.count('read -r line')} key loops")
 
 with tempfile.TemporaryDirectory() as d:
     tmp = pathlib.Path(d)
@@ -177,6 +181,55 @@ with tempfile.TemporaryDirectory() as d:
 check("the subscript form itself resists a hostile key", tag == "1.0.0",
       f"tag={tag} env={env} err={proc.stderr}")
 check("the hostile key is stored as a literal key", '"x | .image.tag": "pwned4"' in env, env)
+
+# 8. Values arrive intact. The loops used to trim with `echo "$x" | xargs`,
+#    which aborted the step on an unbalanced quote (an onboard with a"b'c
+#    failed with "xargs: unmatched double quote") and silently rewrote every
+#    other value: inner quotes and backslashes dropped, runs of spaces
+#    squeezed. The contract now matches write-service-secrets-from-secret:
+#    trim around key and value, drop ONE pair of matching outer quotes.
+FIDELITY = [
+    ("Q1", "a\"b'c", "a\"b'c"),
+    ("Q2", "it's", "it's"),
+    ("BS", r"C:\path\n\t", r"C:\path\n\t"),
+    ("SP", "two  spaces   here", "two  spaces   here"),
+    ("PAD", "  padded\t ", "padded"),
+    ("DQ", '"quoted value"', "quoted value"),
+    ("SQ", "'single'", "single"),
+    ("NESTED", "\"'x'\"", "'x'"),
+    ("HALF", '"open', '"open'),
+    ("EMPTYQ", '""', ""),
+    ("B64", "YWJj==", "YWJj=="),
+    ("EQ", "x=y=z", "x=y=z"),
+    ("SUB", "$(id)`id`;|&", "$(id)`id`;|&"),
+]
+payload = "\n".join(f"{k}={raw}" for k, raw, _ in FIDELITY)
+payload += "\n  # a comment\n\n  SPACED_KEY  =v\nNOEQ"
+# All three env_vars loops (onboard, deploy, update-config), not just the
+# first: each one was its own copy of the xargs trim.
+ENV_LOOPS = re.findall(r"while IFS= read -r line; do\n((?:(?!while IFS=).)*?)\n *done <<(ENVEOF\w*)",
+                       SOURCE, re.S)
+check("found the three env_vars loops", len(ENV_LOOPS) == 3,
+      [t for _, t in ENV_LOOPS])
+for loop_body, term in ENV_LOOPS:
+    proc, tag, env = run(payload, dedent(loop_body, 6))
+    try:
+        got = json.loads(env) or {}
+    except ValueError:
+        got = {}
+    check(f"{term}: values with quotes, backslashes and spaces are accepted",
+          proc.returncode == 0, f"rc={proc.returncode} err={proc.stderr}")
+    for k, raw, want in FIDELITY:
+        check(f"{term}: value {raw!r} is stored as {want!r}", got.get(k) == want,
+              f"got {got.get(k)!r}")
+    check(f"{term}: a key is trimmed", got.get("SPACED_KEY") == "v",
+          repr(got.get("SPACED_KEY")))
+    check(f"{term}: a line without '=' sets an empty value", got.get("NOEQ") == "",
+          repr(got.get("NOEQ")))
+    check(f"{term}: a comment line with leading blanks is skipped",
+          not any(k.startswith("#") for k in got), repr(list(got)))
+check("no loop trims with xargs any more",
+      "| xargs" not in CODE, "an env/secret loop still pipes through xargs")
 
 # --- config_patch ----------------------------------------------------------
 # config_patch is the one parameter that IS an expression, so it has no
