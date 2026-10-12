@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-10-12T21:00:00Z'
+status: accepted
+updated_at: '2026-10-12T20:14:30Z'
 updated_by: mashkovd
 source:
   type: github_issue
@@ -8,9 +8,13 @@ source:
   url: https://github.com/mctlhq/mctl-api/issues/377
 control:
   requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-12T20:14:30Z'
 notes: >-
   Written by hand (operator + Claude Code), not by issue-investigator. Revision
-  2: records the owner's answers to Q1-Q5 of the 2026-10-12 audit and the
-  revised schema and rollout. Not approved for implementation. PR-0 (the
-  `admins` tenant-name privilege fix) is scoped in tasks.md and approved to
-  proceed on its own, outside this proposal's approval.
+  2 records the owner's answers to Q1-Q5 of the 2026-10-12 audit. Approved by
+  the owner on 2026-10-12. Implemented BY HAND, one slice per PR in the order
+  of tasks.md (PR-0 done in mctl-api#587, live in 4.81.1; PR-A next). Do not
+  run mctl_trigger_implementer on this proposal: it would attempt every slice
+  at once, and the switch to principal mode is gated on the shadow window.
