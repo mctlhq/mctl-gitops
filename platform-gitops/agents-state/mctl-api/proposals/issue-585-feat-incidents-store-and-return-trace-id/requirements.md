@@ -90,6 +90,11 @@ Read path
   `trace_unavailable: "audit_record_forbidden"`.
 - IF the audit lookup errors or exceeds its timeout THEN THE SYSTEM SHALL still
   return the incident (HTTP 200) with `trace_unavailable: "audit_unavailable"`.
+- WHEN `GET /api/v1/incidents` (the list endpoint, which does not run the
+  audit derivation) returns an incident with an empty stored `trace_id` THE
+  SYSTEM SHALL set `trace_unavailable: "not_derived_on_list"` on that item, so
+  a missing `trace_id` in a list response is never readable as "this incident
+  has no trace". The single-incident GET remains the place to resolve it.
 - WHEN `mctl_get_incident argo-mctl-agents-implement-dae24112-1791756910` is
   called after deploy THE SYSTEM SHALL return `trace_id=431486061c652efb376a860d9d656f25`
   and `trace_source="workflow_audit"`.
@@ -98,8 +103,8 @@ Read path
 
 - Storing `span_id` on the incident (#97: a span id names a transient attempt).
 - Querying Tempo or Loki from mctl-api.
-- Read-time derivation on the list endpoint (it returns stored values only; see
-  Open questions).
+- Read-time derivation on the list endpoint (it returns stored values only and
+  marks the rest `not_derived_on_list`; see Open questions).
 - Changing the onExit legs in mctl-gitops to send `workflow_name` or `trace_id`
   (a follow-up in another repo; the summary-URL fallback covers today's producers).
 - Backfilling `trace_id` into existing rows.
@@ -111,8 +116,11 @@ Read path
 - List endpoint derivation: the issue asks the list endpoint to "return it".
   This proposal returns the stored value on list but runs the audit derivation
   only on the single-incident GET, to avoid up to 50 audit queries per list
-  call. If the investigator path needs derived ids on list, a batched audit
-  lookup can be added later.
+  call. Items without a stored trace carry `trace_unavailable:
+  "not_derived_on_list"` (amended at review: an unmarked absence on list would
+  read as "no trace exists", which mctlhq/mctl-agent#97 forbids). If the
+  investigator path needs derived ids on list, a batched audit lookup can be
+  added later.
 - Dedup semantics for `trace_id`: the issue states "latest run wins" for PATCH
   only; this proposal applies the same rule to a dedup-hit POST. For Argo
   incidents the deduplicated row keeps the first run's summary URL, so the
