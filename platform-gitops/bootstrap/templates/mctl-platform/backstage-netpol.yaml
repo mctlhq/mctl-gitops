@@ -1,0 +1,71 @@
+# Ingress allowlist for the backstage namespace (mctl-gitops#1810 phase 2).
+#
+# Threat: with no policy, any pod in the cluster (tenant namespaces included)
+# reaches the Backstage backend on :7007 directly: the forward-auth endpoint
+# every Traefik-fronted service trusts, the scaffolder, and the catalog,
+# bypassing Traefik and everything in front of it.
+#
+# Who talks to Backstage, derived from config, an org-wide code search and
+# 17h of the backend's request log (2026-10-12):
+#   traefik         app.mctl.ai, plus every forward-auth Middleware
+#                   (base-service's ingress-forward-auth-middleware.yaml,
+#                   temporal-web, labs/claude-remote): Traefik itself calls
+#                   backstage.backstage.svc:7007/api/oidc-provider/forward-auth.
+#                   Backstage's own backend calls and mctl-api's BACKSTAGE_URL
+#                   use backend.baseUrl https://app.mctl.ai and also arrive
+#                   through Traefik, as do the blackbox probe and GitHub's
+#                   github-app-connect webhook.
+#   mctl-api        BACKSTAGE_INTERNAL_URL (unset, so the default
+#                   http://backstage.backstage.svc.cluster.local:7007) for the
+#                   github-app-connect repo operations.
+#   argo-workflows  wft-remove-custom-domain calls /api/custom-domains on the
+#                   in-cluster URL. mctl-api submits it to argo-workflows
+#                   (operations.WorkflowNamespace), never to a tenant
+#                   namespace. Scoped to workflow pods: the Argo server and
+#                   controller have no reason to call Backstage.
+#
+# No metrics scrape targets Backstage. kubelet probes need no rule: k3s'
+# kube-router accepts traffic from the pod's own node before any policy
+# chain ("from local node").
+#
+# Peers are scoped by podSelector, not by namespace alone: a namespaceSelector
+# also matches hostNetwork pods, whose address is their node's (#1818).
+#
+# Applied by root-app, which prunes: reverting this file removes the policy.
+# Wave 0, no annotation: a later wave would deadlock root-app (see
+# erpact/applications.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backstage-ingress
+  namespace: backstage
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mctl-api
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-api
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argo-workflows
+          podSelector:
+            matchExpressions:
+              - key: workflows.argoproj.io/workflow
+                operator: Exists
+      ports:
+        - protocol: TCP
+          port: 7007
