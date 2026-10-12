@@ -118,3 +118,60 @@ tests:
                 More than 10% of MCP tool invocations are returning errors over
                 the last 15 minutes. Check mctl-telegram logs for the specific
                 tools failing (tool label on mctl_tool_invocations_total).
+
+  # MctlTelegramCallerErrorShareHigh (mctl-telegram#759): the case the
+  # ok|error allow-list cannot see. Every call refused as a 400 leaves the SLI
+  # and HighToolErrorRate empty, and this is what fires instead.
+  - interval: 1m
+    name: MctlTelegramCallerErrorShareHigh fires when most calls are caller errors
+    input_series:
+      # 60 caller_error against 18 ok per hour: 77%.
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="caller_error"}'
+        values: '0+1x90'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="list_dialogs",status="ok"}'
+        values: '0+0.3x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramCallerErrorShareHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: mctl-telegram
+              instance: prod
+            exp_annotations:
+              summary: "mctl-telegram: more than half of tool calls are caller errors"
+              description: >-
+                Over the last hour more than 50% of MCP tool invocations were
+                classified caller_error, which the availability SLI and
+                HighToolErrorRate do not count. Either one client is looping on
+                a bad request, or a server-side regression makes Telegram refuse
+                every call and the SLI cannot see it.
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramcallererrorsharehigh"
+      - eval_time: 90m
+        alertname: HighToolErrorRate
+        exp_alerts: []
+
+  # Ordinary traffic: about 9% caller errors, well under half.
+  - interval: 1m
+    name: MctlTelegramCallerErrorShareHigh stays quiet at a normal share
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="caller_error"}'
+        values: '0+0.5x90'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="ok"}'
+        values: '0+5x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramCallerErrorShareHigh
+        exp_alerts: []
+
+  # A quiet hour with a handful of calls, all refused: 100%, but 6 calls is
+  # below the volume floor and says nothing about the service.
+  - interval: 1m
+    name: MctlTelegramCallerErrorShareHigh stays quiet below the volume floor
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="caller_error"}'
+        values: '0+0.1x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramCallerErrorShareHigh
+        exp_alerts: []
