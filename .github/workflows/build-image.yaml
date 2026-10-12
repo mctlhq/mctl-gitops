@@ -439,7 +439,24 @@ jobs:
         env:
           IMAGE_NAME: ${{ inputs.image_name }}
           GITHUB_TOKEN_IMAGES: |
+            ghcr.io/mctlhq/grafana-iac
+            ghcr.io/mctlhq/mc
+            ghcr.io/mctlhq/mctl-academy
+            ghcr.io/mctlhq/mctl-agent
             ghcr.io/mctlhq/mctl-agents
+            ghcr.io/mctlhq/mctl-alice
+            ghcr.io/mctlhq/mctl-api
+            ghcr.io/mctlhq/mctl-design
+            ghcr.io/mctlhq/mctl-docs
+            ghcr.io/mctlhq/mctl-portal
+            ghcr.io/mctlhq/mctl-telegram
+            ghcr.io/mctlhq/mctl-web
+            ghcr.io/mctlhq/pfeifenpatenschaft-backend
+            ghcr.io/mctlhq/portfolio
+            ghcr.io/mctlhq/projects-mcp
+            ghcr.io/mctlhq/seerrsense
+            ghcr.io/mctlhq/vault-iac
+            ghcr.io/mctlhq/zitadel-iac
         run: |
           if [[ "${{ steps.vault_pat.outputs.has_pat }}" == "true" ]]; then
             echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
