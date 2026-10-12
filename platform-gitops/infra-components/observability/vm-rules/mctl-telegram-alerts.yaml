@@ -115,23 +115,30 @@ spec:
           # client looping on a bad argument, which is worth a look too.
           #
           # The [1h] window and the >= 20 calls floor keep a quiet hour with a
-          # couple of bad calls (2 of 2 = 100%) from firing it. Bare counter
-          # in the denominator on purpose: this is a share of all calls.
-          # Instance is kept, as in HighToolErrorRate, so preview and
-          # production stay separate series.
+          # couple of bad calls (2 of 2 = 100%) from firing it. The
+          # denominator lists all three status values, the allow-list the
+          # SLO rules treat as a contract, so a status added later cannot
+          # silently dilute the share.
+          #
+          # Aggregated by (job, namespace) like the SLO recording rules: a
+          # share of the SERVICE's calls. instance is the pod IP, so keeping
+          # it would split the share and the floor per replica, and a rollout
+          # inside the hour would split it again; three pods each serving 15
+          # refused calls would never reach the floor. Preview has its own
+          # job, so it stays a separate series.
           expr: |
             (
-              sum without(tool, status) (
+              sum by (job, namespace) (
                 increase(mctl_tool_invocations_total{status="caller_error"}[1h])
               )
               /
-              sum without(tool, status) (
-                increase(mctl_tool_invocations_total[1h])
+              sum by (job, namespace) (
+                increase(mctl_tool_invocations_total{status=~"ok|error|caller_error"}[1h])
               )
             ) > 0.5
             and
-            sum without(tool, status) (
-              increase(mctl_tool_invocations_total[1h])
+            sum by (job, namespace) (
+              increase(mctl_tool_invocations_total{status=~"ok|error|caller_error"}[1h])
             ) >= 20
           for: 15m
           labels:
