@@ -82,9 +82,12 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: erpact
+          # Both labels, as in bootstrap/templates/erpact/networkpolicy.yaml:
+          # the deployer pods only, not anything else in that release.
           podSelector:
             matchLabels:
               app.kubernetes.io/instance: erpact-deployer
+              app.kubernetes.io/name: helm-deployer
       ports:
         - protocol: TCP
           port: 8080
