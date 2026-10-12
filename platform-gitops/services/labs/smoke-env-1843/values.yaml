@@ -39,6 +39,7 @@ env:
   SMOKE_B64: YWJj==
   SMOKE_SPACES: two  spaces
   SMOKE_OUTER: quoted value
+  SMOKE_UPD: x"y\z  w==
 externalSecret:
   targetSecret: smoke-env-1843-secrets
   data:
