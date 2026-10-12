@@ -12,14 +12,24 @@
 #   argocd-freshness.sh <sha>            # needs ARGOCD_SERVER, ARGOCD_TOKEN
 #   argocd-freshness.sh --self-test      # exercises the extraction on fixtures
 #
-# Exit 0 when every tracked source is at <sha> or newer, 1 otherwise.
+# Exit 0 when every tracked source is at <sha> or newer and no tracked app
+# is left OutOfSync by a failed sync operation, 1 otherwise.
+#
+# Resolving the commit is not the same as applying it (#1855): on 2026-10-12
+# two bumps landed seconds apart, the auto-sync of a multi-source app pinned
+# its chart and $values sources to different commits, failed on all retries
+# and stayed OutOfSync on the previous image, while status.sync.revisions
+# already pointed at the new commit and this check reported green.
 set -euo pipefail
 
 REPO_RE='^https://github\.com/mctlhq/mctl-gitops(\.git)?$'
 ARGOCD_SERVER="${ARGOCD_SERVER:-https://ops.mctl.ai}"
 
-# Print "<app>\t<source-index>\t<revision>" for every source of every
-# Application that points at this repository's main branch. Sources and
+# Print "<app>\t<source-index>\t<revision>\t<failed-phase>" for every source
+# of every Application that points at this repository's main branch.
+# <failed-phase> is the last operation's phase (Error / Failed) when that
+# operation failed AND the app is still not Synced, empty otherwise: a failed
+# operation on an app that has since converged is history, not drift. Sources and
 # status.sync.revisions are parallel arrays; single-source apps expose
 # spec.source / status.sync.revision instead, so both shapes are folded
 # into the same list-of-sources form first.
@@ -29,19 +39,28 @@ tracked_sources() {
     | .metadata.name as $name
     | ((.spec.sources // [.spec.source])) as $sources
     | ((.status.sync.revisions // [.status.sync.revision]) // []) as $revs
+    | (.status.operationState.phase // "") as $phase
+    | (if (.status.sync.status // "") != "Synced"
+          and ($phase == "Error" or $phase == "Failed")
+       then $phase else "" end) as $failed
     | range(0; $sources | length) as $i
     | $sources[$i]
     | select((.repoURL // "") | test($re))
     | select(.targetRevision == "main")
-    | [$name, ($i | tostring), ($revs[$i] // "")]
+    | [$name, ($i | tostring), ($revs[$i] // ""), $failed]
     | @tsv
   '
 }
 
-# Return the tracked sources whose revision does not contain <sha>.
+# Return the tracked sources whose revision does not contain <sha>, or whose
+# app is stuck OutOfSync after a failed sync operation.
 stale_sources() {
   local sha="$1"
-  while IFS=$'\t' read -r app idx rev; do
+  while IFS=$'\t' read -r app idx rev failed; do
+    if [ -n "$failed" ]; then
+      printf '%s\t%s\t%s\n' "$app" "$idx" "${rev:-(no revision)} (OutOfSync, last sync ${failed})"
+      continue
+    fi
     if [ -z "$rev" ]; then
       printf '%s\t%s\t%s\n' "$app" "$idx" "(no revision)"
       continue
@@ -78,13 +97,29 @@ self_test() {
      "status":{"sync":{"revisions":["0.72.5","bbb"]}}},
     {"metadata":{"name":"tag-pinned"},"spec":{"source":{"repoURL":"https://github.com/mctlhq/mctl-gitops.git","targetRevision":"2.6.3"}},"status":{"sync":{"revision":"2.6.3"}}},
     {"metadata":{"name":"other-repo"},"spec":{"source":{"repoURL":"https://github.com/mctlhq/mctl-api.git","targetRevision":"main"}},"status":{"sync":{"revision":"ccc"}}},
-    {"metadata":{"name":"never-synced"},"spec":{"source":{"repoURL":"https://github.com/mctlhq/mctl-gitops.git","targetRevision":"main"}},"status":{}}
+    {"metadata":{"name":"never-synced"},"spec":{"source":{"repoURL":"https://github.com/mctlhq/mctl-gitops.git","targetRevision":"main"}},"status":{}},
+    {"metadata":{"name":"mixed-revisions"},"spec":{"sources":[
+        {"repoURL":"https://github.com/mctlhq/mctl-gitops.git","targetRevision":"main","path":"chart"},
+        {"repoURL":"https://github.com/mctlhq/mctl-gitops.git","targetRevision":"main","ref":"values"}]},
+     "status":{"sync":{"status":"OutOfSync","revisions":["ddd","ddd"]},"operationState":{"phase":"Error"}}},
+    {"metadata":{"name":"failed-then-converged"},"spec":{"source":{"repoURL":"https://github.com/mctlhq/mctl-gitops.git","targetRevision":"main"}},
+     "status":{"sync":{"status":"Synced","revision":"eee"},"operationState":{"phase":"Failed"}}},
+    {"metadata":{"name":"sync-running"},"spec":{"source":{"repoURL":"https://github.com/mctlhq/mctl-gitops.git","targetRevision":"main"}},
+     "status":{"sync":{"status":"OutOfSync","revision":"fff"},"operationState":{"phase":"Running"}}}
   ]}'
   out=$(printf '%s' "$fixture" | tracked_sources)
-  expected=$'single\t0\taaa\nmulti\t1\tbbb\nnever-synced\t0\t'
+  expected=$'single\t0\taaa\t\nmulti\t1\tbbb\t\nnever-synced\t0\t\t\nmixed-revisions\t0\tddd\tError\nmixed-revisions\t1\tddd\tError\nfailed-then-converged\t0\teee\t\nsync-running\t0\tfff\t'
   if [ "$out" != "$expected" ]; then
     echo "self-test FAILED: tracked_sources produced:" >&2
     printf '%s\n' "$out" >&2
+    exit 1
+  fi
+  # A failed operation that left the app OutOfSync is stale even though its
+  # revision already contains the commit (#1855). No git lookup is needed for
+  # that verdict, so the fixture SHA does not have to exist.
+  out=$(printf 'mixed-revisions\t1\tddd\tError\n' | stale_sources "ddd")
+  if [ "$out" != $'mixed-revisions\t1\tddd (OutOfSync, last sync Error)' ]; then
+    echo "self-test FAILED: a failed sync left OutOfSync must be stale, got: ${out:-(nothing)}" >&2
     exit 1
   fi
   # An empty or unexpectedly shaped response must fail, never pass.

@@ -5,6 +5,9 @@ name: argocd-freshness
 # not tell you that (#970): an app can sit Synced on the previous revision
 # for the whole poll + refs-cache window, and no metric exposes the gap.
 #
+# Resolving the commit is not applying it either (#1855): an app whose last
+# sync failed and left it OutOfSync fails the check too.
+#
 # Not a merge gate — it runs on push, after the fact — but a failed run
 # lands in the workflow_failed channel like any other, which is the alert
 # the issue asked for.
@@ -59,5 +62,5 @@ jobs:
             echo "attempt ${attempt}/14: not there yet, retrying in 30s"
             sleep 30
           done
-          echo "::error::Argo CD did not resolve ${GITHUB_SHA} on every tracked Application within ~8 min (#970)"
+          echo "::error::Argo CD did not resolve ${GITHUB_SHA} on every tracked Application within ~8 min, or a failed sync left one OutOfSync (#970, #1855)"
           exit 1
