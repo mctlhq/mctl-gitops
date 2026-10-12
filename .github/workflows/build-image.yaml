@@ -425,13 +425,30 @@ jobs:
           token: ${{ steps.checkout_token.outputs.token }}
 
       # --- Resolve GHCR push token ---
+      # GITHUB_TOKEN canary. GHCR_PAT is a classic PAT with write:packages; it
+      # expired silently on 2026-10-12 and every release-deploy failed at GHCR
+      # login from 07:24Z until it was re-minted. The job's own GITHUB_TOKEN
+      # (packages: write) lives one run and cannot expire that way, but it can
+      # push to an existing package only after the package grants mctl-gitops
+      # Write under "Manage Actions access". Images listed here use it instead
+      # of GHCR_PAT; the list grows as packages are granted, and GHCR_PAT is
+      # deleted once every package is on it. A Vault PAT still wins: tenant
+      # builds push with their own credential.
       - name: Resolve GHCR token
         id: ghcr_token
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          GITHUB_TOKEN_IMAGES: |
+            ghcr.io/mctlhq/mctl-agents
         run: |
           if [[ "${{ steps.vault_pat.outputs.has_pat }}" == "true" ]]; then
             echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
             echo "🔑 Using Vault PAT for GHCR push"
+          elif [[ -n "$IMAGE_NAME" ]] && grep -qxF -- "$IMAGE_NAME" <<< "$GITHUB_TOKEN_IMAGES"; then
+            echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
+            echo "username=${{ github.actor }}" >> $GITHUB_OUTPUT
+            echo "🌐 Using GITHUB_TOKEN for GHCR push (package granted to mctl-gitops)"
           elif [[ -n "${{ secrets.GHCR_PAT }}" ]]; then
             echo "token=${{ secrets.GHCR_PAT }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
