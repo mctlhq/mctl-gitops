@@ -59,7 +59,14 @@ spec:
           - ApplyOutOfSyncOnly=true
           - ServerSideApply=true
           - RespectIgnoreDifferences=true
+        # refresh: re-resolve the revision on every retry instead of reusing
+        # the one the failed attempt pinned. Both sources (chart and $values)
+        # live in this repository; when two bumps land seconds apart the
+        # first attempt can pin them to different commits, and without a
+        # refresh every retry repeats that mismatch and auto-sync never
+        # tries the same revision again (#1855).
         retry:
+          refresh: true
           limit: 3
           backoff:
             duration: 10s
