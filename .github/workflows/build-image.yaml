@@ -319,6 +319,9 @@ jobs:
           want=$(lower "$INPUT_REPO")
           dir=".image-name-policy/platform-gitops/services/${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
           refuse() { echo "::error::$1"; exit 1; }
+          # Unique path and removed on every exit, refusals included.
+          resp=$(mktemp)
+          trap 'rm -rf .image-name-policy "$resp"' EXIT
 
           if [ ! -d .image-name-policy/platform-gitops/services ]; then
             refuse "cannot read platform-gitops/services from main"
@@ -332,6 +335,8 @@ jobs:
             catalog="${dir}/catalog-info.yaml"
             [ -f "$catalog" ] \
               || refuse "${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME} is registered but has no catalog-info.yaml; cannot tell its source repository"
+            # Checked apart so a missing yq is not reported as a bad file.
+            command -v yq >/dev/null || refuse "yq is not available on this runner"
             src=$(yq -r '.metadata.annotations["github.com/source-repo"] // ""' "$catalog") \
               || refuse "cannot parse ${catalog#.image-name-policy/}"
             [ -n "$src" ] \
@@ -342,13 +347,23 @@ jobs:
           elif [ "$HAS_PAT" = "true" ]; then
             echo "source repository: ${INPUT_REPO} (not registered; team-bound Vault PAT)"
           else
-            code=$(curl -sS -o /tmp/source-repo.json -w '%{http_code}' \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${INPUT_REPO}") || code=000
+            # With the job token first (higher rate limit). It is scoped to
+            # this repository, so if GitHub answers 401/403 for another one,
+            # ask again without it: anonymous reads of a public repository
+            # answer 200, of a private or missing one 404. Any other answer,
+            # such as an anonymous rate-limit 403, stays unknown and refuses.
+            lookup() {
+              curl -sS -o "$resp" -w '%{http_code}' "$@" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${INPUT_REPO}" || echo 000
+            }
+            code=$(lookup -H "Authorization: Bearer ${GH_TOKEN}")
+            case "$code" in
+              401|403) code=$(lookup) ;;
+            esac
             case "$code" in
               200)
-                visibility=$(jq -r '.visibility // empty' /tmp/source-repo.json) \
+                visibility=$(jq -r '.visibility // empty' "$resp") \
                   || refuse "unreadable response for ${INPUT_REPO}"
                 [ "$visibility" = "public" ] \
                   || refuse "${INPUT_REPO} is not public (${visibility:-unknown}) and no repository PAT is bound for ${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
@@ -362,7 +377,6 @@ jobs:
             esac
             echo "source repository: ${INPUT_REPO} (not registered; public)"
           fi
-          rm -rf .image-name-policy /tmp/source-repo.json
 
       # --- Tier 2: GitHub App token ---
       # This is the one place MCTL App is still the right credential: the
