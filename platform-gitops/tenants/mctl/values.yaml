@@ -8,6 +8,7 @@ tenant:
   contactEmail: ""
   members:
     - userId: mashkovd
+      principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
       role: owner
   quotas:
     requests.cpu: "100m"
