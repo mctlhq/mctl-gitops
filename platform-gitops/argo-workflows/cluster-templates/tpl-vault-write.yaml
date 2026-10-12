@@ -40,71 +40,68 @@ spec:
           export VAULT_TOKEN
           echo "✅ Authenticated"
 
-          # ── Parse KEY=value lines into JSON ─────────────────────────────────
-          JSON_DATA="{"
-          FIRST=true
-          while IFS='=' read -r key rest; do
-            # Skip empty lines and comments
-            [ -z "$key" ] && continue
-            echo "$key" | grep -q '^#' && continue
-            key=$(echo "$key" | xargs)
-            value=$(echo "$rest" | xargs)
-            [ -z "$key" ] && continue
+          # ── Parse, merge, write ─────────────────────────────────────────────
+          # Same parsing and merge rules as write-service-secrets-from-secret
+          # below. This was shell: values went through `echo | xargs`, which
+          # failed on an unbalanced quote and stripped inner quotes and
+          # backslashes, and the merge pasted both JSON documents into a
+          # `python3 -c '...'` string, so a value with a single quote broke
+          # the program and the `|| echo` fallback wrote only the new keys —
+          # deleting every secret already stored at the path. Values now stay
+          # in the environment and never become program text.
+          export VAULT_PATH
+          python3 - <<'PY'
+          import json, os, re, sys, urllib.error, urllib.request
 
-            # Escape double-quotes in value
-            value_escaped=$(echo "$value" | sed 's/"/\\"/g')
+          ADDR = os.environ["VAULT_ADDR"]
+          PATH = os.environ["VAULT_PATH"]
+          TOKEN = os.environ["VAULT_TOKEN"]
+          KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-            if [ "$FIRST" = "true" ]; then
-              JSON_DATA="${JSON_DATA}\"${key}\":\"${value_escaped}\""
-              FIRST=false
-            else
-              JSON_DATA="${JSON_DATA},\"${key}\":\"${value_escaped}\""
-            fi
-          done <<SECRETS_EOF
-          $PARAM_SECRET_ENV_VARS
-          SECRETS_EOF
+          new = {}
+          for n, line in enumerate(os.environ["PARAM_SECRET_ENV_VARS"].splitlines(), 1):
+              key, _, value = line.partition("=")
+              key = key.strip()
+              if not key or key.startswith("#"):
+                  continue
+              if not KEY.match(key):
+                  sys.exit(f"line {n}: key is not a valid environment variable name")
+              value = value.strip()
+              if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                  value = value[1:-1]
+              new[key] = value
+          if not new:
+              sys.exit("no KEY=value lines in secret_env_vars")
 
-          JSON_DATA="${JSON_DATA}}"
+          def call(method, body=None):
+              req = urllib.request.Request(f"{ADDR}/v1/{PATH}", method=method,
+                                           data=None if body is None else json.dumps(body).encode())
+              req.add_header("Content-Type", "application/json")
+              req.add_header("X-Vault-Token", TOKEN)
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return resp.status, resp.read()
+              except urllib.error.HTTPError as e:
+                  return e.code, b""
 
-          # ── Merge with existing secrets ──────────────────────────────────────
-          EXISTING_JSON="{}"
-          HTTP_GET=$(curl -sS -o /tmp/vault-get.json -w "%{http_code}" \
-            -H "X-Vault-Token: $VAULT_TOKEN" \
-            "${VAULT_ADDR}/v1/${VAULT_PATH}")
+          # A KV v2 write replaces the whole secret, so an unreadable current
+          # version must stop the step rather than read as "nothing stored".
+          status, body = call("GET")
+          if status == 200:
+              existing = json.loads(body).get("data", {}).get("data") or {}
+              print("Merging with existing secrets")
+          elif status == 404:
+              existing = {}
+              print("Creating new secret path")
+          else:
+              sys.exit(f"Could not read existing secrets (HTTP {status}); not overwriting them")
 
-          if [ "$HTTP_GET" = "200" ]; then
-            # KV v2 response: {"data":{"data":{...},"metadata":{...}}}
-            # Extract the inner .data.data object using python3
-            EXISTING_JSON=$(python3 -c \
-              "import json; d=json.load(open('/tmp/vault-get.json')); print(json.dumps(d.get('data',{}).get('data',{})))" \
-              2>/dev/null || echo "{}")
-            echo "ℹ️  Merging with existing secrets"
-          elif [ "$HTTP_GET" = "404" ]; then
-            echo "ℹ️  Creating new secret path"
-          else
-            echo "⚠️  Could not read existing secrets (HTTP $HTTP_GET) — will write fresh"
-          fi
-
-          # Merge: existing keys + new keys (new values win on conflict)
-          MERGED_JSON=$(python3 -c \
-            "import json; e=json.loads('$EXISTING_JSON'); n=json.loads('$JSON_DATA'); e.update(n); print(json.dumps(e))" \
-            2>/dev/null || echo "$JSON_DATA")
-
-          # ── Write to Vault ───────────────────────────────────────────────────
-          HTTP_CODE=$(curl -sS -o /tmp/vault-write.json -w "%{http_code}" \
-            -X POST \
-            -H "X-Vault-Token: $VAULT_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"data\":${MERGED_JSON}}" \
-            "${VAULT_ADDR}/v1/${VAULT_PATH}")
-
-          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
-            echo "❌ Failed to save secrets (HTTP $HTTP_CODE)"
-            cat /tmp/vault-write.json || true
-            exit 1
-          fi
-
-          echo "✅ Secrets saved to Vault at ${VAULT_PATH}"
+          existing.update(new)
+          status, _ = call("POST", {"data": existing})
+          if status not in (200, 204):
+              sys.exit(f"Failed to save secrets (HTTP {status})")
+          print(f"Secrets saved to Vault at {PATH} ({len(new)} key(s) written)")
+          PY
         env:
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"

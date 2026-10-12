@@ -471,6 +471,12 @@ jobs:
       - name: Test workflow parameters cannot inject shell
         run: python3 tests/test_shell_param_injection.py
 
+      - name: Unit-test write-service-secrets against a fake Vault
+        # Values reach Vault byte for byte (quotes, backslashes, code-shaped
+        # text), existing keys survive the merge, and an unreadable current
+        # version stops the step instead of overwriting the whole secret.
+        run: python3 tests/test_tpl_vault_write_parse.py
+
       - name: Unit-test create-tenant's existing-tenant checks
         # create-tenant creates a tenant: an existing one fails validate unless
         # reprovision=true, and the commit step refuses one that appeared

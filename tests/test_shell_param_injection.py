@@ -166,16 +166,18 @@ with tempfile.TemporaryDirectory() as d:
                 check(f"{name}: previous_generation {good!r} accepted",
                       r.returncode == 0, r.stderr)
 
-    # secret_env_vars loop of write-service-secrets, run with a terminator line.
+    # write-service-secrets parses secret_env_vars in a quoted here-document
+    # program that reads the value from the environment; it is exercised
+    # against a fake Vault, terminator line and code-shaped values included,
+    # by tests/test_tpl_vault_write_parse.py. Here: the value is never in the
+    # program text.
     src = template("tpl-vault-write.yaml", "write-service-secrets")["script"]["source"]
-    m = re.search(r'^(JSON_DATA="\{"\n.*?^SECRETS_EOF)$', src, re.S | re.M)
-    check("extracted the secret loop", bool(m))
+    m = re.search(r"^python3 - <<'PY'\n(.*?)\n^PY$", src, re.S | re.M)
+    check("extracted the secret program", bool(m))
     if m:
-        payload = f"A=1\nSECRETS_EOF\ntouch {canary}\nB=2"
-        out = run_sh(m.group(1) + '\necho "$JSON_DATA"',
-                     {**base_env, "PARAM_SECRET_ENV_VARS": payload}, work)
-        check("secret loop: terminator line is data", not canary.exists(), out.stderr)
-        check("secret loop: valid lines still parsed", '"A":"1"' in out.stdout, out.stdout)
+        check("secret program reads secret_env_vars from the environment",
+              'os.environ["PARAM_SECRET_ENV_VARS"]' in m.group(1)
+              and "$PARAM_SECRET_ENV_VARS" not in m.group(1))
 
     # write-platform-secret refuses an unsafe vault_path before any request.
     tmpl = template("tpl-vault-write.yaml", "write-platform-secret")
