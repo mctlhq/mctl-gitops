@@ -1,6 +1,6 @@
-status: accepted
-updated_at: '2026-10-12T20:14:30Z'
-updated_by: mashkovd
+status: implemented
+updated_at: '2026-10-12T20:50:29Z'
+updated_by: mctl-agents[bot]
 source:
   type: github_issue
   repo: mctlhq/mctl-api
@@ -11,10 +11,14 @@ control:
 approval:
   approved_by: mashkovd
   approved_at: '2026-10-12T20:14:30Z'
-notes: >-
-  Written by hand (operator + Claude Code), not by issue-investigator. Revision
-  2 records the owner's answers to Q1-Q5 of the 2026-10-12 audit. Approved by
-  the owner on 2026-10-12. Implemented BY HAND, one slice per PR in the order
-  of tasks.md (PR-0 done in mctl-api#587, live in 4.81.1; PR-A next). Do not
-  run mctl_trigger_implementer on this proposal: it would attempt every slice
-  at once, and the switch to principal mode is gated on the shadow window.
+attempt:
+  id: 68cc00de94314a2d2c4bf60cd79deefc41bb37cf9202ace09dddd0f836f1ccb3
+  started_at: '2026-10-12T20:42:23Z'
+  expires_at: '2026-10-12T22:52:23Z'
+  finished_at: '2026-10-12T20:50:29Z'
+pr: https://github.com/mctlhq/mctl-api/pull/591
+execution:
+  context_id: ex-b4b3edb62dcfd21a
+  trace_id: d571527fc75cbefe5117ac6ddd64385d
+  agent: implementer
+  version: ''
