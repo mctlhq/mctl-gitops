@@ -124,8 +124,9 @@ spec:
           # share of the SERVICE's calls. instance is the pod IP, so keeping
           # it would split the share and the floor per replica, and a rollout
           # inside the hour would split it again; three pods each serving 15
-          # refused calls would never reach the floor. Preview has its own
-          # job, so it stays a separate series.
+          # refused calls would never reach the floor. (Preview exports no
+          # mctl_tool_* series at all: its VMServiceScrape keeps only
+          # mctl_agent_.*.)
           expr: |
             (
               sum by (job, namespace) (
