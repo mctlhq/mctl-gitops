@@ -439,12 +439,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ inputs.image_name }}
           GITHUB_TOKEN_IMAGES: |
-            ghcr.io/mctlhq/agent-worker-preview
-            ghcr.io/mctlhq/coolify-mcp
-            ghcr.io/mctlhq/draw-with-friends
-            ghcr.io/mctlhq/genai-leader
             ghcr.io/mctlhq/grafana-iac
-            ghcr.io/mctlhq/kuptsi-app
             ghcr.io/mctlhq/mc
             ghcr.io/mctlhq/mctl-academy
             ghcr.io/mctlhq/mctl-agent
@@ -456,16 +451,10 @@ jobs:
             ghcr.io/mctlhq/mctl-portal
             ghcr.io/mctlhq/mctl-telegram
             ghcr.io/mctlhq/mctl-web
-            ghcr.io/mctlhq/payment-llm-pipelines
-            ghcr.io/mctlhq/pelican-proxy
-            ghcr.io/mctlhq/pelican-proxy-staging
             ghcr.io/mctlhq/pfeifenpatenschaft-backend
             ghcr.io/mctlhq/portfolio
             ghcr.io/mctlhq/projects-mcp
-            ghcr.io/mctlhq/quirestack-api
-            ghcr.io/mctlhq/quirestack-web
             ghcr.io/mctlhq/seerrsense
-            ghcr.io/mctlhq/smoke-test-svc
             ghcr.io/mctlhq/vault-iac
             ghcr.io/mctlhq/zitadel-iac
         run: |
