@@ -75,6 +75,12 @@ spec:
       input:
         entityRef: ${{ parameters.serviceName }}
 
+    - id: require-team-access
+      name: Verify caller may act for this team
+      action: mctl:auth:requireTeamAccess
+      input:
+        team: ${{ steps['fetch-service'].output.entity.metadata.labels.team or steps['fetch-service'].output.entity.spec.owner | replace('group:', '') }}
+
     - id: deploy-version
       name: Deploy new version via Argo Workflows
       action: mctl:workflow:submit

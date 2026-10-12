@@ -113,6 +113,11 @@ spec:
 
 
   steps:
+    - id: require-team-access
+      name: Verify caller may act for this team
+      action: mctl:auth:requireTeamAccess
+      input:
+        team: ${{ parameters.teamName | parseEntityRef | pick('name') }}
 
     - id: trigger-deploy
       name: Onboard service via Argo Workflows

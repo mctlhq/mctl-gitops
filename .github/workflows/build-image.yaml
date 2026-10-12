@@ -171,7 +171,6 @@ jobs:
             echo "::error::component_name ${INPUT_COMPONENT_NAME} is not available to team ${INPUT_TEAM_NAME}"
             exit 1
           fi
-          rm -rf .image-name-policy
 
       # --- Tier 1: Vault PAT via GitHub OIDC -> Vault JWT ---
       - name: Fetch Vault PAT
@@ -279,6 +278,91 @@ jobs:
           else
             echo "has_pat=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # --- Source repository: build only the repo the component is bound to ---
+      # The image-name check above decides what may be pushed; this decides
+      # what may be checked out. Without it, whoever can dispatch this
+      # workflow picks `repo` freely, and the checkout runs with the team's
+      # Vault PAT or the MCTL App token, which reach private repositories:
+      # their source would be built into an image under the team's name.
+      # mctl-api and the portal check the repository before they dispatch;
+      # this is the same backstop at the build, for a direct dispatch only
+      # (the release-deploy.yaml gap above applies here too).
+      #
+      # Allowed, decided from main (the policy checkout), never from inputs:
+      #   * team platform: only this repository (platform-gitops/images/).
+      #   * a component registered under services/<team>/<component>/: only
+      #     its catalog-info.yaml `github.com/source-repo`, which
+      #     tpl-git-commit writes once, at onboard. To build from another
+      #     repository, change that annotation in a reviewed PR first.
+      #   * a component not registered yet (onboard): a repository GitHub
+      #     reports as public, or one the team bound a Vault PAT for (the
+      #     Tier 1 step found one for this team/component). A private
+      #     repository reachable only through the MCTL App cannot be
+      #     onboarded by a direct dispatch.
+      # A registration this step cannot read (a component directory without
+      # catalog-info.yaml, an unparsable file, no annotation) and a
+      # visibility lookup that does not answer 200 or 404 refuse the build:
+      # they are unknowns, not "unregistered" or "public".
+      - name: Check source repository
+        if: steps.caller.outputs.direct == 'true'
+        env:
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_TEAM_NAME: ${{ inputs.team_name }}
+          INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
+          HAS_PAT: ${{ steps.vault_pat.outputs.has_pat }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Shape already checked by the Vault step, which runs first.
+          lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+          want=$(lower "$INPUT_REPO")
+          dir=".image-name-policy/platform-gitops/services/${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
+          refuse() { echo "::error::$1"; exit 1; }
+
+          if [ ! -d .image-name-policy/platform-gitops/services ]; then
+            refuse "cannot read platform-gitops/services from main"
+          fi
+
+          if [ "$INPUT_TEAM_NAME" = "platform" ]; then
+            [ "$want" = "$(lower "$GITHUB_REPOSITORY")" ] \
+              || refuse "team platform builds only from ${GITHUB_REPOSITORY}, got: ${INPUT_REPO}"
+            echo "source repository: ${INPUT_REPO} (platform)"
+          elif [ -e "$dir" ]; then
+            catalog="${dir}/catalog-info.yaml"
+            [ -f "$catalog" ] \
+              || refuse "${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME} is registered but has no catalog-info.yaml; cannot tell its source repository"
+            src=$(yq -r '.metadata.annotations["github.com/source-repo"] // ""' "$catalog") \
+              || refuse "cannot parse ${catalog#.image-name-policy/}"
+            [ -n "$src" ] \
+              || refuse "${catalog#.image-name-policy/} names no github.com/source-repo; refusing to build"
+            [ "$want" = "$(lower "$src")" ] \
+              || refuse "${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME} is bound to ${src}, got: ${INPUT_REPO}"
+            echo "source repository: ${INPUT_REPO} (registered)"
+          elif [ "$HAS_PAT" = "true" ]; then
+            echo "source repository: ${INPUT_REPO} (not registered; team-bound Vault PAT)"
+          else
+            code=$(curl -sS -o /tmp/source-repo.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${INPUT_REPO}") || code=000
+            case "$code" in
+              200)
+                visibility=$(jq -r '.visibility // empty' /tmp/source-repo.json) \
+                  || refuse "unreadable response for ${INPUT_REPO}"
+                [ "$visibility" = "public" ] \
+                  || refuse "${INPUT_REPO} is not public (${visibility:-unknown}) and no repository PAT is bound for ${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
+                ;;
+              404)
+                refuse "${INPUT_REPO} is not public or does not exist, and no repository PAT is bound for ${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
+                ;;
+              *)
+                refuse "could not read the visibility of ${INPUT_REPO} (HTTP ${code}); not building"
+                ;;
+            esac
+            echo "source repository: ${INPUT_REPO} (not registered; public)"
+          fi
+          rm -rf .image-name-policy /tmp/source-repo.json
 
       # --- Tier 2: GitHub App token ---
       # This is the one place MCTL App is still the right credential: the
