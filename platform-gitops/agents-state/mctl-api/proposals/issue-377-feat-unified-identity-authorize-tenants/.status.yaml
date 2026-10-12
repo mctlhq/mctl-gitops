@@ -1,0 +1,16 @@
+status: proposed
+updated_at: '2026-10-12T21:00:00Z'
+updated_by: mashkovd
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 377
+  url: https://github.com/mctlhq/mctl-api/issues/377
+control:
+  requires_human_approval: true
+notes: >-
+  Written by hand (operator + Claude Code), not by issue-investigator. Revision
+  2: records the owner's answers to Q1-Q5 of the 2026-10-12 audit and the
+  revised schema and rollout. Not approved for implementation. PR-0 (the
+  `admins` tenant-name privilege fix) is scoped in tasks.md and approved to
+  proceed on its own, outside this proposal's approval.
