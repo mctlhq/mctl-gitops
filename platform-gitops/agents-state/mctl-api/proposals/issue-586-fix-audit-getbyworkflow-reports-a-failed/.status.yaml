@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-10-12T21:37:44Z'
-updated_by: mctl-agents[bot]
+status: merged
+updated_at: '2026-10-13T07:40:00Z'
+updated_by: mashkovd
 execution:
   context_id: ex-53fc9e756fc98a0e
   trace_id: fb258cb54ec98fc9462a8e6b13927da3
@@ -26,8 +26,16 @@ attempt:
   started_at: '2026-10-12T21:37:38Z'
   expires_at: '2026-10-12T23:47:38Z'
   finished_at: '2026-10-12T21:37:44Z'
-failure:
-  code: no-commits
-  stage: agent
-  message: implementer produced no commits
-notes: 'agent: implementer produced no commits'
+pr: https://github.com/mctlhq/mctl-api/pull/593
+notes: >-
+  Implemented by hand, not by the implementer. Both implement attempts after
+  the approval failed without producing a branch or commits: the first
+  (21:11Z) on an orphaned sub-agent, retried by mctl-gitops#1865; the second
+  (attempt above, 21:37Z) with failure no-commits. The fix was then written
+  by hand as mctl-api#593 and merged; it shipped in mctl-api 4.82.1. Issue
+  #586 is closed. This record moves the proposal from needs-triage to merged
+  on that PR; the approval is unchanged, and the attempt block is the failed
+  second attempt, kept as history. No retry is pending: the approve step
+  refuses any status other than proposed or accepted.
+merged_at: '2026-10-12T22:03:39Z'
+merge_commit: 38c3bffac03be3394da4eb3f55c4968abb80204a
