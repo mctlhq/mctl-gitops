@@ -89,9 +89,13 @@ additive except the two tightenings in §5.
      409 `approval_intent_mismatch`. The requester names the target at
      create time, but the human approves a DevLoop, so the target must be
      that DevLoop's proposal;
-  3. compute `IntentHash` from the validated input and, after every other
+  3. compute `IntentHash` and, after every other
      check, call the store `ConsumeActionApproval` (CAS: approved, intent
-     match, not expired, single use);
+     match, not expired, single use). The hash is over the `ActionIntent`
+     fields only (execution, kind, `<service>/<slug>` target, args digest,
+     policy, artifact hash, work item), taken from the validated input and
+     the `aar_` row, never over the input map, so the approver set in step 1
+     is not hashed and the create-time and spend-time intents match;
   4. submit, audit `operation.execute` with `actor_kind=agent`,
      `actor_name`, `agent_run_id`, `subject_principal_id`, `grant_ref`.
      The decision and consume audits carry `target`.
@@ -112,8 +116,9 @@ subject string must be `github:<login>` or `oidc:<name>` (what
 `principalOf` records for a human); its name is kept only so the subject's
 `principalOf` reproduces it. Empty id, a non-human namespace, or a
 disabled or missing principal → `grant_subject_unresolved`; store error →
-503. A `sil_` grant stores no principal and keeps resolving through its
-mirrored GitHub identity. In legacy tenant mode a
+503. A `sil_` grant (surface link) stores no principal and keeps
+resolving through its mirrored GitHub identity, so it still requires a
+`github:` subject (R9a); it never authorizes the approve operation. In legacy tenant mode a
 non-GitHub subject gets no login-derived groups; that is correct, and
 grant-authorized approval (§2) needs none.
 

@@ -13,8 +13,9 @@ before editing.
 Slices A and B of #376 are on `main`: agent run tokens (`art_`, minted by
 `MintAgentRunToken`, `isDirectService` only, bound to a `we_` execution and
 its work item), the delegation gate (`agentPrincipalGate`,
-`handlers_agent_identity.go`), `internal/delegation` grants (`xr_`, `aar_`,
-`wi_`, surface links) bound by execution or work item
+`handlers_agent_identity.go`), `internal/delegation` grants (execution requests `xr_`, action approvals
+`aar_`, work items `wi_`, and surface links `sil_`, which store no
+principal of their own) bound by execution or work item
 (`delegation.go:196-199`), and Slice D's `GET /api/v1/identity/self`.
 
 What is left is the DevLoop approval itself. Today:
@@ -150,12 +151,18 @@ existing run token, the subject is the existing `prn_`.
 
 ### Subject (D5)
 
-- R9. THE delegation gate SHALL derive the subject from the grant's
-  `SubjectPrincipalID` (`prn_`) through the principal store, for every IdP
-  (GitHub, ZITADEL), and SHALL NOT require a `github:` subject. A grant
-  without a `SubjectPrincipalID`, or whose principal is disabled or
-  unresolvable, SHALL refuse (`grant_subject_unresolved` / 503 on a store
-  outage), never fall back to the login string.
+- R9. FOR an `xr_`, `aar_` or `wi_` grant THE delegation gate SHALL derive
+  the subject from the grant's `SubjectPrincipalID` (`prn_`) through the
+  principal store, for every IdP (GitHub, ZITADEL), and SHALL NOT require a
+  `github:` subject. Such a grant without a `SubjectPrincipalID`, or whose
+  principal is disabled or unresolvable, SHALL refuse
+  (`grant_subject_unresolved` / 503 on a store outage), never fall back to
+  the login string.
+- R9a. A `sil_` grant stores no principal and is out of R9: it keeps
+  resolving through its mirrored GitHub identity as today, so it SHALL
+  still require a `github:` subject and refuse any other
+  (`grant_subject_unresolved`). It cannot authorize `mctl-agents-approve`
+  (R7), so A6 does not depend on it.
 
 ### Credentials (D4)
 
