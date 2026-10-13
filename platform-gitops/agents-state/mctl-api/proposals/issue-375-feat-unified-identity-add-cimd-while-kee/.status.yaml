@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-10-13T14:00:00Z'
+status: accepted
+updated_at: '2026-10-13T13:59:54Z'
 updated_by: mashkovd
 source:
   type: github_issue
@@ -8,10 +8,13 @@ source:
   url: https://github.com/mctlhq/mctl-api/issues/375
 control:
   requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-13T13:59:54Z'
 notes: >-
   Hand-written proposal (a Claude Code session working for the owner on
-  mctlhq/.github#91), not produced by the issue-investigator. Awaiting owner
-  approval; nothing is implemented. Amended 2026-10-13 with the owner's
-  three decisions (mandatory host allowlist, consent every time, RFC 8252
-  any-port loopback for IP literals). Implementation may be by hand or by the
-  implementer once accepted.
+  mctlhq/.github#91), not produced by the issue-investigator. Approved by the
+  owner on 2026-10-13 as amended by gitops#1874: mandatory host allowlist,
+  consent on every authorization, RFC 8252 any-port loopback for the
+  127.0.0.1 / [::1] IP literals only. Rollout (task 7) stays owner-gated:
+  release with CIMD disabled, then enable in mctl-gitops.
