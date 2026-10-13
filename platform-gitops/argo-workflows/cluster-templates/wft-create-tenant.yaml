@@ -63,6 +63,13 @@ spec:
         value: ""
       - name: creator_user_id
         value: ""
+      - name: creator_principal_id
+        # The creator's canonical principal (prn_ + 26 Crockford base32),
+        # written as the owner entry's principalId: principal-mode tenant
+        # authorization (mctlhq/mctl-api#377) grants by that key alone, so
+        # an owner entry without it would lock the creator out of their own
+        # tenant. Set by mctl-api from the authenticated session.
+        value: ""
       - name: reprovision
         value: "false"
         # "true": re-run provisioning for a tenant that already exists
@@ -149,6 +156,8 @@ spec:
                   value: "{{workflow.parameters.contact_email}}"
                 - name: creator_user_id
                   value: "{{workflow.parameters.creator_user_id}}"
+                - name: creator_principal_id
+                  value: "{{workflow.parameters.creator_principal_id}}"
                 - name: reprovision
                   value: "{{workflow.parameters.reprovision}}"
 
@@ -622,6 +631,7 @@ spec:
           - name: allow_internet_egress
           - name: contact_email
           - name: creator_user_id
+          - name: creator_principal_id
           - name: reprovision
       volumes:
         - name: deploy-key
@@ -661,6 +671,8 @@ spec:
             value: "{{inputs.parameters.contact_email}}"
           - name: PARAM_CREATOR_USER_ID
             value: "{{inputs.parameters.creator_user_id}}"
+          - name: PARAM_CREATOR_PRINCIPAL_ID
+            value: "{{inputs.parameters.creator_principal_id}}"
           - name: PARAM_REPROVISION
             value: "{{inputs.parameters.reprovision}}"
         source: |
@@ -699,6 +711,7 @@ spec:
             echo "ℹ️ contact_email given but not stored: it does not go into the public gitops repository (mctlhq/mctl-gitops#1627)"
           fi
           CREATOR_USER_ID="$PARAM_CREATOR_USER_ID"
+          CREATOR_PRINCIPAL_ID="$PARAM_CREATOR_PRINCIPAL_ID"
 
           # Defaults
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
@@ -743,6 +756,42 @@ spec:
                 exit 1
                 ;;
             esac
+          fi
+
+          # creator_principal_id is spliced into the same members block,
+          # unquoted, so it gets the exact grammar of a principal id:
+          # "prn_" and 26 Crockford base32 characters (mctl-api's
+          # ValidPrincipalID). It keys the creator's owner entry, so it
+          # means nothing without one.
+          #
+          # Matched with case and a length check, not grep -x: grep tests
+          # each LINE, so "<valid id>\n  admin: true" passes it and the
+          # second line becomes a key of the tenant document. The class is
+          # spelled out rather than written as ranges, which follow the
+          # locale's collation order in some shells.
+          if [ -n "$CREATOR_PRINCIPAL_ID" ]; then
+            PRN_BODY="${CREATOR_PRINCIPAL_ID#prn_}"
+            PRN_OK=true
+            [ "$PRN_BODY" = "$CREATOR_PRINCIPAL_ID" ] && PRN_OK=false
+            [ "${#PRN_BODY}" -eq 26 ] || PRN_OK=false
+            case "$PRN_BODY" in
+              *[!0123456789ABCDEFGHJKMNPQRSTVWXYZ]* ) PRN_OK=false ;;
+            esac
+            if [ "$PRN_OK" != true ]; then
+              echo "❌ creator_principal_id must be prn_ followed by 26 Crockford base32 characters; got: ${CREATOR_PRINCIPAL_ID}" >&2
+              exit 1
+            fi
+            if [ -z "$CREATOR_USER_ID" ]; then
+              echo "❌ creator_principal_id given without creator_user_id" >&2
+              exit 1
+            fi
+          elif [ -n "$CREATOR_USER_ID" ]; then
+            # Still accepted until every caller sends the key (mctl-api
+            # does once it passes the session's principal; Backstage
+            # does not). The entry it writes works for login-keyed
+            # authorization only, and validate-tenant-member-keys.py
+            # fails CI on main until someone adds the principalId.
+            echo "⚠️ creator_user_id without creator_principal_id: the owner entry gets no principalId and grants nothing under principal-mode authorization (mctlhq/mctl-api#377)" >&2
           fi
 
           # The five quota values land in quoted YAML scalars exactly like
@@ -824,7 +873,9 @@ spec:
 
           # Build members section if creator is specified
           MEMBERS_BLOCK=""
-          if [ -n "$CREATOR_USER_ID" ]; then
+          if [ -n "$CREATOR_PRINCIPAL_ID" ]; then
+            MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      principalId: %s\n      role: owner' "$CREATOR_USER_ID" "$CREATOR_PRINCIPAL_ID")
+          elif [ -n "$CREATOR_USER_ID" ]; then
             MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      role: owner' "$CREATOR_USER_ID")
           fi
 

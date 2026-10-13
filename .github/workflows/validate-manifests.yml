@@ -266,6 +266,18 @@ jobs:
           scripts/validate-agents-state-approval.py --selftest
           scripts/validate-agents-state-approval.py
 
+      # Principal-mode tenant authorization (mctl-api#377) grants by
+      # members[].principalId alone, so an entry without one works today and
+      # silently locks its member out after the switch. Runs on main too:
+      # wft-create-tenant pushes new tenants straight to main, and a creator
+      # submitted without a principal id must turn it red. --selftest first,
+      # same reason as the other detectors.
+      - name: Every tenant member carries a principalId
+        run: |
+          set -euo pipefail
+          scripts/validate-tenant-member-keys.py --selftest
+          scripts/validate-tenant-member-keys.py
+
       - name: Check for shell interpolation of workflow parameters
         run: |
           set -euo pipefail
