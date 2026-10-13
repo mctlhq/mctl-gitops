@@ -5,21 +5,27 @@ additive except the two tightenings in §5.
 
 ## 0. Issue → work item → `we_` (R0a-R0d, D6)
 
-- mctl-api: `ListWorkItems` gains the `surface` + `external_id` filter,
-  joined on `work_item_surface_refs`, under the existing tenant scoping. A
-  store error is a 503, never an empty list.
+- No new mctl-api route. The issue's work item is the open work item whose
+  `external_key` is the canonical issue URL
+  `https://github.com/<owner>/<repo>/issues/<number>` — the shape
+  `internal/evidence/derive.go` and mctl-agents' `work_context/contract.py`
+  already read as "the issue". `Store.Create` dedupes open work on
+  `(tenant, external_key)` (partial unique index
+  `work_items_tenant_external_key_open`), so creating is also resolving.
 - Worker (mctl-agents#636), at DevLoop start, before anything else:
-  1. lookup by `github` surface ref; exactly one hit → reuse; more than one
-     → hard failure (ambiguous, needs a human);
-  2. none → `POST /api/v1/work-items` with idempotency key
-     `devloop:github:<owner>/<repo>#<number>` and the tenant that owns the
-     target service (an explicit service→tenant mapping in the worker; an
-     unmapped service is a hard failure, never a default tenant), then link
-     the `github` surface ref;
-  3. attach the execution `(temporal, <workflow_id>)` → `we_`.
-  The same issue always lands on the same work item, and the same
-  workflow id on the same `we_`. Steps 2-3 are retry-safe because both
-  routes are idempotent.
+  1. `POST /api/v1/work-items` with `external_key` = the issue URL,
+     idempotency key `devloop:github:<owner>/<repo>#<number>` and the tenant
+     that owns the target service (an explicit service→tenant mapping in the
+     worker; an unmapped service is a hard failure, never a default tenant).
+     `201` = created, `200` = the existing open item (replay or
+     `external_key` dedupe); `409 external_key_in_use` (open work the worker
+     cannot see) or any other error is a hard failure, never a retry with a
+     different key;
+  2. attach the execution `(temporal, <workflow_id>)` → `we_`.
+  The same issue always lands on the same open work item, and the same
+  workflow id on the same `we_`. Both steps are retry-safe because both
+  routes are idempotent. An issue whose earlier work item is already
+  terminal gets a new one: a closed item is history, not open work.
 
 ## 1. DevLoop `aar_` keyed by `we_` (R1-R3, D3)
 
@@ -101,6 +107,6 @@ audited. Helm and README gain the variable.
 ## Risks
 
 - Grant confusion: bound by `we_` (gate) and intent (CAS); heaviest tests.
-- A DevLoop that cannot obtain a `we_`: stops before the approval gate (R0d); a lookup outage is a failed start, not a duplicate work item.
+- A DevLoop that cannot obtain a `we_`: stops before the approval gate (R0d); a create error (including `external_key_in_use`) is a failed start, not a second work item.
 - Principal-store outage: delegated approvals fail closed (503) while the
   legacy relay, while on, still works.

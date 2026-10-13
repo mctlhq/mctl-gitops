@@ -55,29 +55,29 @@ existing run token, the subject is the existing `prn_`.
   execution (`engine=temporal`, `engine_ref=<workflow_id>`). The work item
   linked to the GitHub issue is reused, or created idempotently through the
   existing route and linked to that issue; no synthetic or unlinked work
-  item is ever created. (Was open question Q1.)
+  item is ever created. (Was open question Q1.) The link is the work item's
+  `external_key` = the issue URL, which the create route already dedupes
+  on; this replaced a surface-ref lookup route on 2026-10-13, before any
+  implementation.
 
 ## Requirements (EARS)
 
 ### Canonical execution (D6)
 
-- R0a. WHEN a DevLoop starts THE worker SHALL resolve the work item linked
-  to its GitHub issue through its `github` surface ref
-  (`external_id` = `<owner>/<repo>#<number>`), and IF none exists THEN create
-  it through `POST /api/v1/work-items` with an idempotency key derived only
-  from that issue ref and link it with
-  `POST /api/v1/work-items/{id}/surface-refs` (idempotent by
-  `(surface, external_id)`).
+- R0a. WHEN a DevLoop starts THE worker SHALL obtain its issue's work item
+  through `POST /api/v1/work-items` with `external_key` =
+  `https://github.com/<owner>/<repo>/issues/<number>` and an idempotency key
+  derived only from that issue ref, in the tenant mapped from the target
+  service; the route returns the existing open item for that
+  `(tenant, external_key)` instead of a second one.
 - R0b. THE worker SHALL then attach its execution through
   `POST /api/v1/work-items/{id}/executions` with `engine=temporal`,
   `engine_ref=<workflow_id>` (idempotent on that triple), so a restarted or
   retried DevLoop gets the same work item and the same `we_`, never a
   duplicate.
-- R0c. THE SYSTEM SHALL offer a lookup of a work item by surface ref
-  (`GET /api/v1/work-items?surface=github&external_id=…`, tenant-scoped like
-  the existing list) so a work item linked to the issue by any surface
-  is reused rather than duplicated. A failed lookup SHALL fail the DevLoop
-  start, never be read as "no work item" and lead to a create.
+- R0c. A create error, `409 external_key_in_use` included, SHALL fail the
+  DevLoop start; THE worker SHALL NOT retry with another `external_key`,
+  another idempotency key or another tenant.
 - R0d. A DevLoop that cannot obtain a `we_` SHALL stop before its approval
   gate with a typed error; it SHALL NOT run without one, and SHALL NOT
   create a work item that is not linked to its issue.
