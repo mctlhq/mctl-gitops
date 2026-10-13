@@ -114,6 +114,10 @@ audited. Helm and README gain the variable.
   (audit query over 14 days). Narrowed from all of `requireTemporalAdmin`
   on 2026-10-13: `run_shepherd.py` reads the dev-loop status route with the
   service token, so a global change would break the shepherd sweep.
+  Abandon is deliberately left out: it stops a run and grants no
+  authority, so it is not part of the approval chain this issue binds; no
+  automation calls it today (mctl-agents `main`), and making it human-only
+  is its own change if wanted.
 - DevLoop `aar_` creation refuses a non-`we_` `execution_id`.
 
 ## Rollout
