@@ -17,8 +17,9 @@ owner-gated rollout. Re-read line numbers on `main` before editing.
   with the flag on; `isHumanAdmin`. — DoD: tests for found/not-found `we_`,
   the dispatched `<workflow_id>#<request_id>` form, two open executions →
   409 `execution_ambiguous`, a store read error → 503 (never the legacy
-  payload), no pending `aar_` (flag on/off), service principal refused on
-  approve, self-decision refused.
+  payload), no `aar_` (flag on/off), a denied/consumed/expired `aar_` →
+  its 409 with the flag on, service principal refused on approve,
+  self-decision refused.
 - [ ] 3. Grant-authorized `mctl-agents-approve` (§2) + allowlist route. —
   DoD: A1-A4 as handler tests through the router with a real run token:
   bound grant succeeds once; other `we_` → `grant_not_bound`; second use →

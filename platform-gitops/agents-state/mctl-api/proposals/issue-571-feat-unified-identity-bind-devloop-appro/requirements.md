@@ -106,10 +106,16 @@ existing run token, the subject is the existing `prn_`.
   `<workflow_id>#`), refuse more than one with 409 `execution_ambiguous`,
   decide the pending `aar_` for that `we_` and
   action kind through the existing `DecideActionApproval` rules, and
-  signal `{approval_ref: "aar_…"}`; IF no such `we_` or pending `aar_`
-  exists THEN it SHALL keep today's behaviour (legacy relay) while the
-  legacy flag is on, and refuse with 409 `approval_grant_missing` when it
-  is off.
+  signal `{approval_ref: "aar_…"}` (an already approved, unconsumed one is
+  re-signalled); IF the `we_` has no `aar_` of that kind at all, or there
+  is no such `we_`, THEN it SHALL keep today's behaviour (legacy relay)
+  while the legacy flag is on, and refuse with 409 `approval_grant_missing`
+  when it is off. IF the newest such `aar_` is denied, consumed or expired
+  THEN it SHALL refuse with that state's existing 409 (`approval_denied`,
+  `approval_consumed`, `approval_expired`) whatever the flag: a recorded
+  decision is not an absent gate. A store error in any of these reads
+  SHALL be 503 `work_items_unavailable`, never "none" and never the legacy
+  payload.
 - R4. THE DevLoop approve route SHALL accept only a human admin
   (`isHumanAdmin`), so a service or agent principal can never perform the
   human act. `requireTemporalAdmin` itself is unchanged: the shepherd reads

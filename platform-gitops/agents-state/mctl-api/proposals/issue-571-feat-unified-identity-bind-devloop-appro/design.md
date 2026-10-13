@@ -59,8 +59,11 @@ additive except the two tightenings in §5.
   grant; more than one → 409 `execution_ambiguous`, never a pick. Then the
   newest pending `aar_` with that `execution_id` and kind; decide it with
   the existing store `DecideActionApproval` (same self-decision and
-  human-admin rules); signal `{approval_ref}`. No `we_` or no pending `aar_`
-  → legacy payload `{approver}` while the flag is on, 409 when off (R3).
+  human-admin rules); signal `{approval_ref}`. An approved, unconsumed one
+  is re-signalled. A denied, consumed or expired newest `aar_` → its
+  state's 409, never the legacy payload. No `we_`, or a `we_` that never
+  had an `aar_` of this kind → legacy payload `{approver}` while the flag
+  is on, 409 when off. Any store read error → 503 (R3).
   The approve route additionally requires `isHumanAdmin` (R4);
   `requireTemporalAdmin` stays as it is for the other dev-loop routes.
 - No new column: the workflow id lives on the execution row as
