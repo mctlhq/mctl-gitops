@@ -29,9 +29,10 @@ owner-gated rollout. Re-read line numbers on `main` before editing.
   approval), env var, error codes. `go vet`, `gofmt`, `golangci-lint`,
   `go test ./...` green.
 - [ ] 6. mctl-agents#636 (counterpart): issue → work item → `we_` at DevLoop
-  start (§0, D6: create with `external_key` = issue URL, attach
-  `temporal`/`workflow_id`; restart yields the same `we_`; a create error,
-  `external_key_in_use` included, stops the run), mint run token, create `aar_` with `we_`, read `approval_ref` from
+  start (§0, D6: a dispatched run uses its fulfilled `we_`; any
+  other start creates with `external_key` = the canonical issue URL and
+  attaches `temporal`/`workflow_id`; restart yields the same `we_`; a create
+  error, `external_key_in_use` included, stops the run), mint run token, create `aar_` with `we_`, read `approval_ref` from
   the signal, submit with `X-MCTL-On-Behalf-Of: aar_…` and no `approver`,
   typed refusals are hard failures; E2E test fails when the run-token or
   `approval_ref` path is removed.

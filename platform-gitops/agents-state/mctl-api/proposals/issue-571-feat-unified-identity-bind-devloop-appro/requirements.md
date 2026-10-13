@@ -47,7 +47,9 @@ existing run token, the subject is the existing `prn_`.
 - D2. The delegation allowlist grows only by the routes mctl-agents#636
   actually calls (narrow method + path).
 - D3. The `we_` execution id is canonical; the Temporal workflow id is an
-  attribute (the execution's `engine_ref`).
+  attribute (the execution's `engine_ref`: the workflow id, or
+  `<workflow_id>#<request_id>` for a run dispatched from an execution
+  request, mctl-agents#461).
 - D4. Minting run tokens and creating `aar_` keep requiring the static
   service token in Slice C; replacing that credential is separate work.
 - D5. The approval subject is the canonical `prn_`, not a `github:` login.
@@ -64,9 +66,14 @@ existing run token, the subject is the existing `prn_`.
 
 ### Canonical execution (D6)
 
+- R0. WHEN a DevLoop was dispatched from an execution request THE worker
+  SHALL use the `we_` the dispatcher fulfilled that request with
+  (`engine_ref = <workflow_id>#<request_id>`) and SHALL NOT create a work
+  item or attach another execution; R0a-R0b apply to every other start.
 - R0a. WHEN a DevLoop starts THE worker SHALL obtain its issue's work item
   through `POST /api/v1/work-items` with `external_key` =
-  `https://github.com/<owner>/<repo>/issues/<number>` and an idempotency key
+  `https://github.com/<owner>/<repo>/issues/<number>` (owner and repo
+  lowercased, number in decimal without leading zeros) and an idempotency key
   derived only from that issue ref, in the tenant mapped from the target
   service; the route returns the existing open item for that
   `(tenant, external_key)` instead of a second one.
@@ -85,8 +92,7 @@ existing run token, the subject is the existing `prn_`.
 ### Grant shape (D3)
 
 - R1. WHEN the DevLoop reaches its approval gate THE worker SHALL create the
-  `aar_` with `execution_id` = the run's `we_` (the work-item execution
-  whose `engine` is `temporal` and `engine_ref` is the workflow id),
+  `aar_` with `execution_id` = the run's `we_` (R0 or R0b),
   `action_kind` = `mctl-agents-approve`, `target` = `<service>/<slug>`,
   `policy_rule_id` = `dev-loop.human-approval`, `policy_version` = `v1`.
 - R2. THE SYSTEM SHALL refuse to create a DevLoop `aar_` whose
@@ -94,8 +100,10 @@ existing run token, the subject is the existing `prn_`.
   workflow ids, no `we_` check bypass).
 - R3. WHEN a human admin approves through
   `POST /api/v1/agents/dev-loop/{workflow_id}/approve` THE SYSTEM SHALL
-  resolve `workflow_id` to its `we_` through the execution's
-  `(engine, engine_ref)`, decide the pending `aar_` for that `we_` and
+  resolve `workflow_id` to its one open `we_` (non-terminal, `engine`
+  `temporal`, `engine_ref` equal to `workflow_id` or starting with
+  `<workflow_id>#`), refuse more than one with 409 `execution_ambiguous`,
+  decide the pending `aar_` for that `we_` and
   action kind through the existing `DecideActionApproval` rules, and
   signal `{approval_ref: "aar_…"}`; IF no such `we_` or pending `aar_`
   exists THEN it SHALL keep today's behaviour (legacy relay) while the

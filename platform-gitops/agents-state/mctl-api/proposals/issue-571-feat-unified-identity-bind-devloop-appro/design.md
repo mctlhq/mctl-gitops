@@ -13,19 +13,34 @@ additive except the two tightenings in §5.
   `(tenant, external_key)` (partial unique index
   `work_items_tenant_external_key_open`), so creating is also resolving.
 - Worker (mctl-agents#636), at DevLoop start, before anything else:
-  1. `POST /api/v1/work-items` with `external_key` = the issue URL,
-     idempotency key `devloop:github:<owner>/<repo>#<number>` and the tenant
-     that owns the target service (an explicit service→tenant mapping in the
-     worker; an unmapped service is a hard failure, never a default tenant).
-     `201` = created, `200` = the existing open item (replay or
-     `external_key` dedupe); `409 external_key_in_use` (open work the worker
-     cannot see) or any other error is a hard failure, never a retry with a
-     different key;
+  0. a DevLoop dispatched from an execution request (mctl-agents#461:
+     `IssueRef` carries `work_item_id` + `execution_request_id`) already has
+     its `we_`: the execution the dispatcher fulfilled the request with,
+     `engine_ref = <workflow_id>#<request_id>` (`request_engine_ref`). It
+     uses that `we_` (after a resume delivery, the one of the request being
+     served) and skips steps 1-2: creating or attaching another would hit
+     the one-open-execution-per-item index or split the run in two;
+  1. otherwise (issue trigger, cron): `POST /api/v1/work-items` with
+     `external_key` = the canonical issue URL, idempotency key
+     `devloop:github:<owner>/<repo>#<number>` and the tenant that owns the
+     target service (an explicit service→tenant mapping in the worker; an
+     unmapped service is a hard failure, never a default tenant). `201` =
+     created, `200` = the existing open item (replay or `external_key`
+     dedupe); `409 external_key_in_use` (open work the worker cannot see)
+     or any other error is a hard failure, never a retry with a different
+     key;
   2. attach the execution `(temporal, <workflow_id>)` → `we_`.
   The same issue always lands on the same open work item, and the same
   workflow id on the same `we_`. Both steps are retry-safe because both
   routes are idempotent. An issue whose earlier work item is already
   terminal gets a new one: a closed item is history, not open work.
+- Canonical issue URL: `https://github.com/<owner>/<repo>/issues/<number>`
+  with `<owner>/<repo>` lowercased and `<number>` in decimal without
+  leading zeros, built from the same parse that names the workflow
+  (`dev-loop-<owner>-<repo>-<number>`). mctl-api compares `external_key`
+  byte for byte, so `Mctlhq/…` or `/issues/0571` would otherwise open a
+  second work item for the same issue. A URL that does not parse stops the
+  run.
 
 ## 1. DevLoop `aar_` keyed by `we_` (R1-R3, D3)
 
@@ -38,7 +53,10 @@ additive except the two tightenings in §5.
   `execution_id` must parse as `we_` and load as a non-terminal execution
   (R2). Other kinds are unchanged.
 - `ApproveDevLoopWorkflow` (`handlers_dev_loop.go:309-360`): new store
-  lookup `ExecutionByEngineRef(ctx, "temporal", workflowID)`; then the
+  lookup of the run's open `we_`: the non-terminal `temporal` executions
+  whose `engine_ref` is the workflow id or starts with `<workflow_id>#`
+  (the dispatched form, §0 step 0). Exactly one → that `we_`; none → no
+  grant; more than one → 409 `execution_ambiguous`, never a pick. Then the
   newest pending `aar_` with that `execution_id` and kind; decide it with
   the existing store `DecideActionApproval` (same self-decision and
   human-admin rules); signal `{approval_ref}`. No `we_` or no pending `aar_`
