@@ -77,6 +77,13 @@ spec:
             # unresolved (docs/principals.md in mctl-api).
             # Rollback: remove this line (default `legacy`).
             TENANT_AUTHZ_MODE: "shadow"
+            # Platform admins by principal (mctlhq/mctl-api#377). In shadow
+            # it decides nothing: the admin decision is still ADMIN_USERS,
+            # and this list is only compared with it (admin_mismatch in
+            # tenant_authz_shadow_*), so the switch to `principal` can show
+            # a clean admin record first. A malformed id refuses startup.
+            # Rollback: remove this line.
+            ADMIN_PRINCIPALS: prn_01M39HRB7JRXZ2PHW5VVB695YZ
             AUTH_REQUIRED: "true"
             BACKSTAGE_URL: https://app.mctl.ai
             # No DEX_ISSUER_URL: since mctl-api 4.72.0 (mctlhq/mctl-api#521)
