@@ -1,0 +1,15 @@
+status: proposed
+updated_at: '2026-10-13T13:20:00Z'
+updated_by: mashkovd
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 375
+  url: https://github.com/mctlhq/mctl-api/issues/375
+control:
+  requires_human_approval: true
+notes: >-
+  Hand-written proposal (a Claude Code session working for the owner on
+  mctlhq/.github#91), not produced by the issue-investigator. Awaiting owner
+  approval; nothing is implemented. Implementation may be by hand or by the
+  implementer once accepted.
