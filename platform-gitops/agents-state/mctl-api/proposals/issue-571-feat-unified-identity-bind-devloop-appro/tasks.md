@@ -10,11 +10,15 @@ owner-gated rollout. Re-read line numbers on `main` before editing.
   relay works, exactly one audit entry per use; flag off: 400
   `legacy_approver_disabled`, audited; mutation: removing the refusal fails
   the flag-off test (R13).
-- [ ] 2. `we_`-keyed DevLoop `aar_` (§1): create-time `we_` check,
-  `ExecutionByEngineRef`, approve decides the pending `aar_` and signals
-  `approval_ref`; legacy payload only with the flag on; `isHumanAdmin`.
-  — DoD: tests for found/not-found `we_`, no pending `aar_` (flag on/off),
-  service principal refused on approve, self-decision refused.
+- [ ] 2. `we_`-keyed DevLoop `aar_` (§1): create-time `we_` check; the
+  approve route resolves `workflow_id` to its one open `we_` (non-terminal,
+  `engine_ref` equal to `workflow_id` or starting with `<workflow_id>#`),
+  decides the pending `aar_` and signals `approval_ref`; legacy payload only
+  with the flag on; `isHumanAdmin`. — DoD: tests for found/not-found `we_`,
+  the dispatched `<workflow_id>#<request_id>` form, two open executions →
+  409 `execution_ambiguous`, a store read error → 503 (never the legacy
+  payload), no pending `aar_` (flag on/off), service principal refused on
+  approve, self-decision refused.
 - [ ] 3. Grant-authorized `mctl-agents-approve` (§2) + allowlist route. —
   DoD: A1-A4 as handler tests through the router with a real run token:
   bound grant succeeds once; other `we_` → `grant_not_bound`; second use →

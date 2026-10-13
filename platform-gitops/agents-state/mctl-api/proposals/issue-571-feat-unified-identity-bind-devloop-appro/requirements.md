@@ -54,7 +54,8 @@ existing run token, the subject is the existing `prn_`.
   service token in Slice C; replacing that credential is separate work.
 - D5. The approval subject is the canonical `prn_`, not a `github:` login.
 - D6. Every DevLoop has a canonical `we_`: issue → work item → `we_`
-  execution (`engine=temporal`, `engine_ref=<workflow_id>`). The work item
+  execution (`engine=temporal`, `engine_ref=<workflow_id>`, or
+  `<workflow_id>#<request_id>` for a dispatched run, D3). The work item
   linked to the GitHub issue is reused, or created idempotently through the
   existing route and linked to that issue; no synthetic or unlinked work
   item is ever created. (Was open question Q1.) The link is the work item's
