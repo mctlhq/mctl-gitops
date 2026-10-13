@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-13T15:16:04Z'
+updated_at: '2026-10-13T15:27:43Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -22,7 +22,7 @@ execution:
   trace_id: d8d0d4a5db82dd0fde1b62763c1a7189
   agent: implementer
   version: ''
-ci_blockers_head: 5a0ee5e82c132268d38b3a525d0657fabeea02ef
+ci_blockers_head: 6143293f339dd3d1371a35e816bc524a9c1c3b36
 ci_blockers:
 - validate / lint
-review_attempts: 1
+review_attempts: 2
