@@ -1,0 +1,15 @@
+status: proposed
+updated_at: '2026-10-13T14:30:00Z'
+updated_by: mashkovd
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 571
+  url: https://github.com/mctlhq/mctl-api/issues/571
+control:
+  requires_human_approval: true
+notes: >-
+  Hand-written proposal (a Claude Code session working for the owner on
+  mctlhq/.github#91) for #376 Slice C, carrying the owner's five decisions
+  of 2026-10-13 and one open question (Q1, DevLoops without a work item).
+  Awaiting owner approval; nothing is implemented.
