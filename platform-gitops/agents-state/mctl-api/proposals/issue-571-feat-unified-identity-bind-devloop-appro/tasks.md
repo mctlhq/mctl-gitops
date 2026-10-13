@@ -13,20 +13,26 @@ owner-gated rollout. Re-read line numbers on `main` before editing.
 - [ ] 2. `we_`-keyed DevLoop `aar_` (§1): create-time `we_` check; the
   approve route resolves `workflow_id` to its one open `we_` (non-terminal,
   `engine_ref` equal to `workflow_id` or starting with `<workflow_id>#`),
-  decides the pending `aar_` and signals `approval_ref`; legacy payload only
+  acts on the newest `aar_` in any state (pending → decide and signal
+  `approval_ref`); legacy payload only
   with the flag on; `isHumanAdmin`. — DoD: tests for found/not-found `we_`,
   the dispatched `<workflow_id>#<request_id>` form, two open executions →
   409 `execution_ambiguous`, a store read error → 503 (never the legacy
   payload), no `aar_` (flag on/off), a denied/consumed/expired `aar_` →
-  its 409 with the flag on, service principal refused on approve,
+  its 409 with the flag on and off, an older live `aar_` under a newer
+  denial → 409 `approval_denied`, service principal refused on approve
+  (audited),
   self-decision refused.
 - [ ] 3. Grant-authorized `mctl-agents-approve` (§2) + allowlist route. —
   DoD: A1-A4 as handler tests through the router with a real run token:
   bound grant succeeds once; other `we_` → `grant_not_bound`; second use →
   consumed; wrong target, expired, denied, pending → refused, nothing
   submitted; body `approver` refused; agent without grant and non-admin
-  human still refused. Mutations: dropping the target check, the CAS, or
-  the kind check each fails a test.
+  human still refused; a grant created for another DevLoop's proposal is
+  refused (target bound to the `we_`'s `engine_ref`), the dispatched form
+  binds; a decider name the approver pattern refuses is 400, unspent.
+  Mutations: dropping the target binding, the CAS, or the kind check, or
+  setting the approver after validation, each fails a test.
 - [ ] 4. Subject from `prn_` (§3). — DoD: ZITADEL-only subject delegates
   (A6); empty id refuses; disabled principal refuses; store error 503;
   mutation: reinstating the `github:` requirement fails A6.

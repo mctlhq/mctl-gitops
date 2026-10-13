@@ -104,10 +104,11 @@ existing run token, the subject is the existing `prn_`.
   resolve `workflow_id` to its one open `we_` (non-terminal, `engine`
   `temporal`, `engine_ref` equal to `workflow_id` or starting with
   `<workflow_id>#`), refuse more than one with 409 `execution_ambiguous`,
-  decide the pending `aar_` for that `we_` and
-  action kind through the existing `DecideActionApproval` rules, and
+  decide the newest `aar_` for that `we_` and action kind when it is
+  pending, through the existing `DecideActionApproval` rules, and
   signal `{approval_ref: "aar_…"}` (an already approved, unconsumed one is
-  re-signalled); IF the `we_` has no `aar_` of that kind at all, or there
+  re-signalled), always acting on the newest `aar_` of that kind in any
+  state, so an older live one never outranks a newer recorded decision; IF the `we_` has no `aar_` of that kind at all, or there
   is no such `we_`, THEN it SHALL keep today's behaviour (legacy relay)
   while the legacy flag is on, and refuse with 409 `approval_grant_missing`
   when it is off. IF the newest such `aar_` is denied, consumed or expired
@@ -132,15 +133,18 @@ existing run token, the subject is the existing `prn_`.
   from the caller's admin status: the `aar_` must be bound to the run's
   `we_` (existing `grant_not_bound`), have `action_kind`
   `mctl-agents-approve`, a `target` equal to the request's
-  `<service>/<slug>`, and be consumed by the existing intent-hash CAS
+  `<service>/<slug>`, that target must be the proposal of the run's own
+  DevLoop (its workflow id is the one the `we_`'s `engine_ref` names,
+  else 409 `approval_intent_mismatch`), and be consumed by the existing intent-hash CAS
   (`ConsumeActionApproval`) before the operation is submitted. Expired,
   denied, pending, consumed, unbound or mismatched grants SHALL refuse with
   the existing typed codes and submit nothing.
 - R7. THE SYSTEM SHALL keep refusing `mctl-agents-approve` to an agent run
   without a grant, to a delegated subject on any other grant kind, and to a
   non-admin human, exactly as today.
-- R8. THE recorded approver SHALL be taken from the consumed grant
-  (`decided_by`, `decided_by_principal_id`), never from the request body;
+- R8. THE recorded approver SHALL be taken from the grant's decider
+  (`decided_by` without its `github:`/`oidc:` prefix, validated like any
+  approver; `decided_by_principal_id` as subject), never from the request body;
   an `approver` field in the body of a grant-authorized call SHALL be
   refused (400), like `forbiddenIdentityFields`.
 
