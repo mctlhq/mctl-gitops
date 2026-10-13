@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-10-13T15:00:00Z'
+status: accepted
+updated_at: '2026-10-13T14:04:03Z'
 updated_by: mashkovd
 source:
   type: github_issue
@@ -8,10 +8,12 @@ source:
   url: https://github.com/mctlhq/mctl-api/issues/571
 control:
   requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-13T14:04:03Z'
 notes: >-
   Hand-written proposal (a Claude Code session working for the owner on
-  mctlhq/.github#91) for #376 Slice C, carrying the owner's five decisions
-  of 2026-10-13, and D6 (owner, same day): every DevLoop resolves or
-  idempotently creates the issue's work item and attaches its we_ execution
-  (engine=temporal, engine_ref=workflow_id).
-  Awaiting owner approval; nothing is implemented.
+  mctlhq/.github#91) for #376 Slice C. Approved by the owner on 2026-10-13
+  with decisions D1-D6 as recorded in requirements.md (D6: issue -> canonical
+  work item -> we_ execution, engine=temporal, engine_ref=workflow_id).
+  Rollout steps 7-8 (release, natural E2E, legacy flag off) stay owner-gated.
