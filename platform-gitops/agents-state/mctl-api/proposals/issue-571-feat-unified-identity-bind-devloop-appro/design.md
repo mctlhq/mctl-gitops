@@ -61,7 +61,8 @@ additive except the two tightenings in §5.
   the existing store `DecideActionApproval` (same self-decision and
   human-admin rules); signal `{approval_ref}`. No `we_` or no pending `aar_`
   → legacy payload `{approver}` while the flag is on, 409 when off (R3).
-  `requireTemporalAdmin` becomes `isHumanAdmin` (R4).
+  The approve route additionally requires `isHumanAdmin` (R4);
+  `requireTemporalAdmin` stays as it is for the other dev-loop routes.
 - No new column: the workflow id lives on the execution row as
   `engine_ref`; the `aar_` keeps only the `we_`.
 
@@ -108,9 +109,11 @@ audited. Helm and README gain the variable.
 
 ## 5. Tightenings
 
-- `requireTemporalAdmin` → `isHumanAdmin`: verify before release that no
-  automation calls the dev-loop approve/abandon routes with the service
-  token (audit query over 14 days).
+- Approve requires `isHumanAdmin`: verify before release that no
+  automation calls the dev-loop approve route with the service token
+  (audit query over 14 days). Narrowed from all of `requireTemporalAdmin`
+  on 2026-10-13: `run_shepherd.py` reads the dev-loop status route with the
+  service token, so a global change would break the shepherd sweep.
 - DevLoop `aar_` creation refuses a non-`we_` `execution_id`.
 
 ## Rollout

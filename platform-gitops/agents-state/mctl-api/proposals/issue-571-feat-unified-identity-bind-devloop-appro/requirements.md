@@ -109,9 +109,10 @@ existing run token, the subject is the existing `prn_`.
   exists THEN it SHALL keep today's behaviour (legacy relay) while the
   legacy flag is on, and refuse with 409 `approval_grant_missing` when it
   is off.
-- R4. `requireTemporalAdmin` (`handlers_dev_loop.go:156-171`) SHALL accept
-  only a human admin (`isHumanAdmin`), so a service or agent principal can
-  never perform the human act.
+- R4. THE DevLoop approve route SHALL accept only a human admin
+  (`isHumanAdmin`), so a service or agent principal can never perform the
+  human act. `requireTemporalAdmin` itself is unchanged: the shepherd reads
+  `GET /api/v1/agents/dev-loop/{workflow_id}` with the service token.
 
 ### Exercising the grant (D1, D2)
 
