@@ -1,6 +1,6 @@
 status: merged
-updated_at: '2026-09-27T15:49:40Z'
-updated_by: mctl-agents[bot]
+updated_at: '2026-10-13T13:25:00Z'
+updated_by: mashkovd
 execution:
   context_id: ex-61b8e11d375d92c2
   trace_id: 4d958c2dd8b9872a1a74247870ff0781
@@ -27,20 +27,13 @@ attempt:
   expires_at: '2026-09-27T02:12:08Z'
   finished_at: '2026-09-27T00:38:10Z'
 pr: https://github.com/mctlhq/mctl-api/pull/410
-ci_blockers_head: 6870b55ea1c65ee064fbb338a25a7fb1be7d94c8
-ci_blockers:
-- validate / lint
-notes: 'The platform lost the implementer''s work 3 time(s) in a row (implementer
-  follow-up exited non-zero (51) for mctl-api/issue-374-feat-unified-identity-introduce-a-swappa).
-  This is a harness defect, not a problem with the proposal — review_attempts was
-  never charged. Human triage required; see mctl-agents#366. Reason: The implementer
-  sub-agent made uncommitted edits to internal/auth/federation_config.go, internal/auth/provider_oidc.go,
-  internal/auth/federation_test.go, docs/federation.md, and cmd/api/main.go addressing
-  the P1 (admins exemption over-stripped for the documented production canary), P2
-  (docs/federation.md shim-replacement procedure) and P2 (missing BuildFederationRegistry
-  test) findings, and reported go build/go vet/go test ./internal/auth/... passing
-  before it ran out of budget. However, this orchestrator run''s own execution budget
-  was exhausted immediately afterward (denied before even ''git s'
+notes: >-
+  Reconciled 2026-10-13 from GitHub. The implementer's follow-up failures
+  recorded here earlier were superseded: mctl-api#410 was finished and merged
+  (merge commit 4ae298c) with validate / lint and test green on its final head
+  58d4d32, so the ci_blockers entry (recorded against the earlier head
+  6870b55) no longer applied and no human triage is pending. mctl-api#374 was
+  closed on 2026-10-11.
 github:
   state: merged
   head_sha: 58d4d3254f0e0e56d1239d28faa158bd0a1056ea
