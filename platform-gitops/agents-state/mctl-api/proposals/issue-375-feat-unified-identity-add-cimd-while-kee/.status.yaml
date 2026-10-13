@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-13T16:24:45Z'
+status: review-stuck
+updated_at: '2026-10-13T16:39:45Z'
 updated_by: mctl-agents[bot]
 source:
   type: github_issue
@@ -26,11 +26,11 @@ ci_blockers_head: b32bc188315ce12e705e753641c4fc1d40c127b1
 ci_blockers:
 - validate / lint
 review_attempts: 4
-refusals: 2
+refusals: 3
 refusals_head: b32bc188315ce12e705e753641c4fc1d40c127b1
-notes: 'implementer declined to act: The lint failure is an infrastructure/network
-  flake, not a code defect: `golangci-lint config verify` failed with ''failing loading
-  https://golangci-lint.run/jsonschema/golangci.v2.11.jsonschema.json: context deadline
-  exceeded (Client.Timeout exceeded while awaiting headers)''. It timed out downloading
-  the config schema before any linting ran, so no source change can fix it; re-running
-  the check is the remedy.'
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: lint failed because golangci-lint config
+  verify timed out fetching https://golangci-lint.run/jsonschema/golangci.v2.11.jsonschema.json
+  (context deadline exceeded, Client.Timeout exceeded while awaiting headers). This
+  is a network flake, not a code or config defect; no lint findings were reported.'
