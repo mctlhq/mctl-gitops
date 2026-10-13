@@ -53,9 +53,13 @@ stays. CIMD is additive.
   name (no IP literal); port absent or 443; a non-empty path other than
   `/`; no userinfo, query, fragment, or `.`/`..` segments; at most 512
   bytes.
-- R6. IF a domain allowlist (`OAUTH_CIMD_ALLOWED_HOSTS`) is configured THEN
-  THE SYSTEM SHALL refuse a CIMD URL whose host is not on it (exact host,
-  or a `.suffix` entry), before any network access.
+- R6. THE SYSTEM SHALL refuse a CIMD URL whose host is not on the domain
+  allowlist `OAUTH_CIMD_ALLOWED_HOSTS` (exact host, or a `.suffix` entry),
+  before any network access. The allowlist is mandatory: an empty list
+  admits no host, and the API SHALL refuse to start with
+  `OAUTH_CIMD_ENABLED=true` and an empty or unparsable allowlist, so a
+  misconfiguration is a visible boot failure rather than either "any public
+  host" or a silently disabled feature.
 
 ### Fetch (fail closed)
 
@@ -85,8 +89,20 @@ stays. CIMD is additive.
   whose `redirect_uris` is absent, empty or not a list of absolute URIs,
   whose `token_endpoint_auth_method` is anything but `none`, or that carries
   `client_secret` or `client_secret_expires_at`.
-- R11. THE SYSTEM SHALL accept a `redirect_uri` for a CIMD client only on an
-  exact string match against the document's `redirect_uris`.
+- R11. THE SYSTEM SHALL accept a `redirect_uri` for a CIMD client only when
+  it matches an entry of the document's `redirect_uris`:
+  - by exact string match; or
+  - (RFC 8252 §7.3) WHEN both the requested URI and the document entry use
+    scheme `http` and the IP-literal host `127.0.0.1` or `[::1]`, by an exact
+    match of every component except the port, which may differ (a native
+    client binds an ephemeral port). Scheme, host, path and query must match
+    exactly; userinfo, a fragment or a backslash refuses the URI. The host
+    name `localhost` gets no port exemption (RFC 8252 §8.3); it matches only
+    exactly.
+  The port exemption applies only against the client's own document, never
+  to an entry the document does not list, and does not change the existing
+  rule for pre-registered clients, which match their loopback entries with
+  the port.
 - R12. THE SYSTEM SHALL keep requiring PKCE S256 for CIMD clients (it is
   already mandatory for every client, `oauth_handlers.go:165-172`) and SHALL
   bind the issued code and refresh token to the CIMD `client_id` exactly as
@@ -98,8 +114,9 @@ stays. CIMD is additive.
   upstream IdP callback (`signinPrincipal`), exactly as for every other
   client: nothing in a metadata document can name, select or influence a
   principal, a tenant or a group.
-- R14. WHEN a CIMD client is authorized THE SYSTEM SHALL show, after the
-  upstream sign-in and before a code is issued, a consent page naming the
+- R14. WHEN a CIMD client is authorized THE SYSTEM SHALL show, on every
+  authorization (consent is never remembered), after the upstream sign-in
+  and before a code is issued, a consent page naming the
   client (`client_name`, else the URL host), the `client_id` URL and the
   redirect host, visibly separate from the signed-in account. Denial
   redirects `access_denied`; the consent token is single-use, expires in 5
@@ -124,7 +141,9 @@ stays. CIMD is additive.
   a stub resolver and a local TLS server).
 - A2. Oversized, non-JSON, non-200 and slow responses fail closed.
 - A3. A document naming another `client_id`, or a `redirect_uri` it does
-  not list, is refused.
+  not list, is refused. A loopback IP-literal entry accepts the same URI on
+  another port and refuses another path, host or scheme; a `localhost`
+  entry on another port is refused.
 - A4. The same human signing in through a CIMD client, a DCR client and a
   pre-registered client resolves to the same `prn_`; the token carries no
   client-chosen identity.
@@ -136,6 +155,14 @@ stays. CIMD is additive.
   `oauth.grant_issued` with `client_kind=cimd` next to the human's
   principal; a CIMD URL resolving to a private address is refused; the
   Cloudflare MCP Portal still connects.
+
+## Owner decisions (2026-10-13)
+
+- CIMD hosts: mandatory allowlist `OAUTH_CIMD_ALLOWED_HOSTS` (R6), not
+  "any public host".
+- Consent: shown on every authorization, nothing persisted (R14).
+- Loopback redirects: RFC 8252, any port for `127.0.0.1` / `[::1]` with
+  scheme, host and path matched exactly (R11).
 
 ## Out of scope
 
