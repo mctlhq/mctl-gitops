@@ -3,6 +3,24 @@
 Narrows `issue-376-…/design.md` §5 to `main` at `548a541`. Everything is
 additive except the two tightenings in §5.
 
+## 0. Issue → work item → `we_` (R0a-R0d, D6)
+
+- mctl-api: `ListWorkItems` gains the `surface` + `external_id` filter,
+  joined on `work_item_surface_refs`, under the existing tenant scoping. A
+  store error is a 503, never an empty list.
+- Worker (mctl-agents#636), at DevLoop start, before anything else:
+  1. lookup by `github` surface ref; exactly one hit → reuse; more than one
+     → hard failure (ambiguous, needs a human);
+  2. none → `POST /api/v1/work-items` with idempotency key
+     `devloop:github:<owner>/<repo>#<number>` and the tenant that owns the
+     target service (an explicit service→tenant mapping in the worker; an
+     unmapped service is a hard failure, never a default tenant), then link
+     the `github` surface ref;
+  3. attach the execution `(temporal, <workflow_id>)` → `we_`.
+  The same issue always lands on the same work item, and the same
+  workflow id on the same `we_`. Steps 2-3 are retry-safe because both
+  routes are idempotent.
+
 ## 1. DevLoop `aar_` keyed by `we_` (R1-R3, D3)
 
 - Worker (mctl-agents#636): at the approval gate it already knows its `we_`
@@ -83,6 +101,6 @@ audited. Helm and README gain the variable.
 ## Risks
 
 - Grant confusion: bound by `we_` (gate) and intent (CAS); heaviest tests.
-- A DevLoop without a work item: Q1.
+- A DevLoop that cannot obtain a `we_`: stops before the approval gate (R0d); a lookup outage is a failed start, not a duplicate work item.
 - Principal-store outage: delegated approvals fail closed (503) while the
   legacy relay, while on, still works.

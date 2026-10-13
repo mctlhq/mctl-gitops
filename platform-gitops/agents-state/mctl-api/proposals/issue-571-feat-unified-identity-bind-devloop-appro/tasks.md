@@ -3,6 +3,9 @@
 mctl-api tasks 1-5 can be one or two PRs; task 6 is mctl-agents#636; 7-8 are
 owner-gated rollout. Re-read line numbers on `main` before editing.
 
+- [ ] 0. Work-item lookup by surface ref (§0, R0c). — DoD: filter returns
+  the linked item; tenant scoping enforced; store error is 503 (mutation:
+  turning the error into an empty list fails the test).
 - [ ] 1. Legacy flag + `approver.legacy_relay` audit (§4). — DoD: flag on:
   relay works, exactly one audit entry per use; flag off: 400
   `legacy_approver_disabled`, audited; mutation: removing the refusal fails
@@ -25,8 +28,10 @@ owner-gated rollout. Re-read line numbers on `main` before editing.
 - [ ] 5. Docs/OpenAPI/Helm/README: `docs/principals.md` (grant-authorized
   approval), env var, error codes. `go vet`, `gofmt`, `golangci-lint`,
   `go test ./...` green.
-- [ ] 6. mctl-agents#636 (counterpart): attach `we_` at DevLoop start (per
-  Q1), mint run token, create `aar_` with `we_`, read `approval_ref` from
+- [ ] 6. mctl-agents#636 (counterpart): issue → work item → `we_` at DevLoop
+  start (§0, D6: lookup, idempotent create + surface link, attach
+  `temporal`/`workflow_id`; restart yields the same `we_`; lookup failure
+  and ambiguity stop the run), mint run token, create `aar_` with `we_`, read `approval_ref` from
   the signal, submit with `X-MCTL-On-Behalf-Of: aar_…` and no `approver`,
   typed refusals are hard failures; E2E test fails when the run-token or
   `approval_ref` path is removed.

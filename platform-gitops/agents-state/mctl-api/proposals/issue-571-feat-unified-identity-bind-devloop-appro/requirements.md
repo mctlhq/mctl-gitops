@@ -51,8 +51,36 @@ existing run token, the subject is the existing `prn_`.
 - D4. Minting run tokens and creating `aar_` keep requiring the static
   service token in Slice C; replacing that credential is separate work.
 - D5. The approval subject is the canonical `prn_`, not a `github:` login.
+- D6. Every DevLoop has a canonical `we_`: issue → work item → `we_`
+  execution (`engine=temporal`, `engine_ref=<workflow_id>`). The work item
+  linked to the GitHub issue is reused, or created idempotently through the
+  existing route and linked to that issue; no synthetic or unlinked work
+  item is ever created. (Was open question Q1.)
 
 ## Requirements (EARS)
+
+### Canonical execution (D6)
+
+- R0a. WHEN a DevLoop starts THE worker SHALL resolve the work item linked
+  to its GitHub issue through its `github` surface ref
+  (`external_id` = `<owner>/<repo>#<number>`), and IF none exists THEN create
+  it through `POST /api/v1/work-items` with an idempotency key derived only
+  from that issue ref and link it with
+  `POST /api/v1/work-items/{id}/surface-refs` (idempotent by
+  `(surface, external_id)`).
+- R0b. THE worker SHALL then attach its execution through
+  `POST /api/v1/work-items/{id}/executions` with `engine=temporal`,
+  `engine_ref=<workflow_id>` (idempotent on that triple), so a restarted or
+  retried DevLoop gets the same work item and the same `we_`, never a
+  duplicate.
+- R0c. THE SYSTEM SHALL offer a lookup of a work item by surface ref
+  (`GET /api/v1/work-items?surface=github&external_id=…`, tenant-scoped like
+  the existing list) so a work item linked to the issue by any surface
+  is reused rather than duplicated. A failed lookup SHALL fail the DevLoop
+  start, never be read as "no work item" and lead to a create.
+- R0d. A DevLoop that cannot obtain a `we_` SHALL stop before its approval
+  gate with a typed error; it SHALL NOT run without one, and SHALL NOT
+  create a work item that is not linked to its issue.
 
 ### Grant shape (D3)
 
@@ -147,18 +175,6 @@ existing run token, the subject is the existing `prn_`.
   actor and subject separately, and zero `approver.legacy_relay` entries
   appear over a full DevLoop cycle (the Saturday cron plus one
   issue-triggered loop) before the flag is turned off.
-
-## Open question for the owner
-
-- Q1. A `we_` exists only for a run attached to a work item
-  (`POST /api/v1/work-items/{id}/executions`, idempotent on
-  `(engine, engine_ref)`). An issue-triggered DevLoop with no work item has
-  no `we_`, so it cannot hold a run token or a bound `aar_`, and the flag
-  could never be turned off for it. Recommendation: the DevLoop start
-  attaches its execution (`engine=temporal`, `engine_ref=workflow_id`) to
-  the issue's work item, creating the work item through the existing route
-  when none exists. The alternative (keep such loops on the relay) blocks
-  R12 indefinitely.
 
 ## Out of scope
 
