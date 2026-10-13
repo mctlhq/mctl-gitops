@@ -12,7 +12,12 @@ Re-read line numbers on `main` before editing.
   rebinding test.
 
 - [ ] 2. `internal/auth/cimd` (§2). — DoD: tests for every R5 shape rule,
-  R6 allowlist (exact and suffix, checked before any dial), R8 (status,
+  R6 allowlist (exact and suffix, checked before any dial; an empty list
+  admits nothing), R11 `RedirectAllowed` (exact match; `127.0.0.1` and
+  `[::1]` entries accept another port and refuse another scheme, host, path
+  or query; `localhost` gets no port exemption; userinfo, fragment and
+  backslash refused; mutation: comparing the port fails the ephemeral-port
+  test, dropping the path comparison fails the other-path test), R8 (status,
   media type, size, timeout), R10 (client_id mismatch, empty/invalid
   `redirect_uris`, wrong auth method, `client_secret` present), positive
   and negative cache, singleflight (one fetch for N concurrent resolves),
@@ -28,9 +33,11 @@ Re-read line numbers on `main` before editing.
   - Mutation pins (A5): removing the CIMD branch fails the CIMD tests;
     removing DCR registration fails the DCR tests.
   - Metadata advertises the flag only when enabled.
+  - Pre-registered loopback entries stay port-exact with CIMD enabled.
 
 - [ ] 4. Consent interstitial (§4). — DoD: handler tests for approve, deny,
-  replayed token, expired token, missing/mismatched cookie, and a non-CIMD
+  replayed token, expired token, a second authorization by the same human
+  and client showing the page again, missing/mismatched cookie, and a non-CIMD
   client never seeing the page; the page HTML-escapes `client_name`.
 
 - [ ] 5. `oauth.grant_issued` audit (§5) for every client kind. — DoD:
@@ -40,7 +47,8 @@ Re-read line numbers on `main` before editing.
   to the same `prn_`.
 
 - [ ] 6. Configuration and docs (§6): `cmd/api/main.go`, README env table,
-  `.env.example`, `helm/templates/deployment.yaml`, `docs/federation.md`
+  `.env.example`, `helm/templates/deployment.yaml` (startup refuses
+  `OAUTH_CIMD_ENABLED=true` with an empty allowlist, with a test), `docs/federation.md`
   (client identity vs principal identity), OpenAPI for `/oauth/consent`.
   — DoD: `go vet ./...`, `gofmt`, `golangci-lint` clean; `go test ./...`
   green.

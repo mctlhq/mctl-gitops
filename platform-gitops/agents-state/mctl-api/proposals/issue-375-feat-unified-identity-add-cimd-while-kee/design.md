@@ -75,9 +75,18 @@ func IsCIMDURL(s string) bool // R5 shape only, no network
   ```go
   if s.CIMD != nil && cimd.IsCIMDURL(clientID) {
       doc, err := s.CIMD.Resolve(ctx, clientID)
-      return err == nil && slices.Contains(doc.RedirectURIs, uri)
+      return err == nil && cimd.RedirectAllowed(doc.RedirectURIs, uri)
   }
   ```
+
+  `cimd.RedirectAllowed` implements R11: exact match first, then the
+  RFC 8252 port exemption for `http` + `127.0.0.1`/`[::1]` entries only,
+  comparing the parsed scheme, hostname, path and raw query exactly and
+  ignoring only the port. It rejects backslashes, userinfo and fragments
+  before parsing (the same hardening as `isLoopbackRedirectURI`), and it is
+  a separate function on purpose: the pre-registered rule stays
+  port-exact, and the global loopback rule is never consulted for a CIMD
+  `client_id`.
 
   The method gains a `ctx` (call sites: authorize, DCR registration with
   `""`). A CIMD `client_id` therefore never reaches the allowlist or
@@ -126,10 +135,11 @@ parameters (R13, R15). No new table.
 | Env | Default | Meaning |
 |---|---|---|
 | `OAUTH_CIMD_ENABLED` | `false` | Build the resolver and advertise CIMD |
-| `OAUTH_CIMD_ALLOWED_HOSTS` | empty (any public host) | Comma list; `.example.com` matches subdomains |
+| `OAUTH_CIMD_ALLOWED_HOSTS` | empty (admits no host) | Comma list; `.example.com` matches subdomains. Required when enabled: `OAUTH_CIMD_ENABLED=true` with an empty or unparsable list fails startup (R6) |
 
 Helm `deployment.yaml` and the README env table gain both. Rollout ships
-disabled, then flips in mctl-gitops (owner decision on the allowlist).
+disabled, then flips in mctl-gitops together with the first allowlist
+entries the owner names.
 
 ## 7. Failure semantics
 
@@ -141,10 +151,10 @@ The token endpoint never fetches.
 ## 8. Risks
 
 - **Outbound traffic from the API pod.** Bounded by R8/R9; the allowlist
-  can narrow it to known vendors. NetworkPolicy egress already allows
+  limits it to the hosts the owner listed. NetworkPolicy egress already allows
   443 to the internet for the GitHub/ZITADEL calls (verify in rollout).
 - **Phishing via a convincing `client_name`.** Mitigated by showing the
-  URL host and redirect host next to the name, and by the optional
-  allowlist.
+  URL host and redirect host next to the name on every authorization, and
+  by the mandatory allowlist.
 - **Long `client_id` values** in the token form: 512-byte CIMD cap is far
   below `maxOAuthFormBytes` (16 KiB).

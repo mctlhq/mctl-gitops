@@ -1,5 +1,5 @@
 status: proposed
-updated_at: '2026-10-13T13:20:00Z'
+updated_at: '2026-10-13T14:00:00Z'
 updated_by: mashkovd
 source:
   type: github_issue
@@ -11,5 +11,7 @@ control:
 notes: >-
   Hand-written proposal (a Claude Code session working for the owner on
   mctlhq/.github#91), not produced by the issue-investigator. Awaiting owner
-  approval; nothing is implemented. Implementation may be by hand or by the
+  approval; nothing is implemented. Amended 2026-10-13 with the owner's
+  three decisions (mandatory host allowlist, consent every time, RFC 8252
+  any-port loopback for IP literals). Implementation may be by hand or by the
   implementer once accepted.
