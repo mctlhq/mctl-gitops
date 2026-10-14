@@ -8,9 +8,9 @@
 # Who may sign in is decided here, as for Cloudflare Access: the role and
 # project checks refuse anyone without a role on this project before WorkOS
 # sees them. Which Anthropic role each group maps to is set on Anthropic's
-# side; the role key `owners` is named for the Anthropic role it is meant to
-# map to (Owner), not `admins`, which Anthropic uses for a narrower role
-# (manages membership only).
+# side; the role keys are named for the Anthropic roles they are meant to
+# map to, `owners` (Owner) and `users` (User), not `admins`, which Anthropic
+# uses for a narrower role (manages membership only).
 #
 # Anthropic routes a user to this connection by the domain of their e-mail
 # address, so a holder of the grant whose ZITADEL address is not at a domain
@@ -67,6 +67,48 @@ resource "zitadel_user_grant" "anthropic_owner" {
   user_id    = each.value
   project_id = zitadel_project.anthropic.id
   role_keys  = [zitadel_project_role.anthropic_owner.role_key]
+}
+
+# Tenant users, mapped to Anthropic's User role. As for kubectl
+# (kubernetes.tf): every tenant organization may hand out `users` and nothing
+# else, and only a user whose Vault entry carries "anthropic": true holds it.
+#
+# `groups` is a flat list of role keys from every project of the groups
+# action, and the tenant roles of Argo CD, Vault and kubectl are keyed by the
+# tenant's name. A tenant named `owners` would therefore put `owners` into
+# the token of each of its users and make them Anthropic Owners, so the two
+# keys are refused as tenant names.
+resource "zitadel_project_role" "anthropic_user" {
+  org_id       = local.mctl_org_id
+  project_id   = zitadel_project.anthropic.id
+  role_key     = "users"
+  display_name = "Anthropic user"
+
+  lifecycle {
+    precondition {
+      condition     = length(setintersection(keys(local.tenants), ["owners", "users"])) == 0
+      error_message = "A tenant named owners or users would hand its users that Anthropic group through the tenant roles in `groups`; rename the tenant."
+    }
+  }
+}
+
+resource "zitadel_project_grant" "anthropic_tenant" {
+  for_each = local.tenants
+
+  org_id         = local.mctl_org_id
+  project_id     = zitadel_project.anthropic.id
+  granted_org_id = zitadel_org.tenant[each.key].id
+  role_keys      = [zitadel_project_role.anthropic_user.role_key]
+}
+
+resource "zitadel_user_grant" "anthropic_tenant" {
+  for_each = { for key, user in local.users : key => user if try(user.anthropic, false) == true }
+
+  org_id           = zitadel_org.tenant[each.value.tenant].id
+  user_id          = zitadel_human_user.tenant[each.key].id
+  project_id       = zitadel_project.anthropic.id
+  project_grant_id = zitadel_project_grant.anthropic_tenant[each.value.tenant].id
+  role_keys        = [zitadel_project_role.anthropic_user.role_key]
 }
 
 # A confidential web client: WorkOS authenticates with the client secret at

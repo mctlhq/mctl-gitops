@@ -8,10 +8,12 @@ variable "tenant_users" {
     JSON object, one key per platform tenant. Each value is the tenant's
     Vault secret secret/platform/zitadel/users/<tenant> as JSON: one field
     per user name, each a JSON-encoded {email, first_name, last_name,
-    preferred_language, argocd, vault, workflows, frappe, github_login};
-    argocd, vault and workflows (optional, default false) grant the
-    tenant's Argo CD role (argocd.tf), Vault role (vault.tf) and Argo
-    Workflows role (workflows.tf); frappe (optional, tenant erpact only:
+    preferred_language, argocd, vault, workflows, kubectl, anthropic, frappe,
+    github_login}; argocd, vault, workflows and kubectl (optional, default
+    false) grant the tenant's Argo CD role (argocd.tf), Vault role
+    (vault.tf), Argo Workflows role (workflows.tf) and kubectl role
+    (kubernetes.tf); anthropic (optional, default false) grants the
+    Anthropic `users` role (anthropic.tf); frappe (optional, tenant erpact only:
     {sites, roles}) lists the user for the copy's Frappe sites (erpact.tf);
     github_login (optional) is the user's GitHub login, for the
     mctl:github_login claim (github-login.tf). This repository is public, so
