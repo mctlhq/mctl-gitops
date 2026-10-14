@@ -1,11 +1,11 @@
-# Email Routing for mctl.ai. Seven addresses forward to one mailbox, and the
+# Email Routing for mctl.ai. Eleven addresses forward to one mailbox, and the
 # catch-all drops everything else — enabled deliberately as #1089 item 7, so
 # that the declared state and the intent are the same thing.
 #
 # Not managed: Email Routing verification status, which is runtime state per
 # mctlhq/.github#47.
 
-# The mailbox all seven rules forward to is a personal address, and this
+# The mailbox all eleven rules forward to is a personal address, and this
 # repository is public, so it is not written here. It arrives at plan and
 # apply time from the repository secret CF_MCTL_AI_EMAIL_DESTINATION, passed
 # as TF_VAR_email_routing_destination by cloudflare-plan.yml,
@@ -187,6 +187,96 @@ resource "cloudflare_email_routing_rule" "ci" {
     },
   ]
   name     = "Rule created at 2026-03-15T09:10:15.590Z"
+  priority = 0
+  source   = "api"
+  zone_id  = local.zone_id
+}
+
+# The four rules below were created in the dashboard and ran unreviewed until
+# they were imported here (2026-10-14). obukhov@mctl.ai is a person's address
+# but still forwards to the shared mailbox; moving it to its owner's own
+# mailbox is a separate change, since that destination has to be added to the
+# account and verified first.
+
+resource "cloudflare_email_routing_rule" "obukhov" {
+  actions = [
+    {
+      type  = "forward"
+      value = [var.email_routing_destination]
+    },
+  ]
+  enabled = true
+  matchers = [
+    {
+      field = "to"
+      type  = "literal"
+      value = "obukhov@mctl.ai"
+    },
+  ]
+  name     = ""
+  priority = 0
+  source   = "api"
+  zone_id  = local.zone_id
+}
+
+resource "cloudflare_email_routing_rule" "dmarc" {
+  actions = [
+    {
+      type  = "forward"
+      value = [var.email_routing_destination]
+    },
+  ]
+  enabled = true
+  matchers = [
+    {
+      field = "to"
+      type  = "literal"
+      value = "dmarc@mctl.ai"
+    },
+  ]
+  name     = "Forward dmarc@mctl.ai"
+  priority = 0
+  source   = "api"
+  zone_id  = local.zone_id
+}
+
+resource "cloudflare_email_routing_rule" "postmaster" {
+  actions = [
+    {
+      type  = "forward"
+      value = [var.email_routing_destination]
+    },
+  ]
+  enabled = true
+  matchers = [
+    {
+      field = "to"
+      type  = "literal"
+      value = "postmaster@mctl.ai"
+    },
+  ]
+  name     = "Forward postmaster@mctl.ai"
+  priority = 0
+  source   = "api"
+  zone_id  = local.zone_id
+}
+
+resource "cloudflare_email_routing_rule" "abuse" {
+  actions = [
+    {
+      type  = "forward"
+      value = [var.email_routing_destination]
+    },
+  ]
+  enabled = true
+  matchers = [
+    {
+      field = "to"
+      type  = "literal"
+      value = "abuse@mctl.ai"
+    },
+  ]
+  name     = "Forward abuse@mctl.ai"
   priority = 0
   source   = "api"
   zone_id  = local.zone_id
