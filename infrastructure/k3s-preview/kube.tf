@@ -320,8 +320,12 @@ module "kube-hetzner" {
   }
 
   # --- Kubeconfig ---
-  # Best practice: generate via `terraform output --raw kubeconfig > kubeconfig.yaml`
-  # create_kubeconfig = false
+  # No local files: the providers below read module.kube-hetzner.kubeconfig,
+  # not a file, and a CI runner starts empty, so these two only showed up as
+  # creates in every plan. Operators get a kubeconfig with
+  # `tofu output --raw kubeconfig`.
+  create_kubeconfig    = false
+  create_kustomization = false
 }
 
 # --- Cluster Bootstrap Module ---
