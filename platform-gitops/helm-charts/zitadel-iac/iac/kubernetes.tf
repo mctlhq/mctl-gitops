@@ -3,12 +3,16 @@
 # audience (infrastructure/k3s-preview/kube.tf), and the tenant chart binds
 # group `oidc:<tenant>` to a namespaced read + pod-delete Role.
 #
-# Like Vault (vault.tf): a project of its own, one role per tenant, the
-# user's roles on this project alone in the `groups` claim (the shared
-# groups action in argocd.tf), and project_role_check, so a tenant user
-# without the opt-in gets no token at all. No `admins` role: platform admins
-# keep the cluster's certificate kubeconfig, and an OIDC path to
-# cluster-admin would be a second, weaker door to the same room.
+# Like Vault (vault.tf): a project of its own, one role per tenant, and
+# project_role_check, so a tenant user without the opt-in gets no token at
+# all. The shared groups action (argocd.tf) puts the user's roles on all of
+# its projects into `groups`, not this project's alone, so the token also
+# carries the user's Argo CD tenant role. That names the same tenant: a
+# tenant user lives in the tenant's organization, whose project grants hand
+# out that tenant's role and no other. No `admins` role, and no MCTL user is
+# granted one here, so a platform admin's `admins` from Argo CD never reaches
+# the API server: they keep the cluster's certificate kubeconfig, and an
+# OIDC path to cluster-admin would be a second, weaker door to the same room.
 #
 # Its own project because ZITADEL puts the client ids of every application
 # of a project into `aud`: sharing one would let another application's
