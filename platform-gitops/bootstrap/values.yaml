@@ -375,7 +375,11 @@ externalManifestNamespaces:
     # Ingress hosts (rules and TLS) must match this RE2 pattern in full (the
     # policy anchors it), so the repository cannot claim another tenant's
     # unreserved *.mctl.ai name. Traefik kinds of any sort are refused outright.
-    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai'
+    # Sites created before the switch keep erpact-<label>.mctl.ai; new ones are
+    # <label>.erpact.online (the deployer's mainDomain since erpact/mctl-apps
+    # #16), a zone in this platform's Cloudflare account that serves ERPact only.
+    # The apex erpact.online is not matched.
+    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai|[a-z0-9]([a-z0-9-]*[a-z0-9])?\.erpact\.online'
 
 # Platform hostnames and the namespaces allowed to serve them (#1503),
 # enforced by the mctl-reserved-platform-hosts-* admission policies in

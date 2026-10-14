@@ -160,7 +160,8 @@ spec:
 # The keep rule repeats externalManifestNamespaces.erpact.hostPattern from
 # bootstrap/values.yaml, which the admission policy already enforces on every
 # Ingress host in erpact. Restating it here means the probe can only ever go to
-# an erpact-*.mctl.ai name, whatever the tenant's repository writes.
+# an erpact-*.mctl.ai or *.erpact.online name, whatever the tenant's repository
+# writes. Change both together.
 # Two kinds of host in erpact are not Frappe sites and are dropped below,
 # because /api/method/ping can only fail on them:
 #   - an Ingress from any chart other than erpnext (erpact-deployer is the
@@ -201,7 +202,7 @@ spec:
           - erpact
       relabelingConfigs:
         - sourceLabels: [__meta_kubernetes_ingress_host]
-          regex: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai'
+          regex: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai|[a-z0-9]([a-z0-9-]*[a-z0-9])?\.erpact\.online'
           action: keep
         - sourceLabels: [__meta_kubernetes_ingress_label_app_kubernetes_io_name]
           regex: erpnext
