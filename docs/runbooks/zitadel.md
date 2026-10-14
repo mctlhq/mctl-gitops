@@ -400,6 +400,37 @@ ZITADEL is offered as an Access identity provider:
   because a recreate changes the id and breaks the Access login until the
   copy is updated.
 
+### Anthropic SSO
+
+`iac/anthropic.tf` declares the client behind the Anthropic organization's
+SSO (claude.ai, Claude Console). Anthropic's SSO runs on WorkOS, which has no
+ZITADEL preset, so the connection is WorkOS "Custom OIDC":
+
+- **Project `Anthropic`** in organization `MCTL`, with `project_role_check`,
+  `has_project_check` and `project_role_assertion`. Role `admins` is held by
+  the personal platform admins (not the break-glass `mctl-admin`, which has
+  no mailbox). The shared groups action copies it into `groups`, which
+  WorkOS requires; Anthropic maps groups to its own roles.
+- **Client `anthropic`**: web, basic auth with a client secret, redirect
+  = the WorkOS connection's callback. A new connection on Anthropic's side
+  has a new callback, so it is a change to `anthropic_sso_callback`.
+- **WorkOS step 4.** Discovery endpoint
+  `https://auth.mctl.ai/.well-known/openid-configuration`; client id and
+  secret from `zitadel/anthropic-sso-oidc` (keys `clientID`,
+  `clientSecret`):
+
+  ```
+  kubectl -n zitadel get secret anthropic-sso-oidc -o jsonpath='{.data.clientID}' | base64 -d
+  kubectl -n zitadel get secret anthropic-sso-oidc -o jsonpath='{.data.clientSecret}' | base64 -d
+  ```
+
+  The project and the application carry `prevent_destroy`: a recreate
+  changes both values and breaks every Anthropic sign-in until they are
+  entered again.
+- Anthropic routes a user to this connection by the domain of their e-mail
+  address, so a grant holder whose ZITADEL e-mail is not at a domain
+  verified in the Anthropic organization never reaches it.
+
 ### GitHub login claim (#1500 phase 1)
 
 `iac/github-login.tf` gives the applications that still identify people by
