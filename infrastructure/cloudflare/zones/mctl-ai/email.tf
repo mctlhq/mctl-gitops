@@ -1,11 +1,12 @@
-# Email Routing for mctl.ai. Eleven addresses forward to one mailbox, and the
-# catch-all drops everything else — enabled deliberately as #1089 item 7, so
-# that the declared state and the intent are the same thing.
+# Email Routing for mctl.ai. Ten addresses forward to one mailbox, obukhov@
+# to its owner's own, and the catch-all drops everything else — enabled
+# deliberately as #1089 item 7, so that the declared state and the intent
+# are the same thing.
 #
 # Not managed: Email Routing verification status, which is runtime state per
 # mctlhq/.github#47.
 
-# The mailbox all eleven rules forward to is a personal address, and this
+# The mailbox the ten shared rules forward to is a personal address, and this
 # repository is public, so it is not written here. It arrives at plan and
 # apply time from the repository secret CF_MCTL_AI_EMAIL_DESTINATION, passed
 # as TF_VAR_email_routing_destination by cloudflare-plan.yml,
@@ -194,15 +195,27 @@ resource "cloudflare_email_routing_rule" "ci" {
 
 # The four rules below were created in the dashboard and ran unreviewed until
 # they were imported here (2026-10-14). obukhov@mctl.ai is a person's address
-# but still forwards to the shared mailbox; moving it to its owner's own
-# mailbox is a separate change, since that destination has to be added to the
-# account and verified first.
+# and forwards to that person's own mailbox, a destination declared in
+# infrastructure/cloudflare/account (email-routing.tf). Apply that root
+# first and have the address verified: a rule that forwards to an
+# unverified destination delivers nothing.
+variable "email_routing_destination_obukhov" {
+  description = "The personal mailbox obukhov@mctl.ai forwards to."
+  type        = string
+  sensitive   = true
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.email_routing_destination_obukhov))
+    error_message = "email_routing_destination_obukhov must be one well-formed e-mail address (CF_MCTL_AI_EMAIL_OBUKHOV)."
+  }
+}
 
 resource "cloudflare_email_routing_rule" "obukhov" {
   actions = [
     {
       type  = "forward"
-      value = [var.email_routing_destination]
+      value = [var.email_routing_destination_obukhov]
     },
   ]
   enabled = true
