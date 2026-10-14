@@ -1,0 +1,83 @@
+{{- /*
+kubectl for a tenant's people (#1881): the API server maps a ZITADEL ID
+token's groups claim to `oidc:<group>` (infrastructure/k3s-preview/kube.tf),
+and the claim carries the user's role on ZITADEL's Kubernetes project, which
+is their tenant's name and only for users opted in with "kubectl": true
+(zitadel-iac/iac/kubernetes.tf). So this binding is what a signed-in tenant
+user may do, and nothing outside the tenant's namespaces.
+
+Read plus pod delete only:
+- no secrets: credentials live in Vault, and the namespace also holds the
+  reflected platform credentials;
+- no pods/exec, pods/attach, pods/portforward (SOC F4: no exec for tenants;
+  port-forward would reach databases directly);
+- no patch/update on workloads: editing a Pod template can mount any Secret
+  or change the command, which is exec by another name, and Argo CD would
+  revert it anyway. Workloads restart through the Argo CD restart action or
+  by deleting a Pod.
+*/ -}}
+{{- if .Values.tenant.kubectlAccess.enabled }}
+{{- $tenantName := include "tenant.name" . }}
+{{- if eq $tenantName "admins" }}
+{{- fail "kubectlAccess: tenant \"admins\" is the platform admins' group, not a tenant" }}
+{{- end }}
+{{- $namespaces := list }}
+{{- if .Values.tenant.teams }}
+  {{- range .Values.tenant.teams }}
+    {{- $namespaces = append $namespaces (printf "%s-%s" $tenantName .name) }}
+  {{- end }}
+{{- else }}
+  {{- $namespaces = append $namespaces $tenantName }}
+{{- end }}
+{{- range $ns := $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tenant-kubectl
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "services", "endpoints", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-kubectl
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tenant-kubectl
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: oidc:{{ $tenantName }}
+{{- end }}
+{{- end }}

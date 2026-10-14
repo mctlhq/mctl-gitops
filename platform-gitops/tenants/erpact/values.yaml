@@ -46,6 +46,9 @@ tenant:
     max:
       cpu: "2"
       memory: "5Gi"
+  # kubectl through ZITADEL for opted-in ERPact users (#1881).
+  kubectlAccess:
+    enabled: true
   networking:
     allowIntraNamespace: true
     allowClusterEgress: true

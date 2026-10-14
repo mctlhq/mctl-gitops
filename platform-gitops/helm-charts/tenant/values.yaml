@@ -141,3 +141,10 @@ tenant:
   # flip of podSecurityLevel to "restricted" is based on observed data
   # (ROADMAP 3.2, step 1 of 2).
   podSecurityObserveLevel: "restricted"
+
+  # -- kubectl for the tenant's people through ZITADEL (#1881): a read +
+  # pod-delete Role bound to group oidc:<tenant> in the tenant's namespaces
+  # (templates/kubectl-access.yaml). Users also need "kubectl": true in their
+  # Vault entry (zitadel-iac/iac/kubernetes.tf). Opt-in per tenant.
+  kubectlAccess:
+    enabled: false
