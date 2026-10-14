@@ -276,20 +276,20 @@ spec:
         object.spec.rules.all(r, !has(r.host) ||
           ((!(r.host in variables.owners) || variables.ns in variables.owners[r.host]) &&
            !(r.host.startsWith('*.') && (r.host.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + r.host.substring(2)) && !(variables.ns in variables.owners[k])))) &&
-           !variables.domainOwners.exists(d, !(variables.ns in variables.domainOwners[d]) && (r.host == d || r.host.endsWith('.' + d) || (r.host.startsWith('*.') && d.endsWith('.' + r.host.substring(2)))))))
+           !variables.domainOwners.exists(dom, !(variables.ns in variables.domainOwners[dom]) && (r.host == dom || r.host.endsWith('.' + dom) || (r.host.startsWith('*.') && dom.endsWith('.' + r.host.substring(2)))))))
       messageExpression: >-
         'Ingress host reserved for the platform and owned by another namespace (mctl-reserved-platform-hosts): ' +
         object.spec.rules.filter(r, has(r.host) &&
           ((r.host in variables.owners && !(variables.ns in variables.owners[r.host])) ||
            (r.host.startsWith('*.') && (r.host.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + r.host.substring(2)) && !(variables.ns in variables.owners[k])))) ||
-           variables.domainOwners.exists(d, !(variables.ns in variables.domainOwners[d]) && (r.host == d || r.host.endsWith('.' + d) || (r.host.startsWith('*.') && d.endsWith('.' + r.host.substring(2))))))).map(r, r.host).join(', ')
+           variables.domainOwners.exists(dom, !(variables.ns in variables.domainOwners[dom]) && (r.host == dom || r.host.endsWith('.' + dom) || (r.host.startsWith('*.') && dom.endsWith('.' + r.host.substring(2))))))).map(r, r.host).join(', ')
       reason: Forbidden
     - expression: >-
         !has(object.spec.tls) ||
         object.spec.tls.all(t, !has(t.hosts) || t.hosts.all(h,
           (!(h in variables.owners) || variables.ns in variables.owners[h]) &&
           !(h.startsWith('*.') && (h.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2)) && !(variables.ns in variables.owners[k])))) &&
-          !variables.domainOwners.exists(d, !(variables.ns in variables.domainOwners[d]) && (h == d || h.endsWith('.' + d) || (h.startsWith('*.') && d.endsWith('.' + h.substring(2)))))))
+          !variables.domainOwners.exists(dom, !(variables.ns in variables.domainOwners[dom]) && (h == dom || h.endsWith('.' + dom) || (h.startsWith('*.') && dom.endsWith('.' + h.substring(2)))))))
       message: "Ingress spec.tls lists a host reserved for the platform and owned by another namespace; a tenant certificate must not be offered for it"
       reason: Forbidden
 ---
@@ -380,7 +380,7 @@ spec:
             h.matches(variables.dnsName) &&
             (!(h in variables.owners) || variables.ns in variables.owners[h]) &&
             !(h.startsWith('*.') && (h.substring(2) in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2)) && !(variables.ns in variables.owners[k])))) &&
-            !variables.domainOwners.exists(d, !(variables.ns in variables.domainOwners[d]) && (h == d || h.endsWith('.' + d) || (h.startsWith('*.') && d.endsWith('.' + h.substring(2)))))))
+            !variables.domainOwners.exists(dom, !(variables.ns in variables.domainOwners[dom]) && (h == dom || h.endsWith('.' + dom) || (h.startsWith('*.') && dom.endsWith('.' + h.substring(2)))))))
       message: "IngressRoute names a host reserved for the platform and owned by another namespace (mctl-reserved-platform-hosts), a literal that is not a DNS name, or HostSNI(`*`)"
       reason: Forbidden
     - expression: >-
@@ -391,7 +391,7 @@ spec:
             .map(x, x.endsWith('.') ? x.substring(0, size(x) - 1) : x).all(h,
             (!(h.lowerAscii() in variables.owners) || variables.ns in variables.owners[h.lowerAscii()]) &&
             !(h.startsWith('*.') && (h.substring(2).lowerAscii() in variables.platformDomains || variables.owners.exists(k, k.endsWith('.' + h.substring(2).lowerAscii()) && !(variables.ns in variables.owners[k])))) &&
-            !variables.domainOwners.exists(d, !(variables.ns in variables.domainOwners[d]) && (h == d || h.endsWith('.' + d) || (h.startsWith('*.') && d.endsWith('.' + h.substring(2)))))))
+            !variables.domainOwners.exists(dom, !(variables.ns in variables.domainOwners[dom]) && (h == dom || h.endsWith('.' + dom) || (h.startsWith('*.') && dom.endsWith('.' + h.substring(2)))))))
       message: "IngressRoute spec.tls.domains lists a host reserved for the platform and owned by another namespace"
       reason: Forbidden
 ---
