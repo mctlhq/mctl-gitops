@@ -86,6 +86,13 @@ image:
 #   organization (the portal's client id joins its allowlist). Removing a
 #   tenant plans a destroy of its grant, which allowedDeletes refuses until
 #   the address is listed.
+#   kubectl sign-in (#1881, kubernetes.tf: the Kubernetes project, one role
+#   and project grant per tenant organization, user grants for users whose
+#   Vault entry declares "kubectl": true, the kubectl native client, the
+#   zitadel/kubernetes-oidc Secret): no new action; all creates, plus an
+#   in-place update of the groups action's script in every organization.
+#   Removing a tenant plans destroys of its role and grant, which
+#   allowedDeletes refuses until the addresses are listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
