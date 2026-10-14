@@ -16,7 +16,8 @@ mock_provider "kubernetes" {}
 variables {
   smtp_password = "test"
   platform_admins = jsonencode({
-    admin = jsonencode({ email = "p@example.com", first_name = "P", last_name = "A" })
+    admin  = jsonencode({ email = "p@example.com", first_name = "P", last_name = "A" })
+    kadmin = jsonencode({ email = "q@example.com", first_name = "Q", last_name = "A", kubectl = true })
   })
   tenant_users = jsonencode({
     acme = jsonencode({
@@ -61,16 +62,52 @@ run "only_opted_in_users_are_granted" {
   }
 }
 
-run "no_admins_role" {
+run "tenant_roles_and_one_admin_role" {
   command = plan
   plan_options {
-    target = [zitadel_project_role.kubernetes_tenant]
+    target = [zitadel_project_role.kubernetes_tenant, zitadel_project_role.kubernetes_admin]
   }
 
   assert {
     condition     = toset(keys(zitadel_project_role.kubernetes_tenant)) == toset(["acme", "erpact"])
-    error_message = "Roles are the tenants alone: an admins role would open an OIDC path to cluster-wide RBAC."
+    error_message = "One role per tenant."
   }
+  assert {
+    condition     = zitadel_project_role.kubernetes_admin.role_key == "kubernetes-admins"
+    error_message = "The admin role must not be `admins`: the groups action merges every project's roles, so Argo CD and Vault admins would become cluster admins."
+  }
+}
+
+run "only_opted_in_personal_admins_are_cluster_admins" {
+  command = plan
+  plan_options {
+    target = [zitadel_user_grant.kubernetes_admin]
+  }
+
+  assert {
+    condition     = toset(keys(zitadel_user_grant.kubernetes_admin)) == toset(["kadmin"])
+    error_message = "Only a personal admin whose entry says \"kubectl\": true may hold kubernetes-admins; the break-glass admin and other admins must not."
+  }
+  assert {
+    condition     = zitadel_user_grant.kubernetes_admin["kadmin"].role_keys == toset(["kubernetes-admins"])
+    error_message = "The admin grant carries kubernetes-admins and nothing else."
+  }
+}
+
+run "a_tenant_named_like_the_admin_group_is_refused" {
+  command = plan
+  plan_options {
+    target = [zitadel_project_role.kubernetes_tenant]
+  }
+  variables {
+    tenant_users = jsonencode({
+      kubernetes-admins = jsonencode({
+        x = jsonencode({ email = "x@example.com", first_name = "X", last_name = "U" })
+      })
+    })
+  }
+
+  expect_failures = [zitadel_project_role.kubernetes_tenant]
 }
 
 run "the_cli_client_is_public_with_pkce_and_loopback_redirects" {
