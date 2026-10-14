@@ -13,8 +13,9 @@ before editing.
 Slices A and B of #376 are on `main`: agent run tokens (`art_`, minted by
 `MintAgentRunToken`, `isDirectService` only, bound to a `we_` execution and
 its work item), the delegation gate (`agentPrincipalGate`,
-`handlers_agent_identity.go`), `internal/delegation` grants (`xr_`, `aar_`,
-`wi_`, surface links) bound by execution or work item
+`handlers_agent_identity.go`), `internal/delegation` grants (execution requests `xr_`, action approvals
+`aar_`, work items `wi_`, and surface links `sil_`, which store no
+principal of their own) bound by execution or work item
 (`delegation.go:196-199`), and Slice D's `GET /api/v1/identity/self`.
 
 What is left is the DevLoop approval itself. Today:
@@ -47,37 +48,45 @@ existing run token, the subject is the existing `prn_`.
 - D2. The delegation allowlist grows only by the routes mctl-agents#636
   actually calls (narrow method + path).
 - D3. The `we_` execution id is canonical; the Temporal workflow id is an
-  attribute (the execution's `engine_ref`).
+  attribute (the execution's `engine_ref`: the workflow id, or
+  `<workflow_id>#<request_id>` for a run dispatched from an execution
+  request, mctl-agents#461).
 - D4. Minting run tokens and creating `aar_` keep requiring the static
   service token in Slice C; replacing that credential is separate work.
 - D5. The approval subject is the canonical `prn_`, not a `github:` login.
 - D6. Every DevLoop has a canonical `we_`: issue → work item → `we_`
-  execution (`engine=temporal`, `engine_ref=<workflow_id>`). The work item
+  execution (`engine=temporal`, `engine_ref=<workflow_id>`, or
+  `<workflow_id>#<request_id>` for a dispatched run, D3). The work item
   linked to the GitHub issue is reused, or created idempotently through the
   existing route and linked to that issue; no synthetic or unlinked work
-  item is ever created. (Was open question Q1.)
+  item is ever created. (Was open question Q1.) The link is the work item's
+  `external_key` = the issue URL, which the create route already dedupes
+  on; this replaced a surface-ref lookup route on 2026-10-13, before any
+  implementation.
 
 ## Requirements (EARS)
 
 ### Canonical execution (D6)
 
-- R0a. WHEN a DevLoop starts THE worker SHALL resolve the work item linked
-  to its GitHub issue through its `github` surface ref
-  (`external_id` = `<owner>/<repo>#<number>`), and IF none exists THEN create
-  it through `POST /api/v1/work-items` with an idempotency key derived only
-  from that issue ref and link it with
-  `POST /api/v1/work-items/{id}/surface-refs` (idempotent by
-  `(surface, external_id)`).
+- R0. WHEN a DevLoop was dispatched from an execution request THE worker
+  SHALL use the `we_` the dispatcher fulfilled that request with
+  (`engine_ref = <workflow_id>#<request_id>`) and SHALL NOT create a work
+  item or attach another execution; R0a-R0b apply to every other start.
+- R0a. WHEN a DevLoop starts THE worker SHALL obtain its issue's work item
+  through `POST /api/v1/work-items` with `external_key` =
+  `https://github.com/<owner>/<repo>/issues/<number>` (owner and repo
+  lowercased, number in decimal without leading zeros) and an idempotency key
+  derived only from that issue ref, in the tenant mapped from the target
+  service; the route returns the existing open item for that
+  `(tenant, external_key)` instead of a second one.
 - R0b. THE worker SHALL then attach its execution through
   `POST /api/v1/work-items/{id}/executions` with `engine=temporal`,
   `engine_ref=<workflow_id>` (idempotent on that triple), so a restarted or
   retried DevLoop gets the same work item and the same `we_`, never a
   duplicate.
-- R0c. THE SYSTEM SHALL offer a lookup of a work item by surface ref
-  (`GET /api/v1/work-items?surface=github&external_id=…`, tenant-scoped like
-  the existing list) so a work item linked to the issue by any surface
-  is reused rather than duplicated. A failed lookup SHALL fail the DevLoop
-  start, never be read as "no work item" and lead to a create.
+- R0c. A create error, `409 external_key_in_use` included, SHALL fail the
+  DevLoop start; THE worker SHALL NOT retry with another `external_key`,
+  another idempotency key or another tenant.
 - R0d. A DevLoop that cannot obtain a `we_` SHALL stop before its approval
   gate with a typed error; it SHALL NOT run without one, and SHALL NOT
   create a work item that is not linked to its issue.
@@ -85,8 +94,7 @@ existing run token, the subject is the existing `prn_`.
 ### Grant shape (D3)
 
 - R1. WHEN the DevLoop reaches its approval gate THE worker SHALL create the
-  `aar_` with `execution_id` = the run's `we_` (the work-item execution
-  whose `engine` is `temporal` and `engine_ref` is the workflow id),
+  `aar_` with `execution_id` = the run's `we_` (R0 or R0b),
   `action_kind` = `mctl-agents-approve`, `target` = `<service>/<slug>`,
   `policy_rule_id` = `dev-loop.human-approval`, `policy_version` = `v1`.
 - R2. THE SYSTEM SHALL refuse to create a DevLoop `aar_` whose
@@ -94,16 +102,26 @@ existing run token, the subject is the existing `prn_`.
   workflow ids, no `we_` check bypass).
 - R3. WHEN a human admin approves through
   `POST /api/v1/agents/dev-loop/{workflow_id}/approve` THE SYSTEM SHALL
-  resolve `workflow_id` to its `we_` through the execution's
-  `(engine, engine_ref)`, decide the pending `aar_` for that `we_` and
-  action kind through the existing `DecideActionApproval` rules, and
-  signal `{approval_ref: "aar_…"}`; IF no such `we_` or pending `aar_`
-  exists THEN it SHALL keep today's behaviour (legacy relay) while the
-  legacy flag is on, and refuse with 409 `approval_grant_missing` when it
-  is off.
-- R4. `requireTemporalAdmin` (`handlers_dev_loop.go:156-171`) SHALL accept
-  only a human admin (`isHumanAdmin`), so a service or agent principal can
-  never perform the human act.
+  resolve `workflow_id` to its one open `we_` (non-terminal, `engine`
+  `temporal`, `engine_ref` equal to `workflow_id` or starting with
+  `<workflow_id>#`), refuse more than one with 409 `execution_ambiguous`,
+  decide the newest `aar_` for that `we_` and action kind when it is
+  pending, through the existing `DecideActionApproval` rules, and
+  signal `{approval_ref: "aar_…"}` (an already approved, unconsumed one is
+  re-signalled), always acting on the newest `aar_` of that kind in any
+  state, so an older live one never outranks a newer recorded decision; IF the `we_` has no `aar_` of that kind at all, or there
+  is no such `we_`, THEN it SHALL keep today's behaviour (legacy relay)
+  while the legacy flag is on, and refuse with 409 `approval_grant_missing`
+  when it is off. IF the newest such `aar_` is denied, consumed or expired
+  THEN it SHALL refuse with that state's existing 409 (`approval_denied`,
+  `approval_consumed`, `approval_expired`) whatever the flag: a recorded
+  decision is not an absent gate. A store error in any of these reads
+  SHALL be 503 `work_items_unavailable`, never "none" and never the legacy
+  payload.
+- R4. THE DevLoop approve route SHALL accept only a human admin
+  (`isHumanAdmin`), so a service or agent principal can never perform the
+  human act. `requireTemporalAdmin` itself is unchanged: the shepherd reads
+  `GET /api/v1/agents/dev-loop/{workflow_id}` with the service token.
 
 ### Exercising the grant (D1, D2)
 
@@ -116,26 +134,35 @@ existing run token, the subject is the existing `prn_`.
   from the caller's admin status: the `aar_` must be bound to the run's
   `we_` (existing `grant_not_bound`), have `action_kind`
   `mctl-agents-approve`, a `target` equal to the request's
-  `<service>/<slug>`, and be consumed by the existing intent-hash CAS
+  `<service>/<slug>`, that target must be the proposal of the run's own
+  DevLoop (its workflow id is the one the `we_`'s `engine_ref` names,
+  else 409 `approval_intent_mismatch`), and be consumed by the existing intent-hash CAS
   (`ConsumeActionApproval`) before the operation is submitted. Expired,
   denied, pending, consumed, unbound or mismatched grants SHALL refuse with
   the existing typed codes and submit nothing.
 - R7. THE SYSTEM SHALL keep refusing `mctl-agents-approve` to an agent run
   without a grant, to a delegated subject on any other grant kind, and to a
   non-admin human, exactly as today.
-- R8. THE recorded approver SHALL be taken from the consumed grant
-  (`decided_by`, `decided_by_principal_id`), never from the request body;
+- R8. THE recorded approver SHALL be taken from the grant's decider
+  (`decided_by` without its `github:`/`oidc:` prefix, validated like any
+  approver; `decided_by_principal_id` as subject), never from the request body;
   an `approver` field in the body of a grant-authorized call SHALL be
   refused (400), like `forbiddenIdentityFields`.
 
 ### Subject (D5)
 
-- R9. THE delegation gate SHALL derive the subject from the grant's
-  `SubjectPrincipalID` (`prn_`) through the principal store, for every IdP
-  (GitHub, ZITADEL), and SHALL NOT require a `github:` subject. A grant
-  without a `SubjectPrincipalID`, or whose principal is disabled or
-  unresolvable, SHALL refuse (`grant_subject_unresolved` / 503 on a store
-  outage), never fall back to the login string.
+- R9. FOR an `xr_`, `aar_` or `wi_` grant THE delegation gate SHALL derive
+  the subject from the grant's `SubjectPrincipalID` (`prn_`) through the
+  principal store, for every IdP (GitHub, ZITADEL), and SHALL NOT require a
+  `github:` subject. Such a grant without a `SubjectPrincipalID`, or whose
+  principal is disabled or unresolvable, SHALL refuse
+  (`grant_subject_unresolved` / 503 on a store outage), never fall back to
+  the login string.
+- R9a. A `sil_` grant stores no principal and is out of R9: it keeps
+  resolving through its mirrored GitHub identity as today, so it SHALL
+  still require a `github:` subject and refuse any other
+  (`grant_subject_unresolved`). It cannot authorize `mctl-agents-approve`
+  (R7), so A6 does not depend on it.
 
 ### Credentials (D4)
 
