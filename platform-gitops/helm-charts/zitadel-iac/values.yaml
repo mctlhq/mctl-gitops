@@ -93,7 +93,7 @@ image:
 #   in-place update of the groups action's script in every organization.
 #   Removing a tenant plans destroys of its role and grant, which
 #   allowedDeletes refuses until the addresses are listed.
-#   Anthropic SSO (anthropic.tf: the Anthropic project, admin role and
+#   Anthropic SSO (anthropic.tf: the Anthropic project, owners role and
 #   grants for the personal platform admins, the WorkOS web client, the
 #   zitadel/anthropic-sso-oidc Secret): no new action; all creates, plus an
 #   in-place update of the groups action's script in every organization.

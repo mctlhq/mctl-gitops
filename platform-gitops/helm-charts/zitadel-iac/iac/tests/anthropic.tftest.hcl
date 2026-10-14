@@ -44,11 +44,11 @@ run "the_project_refuses_users_without_a_role" {
 run "only_personal_platform_admins_are_granted" {
   command = plan
   plan_options {
-    target = [zitadel_user_grant.anthropic_admin]
+    target = [zitadel_user_grant.anthropic_owner]
   }
 
   assert {
-    condition     = toset(keys(zitadel_user_grant.anthropic_admin)) == toset(["admin"])
+    condition     = toset(keys(zitadel_user_grant.anthropic_owner)) == toset(["admin"])
     error_message = "Only the personal platform admins hold the Anthropic role: not the break-glass mctl-admin, not tenant users."
   }
 }

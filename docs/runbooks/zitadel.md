@@ -407,10 +407,11 @@ SSO (claude.ai, Claude Console). Anthropic's SSO runs on WorkOS, which has no
 ZITADEL preset, so the connection is WorkOS "Custom OIDC":
 
 - **Project `Anthropic`** in organization `MCTL`, with `project_role_check`,
-  `has_project_check` and `project_role_assertion`. Role `admins` is held by
+  `has_project_check` and `project_role_assertion`. Role `owners` is held by
   the personal platform admins (not the break-glass `mctl-admin`, which has
   no mailbox). The shared groups action copies it into `groups`, which
-  WorkOS requires; Anthropic maps groups to its own roles.
+  WorkOS requires; on Anthropic's side `owners` maps to Owner. Not named
+  `admins`: Anthropic's Admin is a narrower role (membership only).
 - **Client `anthropic`**: web, basic auth with a client secret, redirect
   = the WorkOS connection's callback. A new connection on Anthropic's side
   has a new callback, so it is a change to `anthropic_sso_callback`.

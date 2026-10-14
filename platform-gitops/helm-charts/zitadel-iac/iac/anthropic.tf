@@ -6,11 +6,15 @@
 # and sub, email, given_name, family_name and groups in the ID token.
 #
 # Who may sign in is decided here, as for Cloudflare Access: the role and
-# project checks refuse anyone without the `admins` role on this project
-# before WorkOS sees them. Which Anthropic role each group maps to is set on
-# Anthropic's side. Anthropic also routes a user to this connection by the
-# domain of their e-mail address, so a holder of the grant whose address is
-# not at a domain verified there is not sent here at all.
+# project checks refuse anyone without a role on this project before WorkOS
+# sees them. Which Anthropic role each group maps to is set on Anthropic's
+# side; the role key `owners` is named for the Anthropic role it is meant to
+# map to (Owner), not `admins`, which Anthropic uses for a narrower role
+# (manages membership only).
+#
+# Anthropic routes a user to this connection by the domain of their e-mail
+# address, so a holder of the grant whose ZITADEL address is not at a domain
+# verified there (mctl.ai) is not sent here at all.
 #
 # Its own project, not `zitadel_project.platform`: the role check applies to
 # every application of a project, and ZITADEL puts the client ids of every
@@ -49,20 +53,20 @@ resource "zitadel_project" "anthropic" {
   }
 }
 
-resource "zitadel_project_role" "anthropic_admin" {
+resource "zitadel_project_role" "anthropic_owner" {
   org_id       = local.mctl_org_id
   project_id   = zitadel_project.anthropic.id
-  role_key     = "admins"
-  display_name = "Anthropic admin"
+  role_key     = "owners"
+  display_name = "Anthropic owner"
 }
 
-resource "zitadel_user_grant" "anthropic_admin" {
+resource "zitadel_user_grant" "anthropic_owner" {
   for_each = local.anthropic_users
 
   org_id     = local.mctl_org_id
   user_id    = each.value
   project_id = zitadel_project.anthropic.id
-  role_keys  = [zitadel_project_role.anthropic_admin.role_key]
+  role_keys  = [zitadel_project_role.anthropic_owner.role_key]
 }
 
 # A confidential web client: WorkOS authenticates with the client secret at
