@@ -2,5 +2,7 @@
 p, role:team-commerce-proof, applications, get, apps/commerce-proof-*, allow
 p, role:team-commerce-proof, applications, list, apps/commerce-proof-*, allow
 p, role:team-commerce-proof, applications, sync, apps/commerce-proof-*, allow
+p, role:team-commerce-proof, applications, action/apps/Deployment/restart, apps/commerce-proof-*, allow
+p, role:team-commerce-proof, applications, action/apps/StatefulSet/restart, apps/commerce-proof-*, allow
 p, role:team-commerce-proof, logs, get, apps/commerce-proof-*, allow
 g, commerce-proof, role:team-commerce-proof
