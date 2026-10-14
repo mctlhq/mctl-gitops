@@ -24,7 +24,7 @@ locals {
   # The callback of the WorkOS connection, from step 2 of Anthropic's SSO
   # setup. It identifies the connection, so a new connection on Anthropic's
   # side is a new value here.
-  anthropic_sso_callback = "https://auth.workos.com/sso/oidc/oLjmLkaVNnlHjlyQBvblz4Ock/callback"
+  anthropic_sso_callback = "https://auth.workos.com/sso/oidc/oLjmLkaVNnlHjIyQBvbIz4Ock/callback"
 
   # The personal platform admins (admins.tf). Not the break-glass mctl-admin:
   # it has no mailbox, so Anthropic has no account to match it to, and the

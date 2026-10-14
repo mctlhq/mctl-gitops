@@ -64,7 +64,7 @@ run "the_client_is_confidential_with_the_workos_callback_only" {
     error_message = "WorkOS authenticates with a client secret: a web client with basic auth."
   }
   assert {
-    condition     = toset(zitadel_application_oidc.anthropic.redirect_uris) == toset(["https://auth.workos.com/sso/oidc/oLjmLkaVNnlHjlyQBvblz4Ock/callback"])
+    condition     = toset(zitadel_application_oidc.anthropic.redirect_uris) == toset(["https://auth.workos.com/sso/oidc/oLjmLkaVNnlHjIyQBvbIz4Ock/callback"])
     error_message = "Only the WorkOS connection's callback; any other URI could receive a code for this client."
   }
   assert {
