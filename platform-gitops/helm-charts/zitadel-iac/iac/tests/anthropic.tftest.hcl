@@ -89,3 +89,57 @@ run "the_groups_action_covers_the_anthropic_project" {
     error_message = "WorkOS requires a groups claim; the shared groups action must copy the Anthropic project's roles into it."
   }
 }
+
+run "only_opted_in_tenant_users_hold_users" {
+  command = plan
+  plan_options {
+    target = [zitadel_user_grant.anthropic_tenant]
+  }
+
+  variables {
+    tenant_users = jsonencode({
+      erpact = jsonencode({
+        tuser = jsonencode({ email = "t@example.com", first_name = "T", last_name = "U", anthropic = true })
+        other = jsonencode({ email = "o@example.com", first_name = "O", last_name = "U" })
+      })
+    })
+  }
+
+  assert {
+    condition     = toset(keys(zitadel_user_grant.anthropic_tenant)) == toset(["erpact/tuser"])
+    error_message = "Membership of a tenant organization alone must grant nothing; only \"anthropic\": true does."
+  }
+  assert {
+    condition     = zitadel_user_grant.anthropic_tenant["erpact/tuser"].role_keys == toset(["users"])
+    error_message = "A tenant user holds users, never owners."
+  }
+}
+
+run "tenant_grants_hand_out_users_only" {
+  command = plan
+  plan_options {
+    target = [zitadel_project_grant.anthropic_tenant]
+  }
+
+  assert {
+    condition     = alltrue([for g in zitadel_project_grant.anthropic_tenant : g.role_keys == toset(["users"])])
+    error_message = "A tenant organization may hand out users and nothing else."
+  }
+}
+
+run "a_tenant_named_owners_is_refused" {
+  command = plan
+  plan_options {
+    target = [zitadel_project_role.anthropic_user]
+  }
+
+  variables {
+    tenant_users = jsonencode({
+      owners = jsonencode({
+        tuser = jsonencode({ email = "t@example.com", first_name = "T", last_name = "U" })
+      })
+    })
+  }
+
+  expect_failures = [zitadel_project_role.anthropic_user]
+}

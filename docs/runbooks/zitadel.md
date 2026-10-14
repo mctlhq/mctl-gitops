@@ -428,9 +428,22 @@ ZITADEL preset, so the connection is WorkOS "Custom OIDC":
   The project and the application carry `prevent_destroy`: a recreate
   changes both values and breaks every Anthropic sign-in until they are
   entered again.
+- **Tenant users.** Role `users` (maps to User) is handed out through a
+  project grant to every tenant organization, and held only by a tenant user
+  whose Vault entry carries `"anthropic": true`. `groups` is a flat list of
+  role keys, and tenant roles elsewhere are keyed by the tenant's name, so a
+  tenant named `owners` or `users` is refused at plan time.
 - Anthropic routes a user to this connection by the domain of their e-mail
   address, so a grant holder whose ZITADEL e-mail is not at a domain
   verified in the Anthropic organization never reaches it.
+- **Changing an existing user's e-mail in Vault marks the new address
+  verified at once**, and no verification mail is sent: the provider
+  re-sends the stored `is_email_verified` with the new address (observed
+  2026-10-14: `user.human.email.changed` and `user.human.email.verified` in
+  the same instant). Whoever can write the Vault entry therefore decides,
+  unchecked, which address Anthropic and Frappe (which matches users by
+  `email` alone, see ERPact above) see for that person. Check the address
+  belongs to them before writing it.
 
 ### GitHub login claim (#1500 phase 1)
 

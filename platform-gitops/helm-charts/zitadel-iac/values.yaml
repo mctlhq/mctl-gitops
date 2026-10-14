@@ -97,6 +97,10 @@ image:
 #   grants for the personal platform admins, the WorkOS web client, the
 #   zitadel/anthropic-sso-oidc Secret): no new action; all creates, plus an
 #   in-place update of the groups action's script in every organization.
+#   Anthropic tenant users (anthropic.tf: the users role, one project grant
+#   per tenant organization, user grants for users whose Vault entry declares
+#   "anthropic": true): no new action; all creates. Removing a tenant plans a
+#   destroy of its grant, which allowedDeletes refuses until listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"
