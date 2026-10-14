@@ -421,3 +421,13 @@ reservedPlatformHosts:
   tg-preview.mctl.ai: [labs]
   # The Cloudflare MCP portal; never served from the cluster.
   mcp.mctl.ai: []
+
+# Whole domains and the namespaces allowed to serve them, enforced by the same
+# mctl-reserved-platform-hosts-* policies: the domain itself, every name under
+# it at any depth, and every wildcard covering it (*.erpact.online, *.online).
+# For a zone in this platform's Cloudflare account that belongs to a single
+# tenant, whose wildcard DNS points at the cluster, so that no other namespace
+# can stand up a route under it.
+reservedDomains:
+  # ERPact's site domain (<label>.erpact.online, erpact/mctl-apps#16).
+  erpact.online: [erpact]
