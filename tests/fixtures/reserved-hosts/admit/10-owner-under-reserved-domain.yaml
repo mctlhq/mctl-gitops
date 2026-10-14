@@ -1,0 +1,24 @@
+# Fixture for scripts/test-reserved-hosts-policy.sh (reservedDomains: erpact.online owned by erpact).
+# The owner serves a site under its domain.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: x
+  namespace: erpact
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: test.erpact.online
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svc
+            port:
+              number: 80
+  tls:
+  - hosts:
+    - test.erpact.online
+    secretName: x-tls
