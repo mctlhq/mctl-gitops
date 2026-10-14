@@ -1,9 +1,10 @@
 # Platform admins: the MCTL users who hold every platform admin grant, i.e.
 # Argo CD `admins` (argocd.tf), Vault `admins` (vault.tf), Argo Workflows
 # `admins` (workflows.tf), Grafana `admins` (grafana.tf) and Cloudflare
-# Access `access` (cloudflare-access.tf). One list, so they cannot drift
-# apart. The MCTL API project (mctl-api.tf) has no roles: any MCTL user
-# obtains its token, and mctl-api grants nothing from ZITADEL yet.
+# Access `access` (cloudflare-access.tf); the personal ones also hold
+# Anthropic `owners` (anthropic.tf). One list, so they cannot drift apart.
+# The MCTL API project (mctl-api.tf) has no roles: any MCTL user obtains its
+# token, and mctl-api grants nothing from ZITADEL yet.
 #
 # Two kinds of admin:
 #   - mctl-admin, the instance's first user (FirstInstance in
