@@ -146,3 +146,16 @@ resource "cloudflare_dns_record" "mcp_portal" {
   type    = "CNAME"
   zone_id = local.zone_id
 }
+
+# Anthropic organization domain verification (WorkOS-hosted flow). A static
+# proof of ownership, so it is kept in Git like the Search Console token.
+# Created through the API (this root cannot apply, #1111) and pinned by import.
+resource "cloudflare_dns_record" "anthropic_domain_verify" {
+  comment = "Anthropic (WorkOS) organization domain verification"
+  content = "anthropic-domain-verification-kwd8sr=ThZHrDOx9NHkn3y6HJbvFkKPG"
+  name    = "mctl.ai"
+  proxied = false
+  ttl     = 1
+  type    = "TXT"
+  zone_id = local.zone_id
+}
