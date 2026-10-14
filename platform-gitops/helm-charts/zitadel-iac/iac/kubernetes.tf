@@ -9,10 +9,16 @@
 # its projects into `groups`, not this project's alone, so the token also
 # carries the user's Argo CD tenant role. That names the same tenant: a
 # tenant user lives in the tenant's organization, whose project grants hand
-# out that tenant's role and no other. No `admins` role, and no MCTL user is
-# granted one here, so a platform admin's `admins` from Argo CD never reaches
-# the API server: they keep the cluster's certificate kubeconfig, and an
-# OIDC path to cluster-admin would be a second, weaker door to the same room.
+# out that tenant's role and no other.
+#
+# Platform admins (owner decision, 2026-10-15): a personal admin whose
+# Vault entry (secret/platform/zitadel/admins) carries "kubectl": true holds
+# `kubernetes-admins`, which the bootstrap chart binds to cluster-admin
+# (bootstrap/templates/system/oidc-kubectl-admins-rbac.yaml). Its own key,
+# not `admins`: the groups action merges every project's roles, so a shared
+# key would make every Argo CD or Vault admin a cluster admin by accident.
+# The break-glass admin is never granted it and keeps the certificate
+# kubeconfig, the path that works when ZITADEL itself is down.
 #
 # Its own project because ZITADEL puts the client ids of every application
 # of a project into `aud`: sharing one would let another application's
@@ -36,6 +42,23 @@ resource "zitadel_project" "kubernetes" {
   }
 }
 
+locals {
+  kubernetes_admin_group = "kubernetes-admins"
+
+  # { admin key => user id } for the personal admins who opted in.
+  kubernetes_admin_user_ids = {
+    for key, user in zitadel_human_user.platform_admin : key => user.id
+    if try(local.platform_admins[key].kubectl, false) == true
+  }
+}
+
+resource "zitadel_project_role" "kubernetes_admin" {
+  org_id       = local.mctl_org_id
+  project_id   = zitadel_project.kubernetes.id
+  role_key     = local.kubernetes_admin_group
+  display_name = "kubectl cluster admin"
+}
+
 resource "zitadel_project_role" "kubernetes_tenant" {
   for_each = local.tenants
 
@@ -43,6 +66,15 @@ resource "zitadel_project_role" "kubernetes_tenant" {
   project_id   = zitadel_project.kubernetes.id
   role_key     = each.key
   display_name = "kubectl tenant ${each.key}"
+
+  lifecycle {
+    # A tenant named like the admin group would bind cluster-admin to every
+    # opted-in user of that tenant.
+    precondition {
+      condition     = each.key != local.kubernetes_admin_group
+      error_message = "Tenant \"${each.key}\" collides with the kubectl admin group."
+    }
+  }
 }
 
 # A tenant organization may hand out its own tenant role, and no other.
@@ -65,6 +97,17 @@ resource "zitadel_user_grant" "kubernetes_tenant" {
   project_id       = zitadel_project.kubernetes.id
   project_grant_id = zitadel_project_grant.kubernetes_tenant[each.value.tenant].id
   role_keys        = [zitadel_project_role.kubernetes_tenant[each.value.tenant].role_key]
+}
+
+# Personal platform admins with "kubectl": true, granted in the MCTL
+# organization that owns the project, so no project grant is involved.
+resource "zitadel_user_grant" "kubernetes_admin" {
+  for_each = local.kubernetes_admin_user_ids
+
+  org_id     = local.mctl_org_id
+  user_id    = each.value
+  project_id = zitadel_project.kubernetes.id
+  role_keys  = [zitadel_project_role.kubernetes_admin.role_key]
 }
 
 # kubelogin (`kubectl oidc-login`): a public client with PKCE, since a CLI
