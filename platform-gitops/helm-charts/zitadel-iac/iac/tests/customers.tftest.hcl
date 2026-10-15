@@ -48,8 +48,13 @@ run "the_login_policy_admits_github_only" {
   }
 }
 
-run "the_idp_never_links_and_creates_nothing_in_phase_1" {
+run "the_idp_never_links_and_creates_nothing_by_default" {
   command = plan
+  variables {
+    identity_hook_token_functions_enabled = false
+    identity_hook_create_gate_enabled     = false
+    identity_hook_intent_enabled          = false
+  }
   plan_options {
     target = [zitadel_org_idp_github.customers]
   }
@@ -61,7 +66,7 @@ run "the_idp_never_links_and_creates_nothing_in_phase_1" {
       zitadel_org_idp_github.customers.is_creation_allowed == false &&
       zitadel_org_idp_github.customers.is_auto_creation == false
     )
-    error_message = "A GitHub identity must never attach to an existing account, and phase 1 creates no account: creation turns on only with the intent hook (phase 3.3)."
+    error_message = "A GitHub identity must never attach to an existing account, and creation stays off until the intent hook is on (phase 3.3)."
   }
   assert {
     condition     = contains(tolist(zitadel_org_idp_github.customers.scopes), "user:email")
@@ -149,4 +154,162 @@ run "the_clients_are_separate_public_pkce_clients" {
     condition     = zitadel_application_oidc.mctl_web.dev_mode == false && alltrue([for u in zitadel_application_oidc.mctl_web.redirect_uris : startswith(u, "https://mctl.ai/")])
     error_message = "The production client redirects to https://mctl.ai only, with dev mode off."
   }
+}
+
+# ----------------------------------------------- phase 3 toggles (customers_executions.tf)
+
+run "no_execution_exists_with_every_toggle_off" {
+  command = plan
+  # Explicit: customers_rollout.auto.tfvars.json sets the production values,
+  # and tofu test loads it like a run does.
+  variables {
+    identity_hook_token_functions_enabled = false
+    identity_hook_create_gate_enabled     = false
+    identity_hook_intent_enabled          = false
+  }
+  plan_options {
+    target = [
+      zitadel_action_execution_function.identity_token_claims,
+      zitadel_action_execution_request.identity_create_user,
+      zitadel_action_execution_response.identity_intent,
+    ]
+  }
+
+  assert {
+    condition = (
+      length(zitadel_action_execution_function.identity_token_claims) == 0 &&
+      length(zitadel_action_execution_request.identity_create_user) == 0 &&
+      length(zitadel_action_execution_response.identity_intent) == 0
+    )
+    error_message = "Every execution is instance-wide; none may exist until its rollout toggle is turned on."
+  }
+}
+
+# What production runs: the toggles as customers_rollout.auto.tfvars.json
+# sets them. Step 3.1 is on; the gate, the intent hook and account creation
+# stay off until their own change.
+run "production_rollout_is_at_step_3_1" {
+  command = plan
+  plan_options {
+    target = [
+      zitadel_action_execution_function.identity_token_claims,
+      zitadel_action_execution_request.identity_create_user,
+      zitadel_action_execution_response.identity_intent,
+      zitadel_org_idp_github.customers,
+    ]
+  }
+
+  assert {
+    condition     = toset(keys(zitadel_action_execution_function.identity_token_claims)) == toset(["preuserinfo", "preaccesstoken"])
+    error_message = "Production is at step 3.1: preuserinfo and preaccesstoken route to the token target."
+  }
+  assert {
+    condition     = length(zitadel_action_execution_request.identity_create_user) == 0 && length(zitadel_action_execution_response.identity_intent) == 0
+    error_message = "Production is at step 3.1: no gate and no intent hook yet."
+  }
+  assert {
+    condition     = !zitadel_org_idp_github.customers.is_creation_allowed && !zitadel_org_idp_github.customers.is_auto_creation
+    error_message = "Production is at step 3.1: account creation on the customers IdP stays off."
+  }
+}
+
+run "step_3_1_adds_only_the_token_functions" {
+  command = plan
+  variables {
+    identity_hook_token_functions_enabled = true
+    identity_hook_create_gate_enabled     = false
+    identity_hook_intent_enabled          = false
+  }
+  plan_options {
+    target = [
+      zitadel_action_execution_function.identity_token_claims,
+      zitadel_action_execution_request.identity_create_user,
+      zitadel_action_execution_response.identity_intent,
+    ]
+  }
+
+  assert {
+    condition     = toset(keys(zitadel_action_execution_function.identity_token_claims)) == toset(["preuserinfo", "preaccesstoken"])
+    error_message = "Step 3.1 routes preuserinfo and preaccesstoken to the token target."
+  }
+  assert {
+    condition     = length(zitadel_action_execution_request.identity_create_user) == 0 && length(zitadel_action_execution_response.identity_intent) == 0
+    error_message = "Step 3.1 must not add the gate or the intent hook."
+  }
+}
+
+run "step_3_2_gates_every_user_creating_method" {
+  command = plan
+  variables {
+    identity_hook_token_functions_enabled = true
+    identity_hook_create_gate_enabled     = true
+    identity_hook_intent_enabled          = false
+  }
+  plan_options {
+    target = [
+      zitadel_action_execution_request.identity_create_user,
+      zitadel_action_execution_response.identity_intent,
+      zitadel_org_idp_github.customers,
+    ]
+  }
+
+  assert {
+    condition = toset(keys(zitadel_action_execution_request.identity_create_user)) == toset([
+      "/zitadel.user.v2.UserService/CreateUser",
+      "/zitadel.user.v2.UserService/AddHumanUser",
+      "/zitadel.user.v2beta.UserService/AddHumanUser",
+      "/zitadel.resources.user.v3alpha.ZITADELUsers/CreateUser",
+      "/zitadel.management.v1.ManagementService/AddHumanUser",
+      "/zitadel.management.v1.ManagementService/ImportHumanUser",
+      "/zitadel.management.v1.ManagementService/AddMachineUser",
+      "/zitadel.admin.v1.AdminService/ImportData",
+      "/zitadel.user.v2.UserService/AddIDPLink",
+      "/zitadel.user.v2beta.UserService/AddIDPLink",
+      "/zitadel.resources.user.v3alpha.ZITADELUsers/AddIDPAuthenticator",
+      "/zitadel.management.v1.ManagementService/SetUserMetadata",
+      "/zitadel.management.v1.ManagementService/BulkSetUserMetadata",
+      "/zitadel.user.v2.UserService/SetUserMetadata",
+      "/zitadel.user.v2.UserService/UpdateUser",
+    ])
+    error_message = "The creation gate must cover every user-creating, IdP-linking and user-metadata-writing method of ZITADEL v4.19.2 (B0 found v1 ImportHumanUser bypassing a v2-only gate)."
+  }
+  assert {
+    condition     = length(zitadel_action_execution_response.identity_intent) == 0 && zitadel_org_idp_github.customers.is_creation_allowed == false
+    error_message = "Step 3.2 must not open account creation; that is step 3.3."
+  }
+}
+
+run "step_3_3_opens_creation_with_the_intent_hook" {
+  command = plan
+  variables {
+    identity_hook_token_functions_enabled = true
+    identity_hook_create_gate_enabled     = true
+    identity_hook_intent_enabled          = true
+  }
+  plan_options {
+    target = [zitadel_action_execution_response.identity_intent, zitadel_org_idp_github.customers]
+  }
+
+  assert {
+    condition     = length(zitadel_action_execution_response.identity_intent) == 1 && zitadel_action_execution_response.identity_intent[0].method == "/zitadel.user.v2.UserService/RetrieveIdentityProviderIntent"
+    error_message = "Step 3.3 routes the intent response to the hook."
+  }
+  assert {
+    condition     = zitadel_org_idp_github.customers.is_creation_allowed && zitadel_org_idp_github.customers.is_auto_creation
+    error_message = "Step 3.3 opens account creation in the same change as the intent hook."
+  }
+}
+
+run "creation_never_opens_without_the_gate" {
+  command = plan
+  variables {
+    identity_hook_token_functions_enabled = false
+    identity_hook_create_gate_enabled     = false
+    identity_hook_intent_enabled          = true
+  }
+  plan_options {
+    target = [zitadel_org_idp_github.customers]
+  }
+
+  expect_failures = [zitadel_org_idp_github.customers]
 }

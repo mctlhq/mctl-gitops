@@ -543,8 +543,11 @@ the next starts only after the previous smoke test passes.
 2. **Phase 2.** The mctl-api Deployment reads `mctl-api-zitadel-hook` and runs
    a release that has the hook. Check: an unsigned POST to each route answers
    `401`, not `503`. A `503` means the configuration was not read.
-3. **Phase 3, `customers_executions.tf`.** Three toggles, all off by default,
-   turned on one per change:
+3. **Phase 3, `customers_executions.tf`.** Three toggles, all off by default
+   in `variables.tf`. Production sets them in
+   `iac/customers_rollout.auto.tfvars.json`, turned on one per change; the
+   `production_rollout_is_at_step_3_1` test pins the current step and moves
+   with it:
    - **3.1 `identity_hook_token_functions_enabled`.** Routes `preuserinfo` and
      `preaccesstoken`. The target does not interrupt.
      - Smoke: an admin signs in and refreshes a token. Both work, and the

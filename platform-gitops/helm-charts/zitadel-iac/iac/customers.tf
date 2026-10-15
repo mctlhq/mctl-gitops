@@ -9,14 +9,12 @@
 # and `github_id` / `github_login` metadata. The hook refuses everything else.
 #
 # Rollout is phased (docs/runbooks/zitadel.md, "Customers organization and
-# the identity hook"). This file is PHASE 1: the organization, its policy,
-# the clients, the IdP with account creation OFF, and the three Actions v2
-# targets with their signing keys written to mctl-api's Secret. It declares
-# NO executions, so ZITADEL never calls a target and nothing outside
-# `customers` changes; CI fails if an execution appears here
-# (validate-manifests.yml). Phase 2 deploys mctl-api with that Secret;
-# phase 3 (a separate change) adds the executions one step at a time and
-# turns account creation on together with the intent hook.
+# the identity hook"). This file is phase 1: the organization, its policy,
+# the clients, the IdP, and the three Actions v2 targets with their signing
+# keys written to mctl-api's Secret. Phase 2 deploys mctl-api with that
+# Secret. Phase 3 is customers_executions.tf: the executions, each group
+# behind its own toggle, all off by default, and account creation, which
+# opens last.
 #
 # Executions are instance-wide, not per organization. Once phase 3 lands:
 #   - with mctl-api unreachable, every gated method (user creation, IdP
@@ -65,18 +63,18 @@ resource "zitadel_organization_domain" "customers" {
 # secret/platform/zitadel/github-idp (ExternalSecret zitadel-iac-github-idp).
 # The client secret is write-only in the provider: it never enters the state.
 #
-# Account creation is OFF in phase 1: without the intent hook (phase 3.3)
-# Login V2 would fall back to its own registration form, which only
-# allow_register = false stops (B0 baseline). Phase 3.3 turns creation and
-# auto-creation on in the same change as the intent execution, so an account
-# is only ever created in the shape the hook sets. Auto-update is on: it only
-# touches existing accounts, and there are none before phase 3.3. Linking
-# off: a GitHub identity never attaches to an existing account.
+# Account creation follows the intent toggle (phase 3.3,
+# customers_executions.tf): without the intent hook Login V2 would fall back
+# to its own registration form, which only allow_register = false stops (B0
+# baseline), so creation turns on in the same change as the intent
+# execution and an account is only ever created in the shape the hook sets.
+# It also needs the create gate already on, so every creation path is
+# checked (precondition below). Auto-update only touches existing accounts.
+# Linking off: a GitHub identity never attaches to an existing account.
 # Phase 0 (local ZITADEL v4.19.2 against mctl-api 4.89.0, mctl-web
-# docs/plans/site-onboarding-review.md) confirmed both halves: with creation
-# off, a GitHub sign-in ends on "Account Not Found"; with creation on and no
-# intent execution, only Login V2's form check (allow_register) stops it and
-# the API would still create the user. Creation stays off until phase 3.3.
+# docs/plans/site-onboarding-review.md) confirmed that with the hook the
+# account is created without the form, and that with creation on but no
+# intent execution only Login V2's form check would stop it.
 resource "zitadel_org_idp_github" "customers" {
   org_id              = zitadel_org.customers.id
   name                = "GitHub"
@@ -84,10 +82,17 @@ resource "zitadel_org_idp_github" "customers" {
   client_secret       = local.customers_github_idp.client_secret
   scopes              = ["read:user", "user:email"]
   is_linking_allowed  = false
-  is_creation_allowed = false
-  is_auto_creation    = false
+  is_creation_allowed = var.identity_hook_intent_enabled
+  is_auto_creation    = var.identity_hook_intent_enabled
   is_auto_update      = true
   auto_linking        = "AUTO_LINKING_OPTION_UNSPECIFIED"
+
+  lifecycle {
+    precondition {
+      condition     = !var.identity_hook_intent_enabled || var.identity_hook_create_gate_enabled
+      error_message = "Account creation on the customers IdP (identity_hook_intent_enabled) needs the create gate on first (identity_hook_create_gate_enabled): otherwise a creation path exists that the hook does not check."
+    }
+  }
 }
 
 # An organization login policy replaces the instance policy as a whole, so

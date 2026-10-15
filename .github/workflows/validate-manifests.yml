@@ -770,16 +770,16 @@ jobs:
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: tofu test -no-color
 
-      # Customers rollout phase 1 (customers.tf): targets only. An Actions v2
-      # execution is instance-wide; one landing before mctl-api serves the
-      # hook (phase 2) fails user creation in every organization. Phase 3
-      # replaces this guard with per-step toggles.
-      - name: zitadel-iac declares no Actions v2 executions (phase 1)
+      # Customers rollout phase 3: every Actions v2 execution is
+      # instance-wide and lives behind a toggle in customers_executions.tf
+      # (its tests prove the toggles). One declared anywhere else would apply
+      # on the next hourly run with no toggle in front of it.
+      - name: zitadel-iac declares Actions v2 executions only behind the rollout toggles
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: |
           set -euo pipefail
-          if grep -nE '^resource "zitadel_action_execution_' *.tf; then
-            echo "::error::Actions v2 executions are phase 3 of the customers rollout (docs/runbooks/zitadel.md); phase 1 declares targets only."
+          if grep -nE '^resource "zitadel_action_execution_' $(ls *.tf | grep -vx customers_executions.tf); then
+            echo "::error::Actions v2 executions belong in customers_executions.tf, behind a rollout toggle (docs/runbooks/zitadel.md)."
             exit 1
           fi
 

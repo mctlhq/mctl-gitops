@@ -182,3 +182,23 @@ variable "identity_hook_login_client_user_id" {
     error_message = "identity_hook_login_client_user_id must not be empty: the gate would match no caller and refuse every customers account."
   }
 }
+
+# Customers rollout phase 3 toggles (customers_executions.tf). One per
+# change, in order, each after the previous step's smoke test.
+variable "identity_hook_token_functions_enabled" {
+  description = "Phase 3.1: route preuserinfo and preaccesstoken to the identity hook (non-interrupting)."
+  type        = bool
+  default     = false
+}
+
+variable "identity_hook_create_gate_enabled" {
+  description = "Phase 3.2: gate every user-creating, IdP-linking and user-metadata-writing method through the identity hook. Interrupting and instance-wide."
+  type        = bool
+  default     = false
+}
+
+variable "identity_hook_intent_enabled" {
+  description = "Phase 3.3: the intent response hook, and account creation on the customers GitHub IdP. Requires the create gate."
+  type        = bool
+  default     = false
+}
