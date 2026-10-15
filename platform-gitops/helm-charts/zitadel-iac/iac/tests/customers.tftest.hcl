@@ -61,7 +61,7 @@ run "the_idp_never_links_and_creates_nothing_in_phase_1" {
       zitadel_org_idp_github.customers.is_creation_allowed == false &&
       zitadel_org_idp_github.customers.is_auto_creation == false
     )
-    error_message = "A GitHub identity must never attach to an existing account, and phase 1 creates no account: creation turns on only with the intent hook (phase 3.2)."
+    error_message = "A GitHub identity must never attach to an existing account, and phase 1 creates no account: creation turns on only with the intent hook (phase 3.3)."
   }
   assert {
     condition     = contains(tolist(zitadel_org_idp_github.customers.scopes), "user:email")

@@ -65,12 +65,12 @@ resource "zitadel_organization_domain" "customers" {
 # secret/platform/zitadel/github-idp (ExternalSecret zitadel-iac-github-idp).
 # The client secret is write-only in the provider: it never enters the state.
 #
-# Account creation is OFF in phase 1: without the intent hook (phase 3.2)
+# Account creation is OFF in phase 1: without the intent hook (phase 3.3)
 # Login V2 would fall back to its own registration form, which only
-# allow_register = false stops (B0 baseline). Phase 3.2 turns creation and
+# allow_register = false stops (B0 baseline). Phase 3.3 turns creation and
 # auto-creation on in the same change as the intent execution, so an account
 # is only ever created in the shape the hook sets. Auto-update is on: it only
-# touches existing accounts, and there are none before phase 3.2. Linking
+# touches existing accounts, and there are none before phase 3.3. Linking
 # off: a GitHub identity never attaches to an existing account.
 # Phase 0 (local ZITADEL v4.19.2 against mctl-api 4.89.0, mctl-web
 # docs/plans/site-onboarding-review.md) confirmed both halves: with creation
