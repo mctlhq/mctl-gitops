@@ -770,6 +770,19 @@ jobs:
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: tofu test -no-color
 
+      # Customers rollout phase 1 (customers.tf): targets only. An Actions v2
+      # execution is instance-wide; one landing before mctl-api serves the
+      # hook (phase 2) fails user creation in every organization. Phase 3
+      # replaces this guard with per-step toggles.
+      - name: zitadel-iac declares no Actions v2 executions (phase 1)
+        working-directory: platform-gitops/helm-charts/zitadel-iac/iac
+        run: |
+          set -euo pipefail
+          if grep -nE '^resource "zitadel_action_execution_' *.tf; then
+            echo "::error::Actions v2 executions are phase 3 of the customers rollout (docs/runbooks/zitadel.md); phase 1 declares targets only."
+            exit 1
+          fi
+
       # login_texts.json must override every Login V2 text that names
       # Zitadel in the release the zitadel chart pin deploys; a ZITADEL bump
       # that adds one fails here instead of shipping it.

@@ -48,7 +48,7 @@ run "the_login_policy_admits_github_only" {
   }
 }
 
-run "the_idp_creates_but_never_links" {
+run "the_idp_never_links_and_creates_nothing_in_phase_1" {
   command = plan
   plan_options {
     target = [zitadel_org_idp_github.customers]
@@ -58,10 +58,10 @@ run "the_idp_creates_but_never_links" {
     condition = (
       zitadel_org_idp_github.customers.is_linking_allowed == false &&
       zitadel_org_idp_github.customers.auto_linking == "AUTO_LINKING_OPTION_UNSPECIFIED" &&
-      zitadel_org_idp_github.customers.is_creation_allowed == true &&
-      zitadel_org_idp_github.customers.is_auto_creation == true
+      zitadel_org_idp_github.customers.is_creation_allowed == false &&
+      zitadel_org_idp_github.customers.is_auto_creation == false
     )
-    error_message = "A GitHub identity must never attach to an existing account; accounts are created by the hook-shaped intent only."
+    error_message = "A GitHub identity must never attach to an existing account, and phase 1 creates no account: creation turns on only with the intent hook (phase 3.2)."
   }
   assert {
     condition     = contains(tolist(zitadel_org_idp_github.customers.scopes), "user:email")
@@ -105,31 +105,15 @@ run "the_gate_targets_interrupt_and_the_token_target_does_not" {
   }
 }
 
-run "every_user_creating_method_is_gated" {
+run "the_hook_secret_carries_the_login_client_caller" {
   command = plan
   plan_options {
-    target = [zitadel_action_execution_request.identity_create_user]
+    target = [kubernetes_secret_v1_data.mctl_api_zitadel_hook]
   }
 
   assert {
-    condition = toset(keys(zitadel_action_execution_request.identity_create_user)) == toset([
-      "/zitadel.user.v2.UserService/CreateUser",
-      "/zitadel.user.v2.UserService/AddHumanUser",
-      "/zitadel.user.v2beta.UserService/AddHumanUser",
-      "/zitadel.resources.user.v3alpha.ZITADELUsers/CreateUser",
-      "/zitadel.management.v1.ManagementService/AddHumanUser",
-      "/zitadel.management.v1.ManagementService/ImportHumanUser",
-      "/zitadel.management.v1.ManagementService/AddMachineUser",
-      "/zitadel.admin.v1.AdminService/ImportData",
-      "/zitadel.user.v2.UserService/AddIDPLink",
-      "/zitadel.user.v2beta.UserService/AddIDPLink",
-      "/zitadel.resources.user.v3alpha.ZITADELUsers/AddIDPAuthenticator",
-      "/zitadel.management.v1.ManagementService/SetUserMetadata",
-      "/zitadel.management.v1.ManagementService/BulkSetUserMetadata",
-      "/zitadel.user.v2.UserService/SetUserMetadata",
-      "/zitadel.user.v2.UserService/UpdateUser",
-    ])
-    error_message = "The creation gate must cover every user-creating, IdP-linking and user-metadata-writing method of ZITADEL v4.19.2 (B0 found v1 ImportHumanUser bypassing a v2-only gate)."
+    condition     = kubernetes_secret_v1_data.mctl_api_zitadel_hook.data["ZITADEL_HOOK_LOGIN_CLIENT_USER_ID"] == "login-client"
+    error_message = "The gate's allowed caller comes from var.identity_hook_login_client_user_id (default login-client)."
   }
 }
 

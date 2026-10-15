@@ -8,12 +8,20 @@
 # `<login>@mctl.ai`, GitHub's primary verified email, one GitHub IdP link,
 # and `github_id` / `github_login` metadata. The hook refuses everything else.
 #
-# The hook is three Actions v2 targets, each wired to its executions below.
-# Executions are instance-wide, not per organization: the hook itself passes
-# through whatever is not about `customers`. Consequences, accepted in B0:
-#   - with mctl-api unreachable, every v2 CreateUser and the other gated
-#     methods fail in EVERY organization, this root's own user resources
-#     included (provider 3.8.7 creates users through user v2 CreateUser);
+# Rollout is phased (docs/runbooks/zitadel.md, "Customers organization and
+# the identity hook"). This file is PHASE 1: the organization, its policy,
+# the clients, the IdP with account creation OFF, and the three Actions v2
+# targets with their signing keys written to mctl-api's Secret. It declares
+# NO executions, so ZITADEL never calls a target and nothing outside
+# `customers` changes; CI fails if an execution appears here
+# (validate-manifests.yml). Phase 2 deploys mctl-api with that Secret;
+# phase 3 (a separate change) adds the executions one step at a time and
+# turns account creation on together with the intent hook.
+#
+# Executions are instance-wide, not per organization. Once phase 3 lands:
+#   - with mctl-api unreachable, every gated method (user creation, IdP
+#     links, user metadata writes, UpdateUser) fails in EVERY organization,
+#     this root's own user resources included;
 #   - the token functions do not interrupt, so a failing hook issues tokens
 #     without `mctl:*` claims rather than blocking admin tokens too; every
 #     relying party treats a missing `mctl:github_id` as a refusal.
@@ -29,43 +37,7 @@ locals {
   # item 6), and production does not override it.
   identity_hook_base = "https://api.mctl.ai/api/v1/webhooks/zitadel"
 
-  # Login V2 authenticates to the API as the System API user `login-client`
-  # (infra-components/identity/zitadel/login-service-key.yaml). For a System
-  # API user the `userID` ZITADEL puts in an execution payload is the user's
-  # name, so the gate's allowed caller is this literal. The hook logs any
-  # other caller it refuses, which is how a mismatch shows up.
-  login_client_user_id = "login-client"
 
-  # Every user-creating, IdP-linking and metadata-writing method of ZITADEL v4.19.2 that the gate
-  # covers. Re-check this list on every ZITADEL upgrade: a method missing here
-  # is a way into `customers` that skips the hook (B0 found v1
-  # ImportHumanUser bypassing a v2-only gate). The organization-creating
-  # methods (AddOrg, SetUpOrg, AddOrganization) are left out on purpose: they
-  # create users only in a new organization. SCIM is plain HTTP and no
-  # execution covers it.
-  identity_hook_create_methods = toset([
-    "/zitadel.user.v2.UserService/CreateUser",
-    "/zitadel.user.v2.UserService/AddHumanUser",
-    "/zitadel.user.v2beta.UserService/AddHumanUser",
-    "/zitadel.resources.user.v3alpha.ZITADELUsers/CreateUser",
-    "/zitadel.management.v1.ManagementService/AddHumanUser",
-    "/zitadel.management.v1.ManagementService/ImportHumanUser",
-    "/zitadel.management.v1.ManagementService/AddMachineUser",
-    "/zitadel.admin.v1.AdminService/ImportData",
-    # IdP-linking methods: a GitHub link added to an existing user would let
-    # that GitHub account sign in as the user. Management v1 has no add-link
-    # RPC in v4.19.2.
-    "/zitadel.user.v2.UserService/AddIDPLink",
-    "/zitadel.user.v2beta.UserService/AddIDPLink",
-    "/zitadel.resources.user.v3alpha.ZITADELUsers/AddIDPAuthenticator",
-    # Metadata writers: github_id/github_login are pinned after creation.
-    # This routes zitadel-iac's own github_login writes (github-login.tf)
-    # through the hook too; the hook allows them outside customers.
-    "/zitadel.management.v1.ManagementService/SetUserMetadata",
-    "/zitadel.management.v1.ManagementService/BulkSetUserMetadata",
-    "/zitadel.user.v2.UserService/SetUserMetadata",
-    "/zitadel.user.v2.UserService/UpdateUser",
-  ])
 
   # The mctl-web Worker's callbacks. The dev client is for `wrangler dev`
   # only; no production allowlist (mctl-api, the portal, the Worker) may
@@ -93,10 +65,16 @@ resource "zitadel_organization_domain" "customers" {
 # secret/platform/zitadel/github-idp (ExternalSecret zitadel-iac-github-idp).
 # The client secret is write-only in the provider: it never enters the state.
 #
-# Auto-creation and auto-update on, so Login V2 creates the account on the
-# first sign-in and refreshes it on each later one; what it creates is
-# whatever the identity hook put in the intent response. Linking off: a
-# GitHub identity never attaches to an existing account, admin or tenant.
+# Account creation is OFF in phase 1: without the intent hook (phase 3.2)
+# Login V2 would fall back to its own registration form, which only
+# allow_register = false stops (B0 baseline). Phase 3.2 turns creation and
+# auto-creation on in the same change as the intent execution, so an account
+# is only ever created in the shape the hook sets. Auto-update is on: it only
+# touches existing accounts, and there are none before phase 3.2. Linking
+# off: a GitHub identity never attaches to an existing account.
+# TODO(phase 3.2): is_creation_allowed and is_auto_creation follow the
+# intent toggle; confirm with the phase 0 local run that creation without
+# the form still holds against mctl-api's hook.
 resource "zitadel_org_idp_github" "customers" {
   org_id              = zitadel_org.customers.id
   name                = "GitHub"
@@ -104,8 +82,8 @@ resource "zitadel_org_idp_github" "customers" {
   client_secret       = local.customers_github_idp.client_secret
   scopes              = ["read:user", "user:email"]
   is_linking_allowed  = false
-  is_creation_allowed = true
-  is_auto_creation    = true
+  is_creation_allowed = false
+  is_auto_creation    = false
   is_auto_update      = true
   auto_linking        = "AUTO_LINKING_OPTION_UNSPECIFIED"
 }
@@ -198,7 +176,8 @@ resource "zitadel_application_oidc" "mctl_web_dev" {
 
 # ------------------------------------------------------------ identity hook
 #
-# One target per role, each with its own signing key. interrupt_on_error is
+# One target per role, each with its own signing key. A target without an
+# execution is never called (phase 1). interrupt_on_error is
 # in each target's name ON PURPOSE: ZITADEL accepts an UpdateTarget that
 # flips restCall.interruptOnError and changes nothing (B0 item 5), so a flip
 # must replace the target, and a new name forces that. A replace changes the
@@ -233,35 +212,14 @@ resource "zitadel_action_target" "identity_token_claims" {
   payload_type       = "PAYLOAD_TYPE_JSON"
 }
 
-# Login V2 reads this response to decide between creating and updating the
-# user; the hook replaces that decision for the customers GitHub IdP.
-resource "zitadel_action_execution_response" "identity_intent" {
-  method     = "/zitadel.user.v2.UserService/RetrieveIdentityProviderIntent"
-  target_ids = [zitadel_action_target.identity_intent.id]
-}
-
-resource "zitadel_action_execution_request" "identity_create_user" {
-  for_each = local.identity_hook_create_methods
-
-  method     = each.value
-  target_ids = [zitadel_action_target.identity_create_user.id]
-}
-
-resource "zitadel_action_execution_function" "identity_token_claims" {
-  for_each = toset(["preuserinfo", "preaccesstoken"])
-
-  name       = each.value
-  target_ids = [zitadel_action_target.identity_token_claims.id]
-}
-
 # The hook's configuration, for mctl-api's env (ZITADEL_HOOK_*). Everything in
 # it is generated by ZITADEL, so it is not written in git. The Secret is
 # pre-created empty by the admins-mctl-api Application, which lets this Job
 # read and patch it by name only
 # (infra-components/mctl-platform/mctl-api/zitadel-hook.yaml). Nothing reads
-# it until the mctl-api Deployment references it, in a separate change;
-# until then the hook answers 503 and every gated call fails, so that change
-# lands with, not after, the first apply of this file.
+# it until the mctl-api Deployment references it (phase 2). Phase 1 has no
+# executions, so nothing calls the hook before phase 2 is live; phase 3 must
+# not start until mctl-api answers with this configuration.
 resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
   metadata {
     name      = "mctl-api-zitadel-hook"
@@ -271,7 +229,7 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
   data = {
     ZITADEL_HOOK_CUSTOMERS_ORG_ID     = zitadel_org.customers.id
     ZITADEL_HOOK_GITHUB_IDP_ID        = zitadel_org_idp_github.customers.id
-    ZITADEL_HOOK_LOGIN_CLIENT_USER_ID = local.login_client_user_id
+    ZITADEL_HOOK_LOGIN_CLIENT_USER_ID = var.identity_hook_login_client_user_id
     ZITADEL_HOOK_USERNAME_DOMAIN      = local.customers_domain
     # Both mctl-web clients, so development sees the same claims. A dev token
     # is still refused in production: every production relying party checks

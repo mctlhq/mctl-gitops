@@ -159,3 +159,25 @@ variable "customers_github_idp" {
     error_message = "customers_github_idp must be JSON {client_id, client_secret} with both non-empty; zitadel-iac-github-idp resolved nothing usable from Vault secret/platform/zitadel/github-idp."
   }
 }
+
+variable "identity_hook_login_client_user_id" {
+  description = <<-EOT
+    The caller id the identity hook's creation gate allows to create
+    `customers` accounts: Login V2's API identity, as ZITADEL puts it in an
+    execution payload's `userID`. Login V2 authenticates as the System API
+    user `login-client` (infra-components/identity/zitadel/login-service-key.yaml).
+    A System API user lives in the runtime configuration, not in the
+    database, so no provider data source can look it up; it is a value here.
+  EOT
+  type        = string
+  default     = "login-client"
+  # TODO(phase 0): confirm from the local run of ZITADEL v4.19.2 against
+  # mctl-api 4.89.0 that the payload's userID for Login V2 is this literal
+  # and not a numeric id; change the default if it is not. A wrong value
+  # fails closed: the gate refuses every customers account creation.
+
+  validation {
+    condition     = length(trimspace(var.identity_hook_login_client_user_id)) > 0
+    error_message = "identity_hook_login_client_user_id must not be empty: the gate would match no caller and refuse every customers account."
+  }
+}
