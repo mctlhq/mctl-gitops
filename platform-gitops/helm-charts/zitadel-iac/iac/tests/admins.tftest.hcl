@@ -17,8 +17,9 @@ mock_provider "zitadel" {
 mock_provider "kubernetes" {}
 
 variables {
-  tenant_users  = "{\"erpact\": \"{\\\"tuser\\\": \\\"{\\\\\\\"email\\\\\\\": \\\\\\\"t@example.com\\\\\\\", \\\\\\\"first_name\\\\\\\": \\\\\\\"T\\\\\\\", \\\\\\\"last_name\\\\\\\": \\\\\\\"U\\\\\\\"}\\\"}\"}"
-  smtp_password = "test"
+  tenant_users         = "{\"erpact\": \"{\\\"tuser\\\": \\\"{\\\\\\\"email\\\\\\\": \\\\\\\"t@example.com\\\\\\\", \\\\\\\"first_name\\\\\\\": \\\\\\\"T\\\\\\\", \\\\\\\"last_name\\\\\\\": \\\\\\\"U\\\\\\\"}\\\"}\"}"
+  smtp_password        = "test"
+  customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
 }
 
 run "login_name_defaults_to_the_key" {

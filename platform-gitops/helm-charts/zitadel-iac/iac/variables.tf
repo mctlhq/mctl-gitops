@@ -135,3 +135,27 @@ variable "smtp_password" {
   type        = string
   sensitive   = true
 }
+
+variable "customers_github_idp" {
+  description = <<-EOT
+    The GitHub OAuth App of the customers organization's IdP (customers.tf),
+    as JSON {client_id, client_secret}: the Vault secret
+    secret/platform/zitadel/github-idp, through ExternalSecret
+    zitadel-iac-github-idp. The secret is write-only in the provider and
+    never enters the state.
+  EOT
+  type        = string
+  sensitive   = true
+
+  # A missing or empty field is a failed read, not "no IdP": planning it
+  # would rewrite the IdP with an empty credential and break every customer
+  # sign-in.
+  validation {
+    condition = try(
+      length(trimspace(jsondecode(var.customers_github_idp).client_id)) > 0 &&
+      length(trimspace(jsondecode(var.customers_github_idp).client_secret)) > 0,
+      false
+    )
+    error_message = "customers_github_idp must be JSON {client_id, client_secret} with both non-empty; zitadel-iac-github-idp resolved nothing usable from Vault secret/platform/zitadel/github-idp."
+  }
+}

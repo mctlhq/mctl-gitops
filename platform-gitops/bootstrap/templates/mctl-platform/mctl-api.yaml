@@ -420,6 +420,12 @@ spec:
       name: mctl-api-oidc-zitadel
       jsonPointers:
         - /data
+    # Written by the zitadel-iac Job (customers.tf): the identity hook's
+    # configuration (infra-components/mctl-platform/mctl-api/zitadel-hook.yaml).
+    - kind: Secret
+      name: mctl-api-zitadel-hook
+      jsonPointers:
+        - /data
     # ESO admission webhook injects defaults absent in git, plus legacy
     # last-applied-configuration annotations can pin stale apiVersion across
     # chart churn. Mirror the tenants ApplicationSet pattern.

@@ -14,7 +14,8 @@ mock_provider "zitadel" {
 mock_provider "kubernetes" {}
 
 variables {
-  smtp_password = "test"
+  smtp_password        = "test"
+  customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
   platform_admins = jsonencode({
     admin = jsonencode({ email = "p@example.com", first_name = "P", last_name = "A" })
   })

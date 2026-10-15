@@ -14,7 +14,8 @@ mock_provider "zitadel" {
 mock_provider "kubernetes" {}
 
 variables {
-  smtp_password = "test"
+  smtp_password        = "test"
+  customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
   # A valid value, as in the other test files: targeted plans prune the
   # validation of platform_admins today, which nothing here should rely on.
   platform_admins = jsonencode({

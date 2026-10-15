@@ -54,6 +54,14 @@ containers:
           secretKeyRef:
             name: zitadel-iac-smtp
             key: password
+      # The customers GitHub IdP's OAuth App (customers.tf). Not optional
+      # either: without it the run stops instead of planning the IdP with an
+      # empty credential.
+      - name: TF_VAR_customers_github_idp
+        valueFrom:
+          secretKeyRef:
+            name: zitadel-iac-github-idp
+            key: github-idp.json
     command: ["/bin/sh", "-c"]
     args:
       - |
