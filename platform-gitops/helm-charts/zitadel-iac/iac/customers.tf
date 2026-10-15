@@ -72,9 +72,11 @@ resource "zitadel_organization_domain" "customers" {
 # is only ever created in the shape the hook sets. Auto-update is on: it only
 # touches existing accounts, and there are none before phase 3.2. Linking
 # off: a GitHub identity never attaches to an existing account.
-# TODO(phase 3.2): is_creation_allowed and is_auto_creation follow the
-# intent toggle; confirm with the phase 0 local run that creation without
-# the form still holds against mctl-api's hook.
+# Phase 0 (local ZITADEL v4.19.2 against mctl-api 4.89.0, mctl-web
+# docs/plans/site-onboarding-review.md) confirmed both halves: with creation
+# off, a GitHub sign-in ends on "Account Not Found"; with creation on and no
+# intent execution, only Login V2's form check (allow_register) stops it and
+# the API would still create the user. Creation stays off until phase 3.3.
 resource "zitadel_org_idp_github" "customers" {
   org_id              = zitadel_org.customers.id
   name                = "GitHub"
