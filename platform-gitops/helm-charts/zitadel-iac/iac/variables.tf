@@ -171,10 +171,11 @@ variable "identity_hook_login_client_user_id" {
   EOT
   type        = string
   default     = "login-client"
-  # TODO(phase 0): confirm from the local run of ZITADEL v4.19.2 against
-  # mctl-api 4.89.0 that the payload's userID for Login V2 is this literal
-  # and not a numeric id; change the default if it is not. A wrong value
-  # fails closed: the gate refuses every customers account creation.
+  # Phase 0 confirmed: against ZITADEL v4.19.2 the execution payload's
+  # userID for Login V2 is this literal, not a numeric id; a numeric value
+  # made the gate refuse sign-up. Change it only if the System API user is
+  # renamed or Login V2 moves to a machine user. A wrong value fails closed:
+  # the gate refuses every customers account creation.
 
   validation {
     condition     = length(trimspace(var.identity_hook_login_client_user_id)) > 0

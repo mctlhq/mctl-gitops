@@ -71,8 +71,10 @@ resource "zitadel_organization_domain" "customers" {
 # It also needs the create gate already on, so every creation path is
 # checked (precondition below). Auto-update only touches existing accounts.
 # Linking off: a GitHub identity never attaches to an existing account.
-# TODO(phase 0): confirm with the local run of ZITADEL v4.19.2 against
-# mctl-api that creation without the form holds against mctl-api's hook.
+# Phase 0 (local ZITADEL v4.19.2 against mctl-api 4.89.0, mctl-web
+# docs/plans/site-onboarding-review.md) confirmed that with the hook the
+# account is created without the form, and that with creation on but no
+# intent execution only Login V2's form check would stop it.
 resource "zitadel_org_idp_github" "customers" {
   org_id              = zitadel_org.customers.id
   name                = "GitHub"
