@@ -35,7 +35,7 @@ Exit codes follow the roadmap convention:
 `load_base_from_git(repo, ref, subdir)` uses fixed argv with no shell:
 
 1. Resolve `REF^{commit}` with `git rev-parse --verify --quiet`. Failure is `base-unresolvable`; include a shallow-checkout hint when applicable.
-2. Enumerate the manifest tree **recursively** with `git ls-tree -rz --name-only REF -- roadmap/epics/`. The `-r` is required: without it, Git may return the directory tree entry rather than its manifest blobs, which would make an existing base look empty.
+2. Enumerate the manifest tree **recursively** with `git ls-tree -rz --name-only REF -- roadmap/epics/`, then keep only paths ending in `.yaml` or `.yml`. The `-r` is required: without it, Git may return the directory tree entry rather than its manifest blobs, which would make an existing base look empty. The extension filter is required too: a non-manifest file under `roadmap/epics/` at the base (a `README`, a `.gitkeep`) is not a manifest and must not reach the structural check, or the guard would exit 2 on something that is not a lifecycle violation. A non-zero `ls-tree` exit is `base-unreadable` and names the subdir. An empty filtered listing after a successful `ls-tree` is a valid observation (no manifests in base), not an error.
 3. Read each YAML blob with `git show REF:<path>`. Failure is `base-unreadable` and names the path.
 4. Parse YAML and perform the minimal historical structural validation needed by this guard: mapping root; `metadata.name`; `spec.lifecycle`; `spec.workItems`; each item has string `id` and boolean `required`. Historical manifests are not forced through today's full schema. Invalid historical input is `base-malformed`.
 

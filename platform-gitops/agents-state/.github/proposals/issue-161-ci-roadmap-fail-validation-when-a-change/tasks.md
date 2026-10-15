@@ -4,7 +4,7 @@
 - [ ] 2. Implement `roadmap/scripts/lifecycle_guard.py` with:
   - `BaseError` and exit-code mapping 0/1/2;
   - `load_base_from_git` using fixed argv/no shell;
-  - recursive base enumeration via `git ls-tree -rz --name-only`;
+  - recursive base enumeration via `git ls-tree -rz --name-only`, filtered to `*.yaml`/`*.yml`; a non-zero `ls-tree` exit is `base-unreadable`, an empty filtered listing is a valid empty base;
   - `load_base_from_dir` for tests;
   - head validation through both `validate.validate_document` and `validate.corpus_errors`;
   - pure `check()` returning `RequiredItemAdded`, `RequiredFlagRaised` and `BornCompletedUnverified`.
@@ -42,6 +42,8 @@
 - [ ] T10. Git base loader:
   - temp repository parent/head path works;
   - multiple YAML manifests under `roadmap/epics/` are all enumerated;
+  - a non-manifest file (for example a `README`) under `roadmap/epics/` at the base is ignored, not reported as `base-malformed`;
+  - a base with the directory but no manifests loads as an empty base;
   - a test fails if recursive `-r` is removed from `git ls-tree`.
 - [ ] T11. Exit-2 errors have distinct prefixes:
   - unknown/missing base -> `base-unresolvable:`;
