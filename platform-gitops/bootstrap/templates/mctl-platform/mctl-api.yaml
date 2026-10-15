@@ -282,9 +282,8 @@ spec:
           # first writes the Secret, and after each key rotation
           # (docs/runbooks/zitadel.md). Needs the chart slot from
           # mctlhq/mctl-api#635; an older chart ignores the value.
-          # TODO(phase 0): the hook needs mctl-api 4.89.0 or later. If the
-          # local phase 0 validation ships a fix, raise image.tag to that
-          # release before the first zitadel-iac apply.
+          # The hook needs mctl-api 4.89.0 or later; phase 0 validated
+          # 4.89.0 as released against a local ZITADEL v4.19.2.
           envFromOptionalSecrets:
             - mctl-api-zitadel-hook
 
