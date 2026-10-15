@@ -50,6 +50,11 @@ run "the_login_policy_admits_github_only" {
 
 run "the_idp_never_links_and_creates_nothing_by_default" {
   command = plan
+  variables {
+    identity_hook_token_functions_enabled = false
+    identity_hook_create_gate_enabled     = false
+    identity_hook_intent_enabled          = false
+  }
   plan_options {
     target = [zitadel_org_idp_github.customers]
   }
@@ -155,6 +160,13 @@ run "the_clients_are_separate_public_pkce_clients" {
 
 run "no_execution_exists_with_every_toggle_off" {
   command = plan
+  # Explicit: customers_rollout.auto.tfvars.json sets the production values,
+  # and tofu test loads it like a run does.
+  variables {
+    identity_hook_token_functions_enabled = false
+    identity_hook_create_gate_enabled     = false
+    identity_hook_intent_enabled          = false
+  }
   plan_options {
     target = [
       zitadel_action_execution_function.identity_token_claims,
@@ -173,10 +185,40 @@ run "no_execution_exists_with_every_toggle_off" {
   }
 }
 
+# What production runs: the toggles as customers_rollout.auto.tfvars.json
+# sets them. Step 3.1 is on; the gate, the intent hook and account creation
+# stay off until their own change.
+run "production_rollout_is_at_step_3_1" {
+  command = plan
+  plan_options {
+    target = [
+      zitadel_action_execution_function.identity_token_claims,
+      zitadel_action_execution_request.identity_create_user,
+      zitadel_action_execution_response.identity_intent,
+      zitadel_org_idp_github.customers,
+    ]
+  }
+
+  assert {
+    condition     = toset(keys(zitadel_action_execution_function.identity_token_claims)) == toset(["preuserinfo", "preaccesstoken"])
+    error_message = "Production is at step 3.1: preuserinfo and preaccesstoken route to the token target."
+  }
+  assert {
+    condition     = length(zitadel_action_execution_request.identity_create_user) == 0 && length(zitadel_action_execution_response.identity_intent) == 0
+    error_message = "Production is at step 3.1: no gate and no intent hook yet."
+  }
+  assert {
+    condition     = !zitadel_org_idp_github.customers.is_creation_allowed && !zitadel_org_idp_github.customers.is_auto_creation
+    error_message = "Production is at step 3.1: account creation on the customers IdP stays off."
+  }
+}
+
 run "step_3_1_adds_only_the_token_functions" {
   command = plan
   variables {
     identity_hook_token_functions_enabled = true
+    identity_hook_create_gate_enabled     = false
+    identity_hook_intent_enabled          = false
   }
   plan_options {
     target = [
@@ -201,6 +243,7 @@ run "step_3_2_gates_every_user_creating_method" {
   variables {
     identity_hook_token_functions_enabled = true
     identity_hook_create_gate_enabled     = true
+    identity_hook_intent_enabled          = false
   }
   plan_options {
     target = [
@@ -260,7 +303,9 @@ run "step_3_3_opens_creation_with_the_intent_hook" {
 run "creation_never_opens_without_the_gate" {
   command = plan
   variables {
-    identity_hook_intent_enabled = true
+    identity_hook_token_functions_enabled = false
+    identity_hook_create_gate_enabled     = false
+    identity_hook_intent_enabled          = true
   }
   plan_options {
     target = [zitadel_org_idp_github.customers]
