@@ -186,9 +186,9 @@ run "no_execution_exists_with_every_toggle_off" {
 }
 
 # What production runs: the toggles as customers_rollout.auto.tfvars.json
-# sets them. Steps 3.1 and 3.2 are on; the intent hook and account creation
-# stay off until their own change.
-run "production_rollout_is_at_step_3_2" {
+# sets them. Every phase 3 step is on: the token functions, the creation
+# gate, the intent hook and account creation on the customers IdP.
+run "production_rollout_is_at_step_3_3" {
   command = plan
   plan_options {
     target = [
@@ -201,19 +201,19 @@ run "production_rollout_is_at_step_3_2" {
 
   assert {
     condition     = toset(keys(zitadel_action_execution_function.identity_token_claims)) == toset(["preuserinfo", "preaccesstoken"])
-    error_message = "Production is at step 3.2: preuserinfo and preaccesstoken route to the token target."
+    error_message = "Production is at step 3.3: preuserinfo and preaccesstoken route to the token target."
   }
   assert {
     condition     = length(zitadel_action_execution_request.identity_create_user) == 15
-    error_message = "Production is at step 3.2: the creation gate covers all 15 methods."
+    error_message = "Production is at step 3.3: the creation gate covers all 15 methods."
   }
   assert {
-    condition     = length(zitadel_action_execution_response.identity_intent) == 0
-    error_message = "Production is at step 3.2: no intent hook yet."
+    condition     = length(zitadel_action_execution_response.identity_intent) == 1
+    error_message = "Production is at step 3.3: the intent response routes to the hook."
   }
   assert {
-    condition     = !zitadel_org_idp_github.customers.is_creation_allowed && !zitadel_org_idp_github.customers.is_auto_creation
-    error_message = "Production is at step 3.2: account creation on the customers IdP stays off."
+    condition     = zitadel_org_idp_github.customers.is_creation_allowed && zitadel_org_idp_github.customers.is_auto_creation
+    error_message = "Production is at step 3.3: account creation on the customers IdP is on."
   }
 }
 
