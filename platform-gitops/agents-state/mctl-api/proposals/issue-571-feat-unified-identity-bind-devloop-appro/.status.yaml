@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-10-13T17:00:00Z'
+status: merged
+updated_at: '2026-10-15T07:12:51Z'
 updated_by: mashkovd
 source:
   type: github_issue
@@ -8,10 +8,14 @@ source:
   url: https://github.com/mctlhq/mctl-api/issues/571
 control:
   requires_human_approval: true
+pr: https://github.com/mctlhq/mctl-api/pull/625
+merged_at: '2026-10-14T06:35:26Z'
+merge_commit: 79ca6326131e932d8b907a2d1fb719492c214532
 notes: >-
-  Hand-written proposal (a Claude Code session working for the owner on
-  mctlhq/.github#91) for #376 Slice C, carrying the owner's five decisions
-  of 2026-10-13, and D6 (owner, same day): every DevLoop resolves or
-  idempotently creates the issue's work item and attaches its we_ execution
-  (engine=temporal, engine_ref=workflow_id).
-  Awaiting owner approval; nothing is implemented.
+  Reconciled to the live implementation. This hand-written proposal was
+  intentionally kept at proposed and was never accepted through agents-state;
+  no approval block is fabricated here. The mctl-api Slice C contract was
+  implemented by hand across PRs #623, #626, #627, #628 and #630, then shipped
+  in release PR #625 (mctl-api 4.88.0); issue #571 is closed completed. The
+  remaining #376 critical path is mctl-agents#636 -> natural DevLoop E2E ->
+  owner-gated legacy-relay disable. No implementer retry for #571 is pending.
