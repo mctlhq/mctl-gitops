@@ -121,8 +121,11 @@ run "every_user_creating_method_is_gated" {
       "/zitadel.management.v1.ManagementService/ImportHumanUser",
       "/zitadel.management.v1.ManagementService/AddMachineUser",
       "/zitadel.admin.v1.AdminService/ImportData",
+      "/zitadel.user.v2.UserService/AddIDPLink",
+      "/zitadel.user.v2beta.UserService/AddIDPLink",
+      "/zitadel.resources.user.v3alpha.ZITADELUsers/AddIDPAuthenticator",
     ])
-    error_message = "The creation gate must cover every user-creating method of ZITADEL v4.19.2 (B0 found v1 ImportHumanUser bypassing a v2-only gate)."
+    error_message = "The creation gate must cover every user-creating and IdP-linking method of ZITADEL v4.19.2 (B0 found v1 ImportHumanUser bypassing a v2-only gate)."
   }
 }
 
