@@ -104,6 +104,12 @@ image:
 #   per tenant organization, user grants for users whose Vault entry declares
 #   "anthropic": true): no new action; all creates. Removing a tenant plans a
 #   destroy of its grant, which allowedDeletes refuses until listed.
+#   Customers organization (customers.tf, mctl-web onboarding B1: the org and
+#   its mctl.ai domain, the GitHub IdP, the org login policy, the mctl-web and
+#   mctl-web-dev projects and clients, three Actions v2 targets with no
+#   executions yet (phase 1), the data of mctl-api/mctl-api-zitadel-hook): no
+#   new action; all creates. Flipping a target's interrupt_on_error renames it, which
+#   plans a replace that allowedDeletes refuses until the address is listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"

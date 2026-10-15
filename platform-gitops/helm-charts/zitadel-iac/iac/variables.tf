@@ -135,3 +135,50 @@ variable "smtp_password" {
   type        = string
   sensitive   = true
 }
+
+variable "customers_github_idp" {
+  description = <<-EOT
+    The GitHub OAuth App of the customers organization's IdP (customers.tf),
+    as JSON {client_id, client_secret}: the Vault secret
+    secret/platform/zitadel/github-idp, through ExternalSecret
+    zitadel-iac-github-idp. The secret is write-only in the provider and
+    never enters the state.
+  EOT
+  type        = string
+  sensitive   = true
+
+  # A missing or empty field is a failed read, not "no IdP": planning it
+  # would rewrite the IdP with an empty credential and break every customer
+  # sign-in.
+  validation {
+    condition = try(
+      length(trimspace(jsondecode(var.customers_github_idp).client_id)) > 0 &&
+      length(trimspace(jsondecode(var.customers_github_idp).client_secret)) > 0,
+      false
+    )
+    error_message = "customers_github_idp must be JSON {client_id, client_secret} with both non-empty; zitadel-iac-github-idp resolved nothing usable from Vault secret/platform/zitadel/github-idp."
+  }
+}
+
+variable "identity_hook_login_client_user_id" {
+  description = <<-EOT
+    The caller id the identity hook's creation gate allows to create
+    `customers` accounts: Login V2's API identity, as ZITADEL puts it in an
+    execution payload's `userID`. Login V2 authenticates as the System API
+    user `login-client` (infra-components/identity/zitadel/login-service-key.yaml).
+    A System API user lives in the runtime configuration, not in the
+    database, so no provider data source can look it up; it is a value here.
+  EOT
+  type        = string
+  default     = "login-client"
+  # Phase 0 confirmed: against ZITADEL v4.19.2 the execution payload's
+  # userID for Login V2 is this literal, not a numeric id; a numeric value
+  # made the gate refuse sign-up. Change it only if the System API user is
+  # renamed or Login V2 moves to a machine user. A wrong value fails closed:
+  # the gate refuses every customers account creation.
+
+  validation {
+    condition     = length(trimspace(var.identity_hook_login_client_user_id)) > 0
+    error_message = "identity_hook_login_client_user_id must not be empty: the gate would match no caller and refuse every customers account."
+  }
+}

@@ -521,6 +521,118 @@ user without the claim is refused there, never matched by e-mail.
   `bootstrap/templates/mctl-platform/mctl-portal.yaml` that also has to
   reference the Secret. Setting it back to `github` is the rollback.
 
+### Customers organization and the identity hook (mctl-web onboarding B1)
+
+Self-service accounts live in the `customers` organization
+(`helm-charts/zitadel-iac/iac/customers.tf`). A first GitHub sign-in creates
+`<login>@mctl.ai`, a login name and not a mailbox, in the shape the identity
+hook in mctl-api sets: mctl-api `docs/zitadel-identity-hook.md`, routes
+`https://api.mctl.ai/api/v1/webhooks/zitadel/{intent,create-user,token-claims}`.
+The plan and the B0 evidence are in mctlhq/mctl-web
+`docs/plans/site-onboarding-review.md`.
+
+**Rollout order.** Do not skip or merge steps. Each one is its own change, and
+the next starts only after the previous smoke test passes.
+
+1. **Phase 1, `customers.tf`.** It creates the organization, the login policy,
+   the `mctl-web` and `mctl-web-dev` clients, the GitHub IdP with account
+   creation off, and three Actions v2 targets. The targets' signing keys are
+   written to `mctl-api/mctl-api-zitadel-hook`. There are no executions, so
+   ZITADEL calls nothing and no other organization changes. CI fails if an
+   execution is declared outside `customers_executions.tf`.
+2. **Phase 2.** The mctl-api Deployment reads `mctl-api-zitadel-hook` and runs
+   a release that has the hook. Check: an unsigned POST to each route answers
+   `401`, not `503`. A `503` means the configuration was not read.
+3. **Phase 3, `customers_executions.tf`.** Three toggles, all off by default,
+   turned on one per change:
+   - **3.1 `identity_hook_token_functions_enabled`.** Routes `preuserinfo` and
+     `preaccesstoken`. The target does not interrupt.
+     - Smoke: an admin signs in and refreshes a token. Both work, and the
+       tokens carry no `mctl:*` claims.
+   - **3.2 `identity_hook_create_gate_enabled`.** Gates the 15 methods listed
+     in `customers_executions.tf`. It interrupts and is instance-wide.
+     - Smoke, all in the admin organization:
+       - the next zitadel-iac run plans and applies cleanly;
+       - creating and deleting a throwaway machine user works;
+       - an `UpdateUser` on an admin works;
+       - a `github_login` metadata write works.
+     - Each call gets a `200` in mctl-api's hook log.
+   - **3.3 `identity_hook_intent_enabled`.** Adds the intent response hook and
+     turns on account creation on the customers IdP. The IdP refuses to plan
+     creation while the gate is off.
+     - Smoke: the B1 acceptance tests with the test group.
+4. **B1b, separate.** Project grants for `customers` to the portal and
+   mctl-api, only after C0 and C2 are live.
+
+**Blast radius once step 3.2 is on.** The gate is an interrupting request
+execution, and executions are instance-wide. While mctl-api is unreachable or
+answers `503`, these fail in **every** organization:
+- user creation (v1, v2, v2beta, v3alpha, admin `ImportData`);
+- IdP links;
+- user metadata writes;
+- `UpdateUser` profile edits;
+- the zitadel-iac users this root creates and its `github_login` writes.
+
+Sign-in, password and TOTP for existing users, and token issuance keep
+working. The token functions do not interrupt, so tokens come out without
+`mctl:*` claims, and relying parties refuse a customer token that lacks
+`mctl:github_id`. Customer sign-up stops: the intent hook interrupts. When
+an execution fails, the failure page's `error` parameter shows the hook's
+URL. That URL is public anyway.
+
+The hook also answers `503` when it cannot read the gitops checkout it
+checks reserved logins against, or when a tenant member has no `userId`
+(mctl-api docs, "Reserved logins"). Either one stops every customer sign-up.
+
+**Kill switch.**
+1. As a platform admin in the console (Actions → Executions), delete the
+   execution groups in reverse rollout order: intent, then the gate, then
+   the token functions. This takes effect immediately.
+2. Turn the toggle off in git. Otherwise the next hourly zitadel-iac run
+   recreates the executions. Turning a toggle off plans destroys, so list the
+   addresses in `allowedDeletes` in the same change, then empty it once
+   applied.
+
+Deleting the targets is not needed: a target without an execution is never
+called.
+
+**A reused GitHub login.** A new GitHub account that takes a login an older
+customer account still holds fails with "User already exists" (Login V2
+`V3-DKcYh`). This fails closed; nobody is signed in as the old account.
+1. Confirm from the old account's `github_id` metadata that it belongs to a
+   different GitHub account.
+2. Rename the old account's username, or delete the account if its owner
+   is gone.
+3. Ask the new person to sign in again.
+
+Never edit `github_id`: the gate refuses it in every organization, by design.
+
+**Signing key rotation.** Each target has its own key, generated by ZITADEL
+and written to `mctl-api-zitadel-hook`. ZITADEL cannot rotate a key in
+place, so rotate by replacing the target:
+1. Rename the target in `customers.tf`. This plans a replace, so list the
+   address in `allowedDeletes`.
+2. Before applying, put the current key and the coming key in the
+   `ZITADEL_HOOK_*_SIGNING_KEYS` CSV. The hook accepts every listed key.
+3. Apply, so the Job writes the new key.
+4. Restart mctl-api, then drop the old key.
+
+The same replace is needed to flip a target's `interrupt_on_error`: ZITADEL
+accepts that update and ignores it (B0 item 5). That is why the flag is part
+of each target's name.
+
+**State.** The three signing keys are computed attributes, so they are in the
+zitadel-iac state (backend `kubernetes`, namespace `zitadel`) as well as in
+`mctl-api-zitadel-hook`. The GitHub client secret is write-only and is not in
+state. Its source is Vault `secret/platform/zitadel/github-idp`
+(`client_id`, `client_secret`), read by ExternalSecret `zitadel-iac-github-idp`.
+
+**ZITADEL upgrades.** Re-check the gated method list in
+`customers_executions.tf` against the new release's protos before bumping. A
+new user-creating, IdP-linking or metadata-writing RPC is a path into
+`customers` that skips the hook. SCIM is not covered by any execution:
+`customers` must not get SCIM provisioning.
+
 ## Sync hooks instead of Helm hooks
 
 The chart ships `zitadel-init` and `zitadel-setup` as Helm pre-install hooks.
