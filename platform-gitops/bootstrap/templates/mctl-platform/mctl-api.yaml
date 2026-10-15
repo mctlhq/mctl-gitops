@@ -273,6 +273,19 @@ spec:
           # missing key cannot take DB_PASSWORD down with it
           # (mctl-api-secrets.yaml).
           envFromExtraSecret: mctl-api-events
+          # Identity hook config for mctl-web onboarding (mctlhq/mctl-api#633,
+          # docs/zitadel-identity-hook.md): ZITADEL_HOOK_* and the three
+          # target signing keys, written by zitadel-iac once it creates the
+          # targets (helm-charts/zitadel-iac/iac/customers.tf). Optional: the
+          # pod starts without it and the hook routes answer 503. envFrom is
+          # read at container start, so bump ROLLOUT_MARKER after zitadel-iac
+          # first writes the Secret, and after each key rotation
+          # (docs/runbooks/zitadel.md). Needs the chart slot from
+          # mctlhq/mctl-api#635; an older chart ignores the value.
+          # The hook needs mctl-api 4.89.0 or later; phase 0 validated
+          # 4.89.0 as released against a local ZITADEL v4.19.2.
+          envFromOptionalSecrets:
+            - mctl-api-zitadel-hook
 
           # The GitHub App installation token, mounted as a FILE. mctl-api
           # reads GITHUB_APP_TOKEN_FILE per use (internal/ghtoken), which is
