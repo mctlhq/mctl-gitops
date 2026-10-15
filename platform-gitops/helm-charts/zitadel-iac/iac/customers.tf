@@ -36,7 +36,7 @@ locals {
   # other caller it refuses, which is how a mismatch shows up.
   login_client_user_id = "login-client"
 
-  # Every user-creating and IdP-linking method of ZITADEL v4.19.2 that the creation gate
+  # Every user-creating, IdP-linking and metadata-writing method of ZITADEL v4.19.2 that the gate
   # covers. Re-check this list on every ZITADEL upgrade: a method missing here
   # is a way into `customers` that skips the hook (B0 found v1
   # ImportHumanUser bypassing a v2-only gate). The organization-creating
@@ -58,6 +58,13 @@ locals {
     "/zitadel.user.v2.UserService/AddIDPLink",
     "/zitadel.user.v2beta.UserService/AddIDPLink",
     "/zitadel.resources.user.v3alpha.ZITADELUsers/AddIDPAuthenticator",
+    # Metadata writers: github_id/github_login are pinned after creation.
+    # This routes zitadel-iac's own github_login writes (github-login.tf)
+    # through the hook too; the hook allows them outside customers.
+    "/zitadel.management.v1.ManagementService/SetUserMetadata",
+    "/zitadel.management.v1.ManagementService/BulkSetUserMetadata",
+    "/zitadel.user.v2.UserService/SetUserMetadata",
+    "/zitadel.user.v2.UserService/UpdateUser",
   ])
 
   # The mctl-web Worker's callbacks. The dev client is for `wrangler dev`
