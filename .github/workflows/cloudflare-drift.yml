@@ -259,8 +259,12 @@ jobs:
           ROOT: ${{ matrix.root }}
         run: |
           set +e
-          tofu plan -input=false -no-color -lock=false -detailed-exitcode | tee plan.txt
+          # stderr into its own file, replayed into the log after the plan:
+          # warnings and errors go there, and tokens/check.tf's check block
+          # result is read from it below.
+          tofu plan -input=false -no-color -lock=false -detailed-exitcode 2>plan.err | tee plan.txt
           code=${PIPESTATUS[0]}
+          cat plan.err >&2
           set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
@@ -293,13 +297,14 @@ jobs:
                  # about tokens whose scope the provider cannot read. That is
                  # an unknown, so it is surfaced here, never folded into
                  # "in sync".
-                 if grep -q 'Check block assertion failed' plan.txt; then
-                   unverified=$(grep -o 'not verified for: .*' plan.txt | head -n 1)
-                   echo "::warning title=Cloudflare tokens::\`$ROOT\`: scope $unverified"
+                 # OpenTofu writes warnings to stderr, which plan.txt does not
+                 # hold, so the check result is read from its own file.
+                 if grep -q 'Check block assertion failed' plan.err; then
+                   echo "::warning title=Cloudflare tokens::\`$ROOT\`: the scope of some tokens is not verified (check token_scopes_observable in the plan log)"
                    { echo "### \`$ROOT\` — in sync except UNVERIFIED scopes (checks only)";
                      echo;
                      echo "> [!WARNING]";
-                     echo "> Scope $unverified. For those tokens only name, status and permission groups were compared."; } >> "$GITHUB_STEP_SUMMARY"
+                     echo "> The provider returned no resources for some tokens, so only their name, status and permission groups were compared. Which ones: check \`token_scopes_observable\` in the plan log."; } >> "$GITHUB_STEP_SUMMARY"
                  else
                    echo "### \`$ROOT\` — in sync (checks only: the live token list matches the manifest)" >> "$GITHUB_STEP_SUMMARY"
                  fi
@@ -327,9 +332,10 @@ jobs:
             *) { echo "### \`$ROOT\` — plan failed (exit $code)";
                  echo; echo '```terraform';
                  cat plan.txt 2>/dev/null || echo "(no plan output captured)";
+                 cat plan.err 2>/dev/null || true;
                  echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
           esac
-          rm -f plan.txt
+          rm -f plan.txt plan.err
           exit "$code"
 
       # The one field OpenTofu cannot watch. `auth_credentials` is write-only:
