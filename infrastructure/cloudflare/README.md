@@ -323,11 +323,14 @@ Nothing is committed. CI reads:
   for `infrastructure/k3s-preview` and passes it into the cluster as
   `TF_VAR_etcd_s3_*`, so it has consumers outside this directory entirely.
   Never exposed to a job that plans unreviewed pull-request code.
-- `CLOUDFLARE_API_TOKEN` — plan identity, **read-only across all zones**
-  (`Cache Rules`, `DNS`, `Zone`, `Zone Settings`, `Zone WAF`, `Single Redirect`,
-  `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
-  `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
-  record is rejected. It is never given to `cloudflare-apply.yml`.
+- `CLOUDFLARE_API_TOKEN` — plan identity of the zone roots, **read-only on
+  mctl.ai, mctl.me and mctl.ru** and on no other zone. Account-owned since
+  2026-10-16 (`mctl-gitops-plan-zones (CLOUDFLARE_API_TOKEN)`), ten groups,
+  all `Read`: Cache Settings, DNS, Zone, Zone Settings, Zone WAF, Dynamic URL
+  Redirects, Page Rules, Access: Apps and Policies, Email Routing Rules,
+  Workers Routes. The exact list and the three zones are declared in
+  `tokens/manifest.tf` and checked every night. It is never given to
+  `cloudflare-apply.yml`.
   Its `Access: Apps and Policies` is **zone**-scoped, which is not the same
   permission as the account-level one: reading an Access application in the
   account answers `1010 auth.forbidden` with this token.
@@ -358,8 +361,9 @@ its creator leaving and is visible to the account's token listing, which is
 what `tokens/` checks: any account token that is not declared, or declared and
 not live, fails the plan of that root and the nightly drift run. A
 user-owned token is invisible to that listing, so the check cannot see it at
-all. Three CI tokens are still user-owned and are being moved:
-`CLOUDFLARE_API_TOKEN`, `CF_PORTAL_READ_TOKEN` and `CF_APPLY_TOKEN_PORTAL`.
+all. The last three user-owned CI tokens (`CLOUDFLARE_API_TOKEN`,
+`CF_PORTAL_READ_TOKEN`, `CF_APPLY_TOKEN_PORTAL`) were re-issued as account
+tokens on 2026-10-16.
 
 Everything above is a **repository** secret. `R2_CF_STATE_*` should not be:
 it has exactly one consumer, `opentofu-state-backup.yml`, whose `state-backup`

@@ -36,14 +36,22 @@ locals {
     access_idps_read              = "9c35051ed89842839a637f81448d8c7c"
     access_orgs_idps_groups_write = "bfe0d8686a584fa680f4c53b5eb0de6d"
     access_service_tokens_write   = "a1c0fec57cf94af79479a6d827fa518c"
+    access_zone_read              = "eb258a38ea634c86a0c89da6b27cb6b6"
+    cache_settings_read           = "3245da1cf36c45c3847bb9b483c62f97"
     cache_settings_write          = "9ff81cbbe65c400b97d92c3c1033cab6"
     cf_agents_write               = "cb142f7fbc3540f0bade0cbe75f606dc"
+    dns_read                      = "82e64a83756745bbbb1c9c2701bf816b"
     dns_write                     = "4755a26eedb94da69e1066d98aa820be"
+    dynamic_url_redirects_read    = "d8e12db741544d1586ec1d6f5d3c7786"
     dynamic_url_redirects_write   = "74e1036f577a48528b78d2413b40538d"
     email_routing_addresses_read  = "5272e56105d04b5897466995b9bd4643"
     email_routing_addresses_write = "e4589eb09e63436686cd64252a3aebeb"
+    email_routing_rules_read      = "1b600d9d8062443e986a973f097e728a"
     email_routing_rules_write     = "79b3ec0d10ce4148a8f8bdc0cc5f97f2"
+    mcp_portals_read              = "b84a912ebb4a418888fec65f65c8ff3b"
+    mcp_portals_write             = "db3d398df73946acb755c05b69edfc30"
     pages_write                   = "8d28297797f24fb8a0c332fe0866ec89"
+    page_rules_read               = "b415b70a4fd1412886f164451f20405c"
     page_rules_write              = "ed07f6c337da4195b4e72a1fb2c6bcae"
     r2_bucket_item_read           = "6a018a9f2fc74eb6b293b0c548f38b39"
     r2_bucket_item_write          = "2efd5506f9c8494dacb1fa10a3e7d5b6"
@@ -58,12 +66,15 @@ locals {
     workers_kv_read               = "8b47d2786a534c08a1f94ee8f9f599ef"
     workers_kv_write              = "f7f0eda5697f475c90846e879bab8666"
     workers_observability_write   = "82c075da3f4647a2a03becd0fe240f8a"
+    workers_routes_read           = "2072033d694d415a936eaeb94e6405b8"
     workers_routes_write          = "28f4b596e7d643029c524985477ae49a"
     workers_scripts_write         = "e086da7e2179491d91ee5f35b3ca210a"
     workers_tail_read             = "05880cd1bdc24d8bae0be2136972816b"
     zero_trust_write              = "b33f02c6f7284e05a6f20741c0bb0567"
     zone_read                     = "c8fed203ed3043cba015a93ad1616f1f"
+    zone_settings_read            = "517b21aee92c4d89936c976ba6e4be55"
     zone_settings_write           = "3030687196b94b638145a3953da2b699"
+    zone_waf_read                 = "dbc512b354774852af2b5a5f4ba3d470"
     zone_waf_write                = "fb6778dc191143babbfaa57993f1d275"
   }
 
@@ -103,6 +114,43 @@ locals {
         resources = { (local.account) = "*" }
       }]
     },
+    # CLOUDFLARE_API_TOKEN: plan and drift of ../zones/*. Read-only, on the
+    # three IaC zones listed flat (the user-owned token it replaced had every
+    # zone on the account).
+    {
+      name = "mctl-gitops-plan-zones (CLOUDFLARE_API_TOKEN)"
+      policies = [{
+        permission_groups = [
+          local.pg.access_zone_read,
+          local.pg.cache_settings_read,
+          local.pg.dns_read,
+          local.pg.dynamic_url_redirects_read,
+          local.pg.email_routing_rules_read,
+          local.pg.page_rules_read,
+          local.pg.workers_routes_read,
+          local.pg.zone_read,
+          local.pg.zone_settings_read,
+          local.pg.zone_waf_read,
+        ]
+        resources = {
+          (local.zone.mctl_ai) = "*"
+          (local.zone.mctl_me) = "*"
+          (local.zone.mctl_ru) = "*"
+        }
+      }]
+    },
+    # CF_PORTAL_READ_TOKEN: plan and drift of ../portal, and the hourly
+    # cloudflare-portal-health read.
+    {
+      name     = "mctl-gitops-portal-read (CF_PORTAL_READ_TOKEN)"
+      policies = [{ permission_groups = [local.pg.mcp_portals_read], resources = { (local.account) = "*" } }]
+    },
+    # CF_APPLY_TOKEN_PORTAL (environment cloudflare-apply): apply of ../portal
+    # and cloudflare-portal-health's re-snapshot job.
+    {
+      name     = "mctl-gitops-portal-apply (CF_APPLY_TOKEN_PORTAL)"
+      policies = [{ permission_groups = [local.pg.mcp_portals_write], resources = { (local.account) = "*" } }]
+    },
     # CF_APPLY_TOKEN_ACCOUNT: apply of ../account.
     {
       name = "mctl-gitops-apply-account (cloudflare-iac #1111)"
@@ -135,6 +183,9 @@ locals {
     },
     # State of these roots in R2 (S3 credentials derived from the token):
     # R2_APPLY_* (apply), R2_PLAN_* (plan and drift), R2_CF_STATE_* (backup).
+    # The two "ctl-cloudflare-state-*" names below are spelled as they are on
+    # Cloudflare, without the leading "m". Renaming the live tokens fixes that;
+    # the entries must change in the same pull request.
     {
       name     = "mctl-cloudflare-state-apply-rw (cloudflare-iac #1111)"
       policies = [{ permission_groups = [local.pg.r2_storage_write], resources = { "${local.r2_bucket}mctl-cloudflare-state" = "*" } }]

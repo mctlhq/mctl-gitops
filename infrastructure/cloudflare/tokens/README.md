@@ -16,8 +16,7 @@ resources would put their values in state, which is why this root only reads.
 
 - **CI tokens are account-owned.** A token owned by a person's profile is
   invisible to `GET /accounts/{id}/tokens`, so this check cannot see it, and
-  it stops working when that person loses access to the account. See
-  "Credentials" in `../README.md` for the user-owned tokens still being moved.
+  it stops working when that person loses access to the account.
 - **Change the dashboard and the manifest in one pull request.** The plan of
   this root on that pull request is the proof that they agree. A pull request
   that changes only the manifest goes red, and so does a dashboard change with
@@ -30,7 +29,10 @@ resources would put their values in state, which is why this root only reads.
 ## What is compared
 
 Per token: name, status, expiry, IP condition, and each policy's effect,
-permission group IDs and resources. Token IDs, issue dates and last use are
+permission group IDs and resources. The manifest has no field for status,
+expiry or IP condition: every entry is declared active, without expiry and
+without an IP condition, and a live token that differs in any of them fails
+the check like any other difference. Token IDs, issue dates and last use are
 not compared, so rotating a token with the same scope needs no change here.
 Names are not unique, so the comparison counts each distinct fingerprint on
 both sides. Two identical live tokens need two entries.
