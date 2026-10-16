@@ -17,8 +17,21 @@ Personal attributes remain in Vault.
 5. Verify the surviving login and report the MCTL duplicate-principal state.
    Do not delete audit-referenced principals or write identity tables directly.
 
-Current state: role-transfer implementation and exact-address delete allowance
-in PR #1914. No user or grant changed yet. An inline workflow was refused by reference-mode
-policy before execution. Use the reviewed `zitadel-login-consolidation`
-ClusterWorkflowTemplate; it authenticates with the existing Argo Vault role
-and uses KV version CAS to preserve concurrent updates.
+## Verified completion (2026-10-16)
+
+- PR #1914 merged as `6b079832d`; current-head Claude review approved after
+  fixing both P2 findings. Full root tests: 87 passed.
+- `zitadel-consolidate-grant-9g2wb` succeeded (Vault admins version 7).
+  `zitadel-iac-transfer-20261016` succeeded and reported no remaining changes.
+  Live destination grants verified before source retirement: ERPAct `frappe`,
+  Kubernetes `erpact` plus the existing `kubernetes-admins`.
+- `zitadel-consolidate-retire-pzbn9` succeeded (Vault tenant-users version 13).
+  `zitadel-iac-retire-20261016` succeeded: 0 added, 0 changed, exactly 3
+  destroyed (the approved source user and its two grants).
+- Live ZITADEL projections confirm source user/grant counts are both zero;
+  destination username and all three transferred/preserved role keys remain.
+- This follow-up clears `allowedDeletes`. The former inline workflow was
+  rejected before execution; no write occurred from that attempt.
+- MCTL audit/identity history is retained. The deleted ZITADEL subject's old
+  principal is not merged into the destination and no identity table is edited
+  directly. Sign in as `dmitrii.mashkov` for the surviving platform account.

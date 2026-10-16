@@ -29,7 +29,6 @@ GitOps repository. ArgoCD source of truth for the entire mctl platform.
 - `platform-gitops/argo-workflows/config/vault-auth.yaml` — Vault auth for Argo Workflows
 
 ## Active Plans
-- `docs/plans/retire-duplicate-zitadel-login.md` — verified role transfer and retirement of the duplicate tenant login
 - `docs/plans/github-first-implementer-pr-lifecycle.md` — phased rollout
   that makes GitHub authoritative for implementer PR lifecycle state
 
