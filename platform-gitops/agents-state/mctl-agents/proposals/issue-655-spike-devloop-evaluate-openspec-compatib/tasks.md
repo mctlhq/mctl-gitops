@@ -1,87 +1,117 @@
 # Tasks: issue-655-spike-devloop-evaluate-openspec-compatib
 
-- [ ] 1. Write `docs/adr/021-sdd-artifact-contract.md` (status: proposed): the
-  change-package layout, requirement and scenario grammar, delta operations
-  and apply order, MCTL extension sections, `Source:` and `Change-Class:`
-  lines, forbidden `.status.yaml` keys, change classes, the Shepherd boundary
-  and the pinned OpenSpec-compatible grammar it targets. — DoD: the ADR
-  states invariants 1-8 from #655 and names `.status.yaml`, approval,
-  authorization, Temporal and execution identity as outside the contract.
-- [ ] 2. Add `orchestrator/spec_contract.py` (stdlib only):
-  `parse_legacy_triplet`, `export_change`, `render_change`, `import_change`,
-  `render_legacy`, `parse_canonical`, `parse_delta`, `apply_delta` (order
-  RENAMED, REMOVED, MODIFIED, ADDED; all-or-nothing `DeltaConflict`),
-  `validate` -> `list[Diagnostic]`, and `archive` (writes only under the given
-  roots) (depends on 1). — DoD: the module imports nothing outside the stdlib
-  and is not imported by any `orchestrator/run_*.py`,
-  `orchestrator/temporal/**` or `proposal_state.py`.
-- [ ] 3. Add `tools/spec_contract.py` with argparse subcommands `validate`,
-  `diff`, `export`, `import`, `apply` and `measure` (bytes plus
-  `ceil(chars/4)` token estimate) (depends on 2). — DoD: each subcommand runs
-  against the fixtures and exits non-zero on diagnostics or conflicts. No
-  console-script entry is added to `pyproject.toml`.
-- [ ] 4. Add fixtures under `tests/fixtures/spec_contract/`:
-  `canonical/devloop-approval/spec.md` (each requirement cites
-  `orchestrator/proposal_state.py` or
-  `orchestrator/temporal/workflows/dev_loop.py`),
-  `changes/approval-content-binding/` (proposal.md, tasks.md and a
-  specs/devloop-approval/spec.md with at least one ADDED and one MODIFIED),
-  `legacy/issue-655/` (copy of this proposal's triplet from `$PROPOSAL_DIR`),
-  and `legacy/issue-623/` if readable, with an `expected/` export of each
-  (depends on 2). — DoD: fixtures validate cleanly, or their diagnostics are
-  the expected findings and are listed in the report. If issue-623 is
-  unreadable, that is recorded as a gap and not replaced by invented content.
-- [ ] 5. Run the demonstration: export, then import (round trip) for each
-  legacy fixture, `apply` the delta to the canonical spec, `archive` into a
-  temp tree, and `measure` all artifacts (depends on 3, 4). — DoD: the
-  outputs are captured in the report verbatim, including the before and
-  after canonical spec.
-- [ ] 6. Simulate the agent boundaries: for issue #623 (issue text + code at
-  its pre-merge commit + `devloop-approval` or the relevant canonical spec),
-  hand-author the change package the investigator would produce, then read
-  it as the implementer would against the `_build_prompt` contract in
-  `run_implementer.py`. Score clarity, task completeness, context size,
-  ambiguity, implementation feasibility and capability identification
-  (depends on 5). — DoD: the scores and rationale are in the report, labeled
-  "simulated", with the inputs listed.
-- [ ] 7. Write `docs/spikes/655-openspec-compatible-artifact-contract.md`:
-  the measured mapping table, information lost or duplicated, size and token
-  table, validator findings the current pipeline misses, the sync/archive
-  demo, agent-fit results, the Shepherd boundary checked against the review
-  loop states, change classes, the OpenSpec coupling statement (none), a
-  migration cost estimate for the 92 existing proposals, the effect on the
-  DevLoop state machine and APIs, and exactly one recommendation chosen by
-  the design.md rubric (depends on 5, 6). — DoD: the report contains exactly
-  one of `ADOPT_CONTRACT`, `ADAPTER_ONLY` or `NO_GO`. For ADOPT or ADAPTER it
-  also has a staged plan and follow-up issue drafts (title + one-paragraph
-  body), including "bind approval to proposal content digest" as a
-  standalone follow-up.
+Global constraint for every task: do not modify `run_issue_investigator.py`,
+`run_implementer.py`, `run_shepherd.py`, `proposal_state.py`,
+`orchestrator/temporal/**`, `pyproject.toml`, `uv.lock`, or anything outside
+the clone.
+
+- [ ] 1. Write the draft ADR `docs/adr/021-sdd-artifact-contract.md`
+  (status: proposed). — DoD: the ADR covers all of the following:
+  - the change-package layout and the canonical-spec layout;
+  - the requirement and delta grammar (ADDED/MODIFIED/REMOVED/RENAMED, apply
+    order, all-or-nothing);
+  - the MCTL extension headings;
+  - the `Source:` and `Change-Class:` lines;
+  - the forbidden `.status.yaml` keys;
+  - the change classes;
+  - the pinned OpenSpec format assumptions;
+  - a statement that approval, authorization, Temporal and `.status.yaml`
+    are outside the contract.
+- [ ] 2. Implement `orchestrator/spec_contract.py` (depends on 1), pure
+  stdlib. — DoD: the module provides:
+  - the dataclasses and functions named in design.md section 3;
+  - `apply_delta` raising `DeltaConflict` and leaving its inputs untouched on
+    any conflict;
+  - `archive` writing only under the roots it is given;
+  - no import of yaml, network or subprocess modules.
+- [ ] 3. Implement `tools/spec_contract.py` (depends on 2), with the
+  subcommands `validate`, `diff`, `export`, `import`, `apply` and `measure`.
+  — DoD: each subcommand runs against the fixtures from task 4, and
+  `measure` prints bytes and `ceil(chars/4)` tokens.
+- [ ] 4. Add the canonical spec and change-delta fixtures under
+  `tests/fixtures/spec_contract/` (depends on 1). — DoD:
+  - `canonical/devloop-approval/spec.md` has at least 4 requirements, each
+    citing the source file and symbol it was derived from;
+  - `changes/approval-content-binding/` has at least one `ADDED` and one
+    `MODIFIED` delta;
+  - `expected/` holds the post-apply canonical spec;
+  - `invalid/` has one negative fixture per validation rule.
+- [ ] 5. Add the legacy proposal fixtures (depends on 4). — DoD:
+  - `legacy/issue-655/` is a copy of this proposal's triplet from
+    `$PROPOSAL_DIR`;
+  - `legacy/issue-623/` is copied read-only from the mctl-gitops checkout if
+    it is readable, otherwise a second available proposal is used and the
+    substitution is noted;
+  - each fixture has a hand-reviewed `expected/` change package and a
+    capability map.
+- [ ] 6. Run export, import, validate and measure over both legacy fixtures
+  and the delta demonstration (depends on 2, 3, 5). — DoD: the raw outputs
+  (size table, diagnostics, round-trip diff, before/after canonical spec,
+  archive tree) are captured for the report.
+- [ ] 7. Simulate the agent boundaries (depends on 6). — DoD: the report
+  records both of the following, each labeled "simulated":
+  - an Investigator pass for issue #623 (issue text, relevant code and the
+    canonical spec in; change package out);
+  - an Implementer reading of the resulting package, scored on clarity, task
+    completeness, context size, ambiguity and exact capability
+    identification.
+- [ ] 8. Write `docs/spikes/655-openspec-compatible-artifact-contract.md`
+  (depends on 6, 7). — DoD: the report contains:
+  - the filled-in mapping table and the loss/duplication findings;
+  - the measurements and validator findings;
+  - the sync/archive demonstration;
+  - the Shepherd boundary, mapped onto `decide()` outcomes;
+  - the change classes and the coupling statement;
+  - the migration cost estimate for the existing proposals;
+  - the effect on the state machine and APIs;
+  - exactly one of `ADOPT_CONTRACT` / `ADAPTER_ONLY` / `NO_GO`, chosen by
+    the design.md rubric;
+  - follow-up issue drafts, plus a staged migration plan if the
+    recommendation is `ADOPT_CONTRACT`.
+- [ ] 9. Add `tests/test_spec_contract.py` (depends on 2, 4, 5). — DoD: the
+  tests T1-T9 below pass under `uv run pytest tests/test_spec_contract.py`,
+  and the full suite stays green.
 
 ## Tests
 
-- [ ] T1. `tests/test_spec_contract.py`: export then import of each legacy
-  fixture equals the original after the documented normalization.
-- [ ] T2. `apply_delta` on the canonical fixture yields the expected new
-  spec. MODIFIED, REMOVED or RENAMED of a missing name, and ADDED of an
-  existing name, each raise `DeltaConflict` and leave inputs unchanged.
-- [ ] T3. The validator flags: a requirement without SHALL/MUST, a requirement
-  without a scenario, duplicate names, a `normal` change with no delta, a
-  `governed` change without design.md, a malformed `Source:`, and each
-  forbidden `.status.yaml` key.
-- [ ] T4. A `trivial` change with no `specs/` passes validation, and no
-  `Change-Class` value changes any approval-related output.
-- [ ] T5. `archive` writes only under the provided temp roots (assert that
-  no file is created outside `tmp_path`).
-- [ ] T6. Import isolation: an AST scan of `orchestrator/**/*.py` finds no
-  import of `spec_contract` outside `tools/` and `tests/`.
-- [ ] T7. `tools/spec_contract.py validate` exits 0 on clean fixtures and
-  non-zero on an invalid one.
+- [ ] T1. Round trip: `import_change(export_change(parse_legacy_triplet(d)))`
+  renders byte-identical files after normalization for both legacy fixtures,
+  or the test asserts the exact documented list of one-way sections.
+- [ ] T2. `apply_delta` on `devloop-approval` with the fixture delta equals
+  `expected/devloop-approval.spec.md`.
+- [ ] T3. Each of the following raises `DeltaConflict` and writes nothing:
+  `MODIFIED`/`REMOVED`/`RENAMED` against a missing requirement, and `ADDED`
+  of a requirement that already exists.
+- [ ] T4. Each `invalid/` fixture yields exactly its expected diagnostic
+  code. The cases are: a missing SHALL/MUST, a missing scenario, a duplicate
+  name, `normal` with no delta, `governed` with no design.md, a bad `Source:`
+  form, and a `.status.yaml` key present.
+- [ ] T5. Change classes: a `trivial` package with no delta validates
+  cleanly, and no code path in `spec_contract.py` reads or writes
+  `control.requires_human_approval` (asserted by grep over the module
+  source).
+- [ ] T6. `archive()` into a `tmp_path` produces the expected tree, and no
+  file is written outside `tmp_path`.
+- [ ] T7. Import isolation: no module under `orchestrator/` other than
+  `spec_contract.py` imports it, following the pattern in
+  `tests/test_worker_isolation.py`.
+- [ ] T8. The module has no runtime dependency: its imports are limited to
+  the stdlib, and it has no reference to `openspec` executables or
+  `subprocess`.
+- [ ] T9. The `tools/spec_contract.py measure` output for a fixture matches
+  the computed byte and token counts.
 
 ## Rollback
 
-Everything is additive and isolated: delete `orchestrator/spec_contract.py`,
-`tools/spec_contract.py`, `tests/test_spec_contract.py`,
-`tests/fixtures/spec_contract/`, `docs/adr/021-sdd-artifact-contract.md`
-and `docs/spikes/655-openspec-compatible-artifact-contract.md`, or revert the
-single PR. No production path, `.status.yaml`, Temporal history or
-mctl-gitops content is touched, so nothing else needs reverting.
+Every artifact is additive and unreferenced by production code:
+
+- `orchestrator/spec_contract.py`;
+- `tools/spec_contract.py`;
+- `tests/fixtures/spec_contract/`;
+- `tests/test_spec_contract.py`;
+- `docs/adr/021-sdd-artifact-contract.md`;
+- `docs/spikes/655-openspec-compatible-artifact-contract.md`.
+
+To roll back, revert the implementation PR. No `.status.yaml`, Temporal
+history, gitops state or deployed service changes, so nothing needs a data
+migration or a redeploy.
