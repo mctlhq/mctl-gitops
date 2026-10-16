@@ -190,6 +190,23 @@ for extra, label in (({}, "Deployment"), ({"blueGreen": {"enabled": True}}, "Rol
     check(paths == ["/tmp"],
           f"{label}: /tmp already in extraVolumeMounts, got mounts {paths!r}")
 
+    # 10. A path listed twice is mounted once.
+    _, spec = pod_spec(render({**BASE, **extra, **STRICT,
+                               "writablePaths": ["/tmp", "/tmp"]}))
+    check(writable(spec) == {"/tmp": "writable-tmp"}
+          and len(spec.get("volumes") or []) == 1,
+          f"{label}: repeated path renders volumes {spec.get('volumes')!r}")
+
+    # 11. Two paths whose volume names collide fail the render with a
+    #    readable message, instead of a duplicate-name error at apply time.
+    try:
+        render({**BASE, **extra, **STRICT,
+                "writablePaths": ["/var/cache/nginx", "/var/cache-nginx"]})
+        check(False, f"{label}: colliding writablePaths rendered without error")
+    except AssertionError as err:
+        check("both map to volume" in str(err),
+              f"{label}: colliding writablePaths failed without the message: {err}")
+
 if failures:
     for f in failures:
         print(f"FAIL: {f}", file=sys.stderr)
