@@ -72,8 +72,6 @@ containerSecurityContext:
     drop:
       - ALL
 env:
-  MCTL_TRACE_WORKFLOW_TYPES: DevLoopWorkflow
-  MCTL_TRACE_ARGO_PARAM: "true"
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents
   LOG_LEVEL: info
@@ -120,9 +118,5 @@ externalSecret:
       property: mctl-token
 
 # Execution traces (mctl-agents#195): see MCTL_TRACE_WORKFLOW_TYPES in env.
-otel:
-  enabled: true
-
-# Bounded DevLoop rollout; other workflow types remain unsampled.
 otel:
   enabled: true
