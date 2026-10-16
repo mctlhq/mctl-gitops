@@ -420,6 +420,10 @@ run "customer_claims_reach_only_the_explicit_clients" {
     values = { client_id = "cli" }
   }
   assert {
+    condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data["ZITADEL_PORTAL_CLIENT_ID"]) == "portal"
+    error_message = "C0 purpose=signin needs the portal UI client id, or live customer sign-in answers 503."
+  }
+  assert {
     condition = toset(split(",", nonsensitive(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data["ZITADEL_HOOK_CLAIM_CLIENT_IDS"]))) == toset([
       "web", "web-dev", "portal", "api-oauth", "cli"
     ])

@@ -277,6 +277,8 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
     # client id is not read by mctl-api.
     MCTL_WEB_CLIENT_ID     = zitadel_application_oidc.mctl_web.client_id
     MCTL_WEB_DEV_CLIENT_ID = zitadel_application_oidc.mctl_web_dev.client_id
+    # C0 purpose=signin must verify the portal UI audience, not the site's.
+    ZITADEL_PORTAL_CLIENT_ID = zitadel_application_oidc.portal_ui.client_id
   }
 
   field_manager = "zitadel-iac"
