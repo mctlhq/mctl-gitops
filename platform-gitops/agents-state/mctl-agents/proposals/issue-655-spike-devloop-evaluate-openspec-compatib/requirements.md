@@ -1,89 +1,204 @@
-# Spike: evaluate an OpenSpec-compatible artifact contract for DevLoop proposals
+# Spike: evaluate an OpenSpec-compatible artifact contract for MCTL DevLoop proposals
 
 ## Context
 
-Every DevLoop proposal is a triplet today: `requirements.md`, `design.md`
-and `tasks.md`, plus `.status.yaml`, under
-`platform-gitops/agents-state/<service>/proposals/<slug>/`. The
-issue-investigator writes the triplet (`TRIPLET` in
-`orchestrator/run_issue_investigator.py`). The implementer reads it
-(`run_implementer.py`, prompt step 1). Context assembly reads it again as
-prior context (`TRIPLET_FILENAMES` in `orchestrator/context_assembly.py`).
-`.status.yaml` holds the execution state: status, approval, attempt, PR,
-GitHub projection, execution and context ids. MCTL owns that state
-(`orchestrator/proposal_state.py`). Issue #655 asks whether the planning half
-of this, meaning the triplet, should become an OpenSpec-compatible change
-artifact: `proposal.md`, `specs/<capability>/spec.md` with
-`ADDED`/`MODIFIED`/`REMOVED` deltas, `design.md` and `tasks.md`. Under that
-model, canonical current-state capability specs are synced after a merge.
-Execution, approval, authorization, Temporal state, review and merge would
-all stay MCTL-native.
+Each DevLoop proposal is three Markdown files today, `requirements.md`, `design.md`
+and `tasks.md`, plus a `.status.yaml`. They sit under
+`platform-gitops/agents-state/<service>/proposals/<slug>/`. The issue investigator
+writes them (`orchestrator/run_issue_investigator.py`, `TRIPLET`). The
+implementer reads them (`orchestrator/run_implementer.py`, the prompt step that
+says "Read spec files from `$PROPOSAL_DIR`"). Context assembly carries them
+forward (`orchestrator/context_assembly.py`, `TRIPLET_FILENAMES`). Evidence is
+sealed over them by sha256 (`_note_investigation_evidence`).
 
-This is a spike. It produces evidence and exactly one recommendation:
-`ADOPT_CONTRACT`, `ADAPTER_ONLY` or `NO_GO`. It does not change how
-production proposals are written or consumed. Everything it adds is inert:
-a draft contract document, a stand-alone dev tool, fixtures, tests and a
-report. No runtime module under `orchestrator/` imports any of it.
+Nothing checks the files' structure, apart from the investigator confirming that
+they exist and are regular files. No requirement says "what is true today" about
+a capability. Each proposal only describes its own change, so a reader cannot
+work out what a capability currently promises without reading every merged
+proposal.
+
+Issue mctl-agents#655 asks a bounded question. Should MCTL take on an
+OpenSpec-compatible planning layer while keeping execution MCTL-native? That
+layer means a change package: proposal, per-capability delta specs with
+`ADDED`/`MODIFIED`/`REMOVED` requirements, design and tasks. It also means
+canonical current-state capability specs. Execution would stay with
+DevLoopWorkflow, `.status.yaml`, approval, authorization, Temporal, Shepherd,
+CI and merge. The spike must answer the issue's ten questions using a
+reversible prototype, fixtures and historical proposals only. It must end with
+exactly one recommendation: `ADOPT_CONTRACT`, `ADAPTER_ONLY` or `NO_GO`. It
+does not change production behaviour.
 
 ## User stories
 
-- AS a platform maintainer I WANT a written, testable mapping from the current proposal triplet to an OpenSpec-compatible change package SO THAT I can decide on the planning contract from evidence instead of opinion.
-- AS a platform maintainer I WANT one bounded DevLoop capability expressed as a canonical spec, a change delta and the resulting canonical spec SO THAT I can judge whether brownfield deltas are worth having.
-- AS an implementer-agent operator I WANT proof that nothing the implementer reads today is lost in the candidate form SO THAT adopting it cannot silently degrade implementation quality.
-- AS the owner of Shepherd and the approval gate I WANT the spec-verification boundary written down SO THAT spec conformance never becomes a merge, approval or authorization signal.
-- AS a contributor fixing a typo or bumping a dependency I WANT a trivial change class SO THAT small fixes do not pay for the full spec ceremony, and there is still only one DevLoop lifecycle.
+- AS a platform maintainer I WANT a written mapping from today's proposal
+  triplet to an OpenSpec-compatible change package SO THAT I know what would be
+  lost, duplicated or gained before committing to a format.
+- AS a platform maintainer I WANT a canonical capability spec, plus a change
+  delta, plus a simulated merge/archive for one real DevLoop capability SO THAT
+  I can judge whether a current-state spec is worth keeping up to date.
+- AS the issue investigator I WANT a machine-checkable artifact contract SO THAT
+  structural defects in my output (missing acceptance criteria, a delta naming
+  an unknown requirement) are caught before publication, not by the implementer.
+- AS the implementer I WANT to receive at least the information I receive today
+  SO THAT a format change never lowers implementation success.
+- AS the shepherd owner I WANT spec verification defined as one more input
+  signal SO THAT it never replaces CI, review policy (P1/P2), merge policy or
+  authorization.
+- AS an operator I WANT trivial changes (typo, dependency bump, flake fix) to
+  stay cheap SO THAT the contract does not add ceremony where it adds no value,
+  and I still have a single DevLoop lifecycle.
+- AS a reviewer of the spike I WANT exactly one recommendation, with evidence
+  and follow-up issues SO THAT the decision can be acted on.
 
 ## Acceptance criteria (EARS)
 
-Contract and mapping
-- WHEN the spike is complete THE SYSTEM SHALL provide a draft contract document (`docs/adr/021-sdd-artifact-contract.md`, status `proposed`) that defines the change package `proposal.md`, `specs/<capability>/spec.md`, `design.md` and `tasks.md`. It SHALL define which section of each file carries proposal intent, behavioral requirements, design decisions, task decomposition, delta semantics and the source-issue reference.
-- WHEN the spike is complete THE SYSTEM SHALL provide a mapping table from every current artifact and section to a candidate artifact and section, covering every `requirements.md` section (`Context`, `User stories`, `Acceptance criteria (EARS)`, `Out of scope`, `Open questions`), every `design.md` section, every `tasks.md` section (numbered tasks with DoD and dependencies, `Tests`, `Rollback`) and the `.status.yaml` `source` block. Each row SHALL be classified as `preserved`, `moved`, `duplicated` or `lost`.
-- THE SYSTEM SHALL keep every `.status.yaml` field out of the candidate artifact. This covers `status`, `approval`, `attempt`, `pr`, `github`, `execution`, `context` and `control`. The only exception is a read-only source-issue reference (`repo`, `issue`, `url`), which MAY be copied into `proposal.md` front matter.
-- IF a candidate package contains any execution-state key (the keys listed above) THEN THE SYSTEM SHALL report it as a validation error.
+### Contract definition
+- WHEN the spike is complete THE SYSTEM SHALL provide a written artifact
+  contract, `docs/spikes/655-sdd-artifact-contract.md`. The contract SHALL
+  define `proposal.md`, `specs/<capability>/spec.md` (delta form),
+  `design.md` and `tasks.md`, and the canonical spec form. It SHALL also
+  define the grammar of `### Requirement:` and `#### Scenario:` blocks.
+- THE SYSTEM SHALL define the contract so that it separates: proposal
+  intent/context; behavioural requirements; design decisions; the executable
+  task breakdown; delta semantics (`ADDED`, `MODIFIED`, `REMOVED`, `RENAMED`);
+  and a source-issue reference.
+- THE SYSTEM SHALL keep every execution-state field out of the artifact
+  contract. Those fields are `status`, `approval`, `attempt`, `execution`,
+  `pr`, `github`, `merge_commit` and `control`, as written to `.status.yaml`.
+  The validator SHALL reject any artifact whose front matter or body carries
+  one of these keys as structured data.
 
-Canonical and delta specs
-- WHEN the spike is complete THE SYSTEM SHALL include one canonical capability spec fixture for `devloop-approval`, derived from `human_approval_satisfied` / `execution_authorization` in `orchestrator/proposal_state.py` and the `approve` signal in `orchestrator/temporal/workflows/dev_loop.py`. It SHALL also include a change-delta fixture that contains at least one `ADDED` requirement and at least one `MODIFIED` or `REMOVED` requirement.
-- WHEN the delta is applied to the canonical spec THE SYSTEM SHALL produce a new canonical spec that is byte-identical to a committed expected fixture, and SHALL write an archived copy of the change to a temporary directory.
-- IF a delta refers to a requirement that is missing from the canonical spec (`MODIFIED`/`REMOVED`), or adds one that already exists (`ADDED`), THEN THE SYSTEM SHALL refuse the apply with a named conflict and SHALL write nothing.
+### Mapping and round-trip
+- WHEN the spike is complete THE SYSTEM SHALL publish a mapping table from
+  each current artifact and section to its candidate artifact and section.
+  Current artifacts and sections include: `requirements.md` `## Context`,
+  `## User stories`, `## Acceptance criteria (EARS)`, `## Out of scope` and
+  `## Open questions`; `design.md` `## Current state` (including
+  `Deployed state checked:`), `## Proposed solution`, `## Alternatives` and
+  `## Platform impact`; `tasks.md` tasks, `## Tests` and `## Rollback`;
+  `.status.yaml` `source`. Each row SHALL be marked lossless, lossy (with what
+  is lost) or duplicated.
+- WHEN at least two historical proposals are converted THE SYSTEM SHALL check
+  each converted package for information loss. One of them SHALL be
+  `mctl-agents/issue-516-fix-devloop-end-devloopworkflow-when-its`. The loss
+  check SHALL be mechanical: every EARS line, task line, test line and
+  section heading in the original appears in exactly one place in the
+  converted package.
+- WHEN a converted package is exported back to the triplet THE SYSTEM SHALL
+  either produce byte-identical files after whitespace normalisation, or
+  document why a one-way migration is preferable.
 
-Round trip
-- WHEN the spike is complete THE SYSTEM SHALL convert at least one representative merged proposal, copied as a fixture from `agents-state/mctl-agents/proposals/issue-623-tracing-record-cache-read-write-token-us/`, into the candidate form. A second fixture SHALL come from a different service.
-- WHEN a converted package is converted back THE SYSTEM SHALL either reproduce the original triplet byte for byte after a documented normalization (trailing whitespace, final newline), or the report SHALL declare a one-way migration and give the reason.
-- THE SYSTEM SHALL report, for each fixture, the byte size and an approximate token count (bytes / 4, labelled as an approximation) for both the current and the candidate representation.
+### Canonical spec and delta
+- WHEN the spike is complete THE SYSTEM SHALL contain a canonical spec for
+  exactly one bounded capability, written from the current code. The default
+  is "DevLoop approval", grounded in `orchestrator/proposal_state.py`
+  (`human_approval_satisfied`, `execution_authorization`) and the
+  `DevLoopWorkflow.approve` signal in
+  `orchestrator/temporal/workflows/dev_loop.py`.
+- WHEN a change delta containing at least one `ADDED` and one `MODIFIED` or
+  `REMOVED` requirement is applied to that canonical spec THE SYSTEM SHALL
+  produce a new canonical spec deterministically. Applying the same delta to
+  the same base twice SHALL produce byte-identical output.
+- IF a delta names, for `MODIFIED`, `REMOVED` or `RENAMED`, a requirement that
+  does not exist in the base canonical spec THEN THE SYSTEM SHALL fail
+  validation with an error naming the requirement and capability.
+- IF a delta `ADDED` requirement collides with an existing requirement name THEN
+  THE SYSTEM SHALL fail validation.
+- WHEN a simulated merge is run against fixtures THE SYSTEM SHALL demonstrate
+  three things: verify, then sync canonical spec, then archive change. Archive
+  means the change package moves under an archive path. The real
+  `agents-state` tree SHALL never be written.
 
-Agent boundaries
-- WHEN the spike is complete THE SYSTEM SHALL record a traceability check for each converted fixture. The check SHALL show that every EARS criterion, numbered task with its DoD and dependency, test item and rollback step in the original triplet can be found at a stated location in the candidate package.
-- THE SYSTEM SHALL record observations for the Investigator and Implementer boundaries on requirement clarity, task completeness, context size, ambiguity, implementation-success risk and identification of the changed capability. Each observation SHALL be marked `improves`, `preserves` or `worsens`, with the evidence behind it. Any observation not backed by an actual model run SHALL be labelled `simulated`.
+### Agent fit
+- WHEN the investigator simulation is run THE SYSTEM SHALL record the following
+  for current versus candidate representation on the same issue(s):
+  requirement clarity; task completeness; artifact byte size and estimated
+  token count; ambiguity observations; whether the changed capability is
+  identifiable. The issue(s) SHALL be historical and already investigated.
+- WHEN the implementer simulation is run THE SYSTEM SHALL show that every
+  implementation-relevant item in the original triplet is present in the
+  prompt-visible candidate artifact(s).
+- WHILE the spike is in progress THE SYSTEM SHALL NOT change the investigator
+  prompt in `run_issue_investigator.py`, the implementer prompt in
+  `run_implementer.py`, or `TRIPLET` / `TRIPLET_FILENAMES`.
 
-Verification boundary
-- THE SYSTEM SHALL document spec verification as an input to Shepherd, alongside CI and review findings. It SHALL NOT be a replacement for any of them. The document SHALL state that a spec-verification result never produces a merge, an approval, an authorization grant, or a change to `decide()` in `orchestrator/run_shepherd.py` within this spike.
-- IF a proposed design would let spec verification satisfy or bypass `human_approval_satisfied`, the action-approval gate (ADR 016) or required CI checks THEN THE SYSTEM SHALL list that design as rejected.
+### Verification boundary
+- THE SYSTEM SHALL document spec verification as one more, separately reported
+  input to the Shepherd decision, alongside CI/required checks and P1/P2 review
+  findings. It SHALL never be a replacement for any of them.
+- IF a candidate design lets a spec-verification pass merge, approve or
+  authorize anything THEN THE SYSTEM SHALL reject that design in the spike
+  report.
 
-Interop and change classes
-- WHEN the spike is complete THE SYSTEM SHALL provide a dev tool `tools/spec_contract.py` with the sub-commands `validate`, `diff`, `apply`, `import`, `export` and `measure`. The tool SHALL use only the Python standard library and PyYAML, which is already a dependency, and SHALL NOT invoke or import the OpenSpec CLI.
-- THE SYSTEM SHALL define the change classes `trivial`, `normal` and `governed` as a single field in `proposal.md`. A `trivial` package SHALL validate without a `specs/` delta. All three classes SHALL map onto the existing `.status.yaml` lifecycle, with no new status values.
+### Interop boundary
+- THE SYSTEM SHALL implement the contract with no runtime dependency on the
+  OpenSpec CLI or its Node package. The validator, diff, import and export SHALL
+  be pure Python inside `mctl-agents`.
+- WHEN an OpenSpec-layout change directory (`changes/<id>/...`) is imported THE
+  SYSTEM SHALL produce a candidate package. When a candidate package is
+  exported THE SYSTEM SHALL produce an OpenSpec-layout directory. Both SHALL be
+  shown on fixtures.
 
-Decision
-- WHEN the spike is complete THE SYSTEM SHALL publish `docs/spikes/655-openspec-compatible-artifact-contract.md`. The report SHALL contain all the measurements listed in the issue, the answers to questions 1 through 10, a migration and interop cost estimate, and exactly one of `ADOPT_CONTRACT`, `ADAPTER_ONLY` or `NO_GO`, chosen against the rubric in design.md.
-- IF the recommendation is `ADOPT_CONTRACT` THEN THE SYSTEM SHALL include a staged migration plan and a list of follow-up issues, each with a title and a scope. Under that plan, after migration there is one canonical requirements source and no permanent dual authoring.
+### Change classes
+- THE SYSTEM SHALL propose a `trivial` / `normal` / `governed` classification.
+  All three SHALL use the same proposal directory, the same `.status.yaml`
+  state machine and the same approval path. `trivial` SHALL waive only the
+  delta-spec artifacts, never approval or authorization.
 
-Isolation
-- WHILE the spike is unmerged or merged THE SYSTEM SHALL NOT change the investigator prompt, `TRIPLET`, `TRIPLET_FILENAMES`, the implementer prompt, `run_shepherd.decide()`, `dev_loop.py`, `proposal_state.py` or any file under `platform-gitops/`.
+### Invariants
+- WHILE any part of this spike exists THE SYSTEM SHALL leave unchanged the
+  semantics of `.status.yaml`, `human_approval_satisfied`,
+  `execution_authorization`, `DevLoopWorkflow` and the Shepherd decision
+  function.
+- THE SYSTEM SHALL keep exactly one source of truth for requirements in any
+  recommended end state. A permanent model where `requirements.md` and
+  `specs/**` are both authored is not an acceptable recommendation.
+
+### Decision
+- WHEN the spike report is complete THE SYSTEM SHALL state exactly one of
+  `ADOPT_CONTRACT`, `ADAPTER_ONLY` or `NO_GO`. It SHALL justify that choice
+  against the decision criteria written down in the report before the
+  measurements were taken.
+- IF the recommendation is `ADOPT_CONTRACT` THEN THE SYSTEM SHALL include a
+  staged migration plan and a list of follow-up issues with titles and scope.
 
 ## Out of scope
 
-- Changing the proposal layout, the investigator output, or the implementer input in production.
-- Replacing or modifying `DevLoopWorkflow`, Temporal, approval, authorization, Shepherd, CI or merge policy.
-- Bulk migration of historical proposals under `agents-state/`.
-- A public `mctl spec` CLI, or an mctl-api endpoint or MCP tool.
-- A runtime or CI dependency on the OpenSpec CLI or npm package.
-- Wiring a spec-conformance check into Shepherd. The spike defines this boundary on paper only.
+- Replacing DevLoopWorkflow, Temporal, Shepherd, MCTL approval or
+  authorization.
+- Changing what the investigator or implementer produce or consume in
+  production.
+- Writing to `platform-gitops/agents-state/**` in mctl-gitops, and bulk
+  migration of historical proposals.
+- A public `mctl spec` CLI in mctl-api or the MCTL MCP server. The spike
+  ships a repo-local `tools/spec_contract.py` only.
+- Installing or invoking the OpenSpec CLI at runtime or in CI.
+- Binding approval to an artifact content digest. This is noted as a
+  follow-up, not done here.
+- Incident-responder proposals (`incident-*`) and the mctl-docs
+  `proposed-content.md` extension. Both are recorded in the mapping as
+  "not covered".
 
 ## Open questions
 
-- Which OpenSpec revision counts as "compatible"? Without network access the spike pins the format to what it can document: header conventions such as `## ADDED Requirements`, `### Requirement:` and `#### Scenario:`, plus `SHALL`/`MUST` wording. The report must name the revision it was checked against. If none could be checked, it must record the gap.
-- Can EARS acceptance criteria be represented as OpenSpec requirements with scenarios without loss? Assumed: each EARS line becomes one requirement with one scenario, and the EARS keywords are kept verbatim. The traceability check confirms or refutes this.
-- Does the spike need real model runs for the Investigator and Implementer boundary? Assumed no: the boundary is simulated through traceability and prompt-size measurement, labelled `simulated`. One real investigator run against a fixture is optional and needs an operator to spend about $3.
-- Capability taxonomy: how capabilities are named and scoped per service, for example `devloop-approval` versus `approval`. The spike proposes a naming rule but cannot validate it across all 16 services.
-- Approval provenance: `.status.yaml` records `approval.approved_by`/`approved_at`, but it does not record a content digest of the triplet that was approved. Any adoption must decide whether approval binds to a package digest. This is recorded as a follow-up and is not solved here.
-- ADR numbering: `docs/adr/` already contains two `011-*` files. The draft uses `021`, which may need renumbering at merge time.
+- Which OpenSpec version is the compatibility target? The grammar used here is
+  the publicly documented one: `## ADDED|MODIFIED|REMOVED|RENAMED
+  Requirements`, `### Requirement:`, `#### Scenario:` with WHEN/THEN bullets,
+  `changes/archive/YYYY-MM-DD-<id>/`. It was not checked against a pinned
+  release during this investigation. The spike should pin a version, or a
+  commit of the published docs, in its fixtures.
+- Which capability to model canonically? DevLoop approval is the default
+  because its rules are compact and already fail-closed in code. The
+  review/remediation loop is larger and may give a more representative signal.
+- Where would canonical specs live if the recommendation were
+  `ADOPT_CONTRACT`? Options: per target repo, or per service under
+  `agents-state/<service>/specs/`. The spike decides only for fixtures.
+- How should EARS `WHILE`/`IF` lines that are not behaviour of one capability
+  (for example cross-cutting invariants) map onto per-capability requirements?
+- There are 29 of the current `mctl-agents` proposals' `requirements.md` files
+  that have no `## Acceptance criteria` heading (observed in the gitops
+  checkout). Should the validator treat this as an error or a warning when
+  converting history?
+- Should approval in a future contract bind to a digest of the change package?
+  Today `.status.yaml` `approval` records only `approved_by`/`approved_at`. This
+  is out of scope here and recorded for the follow-up list.
