@@ -102,6 +102,12 @@
       ],
       "prompts_total": 4,
       "prompts_enabled": 4,
+      "enabled_prompts": [
+        "deploy_service",
+        "onboard_service",
+        "platform-skill",
+        "troubleshoot_incident"
+      ],
       "recorded": "2026-10-16"
     },
     "coolify": {

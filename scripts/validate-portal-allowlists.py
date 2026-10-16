@@ -19,7 +19,7 @@ script also checks:
   - `baseline.json` -- {"servers": {"<id>": {"tools_total", "tools_enabled",
     "enabled_tools", "prompts_total", "prompts_enabled", ["enabled_prompts"],
     "recorded"}}}, the non-widening reference: a bump that raises a server's
-    enabled/total tool count, or enables a tool NAME not listed in
+    enabled tool count, or enables a tool NAME not listed in
     `enabled_tools` (or, in an `updated_prompts` list, a prompt name not in
     `enabled_prompts`), fails here until a human edits this file in the same
     diff.
@@ -65,8 +65,8 @@ What this script enforces, and what it deliberately does not:
     `updated_tools`. A catalogue tool with no decision would fail the plan
     on a lookup; here it fails with the server and tool named.
   - non-widening, for EVERY server in `mapping.json`, vendored or not:
-    tools_total/tools_enabled (counted from the vendored file, or from the
-    literal `updated_tools`) must not exceed `baseline.json`; every enabled
+    tools_enabled (counted from the vendored file, or from the literal
+    `updated_tools`) must not exceed `baseline.json`; every enabled
     tool name must appear in the server's `enabled_tools` there, so turning a
     read tool off and a write tool on at a constant count still fails (a
     count alone cannot see that swap); and the
@@ -75,12 +75,24 @@ What this script enforces, and what it deliberately does not:
     override means the portal shows every catalogue prompt), so replacing a
     narrowing list with `null` is caught as a widening too.
 
-Two keys share the name `default_disabled` and mean opposite things. In a
-vendored `allowlists/<id>.json` it is the owning repo's posture ("a tool this
-file does not list is disabled") and must be `true`. In `mapping.json` it is
-the portal object's per-server switch ("this server is off by default for
-connecting clients"), copied from the live portal and `false` today. They are
-expected to disagree; PR B must read the portal one from `mapping.json` only.
+Only enabled tools count toward widening. `tools_total` is still recorded
+and must be an integer, but a bump that grows a file with entries that are
+all `enabled: false` (an upstream release adding tools the owning repo keeps
+off) exposes nothing, and refusing it only stalled the bump while the portal
+already carried the new tools -- exposed, on a server mapped with
+`default_disabled: false` (mctl-gitops#1829, 2026-10-16). The name gate on
+`enabled_tools` is what catches a swap at a constant count.
+
+Two keys share the name `default_disabled`. In a vendored
+`allowlists/<id>.json` it is the owning repo's posture ("a tool this file
+does not list is disabled") and must be `true`. In `mapping.json` it is the
+portal's allowlist switch for that server-to-portal mapping (Cloudflare docs,
+MCP portals, "Use an allowlist pattern"): `false` exposes a synced tool or
+prompt that has no `updated_tools`/`updated_prompts` entry, `true` hides it,
+prompts included. The two may differ; PR B reads the portal one from
+`mapping.json` only. Counting `updated_prompts: null` as all prompts enabled
+over-counts under `true` (where null shows none), which errs toward
+reporting a widening, never toward missing one.
 
 What it does NOT do: compare a vendored file against the server's live,
 synced tool *catalogue*. CI holds no Cloudflare credential for this root
@@ -482,7 +494,8 @@ def check_baseline(files: dict, servers: dict, baseline, errors: list[str]) -> N
                 "add them there in the same change if this widening is intentional"
             )
         enabled = sum(1 for t in tools if isinstance(t, dict) and t.get("enabled") is True)
-        if enabled > ints["tools_enabled"] or total > ints["tools_total"]:
+        # Enabled only: see the module docstring for why total is not a gate.
+        if enabled > ints["tools_enabled"]:
             errors.append(
                 f"{where}: widens exposure -- {enabled}/{total} tools enabled/total now, "
                 f"baseline.json records {ints['tools_enabled']}/{ints['tools_total']} for {sid!r}; "
