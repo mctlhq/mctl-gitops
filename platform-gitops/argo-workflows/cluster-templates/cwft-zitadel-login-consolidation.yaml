@@ -7,6 +7,11 @@ metadata:
       Grant first; retire only after live grant verification.
 spec:
   serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  activeDeadlineSeconds: 180
+  ttlStrategy:
+    secondsAfterCompletion: 86400
   entrypoint: transfer
   arguments:
     parameters:
