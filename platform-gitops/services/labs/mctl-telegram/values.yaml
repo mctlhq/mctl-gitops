@@ -645,7 +645,6 @@ extraObjects:
                     limits:
                       cpu: "100m"
                       memory: "64Mi"
-
   # Deny /metrics at the edge — mctlhq/mctl-telegram#588. Same two objects as
   # labs/mctl-telegram-preview, verified there first: after that PR synced,
   # https://tg-preview.mctl.ai/metrics answered 403 while
