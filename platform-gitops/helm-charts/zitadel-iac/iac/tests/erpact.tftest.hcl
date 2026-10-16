@@ -216,7 +216,7 @@ run "rejects_frappe_on_another_tenant" {
 run "grant_only_access_does_not_provision_frappe_users" {
   command = plan
   plan_options {
-    target = [zitadel_user_grant.erpact_frappe_admin]
+    target = [zitadel_user_grant.erpact_frappe_admin, kubernetes_secret_v1_data.erpact_frappe_users]
   }
   variables {
     platform_admins = jsonencode({
