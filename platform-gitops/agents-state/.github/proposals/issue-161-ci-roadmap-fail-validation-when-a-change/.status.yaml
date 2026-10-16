@@ -1,6 +1,6 @@
-status: proposed
-updated_at: '2026-10-15T23:47:00Z'
-updated_by: mashkovd
+status: accepted
+updated_at: '2026-10-16T00:01:48Z'
+updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6e4f3b231fab1af7
   trace_id: 293917ff9aae32041ee95d8241adf60e
@@ -24,3 +24,6 @@ notes: >-
   that a bound issue is closed; head corpus validation is explicit; and an all-zero push base
   skips the real guard step rather than reporting an unevaluated guard as green. Proposal
   remains proposed and still requires human approval.
+approval:
+  approved_by: 'mashkovd'
+  approved_at: '2026-10-16T00:01:48Z'
