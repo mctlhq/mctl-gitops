@@ -247,14 +247,20 @@ locals {
         resources = { (local.account) = "*" }
       }]
     },
-    # DNS Write on every zone of the account. The API nests the zone wildcard
-    # under the account; the provider hands the inner object over as a JSON
-    # string.
+    # DNS Write on every zone of the account (the API nests
+    # `com.cloudflare.api.account.zone.* = *` under the account), most likely
+    # cert-manager's DNS-01 token (Secret cloudflare-api-token, k3s-preview).
+    # The provider cannot represent a nested resource map and returns
+    # `resources = null` for it, so this entry declares null and the token's
+    # zone scope is NOT verified: only its name, status and permission groups
+    # are. check.tf reports that on every run rather than letting it pass as
+    # a match. Re-issuing it with the zones listed flat would make it
+    # observable.
     {
       name = "Edit zone DNS"
       policies = [{
         permission_groups = [local.pg.dns_write]
-        resources         = { (local.account) = jsonencode({ "com.cloudflare.api.account.zone.*" = "*" }) }
+        resources         = null
       }]
     },
   ]

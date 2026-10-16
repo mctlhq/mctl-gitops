@@ -35,6 +35,14 @@ not compared, so rotating a token with the same scope needs no change here.
 Names are not unique, so the comparison counts each distinct fingerprint on
 both sides. Two identical live tokens need two entries.
 
+One blind spot: the provider cannot represent a nested resource map (an
+account with a zone wildcard under it) and returns `resources = null` for it.
+`Edit zone DNS` is such a token, so its zone scope is not verified, only its
+name, status and permission groups. The `token_scopes_observable` check block
+warns about every such token, and the drift summary reports it as UNVERIFIED
+rather than in sync. Re-issuing the token with its zones listed flat removes
+the gap.
+
 A failed read is a failed plan, never an empty list. Without
 `Account API Tokens Read` the API answers 9109 and the data source errors. A
 listing that does come back empty fails the first postcondition.

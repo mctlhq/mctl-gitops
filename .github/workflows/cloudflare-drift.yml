@@ -289,7 +289,20 @@ jobs:
                  # fail the plan (exit 1) on any difference. Exit 0 here means
                  # they all held, which is a verdict about Cloudflare, not an
                  # empty root.
-                 echo "### \`$ROOT\` — in sync (checks only: the live token list matches the manifest)" >> "$GITHUB_STEP_SUMMARY"
+                 # tokens/check.tf's check block warns, rather than fails,
+                 # about tokens whose scope the provider cannot read. That is
+                 # an unknown, so it is surfaced here, never folded into
+                 # "in sync".
+                 if grep -q 'Check block assertion failed' plan.txt; then
+                   unverified=$(grep -o 'not verified for: .*' plan.txt | head -n 1)
+                   echo "::warning title=Cloudflare tokens::\`$ROOT\`: scope $unverified"
+                   { echo "### \`$ROOT\` — in sync except UNVERIFIED scopes (checks only)";
+                     echo;
+                     echo "> [!WARNING]";
+                     echo "> Scope $unverified. For those tokens only name, status and permission groups were compared."; } >> "$GITHUB_STEP_SUMMARY"
+                 else
+                   echo "### \`$ROOT\` — in sync (checks only: the live token list matches the manifest)" >> "$GITHUB_STEP_SUMMARY"
+                 fi
                elif [ "$resources" = "0" ]; then
                  # Deliberately not a failure. account/ will hold zero
                  # resources until #1088 imports Access, and a scheduled

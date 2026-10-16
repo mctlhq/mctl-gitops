@@ -98,3 +98,26 @@ data "cloudflare_account_tokens" "all" {
     }
   }
 }
+
+# What the comparison above cannot see. A policy whose resources the provider
+# could not decode comes back as null, and a null on both sides compares equal,
+# so for such a token only its name, status and permission groups are checked.
+# This is an unknown, not a match: OpenTofu reports a failed check block as a
+# warning, and cloudflare-drift.yml turns that warning into an annotation and
+# an UNVERIFIED line in the summary.
+check "token_scopes_observable" {
+  assert {
+    condition = alltrue([
+      for t in data.cloudflare_account_tokens.all.result : alltrue([
+        for p in(t.policies == null ? [] : t.policies) : p.resources != null
+      ])
+    ])
+    error_message = format(
+      "Scope not observable (the provider returned no resources), so it is not verified for: %s",
+      join(", ", distinct([
+        for t in data.cloudflare_account_tokens.all.result : t.name
+        if anytrue([for p in(t.policies == null ? [] : t.policies) : p.resources == null])
+      ])),
+    )
+  }
+}
