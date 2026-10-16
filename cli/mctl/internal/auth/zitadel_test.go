@@ -90,6 +90,12 @@ func (f *fakeZitadel) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "offline_access missing", http.StatusBadRequest)
 		return
 	}
+	// mctl-api refuses a ZITADEL token that does not name its user's
+	// organization once customers_org_id is set.
+	if !strings.Contains(" "+q.Get("scope")+" ", " urn:zitadel:iam:user:resourceowner ") {
+		http.Error(w, "urn:zitadel:iam:user:resourceowner missing", http.StatusBadRequest)
+		return
+	}
 	redirect, err := url.Parse(q.Get("redirect_uri"))
 	if err != nil || redirect.Hostname() != "127.0.0.1" || redirect.Path != "/callback" {
 		http.Error(w, "redirect_uri must be the loopback /callback", http.StatusBadRequest)
