@@ -54,13 +54,16 @@ variable "platform_admins" {
     The Vault secret secret/platform/zitadel/admins as JSON: one field per
     personal platform admin account in the MCTL organization, each a
     JSON-encoded {email, first_name, last_name, preferred_language, username,
-    frappe, github_login, kubectl} (admins.tf). The field name is the stable key of
+    frappe, frappe_access, github_login, kubectl, kubectl_tenants} (admins.tf). The field name is the stable key of
     the account; `username`, optional, is its login name when it differs
     from the key; `frappe`, optional ({sites, roles}, as for tenant users),
     lists the admin for the ERPact copy's Frappe sites and grants their
     sign-in (erpact.tf); `github_login`, optional, is the admin's GitHub
     login, as for tenant users (github-login.tf); `kubectl`, optional
     (true), grants cluster-admin through kubectl sign-in (kubernetes.tf).
+    `kubectl_tenants`, optional (list of existing tenant names), adds those
+    tenant roles to an opted-in admin's Kubernetes grant. `frappe_access`,
+    optional (true), grants ERPact SSO access without provisioning Frappe users.
     This repository is public, so personal data never appears in it.
   EOT
   type        = string
