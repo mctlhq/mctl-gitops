@@ -117,8 +117,27 @@ extraVolumeMounts: []
 
 # -- Pod-level settings
 automountServiceAccountToken: ~
-podSecurityContext: {}
-containerSecurityContext: {}
+# -- Hardening defaults (SOC 2 binder F18, step 1). They are all allowed by the
+# tenant namespaces' PSS `enforce=baseline`; `runAsNonRoot` and
+# `readOnlyRootFilesystem` are deliberately not here yet, because most images
+# still need per-service changes for them (step 2, then `enforce=restricted`).
+# Helm merges a service's map into these defaults, so a service states only
+# what it changes, e.g. `capabilities.add` for an image whose entrypoint drops
+# privileges itself (nginx). Setting a key to null removes the default.
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+# -- Defaults merged into the securityContext of every initContainer,
+# extraContainer and the db-init Job container. A container's own
+# securityContext wins key by key, so the merge never loosens it.
+extraContainerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
 podAnnotations: {}
 podLabels: {}
 backstage: {}

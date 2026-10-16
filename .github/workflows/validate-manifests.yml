@@ -588,6 +588,17 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_work_context_env.py
 
+      - name: Unit-test base-service's securityContext defaults on both workload kinds
+        # base-service.hardenedContainers merges extraContainerSecurityContext
+        # under each init/extra container's own securityContext. A swapped
+        # `merge` argument order would let the default overwrite a
+        # container's explicit setting, and an edit to only deployment.yaml or
+        # rollout.yaml would drift silently; this renders both and checks the
+        # merged result, plus the db-init Job and the pod-level seccomp.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_security_context.py
+
       - name: Check the otel-collector alert lookbacks against their holds
         # `increase(...[W]) > 0` with W longer than `for: H` pages for a spike
         # that is already over: the expression stays true for the whole window,
