@@ -18,4 +18,7 @@ Personal attributes remain in Vault.
    Do not delete audit-referenced principals or write identity tables directly.
 
 Current state: role-transfer implementation and exact-address delete allowance
-in PR #1914. No user or grant changed yet.
+in PR #1914. No user or grant changed yet. An inline workflow was refused by reference-mode
+policy before execution. Use the reviewed `zitadel-login-consolidation`
+ClusterWorkflowTemplate; it authenticates with the existing Argo Vault role
+and uses KV version CAS to preserve concurrent updates.
