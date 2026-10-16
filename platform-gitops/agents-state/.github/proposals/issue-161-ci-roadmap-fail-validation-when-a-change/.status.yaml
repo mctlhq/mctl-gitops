@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-16T00:10:43Z'
+updated_at: '2026-10-16T00:28:14Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-d12037d9896e1cfb
@@ -27,3 +27,4 @@ attempt:
   expires_at: '2026-10-16T02:17:55Z'
   finished_at: '2026-10-16T00:10:43Z'
 pr: https://github.com/mctlhq/.github/pull/193
+review_attempts: 1
