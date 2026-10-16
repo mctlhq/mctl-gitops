@@ -6,6 +6,7 @@ tenant:
   displayName: "Admins"
   members:
     - userId: mashkovd
+      principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
       role: owner
   # admins already owns ghcr-credentials via the platform-level
   # mctl-agent-ghcr ExternalSecret (bootstrap/templates/mctl-platform/

@@ -266,6 +266,18 @@ jobs:
           scripts/validate-agents-state-approval.py --selftest
           scripts/validate-agents-state-approval.py
 
+      # Principal-mode tenant authorization (mctl-api#377) grants by
+      # members[].principalId alone, so an entry without one works today and
+      # silently locks its member out after the switch. Runs on main too:
+      # wft-create-tenant pushes new tenants straight to main, and a creator
+      # submitted without a principal id must turn it red. --selftest first,
+      # same reason as the other detectors.
+      - name: Every tenant member carries a principalId
+        run: |
+          set -euo pipefail
+          scripts/validate-tenant-member-keys.py --selftest
+          scripts/validate-tenant-member-keys.py
+
       - name: Check for shell interpolation of workflow parameters
         run: |
           set -euo pipefail
@@ -471,12 +483,26 @@ jobs:
       - name: Test workflow parameters cannot inject shell
         run: python3 tests/test_shell_param_injection.py
 
+      - name: Unit-test write-service-secrets against a fake Vault
+        # Values reach Vault byte for byte (quotes, backslashes, code-shaped
+        # text), existing keys survive the merge, and an unreadable current
+        # version stops the step instead of overwriting the whole secret.
+        run: python3 tests/test_tpl_vault_write_parse.py
+
       - name: Unit-test create-tenant's existing-tenant checks
         # create-tenant creates a tenant: an existing one fails validate unless
         # reprovision=true, and the commit step refuses one that appeared
         # after validate. Runs the template's own extracted blocks against a
         # fixture checkout, with git clone stubbed.
         run: python3 tests/test_wft_create_tenant_existing.py
+
+      - name: Unit-test create-tenant's creator_catalog_key
+        # creator_catalog_key=principal writes catalogKey: principal on the
+        # owner entry (site onboarding stage C2); principal without a
+        # principal id, or any value but login/principal, fails the step
+        # instead of falling back to a login-keyed owner. Runs the template's
+        # own extracted case and members blocks.
+        run: python3 tests/test_wft_create_tenant_catalog_key.py
 
       - name: Unit-test retire-service's Argo CD Application guard
         # retire-service deletes the Application <team>-<component>. The
@@ -561,6 +587,17 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_work_context_env.py
+
+      - name: Unit-test base-service's securityContext defaults on both workload kinds
+        # base-service.hardenedContainers merges extraContainerSecurityContext
+        # under each init/extra container's own securityContext. A swapped
+        # `merge` argument order would let the default overwrite a
+        # container's explicit setting, and an edit to only deployment.yaml or
+        # rollout.yaml would drift silently; this renders both and checks the
+        # merged result, plus the db-init Job and the pod-level seccomp.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_security_context.py
 
       - name: Check the otel-collector alert lookbacks against their holds
         # `increase(...[W]) > 0` with W longer than `for: H` pages for a spike
@@ -751,6 +788,19 @@ jobs:
       - name: tofu test (mocked providers)
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: tofu test -no-color
+
+      # Customers rollout phase 3: every Actions v2 execution is
+      # instance-wide and lives behind a toggle in customers_executions.tf
+      # (its tests prove the toggles). One declared anywhere else would apply
+      # on the next hourly run with no toggle in front of it.
+      - name: zitadel-iac declares Actions v2 executions only behind the rollout toggles
+        working-directory: platform-gitops/helm-charts/zitadel-iac/iac
+        run: |
+          set -euo pipefail
+          if grep -nE '^resource "zitadel_action_execution_' $(ls *.tf | grep -vx customers_executions.tf); then
+            echo "::error::Actions v2 executions belong in customers_executions.tf, behind a rollout toggle (docs/runbooks/zitadel.md)."
+            exit 1
+          fi
 
       # login_texts.json must override every Login V2 text that names
       # Zitadel in the release the zitadel chart pin deploys; a ZITADEL bump

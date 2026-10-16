@@ -1,0 +1,25 @@
+# Platform admins' kubectl through ZITADEL sign-in (#1881). The API server
+# maps the ID token's `groups` claim under the `oidc:` prefix
+# (infrastructure/k3s-preview/kube.tf); zitadel-iac (kubernetes.tf) puts
+# `kubernetes-admins` there only for personal platform admins whose Vault
+# entry carries "kubectl": true. Owner decision, 2026-10-15.
+#
+# The group is not `oidc:admins` on purpose: the ZITADEL groups action merges
+# roles from Argo CD, Vault, Workflows and Grafana too, and `admins` there
+# must not imply cluster-admin.
+#
+# Lives in the bootstrap chart (project default) like the other cluster-scoped
+# RBAC in this directory. The certificate kubeconfig stays the break-glass
+# path when ZITADEL is down.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: oidc-kubectl-admins
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: oidc:kubernetes-admins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin

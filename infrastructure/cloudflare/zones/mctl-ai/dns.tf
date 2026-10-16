@@ -40,8 +40,11 @@ resource "cloudflare_dns_record" "mx_route1" {
   zone_id  = local.zone_id
 }
 
+# Aggregate reports go to dmarc@mctl.ai, which has its own forward rule
+# (email.tf). Both were changed in the dashboard on 2026-10-09 and adopted
+# here as they are.
 resource "cloudflare_dns_record" "dmarc" {
-  content = "\"v=DMARC1; p=none; rua=mailto:support@mctl.ai\""
+  content = "\"v=DMARC1; p=none; rua=mailto:dmarc@mctl.ai\""
   name    = "_dmarc.mctl.ai"
   proxied = false
   ttl     = 1

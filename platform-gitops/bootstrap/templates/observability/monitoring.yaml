@@ -845,6 +845,20 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "PlatformWebEndpoint.*"
+                  # shared-pg (vm-rules/shared-pg-alerts.yaml + SharedPgBackup*
+                  # in backup-alerts.yaml, #1811/#1830): the same circularity as
+                  # MctlApi.* one layer further down - mctl-api, through which
+                  # mctl-agent files its incidents, keeps its state in shared-pg,
+                  # so an agent-only route reports a database outage to a
+                  # component that needs that database. Two-part shape:
+                  # continue: true here, AND SharedPg.* in the mctl-agent
+                  # catch-all below, AND SharedPg.* in the critical route's
+                  # exclusion (NoPrimary, WALArchivingFailing, VolumeAlmostFull
+                  # are critical and would otherwise page twice).
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "SharedPg.*"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
@@ -876,7 +890,7 @@ spec:
                   # routes page only the non-critical ones — and the critical
                   # route excludes exactly the alertnames already paged by an
                   # earlier continue: true telegram route (canary, Access login,
-                  # SLO fast-burn, communication agent, mctl-api). Adding a new
+                  # SLO fast-burn, communication agent, mctl-api, shared-pg). Adding a new
                   # continue: true telegram route for an alert that can be
                   # critical means adding its names to that exclusion too.
                   # scripts/check-alertmanager-routes.py fails CI on a
@@ -896,7 +910,7 @@ spec:
                     continue: true
                     matchers:
                       - severity = "critical"
-                      - alertname !~ "MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*"
+                      - alertname !~ "MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|SharedPg.*"
                   # The alerting path itself pages regardless of severity:
                   # when Alertmanager, vmalert or mctl-agent is what broke, the
                   # alert about it must not depend on it. Critical ones are
@@ -943,7 +957,7 @@ spec:
                       - namespace = "monitoring"
                   - receiver: mctl-agent
                     matchers:
-                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|PlatformWebEndpoint.*"
+                      - alertname =~ "ContainerOOMKilled|PodCrashLooping|KubePodCrashLooping|KubePodNotReady|PodNotReady|TenantCPUQuotaHigh|TenantMemoryQuotaHigh|ArgoWorkflowFailed|ArgoWorkflowHighFailureRate|CPUThrottlingHigh|KubeJobNotCompleted|KubePersistentVolumeFillingUp|KubeStatefulSetReplicasMismatch|NodeHighCPU|NodeMemoryHeadroomLow|NodeHighMemory|NodeLowMemoryAvailable|NodeDiskPressure|NodeDiskSpaceHigh|VaultSealed|ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong|MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|PlatformWebEndpoint.*|SharedPg.*"
                   # Restores the root default for everything that got this far.
                   # The root receiver fires only when NO child route matched,
                   # and the continue: true direct-paging routes above count as
@@ -1097,6 +1111,13 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/observability/vmsingle-access
+
+    # VMAlertmanager's NetworkPolicy: only the inventoried clients reach it,
+    # so a tenant pod cannot inject an alert that Alertmanager would forward
+    # to mctl-agent with the real webhook token (mctl-handoff block C).
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/alertmanager-access
 
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main

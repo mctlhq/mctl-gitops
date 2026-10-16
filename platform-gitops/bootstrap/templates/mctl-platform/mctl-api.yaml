@@ -42,7 +42,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.79.0"
+            tag: "4.90.0"
 
           ingress:
             enabled: true
@@ -59,15 +59,41 @@ spec:
             # stores once at startup and keeps a failed one nil (503) until
             # the pod restarts (mctlhq/mctl-api#387); the chart has no pod
             # annotation hook, so changing this value is how gitops restarts
-            # the pod. Last bumped 2026-09-30: load the usage price card
-            # with the claude-opus-5-5 and claude-sonnet-5-5 entries (the
-            # catalog is read once at startup, see
-            # bootstrap/files/usage-pricing/README.md).
-            ROLLOUT_MARKER: "2026-09-30-pricing-5-5-models"
+            # the pod. Last bumped 2026-10-16: load customers_org_id, which
+            # zitadel-iac wrote into MCTL_OIDC_PROVIDERS (mctl-gitops#1904;
+            # envFrom is read at container start).
+            ROLLOUT_MARKER: "2026-10-16-customers-org-id"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
             ADMIN_USERS: mashkovd
+            # Tenant authorization by canonical principal (mctlhq/mctl-api#377).
+            # `shadow`: every tenant decision is still made by GitHub login
+            # (legacy), and is also computed from members[].principalId and
+            # compared; the result is only counted (tenant_authz_shadow_*)
+            # and logged, never enforced. Switch criterion for `principal`
+            # (PR-B): >=7 days here with no new diff and no unexplained
+            # unresolved (docs/principals.md in mctl-api).
+            # Rollback: remove this line (default `legacy`).
+            TENANT_AUTHZ_MODE: "shadow"
+            # Platform admins by principal (mctlhq/mctl-api#377). In shadow
+            # it decides nothing: the admin decision is still ADMIN_USERS,
+            # and this list is only compared with it (admin_mismatch in
+            # tenant_authz_shadow_*), so the switch to `principal` can show
+            # a clean admin record first. A malformed id refuses startup.
+            # Rollback: remove this line.
+            ADMIN_PRINCIPALS: prn_01M39HRB7JRXZ2PHW5VVB695YZ
+            # DevLoop approval relay (mctlhq/mctl-api#571, mctl-agents#636).
+            # `false` closes the free-text approver relay: a service call to
+            # mctl-agents-approve naming a different approver gets 400
+            # legacy_approver_disabled instead of approver.legacy_relay, and
+            # a DevLoop approve with no aar_ grant gets 409
+            # approval_grant_missing. Safe since mctl-agents 1.76.0, whose
+            # DevLoops request a grant first; the pre-1.76.0 loops parked at
+            # approval were abandoned on 2026-10-16. "true"/"false" only;
+            # anything else refuses startup. Rollback: remove this line
+            # (empty = on).
+            MCTL_AGENTS_APPROVE_LEGACY_APPROVER: "false"
             AUTH_REQUIRED: "true"
             BACKSTAGE_URL: https://app.mctl.ai
             # No DEX_ISSUER_URL: since mctl-api 4.72.0 (mctlhq/mctl-api#521)
@@ -257,6 +283,19 @@ spec:
           # missing key cannot take DB_PASSWORD down with it
           # (mctl-api-secrets.yaml).
           envFromExtraSecret: mctl-api-events
+          # Identity hook config for mctl-web onboarding (mctlhq/mctl-api#633,
+          # docs/zitadel-identity-hook.md): ZITADEL_HOOK_* and the three
+          # target signing keys, written by zitadel-iac once it creates the
+          # targets (helm-charts/zitadel-iac/iac/customers.tf). Optional: the
+          # pod starts without it and the hook routes answer 503. envFrom is
+          # read at container start, so bump ROLLOUT_MARKER after zitadel-iac
+          # first writes the Secret, and after each key rotation
+          # (docs/runbooks/zitadel.md). Needs the chart slot from
+          # mctlhq/mctl-api#635; an older chart ignores the value.
+          # The hook needs mctl-api 4.89.0 or later; phase 0 validated
+          # 4.89.0 as released against a local ZITADEL v4.19.2.
+          envFromOptionalSecrets:
+            - mctl-api-zitadel-hook
 
           # The GitHub App installation token, mounted as a FILE. mctl-api
           # reads GITHUB_APP_TOKEN_FILE per use (internal/ghtoken), which is
@@ -402,6 +441,12 @@ spec:
     # (infra-components/mctl-platform/mctl-api/oidc-zitadel.yaml).
     - kind: Secret
       name: mctl-api-oidc-zitadel
+      jsonPointers:
+        - /data
+    # Written by the zitadel-iac Job (customers.tf): the identity hook's
+    # configuration (infra-components/mctl-platform/mctl-api/zitadel-hook.yaml).
+    - kind: Secret
+      name: mctl-api-zitadel-hook
       jsonPointers:
         - /data
     # ESO admission webhook injects defaults absent in git, plus legacy

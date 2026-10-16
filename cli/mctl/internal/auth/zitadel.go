@@ -45,8 +45,15 @@ const (
 )
 
 // zitadelScopes: offline_access for a refresh token; profile/email so the
-// ID token names the user in `mctl auth status`.
-var zitadelScopes = []string{oidc.ScopeOpenID, "profile", "email", oidc.ScopeOfflineAccess}
+// ID token names the user in `mctl auth status`. The resource-owner scope
+// puts the user's organization into the access token: once mctl-api's
+// ZITADEL entry sets customers_org_id, it refuses a token that does not name
+// one (mctl-api docs/federation.md "Self-service customers"). A refresh keeps
+// the scopes of the original login, so a login made without it has to be
+// redone.
+var zitadelScopes = []string{oidc.ScopeOpenID, "profile", "email", oidc.ScopeOfflineAccess, zitadelScopeResourceOwner}
+
+const zitadelScopeResourceOwner = "urn:zitadel:iam:user:resourceowner"
 
 // ErrNoZitadelLogin: no ZITADEL login is stored.
 var ErrNoZitadelLogin = errors.New("not logged in to ZITADEL: run 'mctl auth login --zitadel'")

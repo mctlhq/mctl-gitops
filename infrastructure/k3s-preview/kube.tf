@@ -301,12 +301,31 @@ module "kube-hetzner" {
       "audit-log-maxage=30",
       "audit-log-maxbackup=10",
       "audit-log-maxsize=100",
+      # kubectl sign-in through ZITADEL (#1881). The client is
+      # zitadel_application_oidc.kubernetes (zitadel-iac kubernetes.tf); its
+      # id is public and printed by
+      #   kubectl -n zitadel get secret kubernetes-oidc -o jsonpath='{.data.clientID}' | base64 -d
+      # Both prefixes keep OIDC identities apart from service accounts and
+      # system:* groups: the tenant chart binds group `oidc:<tenant>`.
+      # ZITADEL runs in this cluster, so after a restart the issuer is
+      # unreachable for a while; the API server starts anyway and retries
+      # discovery every 10s, and only OIDC tokens fail until it succeeds.
+      "oidc-issuer-url=https://auth.mctl.ai",
+      "oidc-client-id=395107286768486101",
+      "oidc-username-claim=preferred_username",
+      "oidc-username-prefix=oidc:",
+      "oidc-groups-claim=groups",
+      "oidc-groups-prefix=oidc:",
     ]
   }
 
   # --- Kubeconfig ---
-  # Best practice: generate via `terraform output --raw kubeconfig > kubeconfig.yaml`
-  # create_kubeconfig = false
+  # No local files: the providers below read module.kube-hetzner.kubeconfig,
+  # not a file, and a CI runner starts empty, so these two only showed up as
+  # creates in every plan. Operators get a kubeconfig with
+  # `tofu output --raw kubeconfig`.
+  create_kubeconfig    = false
+  create_kustomization = false
 }
 
 # --- Cluster Bootstrap Module ---

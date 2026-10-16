@@ -37,7 +37,9 @@ podSecurityContext:
   fsGroup: 1000
   runAsNonRoot: true
   runAsUser: 1000
-securityContext:
+# Was `securityContext:`, a key base-service never reads, so these settings
+# were silently not applied to the main container.
+containerSecurityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]

@@ -2,6 +2,7 @@
 p, role:team-karabu, applications, get, apps/karabu-*, allow
 p, role:team-karabu, applications, list, apps/karabu-*, allow
 p, role:team-karabu, applications, sync, apps/karabu-*, allow
-p, role:team-karabu, applications, override, apps/karabu-*, allow
+p, role:team-karabu, applications, action/apps/Deployment/restart, apps/karabu-*, allow
+p, role:team-karabu, applications, action/apps/StatefulSet/restart, apps/karabu-*, allow
 p, role:team-karabu, logs, get, apps/karabu-*, allow
 g, karabu, role:team-karabu

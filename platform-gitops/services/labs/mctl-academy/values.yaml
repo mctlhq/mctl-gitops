@@ -5,13 +5,23 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-academy
-  tag: "0.1.54"
+  tag: "0.1.55"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 8080
 backstage:
   kubernetesId: mctl-academy
+# Non-root on a read-only root filesystem (base-service hardening, step 2).
+# runAsNonRoot is checked by kubelet against a numeric user only, so the
+# ids this image already runs as are pinned (observed 2026-10-16); the
+# chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
 resources:
   requests:
     cpu: 200m

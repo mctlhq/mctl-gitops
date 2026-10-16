@@ -24,7 +24,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.74.0"
+  tag: "1.77.0"
 imagePullSecrets:
   - name: ghcr-credentials
 # --role control since the queue split (ADR-008): this process runs every
@@ -86,6 +86,8 @@ containerSecurityContext:
     drop:
       - ALL
 env:
+  MCTL_TRACE_WORKFLOW_TYPES: DevLoopWorkflow
+  MCTL_TRACE_ARGO_PARAM: "true"
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents
   LOG_LEVEL: info
@@ -186,3 +188,7 @@ externalSecret:
     # would shadow the GITHUB_TOKEN that github_token.py keeps refreshing and
     # defeat the whole mechanism above. Nothing in orchestrator/ reads GH_TOKEN
     # by name — gh picks up GITHUB_TOKEN on its own.
+
+# Bounded DevLoop rollout; other workflow types remain unsampled.
+otel:
+  enabled: true

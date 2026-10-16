@@ -69,8 +69,8 @@ spec:
           echo "0c4d965ea944b64b8fddaf7f27779ee3034e5693263786506ccd1c120f184e8c  /usr/local/bin/yq" | sha256sum -c - >/dev/null
           chmod +x /usr/local/bin/yq
 
-          TEAM="{{inputs.parameters.team_name}}"
-          APP="{{inputs.parameters.app_name}}"
+          TEAM="$PARAM_TEAM_NAME"
+          APP="$PARAM_APP_NAME"
           DB_NAME="${TEAM}-${APP}"
           VAULT_PATH="teams/${TEAM}/${APP}/database"
 
@@ -392,6 +392,10 @@ spec:
             fi
           fi
         env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_APP_NAME
+            value: "{{inputs.parameters.app_name}}"
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
         volumeMounts:

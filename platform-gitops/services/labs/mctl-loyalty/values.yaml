@@ -12,6 +12,16 @@ service:
   port: 8080
 backstage:
   kubernetesId: mctl-loyalty
+# Non-root on a read-only root filesystem (base-service hardening, step 2).
+# runAsNonRoot is checked by kubelet against a numeric user only, so the
+# ids this image already runs as are pinned (observed 2026-10-16); the
+# chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 100
+  runAsGroup: 101
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
 resources:
   # Right-sized 2026-08-03: p95 1.6m/77MB over 24h, was still at untouched
   # chart defaults (<20% of limit used). Trimmed with generous headroom

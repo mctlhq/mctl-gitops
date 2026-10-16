@@ -10,11 +10,13 @@ tenant:
   contactEmail: ""
   members:
     - userId: mashkoffdmitry
+      principalId: prn_01M39HRBFPY3V1ZDZTCAY8G1H9
       role: owner
     # The owner signs in through ZITADEL, which maps them to this login
     # only (mctl:github_login); mashkoffdmitry has no ZITADEL mapping
     # (mctlhq/mctl-gitops#1500).
     - userId: mashkovd
+      principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
       role: owner
   # The tenant chart owns ghcr-credentials here. No service in this tenant
   # supplies it through extraExternalSecrets any more, so it must stay on.

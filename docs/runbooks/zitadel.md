@@ -400,6 +400,51 @@ ZITADEL is offered as an Access identity provider:
   because a recreate changes the id and breaks the Access login until the
   copy is updated.
 
+### Anthropic SSO
+
+`iac/anthropic.tf` declares the client behind the Anthropic organization's
+SSO (claude.ai, Claude Console). Anthropic's SSO runs on WorkOS, which has no
+ZITADEL preset, so the connection is WorkOS "Custom OIDC":
+
+- **Project `Anthropic`** in organization `MCTL`, with `project_role_check`,
+  `has_project_check` and `project_role_assertion`. Role `owners` is held by
+  the personal platform admins (not the break-glass `mctl-admin`, which has
+  no mailbox). The shared groups action copies it into `groups`, which
+  WorkOS requires; on Anthropic's side `owners` maps to Owner. Not named
+  `admins`: Anthropic's Admin is a narrower role (membership only).
+- **Client `anthropic`**: web, basic auth with a client secret, redirect
+  = the WorkOS connection's callback. A new connection on Anthropic's side
+  has a new callback, so it is a change to `anthropic_sso_callback`.
+- **WorkOS step 4.** Discovery endpoint
+  `https://auth.mctl.ai/.well-known/openid-configuration`; client id and
+  secret from `zitadel/anthropic-sso-oidc` (keys `clientID`,
+  `clientSecret`):
+
+  ```
+  kubectl -n zitadel get secret anthropic-sso-oidc -o jsonpath='{.data.clientID}' | base64 -d
+  kubectl -n zitadel get secret anthropic-sso-oidc -o jsonpath='{.data.clientSecret}' | base64 -d
+  ```
+
+  The project and the application carry `prevent_destroy`: a recreate
+  changes both values and breaks every Anthropic sign-in until they are
+  entered again.
+- **Tenant users.** Role `users` (maps to User) is handed out through a
+  project grant to every tenant organization, and held only by a tenant user
+  whose Vault entry carries `"anthropic": true`. `groups` is a flat list of
+  role keys, and tenant roles elsewhere are keyed by the tenant's name, so a
+  tenant named `owners` or `users` is refused at plan time.
+- Anthropic routes a user to this connection by the domain of their e-mail
+  address, so a grant holder whose ZITADEL e-mail is not at a domain
+  verified in the Anthropic organization never reaches it.
+- **Changing an existing user's e-mail in Vault marks the new address
+  verified at once**, and no verification mail is sent: the provider
+  re-sends the stored `is_email_verified` with the new address (observed
+  2026-10-14: `user.human.email.changed` and `user.human.email.verified` in
+  the same instant). Whoever can write the Vault entry therefore decides,
+  unchecked, which address Anthropic and Frappe (which matches users by
+  `email` alone, see ERPact above) see for that person. Check the address
+  belongs to them before writing it.
+
 ### GitHub login claim (#1500 phase 1)
 
 `iac/github-login.tf` gives the applications that still identify people by
@@ -475,6 +520,127 @@ user without the claim is refused there, never matched by e-mail.
   `zitadel`, a separate change in
   `bootstrap/templates/mctl-platform/mctl-portal.yaml` that also has to
   reference the Secret. Setting it back to `github` is the rollback.
+
+### Customers organization and the identity hook (mctl-web onboarding B1)
+
+Self-service accounts live in the `customers` organization
+(`helm-charts/zitadel-iac/iac/customers.tf`). A first GitHub sign-in creates
+`<login>@mctl.ai`, a login name and not a mailbox, in the shape the identity
+hook in mctl-api sets: mctl-api `docs/zitadel-identity-hook.md`, routes
+`https://api.mctl.ai/api/v1/webhooks/zitadel/{intent,create-user,token-claims}`.
+The plan and the B0 evidence are in mctlhq/mctl-web
+`docs/plans/site-onboarding-review.md`.
+
+**Rollout order.** Do not skip or merge steps. Each one is its own change, and
+the next starts only after the previous smoke test passes.
+
+1. **Phase 1, `customers.tf`.** It creates the organization, the login policy,
+   the `mctl-web` and `mctl-web-dev` clients, the GitHub IdP with account
+   creation off, and three Actions v2 targets. The targets' signing keys are
+   written to `mctl-api/mctl-api-zitadel-hook`. There are no executions, so
+   ZITADEL calls nothing and no other organization changes. CI fails if an
+   execution is declared outside `customers_executions.tf`.
+2. **Phase 2.** The mctl-api Deployment reads `mctl-api-zitadel-hook` and runs
+   a release that has the hook. Check: an unsigned POST to each route answers
+   `401`, not `503`. A `503` means the configuration was not read.
+3. **Phase 3, `customers_executions.tf`.** Three toggles, all off by default
+   in `variables.tf`. Production sets them in
+   `iac/customers_rollout.auto.tfvars.json`, turned on one per change; the
+   `production_rollout_is_at_step_3_1` test pins the current step and moves
+   with it:
+   - **3.1 `identity_hook_token_functions_enabled`.** Routes `preuserinfo` and
+     `preaccesstoken`. The target does not interrupt.
+     - Smoke: an admin signs in and refreshes a token. Both work, and the
+       tokens carry no `mctl:*` claims.
+   - **3.2 `identity_hook_create_gate_enabled`.** Gates the 15 methods listed
+     in `customers_executions.tf`. It interrupts and is instance-wide.
+     - Smoke, all in the admin organization:
+       - the next zitadel-iac run plans and applies cleanly;
+       - creating and deleting a throwaway machine user works;
+       - an `UpdateUser` on an admin works;
+       - a `github_login` metadata write works.
+     - Each call gets a `200` in mctl-api's hook log.
+   - **3.3 `identity_hook_intent_enabled`.** Adds the intent response hook and
+     turns on account creation on the customers IdP. The IdP refuses to plan
+     creation while the gate is off.
+     - Smoke: the B1 acceptance tests with the test group.
+4. **B1b.** Project grants for `customers` to the portal and
+   mctl-api, only after C0 and C2 are live. These grants carry no roles;
+   tenant membership remains principal-based. The hook claim allowlist adds
+   the portal UI, API OAuth and CLI clients explicitly. The legacy portal OIDC
+   provider stays excluded: it still resolves users by login, without C0. After the IaC
+   Job succeeds, roll out mctl-api to load the updated Secret before testing
+   those clients. A changed Secret alone does not update process environment.
+   Keep the website test-group restriction until end-to-end acceptance.
+
+**Blast radius once step 3.2 is on.** The gate is an interrupting request
+execution, and executions are instance-wide. While mctl-api is unreachable or
+answers `503`, these fail in **every** organization:
+- user creation (v1, v2, v2beta, v3alpha, admin `ImportData`);
+- IdP links;
+- user metadata writes;
+- `UpdateUser` profile edits;
+- the zitadel-iac users this root creates and its `github_login` writes.
+
+Sign-in, password and TOTP for existing users, and token issuance keep
+working. The token functions do not interrupt, so tokens come out without
+`mctl:*` claims, and relying parties refuse a customer token that lacks
+`mctl:github_id`. Customer sign-up stops: the intent hook interrupts. When
+an execution fails, the failure page's `error` parameter shows the hook's
+URL. That URL is public anyway.
+
+The hook also answers `503` when it cannot read the gitops checkout it
+checks reserved logins against, or when a tenant member has no `userId`
+(mctl-api docs, "Reserved logins"). Either one stops every customer sign-up.
+
+**Kill switch.**
+1. As a platform admin in the console (Actions → Executions), delete the
+   execution groups in reverse rollout order: intent, then the gate, then
+   the token functions. This takes effect immediately.
+2. Turn the toggle off in git. Otherwise the next hourly zitadel-iac run
+   recreates the executions. Turning a toggle off plans destroys, so list the
+   addresses in `allowedDeletes` in the same change, then empty it once
+   applied.
+
+Deleting the targets is not needed: a target without an execution is never
+called.
+
+**A reused GitHub login.** A new GitHub account that takes a login an older
+customer account still holds fails with "User already exists" (Login V2
+`V3-DKcYh`). This fails closed; nobody is signed in as the old account.
+1. Confirm from the old account's `github_id` metadata that it belongs to a
+   different GitHub account.
+2. Rename the old account's username, or delete the account if its owner
+   is gone.
+3. Ask the new person to sign in again.
+
+Never edit `github_id`: the gate refuses it in every organization, by design.
+
+**Signing key rotation.** Each target has its own key, generated by ZITADEL
+and written to `mctl-api-zitadel-hook`. ZITADEL cannot rotate a key in
+place, so rotate by replacing the target:
+1. Rename the target in `customers.tf`. This plans a replace, so list the
+   address in `allowedDeletes`.
+2. Before applying, put the current key and the coming key in the
+   `ZITADEL_HOOK_*_SIGNING_KEYS` CSV. The hook accepts every listed key.
+3. Apply, so the Job writes the new key.
+4. Restart mctl-api, then drop the old key.
+
+The same replace is needed to flip a target's `interrupt_on_error`: ZITADEL
+accepts that update and ignores it (B0 item 5). That is why the flag is part
+of each target's name.
+
+**State.** The three signing keys are computed attributes, so they are in the
+zitadel-iac state (backend `kubernetes`, namespace `zitadel`) as well as in
+`mctl-api-zitadel-hook`. The GitHub client secret is write-only and is not in
+state. Its source is Vault `secret/platform/zitadel/github-idp`
+(`client_id`, `client_secret`), read by ExternalSecret `zitadel-iac-github-idp`.
+
+**ZITADEL upgrades.** Re-check the gated method list in
+`customers_executions.tf` against the new release's protos before bumping. A
+new user-creating, IdP-linking or metadata-writing RPC is a path into
+`customers` that skips the hook. SCIM is not covered by any execution:
+`customers` must not get SCIM provisioning.
 
 ## Sync hooks instead of Helm hooks
 
@@ -683,3 +849,13 @@ are tracked follow-ups, not blockers:
 Bump `targetRevision` in `bootstrap/templates/core-infra/zitadel.yaml`. Read
 the ZITADEL and chart release notes first: setup migrates the schema on the
 next sync, and a downgrade after that needs the database backup.
+
+### Consolidating a tenant login into an existing platform-admin login
+
+Preserve the destination user's ID and existing roles. Add `frappe_access: true` to its Vault entry for grant-only ERPact SSO
+access before retiring an ERPact tenant user. An opted-in Kubernetes admin
+can carry additional existing tenant roles via `kubectl_tenants` in its Vault
+entry; those roles are added to `kubernetes-admins`, never substituted for it.
+Verify destination grants live before removing the source entry from Vault.
+List only the source user and its exact managed grant addresses in
+`allowedDeletes`, and clear that exception after the deletion applies.

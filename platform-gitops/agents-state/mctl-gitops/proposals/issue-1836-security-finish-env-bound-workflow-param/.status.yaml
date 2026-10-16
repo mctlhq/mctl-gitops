@@ -1,0 +1,35 @@
+status: merged
+updated_at: '2026-10-11T22:54:24Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-2d789f97516c7855
+  trace_id: 9c36a9e3671a23c0f15c15794d79880b
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-gitops
+  issue: 1836
+  url: https://github.com/mctlhq/mctl-gitops/issues/1836
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-9dced81d8cd11761
+  content_hash: sha256:9dced81d8cd1176198c7f6090e129e163ff3f9b353ce0cd9315c70fee01e7834
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-11T22:11:05Z'
+attempt:
+  id: a8abd7d17768baa105f6417540ab98478f7219702d37fa060efdcefde584c63b
+  started_at: '2026-10-11T22:15:47Z'
+  expires_at: '2026-10-12T00:25:47Z'
+  finished_at: '2026-10-11T22:18:52Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/1838
+github:
+  state: merged
+  head_sha: 65eb9077fc79da70cf656321b83e67e110020d80
+  observed_at: '2026-10-11T22:54:24Z'
+merged_at: '2026-10-11T22:54:24Z'
+merge_commit: 12eee3bacf369df6caddc27d9e70b22da664f773

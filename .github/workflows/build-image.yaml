@@ -171,7 +171,6 @@ jobs:
             echo "::error::component_name ${INPUT_COMPONENT_NAME} is not available to team ${INPUT_TEAM_NAME}"
             exit 1
           fi
-          rm -rf .image-name-policy
 
       # --- Tier 1: Vault PAT via GitHub OIDC -> Vault JWT ---
       - name: Fetch Vault PAT
@@ -280,6 +279,105 @@ jobs:
             echo "has_pat=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # --- Source repository: build only the repo the component is bound to ---
+      # The image-name check above decides what may be pushed; this decides
+      # what may be checked out. Without it, whoever can dispatch this
+      # workflow picks `repo` freely, and the checkout runs with the team's
+      # Vault PAT or the MCTL App token, which reach private repositories:
+      # their source would be built into an image under the team's name.
+      # mctl-api and the portal check the repository before they dispatch;
+      # this is the same backstop at the build, for a direct dispatch only
+      # (the release-deploy.yaml gap above applies here too).
+      #
+      # Allowed, decided from main (the policy checkout), never from inputs:
+      #   * team platform: only this repository (platform-gitops/images/).
+      #   * a component registered under services/<team>/<component>/: only
+      #     its catalog-info.yaml `github.com/source-repo`, which
+      #     tpl-git-commit writes once, at onboard. To build from another
+      #     repository, change that annotation in a reviewed PR first.
+      #   * a component not registered yet (onboard): a repository GitHub
+      #     reports as public, or one the team bound a Vault PAT for (the
+      #     Tier 1 step found one for this team/component). A private
+      #     repository reachable only through the MCTL App cannot be
+      #     onboarded by a direct dispatch.
+      # A registration this step cannot read (a component directory without
+      # catalog-info.yaml, an unparsable file, no annotation) and a
+      # visibility lookup that does not answer 200 or 404 refuse the build:
+      # they are unknowns, not "unregistered" or "public".
+      - name: Check source repository
+        if: steps.caller.outputs.direct == 'true'
+        env:
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_TEAM_NAME: ${{ inputs.team_name }}
+          INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
+          HAS_PAT: ${{ steps.vault_pat.outputs.has_pat }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Shape already checked by the Vault step, which runs first.
+          lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+          want=$(lower "$INPUT_REPO")
+          dir=".image-name-policy/platform-gitops/services/${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
+          refuse() { echo "::error::$1"; exit 1; }
+          # Unique path and removed on every exit, refusals included.
+          resp=$(mktemp)
+          trap 'rm -rf .image-name-policy "$resp"' EXIT
+
+          if [ ! -d .image-name-policy/platform-gitops/services ]; then
+            refuse "cannot read platform-gitops/services from main"
+          fi
+
+          if [ "$INPUT_TEAM_NAME" = "platform" ]; then
+            [ "$want" = "$(lower "$GITHUB_REPOSITORY")" ] \
+              || refuse "team platform builds only from ${GITHUB_REPOSITORY}, got: ${INPUT_REPO}"
+            echo "source repository: ${INPUT_REPO} (platform)"
+          elif [ -e "$dir" ]; then
+            catalog="${dir}/catalog-info.yaml"
+            [ -f "$catalog" ] \
+              || refuse "${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME} is registered but has no catalog-info.yaml; cannot tell its source repository"
+            # Checked apart so a missing yq is not reported as a bad file.
+            command -v yq >/dev/null || refuse "yq is not available on this runner"
+            src=$(yq -r '.metadata.annotations["github.com/source-repo"] // ""' "$catalog") \
+              || refuse "cannot parse ${catalog#.image-name-policy/}"
+            [ -n "$src" ] \
+              || refuse "${catalog#.image-name-policy/} names no github.com/source-repo; refusing to build"
+            [ "$want" = "$(lower "$src")" ] \
+              || refuse "${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME} is bound to ${src}, got: ${INPUT_REPO}"
+            echo "source repository: ${INPUT_REPO} (registered)"
+          elif [ "$HAS_PAT" = "true" ]; then
+            echo "source repository: ${INPUT_REPO} (not registered; team-bound Vault PAT)"
+          else
+            # With the job token first (higher rate limit). It is scoped to
+            # this repository, so if GitHub answers 401/403 for another one,
+            # ask again without it: anonymous reads of a public repository
+            # answer 200, of a private or missing one 404. Any other answer,
+            # such as an anonymous rate-limit 403, stays unknown and refuses.
+            lookup() {
+              curl -sS -o "$resp" -w '%{http_code}' "$@" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${INPUT_REPO}" || echo 000
+            }
+            code=$(lookup -H "Authorization: Bearer ${GH_TOKEN}")
+            case "$code" in
+              401|403) code=$(lookup) ;;
+            esac
+            case "$code" in
+              200)
+                visibility=$(jq -r '.visibility // empty' "$resp") \
+                  || refuse "unreadable response for ${INPUT_REPO}"
+                [ "$visibility" = "public" ] \
+                  || refuse "${INPUT_REPO} is not public (${visibility:-unknown}) and no repository PAT is bound for ${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
+                ;;
+              404)
+                refuse "${INPUT_REPO} is not public or does not exist, and no repository PAT is bound for ${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
+                ;;
+              *)
+                refuse "could not read the visibility of ${INPUT_REPO} (HTTP ${code}); not building"
+                ;;
+            esac
+            echo "source repository: ${INPUT_REPO} (not registered; public)"
+          fi
+
       # --- Tier 2: GitHub App token ---
       # This is the one place MCTL App is still the right credential: the
       # repo being checked out belongs to the customer, and MCTL App is the
@@ -327,13 +425,47 @@ jobs:
           token: ${{ steps.checkout_token.outputs.token }}
 
       # --- Resolve GHCR push token ---
+      # GITHUB_TOKEN canary. GHCR_PAT is a classic PAT with write:packages; it
+      # expired silently on 2026-10-12 and every release-deploy failed at GHCR
+      # login from 07:24Z until it was re-minted. The job's own GITHUB_TOKEN
+      # (packages: write) lives one run and cannot expire that way, but it can
+      # push to an existing package only after the package grants mctl-gitops
+      # Write under "Manage Actions access". Images listed here use it instead
+      # of GHCR_PAT; the list grows as packages are granted, and GHCR_PAT is
+      # deleted once every package is on it. A Vault PAT still wins: tenant
+      # builds push with their own credential.
       - name: Resolve GHCR token
         id: ghcr_token
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          GITHUB_TOKEN_IMAGES: |
+            ghcr.io/mctlhq/grafana-iac
+            ghcr.io/mctlhq/mc
+            ghcr.io/mctlhq/mctl-academy
+            ghcr.io/mctlhq/mctl-agent
+            ghcr.io/mctlhq/mctl-agents
+            ghcr.io/mctlhq/mctl-alice
+            ghcr.io/mctlhq/mctl-api
+            ghcr.io/mctlhq/mctl-design
+            ghcr.io/mctlhq/mctl-docs
+            ghcr.io/mctlhq/mctl-portal
+            ghcr.io/mctlhq/mctl-telegram
+            ghcr.io/mctlhq/mctl-web
+            ghcr.io/mctlhq/pfeifenpatenschaft-backend
+            ghcr.io/mctlhq/portfolio
+            ghcr.io/mctlhq/projects-mcp
+            ghcr.io/mctlhq/seerrsense
+            ghcr.io/mctlhq/vault-iac
+            ghcr.io/mctlhq/zitadel-iac
         run: |
           if [[ "${{ steps.vault_pat.outputs.has_pat }}" == "true" ]]; then
             echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
             echo "🔑 Using Vault PAT for GHCR push"
+          elif [[ -n "$IMAGE_NAME" ]] && grep -qxF -- "$IMAGE_NAME" <<< "$GITHUB_TOKEN_IMAGES"; then
+            echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
+            echo "username=${{ github.actor }}" >> $GITHUB_OUTPUT
+            echo "🌐 Using GITHUB_TOKEN for GHCR push (package granted to mctl-gitops)"
           elif [[ -n "${{ secrets.GHCR_PAT }}" ]]; then
             echo "token=${{ secrets.GHCR_PAT }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT

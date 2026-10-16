@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tenant-commerce-proof
+  namespace: default
+  description: "Tenant Commerce Proof — namespace, quotas, and network policies"
+  annotations:
+    mctl.me/tenant-name: "commerce-proof"
+    backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/commerce-proof/catalog-info.yaml"
+    backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/commerce-proof/catalog-info.yaml"
+spec:
+  type: tenant
+  owner: group:default/admins
+  system: team-commerce-proof
+  dependsOn: []

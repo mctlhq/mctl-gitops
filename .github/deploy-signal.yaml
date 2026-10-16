@@ -48,12 +48,6 @@ services:
     sha_only: true  # bare commit sha, no main- prefix
 
   # --- deliberately held ---
-  - path: platform-gitops/services/ovk/mctl-academy/values.yaml
-    pinned_to: "0.1.0"
-    # The ovk tenant has never moved past 0.1.0 while labs is on 0.1.50.
-    # Whether that is deliberate is not recorded anywhere, so it is pinned
-    # here rather than declared healthy: if someone changes the deployed tag
-    # without deciding, this entry stops matching and the check fires.
 
   # --- not watched ---
   # These repositories publish no GitHub releases, so there is no release tag
@@ -83,3 +77,14 @@ services:
     unmapped: "no source repository recorded"
   - path: platform-gitops/services/labs/pfeifenpatenschaft-backend/values.yaml
     unmapped: "no source repository recorded"
+  # Added 2026-10-11, verified the same way (`gh api repos/mctlhq/<name>/releases`).
+  - path: platform-gitops/services/karabu/draw-with-friends/values.yaml
+    unmapped: "no source repository recorded"
+  - path: platform-gitops/services/labs/coolify-mcp/values.yaml
+    unmapped: "mctlhq/mctl-coolify-mcp publishes no GitHub releases"
+  - path: platform-gitops/services/labs/mctl-alice/values.yaml
+    unmapped: "mctlhq/mctl-alice publishes no GitHub releases"
+  - path: platform-gitops/services/labs/pelican-proxy-staging/values.yaml
+    unmapped: "no source repository recorded; deployed from staging-<n> builds"
+  - path: platform-gitops/services/labs/projects-mcp/values.yaml
+    unmapped: "mctlhq/projects-mcp releases stop at 0.1.1 while deploys follow tags"

@@ -315,12 +315,17 @@ spec:
         envFrom:
           - configMapRef:
               name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{inputs.parameters.component_name}}"
         source: |
           set -e
           apk add --no-cache git openssh-client > /dev/null 2>&1
 
-          TEAM="{{inputs.parameters.team_name}}"
-          APP="{{inputs.parameters.component_name}}"
+          TEAM="$PARAM_TEAM_NAME"
+          APP="$PARAM_COMPONENT_NAME"
           DB_NAME="${TEAM}-${APP}"
 
           # ── Set up SSH for git ────────────────────────────────────────────

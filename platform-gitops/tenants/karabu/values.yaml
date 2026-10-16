@@ -10,6 +10,7 @@ tenant:
   contactEmail: ""
   members:
     - userId: EmiliiaMashkova
+      principalId: prn_01M3H4H0M0140YFDSCXSV9QVM2
       role: owner
   quotas:
     requests.cpu: "1"

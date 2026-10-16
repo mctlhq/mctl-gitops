@@ -329,9 +329,9 @@ surfaceTelegramToken:
 # templates/system/admission-policies.yaml.
 #
 # Every namespace also holds Secrets it never asked for: the reflector copies
-# argo-workflows/github-actions-pat, argo-workflows/mctl-gitops-deploy-key and
 # the database/* credentials into all of them (#1230), and the tenant chart
-# adds ghcr and artifact-store (R2) credentials. It also creates argo-workflow-sa, whose
+# adds ghcr, artifact-store (R2), github-actions-pat and mctl-gitops-deploy-key
+# credentials. It also creates argo-workflow-sa, whose
 # Roles read every Secret in the namespace through the API. In a reviewed
 # namespace that is a latent risk; where someone outside the platform writes
 # the Pod specs, mounting a Secret or running as that ServiceAccount is one
@@ -375,7 +375,11 @@ externalManifestNamespaces:
     # Ingress hosts (rules and TLS) must match this RE2 pattern in full (the
     # policy anchors it), so the repository cannot claim another tenant's
     # unreserved *.mctl.ai name. Traefik kinds of any sort are refused outright.
-    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai'
+    # Sites created before the switch keep erpact-<label>.mctl.ai; new ones are
+    # <label>.erpact.online (the deployer's mainDomain since erpact/mctl-apps
+    # #16), a zone in this platform's Cloudflare account that serves ERPact only.
+    # The apex erpact.online is not matched.
+    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai|[a-z0-9]([a-z0-9-]*[a-z0-9])?\.erpact\.online'
 
 # Platform hostnames and the namespaces allowed to serve them (#1503),
 # enforced by the mctl-reserved-platform-hosts-* admission policies in
@@ -417,3 +421,13 @@ reservedPlatformHosts:
   tg-preview.mctl.ai: [labs]
   # The Cloudflare MCP portal; never served from the cluster.
   mcp.mctl.ai: []
+
+# Whole domains and the namespaces allowed to serve them, enforced by the same
+# mctl-reserved-platform-hosts-* policies: the domain itself, every name under
+# it at any depth, and every wildcard covering it (*.erpact.online, *.online).
+# For a zone in this platform's Cloudflare account that belongs to a single
+# tenant, whose wildcard DNS points at the cluster, so that no other namespace
+# can stand up a route under it.
+reservedDomains:
+  # ERPact's site domain (<label>.erpact.online, erpact/mctl-apps#16).
+  erpact.online: [erpact]

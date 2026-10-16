@@ -48,6 +48,12 @@ spec:
       input:
         entityRef: ${{ parameters.service }}
 
+    - id: require-team-access
+      name: Verify caller may act for this team
+      action: mctl:auth:requireTeamAccess
+      input:
+        team: ${{ steps['parse-service'].output.entity.metadata.labels.team or steps['parse-service'].output.entity.spec.owner | replace('group:', '') }}
+
     - id: trigger-delete
       name: Retire service via Argo Workflows
       action: mctl:workflow:submit

@@ -2,12 +2,14 @@
 p, role:team-erpact, applications, get, apps/erpact-*, allow
 p, role:team-erpact, applications, list, apps/erpact-*, allow
 p, role:team-erpact, applications, sync, apps/erpact-*, allow
-p, role:team-erpact, applications, override, apps/erpact-*, allow
+p, role:team-erpact, applications, action/apps/Deployment/restart, apps/erpact-*, allow
+p, role:team-erpact, applications, action/apps/StatefulSet/restart, apps/erpact-*, allow
 p, role:team-erpact, logs, get, apps/erpact-*, allow
 g, erpact, role:team-erpact
 # AppProject erpact (bootstrap/templates/projects/project-erpact.yaml): the same verbs on its Applications. No exec (SOC F4).
 p, role:team-erpact, applications, get, erpact/*, allow
 p, role:team-erpact, applications, list, erpact/*, allow
 p, role:team-erpact, applications, sync, erpact/*, allow
-p, role:team-erpact, applications, override, erpact/*, allow
+p, role:team-erpact, applications, action/apps/Deployment/restart, erpact/*, allow
+p, role:team-erpact, applications, action/apps/StatefulSet/restart, erpact/*, allow
 p, role:team-erpact, logs, get, erpact/*, allow
