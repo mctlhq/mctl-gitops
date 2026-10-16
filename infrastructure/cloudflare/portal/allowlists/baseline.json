@@ -23,7 +23,7 @@
       "recorded": "2026-09-25"
     },
     "api": {
-      "tools_total": 89,
+      "tools_total": 92,
       "tools_enabled": 73,
       "enabled_tools": [
         "mctl_abandon_dev_loop",
@@ -102,7 +102,7 @@
       ],
       "prompts_total": 4,
       "prompts_enabled": 4,
-      "recorded": "2026-09-25"
+      "recorded": "2026-10-16"
     },
     "coolify": {
       "tools_total": 45,
