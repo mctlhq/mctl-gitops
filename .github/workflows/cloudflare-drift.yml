@@ -287,9 +287,11 @@ jobs:
           fi
 
           case "$code" in
-            0) if [ "$resources" = "0" ] && [ "$ROOT" = "infrastructure/cloudflare/tokens" ]; then
+            0) if [ "$ROOT" = "infrastructure/cloudflare/tokens" ]; then
                  # A root of checks, not resources: it declares no resources
-                 # and is never applied, and its data source postconditions
+                 # and is never applied (so it may have no state object at
+                 # all, and the resource count above can come back empty
+                 # rather than 0), and its data source postconditions
                  # fail the plan (exit 1) on any difference. Exit 0 here means
                  # they all held, which is a verdict about Cloudflare, not an
                  # empty root.
@@ -297,9 +299,9 @@ jobs:
                  # about tokens whose scope the provider cannot read. That is
                  # an unknown, so it is surfaced here, never folded into
                  # "in sync".
-                 # OpenTofu writes warnings to stderr, which plan.txt does not
-                 # hold, so the check result is read from its own file.
-                 if grep -q 'Check block assertion failed' plan.err; then
+                 # Read from both streams: where OpenTofu prints a warning is
+                 # not something this check should depend on.
+                 if cat plan.txt plan.err 2>/dev/null | grep -q 'Check block assertion failed'; then
                    echo "::warning title=Cloudflare tokens::\`$ROOT\`: the scope of some tokens is not verified (check token_scopes_observable in the plan log)"
                    { echo "### \`$ROOT\` — in sync except UNVERIFIED scopes (checks only)";
                      echo;
