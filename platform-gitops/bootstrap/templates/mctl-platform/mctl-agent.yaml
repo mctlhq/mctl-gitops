@@ -20,8 +20,16 @@ spec:
           - name: ghcr-credentials
         service:
           port: 8080
+        # Non-root on a read-only root filesystem (base-service hardening,
+        # step 2). USER app:app is a name, which kubelet cannot check for
+        # runAsNonRoot, so the ids it already runs as are pinned.
         podSecurityContext:
           fsGroup: 1000
+          runAsUser: 1000
+          runAsGroup: 1000
+        containerSecurityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
         resources:
           requests:
             cpu: 50m

@@ -232,3 +232,42 @@ Usage: include "base-service.hardenedContainers" (dict "containers" .Values.init
 {{- end -}}
 {{- toYaml $out -}}
 {{- end }}
+
+{{/*
+The writablePaths that need an emptyDir, as a JSON list: none unless the main
+container's root filesystem is read-only, and never a path extraVolumeMounts
+already mounts or one listed twice (a second mount on the same path is
+rejected by the API). Two different paths that sanitize to the same volume
+name (/var/cache/nginx, /var/cache-nginx) fail the render here rather than
+at apply time.
+Usage: include "base-service.writablePaths" . | fromJsonArray
+*/}}
+{{- define "base-service.writablePaths" -}}
+{{- $out := list -}}
+{{- if (.Values.containerSecurityContext | default dict).readOnlyRootFilesystem -}}
+{{- $taken := dict -}}
+{{- range .Values.extraVolumeMounts -}}
+{{- $_ := set $taken .mountPath true -}}
+{{- end -}}
+{{- $names := dict -}}
+{{- range .Values.writablePaths -}}
+{{- if not (hasKey $taken .) -}}
+{{- $_ := set $taken . true -}}
+{{- $name := include "base-service.writableVolumeName" . -}}
+{{- if hasKey $names $name -}}
+{{- fail (printf "writablePaths: %q and %q both map to volume %q; rename one" (get $names $name) . $name) -}}
+{{- end -}}
+{{- $_ := set $names $name . -}}
+{{- $out = append $out . -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $out -}}
+{{- end }}
+
+{{/*
+Volume name for a writablePaths entry: /var/cache/nginx -> writable-var-cache-nginx.
+*/}}
+{{- define "base-service.writableVolumeName" -}}
+{{- printf "writable-%s" (regexReplaceAll "[^a-z0-9]+" (lower .) "-" | trimAll "-") | trunc 63 | trimSuffix "-" -}}
+{{- end }}

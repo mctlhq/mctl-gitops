@@ -48,6 +48,7 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- $writable := include "base-service.writablePaths" . | fromJsonArray }}
       {{- with .Values.initContainers }}
       initContainers:
         {{- include "base-service.hardenedContainers" (dict "containers" . "defaults" $.Values.extraContainerSecurityContext) | nindent 8 }}
@@ -112,9 +113,15 @@ spec:
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.extraVolumeMounts }}
+          {{- if or .Values.extraVolumeMounts $writable }}
           volumeMounts:
+            {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- range $writable }}
+            - name: {{ include "base-service.writableVolumeName" . }}
+              mountPath: {{ . }}
+            {{- end }}
           {{- end }}
         {{- with .Values.extraContainers }}
         {{- include "base-service.hardenedContainers" (dict "containers" . "defaults" $.Values.extraContainerSecurityContext) | nindent 8 }}
@@ -131,10 +138,14 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or .Values.extraVolumes .Values.persistence }}
+      {{- if or .Values.extraVolumes .Values.persistence $writable }}
       volumes:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- range $writable }}
+        - name: {{ include "base-service.writableVolumeName" . }}
+          emptyDir: {}
         {{- end }}
         {{- range $name, $spec := .Values.persistence }}
         {{- if (ne $spec.enabled false) }}
