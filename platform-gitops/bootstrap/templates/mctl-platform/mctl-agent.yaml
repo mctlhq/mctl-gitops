@@ -209,9 +209,19 @@ spec:
               - secretKey: BOT_START_FORWARD_TOKEN
                 remoteKey: secret/data/platform/shared/bot-start-bridge
                 property: token
+        # Only the two paths that must be public are routed: Telegram's
+        # webhook (setWebhook to WEBHOOK_CALLBACK_URL + /api/v1/telegram) and
+        # the external blackbox probe of /healthz (blackbox/vmprobes.yaml).
+        # Everything else -- /api/v1/alerts, /mcp, /api/v1/tickets,
+        # /api/v1/skills* -- is in-cluster only and was reachable from the
+        # internet behind a bearer token alone. /api/v1/github-webhook is not
+        # routed because GITHUB_WEBHOOK_SECRET is unset, so the agent does
+        # not register it; route it here if that is ever enabled.
         ingress:
           enabled: true
           ingressClassName: traefik
+          path: /api/v1/telegram
+          pathType: Exact
           annotations:
             cert-manager.io/cluster-issuer: letsencrypt-prod
           hosts:
@@ -220,6 +230,18 @@ spec:
             - secretName: mctl-agent-tls
               hosts:
                 - agent.mctl.ai
+        # No cert-manager annotation here: the certificate is issued once,
+        # for the ingress above, and this one reuses its secret.
+        extraIngresses:
+          - name: admins-mctl-agent-healthz
+            hosts:
+              - agent.mctl.ai
+            path: /healthz
+            pathType: Exact
+            tls:
+              - secretName: mctl-agent-tls
+                hosts:
+                  - agent.mctl.ai
         probes:
           liveness:
             path: /healthz
