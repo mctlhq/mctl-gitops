@@ -24,6 +24,14 @@ spec:
   - name: transfer
     script:
       image: ghcr.io/mctlhq/mctl-agents:1.76.0
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
       command:
       - python
       env:

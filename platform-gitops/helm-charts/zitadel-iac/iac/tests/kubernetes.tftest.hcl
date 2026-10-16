@@ -146,3 +146,16 @@ run "admin_retains_cluster_role_when_tenant_roles_are_added" {
     error_message = "Moving a tenant identity must preserve both its tenant role and the admin's existing cluster role."
   }
 }
+
+run "unknown_admin_tenant_role_is_refused" {
+  command = plan
+  plan_options {
+    target = [zitadel_user_grant.kubernetes_admin]
+  }
+  variables {
+    platform_admins = jsonencode({
+      kadmin = jsonencode({ email = "q@example.com", first_name = "Q", last_name = "A", kubectl = true, kubectl_tenants = ["missing"] })
+    })
+  }
+  expect_failures = [zitadel_user_grant.kubernetes_admin]
+}
