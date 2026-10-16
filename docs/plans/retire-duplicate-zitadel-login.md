@@ -17,4 +17,5 @@ Personal attributes remain in Vault.
 5. Verify the surviving login and report the MCTL duplicate-principal state.
    Do not delete audit-referenced principals or write identity tables directly.
 
-Current state: implementation and tests in progress; no user or grant changed.
+Current state: role-transfer implementation and exact-address delete allowance
+in PR #1914. No user or grant changed yet.

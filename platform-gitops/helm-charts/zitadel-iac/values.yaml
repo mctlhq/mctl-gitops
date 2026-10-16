@@ -128,7 +128,12 @@ allowedActions: "no-op read update create"
 # that needs it, and empty the list once it has applied.
 #   (#1533 listed zitadel_email_provider_smtp.resend for the SMTP port move;
 #   applied 2026-10-04, emptied again here.)
-allowedDeletes: ""
+# One-time retirement approved by the owner; destination grants must be
+# verified before the source Vault field is removed. Clear after apply.
+allowedDeletes: >-
+  zitadel_human_user.tenant["erpact/mashkovd"]
+  zitadel_user_grant.erpact_frappe_tenant["erpact/mashkovd"]
+  zitadel_user_grant.kubernetes_tenant["erpact/mashkovd"]
 
 # The CronJob's schedule. Users come from Vault, which no sync observes, so
 # this is how a user added there reaches ZITADEL.
