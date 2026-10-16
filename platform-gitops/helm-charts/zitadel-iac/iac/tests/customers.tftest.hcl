@@ -317,3 +317,23 @@ run "creation_never_opens_without_the_gate" {
 
   expect_failures = [zitadel_org_idp_github.customers]
 }
+
+run "customer_copy_is_scoped_to_the_customer_organization" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en, zitadel_verify_email_message_text.customers_en]
+  }
+  override_resource {
+    target = zitadel_org.customers
+    values = { id = "customers-org" }
+  }
+  assert {
+    condition = (
+      zitadel_hosted_login_translation.customers_en.org_id == "customers-org" &&
+      zitadel_verify_email_message_text.customers_en.org_id == "customers-org" &&
+      strcontains(zitadel_verify_email_message_text.customers_en.text, "Continue with GitHub") &&
+      !strcontains(zitadel_verify_email_message_text.customers_en.text, "set up a passkey")
+    )
+    error_message = "Customer copy must be org-scoped and direct people to GitHub, preserving staff defaults."
+  }
+}
