@@ -62,7 +62,7 @@ spec:
             # the pod. Last bumped 2026-10-16: load customers_org_id, which
             # zitadel-iac wrote into MCTL_OIDC_PROVIDERS (mctl-gitops#1904;
             # envFrom is read at container start).
-            ROLLOUT_MARKER: "2026-10-16-customers-org-id"
+            ROLLOUT_MARKER: "2026-10-16-customers-client-claims"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
