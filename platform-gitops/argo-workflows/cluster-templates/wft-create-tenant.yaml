@@ -70,6 +70,15 @@ spec:
         # an owner entry without it would lock the creator out of their own
         # tenant. Set by mctl-api from the authenticated session.
         value: ""
+      - name: creator_catalog_key
+        # What the portal names the creator's catalog User by: `login`
+        # (the GitHub login, as for every member so far) or `principal`
+        # (creator_principal_id). The portal sends `principal` for a
+        # self-service customer account, whose GitHub login is display only
+        # and may later belong to someone else (mctl-web
+        # docs/plans/site-onboarding-review.md, stage C2). Written to the
+        # owner entry as catalogKey only when `principal`.
+        value: "login"
       - name: reprovision
         value: "false"
         # "true": re-run provisioning for a tenant that already exists
@@ -158,6 +167,8 @@ spec:
                   value: "{{workflow.parameters.creator_user_id}}"
                 - name: creator_principal_id
                   value: "{{workflow.parameters.creator_principal_id}}"
+                - name: creator_catalog_key
+                  value: "{{workflow.parameters.creator_catalog_key}}"
                 - name: reprovision
                   value: "{{workflow.parameters.reprovision}}"
 
@@ -632,6 +643,7 @@ spec:
           - name: contact_email
           - name: creator_user_id
           - name: creator_principal_id
+          - name: creator_catalog_key
           - name: reprovision
       volumes:
         - name: deploy-key
@@ -673,6 +685,8 @@ spec:
             value: "{{inputs.parameters.creator_user_id}}"
           - name: PARAM_CREATOR_PRINCIPAL_ID
             value: "{{inputs.parameters.creator_principal_id}}"
+          - name: PARAM_CREATOR_CATALOG_KEY
+            value: "{{inputs.parameters.creator_catalog_key}}"
           - name: PARAM_REPROVISION
             value: "{{inputs.parameters.reprovision}}"
         source: |
@@ -712,6 +726,7 @@ spec:
           fi
           CREATOR_USER_ID="$PARAM_CREATOR_USER_ID"
           CREATOR_PRINCIPAL_ID="$PARAM_CREATOR_PRINCIPAL_ID"
+          CREATOR_CATALOG_KEY="$PARAM_CREATOR_CATALOG_KEY"
 
           # Defaults
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
@@ -794,6 +809,25 @@ spec:
             echo "⚠️ creator_user_id without creator_principal_id: the owner entry gets no principalId and grants nothing under principal-mode authorization (mctlhq/mctl-api#377)" >&2
           fi
 
+          # creator_catalog_key is one of two words, and `principal` names
+          # the catalog User by creator_principal_id, so it needs one. An
+          # unknown value is an error, not the login default: a caller that
+          # asked for a principal-keyed owner must never get a login-keyed
+          # one, which the GitHub login's next holder would sign in as.
+          case "$CREATOR_CATALOG_KEY" in
+            ""|login) CREATOR_CATALOG_KEY=login ;;
+            principal)
+              if [ -z "$CREATOR_PRINCIPAL_ID" ]; then
+                echo "❌ creator_catalog_key=principal given without creator_principal_id" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "❌ creator_catalog_key must be login or principal; got: ${CREATOR_CATALOG_KEY}" >&2
+              exit 1
+              ;;
+          esac
+
           # The five quota values land in quoted YAML scalars exactly like
           # displayName/description, and carry no Pattern
           # either (claude P2 on gitops#993). They are Kubernetes
@@ -873,7 +907,9 @@ spec:
 
           # Build members section if creator is specified
           MEMBERS_BLOCK=""
-          if [ -n "$CREATOR_PRINCIPAL_ID" ]; then
+          if [ "$CREATOR_CATALOG_KEY" = principal ]; then
+            MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      principalId: %s\n      role: owner\n      catalogKey: principal' "$CREATOR_USER_ID" "$CREATOR_PRINCIPAL_ID")
+          elif [ -n "$CREATOR_PRINCIPAL_ID" ]; then
             MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      principalId: %s\n      role: owner' "$CREATOR_USER_ID" "$CREATOR_PRINCIPAL_ID")
           elif [ -n "$CREATOR_USER_ID" ]; then
             MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      role: owner' "$CREATOR_USER_ID")
