@@ -1112,6 +1112,13 @@ spec:
       targetRevision: main
       path: platform-gitops/infra-components/observability/vmsingle-access
 
+    # VMAlertmanager's NetworkPolicy: only the inventoried clients reach it,
+    # so a tenant pod cannot inject an alert that Alertmanager would forward
+    # to mctl-agent with the real webhook token (mctl-handoff block C).
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/alertmanager-access
+
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/observability/vm-rules
