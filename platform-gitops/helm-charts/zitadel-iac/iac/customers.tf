@@ -254,7 +254,9 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
     ZITADEL_HOOK_LOGIN_CLIENT_USER_ID = var.identity_hook_login_client_user_id
     ZITADEL_HOOK_USERNAME_DOMAIN      = local.customers_domain
     # Explicit sign-in clients, including portal and API now that B1b opens
-    # authentication there. The token hook only emits these claims for
+    # authentication there. The legacy portal OIDC provider is deliberately
+    # excluded: it still resolves by login and has no customer principal path.
+    # The token hook only emits these claims for
     # customers. Both mctl-web clients get them for parity. A dev token
     # is still refused in production: every production relying party checks
     # `aud` against its own client ids, and the dev client is in a project
@@ -263,7 +265,6 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
       zitadel_application_oidc.mctl_web.client_id,
       zitadel_application_oidc.mctl_web_dev.client_id,
       zitadel_application_oidc.portal_ui.client_id,
-      zitadel_application_oidc.portal_oidc_provider.client_id,
       zitadel_application_oidc.mctl_api_oauth.client_id,
       zitadel_application_oidc.mctl_cli.client_id,
     ])

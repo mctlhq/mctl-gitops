@@ -567,7 +567,8 @@ the next starts only after the previous smoke test passes.
 4. **B1b.** Project grants for `customers` to the portal and
    mctl-api, only after C0 and C2 are live. These grants carry no roles;
    tenant membership remains principal-based. The hook claim allowlist adds
-   the portal UI/provider, API OAuth and CLI clients explicitly. After the IaC
+   the portal UI, API OAuth and CLI clients explicitly. The legacy portal OIDC
+   provider stays excluded: it still resolves users by login, without C0. After the IaC
    Job succeeds, roll out mctl-api to load the updated Secret before testing
    those clients. A changed Secret alone does not update process environment.
    Keep the website test-group restriction until end-to-end acceptance.

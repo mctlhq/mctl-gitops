@@ -382,7 +382,7 @@ run "customer_claims_reach_only_the_explicit_clients" {
   }
   assert {
     condition = toset(split(",", nonsensitive(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data["ZITADEL_HOOK_CLAIM_CLIENT_IDS"]))) == toset([
-      "web", "web-dev", "portal", "portal-provider", "api-oauth", "cli"
+      "web", "web-dev", "portal", "api-oauth", "cli"
     ])
     error_message = "Each approved customer sign-in client needs proven GitHub claims; no other client may receive them."
   }
