@@ -317,3 +317,73 @@ run "creation_never_opens_without_the_gate" {
 
   expect_failures = [zitadel_org_idp_github.customers]
 }
+
+run "customers_get_authentication_without_project_roles" {
+  command = plan
+  plan_options {
+    target = [zitadel_project_grant.customers_portal, zitadel_project_grant.customers_mctl_api]
+  }
+  override_resource {
+    target = zitadel_org.customers
+    values = { id = "customers-org" }
+  }
+  override_resource {
+    target = zitadel_project.portal
+    values = { id = "portal-project" }
+  }
+  override_resource {
+    target = zitadel_project.mctl_api
+    values = { id = "api-project" }
+  }
+  assert {
+    condition = (
+      zitadel_project_grant.customers_portal.project_id == "portal-project" &&
+      zitadel_project_grant.customers_mctl_api.project_id == "api-project" &&
+      alltrue([for g in [zitadel_project_grant.customers_portal, zitadel_project_grant.customers_mctl_api] :
+        g.granted_org_id == "customers-org" && g.org_id == "100000000000000001" && g.role_keys == null
+      ])
+    )
+    error_message = "Only customers gain authentication to Portal/API; the grants must carry no authorization roles."
+  }
+  assert {
+    condition     = zitadel_project.portal.has_project_check && zitadel_project.mctl_api.has_project_check
+    error_message = "Unlisted organizations must remain unable to authenticate."
+  }
+}
+
+run "customer_claims_reach_only_the_explicit_clients" {
+  command = plan
+  plan_options {
+    target = [kubernetes_secret_v1_data.mctl_api_zitadel_hook]
+  }
+  override_resource {
+    target = zitadel_application_oidc.mctl_web
+    values = { client_id = "web" }
+  }
+  override_resource {
+    target = zitadel_application_oidc.mctl_web_dev
+    values = { client_id = "web-dev" }
+  }
+  override_resource {
+    target = zitadel_application_oidc.portal_ui
+    values = { client_id = "portal" }
+  }
+  override_resource {
+    target = zitadel_application_oidc.portal_oidc_provider
+    values = { client_id = "portal-provider" }
+  }
+  override_resource {
+    target = zitadel_application_oidc.mctl_api_oauth
+    values = { client_id = "api-oauth" }
+  }
+  override_resource {
+    target = zitadel_application_oidc.mctl_cli
+    values = { client_id = "cli" }
+  }
+  assert {
+    condition = toset(split(",", nonsensitive(kubernetes_secret_v1_data.mctl_api_zitadel_hook.data["ZITADEL_HOOK_CLAIM_CLIENT_IDS"]))) == toset([
+      "web", "web-dev", "portal", "api-oauth", "cli"
+    ])
+    error_message = "Each approved customer sign-in client needs proven GitHub claims; no other client may receive them."
+  }
+}
