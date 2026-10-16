@@ -118,12 +118,16 @@ extraVolumeMounts: []
 # -- Pod-level settings
 automountServiceAccountToken: ~
 # -- Hardening defaults (SOC 2 binder F18, step 1). They are all allowed by the
-# tenant namespaces' PSS `enforce=baseline`; `runAsNonRoot` and
-# `readOnlyRootFilesystem` are deliberately not here yet, because most images
-# still need per-service changes for them (step 2, then `enforce=restricted`).
+# tenant namespaces' PSS `enforce=baseline`. `runAsNonRoot` and
+# `readOnlyRootFilesystem` are opt-in per service for now (step 2): an image
+# whose USER is root or a name (`app`, `node`) would be refused, and tenants
+# have no way to override these values, so they become defaults only once the
+# container requirements are documented and an opt-out exists.
 # Helm merges a service's map into these defaults, so a service states only
 # what it changes, e.g. `capabilities.add` for an image whose entrypoint drops
 # privileges itself (nginx). Setting a key to null removes the default.
+# `runAsNonRoot` needs a numeric user: kubelet refuses a named USER with
+# CreateContainerConfigError unless `runAsUser` (and `runAsGroup`) are set.
 podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
@@ -131,6 +135,13 @@ containerSecurityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
+# -- Paths the main container may still write when its
+# `readOnlyRootFilesystem` is on. Each becomes an emptyDir (pod-lifetime, node
+# disk) mounted at that path. Ignored while the root filesystem is writable,
+# and skipped for any path extraVolumeMounts already mounts. A service that
+# needs more lists the whole set, e.g. [/tmp, /var/cache/nginx].
+writablePaths:
+  - /tmp
 # -- Defaults merged into the securityContext of every initContainer,
 # extraContainer and the db-init Job container. A container's own
 # securityContext wins key by key, so the merge never loosens it.

@@ -27,6 +27,10 @@ import yaml
 
 CHART = pathlib.Path("platform-gitops/helm-charts/base-service")
 DEFAULT_SC = {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
+# What a service sets to opt in to step 2.
+STRICT = {"containerSecurityContext": {"runAsNonRoot": True,
+                                       "readOnlyRootFilesystem": True}}
+STRICT_SC = {**DEFAULT_SC, "runAsNonRoot": True, "readOnlyRootFilesystem": True}
 
 failures = []
 
@@ -146,9 +150,49 @@ if jobs:
     check(jspec.get("securityContext") == {"seccompProfile": {"type": "RuntimeDefault"}},
           f"db-init pod securityContext = {jspec.get('securityContext')!r}")
 
+
+def writable(spec):
+    """(mountPath -> volume name) for the main container's emptyDir mounts."""
+    empty = {v["name"] for v in spec.get("volumes") or [] if "emptyDir" in v}
+    return {m["mountPath"]: m["name"]
+            for m in spec["containers"][0].get("volumeMounts") or []
+            if m["name"] in empty}
+
+
+for extra, label in (({}, "Deployment"), ({"blueGreen": {"enabled": True}}, "Rollout")):
+    # 6. Without an opt-in nothing changes: no step-2 keys, no emptyDirs.
+    _, spec = pod_spec(render({**BASE, **extra}))
+    check(writable(spec) == {} and "volumes" not in spec,
+          f"{label}: default renders writable mounts {writable(spec)!r}")
+
+    # 7. Opting in merges over the defaults and brings a writable /tmp.
+    _, spec = pod_spec(render({**BASE, **extra, **STRICT}))
+    check(spec["containers"][0].get("securityContext") == STRICT_SC,
+          f"{label}: opted-in securityContext = "
+          f"{spec['containers'][0].get('securityContext')!r}")
+    check(writable(spec) == {"/tmp": "writable-tmp"},
+          f"{label}: opted-in writable mounts = {writable(spec)!r}")
+
+    # 8. A service lists the full set; each path gets its own emptyDir.
+    _, spec = pod_spec(render({**BASE, **extra, **STRICT,
+                               "writablePaths": ["/tmp", "/var/cache/nginx"]}))
+    check(writable(spec) == {"/tmp": "writable-tmp",
+                             "/var/cache/nginx": "writable-var-cache-nginx"},
+          f"{label}: listed writable mounts = {writable(spec)!r}")
+
+    # 9. A path the service already mounts itself is not mounted twice
+    #    (the API rejects duplicate mountPaths).
+    _, spec = pod_spec(render({
+        **BASE, **extra, **STRICT,
+        "extraVolumes": [{"name": "scratch", "emptyDir": {}}],
+        "extraVolumeMounts": [{"name": "scratch", "mountPath": "/tmp"}]}))
+    paths = [m["mountPath"] for m in spec["containers"][0]["volumeMounts"]]
+    check(paths == ["/tmp"],
+          f"{label}: /tmp already in extraVolumeMounts, got mounts {paths!r}")
+
 if failures:
     for f in failures:
         print(f"FAIL: {f}", file=sys.stderr)
     sys.exit(1)
 print("base-service securityContext: container keys win, defaults fill gaps, "
-      "Deployment and Rollout agree")
+      "step 2 is opt-in, writablePaths mount once, Deployment and Rollout agree")
