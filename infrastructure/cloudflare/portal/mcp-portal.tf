@@ -77,7 +77,8 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_portal" "mcp" {
       server_id        = id
       default_disabled = s.default_disabled
       on_behalf        = s.on_behalf
-      # null means no override: the portal shows every catalogue prompt.
+      # null means no override: with default_disabled = false the portal
+      # shows every catalogue prompt, with true it shows none.
       updated_prompts = s.updated_prompts
       # Walk the catalogue, not the allowlist: the portal stores exactly one
       # entry per synced tool, in catalogue order. An allowlist entry for a
@@ -87,8 +88,10 @@ resource "cloudflare_zero_trust_access_ai_controls_mcp_portal" "mcp" {
       # with no decision fails the lookup; the validator reports it first.
       # The one direction nothing here can close: a tool the portal synced
       # after catalogue.json was last updated gets no entry, so its exposure
-      # is the API's default for an unlisted tool until the file catches up.
-      # portal-catalogue-drift.py reports that lag nightly (exit 5).
+      # is the API's default for an unlisted tool until the file catches up
+      # -- exposed under default_disabled = false, hidden under true, which
+      # is why a server whose catalogue grows unreviewed (api) runs with
+      # true. portal-catalogue-drift.py reports that lag nightly (exit 5).
       updated_tools = [
         for name in local.portal_catalogue[id] : {
           name    = name
