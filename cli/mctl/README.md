@@ -77,6 +77,11 @@ plain `mctl auth login` for everything else. The token lives in
 `MCTL_ZITADEL_ISSUER` and `MCTL_ZITADEL_CLIENT_ID` override the defaults.
 `mctl auth logout --zitadel` removes it.
 
+The login requests `urn:zitadel:iam:user:resourceowner`, because mctl-api
+refuses a ZITADEL token that does not name its user's organization. A login
+made by an older build lacks it, and refreshing keeps the original scopes:
+run `mctl auth login --zitadel` again after upgrading.
+
 ## Usage
 
 ### Deploy a service

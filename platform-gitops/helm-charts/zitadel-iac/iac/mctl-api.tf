@@ -175,12 +175,23 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   # `name` and `issuer` are permanent: they key external_identities, so
   # changing either orphans every linked identity. audience_enforcement and
   # grant_groups stay unset: enforce, and no groups (docs/federation.md).
+  #
+  # customers_org_id (mctl-api 4.90.0, stage C0 of mctl-web
+  # docs/plans/site-onboarding-review.md): a token of the customers
+  # organization resolves to the principal of its proven GitHub id, and every
+  # token of this entry must name its user's organization, so each client
+  # sending ZITADEL tokens to mctl-api requests the scope
+  # urn:zitadel:iam:user:resourceowner (the `mctl` CLI does). mctl-api refuses
+  # to boot unless it equals ZITADEL_HOOK_CUSTOMERS_ORG_ID (customers.tf),
+  # which is the same org. Read at container start: bump ROLLOUT_MARKER in
+  # bootstrap/templates/mctl-platform/mctl-api.yaml after the Job writes it.
   data = {
     MCTL_OIDC_PROVIDERS = jsonencode([
       {
-        name      = "zitadel"
-        issuer    = "https://auth.mctl.ai"
-        audiences = [zitadel_application_api.mctl_api.client_id]
+        name             = "zitadel"
+        issuer           = "https://auth.mctl.ai"
+        audiences        = [zitadel_application_api.mctl_api.client_id]
+        customers_org_id = zitadel_org.customers.id
       },
     ])
     # Not read by mctl-api (the chart references MCTL_OIDC_PROVIDERS only).

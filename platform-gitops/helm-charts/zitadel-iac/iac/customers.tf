@@ -249,7 +249,10 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
     ZITADEL_HOOK_INTENT_SIGNING_KEYS = zitadel_action_target.identity_intent.signing_key
     ZITADEL_HOOK_CREATE_SIGNING_KEYS = zitadel_action_target.identity_create_user.signing_key
     ZITADEL_HOOK_TOKEN_SIGNING_KEYS  = zitadel_action_target.identity_token_claims.signing_key
-    # Not read by mctl-api: the public client ids the Worker needs.
+    # The public client ids the Worker needs. mctl-api 4.90.0 also reads
+    # MCTL_WEB_CLIENT_ID: POST /api/v1/surface-principals/zitadel accepts a
+    # purpose=create ID token only from this client (aud and azp). The dev
+    # client id is not read by mctl-api.
     MCTL_WEB_CLIENT_ID     = zitadel_application_oidc.mctl_web.client_id
     MCTL_WEB_DEV_CLIENT_ID = zitadel_application_oidc.mctl_web_dev.client_id
   }
