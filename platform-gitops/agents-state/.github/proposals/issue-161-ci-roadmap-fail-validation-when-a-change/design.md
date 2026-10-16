@@ -1,84 +1,160 @@
 # Design: issue-161-ci-roadmap-fail-validation-when-a-change
 
 ## Current state
-- `roadmap/schemas/epic-definition.schema.json` requires `spec.lifecycle` (enum `proposed|active|paused|completed|archived`, line 37). Each work item requires `id`, `phase` and a boolean `required` (lines 100-106). `issue` is optional: an unbound item instead carries `title` and `owner`, and `validate.semantic_errors` enforces that.
-- `roadmap/scripts/validate.py` runs offline and checks three layers: schema, per-manifest semantics and corpus. Its helpers `_load_manifest`, `_load_schema`, `validate_document`, `_manifest_paths` and `DEFAULT_SCHEMA` can be reused. It never reads `lifecycle`. `corpus_errors` makes `metadata.name` unique across `roadmap/epics/*`, so `metadata.name` is a stable epic identity.
-- `lifecycle` is read only by `roadmap/scripts/publish.py` (around line 276), which copies it into the RoadmapPublication. `completion.py`, `health.py`, `reconcile.py`, `plan.py` and `ready.py` never read it. `completion.item_status` already treats an unbound item as `incomplete/unbound`, the same notion of "unbound" the guard uses.
-- `.github/workflows/roadmap-validate.yml` runs on `pull_request` and on `push` to `main`, filtered to `roadmap/**` and the workflow itself, with `permissions: {}`. It uses `actions/checkout@3d3c42e5...` with no `fetch-depth`, so the checkout is shallow (depth 1). On `pull_request`, that checkout is the synthetic merge commit. The workflow then runs `validate.py roadmap/epics`, offline reconcile/health/ready/plan/apply replays against fixtures, and the unittest suite. Nothing compares against a base.
-- `roadmap/tests/mutations.py` holds pure, deep-copying mutators. Most act on GitHubGraphSnapshot fixtures; `unbind(document, ...)` already mutates an EpicDefinition. The tests import it through `sys.path.insert(0, "roadmap/tests")`, and the workflow imports it in the same way.
-- Exit-code convention in `roadmap/README.md`: `0` converged, `1` drift, `2` usage/IO/auth/validation error.
-- Current corpus: 18 manifests. 12 are `completed` (including `agent-finops.yaml`, whose three required items are all bound), 3 are `paused` and 2 are `active`. So a green run on the current tree exercises the guard heavily.
-- The investigation clone is itself shallow (`git rev-parse --is-shallow-repository` = true, one commit, 04a2816). This is exactly the condition under which a base-aware check must fail rather than pass.
 
-Deployed state checked:
-- No deployed service is involved. The change is a GitHub Actions workflow plus offline Python scripts in `mctlhq/.github`, with no tenant, hostname or runtime config. I did not call the mctl MCP tools for service config because no service is being changed.
-- `$MCTL_GITOPS_ROOT`: I listed it (`README.md`, `agent-platform`, `agents-state`, ...). I did not use it, because no gitops path configures this workflow.
-- I could not observe this workflow's past runs or the branch protection settings on `mctlhq/.github` (no GitHub API access in this run). See Open questions.
+Verified against current `mctlhq/.github` main.
+
+- `roadmap/schemas/epic-definition.schema.json` requires `spec.lifecycle`; each work item requires `id`, `phase` and boolean `required`, while `issue` is optional.
+- `roadmap/scripts/validate.py` validates schema, per-document semantics and corpus invariants, but does not compare lifecycle changes against a base tree.
+- `.github/workflows/roadmap-validate.yml` runs on roadmap/workflow changes with `permissions: {}` and currently checks out shallow history, then validates only the final tree.
+- The failure in #152 is therefore invisible to the current CI: an older PR can add required work while a concurrent main-line change marks the epic completed.
+
+The guard must be semantic and diff-aware, and it must fail closed when the base or the property it needs cannot be observed.
 
 ## Proposed solution
 
-### 1. `roadmap/scripts/lifecycle_guard.py` (new, pure core + thin CLI)
-- **CLI**: `lifecycle_guard.py (--base-ref REF | --base-dir DIR) [--head-dir roadmap/epics] [--repo .] [--schema ...]`.
-  - Exit `0`: no violations.
-  - Exit `1`: violations.
-  - Exit `2`: base or head error.
-  - Output is one `PASS`/`FAIL <path>` line per head manifest, in the same style as `validate.py`.
-- **Base loading** (`load_base_from_git(repo, ref, subdir)`): runs `git` through `subprocess` with fixed argv (no shell).
-  1. `git rev-parse --verify --quiet REF^{commit}`. On failure it raises `BaseError("base-unresolvable", ...)`. The message adds a hint when `git rev-parse --is-shallow-repository` is true.
-  2. `git ls-tree -z --name-only REF -- roadmap/epics/`, filtered to `*.yaml`/`*.yml`. A non-zero exit raises `base-unreadable`. An empty listing is a valid observation (no manifests in base).
-  3. `git show REF:<path>` for each manifest. A failure raises `base-unreadable` naming the path.
-  4. Parse with `yaml.safe_load` and run a minimal structural check. Base manifests are NOT validated against the current schema, because a later schema change must not make history unreadable. The check needs: root mapping, `metadata.name` (str), `spec.lifecycle` (str), and `spec.workItems` as a list of mappings, each with a str `id` and a bool `required`. Anything else raises `base-malformed` naming the path.
-  `load_base_from_dir(dir)` does the same from a directory. Unit tests use it.
-- **Head loading**: uses `validate._manifest_paths`, `validate._load_manifest` and `validate.validate_document`. A failure produces `head-invalid` and exit 2.
-- **Pure checker** `check(base: dict[path, doc], head: dict[path, doc]) -> list[Violation]`, where `Violation(code, epic, path, item_ids, message)`:
-  - Pair each head epic with a base epic by `metadata.name`, falling back to the same relative path.
-  - Skip an epic unless its head `spec.lifecycle == "completed"`. This skips every reopening to `active`/`paused` automatically, including `completed -> active`. It also means a completed epic deleted in head is never visited.
-  - Paired: compute `new_required = R_head - R_base`, where `R` is the set of required ids. Ids also present in base with `required: false` become `RequiredFlagRaised`. All other ids in `new_required` become `RequiredItemAdded`. That covers both new items and an item renamed under a new id.
-  - Unpaired (born in head) and `completed`: each required item with no `issue` becomes `BornCompletedUnbound`. Bound required items are listed on an informational line ("closure not verified offline"), never stated as closed.
-  - The base lifecycle is deliberately not consulted. An `active` base epic flipped to `completed` while it gains required items (the stale-base #152 shape) also fails.
-- The error class `BaseError(kind, detail)` is mapped in `main()` to `print(f"{kind}: {detail}", file=sys.stderr)` and return 2.
+### 1. `roadmap/scripts/lifecycle_guard.py`
+
+Add a pure checker plus a thin CLI:
+
+```text
+lifecycle_guard.py (--base-ref REF | --base-dir DIR)
+                   [--head-dir roadmap/epics]
+                   [--repo .]
+                   [--schema ...]
+```
+
+Exit codes follow the roadmap convention:
+
+- `0`: evaluated, no violations;
+- `1`: lifecycle invariant violation;
+- `2`: base/head could not be evaluated safely.
+
+#### Base loading from Git
+
+`load_base_from_git(repo, ref, subdir)` uses fixed argv with no shell:
+
+1. Resolve `REF^{commit}` with `git rev-parse --verify --quiet`. Failure is `base-unresolvable`; include a shallow-checkout hint when applicable.
+2. Enumerate the manifest tree **recursively** with `git ls-tree -rz --name-only REF -- roadmap/epics/`, then keep only paths ending in `.yaml` or `.yml`. The `-r` is required: without it, Git may return the directory tree entry rather than its manifest blobs, which would make an existing base look empty. The extension filter is required too: a non-manifest file under `roadmap/epics/` at the base (a `README`, a `.gitkeep`) is not a manifest and must not reach the structural check, or the guard would exit 2 on something that is not a lifecycle violation. A non-zero `ls-tree` exit is `base-unreadable` and names the subdir. An empty filtered listing after a successful `ls-tree` is a valid observation (no manifests in base), not an error.
+3. Read each YAML blob with `git show REF:<path>`. Failure is `base-unreadable` and names the path.
+4. Parse YAML and perform the minimal historical structural validation needed by this guard: mapping root; `metadata.name`; `spec.lifecycle`; `spec.workItems`; each item has string `id` and boolean `required`. Historical manifests are not forced through today's full schema. Invalid historical input is `base-malformed`.
+
+`load_base_from_dir` provides the same structure for unit tests.
+
+#### Head loading
+
+Load current manifests with the existing `validate` helpers.
+
+The guard must run both:
+
+- `validate.validate_document` for each manifest; and
+- `validate.corpus_errors` for the whole head corpus.
+
+Any failure is `head-invalid` / exit 2. In particular, duplicate `metadata.name` values must never make pairing ambiguous.
+
+#### Pairing and violations
+
+Pair a head epic to the base by `metadata.name`, falling back to the same relative path.
+
+Only a head epic whose lifecycle is `completed` is checked. Reopening to `active` or `paused` in the same change therefore explicitly opts out of the completed invariant.
+
+For a paired epic:
+
+- `RequiredItemAdded`: an id is required in head and absent from the base required set;
+- `RequiredFlagRaised`: the id existed in base with `required: false` and is `required: true` in head.
+
+For a manifest with no base counterpart that is born `completed`:
+
+- if it has **any** `required: true` work item, report `BornCompletedUnverified`.
+
+This is intentionally stricter than checking only whether `issue` is present. The offline job cannot prove that a bound GitHub issue is closed, and `bound != closed`. Treating a bound required item as safe would violate the same "could not observe" principle the check is meant to enforce.
+
+A legitimate new epic with required work must first land as `active` or `paused`; a later reviewed lifecycle transition to `completed` happens after the normal roadmap state/completion evidence exists.
+
+Deleted head manifests are ignored. Removing required work or lowering `required` does not violate the guard.
+
+The base lifecycle is deliberately not used to waive a violation: an active base that becomes completed in the merge result while gaining required work is exactly the stale-PR shape this guard must catch.
 
 ### 2. `.github/workflows/roadmap-validate.yml`
-- Checkout: `with: fetch-depth: 0`. The repo is small, and full history is the simplest way to guarantee that the merge base exists.
-- New step "Guard completed epics against new required work", placed right after "Validate EpicDefinition manifests". Values reach the step through `env:` (`EVENT`, `BASE_SHA: ${{ github.event.pull_request.base.sha }}`, `HEAD_SHA: ${{ github.event.pull_request.head.sha }}`, `BEFORE: ${{ github.event.before }}`), never interpolated into the script:
-  ```bash
-  set -euo pipefail
-  if [ "$EVENT" = "pull_request" ]; then
-    base=$(git merge-base "$BASE_SHA" "$HEAD_SHA") || { echo "::error::merge-base lookup failed"; exit 1; }
-  elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-    echo "::warning::lifecycle guard: no base commit for this push; guard NOT evaluated"; exit 0
-  else
-    base="$BEFORE"
-  fi
-  python3 roadmap/scripts/lifecycle_guard.py --base-ref "$base" --head-dir roadmap/epics
-  ```
-  The head is the checked-out tree. On `pull_request` that is the merge commit, i.e. what would land.
-- `permissions: {}` is unchanged. The guard does no network I/O.
+
+Set checkout `fetch-depth: 0` so the required base commits and merge base are available.
+
+Keep `permissions: {}` and perform no network/API calls from the guard.
+
+For pull requests:
+
+- pass base/head SHAs through `env:`;
+- compute `git merge-base "$BASE_SHA" "$HEAD_SHA"`;
+- a failed merge-base lookup fails the job;
+- run `lifecycle_guard.py --base-ref "$base"` against the checked-out merge-result tree.
+
+For normal pushes to main:
+
+- use `github.event.before` as the base ref.
+
+For an all-zero `github.event.before`, use **two workflow steps** rather than exiting 0 from the guard step:
+
+1. a notice step, conditionally run only for the zero-base case, emits `::warning::lifecycle guard: no base commit for this push; guard NOT evaluated`;
+2. the real guard step has an `if:` condition that makes it **skipped** for that case.
+
+This distinction matters: a shell `exit 0` inside the guard step would render that check green, contradicting the requirement that an unevaluated guard must not be reported as passed.
 
 ### 3. Tests
-- `roadmap/tests/test_lifecycle_guard.py` builds small in-memory manifests (same base shape as `test_validate.py::_base`) and runs `check()` directly. It also runs `main()` against temp git repos (`git init`, commit base, commit head) to cover `--base-ref`, an unknown SHA, a shallow clone (`git clone --depth 1 file://...`) and a malformed or unreadable base blob.
-- `roadmap/tests/mutations.py` gains pure manifest mutators: `add_required_item(document, item_id, phase, title, owner, issue=None)`, `set_required(document, item_id, value)` and `set_lifecycle(document, value)`. The #152 mutation is `add_required_item(agent_finops, "trajectory-economics", ...)` on the real `roadmap/epics/agent-finops.yaml`. Tests assert that `check()` is empty on the corpus against itself, that it is `RequiredItemAdded` on the mutation, and that it is empty again after `set_lifecycle(..., "active")`.
 
-### 4. `roadmap/README.md`
-One paragraph under `## Validation`: what the guard compares (merge base vs head on PRs, `before` vs head on pushes), the three violation codes, that an unreadable base fails with exit 2, and the two legitimate ways to extend a completed epic (add the item with `required: false`, or set `lifecycle: active`/`paused` in the same change).
+Add `roadmap/tests/test_lifecycle_guard.py` and pure manifest mutators in `roadmap/tests/mutations.py`.
 
-## Alternatives
-- **Add the rule to `validate.py`, reading only the final tree**: dropped. The final tree cannot distinguish an item added after completion from one that was always there, which is the core point of the issue. A tree-only rule like "completed epics may not have unbound required items" would pass #152 if the new item had been bound to an open issue.
-- **A state-based completion check (`lifecycle: completed` vs `completion.py` outcome) instead**: dropped as a substitute. It needs live or snapshot GitHub state, which CI does not have (`permissions: {}`, no token, offline replays only). It is also complementary, not equivalent: it is the out-of-scope follow-up.
-- **Compare against `github.event.pull_request.base.sha` directly, or use `git diff` text hunks**: comparing against `base.sha` directly can include unrelated main-line commits. Text-diff parsing is brittle against YAML reformatting. Semantic comparison of parsed manifests at the merge base is robust and is what the issue asks for.
-- **Targeted `git fetch --depth=... origin $BASE_SHA` instead of `fetch-depth: 0`**: viable, but the depth needed for `merge-base` is unknown in general, and a too-shallow fetch would fail (closed, but noisily). Full history is cheap for this repo.
+Coverage includes:
+
+- unchanged corpus;
+- #152 required-item mutation;
+- optional addition;
+- optional -> required;
+- reopen to active and paused;
+- stale-base shape (base active, head completed + new required item);
+- new completed manifest with unbound required work;
+- new completed manifest with a **bound** required item, which still fails `BornCompletedUnverified` because closure is not observable offline;
+- deletion/removal/lowering required;
+- path move with stable `metadata.name`;
+- unknown/shallow base;
+- malformed/unreadable base;
+- invalid/duplicate head corpus;
+- recursive base enumeration with multiple manifests under `roadmap/epics/`, so removing `-r` from `git ls-tree` breaks a test;
+- no-op/revert mutation proving the guard is load-bearing.
+
+### 4. README
+
+Document under `## Validation`:
+
+- merge-base/head comparison on PRs and before/head on pushes;
+- `RequiredItemAdded`, `RequiredFlagRaised`, `BornCompletedUnverified`;
+- exit 2 on unobservable base/head;
+- legitimate extension paths: add optional work, or reopen the completed epic to active/paused;
+- a new epic with required work must not be introduced already completed because this offline guard cannot prove closed state.
+
+## Evidence plan
+
+The PR must show:
+
+1. current/converged input is green;
+2. the #152 mutation is red with `RequiredItemAdded`;
+3. the same mutation with the guard workflow step removed becomes green, proving the guard is the control that catches it;
+4. a unit-level no-op/revert of `check()` breaks the mutation assertion;
+5. #162 rebased on current main remains green.
+
+Do not describe item 3 as "red when the guard is removed"; that would be logically impossible.
+
+## Alternatives rejected
+
+- **Final-tree-only validation:** cannot identify required work added after completion.
+- **Use binding as proof of closure for a born-completed epic:** rejected; an issue reference proves identity, not closed state.
+- **Live GitHub lookup in CI:** rejected for this issue; the workflow intentionally has `permissions: {}` and is offline.
+- **State-based `completed` vs computed completion check:** complementary follow-up, not a substitute for this diff-aware guard.
+- **Text diff parsing:** brittle under YAML reformat/moves; semantic manifest comparison is the intended boundary.
 
 ## Platform impact
-- **Migrations**: none. No schema or manifest changes. The current corpus passes against its own parent, because no completed epic gains required items.
-- **Backward compatibility**: new failures appear only for the violating shapes. Authors who extend completed epics must use `required: false` or reopen the epic, and the README documents both.
-- **Resources**: `fetch-depth: 0` adds seconds to the checkout. The guard does about 20 `git show` calls.
-- **Risks and mitigations**:
-  - Push with an all-zero `before`. Mitigation: an explicit warning annotation, not a pass claim.
-  - A stale PR base, where main completes an epic after the PR's last run. Mitigation: the rule ignores the base lifecycle, so the merge-commit head still fails on re-run, and the post-merge `push` run against `before` catches it on `main`. Requiring up-to-date branches would close the gap fully (Open questions).
-  - A rename of `metadata.name` together with a file move evades pairing. Mitigation: the born-completed rule still catches unbound required items. This is documented.
-  - `pull_request` from forks: `fetch-depth: 0` and `merge-base` work with no token.
 
-## Open questions
-- Born-completed manifests with bound required items: offline closure is unverifiable. The proposal fails only unbound ones and prints the rest as "not verified". Should a snapshot or live verification be required instead?
-- Whether `mctlhq/.github` branch protection requires branches to be up to date before merging. I could not observe this. If it does not, the stale-base window is closed only by the post-merge `push` run.
-- The meaning of "red again when the guard step is removed" (see requirements.md Open questions).
+- No migrations, schema, runtime or GitOps changes.
+- Full-history checkout adds modest CI cost.
+- Existing completed epics are unaffected unless a change grows their required set while leaving them completed.
+- New completed manifests with required work become intentionally stricter: introduce them active/paused, then complete them through the normal observed-state path.
+- Rollback is a normal revert of the script/tests/workflow/README changes.

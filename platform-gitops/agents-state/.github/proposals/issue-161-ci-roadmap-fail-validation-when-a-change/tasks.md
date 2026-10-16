@@ -1,25 +1,60 @@
 # Tasks: issue-161-ci-roadmap-fail-validation-when-a-change
 
-- [ ] 1. Add manifest mutators `add_required_item`, `set_required` and `set_lifecycle` to `roadmap/tests/mutations.py`. Keep them pure and deep-copying, like `unbind`. — DoD: each returns a copy; the input is unchanged; the result still passes `validate.validate_document` (an unbound added item carries `title`/`owner`).
-- [ ] 2. Implement `roadmap/scripts/lifecycle_guard.py`: `BaseError`, `load_base_from_git`, `load_base_from_dir`, head loading through `validate` helpers, the pure `check()` returning `RequiredItemAdded`/`RequiredFlagRaised`/`BornCompletedUnbound`, and a `main()` with exit codes 0/1/2 and the `base-unresolvable:`/`base-unreadable:`/`base-malformed:`/`head-invalid:` prefixes. — DoD: `python3 roadmap/scripts/lifecycle_guard.py --base-dir roadmap/epics --head-dir roadmap/epics` exits 0; `git` runs only with fixed argv and no shell; no network I/O.
-- [ ] 3. (depends on 2) Wire the guard into `.github/workflows/roadmap-validate.yml`: `fetch-depth: 0` on checkout, and a new guard step after "Validate EpicDefinition manifests" that computes `git merge-base "$BASE_SHA" "$HEAD_SHA"` on `pull_request` (and fails the job if that fails), uses `$BEFORE` on `push`, and emits a `::warning::` no-base notice on an all-zero `before`. Event values go through `env:`. — DoD: `permissions: {}` unchanged; the workflow parses (actionlint or a dry YAML load); the step is green on a no-op roadmap PR.
-- [ ] 4. (depends on 2) Add one paragraph to `roadmap/README.md` under `## Validation` describing the guard, its error codes and the two legitimate ways to extend a completed epic. Add `lifecycle_guard.py` and `test_lifecycle_guard.py` to the file listing near line 65/80. — DoD: the README matches the implemented CLI and codes.
-- [ ] 5. (depends on 3) Prove it both ways in CI and paste the three run links in the PR description. (a) The PR itself: guard green on the current `roadmap/epics` against its merge base. (b) A throwaway branch that reapplies the #152 hunk, adding a required `trajectory-economics` item to `roadmap/epics/agent-finops.yaml` while it stays `lifecycle: completed`: guard red with `RequiredItemAdded`. (c) The same mutation with the guard step removed: green, showing the guard is the only thing that catches it. Also confirm the guard passes on #162 rebased onto current `main`. — DoD: three links in the PR plus the #162 result.
+- [ ] 1. Add pure, deep-copying manifest mutators to `roadmap/tests/mutations.py`: `add_required_item`, `set_required` and `set_lifecycle`. — DoD: input documents are unchanged; outputs remain valid EpicDefinitions where intended.
+- [ ] 2. Implement `roadmap/scripts/lifecycle_guard.py` with:
+  - `BaseError` and exit-code mapping 0/1/2;
+  - `load_base_from_git` using fixed argv/no shell;
+  - recursive base enumeration via `git ls-tree -rz --name-only`, filtered to `*.yaml`/`*.yml`; a non-zero `ls-tree` exit is `base-unreadable`, an empty filtered listing is a valid empty base;
+  - `load_base_from_dir` for tests;
+  - head validation through both `validate.validate_document` and `validate.corpus_errors`;
+  - pure `check()` returning `RequiredItemAdded`, `RequiredFlagRaised` and `BornCompletedUnverified`.
+  — DoD: `python3 roadmap/scripts/lifecycle_guard.py --base-dir roadmap/epics --head-dir roadmap/epics` exits 0; no network I/O.
+- [ ] 3. (depends on 2) Wire the guard into `.github/workflows/roadmap-validate.yml`:
+  - checkout with `fetch-depth: 0`;
+  - on `pull_request`, compute `git merge-base "$BASE_SHA" "$HEAD_SHA"`, failing if it cannot be resolved;
+  - on normal push, use `$BEFORE`;
+  - for all-zero `before`, add a dedicated warning step and make the real guard step conditionally **skipped**, not green-by-`exit 0`;
+  - pass event values through `env:`;
+  - keep `permissions: {}`.
+  — DoD: workflow YAML parses/actionlint passes; zero-base push shows a warning and a skipped guard step.
+- [ ] 4. (depends on 2) Add one paragraph to `roadmap/README.md` under `## Validation`, plus file-list entries for the new script/test. Document the three violation codes, exit-2 fail-closed behavior, legitimate reopen/optional paths, and why a new epic with required work cannot be born completed in offline CI.
+- [ ] 5. (depends on 3) Produce CI evidence in the implementation PR:
+  - current/converged tree: green;
+  - #152 mutation (`trajectory-economics` required while FinOps stays completed): red with `RequiredItemAdded`;
+  - same mutation with the guard workflow step removed: green, proving the guard is the load-bearing control;
+  - #162 rebased on current main: green.
+  Add links/results to the PR description. Do not claim the third run is red.
 
 ## Tests
-- [ ] T1. Unchanged corpus: `check(corpus, corpus)` is empty for the real `roadmap/epics`.
-- [ ] T2. #152 mutation: `add_required_item(agent-finops, "trajectory-economics")` with lifecycle `completed` gives exactly one `RequiredItemAdded` naming that id.
-- [ ] T3. Optional addition: the same item with `required: false` gives no violation.
-- [ ] T4. Flip: `set_required(item, True)` on an item that is optional in base gives `RequiredFlagRaised`.
-- [ ] T5. Reopen: the mutation plus `set_lifecycle("active")`, and separately `"paused"`, gives no violation.
-- [ ] T6. Stale base: base `active`, head `completed` with an added required item gives `RequiredItemAdded`.
-- [ ] T7. Born completed: a new manifest, `completed`, with an unbound required item gives `BornCompletedUnbound`. The same manifest with all required items bound passes and prints them as "closure not verified".
-- [ ] T8. Deleted in head: a completed base epic absent from head gives no violation. Removing required items, or lowering `required`, gives no violation.
-- [ ] T9. Pairing: a manifest moved to a new path with the same `metadata.name` is paired, not treated as new.
-- [ ] T10. Git base: in a temp repo, `main(["--base-ref", <parent>])` exits 1 on the mutation and 0 on the converged commit.
-- [ ] T11. Errors (exit 2, distinct prefix each): an unknown SHA gives `base-unresolvable:`; a `git clone --depth 1` without the base commit gives `base-unresolvable:` with a shallow hint; a base manifest with invalid YAML, or one missing `required` on an item, gives `base-malformed:`; an unlistable or unreadable base path (simulated by a stubbed git runner) gives `base-unreadable:`; a schema-invalid head gives `head-invalid:`.
-- [ ] T12. Revert proof: patching `check` to return `[]` makes the T2 assertion fail. Implement this with `unittest.mock.patch` inside a helper that runs T2's body and asserts the failure, so the suite proves the guard is load-bearing.
-- [ ] T13. `python3 -m unittest discover -s roadmap/tests -p 'test_*.py'` passes, and `validate.py roadmap/epics` passes unchanged.
+
+- [ ] T1. Unchanged corpus: `check(corpus, corpus)` is empty.
+- [ ] T2. #152 mutation gives exactly one `RequiredItemAdded` naming `trajectory-economics`.
+- [ ] T3. Same addition with `required: false` gives no violation.
+- [ ] T4. Existing optional item raised to required gives `RequiredFlagRaised`.
+- [ ] T5. Mutation plus lifecycle `active`, and separately `paused`, gives no violation.
+- [ ] T6. Stale-base case: base active, head completed with added required item gives `RequiredItemAdded`.
+- [ ] T7. Born-completed fail-closed behavior:
+  - new completed manifest with an unbound required item gives `BornCompletedUnverified`;
+  - new completed manifest with a **bound** required item also gives `BornCompletedUnverified` because closed state is not observable offline;
+  - a new active/paused manifest with the same work is allowed.
+- [ ] T8. Deleted-in-head completed epic gives no violation. Removing required work or lowering `required` gives no violation.
+- [ ] T9. Pairing: moving a manifest while retaining the same `metadata.name` pairs it with the base rather than treating it as new.
+- [ ] T10. Git base loader:
+  - temp repository parent/head path works;
+  - multiple YAML manifests under `roadmap/epics/` are all enumerated;
+  - a non-manifest file (for example a `README`) under `roadmap/epics/` at the base is ignored, not reported as `base-malformed`;
+  - a base with the directory but no manifests loads as an empty base;
+  - a test fails if recursive `-r` is removed from `git ls-tree`.
+- [ ] T11. Exit-2 errors have distinct prefixes:
+  - unknown/missing base -> `base-unresolvable:`;
+  - shallow clone missing the base -> `base-unresolvable:` plus shallow hint;
+  - invalid base YAML/shape -> `base-malformed:`;
+  - failed tree/blob read -> `base-unreadable:`;
+  - schema-invalid or corpus-invalid/duplicate-name head -> `head-invalid:`.
+- [ ] T12. Workflow zero-base behavior is pinned by a focused workflow-text/YAML test or equivalent: the warning path exists and the real guard step has an `if:` that skips that case rather than exiting 0 inside the guard.
+- [ ] T13. Revert/load-bearing proof: patch `check` to return `[]` and assert the #152 mutation assertion fails.
+- [ ] T14. `python3 -m unittest discover -s roadmap/tests -p 'test_*.py'` and `python3 roadmap/scripts/validate.py roadmap/epics` remain green.
 
 ## Rollback
-Revert the PR. The guard is additive: one new script, one new test file, mutators, one workflow step, `fetch-depth: 0` and a README paragraph. No manifest, schema or other script depends on it. For an urgent unblock without a full revert, delete only the guard step from `roadmap-validate.yml` in a reviewed PR. That restores the previous behaviour exactly; `fetch-depth: 0` is harmless if left in place.
+
+Revert the implementation PR. The guard is additive: script, tests, workflow wiring and README only. No schema or manifest format changes are introduced.

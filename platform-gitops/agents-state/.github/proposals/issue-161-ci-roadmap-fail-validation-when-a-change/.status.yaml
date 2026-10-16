@@ -1,6 +1,6 @@
 status: proposed
-updated_at: '2026-10-15T23:28:39Z'
-updated_by: mctl-agents[bot]
+updated_at: '2026-10-15T23:47:00Z'
+updated_by: mashkovd
 execution:
   context_id: ex-6e4f3b231fab1af7
   trace_id: 293917ff9aae32041ee95d8241adf60e
@@ -18,3 +18,9 @@ context:
   content_hash: sha256:cfe803393edd77484a4b286b64b61598d928fd3302e82e9b6b43ef0e3918cb2e
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
+notes: >-
+  Owner review amended the proposal before approval: base-tree enumeration must be recursive;
+  a new epic born completed with required work fails closed because offline CI cannot prove
+  that a bound issue is closed; head corpus validation is explicit; and an all-zero push base
+  skips the real guard step rather than reporting an unevaluated guard as green. Proposal
+  remains proposed and still requires human approval.
