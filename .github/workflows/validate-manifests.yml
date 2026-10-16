@@ -599,6 +599,16 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_security_context.py
 
+      - name: Unit-test the image-user check in deploy-service
+        # runAsNonRoot with a named or root image USER only fails after the
+        # deploy is committed (CreateContainerConfigError). check-image-user.sh
+        # judges the image against the rendered chart first; this runs it on
+        # fixtures and every existing service, and checks deploy-service runs
+        # it between the build and the commit.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_check_image_user.py
+
       - name: Check the otel-collector alert lookbacks against their holds
         # `increase(...[W]) > 0` with W longer than `for: H` pages for a spike
         # that is already over: the expression stays true for the whole window,

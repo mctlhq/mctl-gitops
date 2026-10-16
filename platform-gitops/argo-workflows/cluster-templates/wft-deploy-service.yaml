@@ -4,9 +4,9 @@ metadata:
   name: deploy-service
   annotations:
     workflows.argoproj.io/description: |
-      Main deployment workflow: validate → write Vault secrets
-      → optionally provision database → generate Helm manifests
-      → commit to gitops repo → ArgoCD syncs.
+      Main deployment workflow: validate → build → check the image user
+      → write Vault secrets → optionally provision database → generate
+      Helm manifests → commit to gitops repo → ArgoCD syncs.
 
       Actions:
         onboard      — first deploy: creates values.yaml, catalog-info.yaml, vault-cleanup.yaml
@@ -160,6 +160,20 @@ spec:
                 - name: component_name
                   value: "{{workflow.parameters.component_name}}"
 
+          # Step 1c: refuse an image that cannot start under the security
+          # context the chart will give it (runAsNonRoot with a named or
+          # root USER ends in CreateContainerConfigError after the commit).
+          # Without runAsNonRoot it only warns. update-config does not
+          # change the image, so it is not checked.
+          - name: check-image-user
+            dependencies: [validate, build-image]
+            when: "\"{{workflow.parameters.action}}\" != \"update-config\""
+            template: check-image-user
+            arguments:
+              parameters:
+                - name: image_tag
+                  value: "{{tasks.validate.outputs.parameters.image_tag}}"
+
           # Step 2: write Vault secrets (skip if no secrets). Two variants,
           # at most one runs: write-secrets-handoff reads the values from the
           # Secret named by secret_env_secret (mctl-api); write-secrets takes
@@ -215,7 +229,7 @@ spec:
           # Depends on validate (always) + build-image, write-secrets(-handoff),
           # and provision-database (all optional).
           - name: commit
-            dependencies: [validate, build-image, write-secrets, write-secrets-handoff, provision-database]
+            dependencies: [validate, build-image, check-image-user, write-secrets, write-secrets-handoff, provision-database]
             templateRef:
               name: tpl-git-commit
               clusterScope: true
@@ -387,6 +401,57 @@ spec:
         - name: deploy-key
           secret:
             secretName: mctl-gitops-deploy-key
+
+    # ────────────────────────────────────────────────────────────────────────
+    - name: check-image-user
+      inputs:
+        parameters:
+          - name: image_tag
+      script:
+        # helm, yq, jq, curl and git: what check-image-user.sh needs.
+        image: alpine/k8s:1.33.12
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: mctl-platform-config
+        env:
+          - name: PARAM_TEAM_NAME
+            value: "{{workflow.parameters.team_name}}"
+          - name: PARAM_COMPONENT_NAME
+            value: "{{workflow.parameters.component_name}}"
+          - name: PARAM_CONTAINER_REGISTRY
+            value: "{{workflow.parameters.container_registry}}"
+          - name: PARAM_IMAGE_TAG
+            value: "{{inputs.parameters.image_tag}}"
+          # The tenant pull secret: it reads every image a service may run.
+          - name: DOCKER_CONFIG_JSON
+            value: /secrets/ghcr/.dockerconfigjson
+        volumeMounts:
+          - name: ghcr-credentials
+            mountPath: /secrets/ghcr
+            readOnly: true
+        source: |
+          set -eu
+
+          # Parameters arrive as env, never interpolated into this script's
+          # text (gitops#992); the script shape-checks them again.
+          TEAM="$PARAM_TEAM_NAME"
+          COMPONENT="$PARAM_COMPONENT_NAME"
+          REGISTRY="$PARAM_CONTAINER_REGISTRY"
+          TAG="$PARAM_IMAGE_TAG"
+
+          # Read-only and public: the chart, the service's values and the
+          # script, all from main, as the commit step will see them.
+          git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
+
+          # On onboard the service has no values.yaml yet; the service
+          # templates name the image <registry>/<component>.
+          sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/check-image-user.sh check \
+            /tmp/mctl-gitops "$TEAM" "$COMPONENT" "$TAG" "${REGISTRY}/${COMPONENT}"
+      volumes:
+        - name: ghcr-credentials
+          secret:
+            secretName: ghcr-credentials
 
     # ────────────────────────────────────────────────────────────────────────
     - name: refresh-apps-appset

@@ -37,6 +37,7 @@ CASES = [
     ("wft-delete-tenant-safe.yaml", "delete-vault-policy", "echo \"Authenticating"),
     ("wft-delete-tenant.yaml", "delete-vault-policy", "echo \"Authenticating"),
     ("wft-deploy-service.yaml", "refresh-apps-appset", "echo \"Triggering hard refresh"),
+    ("wft-deploy-service.yaml", "check-image-user", "# Read-only and public"),
     ("wft-provision-database.yaml", "do-provision", "# ── Authenticate with Vault",
      "TEAM=\"$PARAM_TEAM_NAME\""),
     ("wft-retire-service.yaml", "cleanup-db-from-gitops", "# ── Set up SSH for git",
