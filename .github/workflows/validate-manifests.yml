@@ -496,6 +496,14 @@ jobs:
         # fixture checkout, with git clone stubbed.
         run: python3 tests/test_wft_create_tenant_existing.py
 
+      - name: Unit-test create-tenant's creator_catalog_key
+        # creator_catalog_key=principal writes catalogKey: principal on the
+        # owner entry (site onboarding stage C2); principal without a
+        # principal id, or any value but login/principal, fails the step
+        # instead of falling back to a login-keyed owner. Runs the template's
+        # own extracted case and members blocks.
+        run: python3 tests/test_wft_create_tenant_catalog_key.py
+
       - name: Unit-test retire-service's Argo CD Application guard
         # retire-service deletes the Application <team>-<component>. The
         # guard only lets through an absent Application or one the `apps`
