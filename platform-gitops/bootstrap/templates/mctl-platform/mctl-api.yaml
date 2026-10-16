@@ -59,10 +59,10 @@ spec:
             # stores once at startup and keeps a failed one nil (503) until
             # the pod restarts (mctlhq/mctl-api#387); the chart has no pod
             # annotation hook, so changing this value is how gitops restarts
-            # the pod. Last bumped 2026-10-16: load customers_org_id, which
-            # zitadel-iac wrote into MCTL_OIDC_PROVIDERS (mctl-gitops#1904;
-            # envFrom is read at container start).
-            ROLLOUT_MARKER: "2026-10-16-customers-client-claims"
+            # the pod. Bump only after zitadel-iac has applied generated
+            # identity configuration: envFrom is read at container start.
+            # This rollout loads ZITADEL_PORTAL_CLIENT_ID (mctl-gitops#1923).
+            ROLLOUT_MARKER: "2026-10-16-portal-customer-audience"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
