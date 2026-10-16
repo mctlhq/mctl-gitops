@@ -843,3 +843,13 @@ are tracked follow-ups, not blockers:
 Bump `targetRevision` in `bootstrap/templates/core-infra/zitadel.yaml`. Read
 the ZITADEL and chart release notes first: setup migrates the schema on the
 next sync, and a downgrade after that needs the database backup.
+
+### Consolidating a tenant login into an existing platform-admin login
+
+Preserve the destination user's ID and existing roles. Add `frappe_access: true` to its Vault entry for grant-only ERPact SSO
+access before retiring an ERPact tenant user. An opted-in Kubernetes admin
+can carry additional existing tenant roles via `kubectl_tenants` in its Vault
+entry; those roles are added to `kubernetes-admins`, never substituted for it.
+Verify destination grants live before removing the source entry from Vault.
+List only the source user and its exact managed grant addresses in
+`allowedDeletes`, and clear that exception after the deletion applies.

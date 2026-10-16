@@ -130,3 +130,19 @@ run "the_cli_client_is_public_with_pkce_and_loopback_redirects" {
     error_message = "The API server reads groups from the ID token."
   }
 }
+
+run "admin_retains_cluster_role_when_tenant_roles_are_added" {
+  command = plan
+  plan_options {
+    target = [zitadel_user_grant.kubernetes_admin]
+  }
+  variables {
+    platform_admins = jsonencode({
+      kadmin = jsonencode({ email = "q@example.com", first_name = "Q", last_name = "A", kubectl = true, kubectl_tenants = ["erpact"] })
+    })
+  }
+  assert {
+    condition     = zitadel_user_grant.kubernetes_admin["kadmin"].role_keys == toset(["kubernetes-admins", "erpact"])
+    error_message = "Moving a tenant identity must preserve both its tenant role and the admin's existing cluster role."
+  }
+}

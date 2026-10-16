@@ -107,7 +107,10 @@ resource "zitadel_user_grant" "kubernetes_admin" {
   org_id     = local.mctl_org_id
   user_id    = each.value
   project_id = zitadel_project.kubernetes.id
-  role_keys  = [zitadel_project_role.kubernetes_admin.role_key]
+  role_keys = concat(
+    [zitadel_project_role.kubernetes_admin.role_key],
+    [for tenant in try(local.platform_admins[each.key].kubectl_tenants, []) : zitadel_project_role.kubernetes_tenant[tenant].role_key],
+  )
 }
 
 # kubelogin (`kubectl oidc-login`): a public client with PKCE, since a CLI
