@@ -318,6 +318,45 @@ run "creation_never_opens_without_the_gate" {
   expect_failures = [zitadel_org_idp_github.customers]
 }
 
+run "customer_copy_is_scoped_to_the_customer_organization" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en, zitadel_verify_email_message_text.customers_en]
+  }
+  override_resource {
+    target = zitadel_org.customers
+    values = { id = "customers-org" }
+  }
+  assert {
+    condition = (
+      zitadel_hosted_login_translation.customers_en.org_id == "customers-org" &&
+      zitadel_verify_email_message_text.customers_en.org_id == "customers-org" &&
+      strcontains(zitadel_verify_email_message_text.customers_en.text, "Continue with GitHub") &&
+      !strcontains(zitadel_verify_email_message_text.customers_en.text, "set up a passkey")
+    )
+    error_message = "Customer copy must be org-scoped and direct people to GitHub, preserving staff defaults."
+  }
+}
+
+run "customer_login_ui_directs_every_entry_path_to_github" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en]
+  }
+  assert {
+    condition = alltrue([
+      for text in [
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).loginname.description,
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).loginname.errors.localAuthenticationNotAllowed,
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.description,
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.signInWithGithub,
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).register.disabled.description,
+      ] : strcontains(text, "GitHub") && !strcontains(lower(text), "set up a passkey") && !strcontains(lower(text), "set a password")
+    ])
+    error_message = "Every customer login entry path must direct to GitHub, never ask for a local password/passkey."
+  }
+}
+
 run "customers_get_authentication_without_project_roles" {
   command = plan
   plan_options {
