@@ -337,3 +337,22 @@ run "customer_copy_is_scoped_to_the_customer_organization" {
     error_message = "Customer copy must be org-scoped and direct people to GitHub, preserving staff defaults."
   }
 }
+
+run "customer_login_ui_directs_every_entry_path_to_github" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en]
+  }
+  assert {
+    condition = alltrue([
+      for text in [
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).loginname.description,
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).loginname.errors.localAuthenticationNotAllowed,
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.description,
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.signInWithGithub,
+        jsondecode(zitadel_hosted_login_translation.customers_en.translations).register.disabled.description,
+      ] : strcontains(text, "GitHub") && !strcontains(lower(text), "set up a passkey") && !strcontains(lower(text), "set a password")
+    ])
+    error_message = "Every customer login entry path must direct to GitHub, never ask for a local password/passkey."
+  }
+}

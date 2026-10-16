@@ -1,5 +1,7 @@
 # Customers use GitHub for sign-in and recovery. Instance defaults invite
 # staff to set up passkeys; never show those instructions to customers.
+# ZITADEL cannot delete hosted-login translations: removing this resource
+# leaves its last applied copy live. Revert by applying replacement texts.
 resource "zitadel_hosted_login_translation" "customers_en" {
   org_id   = zitadel_org.customers.id
   language = "en"
