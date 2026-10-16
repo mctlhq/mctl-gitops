@@ -207,14 +207,18 @@ run "oidc_provider_client_reaches_the_portal_secret" {
     target = zitadel_application_oidc.portal_ui
     values = { client_id = "portal-ui-client-id", client_secret = "portal-ui-client-secret" }
   }
+  override_resource {
+    target = zitadel_org.customers
+    values = { id = "customers-org-id" }
+  }
 
   assert {
     condition     = kubernetes_secret_v1_data.portal_oidc.metadata[0].name == "backstage-oidc-zitadel" && kubernetes_secret_v1_data.portal_oidc.metadata[0].namespace == "backstage"
     error_message = "The keys go into backstage/backstage-oidc-zitadel, the Secret the mctl-portal-oidc-zitadel Application pre-creates."
   }
   assert {
-    condition     = toset(keys(kubernetes_secret_v1_data.portal_oidc.data)) == toset(["OIDC_ZITADEL_CLIENT_ID", "OIDC_ZITADEL_CLIENT_SECRET", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_CLIENT_SECRET"])
-    error_message = "backstage/backstage-oidc-zitadel must carry exactly the four keys the portal reads."
+    condition     = toset(keys(kubernetes_secret_v1_data.portal_oidc.data)) == toset(["OIDC_ZITADEL_CLIENT_ID", "OIDC_ZITADEL_CLIENT_SECRET", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_CLIENT_SECRET", "AUTH_OIDC_CUSTOMERS_ORG_ID"])
+    error_message = "backstage/backstage-oidc-zitadel must carry exactly the five keys the portal reads."
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["OIDC_ZITADEL_CLIENT_ID"]) == "portal-client-id"
@@ -231,6 +235,10 @@ run "oidc_provider_client_reaches_the_portal_secret" {
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["AUTH_OIDC_CLIENT_SECRET"]) == "portal-ui-client-secret"
     error_message = "AUTH_OIDC_CLIENT_SECRET must be the portal (UI) client secret."
+  }
+  assert {
+    condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["AUTH_OIDC_CUSTOMERS_ORG_ID"]) == "customers-org-id"
+    error_message = "AUTH_OIDC_CUSTOMERS_ORG_ID must be the customers organization's id."
   }
   assert {
     condition     = kubernetes_secret_v1_data.portal_oidc.field_manager == "zitadel-iac" && kubernetes_secret_v1_data.portal_oidc.force == true

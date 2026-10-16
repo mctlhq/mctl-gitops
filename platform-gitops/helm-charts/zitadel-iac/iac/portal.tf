@@ -127,11 +127,16 @@ resource "kubernetes_secret_v1_data" "portal_oidc" {
   # OIDC_ZITADEL_* into oidcProvider.zitadel, AUTH_OIDC_* into
   # auth.providers.oidc. Neither is used while its switch
   # (oidcProvider.upstream, auth.signIn) is github, the default.
+  # AUTH_OIDC_CUSTOMERS_ORG_ID goes into zitadelCustomers.organizationId: the
+  # portal's ZITADEL sign-in tells self-service customers (signed in by
+  # principal) from staff (signed in by GitHub login) by it, and refuses
+  # every sign-in without it (mctl-web site onboarding, stage C2).
   data = {
     OIDC_ZITADEL_CLIENT_ID     = zitadel_application_oidc.portal_oidc_provider.client_id
     OIDC_ZITADEL_CLIENT_SECRET = zitadel_application_oidc.portal_oidc_provider.client_secret
     AUTH_OIDC_CLIENT_ID        = zitadel_application_oidc.portal_ui.client_id
     AUTH_OIDC_CLIENT_SECRET    = zitadel_application_oidc.portal_ui.client_secret
+    AUTH_OIDC_CUSTOMERS_ORG_ID = zitadel_org.customers.id
   }
 
   field_manager = "zitadel-iac"
