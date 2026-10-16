@@ -83,6 +83,17 @@ spec:
             # a clean admin record first. A malformed id refuses startup.
             # Rollback: remove this line.
             ADMIN_PRINCIPALS: prn_01M39HRB7JRXZ2PHW5VVB695YZ
+            # DevLoop approval relay (mctlhq/mctl-api#571, mctl-agents#636).
+            # `false` closes the free-text approver relay: a service call to
+            # mctl-agents-approve naming a different approver gets 400
+            # legacy_approver_disabled instead of approver.legacy_relay, and
+            # a DevLoop approve with no aar_ grant gets 409
+            # approval_grant_missing. Safe since mctl-agents 1.76.0, whose
+            # DevLoops request a grant first; the pre-1.76.0 loops parked at
+            # approval were abandoned on 2026-10-16. "true"/"false" only;
+            # anything else refuses startup. Rollback: remove this line
+            # (empty = on).
+            MCTL_AGENTS_APPROVE_LEGACY_APPROVER: "false"
             AUTH_REQUIRED: "true"
             BACKSTAGE_URL: https://app.mctl.ai
             # No DEX_ISSUER_URL: since mctl-api 4.72.0 (mctlhq/mctl-api#521)
