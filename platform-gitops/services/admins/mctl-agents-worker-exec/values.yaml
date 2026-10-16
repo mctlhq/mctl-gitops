@@ -31,7 +31,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.75.2"
+  tag: "1.76.0"
 imagePullSecrets:
   - name: ghcr-credentials
 command: ["python", "-m", "orchestrator.temporal.worker", "--role", "execution"]
