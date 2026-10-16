@@ -212,6 +212,11 @@ which is a diff against every service that renders today for no reason.
 Render a list of containers (initContainers / extraContainers) with the chart's
 extraContainerSecurityContext merged under each container's own securityContext.
 The container's keys win, so an explicit setting is never loosened.
+`merge` treats a container's empty values (false, 0, [], "") as unset and
+fills them from the default, so an explicit `capabilities.drop: []` becomes
+the default list. That can only tighten a container, never loosen it. To opt
+out of a default, set extraContainerSecurityContext (or that key) to null at
+the service level instead.
 Usage: include "base-service.hardenedContainers" (dict "containers" .Values.initContainers "defaults" .Values.extraContainerSecurityContext)
 */}}
 {{- define "base-service.hardenedContainers" -}}
