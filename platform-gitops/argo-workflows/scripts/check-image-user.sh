@@ -17,6 +17,11 @@
 # pod fail with CreateContainerConfigError, and so does root (no USER, `root`,
 # or uid 0). Only in that case is the image config read from the registry.
 #
+# Only the main container is judged: it runs the image this deploy changes.
+# An initContainers or extraContainers entry with a named or root USER and no
+# runAsUser of its own fails the same way under a pod-level runAsNonRoot, and
+# is not caught here.
+#
 # Under runAsNonRoot a failing image is refused. Without it the same finding
 # is printed as a warning only: the service runs today, and the warning is
 # what tells its owner it will stop once non-root becomes the default.
@@ -48,14 +53,22 @@ TMP=$(mktemp -d) || die "mktemp failed"
 trap 'rm -rf "$TMP"' EXIT
 
 # ── Registry ─────────────────────────────────────────────────────────────
+# Every registry call is bounded and retried: this step gates the commit, so a
+# stalled registry must not hang the deploy, and one transient 5xx must not
+# refuse it. curl prints the status through -w even when it fails (000 for no
+# response), so its exit code is not used.
+http() {
+  curl -sS --connect-timeout 5 --max-time 30 --retry 3 --retry-connrefused "$@" || true
+}
+
 # GET <url> into $TMP/body with the current $AUTH header; prints the status.
 get() {
   if [ -n "${AUTH:-}" ]; then
-    curl -sS -L -o "$TMP/body" -D "$TMP/headers" -w '%{http_code}' \
-      -H "Accept: $ACCEPT" -H "Authorization: $AUTH" "$1" || echo 000
+    http -L -o "$TMP/body" -D "$TMP/headers" -w '%{http_code}' \
+      -H "Accept: $ACCEPT" -H "Authorization: $AUTH" "$1"
   else
-    curl -sS -L -o "$TMP/body" -D "$TMP/headers" -w '%{http_code}' \
-      -H "Accept: $ACCEPT" "$1" || echo 000
+    http -L -o "$TMP/body" -D "$TMP/headers" -w '%{http_code}' \
+      -H "Accept: $ACCEPT" "$1"
   fi
 }
 
@@ -97,18 +110,23 @@ fetch_user() {
     [ -n "$realm" ] || die "${registry} answered 401 without a bearer realm"
     basic=""
     if [ -n "${DOCKER_CONFIG_JSON:-}" ] && [ -r "$DOCKER_CONFIG_JSON" ]; then
-      basic=$(jq -r --arg r "$registry" '.auths[$r].auth // empty' "$DOCKER_CONFIG_JSON") \
-        || die "cannot parse ${DOCKER_CONFIG_JSON}"
+      # Docker Hub entries are conventionally keyed by its v1 index URL.
+      basic=$(jq -r --arg r "$registry" \
+        '(.auths[$r] // (if $r == "docker.io" then .auths["https://index.docker.io/v1/"] else null end)).auth // empty' \
+        "$DOCKER_CONFIG_JSON") || die "cannot parse ${DOCKER_CONFIG_JSON}"
     fi
     if [ -n "$basic" ]; then
-      tcode=$(curl -sS -o "$TMP/token" -w '%{http_code}' -G "$realm" \
+      tcode=$(http -o "$TMP/token" -w '%{http_code}' -G "$realm" \
         --data-urlencode "service=${service}" \
         --data-urlencode "scope=repository:${path}:pull" \
-        -H "Authorization: Basic ${basic}" || echo 000)
+        -H "Authorization: Basic ${basic}")
     else
-      tcode=$(curl -sS -o "$TMP/token" -w '%{http_code}' -G "$realm" \
+      # Said out loud: a private image read anonymously fails with a bare 401
+      # that would not tell which credentials, if any, were used.
+      echo "check-image-user: no credentials for ${registry} in ${DOCKER_CONFIG_JSON:-<unset>}; reading anonymously" >&2
+      tcode=$(http -o "$TMP/token" -w '%{http_code}' -G "$realm" \
         --data-urlencode "service=${service}" \
-        --data-urlencode "scope=repository:${path}:pull" || echo 000)
+        --data-urlencode "scope=repository:${path}:pull")
     fi
     [ "$tcode" = 200 ] || die "token request to ${realm} answered HTTP ${tcode}"
     token=$(jq -r '.token // .access_token // empty' "$TMP/token") || die "unreadable token response"
@@ -175,6 +193,10 @@ check() {
   done
   case "$tag" in
     *[!A-Za-z0-9._:@-]*|"") die "invalid image tag: ${tag}" ;;
+  esac
+  # --set-string splits on commas, so the repository is shape-checked too.
+  case "$default_repo" in
+    *[!A-Za-z0-9._:/-]*) die "invalid default repository: ${default_repo}" ;;
   esac
 
   chart="$root/platform-gitops/helm-charts/base-service"

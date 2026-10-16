@@ -407,6 +407,9 @@ spec:
       inputs:
         parameters:
           - name: image_tag
+      # The commit waits on this step; a stuck clone or registry read must
+      # fail the deploy rather than hold it open.
+      activeDeadlineSeconds: 300
       script:
         # helm, yq, jq, curl and git: what check-image-user.sh needs.
         image: alpine/k8s:1.33.12

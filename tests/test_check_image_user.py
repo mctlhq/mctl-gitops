@@ -146,7 +146,8 @@ root = checkout(None)
 try:
     for args, label in ((["labs", "Bad_Name", "1.2.3"], "invalid component"),
                         (["labs", "svc", "1.2.3;x"], "invalid tag"),
-                        (["labs", "svc", "1.2.3", ""], "onboard without a repository")):
+                        (["labs", "svc", "1.2.3", ""], "onboard without a repository"),
+                        (["labs", "svc", "1.2.3", "ghcr.io/x,image.tag=0"], "repository with a comma")):
         p = subprocess.run(["sh", str(SCRIPT), "check", "--image-user", "1000", str(root), *args],
                            capture_output=True, text=True)
         check(p.returncode == 2, f"{label}: exit {p.returncode}, want 2\n{p.stderr}")
@@ -162,7 +163,22 @@ for values in sorted((REPO / "platform-gitops/services").glob("*/*/values.yaml")
     team, name = values.parts[-3], values.parts[-2]
     p = subprocess.run(["sh", str(SCRIPT), "check", "--image-user", "app", str(REPO), team, name, "1.2.3"],
                        capture_output=True, text=True)
-    check(p.returncode == 0, f"{team}/{name} refused with a named image user:\n{p.stdout}{p.stderr}")
+    check(p.returncode == 0,
+          f"{team}/{name} refused with a named image user. A service that opts into "
+          "runAsNonRoot must pin runAsUser/runAsGroup in its values (numeric, from "
+          "the image's real uid) so this offline check, and kubelet, can verify it:\n"
+          f"{p.stdout}{p.stderr}")
+
+# Every registry call is bounded and retried: the step gates the commit, so a
+# stalled registry must not hang the deploy. Each curl goes through http().
+src = SCRIPT.read_text()
+calls = [l.strip() for l in src.splitlines() if l.strip().startswith(("curl ", "http "))
+         or "$(curl " in l or "$(http " in l]
+check(all("curl" not in c or "--max-time" in c for c in calls) and calls,
+      f"registry calls must go through http() with timeouts: {calls}")
+code = [l for l in src.splitlines() if not l.lstrip().startswith("#")]
+check(sum(l.count("curl ") for l in code) == 1 and "--connect-timeout" in src and "--retry" in src,
+      "exactly one curl, in http(), with --connect-timeout, --max-time and --retry")
 
 # deploy-service runs the check after the build and before the commit, for
 # onboard and deploy only, with the script taken from the checkout.
@@ -179,6 +195,8 @@ check("check-image-user" in tasks.get("commit", {}).get("dependencies", []),
 body = next((t for t in wft["spec"]["templates"] if t["name"] == "check-image-user"), None)
 check(body is not None and "check-image-user.sh check" in body["script"]["source"],
       "the check-image-user template must run check-image-user.sh check")
+check(body is not None and body.get("activeDeadlineSeconds"),
+      "the check-image-user template must carry an activeDeadlineSeconds")
 
 if failures:
     for f in failures:
