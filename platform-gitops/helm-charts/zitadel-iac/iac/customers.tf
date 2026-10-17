@@ -249,10 +249,14 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
   }
 
   data = {
-    ZITADEL_HOOK_CUSTOMERS_ORG_ID     = zitadel_org.customers.id
-    ZITADEL_HOOK_GITHUB_IDP_ID        = zitadel_org_idp_github.customers.id
-    ZITADEL_HOOK_LOGIN_CLIENT_USER_ID = var.identity_hook_login_client_user_id
-    ZITADEL_HOOK_USERNAME_DOMAIN      = local.customers_domain
+    ZITADEL_CUSTOMER_LIFECYCLE_CLIENT_ID     = zitadel_machine_user.customer_lifecycle.client_id
+    ZITADEL_CUSTOMER_LIFECYCLE_CLIENT_SECRET = zitadel_machine_user.customer_lifecycle.client_secret
+    ZITADEL_CUSTOMER_LIFECYCLE_PROJECT_ID    = zitadel_project.customer_lifecycle.id
+    ZITADEL_CUSTOMER_LIFECYCLE_USER_ID       = zitadel_machine_user.customer_lifecycle.id
+    ZITADEL_HOOK_CUSTOMERS_ORG_ID            = zitadel_org.customers.id
+    ZITADEL_HOOK_GITHUB_IDP_ID               = zitadel_org_idp_github.customers.id
+    ZITADEL_HOOK_LOGIN_CLIENT_USER_ID        = var.identity_hook_login_client_user_id
+    ZITADEL_HOOK_USERNAME_DOMAIN             = local.customers_domain
     # Explicit sign-in clients, including portal and API now that B1b opens
     # authentication there. The legacy portal OIDC provider is deliberately
     # excluded: it still resolves by login and has no customer principal path.
@@ -284,4 +288,30 @@ resource "kubernetes_secret_v1_data" "mctl_api_zitadel_hook" {
   field_manager = "zitadel-iac"
   # Created by Argo CD with no data; see forgejo.tf.
   force = true
+}
+
+
+# The teardown machine lives outside customers (which only admits humans via
+# GitHub), and may manage users only in the customer organization. No staff,
+# instance-admin, project-grant or GitOps permission is attached to it.
+resource "zitadel_machine_user" "customer_lifecycle" {
+  org_id            = local.mctl_org_id
+  user_name         = "customer-lifecycle"
+  name              = "Customer lifecycle"
+  description       = "Automated, explicitly approved customer account deletion"
+  with_secret       = true
+  access_token_type = "ACCESS_TOKEN_TYPE_JWT"
+}
+
+resource "zitadel_org_member" "customer_lifecycle" {
+  org_id  = zitadel_org.customers.id
+  user_id = zitadel_machine_user.customer_lifecycle.id
+  roles   = ["ORG_USER_MANAGER"]
+}
+
+# A dedicated audience lets the Worker accept this machine without accepting
+# customer tokens or giving the API any Cloudflare KV administration token.
+resource "zitadel_project" "customer_lifecycle" {
+  org_id = local.mctl_org_id
+  name   = "MCTL customer lifecycle"
 }
