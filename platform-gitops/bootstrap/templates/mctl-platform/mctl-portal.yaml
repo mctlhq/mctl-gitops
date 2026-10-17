@@ -2,6 +2,31 @@
 # Consolidates Application, ExternalSecrets, and RBAC
 
 ---
+# Reuse the sending-only mctl.ai key already held in Vault for transactional
+# identity mail. Keep it in a separate Secret so SMTP-key drift cannot stop
+# the portal's existing OAuth/database Secret from reconciling.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: backstage-workspace-ready
+  namespace: backstage
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: backstage-workspace-ready
+    creationPolicy: Owner
+  data:
+    - secretKey: WORKSPACE_READY_RESEND_API_KEY
+      remoteRef:
+        key: platform/zitadel/smtp
+        property: password
+
+---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
@@ -272,6 +297,7 @@ spec:
               memory: 768Mi
           extraEnvVarsSecrets:
             - backstage-secrets
+            - backstage-workspace-ready
             # ZITADEL client of the portal's OIDC provider (OIDC_ZITADEL_CLIENT_ID
             # and _SECRET), the portal UI client (AUTH_OIDC_*) and the
             # customers organization and GitHub IdP ids, filled by the
@@ -501,6 +527,9 @@ spec:
                 pvcs: "2"
                 services: "5"
               maxTeamsPerTenant: 1
+              workspaceReady:
+                enabled: true
+                resendApiKey: ${WORKSPACE_READY_RESEND_API_KEY}
             oidcProvider:
               issuer: https://app.mctl.ai/api/oidc-provider
               # ZITADEL only (mctlhq/mctl-gitops#1500, phase 7): no GitHub
