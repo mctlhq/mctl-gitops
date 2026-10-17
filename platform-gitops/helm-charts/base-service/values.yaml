@@ -20,7 +20,8 @@ service:
   # change `port` itself on a live service: Service ports merge by number, the
   # new entry collides with the old one on the name `http`, the apply fails
   # and the Ingress is left pointing at a port the Service does not have
-  # (gitops#1933).
+  # (gitops#1933). Probes follow only when they name the port: a service that
+  # overrides probes.*.port with a number must move that number too.
   # containerPort: 8080
 
 # -- Required: resource limits
