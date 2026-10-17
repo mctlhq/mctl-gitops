@@ -476,3 +476,21 @@ run "customer_copy_covers_every_supported_locale" {
     error_message = "Non-English browsers must not inherit staff password/passkey enrollment instructions."
   }
 }
+
+run "customer_lifecycle_is_scoped_to_customer_user_management" {
+  command = plan
+  plan_options {
+    target = [zitadel_org_member.customer_lifecycle, zitadel_project.customer_lifecycle]
+  }
+  assert {
+    condition = (
+      zitadel_machine_user.customer_lifecycle.org_id == local.mctl_org_id &&
+      zitadel_machine_user.customer_lifecycle.with_secret == true &&
+      zitadel_machine_user.customer_lifecycle.access_token_type == "ACCESS_TOKEN_TYPE_JWT" &&
+      zitadel_org_member.customer_lifecycle.org_id == zitadel_org.customers.id &&
+      toset(zitadel_org_member.customer_lifecycle.roles) == toset(["ORG_USER_MANAGER"]) &&
+      zitadel_project.customer_lifecycle.org_id == local.mctl_org_id
+    )
+    error_message = "Lifecycle credentials must be JWT machine credentials outside customers, with only customer-org user management."
+  }
+}
