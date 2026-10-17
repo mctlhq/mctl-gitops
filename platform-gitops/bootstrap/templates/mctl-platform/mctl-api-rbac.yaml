@@ -59,6 +59,8 @@ kind: ClusterRole
 metadata:
   name: mctl-api-customer-namespace-reader
 rules:
+  # Namespace get is cluster-wide because customer names are dynamic. It
+  # exposes metadata/status only; no list, write, workload or secret access.
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get"]

@@ -309,8 +309,11 @@ resource "zitadel_org_member" "customer_lifecycle" {
   roles   = ["ORG_USER_MANAGER"]
 }
 
-# A dedicated audience lets the Worker accept this machine without accepting
-# customer tokens or giving the API any Cloudflare KV administration token.
+# The reserved urn:zitadel:iam:org:project:id:{projectid}:aud scope adds
+# the project ID itself to access-token aud, even without an application.
+# https://zitadel.com/docs/apis/openidoauth/scopes#reserved-scopes
+# The Worker pins this project ID AND the exact machine subject; a project
+# role/application is not an authorization gate for this private endpoint.
 resource "zitadel_project" "customer_lifecycle" {
   org_id = local.mctl_org_id
   name   = "MCTL customer lifecycle"
