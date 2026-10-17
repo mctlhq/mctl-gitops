@@ -194,6 +194,15 @@ spec:
             # ZITADEL identity maps to the linked GitHub login.
             # Rollback: set this back to `both`.
             OAUTH_UPSTREAM: "zitadel"
+            # GitHub numeric ids allowed to create a NEW account in the ZITADEL
+            # org customers (identity hook, mctlhq/mctl-web#158). Unset creates
+            # nobody; exactly "*" opens creation to anyone (the public cutover,
+            # not decided). Existing customers accounts sign in regardless.
+            # Ids only, never names: this repository is public. Must be live
+            # BEFORE the mctl-api release with the gate; older releases ignore
+            # it. A malformed value refuses startup. Read at start: adding an
+            # id restarts the pod through this env change.
+            ZITADEL_HOOK_CUSTOMER_CREATE_GITHUB_IDS: "268260640,334465501,47027422"
             # Browser origins permitted by CORS. Distinct from the redirect URIs
             # above: those govern where the OAuth dance may hand a code back,
             # this governs which page may read an authenticated API response.
