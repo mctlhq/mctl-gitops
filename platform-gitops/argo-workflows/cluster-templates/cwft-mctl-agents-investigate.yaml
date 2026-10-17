@@ -80,7 +80,7 @@ spec:
         # https://github.com/mctlhq/mctl-telegram/issues/123
         # run-investigator fails fast with a clear message if empty.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.82.0
+        value: ghcr.io/mctlhq/mctl-agents:1.83.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -138,6 +138,18 @@ spec:
         # rule as work_item_id. Requires an issue-investigator release
         # containing mctl-agents#558 (1.66.0+); an earlier pin does not
         # recognise the flag and exits non-zero.
+      - name: work_item_owner_principal_id
+        value: ""
+        # Optional. The work item owner's canonical principal (prn_...),
+        # sent only by the DevLoop's continuation, which pops work_item_id
+        # and so has no work context of its own (mctl-agents#684). The
+        # investigator names it as `principal:<prn_>` on a later-round
+        # human-input request, so a ZITADEL-only owner can still answer.
+        # Forwarded as --work-item-owner-principal-id and validated against
+        # the prn_ shape before any clone. Same omit-when-empty rule as
+        # work_item_id. Requires an issue-investigator release containing
+        # mctl-agents#686; an earlier pin does not recognise the flag and
+        # exits non-zero.
       - name: traceparent
         value: ""
         # Optional. W3C trace context of the Temporal activity that
@@ -456,6 +468,10 @@ spec:
             if [ -n "$WORKFLOW_HUMAN_INPUT_RESPONSES" ]; then
               set -- "$@" --human-input-responses "$WORKFLOW_HUMAN_INPUT_RESPONSES"
             fi
+            # Owner principal for later-round questions (mctl-agents#684).
+            if [ -n "$WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID" ]; then
+              set -- "$@" --work-item-owner-principal-id "$WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID"
+            fi
             printf '→'
             printf ' %s' "$@"
             printf '\n'
@@ -680,6 +696,8 @@ spec:
             value: "{{workflow.parameters.execution_request_id}}"
           - name: WORKFLOW_HUMAN_INPUT_RESPONSES
             value: "{{workflow.parameters.human_input_responses}}"
+          - name: WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID
+            value: "{{workflow.parameters.work_item_owner_principal_id}}"
           # The engine run this attempt belongs to (mctl-agents#455): the
           # investigator attaches it to the work item as (argo, workflow name)
           # and takes the store's `we_` id as its execution identity. The

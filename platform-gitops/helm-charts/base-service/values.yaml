@@ -184,7 +184,9 @@ terminationGracePeriodSeconds: ~
 # routes to it, and those requests get a 502 (admins/mctl-web, gitops#1946).
 # Uses the kubelet's native sleep action, so the image needs no shell. Counts
 # against terminationGracePeriodSeconds and must stay below it. Set 0 to turn
-# it off.
+# it off. Not rendered with `strategy.type: Recreate`: there the old pod is out
+# of the endpoints and the new one waits for it to exit, so the sleep would
+# only add downtime to every restart.
 preStopSleepSeconds: 5
 
 # -- Health checks
