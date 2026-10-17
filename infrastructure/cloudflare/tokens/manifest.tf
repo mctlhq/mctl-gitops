@@ -23,6 +23,9 @@ locals {
     mctl_ai = "com.cloudflare.api.account.zone.86a90fe2fdfe87b9702842218b607f60"
     mctl_me = "com.cloudflare.api.account.zone.b0a1f8992b5d4221faf4541a9f75a329"
     mctl_ru = "com.cloudflare.api.account.zone.a7ec983a32a4b15097fbb80b1f5f6924"
+    # A zone on this account that is not managed under ../zones. Only its ID
+    # is recorded here; cert-manager issues one certificate in it.
+    non_iac_1 = "com.cloudflare.api.account.zone.dec531554eb221a97e97c29ecf49f891"
   }
 
   # Permission group IDs, named as the dashboard names them. The check compares
@@ -298,15 +301,32 @@ locals {
         resources = { (local.account) = "*" }
       }]
     },
-    # DNS Write on every zone of the account (the API nests
-    # `com.cloudflare.api.account.zone.* = *` under the account), most likely
-    # cert-manager's DNS-01 token (Secret cloudflare-api-token, k3s-preview).
-    # The provider cannot represent a nested resource map and returns
-    # `resources = null` for it, so this entry declares null and the token's
-    # zone scope is NOT verified: only its name, status and permission groups
-    # are. check.tf reports that on every run rather than letting it pass as
-    # a match. Re-issuing it with the zones listed flat would make it
-    # observable.
+    # cert-manager's DNS-01 token on k3s-preview (Secret
+    # cert-manager/cloudflare-api-token, from Vault
+    # platform/cloudflare/cert-manager-dns01 via ExternalSecret). The zones
+    # are listed flat so that check.tf verifies the scope; these four are the
+    # ones the ClusterIssuers' certificates name. It replaces "Edit zone DNS"
+    # below.
+    {
+      name = "cert-manager-dns01 (k3s-preview)"
+      policies = [{
+        permission_groups = [local.pg.dns_write]
+        resources = {
+          (local.zone.mctl_ai)   = "*"
+          (local.zone.mctl_me)   = "*"
+          (local.zone.mctl_ru)   = "*"
+          (local.zone.non_iac_1) = "*"
+        }
+      }]
+    },
+    # The token cert-manager used until the one above: DNS Write on every
+    # zone of the account (the API nests `com.cloudflare.api.account.zone.* =
+    # *` under the account). The provider cannot represent a nested resource
+    # map and returns `resources = null` for it, so this entry declares null
+    # and the token's zone scope is NOT verified: only its name, status and
+    # permission groups are. check.tf reports that on every run rather than
+    # letting it pass as a match. It is deleted, and this entry with it, once
+    # cert-manager has issued a certificate with the replacement.
     {
       name = "Edit zone DNS"
       policies = [{

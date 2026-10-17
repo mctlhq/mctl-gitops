@@ -68,6 +68,7 @@
       "argo-workflows"
       "argocd"
       "backstage"
+      "cert-manager"
       "cnpg-system"
       "default"
       "erpact"
