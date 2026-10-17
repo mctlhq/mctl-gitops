@@ -59,8 +59,10 @@ spec:
             # stores once at startup and keeps a failed one nil (503) until
             # the pod restarts (mctlhq/mctl-api#387); the chart has no pod
             # annotation hook, so changing this value is how gitops restarts
-            # the pod. Bump only after zitadel-iac has applied generated
-            # identity configuration: envFrom is read at container start.
+            # the pod. envFrom and startup-only files are read at container
+            # start, so when a rollout depends on generated configuration
+            # (for example zitadel-iac output), bump only after it is applied.
+            # The line below records why the current value was set.
             # This rollout loads the claude-haiku-5-5 usage price card, which
             # mctl-api reads only at startup.
             ROLLOUT_MARKER: "2026-10-17-usage-pricing-haiku-5-5"
