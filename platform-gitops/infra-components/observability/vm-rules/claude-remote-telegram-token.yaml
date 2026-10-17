@@ -119,8 +119,11 @@ spec:
               pushed metrics for over three hours. Check that the pod is
               running and look for [telegram-token] lines in its log.
         - alert: ClaudeRemoteTelegramTokenCheckAbsent
-          expr: absent_over_time(mctl_claude_remote_telegram_token_last_check_timestamp_seconds[3h])
-          for: 0m
+          # absent() with a pending period, not absent_over_time with for: 0m:
+          # a brand-new series has no history, so the latter would fire on
+          # the first evaluation after rollout, before the first push.
+          expr: absent(mctl_claude_remote_telegram_token_last_check_timestamp_seconds)
+          for: 3h
           labels:
             severity: warning
             service: claude-remote

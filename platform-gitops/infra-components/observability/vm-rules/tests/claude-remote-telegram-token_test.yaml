@@ -136,7 +136,10 @@ tests:
       - series: 'unrelated_metric'
         values: '1x300'
     alert_rule_test:
-      - eval_time: 3h
+      - eval_time: 2h
+        alertname: ClaudeRemoteTelegramTokenCheckAbsent
+        exp_alerts: []
+      - eval_time: 3h10m
         alertname: ClaudeRemoteTelegramTokenCheckAbsent
         exp_alerts:
           - exp_labels:
@@ -165,3 +168,17 @@ tests:
             exp_annotations:
               summary: "claude-remote session holds a Telegram token expiring within a day"
               description: "The claude-remote session is still connected with a Telegram worker token that expires in 23h 30m 0s, although a relaunch should already have moved it to a newer one. Restart deploy/labs-claude-remote-base-service in labs so the session reconnects."
+
+  - interval: 1m
+    name: a rollout whose first push lands after a few minutes stays quiet
+    input_series:
+      # No samples for the first five minutes, then hourly-style checks.
+      - series: 'mctl_claude_remote_telegram_token_last_check_timestamp_seconds{job="claude-remote-telegram-token"}'
+        values: '_x5 300+60x300'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: ClaudeRemoteTelegramTokenCheckAbsent
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: ClaudeRemoteTelegramTokenCheckAbsent
+        exp_alerts: []
