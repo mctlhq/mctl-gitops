@@ -160,10 +160,16 @@ env:
   MCTL_EVENTS_VALKEY_PASSWORD_FILE: "/etc/mctl-events/secrets/valkey-password"
   MCTL_EVENTS_POLICY: "/etc/mctl-events/policy.json"
   # Hydration of telegram.message.* refs through the preview mctl-telegram MCP
-  # (the account's live traffic is on preview). The worker token is read-only;
-  # its expiry is tracked in Vault platform/mctl-claude-remote/telegram-mcp.
+  # (the account's live traffic is on preview). The worker token is read-only.
+  # The file below is the seed (Vault platform/mctl-claude-remote/telegram-mcp):
+  # since image 0.14.0 the device renews the token itself and keeps renewals
+  # in /workspace/.claude, so the seed is only rewritten for a human mint
+  # (yearly, or after an expiry). Renewal metrics go to the Pushgateway and
+  # alert through vm-rules/claude-remote-telegram-token.yaml
+  # (mctlhq/mctl-claude-remote#82).
   MCTL_EVENTS_TELEGRAM_MCP_URL: "https://tg-preview.mctl.ai/mcp"
   MCTL_EVENTS_TELEGRAM_MCP_TOKEN_FILE: "/etc/mctl-events/secrets/telegram-mcp-token"
+  MCTL_EVENTS_PUSHGATEWAY_URL: "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
 # Intentionally NO envFrom / no CLAUDE_CODE_OAUTH_TOKEN in env:
 #
 # `claude --remote-control` needs a full-scope claude.ai login (from
