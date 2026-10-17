@@ -16,7 +16,9 @@ metadata:
         2. flip-status — proposed → accepted for the {service, slug} pair,
            recording approver identity and the content digest of
            requirements.md, design.md, tasks.md and proposed-content.md
-           (mctl-agents#658).
+           (mctl-agents#658). With expected_content_digest set, refuses
+           unless the files still hash to it: the digest the human approved
+           (mctl-agents#681).
            Idempotent: already-accepted exits 0
            so Temporal retries and rebase races never fail the loop; any
            other status (implemented, needs-triage, ...) fails loudly.
@@ -66,6 +68,14 @@ spec:
         # the .status.yaml approval block and the commit message for the
         # audit trail (#150); "unknown" when the caller predates the field.
         value: "unknown"
+      - name: expected_content_digest
+        # Optional. The proposal content digest the approval was decided for
+        # (mctl-agents#681). mctl-api sets it from the exercised grant's
+        # artifact_hash, never from the caller. When set, the flip refuses
+        # unless the files hash to exactly this value, and an already
+        # accepted record must carry it. Empty keeps the #658 behaviour:
+        # record the digest of whatever is there at flip time.
+        value: ""
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # Was a 1Gi `volumeClaimTemplates` entry, which Argo provisions as a Hetzner
@@ -188,11 +198,26 @@ spec:
             value: "{{workflow.parameters.slug}}"
           - name: WORKFLOW_APPROVER
             value: "{{workflow.parameters.approver}}"
+          - name: WORKFLOW_EXPECTED_DIGEST
+            value: "{{workflow.parameters.expected_content_digest}}"
         source: |
           set -e
           if [ -z "$WORKFLOW_SERVICE" ] || [ -z "$WORKFLOW_SLUG" ]; then
             echo "❌ service and slug are both required" >&2
             exit 1
+          fi
+          # A set expected digest must be well formed: a malformed one is a
+          # broken caller, not a reason to fall back to hashing at flip time.
+          if [ -n "$WORKFLOW_EXPECTED_DIGEST" ]; then
+            case "$WORKFLOW_EXPECTED_DIGEST" in
+              sha256:*[!0-9a-f]*|sha256:)
+                echo "❌ expected_content_digest is not sha256:<64 hex>" >&2
+                exit 1 ;;
+              sha256:????????????????????????????????????????????????????????????????) ;;
+              *)
+                echo "❌ expected_content_digest is not sha256:<64 hex>" >&2
+                exit 1 ;;
+            esac
           fi
           # service/slug become path components below — refuse separators
           # and dot-dot so a crafted value cannot escape agents-state/.
@@ -218,6 +243,16 @@ spec:
             # Idempotent path: a Temporal retry of submit_and_wait, or a
             # manual approve racing the automated one. Exit 0 so the loop
             # proceeds to implement instead of failing on a double-approve.
+            # Not when this approval was decided for other content: an
+            # accepted record carrying another digest was approved by someone
+            # else for something else, and this decision does not cover it.
+            if [ -n "$WORKFLOW_EXPECTED_DIGEST" ]; then
+              RECORDED=$(sed -n "s/^  content_digest:[[:space:]]*'\{0,1\}\([^']*\)'\{0,1\}[[:space:]]*$/\1/p" "$STATUS_FILE" | head -1)
+              if [ "$RECORDED" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
+                echo "❌ ${WORKFLOW_SLUG} is already accepted with content digest '${RECORDED:-<none>}', not the approved ${WORKFLOW_EXPECTED_DIGEST}" >&2
+                exit 1
+              fi
+            fi
             echo "ℹ️  ${WORKFLOW_SLUG} is already accepted — no-op." >&2
             echo -n "noop"
             exit 0
@@ -266,6 +301,13 @@ spec:
               echo "❌ could not compute the proposal content digest" >&2
               exit 1 ;;
           esac
+          # The human decided the content behind the expected digest
+          # (mctl-agents#681). Content changed since is not what was approved:
+          # refuse before any edit, never record the new digest as approved.
+          if [ -n "$WORKFLOW_EXPECTED_DIGEST" ] && [ "$CONTENT_DIGEST" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
+            echo "❌ ${WORKFLOW_SLUG} changed after it was approved: the files hash to ${CONTENT_DIGEST}, the approval was for ${WORKFLOW_EXPECTED_DIGEST}" >&2
+            exit 1
+          fi
           # A proposed record that already carries an approval block would be
           # flipped without a digest of this content, and once accepted it can
           # never be re-approved. Refuse before any edit; the recovery is to
