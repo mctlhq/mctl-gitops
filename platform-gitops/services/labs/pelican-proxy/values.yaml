@@ -21,6 +21,7 @@ podSecurityContext:
   runAsGroup: 101
 containerSecurityContext:
   runAsNonRoot: true
+  readOnlyRootFilesystem: false
 resources:
   # CORRECTED 2026-08-03: the 24h sample used for the first trim (p95
   # 8.5m/32MB) badly understated real usage — a 7d pull shows max 71.7m

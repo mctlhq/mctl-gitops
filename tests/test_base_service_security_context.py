@@ -26,11 +26,19 @@ import tempfile
 import yaml
 
 CHART = pathlib.Path("platform-gitops/helm-charts/base-service")
+SERVICES = pathlib.Path("platform-gitops/services")
+# extraContainerSecurityContext: init/extra containers and the db-init Job.
 DEFAULT_SC = {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
-# What a service sets to opt in to step 2.
+# The main container's default since step 2: non-root, read-only root.
+MAIN_SC = {**DEFAULT_SC, "runAsNonRoot": True, "readOnlyRootFilesystem": True}
+# Stating the default explicitly changes nothing.
 STRICT = {"containerSecurityContext": {"runAsNonRoot": True,
                                        "readOnlyRootFilesystem": True}}
-STRICT_SC = {**DEFAULT_SC, "runAsNonRoot": True, "readOnlyRootFilesystem": True}
+STRICT_SC = MAIN_SC
+# What a service that cannot meet step 2 yet sets.
+OPT_OUT = {"containerSecurityContext": {"runAsNonRoot": False,
+                                        "readOnlyRootFilesystem": False}}
+OPT_OUT_SC = {**DEFAULT_SC, "runAsNonRoot": False, "readOnlyRootFilesystem": False}
 
 failures = []
 
@@ -112,7 +120,7 @@ for extra, label in (({}, "Deployment"), ({"blueGreen": {"enabled": True}}, "Rol
               f"{label}: {name} securityContext = {got.get(name)!r}, want {want!r}")
 
     # 2. The main container and the pod get the chart-level defaults.
-    check(spec["containers"][0].get("securityContext") == DEFAULT_SC,
+    check(spec["containers"][0].get("securityContext") == MAIN_SC,
           f"{label}: main container securityContext = "
           f"{spec['containers'][0].get('securityContext')!r}")
     check(spec.get("securityContext") == {"seccompProfile": {"type": "RuntimeDefault"}},
@@ -160,18 +168,24 @@ def writable(spec):
 
 
 for extra, label in (({}, "Deployment"), ({"blueGreen": {"enabled": True}}, "Rollout")):
-    # 6. Without an opt-in nothing changes: no step-2 keys, no emptyDirs.
-    _, spec = pod_spec(render({**BASE, **extra}))
-    check(writable(spec) == {} and "volumes" not in spec,
-          f"{label}: default renders writable mounts {writable(spec)!r}")
+    # 6. The default is step 2: non-root, read-only root, a writable /tmp.
+    for values, what in (({}, "default"), (STRICT, "explicit true")):
+        _, spec = pod_spec(render({**BASE, **extra, **values}))
+        check(spec["containers"][0].get("securityContext") == STRICT_SC,
+              f"{label}: {what} securityContext = "
+              f"{spec['containers'][0].get('securityContext')!r}")
+        check(writable(spec) == {"/tmp": "writable-tmp"},
+              f"{label}: {what} writable mounts = {writable(spec)!r}")
 
-    # 7. Opting in merges over the defaults and brings a writable /tmp.
-    _, spec = pod_spec(render({**BASE, **extra, **STRICT}))
-    check(spec["containers"][0].get("securityContext") == STRICT_SC,
-          f"{label}: opted-in securityContext = "
+    # 7. An explicit false survives the merge over a true default (a null
+    #    would delete the key instead, and the whole map with it), and a
+    #    writable root brings no emptyDirs.
+    _, spec = pod_spec(render({**BASE, **extra, **OPT_OUT}))
+    check(spec["containers"][0].get("securityContext") == OPT_OUT_SC,
+          f"{label}: opted-out securityContext = "
           f"{spec['containers'][0].get('securityContext')!r}")
-    check(writable(spec) == {"/tmp": "writable-tmp"},
-          f"{label}: opted-in writable mounts = {writable(spec)!r}")
+    check(writable(spec) == {} and "volumes" not in spec,
+          f"{label}: opted-out renders writable mounts {writable(spec)!r}")
 
     # 8. A service lists the full set; each path gets its own emptyDir.
     _, spec = pod_spec(render({**BASE, **extra, **STRICT,
@@ -207,9 +221,23 @@ for extra, label in (({}, "Deployment"), ({"blueGreen": {"enabled": True}}, "Rol
         check("both map to volume" in str(err),
               f"{label}: colliding writablePaths failed without the message: {err}")
 
+# 12. No service drops the hardening by accident. A null or empty
+#     containerSecurityContext deletes every chart default at once, the
+#     capabilities drop included, so an opt-out must name the keys it turns
+#     off. The services that run with a writable root or as root say so
+#     explicitly, which is what keeps the default flip from changing them.
+for path in sorted(SERVICES.glob("*/*/values.yaml")):
+    vals = yaml.safe_load(path.read_text()) or {}
+    for key in ("podSecurityContext", "containerSecurityContext"):
+        if key in vals:
+            check(isinstance(vals[key], dict) and vals[key],
+                  f"{path}: {key} is {vals[key]!r}; a null or empty map deletes "
+                  "the chart's hardening defaults, set the individual keys instead")
+
 if failures:
     for f in failures:
         print(f"FAIL: {f}", file=sys.stderr)
     sys.exit(1)
 print("base-service securityContext: container keys win, defaults fill gaps, "
-      "step 2 is opt-in, writablePaths mount once, Deployment and Rollout agree")
+      "step 2 is the default with explicit opt-outs, writablePaths mount once, "
+      "Deployment and Rollout agree")

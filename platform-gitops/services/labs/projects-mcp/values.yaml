@@ -173,3 +173,10 @@ extraVolumeMounts:
     mountPath: /etc/projects-mcp
     readOnly: true
 extraContainers: []
+# Opted out of the chart's non-root, read-only-root default (base-service
+# hardening, step 2): the image runs as root. Remove once it runs as a numeric
+# non-root USER and writes only to /tmp, see
+# https://docs.mctl.ai/guides/scaffolding#container-requirements
+containerSecurityContext:
+  runAsNonRoot: false
+  readOnlyRootFilesystem: false

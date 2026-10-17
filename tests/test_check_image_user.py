@@ -12,8 +12,8 @@ anything is committed. This runs that script:
     security context or from the image, numeric / named / root users, the
     container-over-pod precedence (an explicit container `false` wins), and
     an image read that fails;
-  * against a copy of the chart with the default flipped on, so the check
-    follows the chart without being edited when the default changes;
+  * against a copy of the chart with the default turned off, so the check
+    follows the chart rather than a copy of its default;
   * against this repository's services, which must all pass today;
 
 and checks that deploy-service runs it between the build and the commit.
@@ -73,14 +73,22 @@ def run(root, user=None, team="labs", name="svc", default_repo="ghcr.io/mctlhq/s
 
 
 STRICT = {"containerSecurityContext": {"runAsNonRoot": True}}
+# A service that opted out of the chart's runAsNonRoot default.
+OPT_OUT = {"containerSecurityContext": {"runAsNonRoot": False}}
 
 # (label, values or None for onboard, image user, want rc, want text)
 CASES = [
-    # Default chart (runAsNonRoot off): never refuses, warns on root/named.
+    # The chart default is runAsNonRoot: an onboard (chart defaults only) and
+    # a service that states nothing are both strict.
     ("onboard, default, numeric", None, "10001:10001", 0, "OK:"),
-    ("onboard, default, named", None, "app", 0, "WARNING:"),
-    ("onboard, default, no USER", None, "", 0, "WARNING:"),
-    ("default, uid 0", {}, "0", 0, "WARNING:"),
+    ("onboard, default, named", None, "app", 1, "a user name"),
+    ("onboard, default, no USER", None, "", 1, "root (USER not set)"),
+    ("default, uid 0", {}, "0", 1, "root"),
+    # Opted out: never refuses, warns on root/named.
+    ("opt-out, numeric", OPT_OUT, "10001:10001", 0, "OK:"),
+    ("opt-out, named", OPT_OUT, "app", 0, "WARNING:"),
+    ("opt-out, no USER", OPT_OUT, "", 0, "WARNING:"),
+    ("opt-out, uid 0", OPT_OUT, "0", 0, "WARNING:"),
     # runAsNonRoot on, uid from the image.
     ("strict, numeric", STRICT, "10001:10001", 0, "OK:"),
     ("strict, numeric no group", STRICT, "101", 0, "OK:"),
@@ -124,7 +132,9 @@ finally:
 # An image read that fails is unknown, not fine: refused under runAsNonRoot,
 # reported as UNKNOWN (never OK) without it. The repository is invalid, so
 # the read fails before any network access.
-for values, want_rc, want_text in ((STRICT, 2, "REFUSED: could not read"), ({}, 0, "UNKNOWN:")):
+for values, want_rc, want_text in ((STRICT, 2, "REFUSED: could not read"),
+                                   ({}, 2, "REFUSED: could not read"),
+                                   (OPT_OUT, 0, "UNKNOWN:")):
     root = checkout({**values, "image": {"repository": "not a registry", "tag": "1.0.0"}})
     try:
         rc, out = run(root)
@@ -133,12 +143,13 @@ for values, want_rc, want_text in ((STRICT, 2, "REFUSED: could not read"), ({}, 
     check(rc == want_rc and want_text in out and "OK:" not in out,
           f"failed image read with {values}: exit {rc}, want {want_rc} and {want_text!r}\n{out}")
 
-# The check follows the chart: flip the default on and an onboard with a
-# named user is refused, with no change to the script.
-root = checkout(None, chart_default={"runAsNonRoot": True})
+# The check follows the chart, not a copy of its default: turn the default
+# off and an onboard with a named user is only warned about, with no change
+# to the script. (With the default on it is refused, in CASES above.)
+root = checkout(None, chart_default={"runAsNonRoot": False})
 try:
     rc, out = run(root, "app")
-    check(rc == 1 and "a user name" in out, f"flipped chart default not honoured: exit {rc}\n{out}")
+    check(rc == 0 and "WARNING:" in out, f"chart default off not honoured: exit {rc}\n{out}")
 finally:
     shutil.rmtree(root)
 

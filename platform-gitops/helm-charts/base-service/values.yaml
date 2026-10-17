@@ -117,12 +117,16 @@ extraVolumeMounts: []
 
 # -- Pod-level settings
 automountServiceAccountToken: ~
-# -- Hardening defaults (SOC 2 binder F18, step 1). They are all allowed by the
-# tenant namespaces' PSS `enforce=baseline`. `runAsNonRoot` and
-# `readOnlyRootFilesystem` are opt-in per service for now (step 2): an image
-# whose USER is root or a name (`app`, `node`) would be refused, and tenants
-# have no way to override these values, so they become defaults only once the
-# container requirements are documented and an opt-out exists.
+# -- Hardening defaults (SOC 2 binder F18). All are allowed by the tenant
+# namespaces' PSS `enforce=baseline`. Step 2 made `runAsNonRoot` and
+# `readOnlyRootFilesystem` the default: the main container must run as a
+# numeric non-root USER and may write only to `writablePaths`. The container
+# requirements are documented at
+# https://docs.mctl.ai/guides/scaffolding#container-requirements, and
+# deploy-service refuses an image that cannot start under them
+# (check-image-user) before anything is committed. A service that cannot meet
+# them yet sets either key to `false` explicitly in its values; that is a
+# platform-side decision, tenants cannot set it through the API.
 # Helm merges a service's map into these defaults, so a service states only
 # what it changes, e.g. `capabilities.add` for an image whose entrypoint drops
 # privileges itself (nginx). Setting a key to null removes the default.
@@ -135,6 +139,8 @@ containerSecurityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
 # -- Paths the main container may still write when its
 # `readOnlyRootFilesystem` is on. Each becomes an emptyDir (pod-lifetime, node
 # disk) mounted at that path. Ignored while the root filesystem is writable,
