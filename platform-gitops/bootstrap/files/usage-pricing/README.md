@@ -19,6 +19,7 @@ https://platform.claude.com/docs/en/about-claude/pricing, retrieved
 | `claude-sonnet-5` | 2.00 | 10.00 | 2.50 | 0.20 | 0.01 | "Model pricing" table |
 | `claude-sonnet-5-5` | 2.00 | 10.00 | 2.50 | 0.20 | 0.01 | "Model pricing" table, retrieved 2026-09-30 |
 | `claude-haiku-4-5` | 1.00 | 5.00 | 1.25 | 0.10 | 0.01 | "Model pricing" table |
+| `claude-haiku-5-5` | 0.10 | 0.50 | 0.125 | 0.01 | 0.01 | "Model pricing" table, prompts up to 100,000 tokens, retrieved 2026-10-17 |
 
 `claude-opus-5-5` and `claude-sonnet-5-5` are their own entries (version
 `2026-09-30-firstparty-1`, `effective_from: 2026-09-30T00:00:00Z`), added
@@ -29,9 +30,29 @@ Opus 5 and its cache hits are 0.05x base input (\$0.20), not the usual 0.1x
 (pricing page footnote 2). The `claude-opus-5` and `claude-sonnet-5`
 entries stay for the rows recorded before the move.
 
-`web_search_per_call: 0.01` for all five comes from the same page's
+`web_search_per_call: 0.01` for all six comes from the same page's
 "Specific tool pricing -> Web search tool" section: $10 per 1,000 searches,
 i.e. $0.01 per call.
+
+## `claude-haiku-5-5`: flat card for a tiered price (known under-pricing)
+
+`claude-haiku-5-5` (version `2026-10-17-firstparty-1`) was added when the
+mctl-agents `cheap` profile moved to Haiku 5.5 (mctlhq/mctl-agents#663);
+`claude-remote` already ran on it, unpriced until now. Haiku 5.5 is priced
+**per request by prompt length**: up to 100,000 prompt tokens it costs the
+rates in the table above, over 100,000 tokens (cache reads and writes
+included) every dimension costs 5x: 0.50 input, 2.50 output, 0.625 cache
+write, 0.05 cache read.
+
+This card is flat because `internal/usage/pricing.go` has one rate set per
+entry, and a usage record aggregates a whole query, so the per-request
+prompt length that picks the tier is not on the row. It uses the
+up-to-100k rates, which fit the short mechanical prompts the `cheap` profile
+is for. **Any request whose prompt was over 100k tokens is under-priced by up
+to 5x**; a session with many MCP tools attached can reach that from its
+first turn. Treat Haiku 5.5 costs from this card as a lower bound.
+Tier-aware pricing is mctlhq/mctl-api#642; when it lands, a new entry
+supersedes this one (append-only rule below) and this section goes.
 
 ## `effective_from` rationale
 

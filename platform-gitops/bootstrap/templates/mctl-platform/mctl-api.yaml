@@ -61,8 +61,9 @@ spec:
             # annotation hook, so changing this value is how gitops restarts
             # the pod. Bump only after zitadel-iac has applied generated
             # identity configuration: envFrom is read at container start.
-            # This rollout loads ZITADEL_PORTAL_CLIENT_ID (mctl-gitops#1923).
-            ROLLOUT_MARKER: "2026-10-16-portal-customer-audience"
+            # This rollout loads the claude-haiku-5-5 usage price card, which
+            # mctl-api reads only at startup.
+            ROLLOUT_MARKER: "2026-10-17-usage-pricing-haiku-5-5"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
