@@ -174,9 +174,10 @@ spec:
     # Rolling-28d compliance. These are what the error-budget policy in
     # docs/slo.md is written against ("freeze non-critical merges when the
     # rolling-28-day SLI drops below target", "resume once it is back above
-    # target with >=50% budget left"). They do not alert — a burnt budget is a
-    # process decision, not a page — but without them that policy has nothing
-    # to read. 28d is the doc's cache-friendly approximation of 30 days.
+    # target with >=50% budget left"). They do not page — a burnt budget is a
+    # process decision — but the mctl-telegram-slo-budget group below turns
+    # each one falling under its objective into a ticket, so the policy has a
+    # trigger. 28d is the doc's cache-friendly approximation of 30 days.
     #
     # Separate group at a 5m interval on purpose: a 28d range query is far
     # more expensive than the 1h/6h ones above and does not need per-minute
@@ -356,3 +357,78 @@ spec:
               reliability ticket; no page.
               SLO and error-budget policy:
               https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+    # Error-budget exhaustion (mctl-telegram#757). Each alert fires once a
+    # rolling-28d compliance ratio above is under its objective, which is the
+    # point at which the docs/slo.md error-budget policy (freeze
+    # non-reliability merges, gate deploys on the 6h burn) applies. Without
+    # them that policy had nothing to trigger it, and nobody read the ratios.
+    #
+    # for: 1h, unlike the burn alerts: a 28d ratio moves slowly, so an hour
+    # costs the signal almost nothing and keeps a ratio sitting on the
+    # objective from flapping across evaluation boundaries. warning, and NOT
+    # in the telegram receiver's matcher list in
+    # bootstrap/templates/observability/monitoring.yaml: like the SlowBurn
+    # pair they fall through to the default mctl-agent receiver, which turns a
+    # firing warning into a ticket. Exhausting a budget is a process decision,
+    # not a page.
+    #
+    # Merged no earlier than 2026-11-03, by owner decision in the
+    # issue-757 proposal: until then the 28d window still holds the
+    # FLOOD_WAIT retries from before mctl-telegram 0.79.2 and the caller
+    # errors from before caller_error, and both alerts would fire on deploy
+    # for states already fixed.
+    - name: mctl-telegram-slo-budget
+      interval: 1m
+      rules:
+        - alert: MctlTelegramToolAvailabilityErrorBudgetExhausted
+          expr: mctl_telegram:tool_availability:ratio_rate28d < 0.995
+          for: 1h
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram: MCP tool availability error budget exhausted (28d)"
+            description: >-
+              MCP tool availability over the rolling 28 days is
+              {{ $value | humanizePercentage }}, below the 99.5% objective: the
+              error budget is spent. Apply the error-budget policy (only
+              reliability and security PRs merge; deploy only while the 6h
+              burn rate is below 1x) until the ratio is back above target with
+              at least half the budget left.
+              https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md#error-budget-policy
+
+        - alert: MctlTelegramOAuthAvailabilityErrorBudgetExhausted
+          expr: mctl_telegram:oauth_availability:ratio_rate28d < 0.999
+          for: 1h
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram: OAuth token endpoint error budget exhausted (28d)"
+            description: >-
+              Non-5xx share of /oauth/token and /oauth/telegram/callback over
+              the rolling 28 days is {{ $value | humanizePercentage }}, below
+              the 99.9% objective: the error budget is spent. Apply the
+              error-budget policy (only reliability and security PRs merge;
+              deploy only while the 6h burn rate is below 1x) until the ratio
+              is back above target with at least half the budget left.
+              https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md#error-budget-policy
+
+        - alert: MctlTelegramSessionBorrowErrorBudgetExhausted
+          expr: mctl_telegram:session_borrow_success:ratio_rate28d < 0.99
+          for: 1h
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram: session borrow error budget exhausted (28d)"
+            description: >-
+              Pool.Borrow() success over the rolling 28 days, excluding TTL
+              expirations, flood waits and caller errors, is
+              {{ $value | humanizePercentage }}, below the 99% objective: the
+              error budget is spent. Apply the error-budget policy (only
+              reliability and security PRs merge; deploy only while the 6h
+              burn rate is below 1x) until the ratio is back above target with
+              at least half the budget left.
+              https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md#error-budget-policy
