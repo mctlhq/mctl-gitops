@@ -315,6 +315,7 @@ resource "zitadel_org_member" "customer_lifecycle" {
 # The Worker pins this project ID AND the exact machine subject; a project
 # role/application is not an authorization gate for this private endpoint.
 resource "zitadel_project" "customer_lifecycle" {
-  org_id = local.mctl_org_id
-  name   = "MCTL customer lifecycle"
+  org_id            = local.mctl_org_id
+  name              = "MCTL customer lifecycle"
+  has_project_check = true
 }

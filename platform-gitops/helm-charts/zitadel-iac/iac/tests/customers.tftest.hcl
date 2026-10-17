@@ -489,7 +489,8 @@ run "customer_lifecycle_is_scoped_to_customer_user_management" {
       zitadel_machine_user.customer_lifecycle.access_token_type == "ACCESS_TOKEN_TYPE_JWT" &&
       zitadel_org_member.customer_lifecycle.org_id == zitadel_org.customers.id &&
       toset(zitadel_org_member.customer_lifecycle.roles) == toset(["ORG_USER_MANAGER"]) &&
-      zitadel_project.customer_lifecycle.org_id == local.mctl_org_id
+      zitadel_project.customer_lifecycle.org_id == local.mctl_org_id &&
+      zitadel_project.customer_lifecycle.has_project_check == true
     )
     error_message = "Lifecycle credentials must be JWT machine credentials outside customers, with only customer-org user management."
   }
