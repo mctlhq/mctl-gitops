@@ -1,9 +1,9 @@
 status: proposed
-updated_at: '2026-10-17T20:12:23Z'
+updated_at: '2026-10-17T20:41:00Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-7262b4e6cead7f63
-  trace_id: 9a79c065fa41497029041476f5df2bde
+  context_id: ex-2c93948233129297
+  trace_id: 8b4136857e19e432fc05311f0ca827f6
   agent: issue-investigator
   version: ''
 source:
@@ -14,7 +14,7 @@ source:
 control:
   requires_human_approval: true
 context:
-  snapshot_id: cs-72e9cc12cead0200
-  content_hash: sha256:72e9cc12cead020057c2f8412d859d4a243d1803373f73f244bb1411caa3bcdb
+  snapshot_id: cs-e138c3be803f6fc7
+  content_hash: sha256:e138c3be803f6fc7f71e04ee2e1ce6f5475175acb7ed3f716036e2281edaca1d
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
