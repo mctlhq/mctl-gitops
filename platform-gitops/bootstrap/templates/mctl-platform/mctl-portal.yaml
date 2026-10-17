@@ -256,7 +256,7 @@ spec:
           image:
             registry: ghcr.io
             repository: mctlhq/mctl-portal
-            tag: 4.20.4
+            tag: 4.21.1
             pullSecrets:
               - ghcr-credentials
           resources:
@@ -273,7 +273,8 @@ spec:
           extraEnvVarsSecrets:
             - backstage-secrets
             # ZITADEL client of the portal's OIDC provider (OIDC_ZITADEL_CLIENT_ID
-            # and _SECRET), filled by the zitadel-iac Job (portal.tf).
+            # and _SECRET), the portal UI client (AUTH_OIDC_*) and the
+            # customers organization id, filled by the zitadel-iac Job (portal.tf).
             - backstage-oidc-zitadel
           {{- if or (default dict .Values.surfacePortalToken).enabled (default dict .Values.repoBinding).enabled }}
           # One extraEnvVars list for every gated entry: two keys would leave
@@ -410,12 +411,25 @@ spec:
                 # prompt: auto, because the oidc authenticator defaults to
                 # prompt=none, which fails for anyone without a live ZITADEL
                 # session instead of showing the login.
+                # additionalScopes: the resource-owner scope makes ZITADEL
+                # name the user's organization in the token; the sign-in
+                # refuses any token without it (zitadelCustomers below).
                 oidc:
                   production:
                     metadataUrl: https://auth.mctl.ai/.well-known/openid-configuration
                     clientId: ${AUTH_OIDC_CLIENT_ID}
                     clientSecret: ${AUTH_OIDC_CLIENT_SECRET}
                     prompt: auto
+                    additionalScopes:
+                      - urn:zitadel:iam:user:resourceowner
+            # The ZITADEL organization of self-service customers (mctl-web
+            # site onboarding, stage C2). The portal signs a customers token in
+            # as the User named by its principal, which mctl-api resolves
+            # (surface-principals/zitadel), and a staff token by its GitHub
+            # login. Unset, it accepts no ZITADEL sign-in: it could not tell
+            # one from the other. Written by the zitadel-iac Job (portal.tf).
+            zitadelCustomers:
+              organizationId: ${AUTH_OIDC_CUSTOMERS_ORG_ID}
             integrations:
               github:
                 - host: github.com

@@ -1,0 +1,75 @@
+# Temporary kubectl access for ERPact developers to namespace erpact, until
+# the API server accepts ZITADEL OIDC and group `erpact` can be bound
+# directly (then delete this file). The owner mints a short-lived token for
+# this ServiceAccount (`kubectl create token --duration`) and hands it over
+# through Vault secret/teams/erpact; nothing here stores a token.
+#
+# Read and restart only:
+# - no secrets: credentials live in Vault, and the namespace also holds the
+#   reflected platform credentials (bootstrap values.yaml explains);
+# - no pods/exec, pods/attach, pods/portforward (SOC F4: no exec for tenants;
+#   port-forward would reach MariaDB directly);
+# - no patch/update on workloads: editing a Pod template can mount any Secret
+#   or change the command, which is exec by another name, and Argo CD would
+#   revert it anyway. Roll workloads with the Argo CD restart action or by
+#   deleting a Pod.
+# No Pod can run as this ServiceAccount: it is not in
+# externalManifestNamespaces.erpact.serviceAccounts, so its token only ever
+# leaves the cluster through TokenRequest.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: erpact-developer-kubectl
+  labels:
+    app.kubernetes.io/name: erpact
+    app.kubernetes.io/component: developer-kubectl
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: erpact-developer-kubectl
+  labels:
+    app.kubernetes.io/name: erpact
+    app.kubernetes.io/component: developer-kubectl
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "services", "endpoints", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: erpact-developer-kubectl
+  labels:
+    app.kubernetes.io/name: erpact
+    app.kubernetes.io/component: developer-kubectl
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: erpact-developer-kubectl
+subjects:
+  - kind: ServiceAccount
+    name: erpact-developer-kubectl
+    namespace: erpact

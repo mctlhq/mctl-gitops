@@ -385,6 +385,12 @@ jobs:
       # Account -> Access: Apps and Policies -> Read and Access: Identity
       # Providers -> Read (since 2026-10-04, #1500) on this account alone;
       # account/access-idps-read.tf fails the plan if the second is lost.
+      #
+      # infrastructure/cloudflare/tokens gets the same token: it reads the
+      # account's API token list (`Account API Tokens Read`, held by
+      # CF_ACCOUNT_READ_TOKEN since 2026-10-16) and fails the plan when it
+      # differs from tokens/manifest.tf. Read-only, and it reads metadata
+      # only: Cloudflare never returns a token's value after creation.
       # Absent, the chain falls back to the zone credential and that root keeps
       # failing visibly rather than being skipped.
       CLOUDFLARE_API_TOKEN: >-
@@ -392,17 +398,22 @@ jobs:
          && secrets.CF_PORTAL_READ_TOKEN
          || matrix.root == 'infrastructure/cloudflare/account'
          && secrets.CF_ACCOUNT_READ_TOKEN
+         || matrix.root == 'infrastructure/cloudflare/tokens'
+         && secrets.CF_ACCOUNT_READ_TOKEN
          || secrets.CLOUDFLARE_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
       # Personal addresses kept out of this public repository, each scoped to
       # the one root that declares it: the account root's pilot addresses
-      # (account/portal-mcp-apps.tf) and the mctl.ai forward destination
-      # (zones/mctl-ai/email.tf). Empty for every other root, and an unset
-      # secret leaves its root without a value, which fails the plan rather
+      # (account/portal-mcp-apps.tf) and the mctl.ai forward destinations,
+      # declared as addresses in the account root (account/email-routing.tf)
+      # and forwarded to from zones/mctl-ai/email.tf, so both roots get them.
+      # Empty for every other root, and an unset secret leaves its root
+      # without a value, which fails the plan rather
       # than planning an empty policy or a forward to nowhere.
       TF_VAR_portal_pilot_emails: ${{ matrix.root == 'infrastructure/cloudflare/account' && secrets.CF_PORTAL_PILOT_EMAILS || '' }}
-      TF_VAR_email_routing_destination: ${{ matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' && secrets.CF_MCTL_AI_EMAIL_DESTINATION || '' }}
+      TF_VAR_email_routing_destination: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_DESTINATION || '' }}
+      TF_VAR_email_routing_destination_obukhov: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_OBUKHOV || '' }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6

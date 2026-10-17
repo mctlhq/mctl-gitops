@@ -47,11 +47,17 @@ EXEMPT_TENANTS = {"admins"}
 # No `override`: it lets a sync carry local manifests or another revision of
 # the source, which the AppProject, not the tenant's own folder, then bounds.
 # Tenants sync what is in git; nothing else.
+# The two restart actions only roll the pods of a workload git already
+# declares (the action patches the pod template's restartedAt annotation);
+# they are named one by one so no `action/*`, `update/*` or `delete/*` grant
+# can ride along.
 def _grants(tenant: str, obj: str) -> str:
     return (
         f"p, role:team-{tenant}, applications, get, {obj}, allow\n"
         f"p, role:team-{tenant}, applications, list, {obj}, allow\n"
         f"p, role:team-{tenant}, applications, sync, {obj}, allow\n"
+        f"p, role:team-{tenant}, applications, action/apps/Deployment/restart, {obj}, allow\n"
+        f"p, role:team-{tenant}, applications, action/apps/StatefulSet/restart, {obj}, allow\n"
         f"p, role:team-{tenant}, logs, get, {obj}, allow\n"
     )
 
@@ -245,6 +251,16 @@ def selftest() -> int:
         if not check(t, f, v, pr):
             print("FAIL selftest(a2): override line in fragment was not caught", file=sys.stderr)
             return 1
+
+    # (a3) a broad resource action or delete grant next to the named restarts.
+    for extra in ("action/*", "delete/*", "update/*"):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            content = canonical_fragment("labs") + f"p, role:team-labs, applications, {extra}, apps/labs-*, allow\n"
+            t, f, v, pr = _write_tree(base, {"labs": True}, {"labs": content})
+            if not check(t, f, v, pr):
+                print(f"FAIL selftest(a3): {extra} grant in fragment was not caught", file=sys.stderr)
+                return 1
 
     # (b) widened object glob.
     with tempfile.TemporaryDirectory() as d:
