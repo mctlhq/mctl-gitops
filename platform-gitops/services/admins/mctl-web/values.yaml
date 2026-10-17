@@ -53,9 +53,6 @@ ingress:
       hosts:
         - mctl.ru
         - mctl.ai
-blueGreen:
-  enabled: true
-  autoPromotionEnabled: true
 externalSecret: {}
 envFrom: []
 extraContainers: []
