@@ -1,0 +1,136 @@
+# Alerting for labs/claude-remote's Telegram hydration worker token
+# (mctlhq/mctl-claude-remote#82).
+#
+# The remote-control session hydrates telegram.message.* events through the
+# preview mctl-telegram MCP with a read-only worker token. Worker tokens are
+# bounded (30 days), and on 2026-10-17 this one expired unnoticed: every
+# Telegram event after that was acked `failed` until a human re-minted it.
+#
+# The image (mctl-claude-remote 0.14.0+) now renews the token itself, hourly
+# check, renewal in the last third of its life, and pushes
+# mctl_claude_remote_telegram_token_* to the cluster Pushgateway (job
+# claude-remote-telegram-token, instance = the device name, kept by the
+# scrape's honorLabels). Each push REPLACES that device's group, so
+# renew_ok exists only after a check that actually attempted a renewal, and
+# the token gauges are omitted, never zeroed, when no token can be read.
+#
+# Every alert here needs a human: the remedy for an exhausted or failing
+# chain is an admin:users login minting a new token into Vault
+# platform/mctl-claude-remote/telegram-mcp, which mctl-agent cannot do. They
+# are routed to Telegram only (monitoring.yaml, ClaudeRemoteTelegramToken.*).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: claude-remote-telegram-token
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: claude-remote
+spec:
+  groups:
+    - name: claude-remote-telegram-token
+      interval: 60s
+      rules:
+        - alert: ClaudeRemoteTelegramTokenExpiring
+          # Renewal starts with ~10 days left, so reaching 7 means it has been
+          # failing for days (RenewalFailing fires first) or the chain hit
+          # its one-year ceiling (ChainEnding fires two weeks earlier).
+          expr: mctl_claude_remote_telegram_token_expires_in_seconds < 7 * 24 * 3600
+          for: 10m
+          labels:
+            severity: warning
+            service: claude-remote
+          annotations:
+            summary: "claude-remote Telegram token expires in under 7 days"
+            description: >-
+              The worker token claude-remote uses to hydrate Telegram events has
+              {{ $value | humanizeDuration }} left. When it expires every
+              Telegram event is acked failed. Mint a new read-only token with
+              mint_worker_token on tg-preview (account 210408407, scopes
+              telegram:dialogs:read and telegram:messages:read) and write it to
+              Vault platform/mctl-claude-remote/telegram-mcp (worker-token).
+              The device picks it up by itself within an hour.
+        - alert: ClaudeRemoteTelegramTokenSessionExpiring
+          # The token the session is connected with, which can lag the newest
+          # one on disk. The device relaunches the session once when this
+          # drops under two days; still under one day means that relaunch did
+          # not reconnect, and the device will not try again by itself.
+          expr: mctl_claude_remote_telegram_token_served_expires_in_seconds < 24 * 3600
+          for: 10m
+          labels:
+            severity: warning
+            service: claude-remote
+          annotations:
+            summary: "claude-remote session holds a Telegram token expiring within a day"
+            description: >-
+              The claude-remote session is still connected with a Telegram
+              worker token that expires in {{ $value | humanizeDuration }},
+              although a relaunch should already have moved it to a newer one.
+              Restart deploy/labs-claude-remote-base-service in labs so the
+              session reconnects.
+        - alert: ClaudeRemoteTelegramTokenRenewalFailing
+          # Fail-open by design: a failed renewal keeps the current token,
+          # which still has ~10 days left, so nothing is user-visible yet.
+          # The Pushgateway holds the last push between hourly checks, so
+          # renew_ok stays 0 while attempts keep failing and flips to 1 on
+          # the first success. Two hours = three failed attempts in a row,
+          # so a single network blip does not page.
+          expr: mctl_claude_remote_telegram_token_renew_ok == 0
+          for: 2h
+          labels:
+            severity: warning
+            service: claude-remote
+          annotations:
+            summary: "claude-remote cannot renew its Telegram token"
+            description: >-
+              claude-remote tried to renew its Telegram worker token and failed
+              on every attempt for two hours. It still runs on the current
+              token, which expires in about ten days. The reason is in the pod
+              log in labs (lines starting with [telegram-token]); the usual
+              ones are a revoked jti and an exhausted one-year chain.
+        - alert: ClaudeRemoteTelegramTokenChainEnding
+          # The server caps renewals at a year from the human mint. Two weeks
+          # of notice for a once-a-year manual step.
+          expr: mctl_claude_remote_telegram_token_chain_expires_in_seconds < 14 * 24 * 3600
+          for: 10m
+          labels:
+            severity: warning
+            service: claude-remote
+          annotations:
+            summary: "claude-remote Telegram token chain ends in under 14 days"
+            description: >-
+              The renewal chain of claude-remote's Telegram worker token ends in
+              {{ $value | humanizeDuration }}; after that the server refuses to
+              renew it. Mint a new read-only token with mint_worker_token on
+              tg-preview and write it to Vault
+              platform/mctl-claude-remote/telegram-mcp (worker-token).
+        - alert: ClaudeRemoteTelegramTokenCheckStale
+          # The loop checks hourly; three missed checks means it stopped (or
+          # the pod is gone) and nothing would notice an expiry.
+          expr: time() - mctl_claude_remote_telegram_token_last_check_timestamp_seconds > 3 * 3600
+          for: 10m
+          labels:
+            severity: warning
+            service: claude-remote
+          annotations:
+            summary: "claude-remote Telegram token check has not run for 3 hours"
+            description: >-
+              The Telegram token renewal loop in labs/claude-remote has not
+              pushed metrics for over three hours. Check that the pod is
+              running and look for [telegram-token] lines in its log.
+        - alert: ClaudeRemoteTelegramTokenCheckAbsent
+          # absent() with a pending period, not absent_over_time with for: 0m:
+          # a brand-new series has no history, so the latter would fire on
+          # the first evaluation after rollout, before the first push.
+          expr: absent(mctl_claude_remote_telegram_token_last_check_timestamp_seconds)
+          for: 3h
+          labels:
+            severity: warning
+            service: claude-remote
+          annotations:
+            summary: "claude-remote Telegram token metrics absent for 3 hours"
+            description: >-
+              No mctl_claude_remote_telegram_token_* samples for three hours.
+              The renewal loop never started (MCTL_EVENTS_TELEGRAM_TOKEN_RENEW,
+              MCTL_EVENTS_PUSHGATEWAY_URL, image older than 0.14.0) or the
+              Pushgateway group was deleted.

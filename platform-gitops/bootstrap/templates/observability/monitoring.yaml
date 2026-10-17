@@ -641,6 +641,15 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "ErpactSite.*"
+                  # claude-remote's Telegram hydration token
+                  # (vm-rules/claude-remote-telegram-token.yaml,
+                  # mctlhq/mctl-claude-remote#82). Telegram only, no ticket:
+                  # the remedy is an admin:users login minting a new worker
+                  # token into Vault, which mctl-agent cannot do. Prefix match
+                  # so the next alert in that file is covered too.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ClaudeRemoteTelegramToken.*"
                   # The lifecycle ownership rollout (ADR-010 §12,
                   # mctlhq/.github#57). Telegram only, no ticket, and the
                   # routing is load-bearing rather than a preference:
