@@ -1,82 +1,60 @@
-# Tenant roles for work items, approvals, surface identities and repo sync
+# Tenant roles for work items, execution requests, approvals and repo sync
 
 ## Context
 
-mctl-api#487 (the fix for #478) added a minimum tenant role to tenant writes:
-the generic `POST /api/v1/operations/{name}/execute` path, custom domains,
-incidents, commerce and the ERPact site actions, all through
-`Handlers.requireTenantRole` in `internal/api/tenant_role.go`. Four groups of
-write handlers were left out on purpose, because each needed a decision
-first: work items and execution requests, action approvals and human-input
-responses, surface identities, and `POST /api/v1/repos/sync`. Two related
-points were also left unwritten: Dex and generic OIDC callers hold no tenant
-role, and `viewer` restricts no reads.
+mctl-api#487 (the fix for #478) added a minimum tenant role check to tenant writes: everything sent to `POST /api/v1/operations/{name}/execute`, custom domains, incidents, commerce and the ERPact owner actions. All of them go through `Handlers.checkTenantRole` / `requireTenantRole` in `internal/api/tenant_role.go`. Four groups of write handlers were left out on purpose, because they needed a design decision first: work items and execution requests, action approvals and human-input responses, surface identities, and `POST /api/v1/repos/sync`. Issue #489 asks for a decision on each group. Each decision ends in either a gate with tests, or a line in the docs that says why there is no gate.
 
-This proposal makes a decision for each group. Where the decision is a gate,
-it adds the gate and tests. Where it is no gate, it adds a sentence to the
-docs saying why. When this lands, #16 can be closed against #487 and this
-issue. Summary of the decisions:
-
-| Group | Decision |
-|---|---|
-| Work-item mutations and execution requests (human callers) | Gate at `developer` |
-| Work-item reads | No role gate. `viewer` reads (documented) |
-| Snapshot seal, execution-request claim/fulfil/reject | No change. Service principal only, as today |
-| Action approval decide, DevLoop approve | No tenant role. Stays human platform admin only (mctl-api#571); `owner` is not enough |
-| Human-input responses | No tenant role. Stays tied to the named respondent (`actor_refs`); an answer is information, not authorization |
-| Surface identities (challenge, redeem, revoke) | No tenant role. Per-principal, no tenant involved |
-| `POST /repos/sync` | Gate at `developer` in mctl-api; matching portal change filed as a follow-up |
-| Dex / generic OIDC callers | No change. Documented as holding no tenant role until #377/#435 |
+The owner has accepted the decision matrix. `developer` is required for work-item writes, execution requests and `POST /repos/sync`. Reads get no role gate. Action approvals stay with human platform admins only (#571). Human-input responses stay tied to `actor_refs`. Surface identities carry no tenant role. The live authorization mode is `TENANT_AUTHZ_MODE=principal`, deployed since 2026-10-17 (#377). So this proposal treats principal mode as the primary path, where the role is read by `prn_` principal through `checkTenantRoleByPrincipal`. Legacy and shadow modes are rollback modes and are kept as regression rows. The machine-caller exemption depends on what the principal is, not on whether a GitHub login is present.
 
 ## User stories
 
-- AS a tenant owner I WANT a `viewer` in my tenant to be unable to create, change or request execution of work items SO THAT a read-only member cannot start paid agent runs or change shared work.
-- AS a tenant developer I WANT to keep creating work items, adding intents and requesting executions SO THAT my everyday workflow is unchanged.
-- AS a `viewer` I WANT to keep reading work items, their events, executions and execution requests SO THAT I can follow my tenant's work.
-- AS a platform admin I WANT approvals to stay with human admins and named respondents SO THAT holding a tenant role never becomes a way to approve a side effect.
-- AS a security reviewer I WANT one document listing every tenant-scoped write with its minimum role, or the reason it has none SO THAT I can audit the policy without reading every handler.
+- AS a tenant owner I WANT a `viewer` in my tenant to be unable to create, change or run work items SO THAT read-only members stay read-only on every write path, not only on operations.
+- AS a tenant developer I WANT to keep creating work items, adding intents, linking surfaces and requesting executions in my tenant SO THAT my daily workflow is unchanged.
+- AS a human who signs in only through ZITADEL (no GitHub login) I WANT my role to come from my `prn_` membership SO THAT I am treated exactly like a GitHub-linked member with the same role.
+- AS the execution platform (the service principal) I WANT to keep attaching executions, resuming, claiming, fulfilling and sealing snapshots SO THAT the gate does not break the run loop.
+- AS a platform operator I WANT `docs/tenant-roles.md` to say which writes need which role, which have no role gate and why, and which authorization mode is current SO THAT #16 can be closed and nobody has to read the code to find the policy.
+- AS a portal user I WANT `POST /repos/sync` to need the same role in mctl-api and in the portal plugin SO THAT the two surfaces do not disagree.
 
 ## Acceptance criteria (EARS)
 
-Work items and execution requests
+Principal mode (primary path):
 
-- WHEN a human caller (direct, surface-relayed or agent-delegated) sends `POST /api/v1/work-items` for a tenant they can access and their effective role on that tenant is below `developer` THE SYSTEM SHALL answer 403 with error code `tenant_role_required`, create nothing, and write a `denied` audit entry.
-- WHEN a human caller whose role on the item's tenant is below `developer` sends `PATCH /api/v1/work-items/{id}`, `POST /api/v1/work-items/{id}/intents`, `/executions`, `/resume`, `/surface-refs` or `/execution-requests` for an item they can see THE SYSTEM SHALL answer 403 `tenant_role_required` and change nothing.
-- WHEN the caller cannot see the work item THE SYSTEM SHALL answer 404 `work_item_not_found` before it checks any role, so the role check never reveals that an item exists.
-- WHEN a human caller with role `developer` or `owner` on the item's tenant sends any of the requests above THE SYSTEM SHALL behave as it does today.
-- IF the caller's role cannot be read (reader not configured, gitops read error, principal not resolved) THEN THE SYSTEM SHALL answer 503, perform no mutation, and write an `error` audit entry.
-- WHILE the caller is the service principal THE SYSTEM SHALL apply the existing principal rules unchanged. The service principal is a platform admin, so the role gate passes it in every `TENANT_AUTHZ_MODE`.
-- WHILE a work-item request is a read (`GET` on items, events, executions, snapshots, execution requests, evidence) THE SYSTEM SHALL NOT check a tenant role. A `viewer` who can see the item SHALL read it as today.
-- WHILE a work-item idempotency key is replayed by a caller whose role was since lowered below `developer` THE SYSTEM SHALL refuse the replay with 403. The role is checked before the store is touched.
+- WHILE `TENANT_AUTHZ_MODE=principal`, WHEN a human caller sends `POST /api/v1/work-items`, `PATCH /api/v1/work-items/{id}`, `POST /api/v1/work-items/{id}/intents`, `POST /api/v1/work-items/{id}/executions`, `POST /api/v1/work-items/{id}/resume`, `POST /api/v1/work-items/{id}/surface-refs` or `POST /api/v1/work-items/{id}/execution-requests` for a tenant, THE SYSTEM SHALL read that caller's role on the tenant by principal id (`MemberRolesForPrincipal`) and require at least `developer`.
+- WHILE in principal mode, IF the caller's effective role on the tenant is `viewer`, THEN THE SYSTEM SHALL answer 403 with the typed code `tenant_role_forbidden`, write a `denied` audit entry, and change nothing in the work-items store. This includes creating a `private` work item.
+- WHILE in principal mode, IF the caller is a human signed in only through ZITADEL (or another federated OIDC provider) whose `prn_` membership gives `developer` or `owner`, THEN THE SYSTEM SHALL allow the write, with no GitHub login needed.
+- WHILE in principal mode, IF a ZITADEL-only human with role `viewer` calls any gated route directly, through a surface relay (`NewRelayedPrincipalUser`), or through an agent delegation (`NewDelegatedPrincipalUser`, `X-MCTL-On-Behalf-Of`), THEN THE SYSTEM SHALL refuse with 403 `tenant_role_forbidden`.
+- IF the role cannot be read (the membership reader is missing or fails, or a human's principal is unresolved), THEN THE SYSTEM SHALL answer 503 with the code `tenant_role_unavailable` and an `error` audit entry, and SHALL NOT perform the write.
+- IF the caller cannot see the work item (it is in another tenant, or it is someone else's private item), THEN THE SYSTEM SHALL answer 404 `work_item_not_found` before the role check runs, so that a role refusal never confirms that an item exists.
+- WHEN a caller sends `POST /api/v1/repos/sync` for a team, THE SYSTEM SHALL require at least `developer` on that team before proxying to the portal plugin, and SHALL NOT send any upstream request when it refuses.
 
-Approvals, human input and surface identities
+Machine callers:
 
-- WHEN a tenant `owner` who is not a human platform admin sends `POST /api/v1/action-approvals/{id}/decision` or `POST /api/v1/agents/dev-loop/{workflow_id}/approve` THE SYSTEM SHALL keep refusing it with 403 `approval_decider_forbidden`, as today.
-- WHEN an eligible respondent named in a request's `actor_refs` answers `POST /api/v1/human-input/{request_id}/response` THE SYSTEM SHALL accept it whatever tenant role they hold. WHEN a caller who is not named answers THE SYSTEM SHALL keep refusing it with 403 `not_eligible`, even if they are a tenant `owner`.
-- WHEN a caller creates, redeems or revokes a surface identity link THE SYSTEM SHALL apply only the existing per-principal rules and check no tenant role.
+- WHEN the caller is the service principal (`auth.NewServiceUser`, a platform admin), THE SYSTEM SHALL pass the role gate, so that attach-execution, resume, snapshot sealing and claim/fulfil/reject behave as they do today.
+- WHILE an agent run token acts for no human (no `X-MCTL-On-Behalf-Of`), THE SYSTEM SHALL give it no tenant role. Today such a token holds no tenant groups (`auth.NewAgentUser`; `PrincipalAuthz.Apply` clears groups for non-humans), so it never reaches a tenant work item. IF a future token of this kind carries a non-admin tenant scope, THEN THE SYSTEM SHALL send it through the gate, where it is refused as a non-human caller.
+- WHEN an agent token delegates for a human, THE SYSTEM SHALL decide the role of the delegated human principal, not the agent's.
 
-Repo sync
+Rollback modes (regression):
 
-- WHEN a non-admin caller sends `POST /api/v1/repos/sync` for a team they can access and their role there is below `developer` THE SYSTEM SHALL answer 403, not call the portal, and write a `denied` audit entry.
-- WHEN a caller with role `developer` or `owner` sends `POST /api/v1/repos/sync` THE SYSTEM SHALL proxy it to the portal as today.
-- IF the role cannot be read for `POST /api/v1/repos/sync` THEN THE SYSTEM SHALL answer 503 and not call the portal.
+- WHILE `TENANT_AUTHZ_MODE=legacy` or `shadow`, THE SYSTEM SHALL decide the same routes with the login-keyed decision (`checkTenantRoleByLogin`). In shadow mode it SHALL also record the principal comparison through `shadowTenantRole`.
 
-Callers without a role, and documentation
+Ungated groups (documented):
 
-- WHILE `TENANT_AUTHZ_MODE` is `legacy` or `shadow` and the caller's sign-in did not prove a GitHub login (a Dex or generic OIDC token) THE SYSTEM SHALL refuse every role-gated write with 403, including the new gates. This is the existing `checkTenantRoleByLogin` behaviour, now written down.
-- THE SYSTEM SHALL ship `docs/tenant-roles.md`. It lists every tenant-scoped write route with its minimum role, or with the reason it has none, and states that `viewer` passes no write and that no read is restricted by role.
+- WHILE handling `POST /api/v1/action-approvals/{id}/decision`, THE SYSTEM SHALL keep the existing human-platform-admin-only rule (`isHumanAdmin`), and SHALL NOT let any tenant role, `owner` included, approve.
+- WHILE handling `POST /api/v1/human-input/{request_id}/response`, THE SYSTEM SHALL keep authorization tied to the request's `actor_refs` (`callerActorRefs` / `respondentRef`), with no tenant role check.
+- WHILE handling `/api/v1/surface-identities/*` and `/api/v1/surface-principals/*`, THE SYSTEM SHALL keep per-principal authorization with no tenant role check.
+- WHILE handling any GET route, THE SYSTEM SHALL NOT check a tenant role. Tenant membership (and per-item visibility for work items) stays the only read check.
 
 ## Out of scope
 
-- Changing `mctl-portal`'s own repo-sync permission. This proposal files it as a follow-up issue. Until that lands, a `viewer` can still sync through the portal UI directly.
-- Giving Dex or generic OIDC identities a tenant role. That belongs with #377 and #435 (membership keyed on a canonical principal).
-- Adding a role check to reads, or a role finer than `viewer`/`developer`/`owner`.
-- Changing who may decide action approvals or approve DevLoops (mctl-api#571), or the eligibility rules for human input (mctl-api#261).
-- Moving the work-item minimum role into `internal/operations/registry.go`. Work items are not registry operations.
+- Changing the minimum role of any operation already gated by #487.
+- Changing the portal plugin (`/api/github-app-connect/repos/sync` in the portal repo) itself. This proposal raises mctl-api to `developer` and requires a companion issue for the portal, so that both surfaces match (see Open questions).
+- Membership keyed on a canonical principal for legacy mode (#377, #435). Principal mode already provides it.
+- Role checks on reads, and any new role beyond `viewer` / `developer` / `owner`.
+- Changes to the execution platform's claim/fulfil/reject (service principal only) and to snapshot sealing (service only). Both are already stricter than `developer`.
+- Changes to the MCP tool count. The MCP work-item and repo-sync tools call the REST routes and inherit the gate.
 
 ## Open questions
 
-- Should `owner` instead of `developer` be required to request execution (`/execution-requests`, `/resume`)? It starts a paid run but can be recovered from. This proposal uses `developer`, the same as `trigger-issue`-style registry operations, and keeps the role in one constant so it is a one-line change.
-- Is a `viewer` meant to be allowed to create a `private` work item as a personal scratch item? This proposal gates every work-item mutation alike, on the rule in `internal/operations/roles.go` that no write accepts `viewer`.
-- Agent run tokens that act for no delegated human (`auth.User.AgentName()` set, no GitHub login): this proposal exempts them from the gate, on the reading that they are platform machinery like the service principal. The implementer must confirm in `internal/auth/agent.go` that such a token cannot carry a non-admin tenant scope. If it can, it should go through the gate, so that `checkTenantRoleByPrincipal` refuses it as a non-human.
-- Deployed `TENANT_AUTHZ_MODE` for mctl-api could not be observed (see design.md, "Deployed state checked"). The design works in every mode, but how the rollout plays out depends on which mode is live.
+- The deployed value of `TENANT_AUTHZ_MODE` could not be observed from this run: the mctl-api Helm values are not in the gitops checkout given here, and `mctl_get_service_config admins/mctl-api` returned "service not found". The owner says principal mode is live, and this proposal takes that as given.
+- ZITADEL `customers` org membership could not be listed from this run. In principal mode an org membership grants no tenant role without a GitOps `principalId` entry, so the release-note list comes from the GitOps members lists. If a customer principal gets a tenant through some other channel, the list must be re-checked before release.
+- The portal plugin currently allows `viewer` on repo sync. mctl-api will refuse `viewer` first. Until the portal is raised too, a viewer who calls the portal plugin directly can still sync. The implementer should open the companion portal issue and link it from the docs.

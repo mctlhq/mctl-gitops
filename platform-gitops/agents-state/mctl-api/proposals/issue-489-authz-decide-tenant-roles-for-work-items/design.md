@@ -2,165 +2,138 @@
 
 ## Current state
 
-The role gate (mctl-api#478/#487):
+The tenant role gate (#478 / #487) lives in `internal/api/tenant_role.go`:
 
-- `internal/api/tenant_role.go`
-  - `checkTenantRole(user, tenant, min, what)` returns a `roleRefusal`. It dispatches on `h.opts.TenantAuthzMode`:
-    - `legacy` and `shadow` use `checkTenantRoleByLogin`, keyed on `user.GitHubLogin()`, which must be proven. Otherwise the result is 403 "your sign-in does not carry a tenant role".
-    - `principal` uses `checkTenantRoleByPrincipal`, keyed on `user.PrincipalID()`. A non-human caller gets 403; an unresolved principal gets 503.
-  - `roleGate` passes `user.IsAdmin()` first.
-  - `decideWrittenRole` turns an unreadable role into 503 (`auditStatus "error"`), not a member into 403, and an unknown role into 403.
-  - `requireTenantRole` wraps the check: it audits the refusal and answers with `writeError`, which carries no typed code.
-  - `operationMinRole` reads `MinRole` from the registry.
-- `internal/operations/roles.go`:
-  - The ranking is `RoleViewer` < `RoleDeveloper` < `RoleOwner`.
-  - The `RoleViewer` doc comment says "No write operation accepts it".
-  - `RoleAdmin` and `RoleAuthenticated` are not tenant roles.
-- Callers today: `handlers_write.go:228` (generic execute, `op.MinRole`), `handlers_domains.go`, `handlers_alerts.go` (`incidentWriteRole = operations.RoleDeveloper`), `handlers_commerce.go` (`commerceTenantRole = RoleOwner`) and `handlers_erpact_sites.go`.
-- Tests: `internal/api/tenant_role_test.go`, using the `stubRoles` and `erpactMember` helpers, with per-handler `*_RoleGate` tests such as `TestIncidentWrites_RoleGate`. Also `tenant_role_execute_test.go`, `tenant_role_mcp_test.go` and `tenant_role_stub_test.go`.
+- `Handlers.checkTenantRole(user, tenant, min, what)` dispatches on `opts.TenantAuthzMode`:
+  - `TenantAuthzPrincipal` uses `checkTenantRoleByPrincipal`. It reads `opts.PrincipalMembership.MemberRolesForPrincipal(tenant, prn)` (`internal/gitops/principal_membership.go:157`). It refuses a non-human `Identity()` with 403 and an unresolved human principal with 503.
+  - Legacy and shadow use `checkTenantRoleByLogin`. It needs `user.GitHubLogin()` and reads `GitReader.MemberRoles`. Shadow also calls `shadowTenantRole`.
+  - Both start with `roleGate`: `IsAdmin()` passes, `RoleAdmin` refuses non-admins, and a non-tenant minimum is a 500. `decideWrittenRole` maps "not listed", "unknown role" and "insufficient" to 403, and "could not read" to 503.
+- `requireTenantRole` audits and writes `writeError(status, message)`. Existing per-handler constants: `incidentWriteRole = operations.RoleDeveloper` (`handlers_alerts.go:35`) and `commerceTenantRole = operations.RoleOwner` (`handlers_commerce.go:61`).
+- The header comment of `tenant_role.go` still describes the legacy rule: "Dex or other OIDC token ... has no role here". In principal mode such a human has a role through its `prn_` membership (`TestZitadelOnlyPrincipal_TenantRole` in `internal/api/tenant_authz_principal_test.go` already proves this).
 
-The groups left out. Routes are in `internal/api/router.go`, all inside the 20/min write-budget group except the claim/fulfil/reject group.
+Work items (`internal/api/handlers_work_items.go`, `handlers_execution_requests.go`, `handlers_work_item_snapshots.go`), routes in `internal/api/router.go:590-640`:
 
-1. **Work items** (`internal/api/handlers_work_items.go`).
-   - The top-of-file comment and `docs/work-context-contract.md` ("Identity and authorization") define authorization as `IsAdmin()` or `HasTenantAccess(tenant)`, plus `visibility`.
-   - `CreateWorkItem` checks `user.HasTenantAccess(body.Tenant)` and returns 403 `tenant_forbidden`.
-   - `TransitionWorkItem`, `AppendWorkItemIntent` (`handlers_work_item_intents.go`), `AttachWorkItemExecution`, `ResumeWorkItem` and `LinkWorkItemSurface` call only `visibleWorkItem`, which returns 404 when the item is not visible.
-   - Every work-item mutation goes through `mutationFor`, which binds the idempotency key to `principalOf(user)`.
-   - `SealWorkItemSnapshot` (`handlers_work_item_snapshots.go`) already refuses anyone who is not the direct service principal.
-   - Result: any tenant member, `viewer` included, can create, transition, add intents to, attach executions to, resume and link work items.
-2. **Execution requests** (`internal/api/handlers_execution_requests.go`).
-   - `CreateExecutionRequest` refuses the service principal (403 `execution_request_requester_forbidden`) and otherwise needs only `visibleWorkItem`.
-   - `Claim`/`Fulfil`/`RejectExecutionRequest` are service principal only (`executionPlatform`).
-   - A request is what makes the execution platform start a paid run.
-   - Result: a `viewer` can request execution.
-3. **Action approvals** (`handlers_action_approvals.go`).
-   - Create and consume: direct service principal only (`isDirectService`).
-   - Decide: `isHumanAdmin` only (`DecideActionApproval`, line 372); the requester of a request may not decide it.
-   - `ApproveDevLoopWorkflow` (`handlers_dev_loop.go:455-471`) also requires `isHumanAdmin`.
-   - No tenant role is involved: a tenant `owner` who is not a platform admin is already refused.
-4. **Human-input responses** (`handlers_human_input_response.go`, `handlers_human_input.go`).
-   - The respondent is derived from authentication (`callerActorRefs`) and must be one of the sealed request's `actor_refs` (`respondentRef` / `req.CanRespond`).
-   - The service principal cannot answer.
-   - The file header states: "An answer is information, not authorization. This endpoint never signals approve."
-5. **Surface identities** (`handlers_surface_identity.go`).
-   - `CreateSurfaceChallenge`/`RedeemSurfaceChallenge` link the caller's own `humanPrincipal` (a proven GitHub login; never the service principal, a surface or a relayed subject).
-   - `RevokeSurfaceIdentity` lets the owner, or an admin, revoke.
-   - No tenant appears in the request or in the link.
-   - `relaySubject` later re-derives the linked human's tenants on every relayed request, and the result is a `NewRelayedUser` with `githubLogin: true`. So the role gate already applies to whatever a relayed human does.
-6. **Repo sync** (`handlers_repos.go:143` `SyncRepos`).
-   - It checks `user.HasTenantAccess(req.Team)` and proxies to `{BackstageInternalURL}/api/github-app-connect/repos/sync`. The issue states the portal plugin allows `viewer`.
-   - The MCP tool `mctl_sync_repos` calls this route (`internal/mcp/server.go:1272`).
-   - There is no `sync-repos` registry operation, so `operationMinRole` has nothing to read.
+- `CreateWorkItem` checks only `user.HasTenantAccess(body.Tenant)`, then 403 `tenant_forbidden`.
+- `TransitionWorkItem`, `AppendWorkItemIntent`, `AttachWorkItemExecution`, `ResumeWorkItem`, `LinkWorkItemSurface` and `CreateExecutionRequest` check only `visibleWorkItem`, then `canSeeWorkItem`: admin, or tenant access plus (`VisibilityTenant` or `OwnerPrincipal == principalOf(u)`). So today a `viewer` can do all of these writes.
+- `CreateExecutionRequest` refuses `user.IsService()` (`requester_forbidden`). Claim, fulfil and reject need `isDirectService`. `SealWorkItemSnapshot` needs `user.IsService()` and no relay.
 
-Identity facts the design depends on:
+Identity shapes (`internal/auth`):
 
-- `auth.NewRelayedUser` and `auth.NewDelegatedUser` (`internal/auth/oidc.go:396`, `:426`) both set `githubLogin: true` and drop the `admins` group. A gate keyed on `GitHubLogin()` therefore covers humans who reach mctl-api through Telegram or an agent delegation.
-- `NewServiceUser` carries `platformAdmin: true`, so `roleGate` passes it.
+- `NewServiceUser()` (`oidc.go:192`) has `platformAdmin: true`, so it passes `roleGate`.
+- `NewAgentUser` (`agent.go:76`) is "never an admin, belongs to no tenant". `PrincipalAuthz.Apply` (`principal_authz.go`) sets `Groups = nil` for every non-human that is not service or dev. So an undelegated agent token has no `HasTenantAccess` on any tenant, and `visibleWorkItem` already returns 404 for it. Its `Identity().Kind` is `KindAgent`, so `checkTenantRoleByPrincipal` would refuse it with 403 if it ever got that far.
+- Delegated subjects (`NewDelegatedUser`, `NewDelegatedPrincipalUser`, `oidc.go:448` and the following code) are human and carry the human's principal (`tokenPrincipal`). They drop "admins". `delegationRoutes` (`handlers_agent_identity.go:95`) allows delegation on `POST .../intents`, `.../surface-refs`, `.../execution-requests` and `/human-input/{id}/response`.
+- Relayed subjects (`NewRelayedUser`, `NewRelayedPrincipalUser`) are human, drop "admins", and carry `relaySurface`.
+- A ZITADEL-only human is `NewFederatedUser(..., KindHuman)` with a principal and no GitHub login.
+
+Other groups:
+
+- Action approvals (`handlers_action_approvals.go`): deciding needs `isHumanAdmin` (lines 66, 372). Creating needs `isHumanAdmin || isDirectService` (310).
+- Human input (`handlers_human_input.go:130`, `handlers_human_input_response.go`): the respondent must match `actor_refs` through `callerActorRefs` / `respondentRef`.
+- Surface identities (`handlers_surface_identity.go`, `handlers_identity_link.go`): per-principal.
+- `SyncRepos` (`handlers_repos.go:143`) checks `HasTenantAccess(req.Team)` and then proxies to `{BackstageInternalURL}/api/github-app-connect/repos/sync`. There is no role check. MCP `mctl_sync_repos` calls this route (`internal/mcp/server.go:1272`).
+- There is no `docs/tenant-roles.md` today.
 
 Deployed state checked:
 
-- `$MCTL_GITOPS_ROOT/services/`: tenants `admins`, `karabu` and `labs`. There is no `mctl-api` service directory, because mctl-api is platform-deployed outside `services/`. Its `TENANT_AUTHZ_MODE` could **not** be observed here (gap recorded under Open questions).
-- `grep role: tenants/*/values.yaml`: 9 `owner` entries, 2 `developer` entries and **no** `viewer` entries. No tenant member deployed today would be refused by a `developer` gate.
-- `services/labs/mctl-telegram/values.yaml` refers to the `platform/mctl-api/surface-tokens` Vault path. Telegram is a deployed relaying surface, so relayed work-item writes are a live path. It is covered because relayed users carry a GitHub login.
-- No mctl MCP tool calls were needed beyond the gitops reads. Deployed mctl-api env vars were not read.
+- `$MCTL_GITOPS_ROOT/tenants/*/values.yaml` lists six tenants: admins, commerce-proof, erpact, karabu, labs, mctl. Every `members[]` entry has a `principalId` and role `owner` or `developer`. There are no `viewer` entries. erpact: mashkovd, obukhov23 = owner; grerik, octongues = developer. labs: mashkoffdmitry, mashkovd = owner. The comment in the labs values says the owner signs in through ZITADEL and is mapped to that login. All other tenants have a single owner.
+- `grep -i viewer tenants/` returned nothing.
+- `mctl_get_service_config team=admins service=mctl-api` returned an error: "service not found: admins/mctl-api". `grep TENANT_AUTHZ_MODE services/` found nothing. **Not observed:** the deployed `TENANT_AUTHZ_MODE`. The owner's statement (principal since 2026-10-17) is taken as given.
+- **Not observed:** ZITADEL `customers` org membership. No tool in this run reads it.
 
 ## Proposed solution
 
-### 1. Work-item and execution-request writes: `developer`
+### 1. Role constants (one place each)
 
-In `internal/api/handlers_work_items.go`:
+In `internal/api/tenant_role.go`, next to the existing gate:
 
-- Add the constant `workItemWriteRole = operations.RoleDeveloper` with a comment linking #489. Its value is the same as `incidentWriteRole`.
-- Add a typed code `wiCodeRoleRequired = "tenant_role_required"`.
-- Add a helper:
+```go
+// workItemWriteRole is the minimum tenant role for every work-item write a
+// person or surface makes (mctl-api#489). viewer passes no write, private
+// items included.
+const workItemWriteRole = operations.RoleDeveloper
+// workItemExecutionRole is the minimum for asking the platform to run work:
+// POST /work-items/{id}/execution-requests and /resume. One constant for
+// both (owner decision on #489).
+const workItemExecutionRole = operations.RoleDeveloper
+// reposSyncRole is the minimum for POST /repos/sync. The portal plugin must
+// match it.
+const reposSyncRole = operations.RoleDeveloper
+```
 
-  ```go
-  // requireWorkItemRole gates a human work-item write on the tenant role.
-  // Machine principals keep their existing principal rules.
-  func (h *Handlers) requireWorkItemRole(w http.ResponseWriter, r *http.Request, user *auth.User, tenant, op string) bool
-  ```
+### 2. Work-item gate helper
 
-  The helper:
-  - Returns true without a check for `user.IsService()`, and for an agent principal that is not acting for a delegated human (`AgentName()` set and `GitHubLogin()` not proven; see Open questions). Both are platform machinery governed by their own rules (snapshot seal, executionPlatform, delegation binding).
-  - Otherwise calls `h.checkTenantRole(user, tenant, workItemWriteRole, "work item "+op)`.
-  - On a refusal, writes the audit entry in the same shape as `requireTenantRole` (`Operation: "work_item."+op`, `Status: d.auditStatus`, `RiskLevel: RiskLow`, `Message: d.detail`, `Parameters{"tenant"}`). It answers `writeErrorCode(w, d.status, code, d.message, nil)`, where code is `wiCodeRoleRequired` for a 403 and `wiCodeUnavailable` for a 503. This keeps the typed codes clients of the work-item API branch on.
-  - Refactor: extract the audit and log half of `requireTenantRole` into `auditRoleRefusal(r, user, tenant, operation, risk, d)` so the two do not drift. `requireTenantRole` then calls it and keeps `writeError`.
+Add `func (h *Handlers) requireWorkItemRole(w, r, user, tenant string, min operations.Role, operation string) bool` in `handlers_work_items.go`. It calls `h.checkTenantRole(user, tenant, min, "work item "+operation)`. On a refusal it logs the audit entry the same way `requireTenantRole` does (`operation`, tenant, `auditStatus`, detail). It answers with `writeErrorCode` and a typed code, so that work-item clients keep machine-readable errors:
 
-Call sites, all placed **after** `visibleWorkItem` (or, for create, after the `HasTenantAccess` check) and **before** `mutationFor` or any store call:
+- `wiCodeRoleForbidden = "tenant_role_forbidden"` for 403.
+- `wiCodeRoleUnavailable = "tenant_role_unavailable"` for 503.
+- The 500 (no minimum configured) keeps `writeError`.
 
-- `CreateWorkItem` with `body.Tenant`.
-- `TransitionWorkItem`, `AppendWorkItemIntent`, `AttachWorkItemExecution`, `ResumeWorkItem`, `LinkWorkItemSurface` and `CreateExecutionRequest`, each with `item.Tenant`.
+To avoid two audit/log code paths, extract the audit+log part of `requireTenantRole` into `auditRoleRefusal(r, user, tenant, operation, risk, d)`. Both helpers use it.
 
-This order means:
+Call sites. The check always runs after the 404 visibility check and before the body decode and any store call:
 
-- A caller who cannot see the item still gets 404, so nothing leaks.
-- A replay of an idempotency key is re-authorized.
-- A refusal touches no state.
+| Handler | Tenant | Min |
+|---|---|---|
+| `CreateWorkItem` | `body.Tenant`, after `HasTenantAccess` | `workItemWriteRole` |
+| `TransitionWorkItem` | `item.Tenant` | `workItemWriteRole` |
+| `AppendWorkItemIntent` | `item.Tenant` | `workItemWriteRole` |
+| `AttachWorkItemExecution` | `item.Tenant` | `workItemWriteRole` |
+| `LinkWorkItemSurface` | `item.Tenant` | `workItemWriteRole` |
+| `ResumeWorkItem` | `item.Tenant` | `workItemExecutionRole` |
+| `CreateExecutionRequest` | `item.Tenant`, after the `IsService` refusal and `visibleWorkItem` | `workItemExecutionRole` |
 
-`SealWorkItemSnapshot` and the claim/fulfil/reject handlers are not changed: they are already service-only.
+The create body must be decoded before its tenant is known, so the check in `CreateWorkItem` runs right after the existing `HasTenantAccess` check and before `mutationFor` and `Create`.
 
-Update the header comment of `handlers_work_items.go` and `docs/work-context-contract.md` "Identity and authorization" to say that reads need tenant access and visibility, and that human writes also need `developer`.
+No gate is added on `SealWorkItemSnapshot` or on claim/fulfil/reject. They already require the service principal, which is stricter. A comment says so.
 
-Why `developer` rather than `owner`:
+### 3. Machine-caller exemption, keyed on the principal
 
-- A work item and an execution request are ordinary and recoverable. A transition can be superseded, a run can be rejected or abandoned.
-- `roles.go` reserves `owner` for destructive or `RiskHigh` actions.
-- `viewer` must pass no write.
+No new predicate is needed. The exemption already follows from the principal:
 
-### 2. Approvals, human input, surface identities: no tenant gate, documented
+- The service principal is `platformAdmin`, so `roleGate` passes it in every mode.
+- An agent token acting for no human principal is `KindAgent`, has no tenant groups, and gets 404 at `visibleWorkItem` / `tenant_forbidden` at create before the gate. If a future token of this kind carried a non-admin tenant scope, it would reach `checkTenantRoleByPrincipal` and be refused as non-human. That matches the owner's rule.
+- A delegated or relayed request is decided as the human principal it names.
 
-- **Action approval decide / DevLoop approve**: stays `isHumanAdmin`. A tenant role must not be a way in. An approval authorizes a hashed side effect, often on the platform's own repos, and #571 deliberately makes it a platform human act. Adding "or tenant owner" would widen authority. Adding "and tenant owner" means nothing for an admin, because admins pass every role.
-- **Human-input responses**: stay tied to `actor_refs`. The request names who may answer, and the answer is information the workflow validates, never approval. A role check would refuse someone the workflow explicitly asked, or admit someone it did not.
-- **Surface identities**: a link binds a surface-native id to the caller's own principal. It carries no tenant, and every relayed request re-derives tenants and roles from the linked human (`relaySubject`, then `checkTenantRole` on whatever write follows). There is no tenant to gate on.
-- Each decision gets one sentence in `docs/tenant-roles.md`, and a short comment at the top of the respective handler file pointing to it.
+The implementer writes this as a comment on `requireWorkItemRole`, citing `auth.NewAgentUser`, `PrincipalAuthz.Apply` and `NewDelegatedPrincipalUser`. No `GitHubLogin()` check appears anywhere in the new code. A unit test pins down each part of the exemption (T5, T6), so a later change to the agent token shape fails a test instead of silently granting a role.
 
-### 3. Repo sync: `developer`
+### 4. `POST /repos/sync`
 
-In `handlers_repos.go`:
+In `SyncRepos`, after `HasTenantAccess(req.Team)`, call `h.requireTenantRole(w, r, user, req.Team, reposSyncRole, "repos-sync", operations.RiskLow)`. Return before building the upstream request. The response body format changes from the `http.Error` JSON string to `writeError`, which has the same `{"error": ...}` shape.
 
-- Add `repoSyncRole = operations.RoleDeveloper`.
-- In `SyncRepos`, after the `HasTenantAccess` check and before the upstream request is built, call `h.requireTenantRole(w, r, user, req.Team, repoSyncRole, "repos-sync", operations.RiskLow)`.
-- Use `normalizeIdentifier(req.Team)` if the domain handlers do; match `requireDomainRole`.
+### 5. Documentation
 
-Rationale: a sync registers repositories against the team, and those repositories are what `onboard`/`deploy` (`developer`) build from. It is a write, so `viewer` must not pass it.
+Add `docs/tenant-roles.md`:
 
-Keeping the portal in step: open a follow-up issue in `mctlhq/mctl-portal` to raise its `github-app-connect` sync permission to `developer`. Until that lands, the API is the stricter of the two, which is the safe direction.
+- **Modes.** `principal` is current: the role is read from `members[].principalId` and `role`, and holds for GitHub, ZITADEL and other OIDC humans alike. `legacy` and `shadow` are rollback modes: login-keyed, and in those modes a Dex or generic OIDC human holds no tenant role and is refused on every role-gated write.
+- **Role table.** `viewer` passes no write. `developer` covers ordinary writes, work items, execution requests, repo sync and incidents. `owner` covers destructive, RiskHigh and commerce writes. Operation minimums are listed in `internal/operations/registry.go`.
+- **Ungated writes, and why:**
+  - Action-approval decisions are human platform admin only (#571). A tenant `owner` cannot approve.
+  - Human-input responses are tied to the request's `actor_refs`.
+  - Surface identities and surface principals are per-principal identity binding, unrelated to tenants.
+  - Snapshot sealing and claim/fulfil/reject are service principal only.
+- **Reads** are never role-gated. Membership (plus work-item visibility) is the only read check.
+- **Machine callers.** The exemption as described in section 3.
 
-### 4. Dex / OIDC callers and read-only `viewer`: documented
+Update the header comment of `internal/api/tenant_role.go` so that the "Dex or other OIDC token ... is refused" paragraph is scoped to legacy/shadow mode, and principal mode is described as current.
 
-No code change. `docs/tenant-roles.md` states the following:
+### 6. Release note
 
-- In `legacy`/`shadow` mode a role is read by a proven GitHub login. A Dex or generic OIDC token has none and is refused on every role-gated write. `principal` mode (#377) reads it by `prn_` instead. Giving such identities roles belongs with #377/#435.
-- `viewer` passes no write. No read is gated by role, by design.
-
-### 5. `docs/tenant-roles.md`
-
-A new document with one table. Columns: route, handler, minimum role or "none", and reason. It covers every tenant-scoped write route in `router.go`: the existing #487 gates and the decisions above. It also has a short section on modes and on callers without a role. Link it from `docs/work-context-contract.md` and from the `tenant_role.go` header comment.
+Based on the GitOps membership read above, no member holds `viewer`. So no listed member starts getting 403 from these gates. The release note states this, lists the members by tenant with their roles, and says that the ZITADEL `customers` org was not observable from the proposal run. It must be re-checked against `TryNamespacesForPrincipal` output at release time.
 
 ## Alternatives
 
-- **Keep work items at membership only, and gate just `execution-requests` and `resume`.**
-  - This only blocks the paid part.
-  - Dropped: it leaves `viewer` able to transition, supersede or cancel shared tenant work, which contradicts `RoleViewer`'s "no write accepts it". It also needs two policies to explain instead of one.
-- **Require `owner` for approvals, in addition to or instead of the named approver.**
-  - Dropped: "instead of" widens approval authority to every tenant owner, against #571. "In addition to" is a no-op for the human admins who are the only deciders. For human input, the named respondent is the stronger and more precise rule.
-- **Put work items and repo sync into the operations registry so `operationMinRole` supplies the role.**
-  - Dropped: they are not Argo operations. Registering fake entries would surface them in `mctl_list_operations` and the portal allowlist tests. A named constant next to `incidentWriteRole` is the established pattern for non-registry writes.
-- **Repo sync: keep `viewer` to stay in step with the portal.**
-  - Dropped: being in step with a too-permissive rule is not a goal. The API can tighten on its own, and the portal follows.
+1. **Require `owner` for execution requests and resume.** Dropped. The owner chose `developer`. Execution is recoverable and already bounded by the platform's own checks (one open request, state version).
+2. **Exempt machine callers with "`AgentName()` set and `GitHubLogin()` not proven".** Dropped. This is a legacy predicate. In principal mode a ZITADEL human has no GitHub login, and a delegated human is not `AgentName()`. Keying on `IsAdmin`/service plus `Identity().Kind` is correct in every mode, and it is what `checkTenantRoleByPrincipal` already does.
+3. **Reuse `requireTenantRole` unchanged for work items.** Dropped. Its `writeError` response has no typed code, and the work-item API contract (`docs/work-context-contract.md`) uses typed codes everywhere. A thin wrapper that shares the audit path keeps one decision and one audit format.
+4. **Gate action-approval decisions on tenant `owner`.** Dropped by the owner. #571 deliberately ties approval to a human platform admin, and a tenant role would widen it.
 
 ## Platform impact
 
-- **Migrations**: none. No store schema changes.
-- **Backward compatibility**:
-  - New 403s are returned only to members whose effective role is below `developer`, meaning `viewer` or an unknown role. Deployed tenants have no `viewer` entries today (see Current state).
-  - Callers without a proven GitHub login in legacy/shadow mode would start getting 403 on work-item writes and repo sync. Such a caller, for example a Dex-authenticated human creating work items, is a behaviour change. No known caller is affected (the issue says so, and Telegram and agent delegation carry GitHub logins), but this must be called out in the release note.
-  - The new error code `tenant_role_required` is additive.
-- **Availability**:
-  - A gitops reader outage now turns work-item writes and repo sync into 503 where they used to succeed. This is the same fail-closed contract as every other gate.
-  - The role read is an in-memory checkout lookup, so the per-request cost is negligible.
-- **Risks and mitigations**:
-  1. Breaking a machine caller of work items (mctl-agents dispatcher, agent run tokens). Mitigation: the service principal passes as an admin, agent principals with no delegated human are explicitly exempt, and a test asserts each.
-  2. Leaking item existence through 403. Mitigation: the gate runs after `visibleWorkItem`, and a test asserts 404 for an invisible item from a `viewer` of another tenant.
-  3. Portal/API drift on repo sync. Mitigation: a follow-up issue in mctl-portal.
-- **Shadow mode**: `checkTenantRole` already calls `shadowTenantRole`, so the new call sites also feed the principal-mode comparison metrics with no extra work.
+- **Migrations:** none. There is no schema change and no new env var.
+- **Backward compatibility:** `developer` and `owner` members are unaffected. A `viewer` member, of whom none are deployed, loses work-item writes and repo sync. A caller whose role cannot be read now gets 503 on these routes, where before the write went through. This fails closed, like every other gated write.
+- **Cost:** in principal mode, one membership read per gated write, from the in-memory gitops checkout that already serves `HasTenantAccess`. Negligible.
+- **Risks and mitigations:**
+  - A service-run path that is not the service principal could be broken (for example a worker using a non-admin token to attach executions). Mitigation: T5/T6, and a check of current callers of `/executions` and `/resume`. In this codebase they are service-only, because agents have no tenant access.
+  - The portal and the API could disagree on repo sync until the companion portal issue lands. mctl-api is the stricter one, so this does not widen access.
+  - The shadow comparison logs a disagreement for every new gate in shadow mode. This is expected, and it is the reason shadow mode exists.
+- **MCP:** no tool is added or removed, so the `server_test.go` count is unchanged.
