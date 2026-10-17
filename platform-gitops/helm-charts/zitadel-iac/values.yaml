@@ -86,6 +86,10 @@ image:
 #   organization (the portal's client id joins its allowlist). Removing a
 #   tenant plans a destroy of its grant, which allowedDeletes refuses until
 #   the address is listed.
+#   Portal customer entry (mctl-web#158, portal.tf): no new action; an
+#   in-place update of the portal client (a second redirect URI, for auth
+#   provider zitadel-customer) and of the data of
+#   backstage/backstage-oidc-zitadel (one key added).
 #   kubectl sign-in (#1881, kubernetes.tf: the Kubernetes project, one role
 #   and project grant per tenant organization, user grants for users whose
 #   Vault entry declares "kubectl": true, the kubectl native client, the

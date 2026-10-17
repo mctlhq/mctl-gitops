@@ -274,7 +274,8 @@ spec:
             - backstage-secrets
             # ZITADEL client of the portal's OIDC provider (OIDC_ZITADEL_CLIENT_ID
             # and _SECRET), the portal UI client (AUTH_OIDC_*) and the
-            # customers organization id, filled by the zitadel-iac Job (portal.tf).
+            # customers organization and GitHub IdP ids, filled by the
+            # zitadel-iac Job (portal.tf).
             - backstage-oidc-zitadel
           {{- if or (default dict .Values.surfacePortalToken).enabled (default dict .Values.repoBinding).enabled }}
           # One extraEnvVars list for every gated entry: two keys would leave
@@ -422,14 +423,33 @@ spec:
                     prompt: auto
                     additionalScopes:
                       - urn:zitadel:iam:user:resourceowner
+                # The customer entry, "Sign in with GitHub" (mctl-web#158):
+                # the same ZITADEL client as oidc, with its own callback
+                # (/api/auth/zitadel-customer/handler/frame, registered in
+                # portal.tf). The portal adds the customers organization and
+                # GitHub IdP scopes itself, from zitadelCustomers below, and
+                # registers the provider only with both ids. Never put those
+                # scopes on oidc: staff would be sent to the customers org.
+                zitadel-customer:
+                  production:
+                    metadataUrl: https://auth.mctl.ai/.well-known/openid-configuration
+                    clientId: ${AUTH_OIDC_CLIENT_ID}
+                    clientSecret: ${AUTH_OIDC_CLIENT_SECRET}
+                    prompt: auto
+                    additionalScopes:
+                      - urn:zitadel:iam:user:resourceowner
             # The ZITADEL organization of self-service customers (mctl-web
             # site onboarding, stage C2). The portal signs a customers token in
             # as the User named by its principal, which mctl-api resolves
             # (surface-principals/zitadel), and a staff token by its GitHub
             # login. Unset, it accepts no ZITADEL sign-in: it could not tell
             # one from the other. Written by the zitadel-iac Job (portal.tf).
+            # githubIdpId is the organization's GitHub IdP: with both ids the
+            # sign-in page offers customers "Sign in with GitHub"
+            # (mctl-web#158). Both ids are public; they reach the browser.
             zitadelCustomers:
               organizationId: ${AUTH_OIDC_CUSTOMERS_ORG_ID}
+              githubIdpId: ${AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID}
             integrations:
               github:
                 - host: github.com

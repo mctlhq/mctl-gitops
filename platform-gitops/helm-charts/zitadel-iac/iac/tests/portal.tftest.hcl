@@ -168,8 +168,8 @@ run "ui_client_is_a_confidential_web_client_with_refresh" {
   }
   # Exactly the Backstage handler of auth provider `oidc`.
   assert {
-    condition     = zitadel_application_oidc.portal_ui.redirect_uris == tolist(["https://app.mctl.ai/api/auth/oidc/handler/frame"])
-    error_message = "The only redirect URI must be https://app.mctl.ai/api/auth/oidc/handler/frame."
+    condition     = zitadel_application_oidc.portal_ui.redirect_uris == tolist(["https://app.mctl.ai/api/auth/oidc/handler/frame", "https://app.mctl.ai/api/auth/zitadel-customer/handler/frame"])
+    error_message = "The redirect URIs must be exactly the handlers of the staff sign-in (oidc) and the customer entry (zitadel-customer)."
   }
   assert {
     condition     = zitadel_application_oidc.portal_ui.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.portal_ui.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"
@@ -211,14 +211,18 @@ run "oidc_provider_client_reaches_the_portal_secret" {
     target = zitadel_org.customers
     values = { id = "customers-org-id" }
   }
+  override_resource {
+    target = zitadel_org_idp_github.customers
+    values = { id = "customers-github-idp-id" }
+  }
 
   assert {
     condition     = kubernetes_secret_v1_data.portal_oidc.metadata[0].name == "backstage-oidc-zitadel" && kubernetes_secret_v1_data.portal_oidc.metadata[0].namespace == "backstage"
     error_message = "The keys go into backstage/backstage-oidc-zitadel, the Secret the mctl-portal-oidc-zitadel Application pre-creates."
   }
   assert {
-    condition     = toset(keys(kubernetes_secret_v1_data.portal_oidc.data)) == toset(["OIDC_ZITADEL_CLIENT_ID", "OIDC_ZITADEL_CLIENT_SECRET", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_CLIENT_SECRET", "AUTH_OIDC_CUSTOMERS_ORG_ID"])
-    error_message = "backstage/backstage-oidc-zitadel must carry exactly the five keys the portal reads."
+    condition     = toset(keys(kubernetes_secret_v1_data.portal_oidc.data)) == toset(["OIDC_ZITADEL_CLIENT_ID", "OIDC_ZITADEL_CLIENT_SECRET", "AUTH_OIDC_CLIENT_ID", "AUTH_OIDC_CLIENT_SECRET", "AUTH_OIDC_CUSTOMERS_ORG_ID", "AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID"])
+    error_message = "backstage/backstage-oidc-zitadel must carry exactly the six keys the portal reads."
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["OIDC_ZITADEL_CLIENT_ID"]) == "portal-client-id"
@@ -239,6 +243,10 @@ run "oidc_provider_client_reaches_the_portal_secret" {
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["AUTH_OIDC_CUSTOMERS_ORG_ID"]) == "customers-org-id"
     error_message = "AUTH_OIDC_CUSTOMERS_ORG_ID must be the customers organization's id."
+  }
+  assert {
+    condition     = nonsensitive(kubernetes_secret_v1_data.portal_oidc.data["AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID"]) == "customers-github-idp-id"
+    error_message = "AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID must be the customers organization's GitHub IdP id."
   }
   assert {
     condition     = kubernetes_secret_v1_data.portal_oidc.field_manager == "zitadel-iac" && kubernetes_secret_v1_data.portal_oidc.force == true
