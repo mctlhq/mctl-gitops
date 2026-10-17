@@ -68,20 +68,16 @@ spec:
             GITHUB_ORG: mctlhq
             ADMIN_USERS: mashkovd
             # Tenant authorization by canonical principal (mctlhq/mctl-api#377).
-            # `shadow`: every tenant decision is still made by GitHub login
-            # (legacy), and is also computed from members[].principalId and
-            # compared; the result is only counted (tenant_authz_shadow_*)
-            # and logged, never enforced. Switch criterion for `principal`
-            # (PR-B): >=7 days here with no new diff and no unexplained
-            # unresolved (docs/principals.md in mctl-api).
-            # Rollback: remove this line (default `legacy`).
-            TENANT_AUTHZ_MODE: "shadow"
-            # Platform admins by principal (mctlhq/mctl-api#377). In shadow
-            # it decides nothing: the admin decision is still ADMIN_USERS,
-            # and this list is only compared with it (admin_mismatch in
-            # tenant_authz_shadow_*), so the switch to `principal` can show
-            # a clean admin record first. A malformed id refuses startup.
-            # Rollback: remove this line.
+            # `principal`: every tenant and admin decision is made from
+            # members[].principalId and ADMIN_PRINCIPALS; a GitHub login
+            # grants nothing on its own. The owner approved an early switch
+            # on 2026-10-17; evidence and remaining live checks: PR #1873.
+            # Rollback: set back to "shadow" (login decides again, the
+            # principal path is still compared and counted).
+            TENANT_AUTHZ_MODE: "principal"
+            # Platform admins by principal (mctlhq/mctl-api#377). Decides
+            # admin in `principal` mode; ADMIN_USERS above only matters on
+            # a rollback to shadow/legacy. A malformed id refuses startup.
             ADMIN_PRINCIPALS: prn_01M39HRB7JRXZ2PHW5VVB695YZ
             # DevLoop approval relay (mctlhq/mctl-api#571, mctl-agents#636).
             # `false` closes the free-text approver relay: a service call to

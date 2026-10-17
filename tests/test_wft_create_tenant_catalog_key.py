@@ -35,6 +35,7 @@ def block(start, end):
 CASE = block("# creator_catalog_key is one of two words", "# The five quota values")
 MEMBERS = block("# Build members section if creator is specified", "# Write values.yaml")
 SCRIPT = ("set -e\nCREATOR_CATALOG_KEY=\"$PARAM_CREATOR_CATALOG_KEY\"\n"
+          + block("# creator_principal_id is spliced", "# creator_catalog_key is one of two words")
           + CASE + MEMBERS + 'printf "%s\\n" "$MEMBERS_BLOCK"\n')
 
 failures = []
@@ -91,6 +92,16 @@ check("creator_catalog_key=principal writes catalogKey: principal",
 r, m = run("principal", "")
 check("principal without creator_principal_id fails the step",
       r.returncode != 0 and "without creator_principal_id" in r.stderr, r.stdout + r.stderr)
+
+for key in ("", "login"):
+    r, m = run(key, "")
+    check(f"login-only owner with catalog key {key!r} is refused",
+          r.returncode != 0 and "without creator_principal_id" in r.stderr,
+          r.stdout + r.stderr)
+r, m = run("login", "", user="")
+check("ownerless platform tenant remains valid", r.returncode == 0, r.stderr)
+r, m = run("login", "invalid")
+check("invalid principal remains refused", r.returncode != 0, r.stderr)
 
 for key in ("Principal", "bogus", "principal "):
     r, m = run(key, PID)
