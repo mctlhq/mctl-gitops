@@ -25,13 +25,14 @@ spec:
     secondsAfterCompletion: 3600
   entrypoint: delete-tenant-safe-pipeline
   serviceAccountName: argo-workflow-sa
-  synchronization:
-    mutex:
-      name: mctl-gitops-main-writes
 
   arguments:
     parameters:
       - name: tenant_name
+      - name: delete_customer_account
+        value: "false"
+      - name: customer_principal_id
+        value: ""
 
   templates:
     - name: delete-tenant-safe-pipeline
@@ -44,8 +45,56 @@ spec:
                 - name: tenant_name
                   value: "{{workflow.parameters.tenant_name}}"
 
-          - name: retire-services
+          - name: begin-customer-account
             dependencies: [validate]
+            when: "'{{workflow.parameters.delete_customer_account}}' == 'true'"
+            template: customer-account-step
+            arguments:
+              parameters:
+                - name: stage
+                  value: begin
+
+          - name: delete-platform-resources
+            dependencies: [begin-customer-account]
+            template: delete-platform-resources
+
+          - name: cleanup-portal
+            dependencies: [delete-platform-resources]
+            template: cleanup-portal
+
+          - name: complete-customer-account
+            dependencies: [cleanup-portal]
+            when: "'{{workflow.parameters.delete_customer_account}}' == 'true'"
+            template: customer-account-step
+            arguments:
+              parameters:
+                - name: stage
+                  value: complete
+
+    # Hold the global GitOps mutex only through destructive platform work.
+    # Identity/session/catalog retries must not block unrelated GitOps writers.
+    - name: delete-platform-resources
+      synchronization:
+        mutex:
+          name: mctl-gitops-main-writes
+      dag:
+        tasks:
+          - name: validate
+            template: validate-tenant-exists
+            arguments:
+              parameters:
+                - name: tenant_name
+                  value: "{{workflow.parameters.tenant_name}}"
+
+          # Recheck the immutable customer owner after waiting for the mutex:
+          # another workflow must not replace the workspace before teardown.
+          - name: recheck-customer-account
+            dependencies: [validate]
+            when: "'{{workflow.parameters.delete_customer_account}}' == 'true'"
+            template: customer-account-guard
+
+          - name: retire-services
+            dependencies: [recheck-customer-account]
             template: retire-tenant-services
             arguments:
               parameters:
@@ -83,6 +132,122 @@ spec:
               parameters:
                 - name: tenant_name
                   value: "{{workflow.parameters.tenant_name}}"
+
+    - name: customer-account-step
+      inputs:
+        parameters:
+          - name: stage
+      retryStrategy:
+        limit: "180"
+        retryPolicy: Always
+        backoff:
+          duration: "5s"
+          factor: "1"
+          maxDuration: "15m"
+      script:
+        image: alpine/k8s:1.33.12
+        command: [sh]
+        env:
+          - name: TENANT
+            value: "{{workflow.parameters.tenant_name}}"
+          - name: PRINCIPAL
+            value: "{{workflow.parameters.customer_principal_id}}"
+          - name: STAGE
+            value: "{{inputs.parameters.stage}}"
+          - name: MCTL_API_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-api-service-token
+                key: MCTL_API_TOKEN
+        source: |
+          set -eu
+          apk add --no-cache curl jq > /dev/null 2>&1
+          # Only validated path segments enter the URL. The API requires a
+          # previously approved immutable manifest and checks every membership.
+          printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'
+          printf '%s' "$PRINCIPAL" | grep -qE '^prn_[0-9A-HJKMNP-TV-Z]{26}$'
+          case "$STAGE" in begin|complete) ;; *) exit 1 ;; esac
+          HTTP_STATUS=$(curl --output /tmp/result.json --write-out "%{http_code}" --silent --show-error --max-time 60 -X POST \
+            -H "Authorization: Bearer $MCTL_API_TOKEN" \
+            "http://mctl-api.mctl-api.svc.cluster.local:8080/api/v1/internal/customer-deletions/$TENANT/$PRINCIPAL/$STAGE")
+          case "$HTTP_STATUS" in 200) ;; *)
+            jq -r '.details.stage // "customer-account"' /tmp/result.json | grep -E '^[a-z-]+$' || true
+            exit 1 ;;
+          esac
+          RESPONSE=$(cat /tmp/result.json)
+          printf '%s' "$RESPONSE" | jq -se --arg stage "$STAGE" \
+            'length == 1 and (.[0].status == "complete" or (.[0].status == "succeeded" and .[0].stage == $stage))'
+
+    # One short request under the global mutex; provider verification happened
+    # in the retryable begin stage before acquiring it. A failure releases the
+    # mutex and the same MCP deletion can resume its durable manifest later.
+    - name: customer-account-guard
+      activeDeadlineSeconds: 30
+      script:
+        image: alpine/k8s:1.33.12
+        command: [sh]
+        env:
+          - name: TENANT
+            value: "{{workflow.parameters.tenant_name}}"
+          - name: PRINCIPAL
+            value: "{{workflow.parameters.customer_principal_id}}"
+          - name: STAGE
+            value: "resources"
+          - name: MCTL_API_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-api-service-token
+                key: MCTL_API_TOKEN
+        source: |
+          set -eu
+          apk add --no-cache curl jq > /dev/null 2>&1
+          # Only validated path segments enter the URL. The API requires a
+          # previously approved immutable manifest and checks every membership.
+          printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'
+          printf '%s' "$PRINCIPAL" | grep -qE '^prn_[0-9A-HJKMNP-TV-Z]{26}$'
+          case "$STAGE" in resources) ;; *) exit 1 ;; esac
+          HTTP_STATUS=$(curl --output /tmp/result.json --write-out "%{http_code}" --silent --show-error --max-time 10 -X POST \
+            -H "Authorization: Bearer $MCTL_API_TOKEN" \
+            "http://mctl-api.mctl-api.svc.cluster.local:8080/api/v1/internal/customer-deletions/$TENANT/$PRINCIPAL/$STAGE")
+          case "$HTTP_STATUS" in 200) ;; *)
+            jq -r '.details.stage // "customer-account"' /tmp/result.json | grep -E '^[a-z-]+$' || true
+            exit 1 ;;
+          esac
+          RESPONSE=$(cat /tmp/result.json)
+          printf '%s' "$RESPONSE" | jq -se --arg stage "$STAGE" \
+            'length == 1 and .[0].status == "succeeded" and .[0].stage == $stage'
+
+    - name: cleanup-portal
+      retryStrategy:
+        limit: "90"
+        retryPolicy: Always
+        backoff:
+          duration: "10s"
+          factor: "1"
+          maxDuration: "15m"
+      script:
+        image: alpine/k8s:1.33.12
+        command: [sh]
+        env:
+          - name: TENANT
+            value: "{{workflow.parameters.tenant_name}}"
+          - name: BACKSTAGE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: backstage-workflow-token
+                key: BACKSTAGE_TOKEN
+        source: |
+          set -eu
+          printf '%s' "$TENANT" | grep -qE '^[a-z0-9][a-z0-9-]{1,62}$'
+          apk add --no-cache curl jq > /dev/null 2>&1
+          # Portal returns success only after GitOps absence, private data
+          # cleanup and catalog convergence. Unknown reads fail this workflow.
+          RESPONSE=$(curl --fail --silent --show-error --max-time 60 -X POST \
+            -H "Authorization: Bearer $BACKSTAGE_TOKEN" \
+            -H 'Content-Type: application/json' --data '{}' \
+            "http://backstage.backstage.svc.cluster.local:7007/api/tenant-management/internal/tenants/$TENANT/cleanup")
+          printf '%s' "$RESPONSE" | jq -se --arg tenant "$TENANT" \
+            'length == 1 and .[0].tenant == $tenant and .[0].cleaned == true and .[0].scope == "workspace"'
 
     - name: validate-tenant-exists
       inputs:

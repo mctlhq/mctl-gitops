@@ -504,6 +504,9 @@ jobs:
         # own extracted case and members blocks.
         run: python3 tests/test_wft_create_tenant_catalog_key.py
 
+      - name: Unit-test customer deletion callbacks and completion gates
+        run: python3 tests/test_wft_customer_deletion.py
+
       - name: Unit-test retire-service's Argo CD Application guard
         # retire-service deletes the Application <team>-<component>. The
         # guard only lets through an absent Application or one the `apps`
