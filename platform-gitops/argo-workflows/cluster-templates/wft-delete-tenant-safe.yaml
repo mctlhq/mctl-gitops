@@ -182,6 +182,7 @@ spec:
     # in the retryable begin stage before acquiring it. A failure releases the
     # mutex and the same MCP deletion can resume its durable manifest later.
     - name: customer-account-guard
+      activeDeadlineSeconds: 30
       script:
         image: alpine/k8s:1.33.12
         command: [sh]

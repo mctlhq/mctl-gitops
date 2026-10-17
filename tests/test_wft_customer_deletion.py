@@ -25,6 +25,7 @@ class CustomerDeletionWorkflow(unittest.TestCase):
         self.assertEqual(resource_tasks['recheck-customer-account']['dependencies'], ['validate'])
         guard = self.templates['customer-account-guard']
         self.assertNotIn('retryStrategy',guard)
+        self.assertEqual(guard['activeDeadlineSeconds'],30)
         self.assertIn('--max-time 10',guard['script']['source'])
         self.assertEqual(tasks['cleanup-portal']['dependencies'], ['delete-platform-resources'])
         self.assertNotIn('synchronization',self.templates['customer-account-step'])
