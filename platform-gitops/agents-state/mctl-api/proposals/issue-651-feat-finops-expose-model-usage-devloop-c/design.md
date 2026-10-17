@@ -2,204 +2,220 @@
 
 ## Current state
 
-Ledger and HTTP surface (mctl-api#266, ADR-012):
-
-- `internal/usage/types.go` — `usage.Record` with nullable token counters
-  (`InputTokens`, `OutputTokens`, `CacheReadTokens`, `CacheWriteTokens`,
-  `ReasoningTokens`, `WebSearchRequests`) and three separate cost fields
+**Ledger and store** (`internal/usage/`):
+- `types.go` defines `usage.Record`. It has nullable token counters (`*int64`) because,
+  under ADR-012, absent is not zero. It has three separate cost fields
   (`ProviderReportedCost`, `CalculatedCost` + `PricingVersion`,
-  `InvoiceReconciledCost`). Correlation fields include `TemporalWorkflowID`,
+  `InvoiceReconciledCost`) and correlation fields: `TemporalWorkflowID`,
   `TemporalRunID`, `ExecutionID`, `Agent`, `DevLoopStage`, `TargetRepo`,
   `IssueNumber`, `PRNumber`, `WorkItemID`.
-- `internal/usage/store.go`
-  - `DefaultQueryLimit = 200`, `MaxQueryLimit = 1000`, `clampLimit`.
-  - `GroupBy` closed set: `agent`, `devloop_stage`, `canonical_model`,
-    `provider`, `target_repo`, `temporal_workflow_id`, `work_item_id`,
-    `execution_id`, `outcome`; `ParseGroupBy` maps request strings to fixed
-    SQL columns via `groupColumns`. Grouping columns such as `agent` and
-    `devloop_stage` are `TEXT NOT NULL DEFAULT ''`, so unattributed rows land in
-    a bucket with key `""`.
-  - `Bucket` — `Key`, `Count`, nullable token sums and the three cost sums,
-    kept apart on purpose ("never summed into one number").
-  - `SummaryResult` — `Buckets`, `Truncated`, `TruncatedBy` (`record_count`),
-    `Limit`. `Store.Summary` fetches `limit+1` rows ordered by `COUNT(*) DESC`
-    to detect truncation. There is no grand total.
-- `internal/api/handlers_usage.go`
-  - `requireUsageAdmin`: nil store -> 503 "usage ledger not configured"
-    (explicitly never an empty result), no user -> 401, non-admin -> 403.
-  - `usageFilterFromQuery`: query params `workflow_id`, `run_id`,
-    `execution_id`, `work_item_id`, `repository`, `agent`, `stage`, `provider`,
-    `model`, `outcome`, `issue`, `pr` (integers; require `repository`),
-    `since`/`until` (RFC3339), `limit` (1..`usage.MaxQueryLimit`, larger is 400).
-  - `GetUsageSummary`: default `group_by=agent`; responds
-    `summaryUsageResponse{GroupBy, *usage.SummaryResult}`.
-- `internal/api/router.go` lines ~783-796 register `/usage/records` and
-  `/usage/summary` in the authenticated API group. `usageWriterGate` confines
-  the usage-writer principal to POST records only.
-- `cmd/api/main.go` ~lines 459-495: the store is built only when
-  `USAGE_DB_URL` or `AUDIT_DB_URL` is set; otherwise `Usage` is nil and the
-  routes return 503.
+- In `store.go`, `Store.Summary(ctx, Filter, GroupBy) (*SummaryResult, error)` runs one
+  `SELECT <col>, COUNT(*), SUM(...)... GROUP BY <col> ORDER BY COUNT(*) DESC, key ASC
+  LIMIT limit+1`. It returns `[]*Bucket` (`key`, `count`, six nullable token sums, three
+  nullable cost sums) plus `truncated`, `truncated_by` (`"record_count"`) and `limit`.
+  `GroupBy` is a closed set: `agent`, `devloop_stage`, `canonical_model`, `provider`,
+  `target_repo`, `temporal_workflow_id`, `work_item_id`, `execution_id`, `outcome`.
+  `clampLimit` uses `DefaultQueryLimit = 200` and `MaxQueryLimit = 1000`.
+- The correlation columns are `TEXT NOT NULL DEFAULT ''` (for example `devloop_stage`).
+  Every record therefore falls in exactly one bucket, and rows without a stage collect
+  under key `""`. Summing the buckets of a complete (untruncated) result gives the
+  total over the matching records with no double counting. Cost columns are `NUMERIC`
+  and decode into `*float64`.
 
-MCP surface:
+**HTTP surface** (`internal/api/handlers_usage.go`, routes in `internal/api/router.go`
+around line 794):
+- `GET /api/v1/usage/summary` is handled by `GetUsageSummary`. It calls
+  `requireUsageAdmin` (503 `"usage ledger not configured"` when `opts.Usage == nil`,
+  401 without a user, 403 `"usage ledger is admin-only"` for non-admins), then
+  `usageFilterFromQuery`. Query names: `workflow_id`, `run_id`, `execution_id`,
+  `work_item_id`, `repository`, `issue`, `pr`, `agent`, `stage`, `provider`, `model`,
+  `outcome`, `since`/`until` (RFC3339), `limit` (1..`usage.MaxQueryLimit`, otherwise
+  400). `issue`/`pr` without `repository` is a 400. `group_by` defaults to `agent`, and
+  an unknown value is a 400. The response is
+  `summaryUsageResponse{GroupBy, *usage.SummaryResult}`.
+- The comment on the handler says costs are deliberately never summed into one number
+  across classes.
+- `usageWriterGate` blocks the usage-writer principal from every read route. The MCP
+  tool calls with the operator's own token, so the gate does not affect it.
+- Tests: `internal/api/handlers_usage_test.go` (`TestUsageHandlers_NilStoreIs503NotEmpty`,
+  `TestUsageHandlers_SummaryAnswersOperatorQuestion`, ...).
 
-- `internal/mcp/server.go` `NewMCPServer` registers every tool with
-  `srv.AddTool(...)`; admin tools such as `toolGetLifecycleOwnership`
-  (`internal/mcp/lifecycle.go`) and `toolListAgentExecutions` are visible to all
-  callers and rely on the API's own admin check on the caller's token.
-- `internal/mcp/commerce.go` is the closest template: read-only tools with
-  `WithReadOnlyHintAnnotation(true)` / `WithDestructiveHintAnnotation(false)`,
-  argument validation via `strictStringArg` (refuses a non-string value so a
-  mistyped filter cannot widen the result), integer `limit` validation, and
-  relay through `s.workItemCall` (`internal/mcp/workitems.go`), which sends the
-  caller's token (`s.effectiveToken`) to `s.apiURL+path` and turns any HTTP
-  status >= 400 into `NewToolResultError("Failed to ... (HTTP n): body")`.
-- `internal/mcp/annotations_test.go` — `recordedHints` holds every tool's hints;
-  `TestReadOnlyToolsAreTheRecordedSet` pins the read-only list.
-  `internal/mcp/server_test.go` `TestNewMCPServer_ToolCount` asserts the
-  registered count equals `len(recordedHints)`.
-- `docs/portal-allowlist.json` + `internal/mcp/portal_allowlist_test.go`
-  (`TestPortalAllowlist_CoversEveryRegisteredTool`): every registered tool needs
-  an explicit `enabled` decision and a reason of >= 40 tool-specific characters.
-  The file is vendored byte-identical into mctl-gitops.
-- `internal/mcp/commerce_test.go` shows the test pattern: an `httptest.Server`
-  stub standing in for the API, asserting path/query and the relayed result.
+**MCP surface** (`internal/mcp/`):
+- Tools are registered in `Server.NewMCPServer` in `server.go` (lifecycle block around
+  line 290, commerce block around line 312). No usage tool exists.
+- Thin read tools follow the pattern in `commerce.go`. The tool sets
+  `WithReadOnlyHintAnnotation(true)` and `WithDestructiveHintAnnotation(false)`, uses
+  `strictStringArg` (a present non-string filter is refused rather than widening the
+  result), checks a bounded integer `limit`, builds `url.Values`, and calls
+  `s.workItemCall(ctx, GET, path, nil, what)` in `workitems.go`. That helper forwards
+  `s.effectiveToken(ctx)`, returns the body text on <400, and returns
+  `"Failed to <what> (HTTP n): body"` as a tool error otherwise.
+- Guard tests: `annotations_test.go` (`recordedHints` must match the registered tool
+  count; `TestReadOnlyToolsAreTheRecordedSet` lists the read-only names; precedent for
+  ledger reads is `idempotent: false`), `portal_allowlist_test.go` (every registered
+  tool needs an explicit entry with a reason of at least 40 characters in
+  `docs/portal-allowlist.json`; the commerce reads are `enabled: false`).
+- Docs: `docs/model-usage-ledger.md` documents the HTTP filters, truncation semantics
+  and the three cost classes.
 
-Deployed state checked:
-
-- `mctl_list_services(team=admins)`: lists mctl-agents-worker(-exec,-implement),
-  mctl-design, mctl-docs, mctl-web. mctl-api is not a catalogue service in any
-  tenant observed, so its deployed config is not visible through this tool.
-- `$MCTL_GITOPS_ROOT/services/` (admins, karabu, labs): no `mctl-api/values.yaml`;
-  `grep USAGE_|AUDIT_DB_URL` returned nothing. mctl-api is deployed outside the
-  tenant services tree (its own `helm/` chart), which this run could not read
-  in deployed form.
-- Gap: whether production sets `USAGE_DB_URL`/`AUDIT_DB_URL` and
-  `USAGE_PRICING_CATALOG` was NOT observed (recorded under Open questions in
-  requirements.md). This is "could not observe", not "absent".
+**Deployed state checked:**
+- `mctl_get_service_config(team=admins, service=mctl-api)`: error, "service not found:
+  admins/mctl-api". mctl-api is not a catalogue service under `admins`.
+- `mctl_list_services(team=admins)`: complete=true, 6 services (mctl-agents-worker*,
+  mctl-design, mctl-docs, mctl-web). No mctl-api row.
+- `$MCTL_GITOPS_ROOT/services/*/mctl-api*`: no such path. A grep of `services/` and
+  `tenants/` for `USAGE_DB_URL` found nothing.
+- Conclusion: I could not observe where mctl-api is deployed or whether `USAGE_DB_URL`
+  is set in production. `cmd/api/main.go` (around line 460) builds the store only when
+  `USAGE_DB_URL`/`AUDIT_DB_URL` is set. This change does not depend on that: when the
+  store is missing, the API answers 503 and the tool turns that into an explicit error.
+  The gap is recorded under Open questions in requirements.md.
+- I did not query the live ledger contents for `dev-loop-mctlhq-mctl-agents-663`. No
+  read path was available in this run.
 
 ## Proposed solution
 
-Add one MCP tool in a new file `internal/mcp/usage.go`:
-`func (s *Server) toolGetUsageSummary() (mcplib.Tool, server.ToolHandlerFunc)`,
-registered in `NewMCPServer` next to the agent-registry / DevLoop admin reads.
+Add one file, `internal/mcp/usage.go`, with `func (s *Server) toolGetUsageSummary()
+(mcplib.Tool, server.ToolHandlerFunc)`, and register it in `NewMCPServer` next to the
+lifecycle/agent reads (`srv.AddTool(s.toolGetUsageSummary())`).
 
-Tool definition:
+**Tool definition**
+- Name `mctl_get_usage_summary`. Title "Model usage / cost summary".
+  `WithReadOnlyHintAnnotation(true)`, `WithDestructiveHintAnnotation(false)`, and
+  `idempotent: false` in `recordedHints`, following the ledger-read precedent: the
+  ledger grows, so repeated calls can differ.
+- String arguments: `workflow_id`, `run_id`, `execution_id`, `work_item_id`,
+  `repository`, `issue`, `pr`, `agent`, `stage`, `provider`, `model`, `outcome`,
+  `since`, `until`, `group_by`. Number argument: `limit`.
+- The description says:
+  - it is admin-only and reads the ledger only (no logs);
+  - `calculated_cost` is a list-price estimate tagged by `pricing_version`, not
+    provider-billed and not invoice spend;
+  - the three cost classes are never added together;
+  - a 503 means the ledger is unavailable or unknown, never zero spend;
+  - bucket ordering and truncation are by record count;
+  - totals are withheld when truncated;
+  - only instrumented producers appear in the ledger.
 
-- Name `mctl_get_usage_summary`, title "Model usage summary",
-  `WithReadOnlyHintAnnotation(true)`, `WithDestructiveHintAnnotation(false)`,
-  `WithIdempotentHintAnnotation(false)` (matching the other recorded reads).
-- Arguments (all optional): strings `workflow_id`, `run_id`, `execution_id`,
-  `work_item_id`, `repository`, `agent`, `stage`, `provider`, `model`,
-  `outcome`, `since`, `until`, `group_by`; numbers `issue`, `pr`, `limit`.
-- Description states: admin-only; backed by the usage ledger, not logs; default
-  grouping is `devloop_stage` (HTTP default is `agent`); allowed `group_by`
-  values (`stage` alias accepted); `workflow_id=dev-loop-...` returns one
-  DevLoop by stage; the cost semantics below; a tool error from a 503 means the
-  ledger is unavailable (unknown spend), never zero; a truncated result carries
-  no total.
+**Argument handling** (all before any network call)
+- Read each string filter with `strictStringArg` and trim it. A non-empty value goes to
+  `url.Values` under the identical HTTP name.
+- Client-side checks mirror `usageFilterFromQuery`, so the caller gets a clear tool
+  error instead of a relayed 400:
+  - `issue`/`pr` must be positive integers, and need `repository`;
+  - `since`/`until` must parse as `time.RFC3339`;
+  - `limit` must be an integer in `1..usage.MaxQueryLimit`. Import the constant from
+    `internal/usage` so the bound cannot drift, as the handler already does.
+- `group_by`: empty becomes `devloop_stage`. The alias `stage` becomes
+  `devloop_stage`. Anything else is lowercased and forwarded. Validity stays with the
+  API's `ParseGroupBy`; the tool does not keep a second copy of the set.
 
-Handler:
+**Fetch**
+- Make one `GET /api/v1/usage/summary?<query>` with the caller's token. I factor a
+  small helper out of `workItemCall` that returns `(status int, body []byte, err
+  error)`, for example `s.apiGetJSON(ctx, path)`. `workItemCall` is then rebuilt on top
+  of it with identical behaviour, and the usage tool can decode the success body.
+- Any status >= 400 becomes `mcplib.NewToolResultError("Failed to read usage summary
+  (HTTP <n>): <body>")`. This covers 503 (not configured), 401/403 (not admin) and 400
+  (bad filter). No empty result is ever synthesised.
 
-1. Validate and build `url.Values`. String args via `strictStringArg`, trimmed,
-   empty skipped, forwarded under the same names `usageFilterFromQuery` reads.
-   `issue`, `pr`: must be float64 integral and > 0; require `repository`.
-   `limit`: integral in 1..`usage.MaxQueryLimit` (import the constant so it
-   cannot drift). `group_by`: default `devloop_stage`; `stage` -> `devloop_stage`;
-   anything else forwarded so the API's `ParseGroupBy` stays authoritative.
-   `since`/`until` are forwarded; the API rejects non-RFC3339 with 400.
-2. Call the API: reuse the HTTP plumbing of `s.workItemCall` but obtain the raw
-   body, so the handler can post-process. Implement a small helper
-   `s.apiGetJSON(ctx, path, what) ([]byte, *mcplib.CallToolResult)` in
-   `workitems.go` (or `usage.go`) that shares the request/token/error logic
-   with `workItemCall` (refactor `workItemCall` to call it for GET so error
-   text stays identical). Any status >= 400, including 503, returns the same
-   `Failed to read usage summary (HTTP n): body` tool error.
-3. Decode the 2xx body into a local struct that embeds the API type shape:
-   `GroupBy string`, `Buckets []*usage.Bucket`, `Truncated bool`,
-   `TruncatedBy string`, `Limit int` (reusing `usage.Bucket` keeps field names
-   and nullability in lock-step with the store). Also decode into
-   `map[string]json.RawMessage` and re-emit all original keys so any field the
-   API adds later is not dropped.
-4. If `!Truncated`, compute `total` with `sumBuckets(buckets) usage.Bucket`
-   (Key = "total"): `Count` summed; for each `*int64` / `*float64` field,
-   result stays nil until some bucket has a non-nil value, then accumulates.
-   Each bucket is visited once; fields are never cross-added. If `Truncated`,
-   `total` = null and `total_unavailable_reason` = "summary truncated by
-   <truncated_by> at limit <n>; narrow the filter or raise limit (max 1000)
-   before totalling".
-5. Add `cost_semantics` (constant string): calculated_cost is a list-price
-   estimate under pricing_version, not provider-billed or invoice spend;
-   provider_reported_cost and invoice_reconciled_cost are separate
-   classifications and are never summed with it; each cost sum covers only the
-   records that carried that cost, so compare with `count`; a missing field
-   means not reported, not zero; key "" is records with no value for the
-   grouped dimension.
-6. Return `mcplib.NewToolResultText(json)`.
-
-Authorization: unchanged and in one place: the API's `requireUsageAdmin`
-(admin-only) on the caller's own token. The MCP tool is not hidden by a tool
-filter, matching `mctl_get_lifecycle_ownership` and other admin reads.
-
-Bookkeeping:
-
-- `internal/mcp/annotations_test.go`: add
-  `"mctl_get_usage_summary": {readOnly: true, destructive: false, idempotent: false}`
-  and add the name to `TestReadOnlyToolsAreTheRecordedSet`.
-- `docs/portal-allowlist.json`: add an explicit entry (alphabetical position),
-  `enabled: true`, reason describing the exposure (aggregate per-stage/agent/
-  model/repository token and cost sums, admin-only via the API's admin check
-  on the caller's token, no prompt content because the record type has no field
-  for it, no credentials). Owner confirmation flagged in Open questions.
-- `docs/model-usage-ledger.md`: add an "MCP: mctl_get_usage_summary" section.
-- `CHANGELOG.md`: entry under the unreleased section.
-
-Example result for the #663 shape (`workflow_id=dev-loop-mctlhq-mctl-agents-663`):
+**Response** (JSON text). The API body is decoded into a local struct that embeds
+`usage.SummaryResult` and `GroupBy`, using the same types as the handler, so fields
+cannot drift. The tool then emits:
 
 ```json
 {
   "group_by": "devloop_stage",
-  "buckets": [
-    {"key": "implementer", "count": 2, "input_tokens": ..., "calculated_cost": 4.1},
-    {"key": "investigator", "count": 1, "input_tokens": ..., "calculated_cost": 2.3}
-  ],
-  "truncated": false,
-  "limit": 200,
-  "total": {"key": "total", "count": 3, "input_tokens": ..., "calculated_cost": 6.4},
-  "cost_semantics": "..."
+  "query": { "workflow_id": "dev-loop-mctlhq-mctl-agents-663", "...": "..." },
+  "buckets": [ { "key": "implementer", "count": 3, "input_tokens": 0, "calculated_cost": 0.0, "...": "..." },
+               { "key": "investigator", "...": "..." } ],
+  "truncated": false, "truncated_by": "", "limit": 200,
+  "total_status": "complete_buckets_summed",
+  "total": {
+    "count": 4,
+    "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
+    "reasoning_tokens": null, "web_search_requests": 0,
+    "provider_reported_cost": null, "calculated_cost": 0.0, "invoice_reconciled_cost": null,
+    "missing_in_buckets": { "provider_reported_cost": ["implementer", "investigator"] }
+  },
+  "cost_semantics": "provider_reported_cost, calculated_cost and invoice_reconciled_cost are separate and never summed together. calculated_cost is a list-price estimate (pricing_version-tagged), not provider-billed or invoice spend.",
+  "coverage_note": "Only model calls emitted by instrumented producers are in the ledger; bucket key \"\" collects rows with no value for the grouped dimension."
 }
 ```
 
+- The total is computed by a pure function `sumUsageBuckets([]*usage.Bucket)
+  usageTotal`. Per field: if every bucket is nil, the result is nil. Otherwise it is
+  the sum of the non-nil values, and the keys of the nil buckets go into
+  `missing_in_buckets[field]`.
+- Costs are summed as float64 and then rounded to 9 decimal places. This removes float
+  artefacts; it is not re-pricing.
+- `count` is the sum of `bucket.Count`.
+- When `truncated=true`, `total` is `null` and `total_status` is
+  `"withheld_truncated"`, with `truncated_by` passed through. When there are zero
+  buckets and `truncated=false`, `total_status` is `"no_matching_records"` and
+  `total.count` is 0 with all cost fields null. That reads as "the ledger holds no rows
+  for this filter", not as "zero spend". Because the store was reachable (HTTP 200),
+  the case stays distinct from "unknown".
+- No field combines cost classes. No field name contains "billed", "charge", "invoice"
+  (except the stored `invoice_reconciled_cost`) or "spend" for the calculated value.
+
+**Authorization**: none in the MCP layer. The tool forwards the caller's token, so
+`requireUsageAdmin` decides, exactly as it does for the HTTP route. The tool is
+admin-only because the API is.
+
+**Portal allowlist**: add an entry to `docs/portal-allowlist.json` with
+`"enabled": false`. Reason: aggregate spend per repository/agent is commercially
+sensitive and admin-only; enabling it on the shared portal is a separate owner
+decision. This follows the commerce-read precedent. Add the name to
+`TestReadOnlyToolsAreTheRecordedSet`.
+
+**Docs**: add a "MCP: `mctl_get_usage_summary`" section to `docs/model-usage-ledger.md`
+covering the default group_by, the total rules and the withheld-on-truncation rule. Add
+a CHANGELOG entry.
+
+**HTTP unchanged**: no edits to `handlers_usage.go`, `router.go` or `internal/usage`.
+
 ## Alternatives
 
-1. Call `usage.Store.Summary` in-process from the MCP package. Dropped: the MCP
-   server is built around relaying to the API with the caller's token
-   (`NewServer(apiURL, ...)`, `workItemCall`); bypassing HTTP would duplicate
-   `requireUsageAdmin` and `usageFilterFromQuery`, and authorization would then
-   live in two places that can drift.
-2. Add a `total` to the HTTP `/api/v1/usage/summary` response. Dropped for this
-   issue: the acceptance criteria require existing HTTP semantics to be
-   unchanged, and the handler comment documents that the API deliberately
-   returns no combined number. Can be revisited as an additive change later.
-3. Relay the raw API body unchanged and make the client sum. Dropped: the issue
-   asks for a safe total where possible, and LLM clients summing nullable
-   floats are error-prone; computing it server-side only on non-truncated
-   results is deterministic and testable. The raw buckets remain present, so
-   a client can still verify.
+1. **Add a `totals` field to `usage.SummaryResult`, computed in SQL** (`SUM` over the
+   full filter, not the clipped buckets). The DB would compute exact NUMERIC totals,
+   and a total would exist even when buckets are truncated. Dropped for now: it changes
+   the HTTP response shape and store query, against the acceptance criterion that
+   `/api/v1/usage/summary` semantics stay unchanged, and adds a second aggregate query
+   per call. It is the better long-term answer if truncated totals become needed, so it
+   is a good follow-up.
+2. **Call `usage.Store` directly from the MCP server.** Dropped: the MCP server is an
+   HTTP client of mctl-api (`apiURL`, `effectiveToken`). Giving it a DB handle would
+   create a second authorization path and break the "authorization matches the HTTP
+   route" criterion.
+3. **Leave the sum to the client and only relay the API body**
+   (`workItemCall` passthrough). This is the smallest change. Dropped because the
+   issue's main use case is a single reported total, and clients summing a truncated
+   list by hand is the failure the issue warns about. A total that the server withholds
+   on truncation is safer than one left to the client.
 
 ## Platform impact
 
-- Migrations: none. No schema or store change.
-- Backward compatibility: purely additive MCP tool; HTTP routes untouched. MCP
-  tool count rises by one (tests updated in the same change). The portal
-  allowlist is vendored into mctl-gitops by the existing dispatch workflow.
-- Resource impact: one bounded Postgres GROUP BY per call (limit <= 1000),
-  same as the existing HTTP endpoint; operator-driven and infrequent.
-- Risks and mitigations:
-  - Misreading an estimate as spend -> `cost_semantics` note, three cost fields
-    never combined, description wording.
-  - Totalling a partial result -> total withheld when `truncated`.
-  - Reading an unconfigured ledger as zero -> 503 relayed as tool error.
-  - Partial cost coverage inside a bucket (NULL ignored by SUM) -> documented
-    in `cost_semantics`; structural fix left as an open question.
-  - Commercially sensitive data on a shared portal -> API admin check remains
-    the access control; owner confirms portal enablement.
+- **Migrations**: none. No schema, store or HTTP change.
+- **Backward compatibility**: purely additive. The registered tool count grows by one,
+  and `recordedHints`, the read-only list and the portal allowlist are all updated in
+  the same change. mctl-gitops vendors `docs/portal-allowlist.json` byte-identical
+  through `.github/workflows/portal-allowlist-dispatch.yml`, so the new disabled entry
+  reaches gitops automatically. It is disabled, so the portal surface does not change.
+- **Resource impact**: one bounded Postgres aggregate per call (at most 1000 + 1 rows),
+  the same cost as the existing HTTP route. It is subject to the same rate-limit group.
+- **Risks and mitigations**:
+  - *A total misread as invoice spend.* Mitigated by keeping three separate totals, the
+    `cost_semantics` note, and the tool description wording; the tests check field
+    names.
+  - *A total over truncated buckets understates spend.* Mitigated: the total is
+    withheld on `truncated=true`, and this is tested.
+  - *A partially measured bucket hides missing rows.* The tool flags only buckets that
+    are null throughout. Within-bucket partial coverage is not visible without a store
+    change; this is documented in the description and Open questions.
+  - *An unconfigured ledger reads as zero.* Mitigated: a 503 becomes a tool error, and
+    this is tested.
+  - *Default group_by differs from HTTP (`agent`).* Mitigated: the response always
+    states `group_by`.
+  - *Float rounding.* Rounding to 1e-9 is far below cent precision and does not change
+    any stored figure.

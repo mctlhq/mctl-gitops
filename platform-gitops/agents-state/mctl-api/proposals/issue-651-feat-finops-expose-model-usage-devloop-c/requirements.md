@@ -2,60 +2,117 @@
 
 ## Context
 
-The durable model-usage ledger (ADR-012, mctl-api#266) already lives in
-`internal/usage` and is readable over HTTP at `GET /api/v1/usage/records` and
-`GET /api/v1/usage/summary` (`internal/api/handlers_usage.go`). Operators who
-work through MCP (ChatGPT / Claude via the Cloudflare portal) have no tool for
-it, so answering "how much did `dev-loop-mctlhq-mctl-agents-663` cost?" today
-means reading archived Argo logs and summing `ResultMessage.total_cost_usd` by
-hand, which is exactly the log archaeology the ledger was built to remove.
+mctl-api already holds the durable model-usage ledger from ADR-012 / mctl-api#266
+(`internal/usage`) and serves it over HTTP at `GET /api/v1/usage/records` and
+`GET /api/v1/usage/summary` (`internal/api/handlers_usage.go`). Both are admin-only,
+answer 503 when the ledger is not configured, keep `provider_reported_cost`,
+`calculated_cost` and `invoice_reconciled_cost` apart, and report `truncated` /
+`truncated_by` / `limit`. No MCP tool reaches them. An operator who asks "how much
+did `dev-loop-mctlhq-mctl-agents-663` cost?" therefore gets an answer built from
+archived Argo logs (`ResultMessage.total_cost_usd`, `model_usage`) and added up by
+hand. The ledger exists so that this is not needed.
 
-This proposal adds one read-only, admin-only MCP tool, `mctl_get_usage_summary`,
-that relays to the existing `/api/v1/usage/summary` route with the caller's own
-token, defaults to grouping by DevLoop stage, and adds a grand total computed
-only from complete (non-truncated) bucket lists. No new pricing, no new store,
-no change to the HTTP endpoint's semantics.
+This proposal adds one read-only, admin-gated MCP tool, `mctl_get_usage_summary`. It
+is a thin client of the existing `/api/v1/usage/summary` route and adds one thing: a
+per-cost-class total. That total is computed only by summing the returned buckets, and
+only when the bucket list is complete. It adds no pricing logic, no second store and
+no log parsing.
 
 ## User stories
 
-- AS a platform admin I WANT to ask an MCP client for one DevLoop's usage by `workflow_id`, broken down by stage, SO THAT I can report investigator / implementer / shepherd cost without reading Argo logs.
-- AS a platform admin I WANT to group usage by agent, model, provider, repository, outcome, workflow, work item or execution SO THAT I can see where model spend went.
-- AS a platform admin I WANT provider-reported, calculated (list-price estimate) and invoice-reconciled cost kept separate SO THAT an estimate is never mistaken for billed spend.
-- AS a platform admin I WANT an unconfigured ledger or a truncated summary to be reported explicitly SO THAT I never read "unknown" or "partial" as "zero" or "complete".
+- AS a platform operator I WANT to ask an MCP client how much one DevLoop
+  (`workflow_id=dev-loop-...`) used, broken down by stage, SO THAT I can answer cost
+  questions without reading Argo logs.
+- AS a platform operator I WANT to group usage by agent, model, provider, repository,
+  workflow, work item, execution or outcome SO THAT I can see where the spend went.
+- AS a platform operator I WANT to filter by repository / issue / PR and a time window
+  SO THAT I can see what one piece of work used.
+- AS a FinOps reviewer I WANT estimated (calculated) cost always labelled apart from
+  provider-reported and invoice-reconciled cost SO THAT no one reads an estimate as an
+  invoice.
 
 ## Acceptance criteria (EARS)
 
-- WHEN the MCP server starts THE SYSTEM SHALL register a tool named `mctl_get_usage_summary` annotated readOnlyHint=true, destructiveHint=false, with an explicit idempotentHint, recorded in `recordedHints` in `internal/mcp/annotations_test.go`.
-- WHEN `mctl_get_usage_summary` is called THE SYSTEM SHALL issue exactly one `GET /api/v1/usage/summary` request to the mctl API carrying the caller's own bearer token, and SHALL NOT read Argo logs, Loki or any other source.
-- WHEN the caller supplies any of `workflow_id`, `run_id`, `execution_id`, `work_item_id`, `repository`, `issue`, `pr`, `agent`, `stage`, `provider`, `model`, `outcome`, `since`, `until`, `limit` THE SYSTEM SHALL forward each one under the identical HTTP query parameter name used by `usageFilterFromQuery`.
-- WHEN `group_by` is omitted THE SYSTEM SHALL request `group_by=devloop_stage`.
-- WHEN `group_by` is `stage` THE SYSTEM SHALL treat it as `devloop_stage`; for any other value THE SYSTEM SHALL forward it unchanged so the API's closed `usage.ParseGroupBy` set remains the single source of valid dimensions.
-- WHEN the API answers 2xx THE SYSTEM SHALL return every field the API returned (`group_by`, `buckets` with all token, web-search and cost fields, `truncated`, `truncated_by`, `limit`) unchanged.
-- WHEN the API answers 2xx AND `truncated` is false THE SYSTEM SHALL add a `total` object whose `count` and each token/web-search/cost field is the sum of that field over the returned buckets, computed separately per field.
-- IF every returned bucket omits a given field THEN THE SYSTEM SHALL omit (leave null) that field in `total` rather than reporting 0.
-- IF `truncated` is true THEN THE SYSTEM SHALL NOT compute a total, SHALL set `total` to null, and SHALL set `total_unavailable_reason` explaining that the bucket list is truncated (by `truncated_by`) and that a narrower filter or larger `limit` is needed.
-- WHILE building `total` THE SYSTEM SHALL keep `provider_reported_cost`, `calculated_cost` and `invoice_reconciled_cost` as three separate fields and SHALL NOT add them together or relabel any of them.
-- WHEN returning a result THE SYSTEM SHALL include a `cost_semantics` note stating that `calculated_cost` is a list-price estimate (not provider-billed or invoice spend), that `provider_reported_cost` and `invoice_reconciled_cost` are separate classifications, that each cost sum covers only the records that carried that cost, and that a bucket with key "" holds records with no value for the grouped dimension.
-- IF the API answers 503 (ledger not configured) THEN THE SYSTEM SHALL return an MCP tool error naming the HTTP status and body, and SHALL NOT return an empty or zero result.
-- IF the API answers 401 or 403 THEN THE SYSTEM SHALL return an MCP tool error; authorization SHALL remain the API's `requireUsageAdmin` check (admin-only), unchanged.
-- IF `issue` or `pr` is not a positive integer, or `limit` is not an integer in 1..`usage.MaxQueryLimit`, or any string argument is supplied as a non-string THEN THE SYSTEM SHALL return a tool error without calling the API.
-- IF `issue` or `pr` is supplied without `repository` THEN THE SYSTEM SHALL return a tool error without calling the API (mirroring `usageFilterFromQuery`).
-- WHILE this change is deployed THE SYSTEM SHALL keep `GET /api/v1/usage/summary` behaviour identical, including its default `group_by=agent`.
-- WHEN the tool is added THE SYSTEM SHALL carry an explicit entry for `mctl_get_usage_summary` in `docs/portal-allowlist.json` with a reason, so `TestPortalAllowlist_CoversEveryRegisteredTool` passes.
+- WHEN the MCP server starts THE SYSTEM SHALL register a tool named
+  `mctl_get_usage_summary` with `readOnlyHint=true`, `destructiveHint=false` and an
+  explicit `idempotentHint` recorded in `internal/mcp/annotations_test.go`.
+- WHEN `mctl_get_usage_summary` is called THE SYSTEM SHALL issue exactly one
+  `GET /api/v1/usage/summary` request with the caller's own bearer token, and SHALL NOT
+  read Argo logs, Loki or any other source.
+- WHEN the caller passes any of `workflow_id`, `run_id`, `execution_id`,
+  `work_item_id`, `repository`, `issue`, `pr`, `agent`, `stage`, `provider`, `model`,
+  `outcome`, `since`, `until`, `group_by`, `limit` THE SYSTEM SHALL forward it under
+  the same query-parameter name the HTTP handler reads in `usageFilterFromQuery`.
+- WHEN `group_by` is omitted THE SYSTEM SHALL send `group_by=devloop_stage`, and the
+  response SHALL state the `group_by` that was applied.
+- WHEN `group_by=stage` is given THE SYSTEM SHALL treat it as `devloop_stage`. Any
+  other value SHALL go to the API unchanged, so the API's closed set (`ParseGroupBy`)
+  stays the only authority.
+- WHEN `workflow_id=<dev-loop-id>` and `group_by=devloop_stage` are given THE SYSTEM
+  SHALL return one bucket per distinct `devloop_stage` (for example `investigator`,
+  `implementer`, `shepherd`, plus an empty-key bucket for unattributed rows) with
+  token, cache, reasoning, web-search and the three cost fields.
+- WHEN the API reports `truncated=false` THE SYSTEM SHALL add a `total` object that
+  holds `count`, each token dimension and each of the three cost classes, each one the
+  sum of that field over the returned buckets. A field that is null in every bucket
+  SHALL stay null, never become 0.
+- IF the API reports `truncated=true` THEN THE SYSTEM SHALL set `total` to null, set
+  `total_status` to `"withheld_truncated"`, and pass through `truncated`,
+  `truncated_by` and `limit`.
+- WHILE a total is present THE SYSTEM SHALL keep `provider_reported_cost`,
+  `calculated_cost` and `invoice_reconciled_cost` as separate fields, and SHALL NOT
+  produce any field that combines them.
+- WHILE a response carries `calculated_cost` THE SYSTEM SHALL describe it, in the tool
+  description and in the response's `cost_semantics` note, as a list-price estimate
+  that is neither provider-billed nor invoice spend.
+- WHILE a total is present THE SYSTEM SHALL list, per field, the bucket keys whose
+  value was null (`total.missing_in_buckets`), so that a partial measurement does not
+  read as complete.
+- IF the ledger is not configured (API 503) THEN THE SYSTEM SHALL return an MCP tool
+  error that keeps the HTTP status and body, and SHALL NOT return an empty or zero
+  summary.
+- IF the caller is not an admin (API 401/403) THEN THE SYSTEM SHALL return an MCP tool
+  error. Authorization SHALL stay in the API's `requireUsageAdmin`, so the tool cannot
+  be more permissive than the HTTP route.
+- IF `issue` or `pr` is given without `repository`, or `limit` is not an integer in
+  1..1000, or a filter argument is present but is not a string, THEN THE SYSTEM SHALL
+  refuse the call before any request is sent.
+- WHILE this tool exists THE SYSTEM SHALL leave the behaviour and response shape of
+  `GET /api/v1/usage/summary` and `GET /api/v1/usage/records` unchanged.
+- WHEN the tool is added THE SYSTEM SHALL record an explicit entry for it in
+  `docs/portal-allowlist.json` with a reason, as `internal/mcp/portal_allowlist_test.go`
+  requires.
 
 ## Out of scope
 
-- New pricing logic, a second cost store, or recomputing cost in the MCP layer.
-- Parsing `ResultMessage` / `model_usage` from Argo or Loki logs.
-- Budget enforcement and provider invoice reconciliation.
-- Changing the HTTP summary response or its default `group_by`.
-- An MCP tool over `GET /api/v1/usage/records` (row listing); can follow separately.
-- Claiming complete issue cost for model calls never emitted into the ledger (mctl-agents#507 producer coverage).
+- New pricing logic, re-pricing, or a second cost store.
+- Parsing `ResultMessage` or anything else from Argo or Loki logs.
+- Budget enforcement or alerting.
+- Provider invoice reconciliation (`invoice_reconciled_cost` stays as stored).
+- Claims of complete "issue cost" for model calls that were never sent to the ledger
+  (mctlhq/mctl-agents#507 covers producer coverage).
+- An MCP tool over `GET /api/v1/usage/records` (row listing).
+- Changes to `usage.Store`, `usage.Bucket`, `usage.SummaryResult` or the HTTP handlers.
 - UI / dashboard work.
 
 ## Open questions
 
-- Portal exposure: this proposal records `enabled: true` in `docs/portal-allowlist.json` with a reason relying on the API's admin check (the same pattern as `mctl_get_lifecycle_ownership`), because the motivating operator path is a portal client. Per-repository spend is described in `handlers_usage.go` as commercially sensitive; the owner must confirm enabling it, or flip it to `enabled: false`. The entry does not invent an "owner decision" date.
-- Cost coverage within a bucket: SQL `SUM()` ignores NULL, so a bucket's `calculated_cost` may cover only some of its `count` records (e.g. records ingested before a pricing catalog was loaded). The store does not expose per-cost record counts today. This proposal documents the caveat in `cost_semantics`; adding `COUNT(calculated_cost)`-style coverage fields to `usage.Bucket` would be an additive HTTP change and is left to a follow-up.
-- The MCP default `group_by=devloop_stage` deliberately differs from the HTTP default (`agent`), per the issue's DevLoop use case. Reviewers should confirm that divergence is acceptable.
-- Deployed configuration of mctl-api (whether `USAGE_DB_URL` / `AUDIT_DB_URL` and `USAGE_PRICING_CATALOG` are set in production) could not be observed from this run; if the ledger is unconfigured in production the tool will correctly return a 503-derived error, but will not be useful until it is configured.
+- Default `group_by`: the HTTP route defaults to `agent`. This proposal makes the MCP
+  tool default to `devloop_stage`, the main operator question in the issue, and states
+  the applied value in the response. A reviewer may prefer to keep the HTTP default.
+- Partial coverage inside a bucket: `SUM()` ignores NULLs, so a bucket in which only
+  some rows have `calculated_cost` shows a non-null sum with no sign that rows are
+  missing. The `Bucket` type does not expose a per-field non-null count. The tool can
+  flag only buckets where the field is null throughout. A per-field coverage count
+  would be an additive change to `usage.Store.Summary` and is left as follow-up.
+- Portal decision: this proposal records `enabled: false` (admin-only and commercially
+  sensitive per the comment in `handlers_usage.go`). mctl-gitops vendors
+  `docs/portal-allowlist.json` byte-identical, so an owner decision to enable it
+  belongs to the owner.
+- Producer coverage: whether the investigator / implementer / shepherd producers for
+  `mctlhq/mctl-agents#663` actually set `temporal_workflow_id` and `devloop_stage` on
+  their records was not checked against the live ledger. This run had no read path to
+  it.
+- Float summation: costs are Postgres `NUMERIC` but decode as Go `float64`, so a
+  client-side sum can show float artefacts. The design rounds each summed cost to 9
+  decimal places. The exact precision is a judgement call.
