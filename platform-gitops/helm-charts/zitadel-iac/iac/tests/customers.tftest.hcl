@@ -430,3 +430,28 @@ run "customer_claims_reach_only_the_explicit_clients" {
     error_message = "Each approved customer sign-in client needs proven GitHub claims; no other client may receive them."
   }
 }
+
+run "customer_copy_covers_every_supported_locale" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en, zitadel_hosted_login_translation.customers_fallback, zitadel_verify_email_message_text.customers_en, zitadel_verify_email_message_text.customers_fallback]
+  }
+  override_resource {
+    target = zitadel_org.customers
+    values = { id = "customers-org" }
+  }
+  assert {
+    condition = (
+      setunion(toset(["en"]), toset(keys(zitadel_hosted_login_translation.customers_fallback))) == local.customer_copy_languages &&
+      setunion(toset(["en"]), toset(keys(zitadel_verify_email_message_text.customers_fallback))) == local.customer_copy_languages
+    )
+    error_message = "Every shipped login locale needs customer-specific login and verification copy."
+  }
+  assert {
+    condition = alltrue([
+      for lang, value in zitadel_hosted_login_translation.customers_fallback :
+      value.language == lang && value.org_id == "customers-org" && value.translations == zitadel_hosted_login_translation.customers_en.translations
+    ])
+    error_message = "Non-English browsers must not inherit staff password/passkey enrollment instructions."
+  }
+}
