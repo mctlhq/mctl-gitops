@@ -78,7 +78,13 @@ spec:
           args:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.preStopSleepSeconds }}
+          {{- /* Recreate starts the new pod only after the old one has exited,
+                 and the old pod leaves the endpoints as soon as it is deleted,
+                 so a sleep cannot keep traffic flowing; it only lengthens the
+                 gap. Rollouts are always blueGreen, so rollout.yaml has no
+                 such case. */}}
+          {{- $recreate := eq (dig "type" "" (.Values.strategy | default dict)) "Recreate" }}
+          {{- with and (not $recreate) .Values.preStopSleepSeconds }}
           {{- /* Nil-check, not `default`: an explicit 0 is a real grace period. */}}
           {{- $grace := 30 }}
           {{- if ne ($.Values.terminationGracePeriodSeconds | toString) "<nil>" }}

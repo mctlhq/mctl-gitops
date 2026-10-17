@@ -14,6 +14,9 @@ a Rollout, and the two templates are maintained by hand):
 - a sleep that reaches terminationGracePeriodSeconds (default 30, and an
   explicit 0 counts) fails the render instead of being cut short by SIGKILL;
 - the grace period the guard checks is the one rendered on the pod;
+- a Deployment with `strategy.type: Recreate` renders no sleep, even when
+  preStopSleepSeconds is set: the old pod is already out of the endpoints and
+  the new one waits for it to exit, so the sleep only adds downtime;
 - every real service renders the sleep on its main container.
 
 Run: python3 tests/test_base_service_prestop_sleep.py
@@ -121,7 +124,25 @@ for kind in KINDS:
         got = workload["spec"]["template"]["spec"].get("terminationGracePeriodSeconds")
         check(got == 60, f"{kind}: terminationGracePeriodSeconds {got} rendered, want 60")
 
-# 7. Every real service gets the default sleep on its main container.
+# 7. Recreate: no sleep and no grace check, whatever preStopSleepSeconds says.
+#    RollingUpdate set explicitly still gets it.
+for extra, label in (({}, "default"),
+                     ({"preStopSleepSeconds": 10}, "explicit 10"),
+                     ({"terminationGracePeriodSeconds": 0}, "grace 0")):
+    docs, err = render(base("Deployment", strategy={"type": "Recreate"}, **extra))
+    check(docs is not None, f"Recreate {label}: render failed: {err}")
+    if docs:
+        _, c = main_container(docs)
+        check("lifecycle" not in c, f"Recreate {label}: renders {c.get('lifecycle')}")
+docs, err = render(base("Deployment", strategy={"type": "RollingUpdate"}))
+check(docs is not None, f"RollingUpdate: render failed: {err}")
+if docs:
+    _, c = main_container(docs)
+    check(c.get("lifecycle") == {"preStop": {"sleep": {"seconds": 5}}},
+          f"RollingUpdate: lifecycle {c.get('lifecycle')}")
+
+# 8. Every real service gets the default sleep on its main container, unless
+#    it recreates its pods.
 count = 0
 for values_file in sorted(SERVICES.glob("*/*/values.yaml")):
     data = yaml.safe_load(values_file.read_text()) or {}
@@ -137,7 +158,8 @@ for values_file in sorted(SERVICES.glob("*/*/values.yaml")):
         print(f"skip {values_file}: {exc}", file=sys.stderr)
         continue
     count += 1
-    want = data.get("preStopSleepSeconds", 5)
+    recreate = (data.get("strategy") or {}).get("type") == "Recreate"
+    want = 0 if recreate else data.get("preStopSleepSeconds", 5)
     got = (c.get("lifecycle") or {}).get("preStop", {}).get("sleep", {}).get("seconds", 0)
     check(got == want, f"{values_file}: preStop sleep {got}, want {want}")
 check(count > 10, f"only {count} service values rendered; the glob is wrong")
@@ -145,4 +167,4 @@ check(count > 10, f"only {count} service values rendered; the glob is wrong")
 if failures:
     print("\n".join(f"FAIL: {f}" for f in failures))
     sys.exit(1)
-print(f"base-service preStop sleep: 5s default, custom and 0 honoured, capped below the grace period, Deployment and Rollout agree; {count} services covered")
+print(f"base-service preStop sleep: 5s default, custom and 0 honoured, capped below the grace period, skipped for Recreate, Deployment and Rollout agree; {count} services covered")
