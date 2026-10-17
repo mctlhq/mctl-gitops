@@ -9,7 +9,8 @@
 # The image (mctl-claude-remote 0.14.0+) now renews the token itself, hourly
 # check, renewal in the last third of its life, and pushes
 # mctl_claude_remote_telegram_token_* to the cluster Pushgateway (job
-# claude-remote-telegram-token). Each push REPLACES the job's group, so
+# claude-remote-telegram-token, instance = the device name, kept by the
+# scrape's honorLabels). Each push REPLACES that device's group, so
 # renew_ok exists only after a check that actually attempted a renewal, and
 # the token gauges are omitted, never zeroed, when no token can be read.
 #
