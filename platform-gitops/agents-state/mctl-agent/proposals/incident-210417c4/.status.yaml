@@ -1,5 +1,5 @@
 status: rejected
-updated_at: '2026-10-17T12:54:30Z'
+updated_at: '2026-10-17T19:33:43Z'
 updated_by: mctl-agents[bot]
 attempt:
   id: 03c309c30f07af63a8cae911c4d12be7ea57dfb1d27054a5c61930e66b4c63bb
@@ -13,3 +13,7 @@ execution:
   agent: implementer
   version: ''
 notes: PR was closed without merging.
+github:
+  state: closed
+  head_sha: 5f44d8d09408e7fb2b5059a7789962440630878c
+  observed_at: '2026-10-17T19:33:43Z'
