@@ -67,7 +67,8 @@ SLICE = argv_build_source()
 
 def run(issue_url="https://github.com/mctlhq/x/issues/1",
         work_item_id="", execution_id="", temporal_workflow_id="",
-        temporal_run_id="", execution_request_id="", human_input_responses=""):
+        temporal_run_id="", execution_request_id="", human_input_responses="",
+        work_item_owner_principal_id=""):
     """Run the extracted slice under /bin/sh with the six env vars set.
 
     Returns the CompletedProcess. The slice's only observable stdout is the
@@ -84,6 +85,7 @@ def run(issue_url="https://github.com/mctlhq/x/issues/1",
     env["WORKFLOW_TEMPORAL_RUN_ID"] = temporal_run_id
     env["WORKFLOW_EXECUTION_REQUEST_ID"] = execution_request_id
     env["WORKFLOW_HUMAN_INPUT_RESPONSES"] = human_input_responses
+    env["WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID"] = work_item_owner_principal_id
     script = "set -e\n" + SLICE
     return subprocess.run(
         ["sh", "-c", script],
@@ -111,7 +113,8 @@ check("omit-both (unset) reproduces today's exact argv",
       f"rc={proc.returncode} stdout={proc.stdout!r} stderr={proc.stderr!r}")
 
 proc = run(work_item_id="", execution_id="", temporal_workflow_id="",
-           temporal_run_id="", execution_request_id="", human_input_responses="")
+           temporal_run_id="", execution_request_id="", human_input_responses="",
+           work_item_owner_principal_id="")
 check("omit-all (explicit empty string) reproduces today's exact argv",
       proc.returncode == 0 and proc.stdout == BASE_ARGV,
       f"rc={proc.returncode} stdout={proc.stdout!r} stderr={proc.stderr!r}")
@@ -241,6 +244,36 @@ with tempfile.TemporaryDirectory() as d:
     check("a hostile human_input_responses survives as one argv token",
           proc.returncode == 0
           and proc.stdout.endswith(f"--human-input-responses {hostile}\n"),
+          f"stdout={proc.stdout!r} stderr={proc.stderr!r}")
+
+# T11. Owner principal for later-round questions (mctl-agents#684): sent
+# only by a continuation, so it rides with human_input_responses and is
+# appended after it, and only when non-empty.
+PRN = "prn_01M39HRB7JRXZ2PHW5VVB695YZ"
+proc = run(work_item_owner_principal_id=PRN)
+want = (f"{ARROW} python -m orchestrator.run_issue_investigator "
+        f"--issue-url https://github.com/mctlhq/x/issues/1 "
+        f"--work-item-owner-principal-id {PRN}\n")
+check("work_item_owner_principal_id alone appends only its own flag",
+      proc.returncode == 0 and proc.stdout == want,
+      f"stdout={proc.stdout!r} stderr={proc.stderr!r}")
+
+proc = run(human_input_responses=HIR, work_item_owner_principal_id=PRN)
+check("work_item_owner_principal_id is appended after human_input_responses",
+      proc.returncode == 0
+      and proc.stdout.endswith(f"--human-input-responses {HIR} "
+                               f"--work-item-owner-principal-id {PRN}\n"),
+      f"stdout={proc.stdout!r}")
+
+with tempfile.TemporaryDirectory() as d:
+    sentinel = pathlib.Path(d) / "pwned"
+    hostile = f"prn_x ; touch {sentinel} ; $(touch {sentinel}) `touch {sentinel}`"
+    proc = run(work_item_owner_principal_id=hostile)
+    check("an injecting work_item_owner_principal_id does not execute",
+          not sentinel.exists(), f"sentinel created: {sentinel}")
+    check("a hostile work_item_owner_principal_id survives as one argv token",
+          proc.returncode == 0
+          and proc.stdout.endswith(f"--work-item-owner-principal-id {hostile}\n"),
           f"stdout={proc.stdout!r} stderr={proc.stderr!r}")
 
 if failures:
