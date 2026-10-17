@@ -599,6 +599,22 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_security_context.py
 
+      - name: Unit-test base-service's containerPort on both workload kinds
+        # service.containerPort moves only the container; the Service and
+        # Ingress stay on service.port (gitops#1933 broke docs.mctl.ai by
+        # changing service.port on a live Service).
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_container_port.py
+
+      - name: Unit-test PruneLast on base-service's blueGreen objects
+        # Switching blueGreen off must not prune the Rollout before the
+        # Deployment that replaces it is Ready; ArgoCD reads PruneLast from
+        # the live object, so it has to be rendered while blueGreen is on.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_bluegreen_prune_last.py
+
       - name: Unit-test the image-user check in deploy-service
         # runAsNonRoot with a named or root image USER only fails after the
         # deploy is committed (CreateContainerConfigError). check-image-user.sh
