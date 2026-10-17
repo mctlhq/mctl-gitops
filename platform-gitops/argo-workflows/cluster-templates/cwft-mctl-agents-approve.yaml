@@ -15,7 +15,8 @@ metadata:
         1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
         2. flip-status — proposed → accepted for the {service, slug} pair,
            recording approver identity and the content digest of
-           requirements.md, design.md and tasks.md (mctl-agents#658).
+           requirements.md, design.md, tasks.md and proposed-content.md
+           (mctl-agents#658).
            Idempotent: already-accepted exits 0
            so Temporal retries and rebase races never fail the loop; any
            other status (implemented, needs-triage, ...) fails loudly.
