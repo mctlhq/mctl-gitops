@@ -16,9 +16,12 @@ locals {
       title            = "Continue to MCTL"
       description      = "Use your GitHub account. MCTL requests your profile and verified email, with no access to your repositories."
       signInWithGithub = "Continue with GitHub"
+      # Login v2 shows this one static page for every failed IdP intent,
+      # including the identity hook's refusal to create a customer account
+      # (mctl-api#653), so it must be right for both without saying which.
       loginError = {
-        title       = "We could not complete sign-in"
-        description = "Check that your GitHub account has a verified email address and try again. If the problem continues, contact MCTL at https://mctl.ai/#contact."
+        title       = "We could not sign you in with GitHub"
+        description = "If you have an MCTL staff or partner account, go back and choose Sign in with MCTL account. Otherwise, check that your GitHub account has a verified email address and try again. If the problem continues, contact MCTL at https://mctl.ai/#contact."
       }
       accountNotFound = {
         title       = "Your MCTL account is not available"
