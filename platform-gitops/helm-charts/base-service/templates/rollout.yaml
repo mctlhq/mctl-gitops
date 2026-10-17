@@ -79,7 +79,11 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.preStopSleepSeconds }}
-          {{- $grace := $.Values.terminationGracePeriodSeconds | default 30 }}
+          {{- /* Nil-check, not `default`: an explicit 0 is a real grace period. */}}
+          {{- $grace := 30 }}
+          {{- if ne ($.Values.terminationGracePeriodSeconds | toString) "<nil>" }}
+          {{- $grace = $.Values.terminationGracePeriodSeconds }}
+          {{- end }}
           {{- if ge (int .) (int $grace) }}
           {{- fail (printf "preStopSleepSeconds (%v) must be below terminationGracePeriodSeconds (%v)" . $grace) }}
           {{- end }}
@@ -156,6 +160,10 @@ spec:
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if ne (.Values.terminationGracePeriodSeconds | toString) "<nil>" }}
+      # Same as deployment.yaml: nil-check so 0 still applies.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- end }}
       {{- if or .Values.extraVolumes .Values.persistence $writable }}
       volumes:

@@ -11,8 +11,9 @@ a Rollout, and the two templates are maintained by hand):
 
 - the default is a 5s sleep;
 - a custom value is rendered, and 0 renders no lifecycle at all;
-- a sleep that reaches terminationGracePeriodSeconds (default 30) fails the
-  render instead of being cut short by SIGKILL;
+- a sleep that reaches terminationGracePeriodSeconds (default 30, and an
+  explicit 0 counts) fails the render instead of being cut short by SIGKILL;
+- the grace period the guard checks is the one rendered on the pod;
 - every real service renders the sleep on its main container.
 
 Run: python3 tests/test_base_service_prestop_sleep.py
@@ -104,7 +105,23 @@ for kind in KINDS:
                             terminationGracePeriodSeconds=60))
     check(docs is not None, f"{kind} 30 vs 60: render failed: {err}")
 
-# 5. Every real service gets the default sleep on its main container.
+    # 5. An explicit grace of 0 is a real value, not "unset": the default
+    #    sleep must fail against it, and turning the sleep off must pass.
+    docs, err = render(base(kind, terminationGracePeriodSeconds=0))
+    check(docs is None and "must be below terminationGracePeriodSeconds" in err,
+          f"{kind} 5 vs grace 0: render should fail, got {'ok' if docs else err}")
+    docs, err = render(base(kind, preStopSleepSeconds=0,
+                            terminationGracePeriodSeconds=0))
+    check(docs is not None, f"{kind} 0 vs grace 0: render failed: {err}")
+
+    # 6. The grace period the guard checks against is the one the pod gets.
+    docs, err = render(base(kind, terminationGracePeriodSeconds=60))
+    if docs:
+        workload = next(d for d in docs if d.get("kind") in KINDS)
+        got = workload["spec"]["template"]["spec"].get("terminationGracePeriodSeconds")
+        check(got == 60, f"{kind}: terminationGracePeriodSeconds {got} rendered, want 60")
+
+# 7. Every real service gets the default sleep on its main container.
 count = 0
 for values_file in sorted(SERVICES.glob("*/*/values.yaml")):
     data = yaml.safe_load(values_file.read_text()) or {}
