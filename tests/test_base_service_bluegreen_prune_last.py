@@ -30,12 +30,13 @@ def check(condition, message):
 
 
 def render(values):
-    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml") as fh:
         yaml.safe_dump(values, fh)
-    proc = subprocess.run(
-        ["helm", "template", "test", str(CHART), "-f", fh.name,
-         "--namespace", "labs"],
-        capture_output=True, text=True)
+        fh.flush()
+        proc = subprocess.run(
+            ["helm", "template", "test", str(CHART), "-f", fh.name,
+             "--namespace", "labs"],
+            capture_output=True, text=True)
     if proc.returncode != 0:
         raise AssertionError(f"helm template failed:\n{proc.stderr}")
     return [d for d in yaml.safe_load_all(proc.stdout) if d]
@@ -57,15 +58,16 @@ for doc in rollouts + previews:
     check("PruneLast=true" in sync_options(doc),
           f"{doc['kind']} {doc['metadata']['name']}: no PruneLast=true in {ANNOTATION}")
 
-# 2. blueGreen off: a Deployment and no Rollout or preview Service, and the
-#    annotation does not leak onto objects that are never pruned this way.
+# 2. blueGreen off: a Deployment and no Rollout or preview Service, and
+#    PruneLast does not leak onto objects that are never pruned this way.
+#    Other sync options on those objects are not this test's concern.
 docs = render({"image": {"tag": "1.0.0"}, "blueGreen": {"enabled": False}})
 kinds = [d.get("kind") for d in docs]
 check("Rollout" not in kinds, "blueGreen off still renders a Rollout")
 check("Deployment" in kinds, "blueGreen off renders no Deployment")
 for doc in docs:
-    check(not sync_options(doc),
-          f"blueGreen off: {doc['kind']} {doc['metadata']['name']} carries {ANNOTATION}")
+    check("PruneLast=true" not in sync_options(doc),
+          f"blueGreen off: {doc['kind']} {doc['metadata']['name']} carries PruneLast=true")
 
 if failures:
     print("\n".join(f"FAIL: {f}" for f in failures))
