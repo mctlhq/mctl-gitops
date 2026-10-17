@@ -50,6 +50,24 @@ spec:
               telegram:dialogs:read and telegram:messages:read) and write it to
               Vault platform/mctl-claude-remote/telegram-mcp (worker-token).
               The device picks it up by itself within an hour.
+        - alert: ClaudeRemoteTelegramTokenSessionExpiring
+          # The token the session is connected with, which can lag the newest
+          # one on disk. The device relaunches the session once when this
+          # drops under two days; still under one day means that relaunch did
+          # not reconnect, and the device will not try again by itself.
+          expr: mctl_claude_remote_telegram_token_served_expires_in_seconds < 24 * 3600
+          for: 10m
+          labels:
+            severity: warning
+            service: claude-remote
+          annotations:
+            summary: "claude-remote session holds a Telegram token expiring within a day"
+            description: >-
+              The claude-remote session is still connected with a Telegram
+              worker token that expires in {{ $value | humanizeDuration }},
+              although a relaunch should already have moved it to a newer one.
+              Restart deploy/labs-claude-remote-base-service in labs so the
+              session reconnects.
         - alert: ClaudeRemoteTelegramTokenRenewalFailing
           # Fail-open by design: a failed renewal keeps the current token,
           # which still has ~10 days left, so nothing is user-visible yet.

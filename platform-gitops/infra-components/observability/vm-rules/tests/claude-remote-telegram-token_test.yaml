@@ -20,6 +20,8 @@ tests:
         values: '30000000-60x300'
       - series: 'mctl_claude_remote_telegram_token_last_check_timestamp_seconds{job="claude-remote-telegram-token"}'
         values: '0+60x300'
+      - series: 'mctl_claude_remote_telegram_token_served_expires_in_seconds{job="claude-remote-telegram-token"}'
+        values: '1728000-60x300'
     alert_rule_test:
       - eval_time: 5h
         alertname: ClaudeRemoteTelegramTokenExpiring
@@ -35,6 +37,9 @@ tests:
         exp_alerts: []
       - eval_time: 5h
         alertname: ClaudeRemoteTelegramTokenCheckAbsent
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: ClaudeRemoteTelegramTokenSessionExpiring
         exp_alerts: []
 
   - interval: 1m
@@ -140,3 +145,23 @@ tests:
             exp_annotations:
               summary: "claude-remote Telegram token metrics absent for 3 hours"
               description: "No mctl_claude_remote_telegram_token_* samples for three hours. The renewal loop never started (MCTL_EVENTS_TELEGRAM_TOKEN_RENEW, MCTL_EVENTS_PUSHGATEWAY_URL, image older than 0.14.0) or the Pushgateway group was deleted."
+
+  - interval: 1m
+    name: a session still on a token under one day fires SessionExpiring
+    input_series:
+      - series: 'mctl_claude_remote_telegram_token_served_expires_in_seconds{job="claude-remote-telegram-token"}'
+        values: '87000-60x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ClaudeRemoteTelegramTokenSessionExpiring
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ClaudeRemoteTelegramTokenSessionExpiring
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: claude-remote
+              job: claude-remote-telegram-token
+            exp_annotations:
+              summary: "claude-remote session holds a Telegram token expiring within a day"
+              description: "The claude-remote session is still connected with a Telegram worker token that expires in 23h 30m 0s, although a relaunch should already have moved it to a newer one. Restart deploy/labs-claude-remote-base-service in labs so the session reconnects."
