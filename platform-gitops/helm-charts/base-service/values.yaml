@@ -13,6 +13,15 @@ image:
 service:
   type: ClusterIP
   port: 8080
+  # -- Port the main container listens on, when it differs from `port`.
+  # Unset means the same as `port`. The Service and Ingress always stay on
+  # `port` and reach the container through the named targetPort `http`, so a
+  # container can move to another port without changing the Service. Do not
+  # change `port` itself on a live service: Service ports merge by number, the
+  # new entry collides with the old one on the name `http`, the apply fails
+  # and the Ingress is left pointing at a port the Service does not have
+  # (gitops#1933).
+  # containerPort: 8080
 
 # -- Required: resource limits
 resources:
