@@ -357,6 +357,27 @@ run "customer_login_ui_directs_every_entry_path_to_github" {
   }
 }
 
+# The identity hook's customer-creation refusal ends on Login v2's static
+# IdP failure page, which shows only idp.loginError. Its copy must send
+# staff and partners to the other button, and must not reveal that a
+# creation allowlist exists (mctl-api#653).
+run "customer_login_error_points_staff_to_the_mctl_account" {
+  command = plan
+  plan_options {
+    target = [zitadel_hosted_login_translation.customers_en]
+  }
+  assert {
+    condition = (
+      strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.description, "Sign in with MCTL account") &&
+      alltrue([
+        for word in ["allowlist", "allow list", "not allowed", "invite", "approved"] :
+        !strcontains(lower(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.description), word)
+      ])
+    )
+    error_message = "idp.loginError must point staff to Sign in with MCTL account without revealing the customer allowlist."
+  }
+}
+
 run "customers_get_authentication_without_project_roles" {
   command = plan
   plan_options {
