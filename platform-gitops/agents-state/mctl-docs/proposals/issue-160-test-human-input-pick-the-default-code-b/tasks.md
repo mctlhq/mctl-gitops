@@ -1,15 +1,14 @@
 # Tasks: issue-160-test-human-input-pick-the-default-code-b
 
-- [ ] 1. Add `theme: { light: 'github-light', dark: 'github-dark' }` to the `markdown` object in `docs/.vitepress/config.ts`, above the existing `config(md)` mermaid fence override, with a one-line comment referencing mctlhq/mctl-docs#160 — DoD: config type-checks; `config(md)` body unchanged.
-- [ ] 2. Run `bun run build` (depends on 1) — DoD: tests, `generate:llms` and `vitepress build docs` succeed with no Shiki theme warnings.
-- [ ] 3. Compare a rendered page with code blocks (e.g. a page under `docs/guides/`) against a build of `main` (depends on 2) — DoD: code blocks carry github-dark colours in `--shiki-dark` and github-light in `--shiki-light`; no visual change expected versus `main`.
-- [ ] 4. Open a PR from a feature branch; release via the normal release-please tag flow — DoD: PR merged, image built, gitops tag bumped.
+- [ ] 1. Confirm the requester's chosen pair from the human-input answer (default: option 1, `github-light` / `github-dark`) — DoD: chosen light and dark theme names recorded in the PR description.
+- [ ] 2. Add `theme: { light: '<light>', dark: '<dark>' }` to the `markdown` object in `docs/.vitepress/config.ts`, keeping the existing `config(md)` mermaid fence override unchanged (depends on 1) — DoD: config diff touches only the `markdown` block.
+- [ ] 3. Run `bun run build` (depends on 2) — DoD: test, llms generation and `vitepress build docs` succeed.
+- [ ] 4. Visually check code blocks in `bun run dev` on pages with shell, YAML and TypeScript fences (depends on 2) — DoD: tokens legible against `--vp-code-block-bg`; mermaid diagrams still render.
 
 ## Tests
-- [ ] T1. `bun run build` passes (includes `bun test ./docs/.vitepress/theme/mermaid-links.test.ts`).
-- [ ] T2. In `docs/.vitepress/dist`, grep a built HTML page with a fenced `ts`/`yaml` block: spans contain `--shiki-dark:` values from github-dark (e.g. `#F97583` for keywords) and `--shiki-light:` values from github-light (e.g. `#D73A49`).
-- [ ] T3. A page containing a `mermaid` fence still renders a `.mermaid-diagram` element and the diagram draws in `bun run preview`.
-- [ ] T4. Visual check in `bun run preview`: code blocks readable on the `--surface-card` background in forced dark mode.
+- [ ] T1. `bun run test` (`docs/.vitepress/theme/mermaid-links.test.ts`) passes.
+- [ ] T2. Built HTML for a page with a code block contains `shiki` spans with the chosen dark theme class/name (e.g. grep `docs/.vitepress/dist` for `github-dark` or `one-dark-pro`).
+- [ ] T3. A `mermaid` fence still renders as `<div class="mermaid-diagram" ...>` in the built output.
 
 ## Rollback
-Revert the commit that adds `markdown.theme` and release a new patch tag (or roll the gitops image tag in `services/admins/mctl-docs/values.yaml` back to the previous version). Because the removed setting equals the VitePress implicit default, rollback has no visible effect on rendering.
+Revert the single commit adding `markdown.theme` and cut a new patch tag; or roll back the `admins/mctl-docs` service to the previous image tag. With option 1 the revert yields identical output, as it matches the VitePress default.

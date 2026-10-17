@@ -1,27 +1,28 @@
-# Pin github-light / github-dark as the default code-block theme for docs.mctl.ai
+# Pick and pin the default code-block syntax theme for docs.mctl.ai
 
 ## Context
-Issue mctlhq/mctl-docs#160 asks for one default syntax-highlighting theme for code blocks on the docs site, covering both light and dark mode, chosen between two candidate pairs. The issue author answered the earlier clarification question (request hir-d6dac56542bddcdf): the pair is **github-light / github-dark**.
+Issue mctlhq/mctl-docs#160 asks for one explicit default syntax-highlighting theme pair (light + dark) for fenced code blocks on the docs site. Two candidates are offered: `github-light` / `github-dark` (familiar GitHub look) and `one-light` / `one-dark-pro` (higher contrast, closer to MCTL design tokens). The issue states the choice belongs to the requester and cannot be inferred from the repository.
 
-VitePress 1.6 already uses github-light / github-dark as its implicit Shiki default, and `docs/.vitepress/config.ts` sets no `markdown.theme`. The value of this change is to make the choice explicit and pinned in config, so a future VitePress upgrade that changes its implicit default cannot silently change how code looks, and so the decision is visible to the next reader. The issue is labelled a test issue for an acceptance check of mctlhq/mctl-agents#668 and says "Do not implement"; this proposal is still written as a complete, buildable spec.
+Today `docs/.vitepress/config.ts` sets no `markdown.theme`, so VitePress 1.6 falls back to its built-in Shiki default, which is `github-light` / `github-dark`. The site also sets `appearance: 'force-dark'`, so only the dark half of any pair is currently rendered. The issue is explicitly a test issue for the human-input flow (mctlhq/mctl-agents#668) and says "Do not implement"; this proposal is nevertheless complete so the flow can be exercised end to end.
 
 ## User stories
-- AS a docs reader I WANT code blocks highlighted with the familiar GitHub palette SO THAT code is easy to scan.
-- AS a docs maintainer I WANT the code-block theme declared explicitly in config SO THAT a VitePress upgrade cannot change it without a reviewed diff.
+- AS a docs reader I WANT code blocks highlighted with a deliberate, consistent theme SO THAT code is readable and matches the site.
+- AS a docs maintainer I WANT the theme pinned explicitly in config SO THAT a VitePress upgrade cannot silently change it.
 
 ## Acceptance criteria (EARS)
-- WHEN the site is built THE SYSTEM SHALL configure Shiki through `markdown.theme` in `docs/.vitepress/config.ts` with `light: 'github-light'` and `dark: 'github-dark'`.
-- WHEN a fenced code block in a supported language is rendered THE SYSTEM SHALL emit inline `--shiki-light` / `--shiki-dark` colour variables taken from github-light and github-dark respectively.
-- WHILE the site uses `appearance: 'force-dark'` THE SYSTEM SHALL render code tokens with the github-dark palette.
-- WHILE a fenced block uses the `mermaid` language THE SYSTEM SHALL keep rendering it as a `.mermaid-diagram` div through the existing custom fence rule, unaffected by the theme setting.
-- IF the configured theme name is not available in the bundled Shiki THEN THE SYSTEM SHALL fail the `vitepress build` rather than ship unhighlighted output.
+- WHEN the site is built THE SYSTEM SHALL configure `markdown.theme` in `docs/.vitepress/config.ts` as an object `{ light: <chosen-light>, dark: <chosen-dark> }` using exactly the pair the requester selected.
+- WHILE `appearance` is `'force-dark'` THE SYSTEM SHALL render fenced code blocks with the chosen dark theme.
+- IF the site appearance is later changed to allow light mode THEN THE SYSTEM SHALL render fenced code blocks with the chosen light theme without further config change.
+- WHEN a fence has language `mermaid` THE SYSTEM SHALL continue to render it as a `.mermaid-diagram` div (the custom fence override in `markdown.config` is unchanged).
+- WHEN `bun run build` runs THE SYSTEM SHALL complete successfully, including the existing `mermaid-links.test.ts` test.
 
 ## Out of scope
-- The one-light / one-dark-pro alternative (rejected by the author's answer).
-- Changing `appearance: 'force-dark'` or adding a light/dark toggle.
-- Restyling code-block background, borders or code-group tabs in `custom.css` / `vitepress-bridge.css`.
-- Adding custom Shiki languages or transformers.
+- Changing `appearance: 'force-dark'` or enabling a light-mode toggle.
+- Restyling code-block chrome (border, background, tabs) in `docs/.vitepress/theme/custom.css` or `vitepress-bridge.css`.
+- Custom or token-derived Shiki themes.
+- Any change to deployed config in mctl-gitops.
 
 ## Open questions
-- The issue says "Close it after the check. Do not implement." Whether this proposal should actually be implemented is for the reviewer to decide; the spec is complete either way.
-- The site sets `appearance: 'force-dark'`, so the github-light half of the pair is configured but never visible today. Assumed acceptable: the issue asks for a pair "for both light and dark mode", and pinning both keeps the config correct if the light appearance is re-enabled.
+- BLOCKING: which pair does the requester want - option 1 (`github-light` / `github-dark`) or option 2 (`one-light` / `one-dark-pro`)? A clarification question has been filed. Until answered, this proposal proceeds on option 1, because it is VitePress's current implicit default: pinning it is a zero-visual-change, lowest-risk step, and switching to option 2 is a two-string edit.
+- The site is `force-dark`; the light theme of either pair is currently never shown. Is pinning the light half still wanted (assumed yes, per the issue wording "for both light and dark mode")?
+- The issue says "Close it after the check. Do not implement." The reviewer should decide whether this proposal is ever accepted.
