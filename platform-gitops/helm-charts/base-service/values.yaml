@@ -178,6 +178,15 @@ affinity: {}
 # Leave unset to inherit the Kubernetes default.
 terminationGracePeriodSeconds: ~
 
+# -- Seconds the main container waits in a preStop sleep before it gets
+# SIGTERM. Deleting a pod and removing it from the Service's endpoints happen
+# in parallel, so without a pause the process can exit while Traefik still
+# routes to it, and those requests get a 502 (admins/mctl-web, gitops#1946).
+# Uses the kubelet's native sleep action, so the image needs no shell. Counts
+# against terminationGracePeriodSeconds and must stay below it. Set 0 to turn
+# it off.
+preStopSleepSeconds: 5
+
 # -- Health checks
 probes:
   liveness:
