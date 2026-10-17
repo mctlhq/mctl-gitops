@@ -43,7 +43,8 @@ account with a zone wildcard under it) and returns `resources = null` for it.
 name, status and permission groups. The `token_scopes_observable` check block
 warns about every such token, and the drift summary reports it as UNVERIFIED
 rather than in sync. Re-issuing the token with its zones listed flat removes
-the gap.
+the gap: `cert-manager-dns01 (k3s-preview)` is that re-issue, and `Edit zone
+DNS` is deleted once cert-manager has issued a certificate with it.
 
 A failed read is a failed plan, never an empty list. Without
 `Account API Tokens Read` the API answers 9109 and the data source errors. A
