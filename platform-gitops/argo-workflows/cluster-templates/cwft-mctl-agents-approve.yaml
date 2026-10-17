@@ -242,7 +242,7 @@ spec:
           # below, so a failure leaves the status file untouched.
           PROPOSAL_DIR=$(dirname "$STATUS_FILE")
           DIGEST_INPUT=$(mktemp)
-          for NAME in requirements.md design.md tasks.md; do
+          for NAME in requirements.md design.md tasks.md proposed-content.md; do
             if [ -f "$PROPOSAL_DIR/$NAME" ]; then
               LEN=$(wc -c < "$PROPOSAL_DIR/$NAME")
               LEN=$(echo $LEN)
