@@ -801,12 +801,10 @@ spec:
               exit 1
             fi
           elif [ -n "$CREATOR_USER_ID" ]; then
-            # Still accepted until every caller sends the key (mctl-api
-            # does once it passes the session's principal; Backstage
-            # does not). The entry it writes works for login-keyed
-            # authorization only, and validate-tenant-member-keys.py
-            # fails CI on main until someone adds the principalId.
-            echo "⚠️ creator_user_id without creator_principal_id: the owner entry gets no principalId and grants nothing under principal-mode authorization (mctlhq/mctl-api#377)" >&2
+            # Principal-mode authorization cannot grant ownership from a
+            # login alone. Refuse before writing an unusable owner entry.
+            echo "creator_user_id without creator_principal_id is not allowed (mctl-api#377)" >&2
+            exit 1
           fi
 
           # creator_catalog_key is one of two words, and `principal` names

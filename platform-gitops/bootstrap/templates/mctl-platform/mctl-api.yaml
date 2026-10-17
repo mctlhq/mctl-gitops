@@ -70,8 +70,8 @@ spec:
             # Tenant authorization by canonical principal (mctlhq/mctl-api#377).
             # `principal`: every tenant and admin decision is made from
             # members[].principalId and ADMIN_PRINCIPALS; a GitHub login
-            # grants nothing on its own. Switched after the shadow window
-            # (docs/principals.md "Switch criterion" in mctl-api).
+            # grants nothing on its own. The owner approved an early switch
+            # on 2026-10-17; evidence and remaining live checks: PR #1873.
             # Rollback: set back to "shadow" (login decides again, the
             # principal path is still compared and counted).
             TENANT_AUTHZ_MODE: "principal"
