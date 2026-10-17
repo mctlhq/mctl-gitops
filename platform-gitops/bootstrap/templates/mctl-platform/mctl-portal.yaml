@@ -384,6 +384,7 @@ spec:
                       subject: mctl-api
                     accessRestrictions:
                       - plugin: custom-domains
+                      - plugin: tenant-management
                   {{- if (default dict .Values.repoBinding).enabled }}
                   # mctl-api's repository-binding lookups (GET
                   # /api/github-app-connect/repo-binding). Its own token and
