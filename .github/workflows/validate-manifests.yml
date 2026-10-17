@@ -615,6 +615,14 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_bluegreen_prune_last.py
 
+      - name: Unit-test base-service's preStop sleep on both workload kinds
+        # Without a pause before SIGTERM the process can exit while Traefik
+        # still routes to the pod (one 502 on admins/mctl-web, gitops#1946).
+        # Also checks the sleep stays below terminationGracePeriodSeconds.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_prestop_sleep.py
+
       - name: Unit-test the image-user check in deploy-service
         # runAsNonRoot with a named or root image USER only fails after the
         # deploy is committed (CreateContainerConfigError). check-image-user.sh
