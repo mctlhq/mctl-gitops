@@ -22,6 +22,7 @@ The registry read itself (fetch-user) needs network and is not exercised here;
 every case below passes --image-user, or must not reach the registry at all.
 """
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -141,6 +142,23 @@ try:
 finally:
     shutil.rmtree(root)
 
+# A Deployment added through extraObjects is not the chart's workload: it
+# neither blocks the deploy nor gets judged in its place. Its root user would
+# be refused if it were picked up.
+extra = {"extraObjects": [{"apiVersion": "apps/v1", "kind": "Deployment",
+                           "metadata": {"name": "sidecar-app"},
+                           "spec": {"selector": {"matchLabels": {"app": "x"}},
+                                    "template": {"metadata": {"labels": {"app": "x"}},
+                                                 "spec": {"securityContext": {"runAsNonRoot": True, "runAsUser": 0},
+                                                          "containers": [{"name": "x", "image": "busybox"}]}}}}]}
+for values, want in (({}, "OK:"), ({"blueGreen": {"enabled": True}}, "OK:")):
+    root = checkout({**values, **extra})
+    try:
+        rc, out = run(root, "10001")
+    finally:
+        shutil.rmtree(root)
+    check(rc == 0 and want in out, f"extraObjects Deployment with {values} must be ignored: exit {rc}\n{out}")
+
 # Bad input and an unreadable checkout are refusals to decide, not passes.
 root = checkout(None)
 try:
@@ -197,6 +215,19 @@ check(body is not None and "check-image-user.sh check" in body["script"]["source
       "the check-image-user template must run check-image-user.sh check")
 check(body is not None and body.get("activeDeadlineSeconds"),
       "the check-image-user template must carry an activeDeadlineSeconds")
+# The registry budget fits inside that deadline with room for the clone and
+# the render, so a slow registry ends in the script's own verdict (UNKNOWN for
+# a service whose image user does not matter yet), not in a deadline kill.
+# A read makes at most five requests: manifest, token, manifest, index child,
+# config blob.
+m = re.search(r"--max-time (\d+) --retry (\d+)", src)
+check(m is not None, "http() must set --max-time and --retry")
+if m and body is not None and body.get("activeDeadlineSeconds"):
+    max_time, retries = int(m.group(1)), int(m.group(2))
+    per_request = (retries + 1) * max_time + (2 ** retries - 1)
+    check(5 * per_request + 60 <= int(body["activeDeadlineSeconds"]),
+          f"registry budget 5 x {per_request}s + 60s exceeds the step deadline "
+          f"{body['activeDeadlineSeconds']}s")
 
 if failures:
     for f in failures:

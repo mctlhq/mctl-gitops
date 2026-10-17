@@ -57,8 +57,13 @@ trap 'rm -rf "$TMP"' EXIT
 # stalled registry must not hang the deploy, and one transient 5xx must not
 # refuse it. curl prints the status through -w even when it fails (000 for no
 # response), so its exit code is not used.
+#
+# The budget stays well inside the step's activeDeadlineSeconds: a read makes
+# up to five requests, each at most 3 x 10s plus backoff. A slow registry must
+# end here, in UNKNOWN or REFUSED, not in an Argo deadline kill, which would
+# fail the deploy even for a service whose image user does not matter yet.
 http() {
-  curl -sS --connect-timeout 5 --max-time 30 --retry 3 --retry-connrefused "$@" || true
+  curl -sS --connect-timeout 5 --max-time 10 --retry 2 --retry-connrefused "$@" || true
 }
 
 # GET <url> into $TMP/body with the current $AUTH header; prints the status.
@@ -214,14 +219,21 @@ check() {
   helm "$@" > "$TMP/render.yaml" 2> "$TMP/render.err" || {
     cat "$TMP/render.err" >&2; die "helm template failed for ${team}/${component}"; }
 
+  # Only the chart's own workload, picked by the template it came from:
+  # extraObjects may add further Deployments, and those are not the image this
+  # deploy changes. helm heads every document with its "# Source:" template.
+  awk '/^---/ { keep = 0; next }
+       /^# Source: / { keep = ($0 ~ /\/templates\/(deployment|rollout)\.yaml$/); if (keep) print "---" }
+       keep' "$TMP/render.yaml" > "$TMP/workload.yaml" || die "cannot split the render"
+
   # Alpine ships two programs named yq (mikefarah's Go one and kislyuk's
   # jq wrapper) and which one an image gets is not pinned, so both are
   # handled. The filter is the same; only the flag that selects JSON differs.
   filter='select(.kind == "Deployment" or .kind == "Rollout") | .spec.template.spec'
   if yq --version 2>&1 | grep -q mikefarah; then
-    yq -o json "$filter" "$TMP/render.yaml" > "$TMP/spec.json" 2> "$TMP/yq.err"
+    yq -o json "$filter" "$TMP/workload.yaml" > "$TMP/spec.json" 2> "$TMP/yq.err"
   else
-    yq -c "$filter" "$TMP/render.yaml" > "$TMP/spec.json" 2> "$TMP/yq.err"
+    yq -c "$filter" "$TMP/workload.yaml" > "$TMP/spec.json" 2> "$TMP/yq.err"
   fi || { cat "$TMP/yq.err" >&2; die "cannot parse the render"; }
   # Exactly one workload: the chart renders a Deployment or a Rollout.
   n=$(jq -s 'length' "$TMP/spec.json") || die "cannot parse the render"
