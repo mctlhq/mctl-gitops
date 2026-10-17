@@ -22,6 +22,10 @@ containers:
   - name: tofu
     image: "{{ .Values.image.repository }}{{ with .Values.image.tag }}:{{ . }}{{ end }}@{{ .Values.image.digest }}"
     env:
+      # ZITADEL org translation writes share an event sequence and can collide
+      # under parallel apply (COMMA-i8nqFl / events2_pkey on v4.19.2).
+      - name: TF_CLI_ARGS_apply
+        value: "-parallelism=1"
       - name: HOME
         value: /work
       - name: ALLOWED_ACTIONS
