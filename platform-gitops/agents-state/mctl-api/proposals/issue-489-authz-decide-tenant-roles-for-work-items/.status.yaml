@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-17T21:11:49Z'
+updated_at: '2026-10-17T21:35:43Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-e67fa63a189e5485
@@ -28,7 +28,8 @@ attempt:
   expires_at: '2026-10-17T22:49:14Z'
   finished_at: '2026-10-17T20:49:03Z'
 pr: https://github.com/mctlhq/mctl-api/pull/665
-ci_blockers_head: 6f14d04f03707a1f94aa4ac728cab9a1dc8eeef7
+ci_blockers_head: 70d41c2c853c54243ac86f6c70ea1c11bc05c827
 ci_blockers:
 - validate / test
 review_attempts: 1
+harness_failures: 1
