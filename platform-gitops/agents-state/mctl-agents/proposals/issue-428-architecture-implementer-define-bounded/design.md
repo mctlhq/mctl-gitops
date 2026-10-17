@@ -1,96 +1,114 @@
 # Design: issue-428-architecture-implementer-define-bounded
 
+This is a revision of the 2026-10-17 proposal. It changes three things in response to the
+owner review: (1) a primary / fallback authority rule, (2) a three-PR delivery split, and
+(3) an honest statement of what `complete` means in v1alpha1. Everything else is unchanged:
+observe-only in Temporal, the shepherd flag off by default, and no approval, review, merge
+or ownership fields in the schema.
+
 ## Current state
 
-**One implementer attempt, two entry points.** `orchestrator/run_implementer.py` (5281
-lines) has two entry points:
-- `_implement_one` (line ~4076): the first implementation. It runs as Argo CWFT
-  `mctl-agents-implement`, step `run-implementer`.
-- `_review_feedback_one` (line ~2831): `--review-feedback`, called by the shepherd as a
-  subprocess.
+**One implementer attempt, two entry points.** `orchestrator/run_implementer.py` has two
+entry points:
+- `_implement_one`: the first implementation. It runs as Argo CWFT `mctl-agents-implement`,
+  template `run-implementer`.
+- `_review_feedback_one`: `--review-feedback`, called by the shepherd as a subprocess.
 
-Each attempt gets a deterministic id from `_resolve_attempt_id` (`WORKFLOW_UID`, or
-`sha256(service|slug|owner_epoch|ordinal|HOSTNAME)`). The id is stamped into
-`.status.yaml` as `attempt: {id, started_at, expires_at}`, with a 130-minute lease
-(`IMPLEMENT_ATTEMPT_LEASE`). An ADR-010 `ExecutionClaim` is held through `_ClaimContext`
-(`claim_id`, `entity`, `phase`, `owner_epoch`, `entity_version`, `executor`, `attempt`)
-and checked before each push by `_check_claim_or_raise`. `_status_is_still_ours` guards
-status writes against a newer attempt.
+**Attempt identity.** `_resolve_attempt_id` (line 1034) returns `WORKFLOW_UID` if it is
+set. Otherwise it returns `sha256(service|slug|owner_epoch|ordinal|HOSTNAME)`.
+`_implement_one` calls it with `owner_epoch=0, attempt_ordinal=0` (line 4289), after
+`ensure_auth_for_sdk()` (line 4280, which raises `SystemExit` on failure, before any claim).
+The id is stamped into `.status.yaml` as `attempt: {id, started_at, expires_at}` (130-minute
+`IMPLEMENT_ATTEMPT_LEASE`). An ADR-010 `ExecutionClaim` is held through `_ClaimContext`,
+acquired *before* the `in-progress` write, checked before each push by
+`_check_claim_or_raise`, and released on every ending arm (`_release_claim`, lines 3729,
+4481, 4572, 4621, 4638, 4698, 4762). `_status_is_still_ours` (line 1407) guards status
+writes against a newer attempt.
 
-**How an attempt ends today.** The end is spread over several unversioned channels:
-- **`.status.yaml`** (via `update_status_yaml` / `proposal_state.update_status_file`):
-  - `implemented` + `pr` + `attempt.finished_at` + an ADR-011 `execution:` annotation
-    (`context_id`, `trace_id`, `agent`, `version`), at step "8. Mark implemented"
-    (~line 4544);
-  - otherwise `_mark_needs_triage(code, stage, message)`, `_mark_blocked`,
-    `_mark_rate_limited`, or budget / policy hand-backs (`budget_handbacks`,
-    `policy_handbacks`).
+**The primary / fallback pair.** In the deployed CWFT the `implement-proposals` steps
+template runs:
+1. `implement` (`is-fallback: "false"`, token `claude-code-oauth-token`), with
+   `continueOn: {failed, error}`;
+2. `implement-fallback` (`is-fallback: "true"`, token `claude-code-oauth-token-2`), with
+   `when: "{{steps.implement.status}} != Succeeded"`;
+3. `commit` (`commit-and-push`);
+4. `assert-produced`, which succeeds if either step succeeded.
 
-  The file reaches gitops main through the CWFT's `changes` artifact (`/tmp/state-out`,
-  S3 key `{{workflow.name}}/agents-state.tgz`), which `commit-and-push` commits under the
-  `mctl-gitops-main-writes` mutex.
-- **Exit codes** (lines 236-342): `EXIT_OK`, 42 `NO_FOLLOWUP_COMMITS`, 43
-  `BRANCH_MISSING_ON_ORIGIN`, 44 `OPERATION_TIMEOUT`, 45 `BLOCKED_ONLY`, 46
-  `ORPHANED_SUBAGENT`, 47 `DELIBERATE_NO_OP`, 48 `FENCED`, 49 `CLAIM_REFUSED`, 50
-  `CI_EVIDENCE_INSUFFICIENT`, 51 `VERIFICATION_BUDGET_EXHAUSTED`, 52 `RATE_LIMITED`, 53
-  `POLICY_REFUSED`, 54 `POLICY_UNDECIDED`. `_review_feedback_exit_code` maps from
-  error-string prefixes (`"deliberate no-op:"`, `"fenced:"`, ...).
-- **`--refusal-out` JSON** (`_write_refusal_out`, `_write_verification_budget_exhausted_out`):
-  `{refused, reason, [verification_budget_exhausted, ledger counts]}`. Best effort.
-- **Agent-authored marker** `.implementer-refusal.json` (`RefusalMarker`), validated by
-  `_read_refusal_marker`: it must be untracked and bounded to 64 KiB.
+Both steps run the same `run-implementer` template. Facts that matter for this design:
+- They are separate pods, each with its own fresh gitops clone. Because `commit-and-push`
+  runs only after both, **the fallback's clone cannot see anything the primary wrote**.
+- Both upload the `changes` artifact (`/tmp/state-out`) to the same literal S3 key,
+  `{{workflow.name}}/agents-state.tgz`. The CWFT comment says: "when both run the fallback
+  goes second and wins". An attempt that produced nothing uploads nothing and "leaves a
+  previous attempt's object intact".
+- If token-2 is unset, the shell prelude exits 1 before Python starts. If token-2 is set
+  but unusable, `ensure_auth_for_sdk` raises before the claim. In both cases the fallback
+  produces no status write and the primary's artifact survives.
+- When the fallback gets past auth, it runs a full attempt. Typical endings on this
+  platform are `rate_limited`, a claim refusal, or another harness error, which
+  `_mark_*` writes into the fallback's `.status.yaml`. That file then overwrites the
+  primary's in the shared artifact.
+- The CWFT sets `WORKFLOW_NAME`, `ARGO_WORKFLOW_NAME` and `IS_FALLBACK` in the pod env. It
+  does **not** set `WORKFLOW_UID`. So in the deployed shape the two steps derive
+  *different* `attempt_id`s, because their `HOSTNAME`s (pod names) differ. In a shape that
+  sets `WORKFLOW_UID` (the docstring assumes "the Temporal path always sets" it) they
+  would derive the *same* id, as the owner review describes. Either way, `attempt_id`
+  alone cannot say which step a record came from. This design binds the step explicitly.
+
+**How an attempt ends today.** The end is spread over unversioned channels:
+- `.status.yaml` via `update_status_yaml` (line 1381): `implemented` + `pr` +
+  `attempt.finished_at` + an ADR-011 `execution:` annotation, or `_mark_needs_triage`
+  (line 3689), `_mark_blocked`, `_mark_rate_limited`, or budget / policy hand-backs;
+- exit codes 0, 1, 42-54 (`EXIT_NO_FOLLOWUP_COMMITS` ... `EXIT_POLICY_UNDECIDED`), with
+  `_review_feedback_exit_code` mapping error-string prefixes;
+- the `--refusal-out` JSON (`_write_refusal_out`, line 551);
+- the agent-authored marker `.implementer-refusal.json` (`RefusalMarker`, line 392,
+  validated by `_read_refusal_marker`, line 416).
 
 **How consumers interpret it.**
-- **Shepherd** (`orchestrator/run_shepherd.py`): `_followup_exit_codes()` returns
-  `(deterministic, harness)` code sets, and `FollowupSubprocessError.kind` is one of
-  `transient | deterministic | harness | refused | fenced`. That kind decides whether
-  `review_attempts` or `harness_failures` (`MAX_HARNESS_FAILURES = 3`) is charged.
-  `_read_refusal_reason` reads `--refusal-out`.
-- **Temporal** (`orchestrator/temporal/workflows/dev_loop.py` `_implement`, ~line 4140):
-  `classify()` from `orchestrator/temporal/implement_outcome.py` turns Argo's node graph
-  into `pre_start | execution | finalization | success`. `success` only means the Argo
-  workflow succeeded. `_record` then calls `record_execution`
-  (`orchestrator/temporal/activities/state.py`). `ExecutionRecord` carries `outcome` and
-  `pre_start_reason` as optional wire keys and retries once without them on a 4xx. The
-  same pattern is used in `implement_sweep.py`.
+- Shepherd (`orchestrator/run_shepherd.py`): `_followup_exit_codes()` returns
+  `(deterministic, harness)` code sets. `FollowupSubprocessError.kind` decides whether
+  `review_attempts` or `harness_failures` is charged.
+- Temporal (`orchestrator/temporal/workflows/dev_loop.py` `_implement`): `classify()` from
+  `orchestrator/temporal/implement_outcome.py` maps the Argo node graph to `pre_start |
+  execution | finalization | success`. `_record` then calls `record_execution`
+  (`orchestrator/temporal/activities/state.py`, `ExecutionRecord`, with optional wire keys
+  and a 4xx retry without them). Temporal knows the Argo `result.workflow_name` and
+  already sends it as `argo_workflow_name`.
 - `read_proposal_status` (`orchestrator/temporal/activities/proposals.py`) already reads
-  `.status.yaml` from GitHub, so Temporal does not need a checkout.
+  `.status.yaml` over HTTP.
 
-**Contract-module precedents.** Sealed, versioned, frozen-dataclass modules with
-`from_dict` that rejects unknown keys and a `sha256:` content hash:
-- `orchestrator/context_snapshot.py` (ADR 009);
-- `orchestrator/execution_identity.py` (ADR 011, `identity.mctl.ai/v1alpha1`);
-- `orchestrator/execution_evidence.py` (ADR 018, `evidence.mctl.ai/v1alpha1`). Its
-  `Outcome.code` set is `succeeded | failed | refused | abandoned | superseded`, and
-  `EvidenceRef` is `{evidence_id, kind}` only.
-
-ADR 011 (execution budget) records the #411/#418/#423/#430 invariants this design must
-reuse.
+**Contract-module precedents.** `orchestrator/context_snapshot.py` (ADR 009),
+`orchestrator/execution_identity.py`, and `orchestrator/execution_evidence.py` (ADR 018,
+`evidence.mctl.ai/v1alpha1`, `EvidenceRef = {evidence_id, kind}`). The newest ADR is
+`docs/adr/020-capability-commerce-contract.md`, so the next number is 021.
 
 **Deployed state checked:**
 - `$MCTL_GITOPS_ROOT/argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml`:
-  - steps `implement` → `implement-fallback` → `commit` → `assert-produced`;
-  - no `outputs.parameters` anywhere, deliberately (#530/#531, gitops#1186);
-  - the only output is the `changes` artifact (`/tmp/state-out`);
-  - `activeDeadlineSeconds: 7200` on `run-implementer`;
-  - inputs include `work_item_id`, `execution_id`, `temporal_workflow_id`,
-    `temporal_run_id`, `execution_request_id`, `traceparent`.
-
-  Conclusion: a new Argo output parameter is the wrong carrier, and `.status.yaml` via
-  the existing artifact is the right one.
-- `$MCTL_GITOPS_ROOT/services/admins/mctl-agents-worker-implement/values.yaml`: the
-  admission worker (#395), `replicaCount: 1` as an architectural invariant. It is not
-  affected by this proposal.
-- I did not call the mctl MCP tools: the change is code-only, with no deployed config to
-  verify. mctl-api's `/api/v1/agents/executions` handler was not inspected; the claim in
-  `state.py` that it drops unknown keys is taken from the clone. See Open questions.
+  - the steps and their `when` / `continueOn` are as described above;
+  - the shared artifact key is `{{workflow.name}}/agents-state.tgz`, with "fallback goes
+    second and wins";
+  - the `IS_FALLBACK` shell prelude exits 1 when token-2 is unset;
+  - there is no `WORKFLOW_UID` env for `run-implementer`. A grep of `argo-workflows/`
+    finds `WORKFLOW_UID` only in `cwft-argo-local-workdir-canary.yaml`;
+  - `WORKFLOW_NAME` is set to `{{workflow.name}}`;
+  - there are no `outputs.parameters` (deliberate);
+  - `activeDeadlineSeconds: 7200` on `run-implementer`.
+- `$MCTL_GITOPS_ROOT/services/admins/mctl-agents-worker-implement/`: exists (the #395
+  admission worker). Not affected.
+- mctl MCP tools: not called. This change is code plus one optional CWFT input; no
+  runtime config needs to be observed. mctl-api's `/api/v1/agents/executions` decoder was
+  not inspected (see Open questions).
+- Not observed: whether token-2 is currently seeded in production. The owner review says
+  the fallback "has no working second account". The design covers both the seeded and
+  unseeded cases.
 
 ## Proposed solution
 
-### 1. New inert schema module: `orchestrator/implementation_completion.py`
+### 1. Inert schema module: `orchestrator/implementation_completion.py` (PR 1)
 
 Modelled on `execution_evidence.py`: frozen dataclasses, `to_dict` / `from_dict` with
-unknown-key rejection, bounded leaves, `seal()` as the only constructor that fills
+unknown-key rejection, bounded leaves, and `seal()` as the only constructor that fills
 identity.
 
 ```
@@ -101,44 +119,56 @@ ImplementationCompletion
   content_hash  sha256 over canonical JSON minus created_at/completion_id/content_hash
   created_at    ISO-8601 Z (excluded from hash)
   subject       {service, slug, work_item_id?}
-  attempt       {attempt_id, phase: implement|review-remediation, ordinal?,
+  attempt       {attempt_id, run_id (WORKFLOW_NAME), step: primary|fallback,
+                 phase: implement|review-remediation, ordinal?,
                  execution_id? (we_), context_id? (ex-), claim_id?, owner_epoch?}
-  source        {repository, base_ref, base_sha?, branch, head_sha?}   (40/64-hex)
-  proposal      {proposal_digest (sha256: over requirements/design/tasks bytes),
-                 review_bundle_digest? (sha256: of the --review-feedback bundle)}
+  source        {repository, base_ref, base_sha?, branch, head_sha?}
+  proposal      {proposal_digest, review_bundle_digest?}
   outcome       complete | incomplete | bounded_refusal | budget_exhausted
                 | deterministic_failure | harness_failure
   stop_reason   {code: closed set, detail?: <=600 chars, redacted}
   verification  [<=32] {check_id, result: pass|fail|unknown|not_run,
                         classification: exit_zero|exit_nonzero|timeout|budget_denied|
                                         not_applicable|observation_failed,
-                        required: bool, evidence_ref?: {evidence_id, kind}}
-  remaining_work [<=32] {item_id (e.g. "task-3"), summary <=256 chars, redacted}
+                        required: bool, evidence_ref?}
+  remaining_work [<=32] {item_id, summary <=256 chars, redacted}
   evidence_refs [<=32] {evidence_id, kind}
 ```
 
-Construction invariants, enforced in `__post_init__`:
-- `complete` requires a `head_sha`, every `required` verification at `pass`, and empty
-  `remaining_work`.
-- `incomplete` requires non-empty `remaining_work`.
+- `run_id` and `step` are part of the hashed content. The primary and fallback records of
+  one Argo run therefore always have distinct `completion_id`s, even under the
+  `WORKFLOW_UID` shape where `attempt_id`s coincide. `step` comes from `IS_FALLBACK`
+  (`"true"` → `fallback`, anything else → `primary`). The review-feedback mode, which the
+  shepherd runs as a subprocess, is always `primary`, and `run_id` is the shepherd's own
+  Argo workflow name.
+- **Invariants.** `complete` requires a `head_sha`, every `required` check at `pass`, and
+  empty `remaining_work`. `incomplete` requires non-empty `remaining_work`. There are no
+  fields for approval, review verdict, merge, release, ownership, claim extension or
+  budget.
+- **What `complete` means in v1alpha1 (owner review point 3).** The required set is
+  exactly the orchestrator-side gates: `commits_present` (`_has_new_commits`),
+  `chart_major_guard` (`_detect_chart_major_bumps`), `push_succeeded`, and
+  `claim_valid_at_push`. Nothing compares the pushed head with the approved `tasks.md`.
+  The module docstring, ADR 021, and the stop-reason code all say so:
+  - `complete` / `gates_passed` means "the attempt pushed a head that passed the
+    orchestrator gates";
+  - it does not mean "the approved scope is implemented", and it is not a review verdict.
 
-There is deliberately no field for approval, review verdict, merge, release, ownership,
-claim extension or budget, so `from_dict` rejects all of them as unknown keys. The module
-docstring and ADR 021 state that `complete` means only "the implementer believes the
-approved scope is ready for independent review".
+  Task-coverage verification is recorded as follow-up **F1**: a future `task_coverage`
+  check, which would become `required` in a later api version.
 
-`stop_reason.code` closed set, with the mapping from today's arms:
+`stop_reason.code` closed set and mapping (one pure function, `completion_from_result`):
 
 | Today's signal | outcome | stop_reason.code |
 | --- | --- | --- |
-| `implemented` write / `EXIT_OK` with a new head | complete | `scope_done` |
+| `implemented` write / `EXIT_OK` with a new head | complete | `gates_passed` |
 | marker with new optional `remaining` list | incomplete | `known_work_remains` |
 | 47 `DELIBERATE_NO_OP` | bounded_refusal | `deliberate_no_op` |
 | 50 `CI_EVIDENCE_INSUFFICIENT` | bounded_refusal | `evidence_insufficient` |
 | 53 `POLICY_REFUSED` | bounded_refusal | `policy_refused` |
 | 51 `VERIFICATION_BUDGET_EXHAUSTED` / budget hand-back | budget_exhausted | `verification_budget` |
 | 44 `OPERATION_TIMEOUT` | budget_exhausted | `operation_timeout` |
-| 52 `RATE_LIMITED` | budget_exhausted | `rate_limited` |
+| 52 `RATE_LIMITED` / `_mark_rate_limited` | budget_exhausted | `rate_limited` |
 | 42 `NO_FOLLOWUP_COMMITS` / no commits | deterministic_failure | `no_commits` |
 | 43 `BRANCH_MISSING_ON_ORIGIN` | deterministic_failure | `branch_missing` |
 | `needs-triage` policy arms (chart guard, stale source) | deterministic_failure | `policy_gate` / `stale_source` |
@@ -148,181 +178,227 @@ approved scope is ready for independent review".
 | 54 `POLICY_UNDECIDED` | harness_failure | `policy_undecided` |
 | 1 generic / unexpected exception | harness_failure | `unexpected_error` |
 
-`pre_start` attempts never start the implementer, so they produce no completion. That is
-the #418 semantics: no attempt is counted and no record exists. The Argo-level
-`finalization` class (commit-and-push failed after the implementer succeeded) is likewise
-observed by Temporal, not by the implementer. A completion from such an attempt may say
-`complete` while Temporal says `finalization`. That combination is legible and
-intentional: the implementer finished, the platform lost the record.
+Pre-claim exits (`pre_start` per #418, `ensure_auth_for_sdk` failure, the token-2-unset
+shell exit) produce no completion. The Argo `finalization` class remains Temporal's to
+observe.
 
-### 2. Emission in `run_implementer.py`
+### 2. Emission and projection in `run_implementer.py` (PR 1)
 
-- Add a pure function, `completion_from_result(result | exit_code, *, ctx, observed) ->
-  ImplementationCompletion`, that encodes the table above. This one function is the only
-  mapping; the exit-code helpers stay unchanged.
-- Add `_AttemptObservations`, collected during the run:
-  - `base_sha` / `head_sha` (`_capture_head_sha`, `_remote_head_sha`);
-  - `proposal_digest`, computed at attempt start next to the `attempt = {...}` dict
-    (~line 4336) by hashing the proposal directory's three files in sorted order;
-  - `review_bundle_digest`, from `_load_review_feedback`;
-  - verification records from orchestrator-observable checks: `commits_present`
-    (`_has_new_commits`), `chart_major_guard` (`_detect_chart_major_bumps`),
-    `push_succeeded`, `claim_valid_at_push`. Optional agent commands are taken from
-    `CommandBudgetLedger` entries, as non-required records with an exit classification
-    only and no output.
-- Wire one `try/finally` emission point in `_implement_one` and `_review_feedback_one`,
-  after claim acquisition. It seals the completion once. It does two things:
-  - projects it into `.status.yaml` through `update_status_yaml(..., completion=...)` on
-    the arms that already write status;
-  - in review-feedback mode, writes the full record to `--completion-out` (new argparse
-    flag; best effort and bounded, mirroring `_write_refusal_out`).
+- Add `completion_from_result(...)` (the table above) and `_AttemptObservations`
+  (`base_sha` / `head_sha`, `proposal_digest` computed next to the `attempt = {...}` dict,
+  `review_bundle_digest`, and the four required gate records plus non-required
+  `CommandBudgetLedger` entries, classification only).
+- Add one `try/finally` emission point after claim acquisition in `_implement_one` and
+  `_review_feedback_one`. It seals once, projects into `.status.yaml` through
+  `update_status_yaml(..., completion=...)` on the arms that already write status, and
+  writes `--completion-out` (new flag, bounded, best effort, mirroring
+  `_write_refusal_out`).
+- `RefusalMarker` gains an optional bounded `remaining: [{item_id, summary}]`. When it is
+  present on an otherwise successful push, the outcome is `incomplete`.
 - `.status.yaml` projection (durable result, not telemetry):
 
   ```yaml
   completion:
     api_version: completion.mctl.ai/v1alpha1
-    completion_id: ic-...
-    content_hash: sha256:...
-    attempt_id: ...
-    outcome: complete
-    stop_reason: scope_done
-    head_sha: ...
-    verification: {required_passed: 3, required_total: 3, optional_total: 2}
+    run_id: mctl-agents-implement-abc12
+    authoritative:            # the record that speaks for this Argo run
+      completion_id: ic-...
+      content_hash: sha256:...
+      attempt_id: ...
+      step: primary
+      outcome: deterministic_failure
+      stop_reason: no_commits
+      head_sha: null
+      verification: {required_passed: 1, required_total: 4, optional_total: 0}
+    other:                    # optional: the non-authoritative step's summary
+      relation: fallback      # fallback | superseded
+      completion_id: ic-...
+      step: fallback
+      outcome: harness_failure
+      stop_reason: rate_limited
+    primary_observed: true
   ```
 
-  The full verification list is not written to git. It travels through `--completion-out`
-  and, later, the mctl-api read model.
-- **Replay guard.** The projection write goes through `_status_is_still_ours(ref,
-  attempt_id)` and a new `_completion_write_allowed(existing, new)`:
-  - same `attempt_id` and same `completion_id`: no-op;
-  - same `attempt_id` and a different id: refuse and log;
-  - a different (newer) `attempt_id` already present: refuse, because this attempt is
-    stale.
+- **Replay guard.** The guard keys on `(run_id, step, attempt_id)`:
+  - same key, same `completion_id`: no-op;
+  - same key, different `completion_id`: refuse and log;
+  - a different `run_id` whose `attempt.id` already owns the status: refuse
+    (`_status_is_still_ours`).
 
-  A Temporal or Argo retry that reuses `WORKFLOW_UID` therefore cannot flip a recorded
-  `harness_failure` / `budget_exhausted` into `complete`. Only a new attempt identity
-  can.
-- **Stale claim.** If `_check_claim_or_raise` raises at the emission point, no projection
-  is written. The record still goes to `--completion-out` as `harness_failure` / `fenced`
-  or `claim_refused`, so the shepherd sees the same thing it sees today.
+  A pod restart or Argo retry inside one step therefore cannot flip `budget_exhausted` /
+  `harness_failure` into `complete`. Only a new step or a new run can produce a new
+  record, and the authority rule below decides between steps.
+- **Stale claim.** If `_check_claim_or_raise` raises at emission, no projection is
+  written. `--completion-out` still gets a `harness_failure` / `fenced` or `claim_refused`
+  record.
 
-### 3. Shepherd consumption (`run_shepherd.py`)
+### 3. Primary / fallback authority (PR 1; owner review point 1)
 
-The shepherd passes `--completion-out <tmp>` next to `--refusal-out`. A new helper,
-`_read_completion(path, expected_attempt_id)`, runs a bounded read and `from_dict`. It
-returns `None` when:
-- the file is absent, invalid or oversize;
-- the `attempt_id` does not match the attempt the shepherd started. The shepherd sets
-  `WORKFLOW_UID`-derived identity, or reads `attempt.id` back from status.
+**Decision: within one Argo run, the primary record is authoritative unless the fallback
+is `complete`.** A failing fallback never replaces the primary's outcome. A succeeding
+fallback does replace it, and the primary's record is kept as a `superseded` summary. This
+is the owner's second option ("never project a fallback completion over a primary one")
+with one exception, for a fallback that actually produced a gated head. That exception
+mirrors `assert-produced`, which already counts the run as produced if either step
+succeeded.
 
-The kind is then derived with `_followup_kind_from_completion(c)`:
+`select_authoritative(primary: Summary | None, fallback: Completion) -> Projection` is a
+pure function in `implementation_completion.py`:
+
+| primary handoff | fallback outcome | authoritative | other |
+| --- | --- | --- | --- |
+| present, any outcome | `complete` | fallback | primary as `superseded` |
+| present, any outcome | not `complete` | primary | fallback as `fallback` |
+| absent (primary emitted nothing) | any | fallback, `primary_observed: false` | none |
+| fallback never reached the claim | n/a (no record) | primary (artifact untouched) | none |
+
+The primary step itself always writes `authoritative = own record`. It runs first and
+never sees a fallback.
+
+**Making the primary visible to the fallback.** The fallback's gitops clone predates the
+primary's status, so the rule needs the primary's handoff. That handoff already exists:
+it is the artifact at `{{workflow.name}}/agents-state.tgz`. One additive mctl-gitops change
+gives `run-implementer` an *optional* input artifact at that same literal key, unpacked to
+`/tmp/prior-state`:
+- for the primary, nothing exists yet, so the input is skipped;
+- for the fallback, it holds the primary's `.status.yaml`, if the primary wrote one.
+
+The fallback reads only the `completion.authoritative` block from it (bounded read,
+`from_dict`-validated summary). It accepts the block only if `run_id` equals its own
+`WORKFLOW_NAME` and `step == primary`, so a stale object from another run fails closed to
+"absent".
+
+The status *transition* the fallback writes (for example `rate_limited` over the primary's
+`needs-triage`) is unchanged existing behaviour and out of scope. Only the `completion:`
+block follows the authority rule. ADR 021 states this explicitly, so that a reader knows
+`completion.authoritative` (the attempt's result) and `status` (lifecycle state) may
+legitimately differ after a failed fallback.
+
+Until the CWFT input is deployed, `/tmp/prior-state` is absent and the fallback projects
+with `primary_observed: false`. Consumers (PR 2 and PR 3) treat a
+`step: fallback, primary_observed: false` non-`complete` record as "fallback result only,
+primary outcome unknown" and never as the primary's outcome. The rule is pinned by tests
+T3a and T3b, whatever the CWFT state.
+
+### 4. Shepherd consumption, shadow mode (PR 2)
+
+The shepherd passes `--completion-out <tmp>` next to `--refusal-out`. Review-feedback runs
+are single-step subprocesses (no fallback pair), so the record is always `step: primary`.
+`_read_completion(path, expected_run_id)` performs a bounded read and `from_dict`, and
+returns `None` on an absent, invalid or oversize file, or on a mismatched run or attempt.
+
+`_followup_kind_from_completion(c)`:
 
 | completion | FollowupKind |
 | --- | --- |
-| `complete` | (success path) |
+| `complete` | success path |
 | `bounded_refusal` | `refused` |
 | `harness_failure` + `fenced` / `claim_refused` | `fenced` |
-| other `harness_failure` and `budget_exhausted` (except `rate_limited`) | `harness` |
+| other `harness_failure`; `budget_exhausted` except `rate_limited` | `harness` |
 | `rate_limited` | existing rate-limited handling |
 | `deterministic_failure`, `incomplete` | `deterministic` |
 
-If the completion is `None`, or the completion-derived kind disagrees with
-`_followup_exit_codes()`'s class for the exit code, the exit-code class wins and a
-`completion-disagreement` warning is printed. This rolls out as observe-then-trust:
-shadow first, so no charging behaviour changes until the mapping is proven. A flag
-`SHEPHERD_TRUST_COMPLETION` (default off) switches the source of truth.
+The shepherd always computes this and logs `completion-disagreement` against
+`_followup_exit_codes()`. Charging behaviour changes only when `SHEPHERD_TRUST_COMPLETION`
+is on (default off). With the flag on, a `None` or disagreeing record still falls back to
+the exit code. The merge decision never reads `outcome`.
 
-### 4. Temporal / execution record
+### 5. Temporal / execution record (PR 3)
 
-- `ExecutionRecord` gains optional `completion_id`, `completion_outcome` and
-  `completion_stop_reason` (default `""`). `record_execution` adds them to the existing
-  `optional` dict, so the retry-without-optional-keys path covers an mctl-api that rejects
-  them.
-- In `dev_loop._implement` and `implement_sweep`, after `_run_cwft` returns an outcome of
-  `success` or `finalization`, a new read-only activity, `read_proposal_completion(service,
-  slug)`, reads the `completion` block over HTTP. It is a sibling of
-  `read_proposal_status` in `activities/proposals.py`. If the block's `attempt_id` does
-  not equal the Argo workflow's UID, it is treated as absent: stale fails closed.
-- The result is stored on `ImplementExecutionState` (`completion_outcome`) and passed to
-  `_record`. The call is gated by `workflow.patched("implement-completion")` for replay
-  safety. There is **no control-flow change**: `success` still returns. The new data is
-  observational, like `pre_start_reason` was in #418.
+- `ExecutionRecord` gains optional `completion_id`, `completion_outcome`,
+  `completion_stop_reason` and `completion_step` (default `""`). They go through the
+  existing `optional` dict and 4xx retry path.
+- New read-only activity `read_proposal_completion(service, slug)` in
+  `activities/proposals.py` (a sibling of `read_proposal_status`), registered in
+  `worker.py`. After `_run_cwft` returns `success` or `finalization`, `dev_loop._implement`
+  and `implement_sweep` read `completion.authoritative`. They treat it as absent unless
+  `completion.run_id == result.workflow_name` (stale fails closed). This replaces the
+  previous revision's `attempt_id == workflow UID` check, which the deployed CWFT (no
+  `WORKFLOW_UID`) would always have failed.
+- The value is stored on `ImplementExecutionState.completion_outcome` and passed to
+  `_record`, gated by `workflow.patched("implement-completion")`. There is no
+  control-flow change.
 
-### 5. Documentation
+### 6. Documentation (PR 1)
 
-`docs/adr/021-implementation-completion-contract.md` records:
-- the scope ("implementer-phase completion contract; not a review verdict, not approval,
-  not a DevLoop");
-- the outcome and stop-reason tables;
-- the replay rules;
-- the carrier boundary (git = durable result projection; Temporal / Argo = runtime;
-  mctl-api = read model);
-- the explicit non-authorities list.
+`docs/adr/021-implementation-completion-contract.md` covers:
+- scope: an implementer-phase completion contract, not a review verdict, not approval,
+  not a DevLoop;
+- the outcome / stop-reason table;
+- the v1alpha1 meaning of `complete` and follow-up F1 (task coverage);
+- the primary / fallback authority rule;
+- the replay key;
+- the carrier boundary: git = durable result projection, Temporal / Argo = runtime,
+  mctl-api = read model;
+- the non-authorities list.
 
-`docs/temporal-flow.md` gets a short pointer.
+PR 2 and PR 3 each append their consumer section. `docs/temporal-flow.md` gets a pointer
+in PR 3.
 
 ## Alternatives
 
-1. **Extend the exit-code table and `--refusal-out` JSON.** This is the cheapest option,
-   but exit codes cannot carry the attempt, claim, head or digest bindings. The
-   `--refusal-out` JSON is unversioned and only exists for review-feedback mode. It would
-   keep growing the parallel tables in `_review_feedback_exit_code` and
-   `_followup_exit_codes`, which are the very drift the issue complains about. Dropped.
-2. **Reuse `ExecutionEvidence` (ADR 018) with an implementer-specific `Outcome`.** The
-   envelope is a join of canonical records with a 5-value outcome shared by every agent.
-   Widening that set or overloading `reason_code` would leak implementer semantics into a
-   cross-agent contract, and Tier B storage does not exist yet. Instead the completion is
-   its own small contract, and it can be referenced from an `ExecutionEvidence` via
-   `ArtifactRef` (`kind: implementation-completion`, `content_hash`). Dropped as the
-   primary carrier, kept as the join point.
-3. **Publish the completion as an Argo output parameter, or a new S3 artifact that
-   Temporal reads.** The CWFT explicitly forbids `outputs.parameters` (#530/#531,
-   gitops#1186). A new artifact would need a cross-repo CWFT change plus S3 read access
-   in the worker. The existing `changes` artifact → `.status.yaml` → `read_proposal_status`
-   path already exists and stays inside the git = durable-result boundary. Dropped.
-4. **Let the agent write the completion itself.** Model-authored self-certification is
-   what the lifecycle boundary forbids. The orchestrator builds the record from observed
-   facts. The agent's only input remains the validated, untracked marker. Dropped.
+1. **Extend exit codes and the `--refusal-out` JSON.** Exit codes cannot carry the run,
+   step, claim, head or digest bindings, and the JSON is unversioned and only exists in
+   review-feedback mode. Dropped.
+2. **Reuse `ExecutionEvidence` (ADR 018) with an implementer-specific outcome.** That
+   would leak implementer semantics into a cross-agent five-value outcome. Kept only as
+   the join point: `ArtifactRef(kind: implementation-completion, content_hash)`.
+3. **Fallback authority: last writer wins (status quo for the artifact).** Simple, but a
+   fallback `harness_failure` on the missing second account would erase the primary's
+   real `deterministic_failure` or `budget_exhausted`, which is exactly the owner's
+   concern. Dropped.
+4. **Fallback authority: drop the fallback's record entirely (replay guard refuses
+   it).** This loses the only record when the fallback *succeeds*, and it loses the
+   evidence that a second account was tried. Dropped in favour of the
+   primary-unless-fallback-complete rule, which keeps both as summaries.
+5. **Merge the two records in `commit-and-push`.** That would move contract logic into a
+   CWFT shell script that this repo cannot unit-test. Dropped. The optional input
+   artifact keeps the logic in Python under test.
+6. **Argo output parameter or a new artifact read by Temporal.** The CWFT forbids
+   `outputs.parameters` (#530/#531, gitops#1186). Dropped.
+7. **Agent-authored completion.** This is self-certification, which the issue forbids.
+   Dropped.
 
 ## Platform impact
 
-- **Migrations:** none. `.status.yaml` gains an optional `completion:` key. Readers that
-  do not know it ignore it (`proposal_state.load_status` returns a dict, and
-  `gitops_state._parse_status_yaml` reads named keys only). Old proposals simply lack it.
-- **Backward compatibility:**
-  - Exit codes, `--refusal-out` and status transitions are unchanged.
-  - A shepherd running an older implementer image gets no `--completion-out` file and
-    falls back to exit codes. A newer implementer called by an older shepherd ignores the
-    missing flag.
-  - `record_execution` optional keys degrade via the existing 4xx retry.
-  - Temporal changes sit behind `workflow.patched("implement-completion")`, so in-flight
-    DevLoops replay unchanged. Pinned by the replay fixtures in
-    `tests/fixtures/histories/`.
-- **Resource impact:** one sha256 over three small files and one extra GitHub contents
-  read per implement step. Negligible.
+- **Delivery:** three mctl-agents PRs, merged in order (see tasks.md), plus one small
+  additive mctl-gitops PR (an optional input artifact on `run-implementer`). The latter
+  can merge before or after mctl-agents PR 1: either order is safe.
+- **Migrations:** none. `.status.yaml` gains an optional `completion:` key that existing
+  readers ignore (`proposal_state.load_status`, `gitops_state._parse_status_yaml` read
+  named keys).
+- **Backward compatibility:** exit codes, `--refusal-out` and status transitions are
+  unchanged. An older shepherd ignores the new file, and a newer shepherd with an older
+  implementer falls back to exit codes. Temporal sits behind
+  `workflow.patched("implement-completion")`. The optional CWFT input is skipped when the
+  key is missing.
+- **Resource impact:** one sha256 over three small files, one extra optional artifact
+  download (a small tgz) in the fallback pod, and one GitHub contents read per Temporal
+  implement step.
 - **Risks and mitigations:**
-  - *Mis-mapping charges the wrong counter.* The shepherd stays on exit codes until
-    `SHEPHERD_TRUST_COMPLETION` is enabled, logs disagreements, and a test pins every
-    exit code against the table.
-  - *Private content leaks via `detail` / `summary`.* These fields are bounded,
-    redacted, and there is no stdout/stderr field. The schema test asserts the absence of
-    the forbidden keys.
-  - *`complete` read as review-clean.* It is enforced by schema absence plus ADR wording.
-    The shepherd's merge decision never reads `outcome`.
-  - *Stale-attempt overwrite.* Guarded by the `_status_is_still_ours` and
-    completion-write rules, and covered by tests.
-  - *Status-write ordering.* The projection is written in the same `update_status_yaml`
-    call as the existing transition, so no extra commit and no partial state is
-    possible.
+  - *`complete` read as "scope done" or review-clean.* Mitigated by the `gates_passed`
+    code name, the docstring and ADR wording, schema absence of review fields, and the
+    shepherd never reading `outcome` for merge.
+  - *Fallback hides the primary's outcome.* Mitigated by `select_authoritative` and
+    T3a / T3b. Before the CWFT input lands, it is visible as `primary_observed: false`
+    rather than silent.
+  - *Stale artifact from an earlier run is read as the primary.* The `run_id` match fails
+    closed.
+  - *Mis-mapping charges the wrong counter.* The shepherd stays in shadow until the flag
+    is turned on, and an exhaustive mapping test is added.
+  - *Private content leaks.* Bounded, redacted leaves; no stdout/stderr field.
 
 ## Open questions
 
-- No approved-content digest exists in `proposal_state.py`. `proposal_digest` is computed
-  at attempt start. Should it later bind to an approval-time digest and fail closed on a
-  mismatch?
-- Which verification checks are "required" per service is undefined. v1alpha1 treats
-  only orchestrator-side gates as required.
-- `incomplete` needs a new optional `remaining` list in `.implementer-refusal.json`. Is
-  that extension acceptable, or should `incomplete` stay reserved?
-- mctl-api's `/api/v1/agents/executions` decoder was not inspected from here. Persisting
-  the new optional fields is a cross-repo follow-up.
+- `WORKFLOW_UID` is not set by the deployed implement CWFT, so the per-pod `HOSTNAME`
+  derivation is what actually runs. Should the CWFT set it, as the `_resolve_attempt_id`
+  docstring assumes? Out of scope here: the design binds `run_id` + `step` and is correct
+  either way.
+- Is the interim `primary_observed: false` behaviour, before the mctl-gitops optional
+  input lands, acceptable? Or should mctl-agents PR 1 wait for it?
+- Approved-content digest binding (`proposal_digest` vs. a future approval-time digest).
+- The `RefusalMarker.remaining` extension as the only source of `incomplete`.
+- The mctl-api `/api/v1/agents/executions` decoder was not inspected. Persisting the new
+  optional fields is a cross-repo follow-up.
+- Whether token-2 is seeded in production was not observed. It does not change the
+  design.
