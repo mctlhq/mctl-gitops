@@ -14,7 +14,9 @@ metadata:
 
         1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
         2. flip-status — proposed → accepted for the {service, slug} pair,
-           recording approver identity. Idempotent: already-accepted exits 0
+           recording approver identity and the content digest of
+           requirements.md, design.md and tasks.md (mctl-agents#658).
+           Idempotent: already-accepted exits 0
            so Temporal retries and rebase races never fail the loop; any
            other status (implemented, needs-triage, ...) fails loudly.
         3. commit-and-push — commits ONLY that proposal's .status.yaml under
@@ -228,6 +230,41 @@ spec:
           APPROVER_SAFE=$(printf '%s' "$WORKFLOW_APPROVER" | tr -cd 'A-Za-z0-9._@-' | cut -c1-64)
           [ -n "$APPROVER_SAFE" ] || APPROVER_SAFE="unknown"
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Bind the approval to the content it approves (mctl-agents#658):
+          # the implementer recomputes this digest before it starts and
+          # refuses on a mismatch or on an approval without one. The framing
+          # must match mctl-agents `proposal_state.proposal_content_digest`
+          # byte for byte (pinned by tests/test_proposal_digest.py there):
+          # per file, in this order, "<name>\n<byte length>\n<bytes>" for a
+          # regular file and "<name>\n-\n" otherwise; then SHA-256. Built in
+          # a temp file, never a pipe, so a failed read stops the flip under
+          # `set -e` instead of hashing a short stream -- and before any edit
+          # below, so a failure leaves the status file untouched.
+          PROPOSAL_DIR=$(dirname "$STATUS_FILE")
+          DIGEST_INPUT=$(mktemp)
+          for NAME in requirements.md design.md tasks.md; do
+            if [ -f "$PROPOSAL_DIR/$NAME" ]; then
+              LEN=$(wc -c < "$PROPOSAL_DIR/$NAME")
+              LEN=$(echo $LEN)
+              case "$LEN" in
+                ''|*[!0-9]*)
+                  echo "❌ could not read the length of ${NAME}" >&2
+                  exit 1 ;;
+              esac
+              printf '%s\n%s\n' "$NAME" "$LEN" >> "$DIGEST_INPUT"
+              cat "$PROPOSAL_DIR/$NAME" >> "$DIGEST_INPUT"
+            else
+              printf '%s\n-\n' "$NAME" >> "$DIGEST_INPUT"
+            fi
+          done
+          CONTENT_DIGEST="sha256:$(sha256sum "$DIGEST_INPUT" | cut -d' ' -f1)"
+          rm -f "$DIGEST_INPUT"
+          case "$CONTENT_DIGEST" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *)
+              echo "❌ could not compute the proposal content digest" >&2
+              exit 1 ;;
+          esac
           # A hand-written file may lack a trailing newline; the appends
           # below would then glue their first key onto the last scalar
           # (`...: trueapproval:`), producing invalid YAML. Normalize once.
@@ -256,7 +293,12 @@ spec:
             # YAML indicators in first position (`@alice`, a bare `-`),
             # which are invalid unquoted. The charset excludes ' itself, so
             # plain quoting is always safe.
-            printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n" "$APPROVER_SAFE" "$NOW" >> "$STATUS_FILE"
+            printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n  content_digest: '%s'\n" "$APPROVER_SAFE" "$NOW" "$CONTENT_DIGEST" >> "$STATUS_FILE"
+          else
+            # A pre-existing approval block is left as written; it records no
+            # digest of this content, so the implementer refuses it with
+            # approval-digest-missing rather than run it.
+            echo "⚠️  ${STATUS_FILE} already has an approval block; no content_digest recorded" >&2
           fi
           # Post-edit verification: the flip this workflow exists to make
           # must actually be on disk before the commit step runs, otherwise
