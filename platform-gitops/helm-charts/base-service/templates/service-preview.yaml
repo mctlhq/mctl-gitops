@@ -5,6 +5,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "base-service.fullname" . }}-preview
+  annotations:
+    # Pruned together with the Rollout when blueGreen is switched off; see
+    # the same annotation in rollout.yaml.
+    argocd.argoproj.io/sync-options: PruneLast=true
   labels:
     {{- include "base-service.labels" . | nindent 4 }}
     {{- include "base-service.extraLabels" . | nindent 4 }}
