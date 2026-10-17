@@ -265,6 +265,14 @@ spec:
               echo "❌ could not compute the proposal content digest" >&2
               exit 1 ;;
           esac
+          # A proposed record that already carries an approval block would be
+          # flipped without a digest of this content, and once accepted it can
+          # never be re-approved. Refuse before any edit; the recovery is to
+          # drop the stale block in a PR and approve again.
+          if grep -q '^approval:' "$STATUS_FILE"; then
+            echo "❌ ${STATUS_FILE} is proposed but already has an approval block; refusing to flip without recording content_digest" >&2
+            exit 1
+          fi
           # A hand-written file may lack a trailing newline; the appends
           # below would then glue their first key onto the last scalar
           # (`...: trueapproval:`), producing invalid YAML. Normalize once.
@@ -288,18 +296,11 @@ spec:
               printf '%s: %s\n' "$FIELD" "$VALUE" >> "$STATUS_FILE"
             fi
           done
-          if ! grep -q '^approval:' "$STATUS_FILE"; then
-            # Single-quote approved_by: the sanitized charset still allows
-            # YAML indicators in first position (`@alice`, a bare `-`),
-            # which are invalid unquoted. The charset excludes ' itself, so
-            # plain quoting is always safe.
-            printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n  content_digest: '%s'\n" "$APPROVER_SAFE" "$NOW" "$CONTENT_DIGEST" >> "$STATUS_FILE"
-          else
-            # A pre-existing approval block is left as written; it records no
-            # digest of this content, so the implementer refuses it with
-            # approval-digest-missing rather than run it.
-            echo "⚠️  ${STATUS_FILE} already has an approval block; no content_digest recorded" >&2
-          fi
+          # Single-quote approved_by: the sanitized charset still allows YAML
+          # indicators in first position (`@alice`, a bare `-`), which are
+          # invalid unquoted. The charset excludes ' itself, so plain quoting
+          # is always safe. No approval block exists here (refused above).
+          printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n  content_digest: '%s'\n" "$APPROVER_SAFE" "$NOW" "$CONTENT_DIGEST" >> "$STATUS_FILE"
           # Post-edit verification: the flip this workflow exists to make
           # must actually be on disk before the commit step runs, otherwise
           # fail loudly here — a partially-updated file would otherwise be
