@@ -85,6 +85,9 @@ containerSecurityContext:
   capabilities:
     drop:
       - ALL
+  # Non-root already; the root filesystem stays writable until the service
+  # is verified on a read-only one (base-service hardening, step 2).
+  readOnlyRootFilesystem: false
 env:
   MCTL_TRACE_WORKFLOW_TYPES: DevLoopWorkflow
   MCTL_TRACE_ARGO_PARAM: "true"

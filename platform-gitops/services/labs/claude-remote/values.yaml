@@ -43,6 +43,9 @@ containerSecurityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
+  # Non-root already; the root filesystem stays writable until the service
+  # is verified on a read-only one (base-service hardening, step 2).
+  readOnlyRootFilesystem: false
 # Dedicated ServiceAccount (instead of the namespace's "default") so the
 # read-only cluster RBAC bound to it (see
 # platform-gitops/bootstrap/templates/system/labs-claude-remote-rbac.yaml)
