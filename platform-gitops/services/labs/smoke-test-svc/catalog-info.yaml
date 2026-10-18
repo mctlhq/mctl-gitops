@@ -5,6 +5,9 @@ metadata:
   namespace: labs
   description: "smoke-test-svc service"
   annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "labs"
+    platform.mctl.me/database-app: "smoke-test-svc"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-smoke-test-svc
     backstage.io/kubernetes-id: smoke-test-svc
     backstage.io/kubernetes-namespace: labs
