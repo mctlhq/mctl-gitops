@@ -1,6 +1,6 @@
 # mctl-agents App secret exposure
 
-Which workflows can read the raw `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY`
+Which workflows can read the raw `AGENTS_APP_PRIVATE_KEY`
 signing key, why permission-level narrowing does not close that gap, and
 what closes it.
 
@@ -9,6 +9,15 @@ Written for mctlhq/mctl-gitops#1033. Sibling to
 *what the mctl-agents App can do* (its declared permissions); this one is
 about a different lever: *who can read the raw key that mints tokens as
 that App at all*.
+
+## Update: `AGENTS_APP_ID` is retired (mctlhq/mctl-gitops#1034)
+
+Since 2026-10-18 every `create-github-app-token` call site identifies the
+App by its Client ID, read from the org **variable** `AGENTS_APP_CLIENT_ID`,
+and the `AGENTS_APP_ID` secret is deleted. A Client ID is public, so the
+only credential this runbook is about is `AGENTS_APP_PRIVATE_KEY`. The text
+below still names `AGENTS_APP_ID` where it records the original finding;
+the actionable steps name the key alone.
 
 ## Update: the bump jobs left the App (mctlhq/mctl-agents#470)
 
@@ -64,7 +73,7 @@ the App's settings page.
 
 ## In-repo consumers (verified from this clone)
 
-Grep for `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY` across
+Grep for `AGENTS_APP_PRIVATE_KEY` across
 `.github/workflows/` in this clone finds exactly four call sites.
 
 | Consumer | Mints for | `repositories:` | `permission-*` scoping (after this proposal) |
@@ -103,8 +112,8 @@ gh api orgs/mctlhq/actions/secrets/AGENTS_APP_PRIVATE_KEY \
 for repo in $(gh repo list mctlhq --limit 100 --json name -q '.[].name'); do
   gh api "repos/mctlhq/$repo/contents/.github/workflows" --jq '.[].name' 2>/dev/null \
     | xargs -I{} gh api "repos/mctlhq/$repo/contents/.github/workflows/{}" --jq '.content' 2>/dev/null \
-    | base64 -d 2>/dev/null | grep -qE 'secrets\.AGENTS_APP_(ID|PRIVATE_KEY)' \
-    && echo "$repo: mints from AGENTS_APP_*"
+    | base64 -d 2>/dev/null | grep -qE 'secrets\.AGENTS_APP_PRIVATE_KEY' \
+    && echo "$repo: mints from AGENTS_APP_PRIVATE_KEY"
 done
 ```
 
@@ -117,7 +126,7 @@ done
    leak from these two call sites specifically; does not touch secret
    readability.
 2. **Next, five-minute org-owner action (issue option 3)**: flip
-   `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY` Actions secret visibility
+   the `AGENTS_APP_PRIVATE_KEY` Actions secret visibility
    from `ALL` to `selected`, seeded with the verified consumer list from
    this runbook (in-repo table above, plus the externally-reported table
    once confirmed). Cheapest lever; closes the "any repo can read the key"
@@ -142,7 +151,7 @@ done
 
 - Run this runbook's verification commands (above) and update the
   "unverified" table with real findings.
-- Flip `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY` org secret visibility
+- Flip the `AGENTS_APP_PRIVATE_KEY` org secret visibility
   from `ALL` to `selected`, seeded with the confirmed consumer repo list
   (issue option 3).
 - Smoke-test `gitops-bump.yaml`, `release-deploy.yaml`, and

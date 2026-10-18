@@ -93,7 +93,7 @@ OIDC JWT (`id-token: write` + `auth/jwt` role `github-actions`), not a
 long-lived `VAULT_TOKEN`.
 
 For which repos/workflows can read the `mctl-agents` GitHub App's raw
-signing key (`AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY`), see
+signing key (`AGENTS_APP_PRIVATE_KEY`), see
 `docs/runbooks/agents-app-secret-exposure.md`.
 
 ## Terraform (k3s-preview cluster)
