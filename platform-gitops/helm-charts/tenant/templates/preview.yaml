@@ -179,27 +179,14 @@ rules:
     resources: ["externalsecrets"]
     verbs: ["*"]
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: argo-workflow-helm-deploy-central
-  namespace: {{ $ns }}
-  labels:
-    {{- include "tenant.labels" $ | nindent 4 }}
-subjects:
-  - kind: ServiceAccount
-    name: argo-workflow-sa
-    namespace: argo-workflows
-roleRef:
-  kind: Role
-  name: argo-workflow-helm-deploy
-  apiGroup: rbac.authorization.k8s.io
----
 # mctl-api submits preview-deploy and preview-delete in the tenant namespace
 # (operations.WorkflowNamespace), so they run as the tenant-local
-# argo-workflow-sa, not the central one bound above. Without this binding
-# `helm list -n {{ $ns }}` is forbidden and preview-deploy waits out its
-# namespace-readiness loop and fails.
+# argo-workflow-sa. Without this binding `helm list -n {{ $ns }}` is
+# forbidden and preview-deploy waits out its namespace-readiness loop and
+# fails. The central argo-workflows/argo-workflow-sa is deliberately not
+# bound here: nothing that runs as it acts inside preview namespaces, and
+# the binding it had gave it write access to every tenant's preview
+# secrets (tests/test_tenant_preview_rbac.py).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
