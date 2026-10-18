@@ -35,3 +35,7 @@ tenant:
     allowIntraNamespace: true
     allowClusterEgress: true
     allowInternetEgress: false
+  # draw-with-friends runs on the base-service non-root default; a
+  # server-side dry-run found no violating pods here or in karabu-preview
+  # (ROADMAP 3.2, step 2).
+  podSecurityLevel: "restricted"
