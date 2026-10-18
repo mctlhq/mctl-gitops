@@ -35,4 +35,9 @@ externalSecret:
       property: PSA_SECRET
 envFrom:
   - secretRef:
+      name: labs-psa-smoke-db-creds
+  - secretRef:
       name: psa-smoke-secrets
+dbSecret:
+  vaultPath: teams/labs/psa-smoke/database
+  secretName: labs-psa-smoke-db-creds

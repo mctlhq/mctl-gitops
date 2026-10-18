@@ -5,6 +5,9 @@ metadata:
   namespace: labs
   description: "psa-smoke service"
   annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "labs"
+    platform.mctl.me/database-app: "psa-smoke"
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-psa-smoke
     backstage.io/kubernetes-id: psa-smoke
     backstage.io/kubernetes-namespace: labs
