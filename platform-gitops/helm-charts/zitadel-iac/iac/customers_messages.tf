@@ -18,7 +18,8 @@ locals {
       signInWithGithub = "Continue with GitHub"
       # Login v2 shows this one static page for every failed IdP intent,
       # including the identity hook's refusal to create a customer account
-      # (mctl-api#653), so it must be right for both without saying which.
+      # (mctl-api#653). Explain the global invitation policy without claiming
+      # why an individual sign-in failed or disclosing cohort membership.
       loginError = {
         title       = "MCTL access is by invitation"
         description = "New here? Request access at https://mctl.ai/#request-access. You do not need to sign in to send a request. Already invited? Check your GitHub verified email and try again. MCTL staff and partners: go back and choose Sign in with MCTL account. For help, contact https://mctl.ai/#contact."
