@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-18T21:48:40Z'
+updated_at: '2026-10-18T22:03:32Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6d6f91ad348f1535
@@ -44,12 +44,12 @@ completion:
       required_total: 4
       optional_total: 1
   primary_observed: true
-notes: 'implementer declined to act: Both findings are already fixed in HEAD e28a7af.
-  Finding 1: issue_state.py:127-143 logs status/body on non-201, raises IssueStateError
-  for transport/429/5xx so the RetryPolicy is reachable, returns quiet False for no-token/4xx;
-  tests/test_post_issue_comment.py covers no-token, transport, 201, 4xx, 5xx. Finding
-  2: dev_loop.py:333 GRANT_FRESHNESS_INTERVAL is 1h (<=168 ticks) with the history
-  budget written in the comment. The CI failure (test_human_input_e2e TimeoutError,
-  in a 463s run where 6111 others passed) touches no code in this change (human-input
-  investigator path, not grant freshness);'
+notes: 'implementer declined to act: Reviewer text 1 reports 0 P1 / 0 P2 and an approved
+  verdict against HEAD 3f01c7a; the only P2 it mentions (_grant_refresh proxy wedging
+  the loop) is already fixed at orchestrator/temporal/workflows/dev_loop.py:2244-2247
+  (missing = not self._is_approved(needs_grant=True) and (self._grant_refresh or not
+  self._requested_ref)). The remaining items are non-blocking P3s outside this P1/P2
+  fix scope.'
 review_attempts: 2
+refusals: 1
+refusals_head: 3f01c7a93732301d5f79c6b04eb40d87e51b0b88
