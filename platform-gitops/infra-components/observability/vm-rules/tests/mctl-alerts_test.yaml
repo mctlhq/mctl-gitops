@@ -346,13 +346,17 @@ tests:
                 Umami retention CronJob admins/admins-umami-retention has not succeeded in over 26h — analytics older than 2 years may be kept despite the privacy policy
 
   - interval: 1m
-    name: a failed retention Job fires, a failed unrelated Job does not
+    name: a failed retention Job fires; a retried-then-complete one and an unrelated one do not
     input_series:
-      - series: 'kube_job_failed{namespace="admins",job_name="admins-umami-retention-29852500",condition="true"}'
+      - series: 'kube_job_status_failed{namespace="admins",job_name="admins-umami-retention-29852500"}'
         values: '1x20'
-      - series: 'kube_job_failed{namespace="admins",job_name="admins-umami-retention-29852500",condition="false"}'
+      - series: 'kube_job_complete{namespace="admins",job_name="admins-umami-retention-29852500",condition="true"}'
         values: '0x20'
-      - series: 'kube_job_failed{namespace="admins",job_name="admins-other-29852500",condition="true"}'
+      - series: 'kube_job_status_failed{namespace="admins",job_name="admins-umami-retention-29852400"}'
+        values: '1x20'
+      - series: 'kube_job_complete{namespace="admins",job_name="admins-umami-retention-29852400",condition="true"}'
+        values: '1x20'
+      - series: 'kube_job_status_failed{namespace="admins",job_name="admins-other-29852500"}'
         values: '1x20'
     alert_rule_test:
       - eval_time: 10m
@@ -362,7 +366,6 @@ tests:
               severity: warning
               namespace: admins
               job_name: admins-umami-retention-29852500
-              condition: "true"
             exp_annotations:
               summary: >-
                 Umami retention Job admins/admins-umami-retention-29852500 failed — check its logs for the "past retention" check or a database error

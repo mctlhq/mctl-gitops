@@ -313,8 +313,12 @@ spec:
               despite the privacy policy
         - alert: UmamiRetentionJobFailed
           # Fast signal for the cause; the staleness rule above is the backstop.
+          # Same shape as K3sUpgradeJobFailed: failed pods on a Job that has
+          # not (yet) completed, so a retry that later succeeded stays quiet.
           expr: |
-            kube_job_failed{namespace="admins", condition="true", job_name=~"admins-umami-retention-.*|umami-retention-.*"} == 1
+            kube_job_status_failed{namespace="admins", job_name=~"admins-umami-retention-.*|umami-retention-.*"} > 0
+            unless on(namespace, job_name)
+            kube_job_complete{namespace="admins", condition="true"} == 1
           for: 5m
           labels:
             severity: warning
