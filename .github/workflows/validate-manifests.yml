@@ -317,6 +317,16 @@ jobs:
           scripts/validate-tenant-workflow-shared-writes.py --selftest
           scripts/validate-tenant-workflow-shared-writes.py
 
+      - name: Tenant workflow pods pass Pod Security "restricted"
+        run: |
+          set -euo pipefail
+          # The workflows mctl-api runs in a tenant namespace must stay
+          # admissible once that namespace enforces "restricted" (handoff
+          # audit block B step 3): non-root, seccomp, no privilege escalation
+          # on init/wait/main, no runtime apk. --selftest first, same reason.
+          scripts/validate-tenant-workflow-pod-security.py --selftest
+          scripts/validate-tenant-workflow-pod-security.py
+
       - name: ArgoCD tenant RBAC fragments match the canonical policy
         run: |
           set -euo pipefail

@@ -15,11 +15,10 @@ spec:
           - name: component_name
           - name: secret_env_vars    # KEY=value newline-separated
       script:
-        image: alpine:3.19
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         source: |
           set -e
-          apk add --no-cache curl python3 > /dev/null 2>&1
           TEAM="$PARAM_TEAM_NAME"
           SERVICE="$PARAM_COMPONENT_NAME"
           SECRET_TEXT="$PARAM_SECRET_ENV_VARS"
@@ -223,11 +222,10 @@ spec:
           - name: vault_path        # e.g. "teams/payments/myapp/database"
           - name: json_data         # JSON string: '{"key":"val"}'
       script:
-        image: alpine:3.19
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         source: |
           set -e
-          apk add --no-cache curl > /dev/null 2>&1
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
           VAULT_TOKEN=$(curl -sS -X POST \
             -H "Content-Type: application/json" \
@@ -271,11 +269,10 @@ spec:
           - name: team_name
           - name: component_name
       script:
-        image: alpine:3.19
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         source: |
           set -e
-          apk add --no-cache curl > /dev/null 2>&1
           TEAM="$PARAM_TEAM_NAME"
           SERVICE="$PARAM_COMPONENT_NAME"
 
