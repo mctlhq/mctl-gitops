@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-18T22:03:32Z'
+status: merged
+updated_at: '2026-10-18T22:20:07Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6d6f91ad348f1535
@@ -50,6 +50,9 @@ notes: 'implementer declined to act: Reviewer text 1 reports 0 P1 / 0 P2 and an 
   (missing = not self._is_approved(needs_grant=True) and (self._grant_refresh or not
   self._requested_ref)). The remaining items are non-blocking P3s outside this P1/P2
   fix scope.'
-review_attempts: 2
-refusals: 1
-refusals_head: 3f01c7a93732301d5f79c6b04eb40d87e51b0b88
+github:
+  state: merged
+  head_sha: 3f01c7a93732301d5f79c6b04eb40d87e51b0b88
+  observed_at: '2026-10-18T22:20:07Z'
+merged_at: '2026-10-18T22:20:07Z'
+merge_commit: 1cfb3812c704fa14aad78e15357a8fc9107b3ea9
