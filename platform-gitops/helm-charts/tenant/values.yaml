@@ -130,9 +130,11 @@ tenant:
       persistentvolumeclaims: "1"
       services: "8"
 
-  # -- Pod Security Standards level for the namespace
-  # "baseline" allows workflow/CI pods running as root (required for apk, git, etc.)
-  # "restricted" enforces non-root + no privilege escalation (stricter, for app-only namespaces)
+  # -- Pod Security Standards enforce level for the tenant's namespaces,
+  # its preview namespace included. Tenant workflow pods meet "restricted"
+  # since #1964-#1969, so a tenant moves to it once its own services do
+  # (ROADMAP 3.2, step 2 of 2). Set it here, under tenant: — the templates
+  # read .Values.tenant.podSecurityLevel; a top-level key is ignored.
   podSecurityLevel: "baseline"
   # -- PSS level for the audit/warn labels only — enforcement stays at
   # podSecurityLevel. Running observe at "restricted" while enforcing

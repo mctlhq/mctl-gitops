@@ -4,8 +4,8 @@
 {{- $networking := .Values.tenant.networking }}
 {{- $store := .Values.tenant.secretStore }}
 {{- $preview := .Values.tenant.preview }}
-{{- $pss := .Values.podSecurityLevel | default "baseline" }}
-{{- $pssObserve := .Values.podSecurityObserveLevel | default "restricted" }}
+{{- $pss := .Values.tenant.podSecurityLevel | default "baseline" }}
+{{- $pssObserve := .Values.tenant.podSecurityObserveLevel | default "restricted" }}
 ---
 # Isolated preview namespace. Production workloads stay in {{ $tenantName }};
 # preview-deploy Helm releases and their ExternalSecrets live here so a branch
