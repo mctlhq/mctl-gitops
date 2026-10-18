@@ -70,7 +70,6 @@
       "backstage"
       "cert-manager"
       "cnpg-system"
-      "default"
       "erpact"
       "external-secrets"
       "forgejo"
