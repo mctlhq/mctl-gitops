@@ -86,7 +86,11 @@ spec:
       - name: dockerfile_path
         default: "Dockerfile"
       - name: port
-        default: ""
+        # `value`, not `default`: Argo rejects a workflow whose argument has
+        # only an empty default and was not submitted ("spec.arguments.port.value
+        # or spec.arguments.port.valueFrom is required"), and mctl-api never
+        # sends port, so every preview-deploy failed validation before any pod.
+        value: ""
         # Container port override. Leave empty to use the value from the service values.yaml.
         # Use when the image being previewed listens on a different port than production.
 
