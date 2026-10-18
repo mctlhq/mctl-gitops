@@ -267,7 +267,7 @@ def selftest() -> int:
         d["wft-smoke-test.yaml"]["spec"]["podSpecPatch"] = yaml.safe_dump(p)
 
     def m_apk(d):
-        s = _step(d, "tpl-vault-write.yaml", "write-platform-secret")
+        s = _step(d, "tpl-vault-write.yaml", "write-service-secrets")
         s["source"] = "apk add --no-cache curl\n" + s["source"]
 
     def m_usrlocal(d):

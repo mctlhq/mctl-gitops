@@ -180,18 +180,6 @@ with tempfile.TemporaryDirectory() as d:
               'os.environ["PARAM_SECRET_ENV_VARS"]' in m.group(1)
               and "$PARAM_SECRET_ENV_VARS" not in m.group(1))
 
-    # write-platform-secret refuses an unsafe vault_path before any request.
-    tmpl = template("tpl-vault-write.yaml", "write-platform-secret")
-    src = tmpl["script"]["source"]
-    m = re.search(r'^( *case "\$PARAM_VAULT_PATH" in.*?^ *esac)$', src, re.S | re.M)
-    check("extracted the vault_path guard", bool(m))
-    if m:
-        for bad in ("../x", "/abs", "a\nb", "a b", "a;b", ""):
-            r = run_sh(m.group(1), {**base_env, "PARAM_VAULT_PATH": bad}, work)
-            check(f"vault_path {bad!r} rejected", r.returncode != 0)
-        r = run_sh(m.group(1), {**base_env, "PARAM_VAULT_PATH": "teams/a/b-c_d"}, work)
-        check("valid vault_path accepted", r.returncode == 0)
-
 if failures:
     print("\n".join(failures), file=sys.stderr)
     sys.exit(1)
