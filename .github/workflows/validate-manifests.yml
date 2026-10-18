@@ -505,6 +505,12 @@ jobs:
         # it does, and a failed LIST or DELETE fails the step.
         run: python3 tests/test_tpl_vault_delete_service_tree.py
 
+      - name: Tenant workflows log in to Vault with their own tenant role
+        # A template reachable from a tenant namespace picks its Vault role
+        # from the pod's namespace and never asks for the platform role
+        # argo-workflow; create/delete-tenant manage the per-tenant role.
+        run: python3 tests/test_vault_login_role.py
+
       - name: Unit-test create-tenant's existing-tenant checks
         # create-tenant creates a tenant: an existing one fails validate unless
         # reprovision=true, and the commit step refuses one that appeared

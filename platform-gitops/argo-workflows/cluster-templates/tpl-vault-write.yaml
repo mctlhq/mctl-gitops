@@ -25,10 +25,18 @@ spec:
           VAULT_PATH="secret/data/teams/${TEAM}/${SERVICE}"
 
           echo "🔐 Authenticating with Vault (Kubernetes auth)..."
+          # A tenant namespace may assume only its own tenant role; the
+          # children wft-smoke-test submits in argo-workflows keep the
+          # platform role.
+          SA_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+          case "$SA_NS" in
+            argo-workflows) VAULT_ROLE=argo-workflow ;;
+            *) VAULT_ROLE="argo-workflow-tenant-${SA_NS}" ;;
+          esac
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
           VAULT_TOKEN=$(curl -sS -X POST \
             -H "Content-Type: application/json" \
-            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            -d "{\"role\":\"${VAULT_ROLE}\",\"jwt\":\"${SA_TOKEN}\"}" \
             "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
             grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
 
@@ -192,10 +200,15 @@ spec:
               except urllib.error.HTTPError as e:
                   return e.code, b""
 
+          # Same role choice as the shell templates: a tenant namespace gets
+          # only its own tenant role.
+          with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
+              ns = f.read().strip()
+          role = "argo-workflow" if ns == "argo-workflows" else f"argo-workflow-tenant-{ns}"
           with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
               jwt = f.read().strip()
           status, body = call("POST", "auth/kubernetes/login",
-                              body={"role": "argo-workflow", "jwt": jwt})
+                              body={"role": role, "jwt": jwt})
           if status != 200:
               sys.exit(f"Vault login failed (HTTP {status})")
           token = json.loads(body)["auth"]["client_token"]
@@ -226,10 +239,18 @@ spec:
         command: [sh]
         source: |
           set -e
+          # A tenant namespace may assume only its own tenant role; the
+          # children wft-smoke-test submits in argo-workflows keep the
+          # platform role.
+          SA_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+          case "$SA_NS" in
+            argo-workflows) VAULT_ROLE=argo-workflow ;;
+            *) VAULT_ROLE="argo-workflow-tenant-${SA_NS}" ;;
+          esac
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
           VAULT_TOKEN=$(curl -sS -X POST \
             -H "Content-Type: application/json" \
-            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            -d "{\"role\":\"${VAULT_ROLE}\",\"jwt\":\"${SA_TOKEN}\"}" \
             "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
             grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
           export VAULT_TOKEN
@@ -276,10 +297,18 @@ spec:
           TEAM="$PARAM_TEAM_NAME"
           SERVICE="$PARAM_COMPONENT_NAME"
 
+          # A tenant namespace may assume only its own tenant role; the
+          # children wft-smoke-test submits in argo-workflows keep the
+          # platform role.
+          SA_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+          case "$SA_NS" in
+            argo-workflows) VAULT_ROLE=argo-workflow ;;
+            *) VAULT_ROLE="argo-workflow-tenant-${SA_NS}" ;;
+          esac
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
           VAULT_TOKEN=$(curl -sS -X POST \
             -H "Content-Type: application/json" \
-            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            -d "{\"role\":\"${VAULT_ROLE}\",\"jwt\":\"${SA_TOKEN}\"}" \
             "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
             grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
           export VAULT_TOKEN
