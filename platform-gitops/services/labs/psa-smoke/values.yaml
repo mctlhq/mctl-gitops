@@ -4,7 +4,7 @@
 
 image:
   repository: ghcr.io/mctlhq/psa-smoke
-  tag: "psa1966-onboard"
+  tag: "psa1966-deploy"
 imagePullSecrets:
   - name: ghcr-credentials
 ingress:
@@ -41,3 +41,4 @@ envFrom:
 dbSecret:
   vaultPath: teams/labs/psa-smoke/database
   secretName: labs-psa-smoke-db-creds
+extraContainers: []
