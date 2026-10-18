@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-18T20:45:10Z'
+updated_at: '2026-10-18T20:47:10Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6d6f91ad348f1535
@@ -47,4 +47,13 @@ completion:
 ci_blockers_head: 59c92081c0eb730bfd6e6fe3b93988261c3e1417
 ci_blockers:
 - PR validation / tests
-review_attempts: 1
+refusals: 1
+refusals_head: 59c92081c0eb730bfd6e6fe3b93988261c3e1417
+notes: 'implementer declined to act: Both findings are already fixed in HEAD e28a7af.
+  Finding 1: issue_state.py:127-143 logs status/body on non-201, raises IssueStateError
+  for transport/429/5xx so the RetryPolicy is reachable, returns quiet False for no-token/4xx;
+  tests/test_post_issue_comment.py covers no-token, transport, 201, 4xx, 5xx. Finding
+  2: dev_loop.py:333 GRANT_FRESHNESS_INTERVAL is 1h (<=168 ticks) with the history
+  budget written in the comment. The CI failure (test_human_input_e2e TimeoutError,
+  in a 463s run where 6111 others passed) touches no code in this change (human-input
+  investigator path, not grant freshness);'
