@@ -656,6 +656,14 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_tenant_preview_rbac.py
 
+      - name: Tenant Pod Security labels follow tenant.podSecurityLevel
+        # The templates read these keys from the top level while the chart
+        # documented them under tenant:, so a per-tenant flip to restricted
+        # rendered baseline without a word.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_pod_security_level.py
+
       - name: Unit-test the image-user check in deploy-service
         # runAsNonRoot with a named or root image USER only fails after the
         # deploy is committed (CreateContainerConfigError). check-image-user.sh
