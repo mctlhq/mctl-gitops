@@ -68,11 +68,12 @@ env:
   # /api/send is the default and is what the public ingress below routes.
 ingress:
   enabled: true
-  # stats.mctl.ai is the canonical host. admins-umami.mctl.ai is kept because
-  # Backstage's forward-auth builds the post-login return URL from
-  # <tenant>-<service>.mctl.ai (same pattern as temporal-web). The alias is
-  # registered for forward-auth in bootstrap/templates/mctl-platform/
-  # mctl-portal.yaml (oidcProvider.forwardAuth.hosts).
+  # stats.mctl.ai is the public host. admins-umami.mctl.ai is the canonical
+  # <tenant>-<service> host that Backstage's forward-auth accepts without
+  # registration (resolveForwardAuthHost in mctl-portal's oidc-provider
+  # router). stats.mctl.ai is an alias, so it is listed in
+  # bootstrap/templates/mctl-platform/mctl-portal.yaml
+  # (oidcProvider.forwardAuth.hosts); an unlisted alias gets 403.
   hosts:
     - stats.mctl.ai
     - admins-umami.mctl.ai
@@ -92,14 +93,17 @@ ingress:
     trustForwardHeader: false
 # The only two paths the tracked sites need from the internet: the tracker
 # script and the collection endpoint it posts to. Exact paths, no
-# forward-auth, on stats.mctl.ai only. Traefik orders routers by rule length,
-# so `Host(stats.mctl.ai) && Path(/api/send)` outranks the main ingress's
-# `Host(stats.mctl.ai) && PathPrefix(/)` and these requests never reach the
-# forward-auth middleware; every other path still does.
+# forward-auth, on stats.mctl.ai only; every other path still goes through
+# forward-auth. Which router wins is a security boundary here, so it is
+# pinned with router.priority instead of left to Traefik's default
+# rule-length ordering, under which a longer rule added later on this host
+# could silently take these paths (or the reverse).
 # No cert-manager annotation here: the certificate is issued once, for the
 # ingress above, and these reuse its secret.
 extraIngresses:
   - name: admins-umami-tracker
+    annotations:
+      traefik.ingress.kubernetes.io/router.priority: "1000"
     hosts:
       - stats.mctl.ai
     path: /insights.js
@@ -109,6 +113,8 @@ extraIngresses:
         hosts:
           - stats.mctl.ai
   - name: admins-umami-collect
+    annotations:
+      traefik.ingress.kubernetes.io/router.priority: "1000"
     hosts:
       - stats.mctl.ai
     path: /api/send
