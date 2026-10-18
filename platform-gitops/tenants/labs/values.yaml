@@ -84,3 +84,8 @@ tenant:
     allowIntraNamespace: true
     allowClusterEgress: true
     allowInternetEgress: true
+  # Every workload here runs on the base-service non-root default; a
+  # server-side dry-run found no violating pods in labs or labs-preview,
+  # and each Deployment's and the CronJob's pod template passes restricted
+  # (ROADMAP 3.2, step 2).
+  podSecurityLevel: "restricted"
