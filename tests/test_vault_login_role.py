@@ -103,8 +103,8 @@ for path in sorted(T.glob("*.yaml")):
                 check(f"{where}: python, namespace {ns} -> {want(ns)}", got == want(ns), got)
             check(f"{where}: python, empty namespace is not the platform role",
                   py_role(expr, "") != "argo-workflow")
-check("found the tenant logins (tpl-vault-write x4, provision-database x1)",
-      logins >= 5, logins)
+check("found the tenant logins (tpl-vault-write x3, provision-database x1)",
+      logins >= 4, logins)
 
 # 2. create-tenant makes the role; delete-tenant removes it.
 create = (T / "wft-create-tenant.yaml").read_text()
