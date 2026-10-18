@@ -173,10 +173,11 @@ extraVolumeMounts:
     mountPath: /etc/projects-mcp
     readOnly: true
 extraContainers: []
-# Opted out of the chart's non-root, read-only-root default (base-service
-# hardening, step 2): the image runs as root. Remove once it runs as a numeric
-# non-root USER and writes only to /tmp, see
-# https://docs.mctl.ai/guides/scaffolding#container-requirements
+# Non-root, read-only root (the chart default). The image runs as USER 1000:1000
+# since 0.1.13; the uid is pinned here too, so kubelet and the deploy-time image
+# check do not depend on reading the image config. The server writes nothing to
+# disk at run time, so /tmp from the chart's writablePaths is enough.
+# See https://docs.mctl.ai/guides/scaffolding#container-requirements
 containerSecurityContext:
-  runAsNonRoot: false
-  readOnlyRootFilesystem: false
+  runAsUser: 1000
+  runAsGroup: 1000
