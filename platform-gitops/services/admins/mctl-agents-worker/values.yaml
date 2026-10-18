@@ -85,11 +85,18 @@ containerSecurityContext:
   capabilities:
     drop:
       - ALL
-  # Non-root already; the root filesystem stays writable until the service
-  # is verified on a read-only one (base-service hardening, step 2).
-  readOnlyRootFilesystem: false
+# Read-only root (the chart default). Run-time writes, measured on the live pod
+# 2026-10-18: tempfiles under /tmp, and `gh` (called through run_shepherd)
+# keeping its state in ~/.local/state/gh. The other ~950 files were Python
+# bytecode under /app; PYTHONDONTWRITEBYTECODE below stops those attempts.
+writablePaths:
+  - /tmp
+  - /home/app/.local
 env:
   MCTL_TRACE_WORKFLOW_TYPES: DevLoopWorkflow
+  # The image ships no precompiled bytecode for the app, so on a read-only
+  # root Python would try and fail to write a .pyc for every module it imports.
+  PYTHONDONTWRITEBYTECODE: "1"
   MCTL_TRACE_ARGO_PARAM: "true"
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents

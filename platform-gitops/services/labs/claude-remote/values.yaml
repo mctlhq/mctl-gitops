@@ -43,8 +43,11 @@ containerSecurityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
-  # Non-root already; the root filesystem stays writable until the service
-  # is verified on a read-only one (base-service hardening, step 2).
+  # Writable root on purpose, permanently (owner decision 2026-10-18): this is
+  # an interactive agent box whose job is to run arbitrary tooling, and a
+  # read-only root would break any tool that writes outside HOME (/workspace)
+  # and /tmp, while protecting little on a pod that executes code by design.
+  # PSA restricted does not require readOnlyRootFilesystem; it stays non-root.
   readOnlyRootFilesystem: false
 # Dedicated ServiceAccount (instead of the namespace's "default") so the
 # read-only cluster RBAC bound to it (see
