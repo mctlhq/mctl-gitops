@@ -9,7 +9,7 @@ metadata:
       Helm manifests → commit to gitops repo → ArgoCD syncs.
 
       Actions:
-        onboard      — first deploy: creates values.yaml, catalog-info.yaml, vault-cleanup.yaml
+        onboard      — first deploy: creates values.yaml, catalog-info.yaml
         deploy       — update image tag in existing service
         update-config — update env vars / secrets without rebuilding
 

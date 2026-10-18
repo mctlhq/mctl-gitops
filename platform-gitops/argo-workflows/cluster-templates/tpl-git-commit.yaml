@@ -471,12 +471,6 @@ spec:
               yq eval -i '.metadata.links += [{"url": "https://" + strenv(HOST), "title": "Service URL", "icon": "web"}]' "${DIR}/catalog-info.yaml"
             fi
 
-            # vault-cleanup.yaml
-            sed \
-              -e "s|__TEAM_NAME__|${TEAM}|g" \
-              -e "s|__SERVICE_NAME__|${SERVICE}|g" \
-              "platform-gitops/argo-workflows/file-templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
-
             # Validate Helm template before committing
             echo "🔍 Validating Helm template..."
 
