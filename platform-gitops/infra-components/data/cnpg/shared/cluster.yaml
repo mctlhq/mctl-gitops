@@ -173,6 +173,7 @@ spec:
       - host labs-seerrsense labs-seerrsense all scram-sha-256
       - host labs-mctl-alice labs-mctl-alice all scram-sha-256
       - host karabu-draw-with-friends karabu-draw-with-friends all scram-sha-256
+      - host admins-umami admins-umami all scram-sha-256
       # Forgejo (platform git, bootstrap/templates/data/forgejo.yaml)
       - host forgejo forgejo all scram-sha-256
       # ZITADEL (platform identity provider, bootstrap/templates/core-infra/zitadel.yaml)
@@ -225,6 +226,12 @@ spec:
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
+      - name: admins-umami
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: admins-umami-db-creds
       - name: karabu-draw-with-friends
         login: true
         connectionLimit: 10
