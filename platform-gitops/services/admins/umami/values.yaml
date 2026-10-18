@@ -166,7 +166,9 @@ extraObjects:
       jobTemplate:
         spec:
           backoffLimit: 2
-          activeDeadlineSeconds: 900
+          # Generous: the first runs after a backlog may delete many rows in
+          # one transaction; a daily run normally takes seconds.
+          activeDeadlineSeconds: 3600
           ttlSecondsAfterFinished: 86400
           template:
             metadata:
