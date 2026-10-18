@@ -118,10 +118,12 @@ externalSecret:
     - secretKey: PII_ENCRYPTION_KEY
       remoteKey: teams/labs/pfeifenpatenschaft-backend
       property: PII_ENCRYPTION_KEY
-# Opted out of the chart's non-root, read-only-root default (base-service
-# hardening, step 2): the image runs as root. Remove once it runs as a numeric
-# non-root USER and writes only to /tmp, see
-# https://docs.mctl.ai/guides/scaffolding#container-requirements
+# Non-root, read-only root (the chart default). The image declares no USER and
+# cannot get one: the source repository is archived (see the top of this file).
+# So the uid is pinned here instead: node:22-alpine's `node` user, 1000:1000.
+# /app is world-readable, and the server writes nothing to disk at run time
+# (migrations go to Postgres), so /tmp from the chart's writablePaths is enough.
+# See https://docs.mctl.ai/guides/scaffolding#container-requirements
 containerSecurityContext:
-  runAsNonRoot: false
-  readOnlyRootFilesystem: false
+  runAsUser: 1000
+  runAsGroup: 1000
