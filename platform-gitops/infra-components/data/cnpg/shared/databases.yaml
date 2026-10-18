@@ -268,3 +268,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: labs-psa-smoke-db
+spec:
+  name: "labs-psa-smoke"
+  owner: "labs-psa-smoke"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
