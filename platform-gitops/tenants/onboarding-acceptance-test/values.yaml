@@ -1,0 +1,35 @@
+# Tenant configuration for: onboarding-acceptance-test
+# Created by: wft-create-tenant workflow
+# Managed by: ArgoCD ApplicationSet (applicationset-tenants)
+tenant:
+  name: onboarding-acceptance-test
+  displayName: "onboarding-acceptance-test"
+  description: "onboarding-acceptance-testonboarding-acceptance-testonboarding-acceptance-testonboarding-acceptance-test"
+  members:
+    - userId: mctl-reviewer
+      principalId: prn_01M58D1EE581Q7M9RTDTBVP15M
+      role: owner
+      catalogKey: principal
+  quotas:
+    requests.cpu: "1"
+    requests.memory: "2Gi"
+    limits.cpu: "2"
+    limits.memory: "3Gi"
+    pods: "10"
+    persistentvolumeclaims: "5"
+    services: "10"
+  limitRange:
+    enabled: true
+    default:
+      cpu: "500m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "5Gi"
+  networking:
+    allowIntraNamespace: true
+    allowClusterEgress: true
+    allowInternetEgress: false
