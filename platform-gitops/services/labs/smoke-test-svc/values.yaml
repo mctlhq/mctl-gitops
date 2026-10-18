@@ -4,14 +4,11 @@
 
 image:
   repository: ghcr.io/mctlhq/smoke-test-svc
-  tag: "smoke-test-kxnqj-onboard"
-
+  tag: "smoke-test-kxnqj-deploy"
 imagePullSecrets:
   - name: ghcr-credentials
-
 ingress:
   enabled: false
-
 resources:
   requests:
     cpu: 100m
@@ -19,7 +16,6 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
-
 probes:
   startup:
     path: /healthz
@@ -37,5 +33,15 @@ probes:
     port: http
     initialDelaySeconds: 60
     periodSeconds: 15
-
-env: {}
+env:
+  SMOKE_ENV: deploy_action
+extraContainers: []
+externalSecret:
+  targetSecret: smoke-test-svc-secrets
+  data:
+    - secretKey: SMOKE_SECRET
+      remoteKey: teams/labs/smoke-test-svc
+      property: SMOKE_SECRET
+envFrom:
+  - secretRef:
+      name: smoke-test-svc-secrets
