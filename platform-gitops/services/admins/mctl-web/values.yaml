@@ -32,10 +32,7 @@ resources:
     memory: 256Mi
 env:
   APP_ENV: production
-  t: "123"
-  r: "321"
   NUXT_PUBLIC_FRONT_BASE: https://mctl.ai
-  NUXT_VUE_DEVTOOLS: "true"
 ingress:
   enabled: true
   annotations:
