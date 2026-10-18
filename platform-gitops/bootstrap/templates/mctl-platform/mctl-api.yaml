@@ -199,6 +199,23 @@ spec:
             # ZITADEL identity maps to the linked GitHub login.
             # Rollback: set this back to `both`.
             OAUTH_UPSTREAM: "zitadel"
+            # Client ID Metadata Documents (mctlhq/mctl-api#375, rollout plan
+            # mctlhq/mctl-api#693). ACCEPT resolves an https:// client_id from
+            # the document at that URL and shows a consent page; ADVERTISE
+            # announces client_id_metadata_document_supported in discovery, and
+            # clients that prefer CIMD (ChatGPT, Codex, Claude, VS Code) switch
+            # to it with no DCR fallback. So the allowlist names every
+            # CIMD-capable client in use, exact hosts only: chatgpt.com covers
+            # ChatGPT and Codex. A client off the list gets 400 on its next
+            # authorization; existing sessions keep refreshing either way.
+            # Proven end to end with ChatGPT (private_key_jwt, refresh) on
+            # 2026-10-18 against a local 4.105.0. When enabled, no live session
+            # used a URL-shaped client_id.
+            # Rollback: set ADVERTISE to "false" (clients go back to DCR on
+            # their next sign-in), or remove all three lines.
+            OAUTH_CIMD_ACCEPT: "true"
+            OAUTH_CIMD_ADVERTISE: "true"
+            OAUTH_CIMD_ALLOWED_HOSTS: "chatgpt.com,claude.ai,vscode.dev"
             # GitHub numeric ids allowed to create a NEW account in the ZITADEL
             # org customers (identity hook, mctlhq/mctl-web#158). Unset creates
             # nobody; exactly "*" opens creation to anyone (the public cutover,
