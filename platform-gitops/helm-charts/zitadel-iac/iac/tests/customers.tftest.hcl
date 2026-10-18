@@ -359,9 +359,10 @@ run "customer_login_ui_directs_every_entry_path_to_github" {
 
 # The identity hook's customer-creation refusal ends on Login v2's static
 # IdP failure page, which shows only idp.loginError. Its copy must send
-# staff and partners to the other button, and must not reveal that a
-# creation allowlist exists (mctl-api#653).
-run "customer_login_error_points_staff_to_the_mctl_account" {
+# staff and partners to the other button. The owner-authorized invitation
+# entry now explains the global launch policy, never an individual account's
+# allowlist membership or a claimed reason for this particular refusal.
+run "customer_login_error_explains_invitation_entry" {
   command = plan
   plan_options {
     target = [zitadel_hosted_login_translation.customers_en]
@@ -369,12 +370,14 @@ run "customer_login_error_points_staff_to_the_mctl_account" {
   assert {
     condition = (
       strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.description, "Sign in with MCTL account") &&
+      strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.title, "invitation") &&
+      strcontains(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.description, "https://mctl.ai/#request-access") &&
       alltrue([
-        for word in ["allowlist", "allow list", "not allowed", "invite", "approved"] :
+        for word in ["allowlist", "allow list", "not allowed", "approved"] :
         !strcontains(lower(jsondecode(zitadel_hosted_login_translation.customers_en.translations).idp.loginError.description), word)
       ])
     )
-    error_message = "idp.loginError must point staff to Sign in with MCTL account without revealing the customer allowlist."
+    error_message = "idp.loginError must explain the global invitation entry and staff sign-in without disclosing individual account approval."
   }
 }
 
