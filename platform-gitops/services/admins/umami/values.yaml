@@ -24,10 +24,11 @@ containerSecurityContext:
   runAsUser: 1001
   runAsGroup: 65533
 resources:
-  # Measured locally: ~305Mi steady state.
+  # Measured locally: ~305Mi steady state. The request sits above that so the
+  # pod is not first in line for eviction under node memory pressure.
   requests:
     cpu: 50m
-    memory: 256Mi
+    memory: 384Mi
   limits:
     cpu: 500m
     memory: 512Mi
