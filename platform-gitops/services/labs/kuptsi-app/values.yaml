@@ -107,6 +107,17 @@ extraContainers:
     image: ghcr.io/mctlhq/kuptsi-app:0.2.27
     imagePullPolicy: IfNotPresent
     command: ["python", "-m", "src.temporal.worker"]
+    # The chart's non-root, read-only default covers only the main container;
+    # extraContainers get just allowPrivilegeEscalation=false + drop ALL. Same
+    # uid as the main container, see containerSecurityContext below.
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      readOnlyRootFilesystem: true
+    volumeMounts:
+      - name: worker-tmp
+        mountPath: /tmp
     env:
       - name: TEMPORAL_ADDRESS
         value: temporal-frontend.temporal.svc.cluster.local:7233
@@ -183,10 +194,21 @@ externalSecret:
     - secretKey: CHAT_ID
       remoteKey: teams/labs/kuptsi-app
       property: CHAT_ID
-# Opted out of the chart's non-root, read-only-root default (base-service
-# hardening, step 2): the image runs as root. Remove once it runs as a numeric
-# non-root USER and writes only to /tmp, see
-# https://docs.mctl.ai/guides/scaffolding#container-requirements
+# Non-root, read-only root (the chart default). python:3.12-slim has no
+# non-root user and the image declares no USER, so the uid is pinned here:
+# 10001:10001, the number the container-requirements guide uses. /app is
+# world-readable, and the venv's python is /usr/local/bin/python3.12, not
+# something under /root. The only run-time writes are tempfile downloads and
+# gunicorn's worker heartbeat, both under /tmp (chart writablePaths). The
+# temporal-worker container above gets the same uid and its own /tmp, because
+# the chart applies neither of these to extraContainers.
+# See https://docs.mctl.ai/guides/scaffolding#container-requirements
 containerSecurityContext:
-  runAsNonRoot: false
-  readOnlyRootFilesystem: false
+  runAsUser: 10001
+  runAsGroup: 10001
+# The temporal-worker's /tmp: its activities download album photos there
+# (src/file_utils.py, tempfile.mkdtemp). The chart's writablePaths volumes only
+# go to the main container.
+extraVolumes:
+  - name: worker-tmp
+    emptyDir: {}
