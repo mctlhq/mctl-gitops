@@ -89,9 +89,9 @@ containerSecurityContext:
   capabilities:
     drop:
       - ALL
-  # Non-root already; the root filesystem stays writable until the service
-  # is verified on a read-only one (base-service hardening, step 2).
-  readOnlyRootFilesystem: false
+# Read-only root (the chart default), /tmp from the chart's writablePaths. This
+# role only submits Argo workflows and waits on them (submit_and_wait); the
+# agents themselves run in the Argo pods, not here.
 env:
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents
