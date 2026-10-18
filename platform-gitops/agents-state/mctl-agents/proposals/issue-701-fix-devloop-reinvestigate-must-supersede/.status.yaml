@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-18T21:01:04Z'
+updated_at: '2026-10-18T21:02:46Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6d6f91ad348f1535
@@ -44,9 +44,6 @@ completion:
       required_total: 4
       optional_total: 1
   primary_observed: true
-ci_blockers_head: e28a7af49916077baddcfcea4390795d18bf56b7
-ci_blockers:
-- PR validation / lint
 notes: 'implementer declined to act: Both findings are already fixed in HEAD e28a7af.
   Finding 1: issue_state.py:127-143 logs status/body on non-201, raises IssueStateError
   for transport/429/5xx so the RetryPolicy is reachable, returns quiet False for no-token/4xx;
