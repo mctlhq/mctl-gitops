@@ -1,5 +1,5 @@
 status: merged
-updated_at: '2026-10-18T15:39:25Z'
+updated_at: '2026-10-18T15:33:38Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-712e598a58478b31
@@ -44,5 +44,9 @@ completion:
       required_total: 4
       optional_total: 1
   primary_observed: true
-merged_at: '2026-10-18T15:39:25Z'
+github:
+  state: merged
+  head_sha: 49a8c796820246f576d1402c78013912f04177bd
+  observed_at: '2026-10-18T15:33:38Z'
+merged_at: '2026-10-18T15:33:38Z'
 merge_commit: 3bcdd3116da63fa5555e8c9169fe73996fec1fcc
