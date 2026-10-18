@@ -12,6 +12,10 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -19,6 +23,10 @@ spec:
       containers:
         - name: db-init
           image: postgres:17-alpine
+          {{- with .Values.extraContainerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           command: ["sh", "-c"]
           args:
             - |

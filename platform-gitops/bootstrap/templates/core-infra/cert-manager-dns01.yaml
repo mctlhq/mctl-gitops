@@ -1,0 +1,44 @@
+# cert-manager's Cloudflare DNS-01 token, from Vault.
+#
+# The ClusterIssuers letsencrypt-prod and letsencrypt-staging
+# (infrastructure/k3s-preview/extra-manifests/letsencrypt-*.yaml.tpl) read
+# `api-token` from the Secret cert-manager/cloudflare-api-token. That Secret
+# was created by hand on 2026-02-12 with no source of truth, holding a token
+# with DNS Write on every zone of the account. It now comes from Vault at
+# platform/cloudflare/cert-manager-dns01: an account-owned token with DNS
+# Write on the four zones the issued certificates name, declared in
+# infrastructure/cloudflare/tokens/manifest.tf so the nightly drift run
+# verifies its scope.
+#
+# Like traefik-origin-cert.yaml, this is the seam between two control planes:
+# Terraform (kube-hetzner extra-manifests) owns the ClusterIssuers, ArgoCD owns
+# the Secret they reference. The Secret name is unchanged, so the issuers need
+# no change. On first sync ESO takes over the existing hand-made Secret; if it
+# cannot, the ExternalSecret reports an error and the old Secret stays as it
+# was, so issuance never loses its credential.
+#
+# Rotation: issue a new token, overwrite the Vault path, and ESO rolls the
+# Secret within refreshInterval.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: cloudflare-api-token
+  namespace: cert-manager
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: cloudflare-api-token
+    creationPolicy: Owner
+  data:
+    - secretKey: api-token
+      remoteRef:
+        key: platform/cloudflare/cert-manager-dns01
+        property: token
+        # ESO's CRD defaults, spelled out: see the note in
+        # infra-components/data/forgejo/externalsecret.yaml (#789).
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None

@@ -16,7 +16,8 @@ mock_provider "zitadel" {
 mock_provider "kubernetes" {}
 
 variables {
-  smtp_password = "test"
+  smtp_password        = "test"
+  customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
   tenant_users = jsonencode({
     erpact = jsonencode({
       tuser = jsonencode({ email = "t@example.com", first_name = "T", last_name = "U" })
@@ -210,4 +211,24 @@ run "rejects_frappe_on_another_tenant" {
     })
   }
   expect_failures = [kubernetes_secret_v1_data.erpact_frappe_users]
+}
+
+run "grant_only_access_does_not_provision_frappe_users" {
+  command = plan
+  plan_options {
+    target = [zitadel_user_grant.erpact_frappe_admin, kubernetes_secret_v1_data.erpact_frappe_users]
+  }
+  variables {
+    platform_admins = jsonencode({
+      admin = jsonencode({ email = "a@example.com", first_name = "A", last_name = "B", frappe_access = true })
+    })
+  }
+  assert {
+    condition     = keys(zitadel_user_grant.erpact_frappe_admin) == ["admin"]
+    error_message = "A grant-only opt-in must preserve ERPact SSO access."
+  }
+  assert {
+    condition     = length(local.erpact_frappe_admin_users) == 0
+    error_message = "SSO role migration must not provision Frappe application users or application roles."
+  }
 }

@@ -16,9 +16,10 @@ mock_provider "zitadel" {
 mock_provider "kubernetes" {}
 
 variables {
-  tenant_users    = "{\"erpact\": \"{\\\"tuser\\\": \\\"{\\\\\\\"email\\\\\\\": \\\\\\\"t@example.com\\\\\\\", \\\\\\\"first_name\\\\\\\": \\\\\\\"T\\\\\\\", \\\\\\\"last_name\\\\\\\": \\\\\\\"U\\\\\\\"}\\\"}\"}"
-  smtp_password   = "test"
-  platform_admins = "{\"dmitrii\": \"{\\\"email\\\": \\\"a@example.com\\\", \\\"first_name\\\": \\\"A\\\", \\\"last_name\\\": \\\"B\\\"}\"}"
+  tenant_users         = "{\"erpact\": \"{\\\"tuser\\\": \\\"{\\\\\\\"email\\\\\\\": \\\\\\\"t@example.com\\\\\\\", \\\\\\\"first_name\\\\\\\": \\\\\\\"T\\\\\\\", \\\\\\\"last_name\\\\\\\": \\\\\\\"U\\\\\\\"}\\\"}\"}"
+  smtp_password        = "test"
+  customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
+  platform_admins      = "{\"dmitrii\": \"{\\\"email\\\": \\\"a@example.com\\\", \\\"first_name\\\": \\\"A\\\", \\\"last_name\\\": \\\"B\\\"}\"}"
 }
 
 run "invitation_mails_name_the_login_name" {

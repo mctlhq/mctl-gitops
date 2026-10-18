@@ -1,0 +1,35 @@
+status: implemented
+updated_at: '2026-10-17T19:33:31Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-d12037d9896e1cfb
+  trace_id: 9d8a65eca62881ae29e9b55b5e74ac98
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/.github
+  issue: 161
+  url: https://github.com/mctlhq/.github/issues/161
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-cfe803393edd7748
+  content_hash: sha256:cfe803393edd77484a4b286b64b61598d928fd3302e82e9b6b43ef0e3918cb2e
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-16T00:01:48Z'
+attempt:
+  id: 8e7a2b5f7fba0f146a676d5bce0248ea68fc97d3ed3ae9ddcf1b5be6a2857fb2
+  started_at: '2026-10-16T00:07:55Z'
+  expires_at: '2026-10-16T02:17:55Z'
+  finished_at: '2026-10-16T00:10:43Z'
+pr: https://github.com/mctlhq/.github/pull/193
+review_attempts: 1
+merge_owner: human-codeowner
+github:
+  state: open
+  head_sha: bf31c84e4f9c2c17e7acbd350e7f5546989e6c8e
+  observed_at: '2026-10-17T19:33:31Z'

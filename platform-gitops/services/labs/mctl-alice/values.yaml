@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-alice
-  tag: "2.2.0"
+  tag: "2.2.1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -13,6 +13,23 @@ service:
 backstage:
   kubernetesId: mctl-alice
 replicaCount: 1
+# Explicit on purpose. The live Deployment still had `Recreate`, left by a
+# manual `kubectl patch` on 2026-09-20 and owned by that field manager, so
+# an empty `strategy` here never reached it under server-side apply. Recreate
+# was needed only while the pod held a ReadWriteOnce PVC; storage moved to
+# shared Postgres (CNPG), so a rolling update is safe and avoids the gap.
+strategy:
+  type: RollingUpdate
+# Non-root on a read-only root filesystem (base-service hardening, step 2).
+# runAsNonRoot is checked by kubelet against a numeric user only, so the
+# ids this image already runs as are pinned (observed 2026-10-16); the
+# chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
 resources:
   requests:
     cpu: 50m

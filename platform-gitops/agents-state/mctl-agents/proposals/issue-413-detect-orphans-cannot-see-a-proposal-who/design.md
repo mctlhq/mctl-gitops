@@ -2,351 +2,117 @@
 
 ## Current state
 
-### The detector
+- `orchestrator/temporal/activities/orphans.py`
+  - `ACTIONABLE_STATUSES = {"accepted", "in-progress", "implemented", "review-fixing"}`.
+  - `_sync_detect_orphans` is the local-checkout path. It iterates `_discover_refs(state_dir, reconcile=True)` and calls `run_shepherd.find_pr_for_proposal`, which reads `pr:` and falls back to branch discovery. It executes `continue` when `pr is None or pr.closed_unmerged or pr.merged`.
+  - `_detect_from_github` is the worker's default path. It runs `list_proposal_refs()` and then `fetch_pr_snapshots(refs)`, and applies the same `continue` on a missing snapshot. `fetch_pr_snapshots` only fetches refs whose `pr:` parses via `pr_ref_of`.
+  - Both paths emit `OrphanSignal(reason="No active DevLoopWorkflow found for open PR proposal")`.
+  - `detect_orphans(state_dir_path="", active_workflow_ids=None)` converts `None` and `[]` both to an empty set (`active_workflow_ids or set()`), so the two cannot be told apart.
+  - `expected_dev_loop_id(slug, repo, service)` derives `dev-loop-{owner}-{service}-{N}` from an `issue-N-` slug. For other slugs it returns `None`.
+- `orchestrator/temporal/workflows/reconcile.py`, `ReconcileWorkflow.run`:
+  - It calls `list_active_dev_loop_ids` under the `orphan-active-ids` patch.
+  - If that query fails, it returns `OrphanDetectionResult(total_actionable=0, orphans=[], skipped_reason=...)`.
+  - Otherwise it calls `detect_orphans(state_dir_path, active_ids)`.
+  - The unpatched replay branch calls `detect_orphans(state_dir_path)` without an active set.
+  - `ReconcileWorkflowResult.orphans` is the `OrphanDetectionResult`.
+- `orchestrator/temporal/activities/stranded.py` (#412):
+  - `_scan` already implements most of a "never started" predicate for `accepted` only: no `pr_url`, no unexpired attempt lease, not `unrunnable`/`blocked`, `execution_authorization` present, outside the `updated_at` grace period, derived DevLoop id not active.
+  - It feeds `ImplementSweepWorkflow` (`workflows/implement_sweep.py`, scheduled every 15 minutes at offset 12 in `worker.py`, grace `DEFAULT_IMPLEMENT_SWEEP_GRACE_MINUTES = 20` in `constants.py`), which re-submits the implementer.
+  - Its result is not on the reconcile result, and the sweep's own documented rollback is to pause its schedule. That rollback recreates exactly the silent state.
+  - `stranded.py` imports `expected_dev_loop_id` from `orphans.py`, so `orphans.py` must not import from `stranded.py` (it would create an import cycle).
+- `orchestrator/temporal/activities/gitops_state.py`:
+  - `_parse_status_yaml` returns an 8-tuple `_ParsedStatus`: status, pr_url, updated_at, attempt_expires_at, unrunnable, blocked, execution_authorization, unauthorized_reason. The tuple is cached per blob sha in `_blob_cache`.
+  - `ProposalStateRef` carries the same fields, all defaulted.
+  - `approval.approved_at` is not extracted anywhere in `orchestrator/`. The only approval-related read is `approved_by`, in `proposal_state.execution_authorization`.
+- `orchestrator/proposal_state.py`, `execution_authorization(data)` returns `(authorization, unauthorized_reason)` and is fail-closed.
+- `docs/adr/005-temporal-reconcile.md`, the "Orphan definition" section, defines the orphan as requiring an open PR.
+- Tests: `tests/test_temporal_activities.py` (`test_detect_orphans_*`, `test_orphans_are_detected_from_github_too`), `tests/test_reconcile_workflow.py`, `tests/test_stranded_activity.py`.
 
-`orchestrator/temporal/activities/orphans.py` owns the whole of orphan
-detection. Its module docstring (lines 1-5) states the definition the issue
-quotes, and both detection paths implement it identically:
-
-- `_sync_detect_orphans(state_dir, active_workflow_ids)` (lines 47-79), used only
-  when an explicit local `state_dir_path` is passed. It calls
-  `run_shepherd._discover_refs(state_dir, reconcile=True)` and then, per ref,
-  `run_shepherd.find_pr_for_proposal(...)`, dropping the ref at line 59 when
-  `pr is None or pr.closed_unmerged or pr.merged`.
-- `_detect_from_github(active_ids)` (lines 102-126), the production path. It
-  calls `gitops_state.list_proposal_refs()` and `gitops_state.fetch_pr_snapshots(refs)`,
-  and drops the ref with the same condition at line 109.
-
-`ACTIONABLE_STATUSES` (line 25) is `{accepted, in-progress, implemented,
-review-fixing}`, so an `accepted` proposal is enumerated and then dropped. In the
-GitHub path that drop is unconditional for a proposal with no `pr:`:
-`fetch_pr_snapshots` (gitops_state.py:319-382) only fetches refs for which
-`pr_ref_of(ref)` returns a `(repo, number)` pair, and `pr_ref_of` returns `None`
-when `ref.pr_url` is falsy (gitops_state.py:299-300). In the local path
-`find_pr_for_proposal` (run_shepherd.py:1333-1357) additionally falls back to
-`_find_pr_url_by_branch(service, slug)`, so a proposal whose implementer pushed a
-branch but never opened a PR can still resolve there — but for "never started"
-there is no branch either, so both paths land on `pr is None`.
-
-`_expected_workflow_id(slug, repo, service)` (lines 82-99) derives
-`dev-loop-{owner}-{service}-{issue}` from an `issue-<N>-` slug prefix, and takes
-the owner from the PR's repo. That is the only place the PR is needed for the
-active-workflow comparison, and the owner defaults to `mctlhq` when there is no
-repo (line 98) — so the ID can be derived without a PR.
-
-### What happens to the result
-
-`detect_orphans` (lines 129-164) logs one `ORPHAN` line per signal at INFO and
-returns `OrphanDetectionResult(total_actionable, orphans, skipped_reason)`.
-`ReconcileWorkflow` (workflows/reconcile.py:124-186) embeds that result in
-`ReconcileWorkflowResult`, and nothing reads it: the 15-minute schedule in
-`orchestrator/temporal/worker.py:241-269` starts the workflow and never fetches a
-result. The log line is the entire consumer surface.
-`docs/adr/010-lifecycle-ownership-contract.md:48` records this explicitly —
-"Owner-less PR detected | `OrphanSignal` | No | nothing — logged only".
-`orchestrator/temporal/activities/lifecycle_reconcile.py:65-68` imports
-`ACTIONABLE_STATUSES` and `_expected_workflow_id` from this module, reusing the
-predicate but never the result type.
-
-### The state the detector would have to read
-
-`.status.yaml` merge semantics live in `orchestrator/proposal_state.py:145-187`
-(`update_status_file`; unknown keys preserved, `None` deletes, `UNSET` leaves
-alone), with `now_iso()` at lines 26-33 producing RFC3339 UTC with a `Z` suffix.
-Relevant keys for this change:
-
-- `status`, `updated_at`, `updated_by` — written on every status write
-  (proposal_state.py:166-168), present on all 371 live status files.
-  `updated_at` is currently read by nothing in this repo.
-- `approval: {approved_by, approved_at}` — written only by the Argo CWFT
-  `cwft-mctl-agents-approve.yaml`, never by this repo, present on 122 files.
-  `approved_at` is read by nothing today; `approved_by` is read by
-  `proposal_state.py:110-116`.
-- `attempt: {id, started_at, expires_at, finished_at}` — minted by
-  `run_implementer.py:2693-2703` under `IMPLEMENT_ATTEMPT_LEASE`
-  (`timedelta(minutes=130)`, run_implementer.py:668), and read by
-  `run_shepherd._attempt_is_fresh` (run_shepherd.py:2795-2877), which parses
-  `expires_at` with `datetime.fromisoformat(value.replace("Z", "+00:00"))` and
-  returns `False` on `(TypeError, ValueError)`.
-
-Neither ref type carries any of these timestamps. `run_shepherd.ProposalRef`
-(run_shepherd.py:847-876) carries `proposal_dir` and a derived `status_path`, so
-the local path *could* re-read the file. `gitops_state.ProposalStateRef`
-(gitops_state.py:66-76) carries only `service, slug, status, pr_url`, because
-`_parse_status_yaml` (gitops_state.py:137-148) returns only `(status, pr_url)` and
-`_blob_cache` caches exactly that tuple keyed by blob SHA
-(gitops_state.py:56-57, 123-134). The production path therefore has **no access to
-any timestamp at all** today.
-
-### Existing "age since X" precedent
-
-- `run_shepherd._within_settle_window(head_pushed_at, now, settle_min)`
-  (run_shepherd.py:1493-1515) — parse, normalise naive to UTC, guard future
-  timestamps, compare against a `timedelta`. Threshold
-  `SHEPHERD_MERGE_SETTLE_MIN` at run_shepherd.py:479-497, env-overridable,
-  default 15, non-positive disables.
-- `run_incident_responder.py:52` — `MIN_AGE_MINUTES = int(os.getenv("MIN_AGE_MINUTES", "30"))`,
-  "skip incidents younger than N minutes". The closest precedent for an
-  only-act-on-things-older-than gate.
-- ADR-010 lines 204-240 — liveness and progress bounds must exceed twice the
-  cadence of the loop they measure, so one missed tick cannot make a live entity
-  look dead.
-
-### Determinism constraints
-
-`ReconcileWorkflow` guards every command addition with a `workflow.patched`
-marker (`orphan-active-ids`, `reconcile-apply`, `lifecycle-reconcile`,
-`exec-queue`), and `tests/test_workflow_replay.py:142-160` replays
-`tests/fixtures/histories/reconcile_apply.prepatch.json` against the live
-definitions. `tests/test_workflow_replay.py:22-40` records the measured fact that
-an *extra argument to an existing activity* and a *changed return payload* are
-invisible to the Replayer — only added, removed or reordered commands are not.
-`tests/test_patch_memoization.py` records that a marker is memoized for the life
-of an execution, so an unpatched branch can never be deleted while old executions
-may be in flight. `tests/test_worker_isolation.py:36,82-104` names `orphans.py`
-as a module the worker imports at module scope and fails the build if any new
-module-level import there transitively reaches `claude_agent_sdk` or
-`orchestrator.run_implementer`.
+Deployed state checked:
+- `$MCTL_GITOPS_ROOT/services/admins/mctl-agents-worker/values.yaml` (`env:` block): the worker runs in tenant `admins` (`LIFECYCLE_ROLLOUT_MODE: observe`, `TEMPORAL_NAMESPACE: mctl-agents`). No `IMPLEMENT_SWEEP_*` or never-started env var is set, so code defaults apply. Sibling services in the same directory: `mctl-agents-worker-exec`, `mctl-agents-worker-implement`.
+- `$MCTL_GITOPS_ROOT/agents-state/*/proposals/*/.status.yaml`: 120 proposals are `status: accepted`. All 120 have no `approval.approved_by`, no `pr:` and no `attempt:`. They are the legacy, unauthorized shape. 0 proposals are `in-progress`.
+  - Consequence: a predicate without the authorization filter would emit 120 signals on its first tick. That is why unauthorized records are only counted.
+  - Approved records do carry `approval.approved_at`, e.g. `mctl-academy/.../issue-212-.../.status.yaml: approved_at: '2026-08-29T14:07:18Z'`.
+- The three evidence proposals (`mctl-api/proposals/issue-335-*`, `mctl-gitops/proposals/issue-1278-*`, `.github/proposals/issue-99-*`) are now `merged`. Each has `approval.approved_at: '2026-09-19T15:37:12Z'` and `attempt.started_at` between 17:47 and 18:05Z, which confirms the 2h+ gap between approval and claim.
+- `mctl_list_services(team="admin")` returned `count: 0`. That is the wrong tenant name, not evidence of absence; the gitops path above is the authoritative source. Live worker logs were not queried.
 
 ## Proposed solution
 
-Split the predicate rather than loosening it, exactly as the issue asks, and
-deliver the second signal **inside the existing `detect_orphans` activity result**
-so that no new workflow command is scheduled.
+Add a second predicate inside the same activity and return its output in the same result object. The two signals stay separate.
 
-### 1. A second signal type, in `activities/orphans.py`
+1. **Extract `approved_at` in `gitops_state.py`.**
+   - `_parse_status_yaml` also returns `approval.approved_at`, normalized with `str(...)` exactly like `updated_at`. This makes `_ParsedStatus` a 9-tuple.
+   - Update the single unpack site in `list_proposal_refs.one`.
+   - Add `approved_at: str | None = None` to `ProposalStateRef`.
+   - `_blob_cache` is process-local and holds tuples from the same code version, so no migration is needed.
 
-```python
-NEVER_STARTED_STATUSES = {"accepted", "in-progress"}
+2. **Share the timestamp parser.** Move `stranded._parse_iso` into `gitops_state.py` as `parse_iso` and keep `stranded._parse_iso = parse_iso` as an alias. `orphans.py` can then use it without importing `stranded.py`, which would be circular.
 
-# Grace window between approval and claim. Four reconcile ticks; must exceed
-# twice the approve-to-implement cadence per ADR-010 L208-240.
-STALLED_NEVER_STARTED_MINUTES = int(os.getenv("STALLED_NEVER_STARTED_MINUTES", "60"))
+3. **Add the new types and predicate in `orphans.py`.**
+   ```python
+   NEVER_STARTED_STATUSES = {"accepted", "in-progress"}
+   NEVER_STARTED_REASON = "approved, no PR, no live DevLoopWorkflow: execution never started"
 
-REASON_NEVER_STARTED = "execution-never-started"
-REASON_NEVER_STARTED_UNKNOWN_AGE = "execution-never-started-unknown-age"
+   @dataclass(frozen=True)
+   class NeverStartedSignal:
+       service: str; slug: str; status: str
+       approved_at: str | None; age_minutes: int | None; reason: str
+   ```
+   `OrphanDetectionResult` gains two defaulted fields:
+   - `never_started: list[NeverStartedSignal] = field(default_factory=list)`;
+   - `never_started_unauthorized: int = 0`.
 
-@dataclass(frozen=True)
-class StalledSignal:
-    service: str
-    slug: str
-    status: str
-    since: str | None        # the timestamp the age was measured from
-    since_field: str         # which key it came from: attempt.started_at, ...
-    age_minutes: int | None  # None when no timestamp parsed
-    reason: str              # stable slug, groupable by a future metric
-```
+   A pure function `_classify_never_started(refs, active_ids, threshold_minutes, now)` does the classification. It takes a list of `ProposalStateRef` and returns `(signals, unauthorized_count)`. It applies these rules in order:
+   - status not in `NEVER_STARTED_STATUSES`: skip;
+   - `pr_url` set: skip (that is the existing orphan predicate's case);
+   - `attempt_expires_at > now`: skip;
+   - `unrunnable` or `blocked`: skip;
+   - `execution_authorization is None`: increment the unauthorized count and skip;
+   - `expected_dev_loop_id(slug, None, service)` in `active_ids`: skip;
+   - `age = now - parse_iso(approved_at or updated_at)`, falling back to `updated_at` when `approved_at` does not parse. If `age < threshold`: skip. If neither timestamp parses: report with `age_minutes=None` (fail toward visibility).
+   - Otherwise: emit a signal.
 
-`OrphanDetectionResult` gains one defaulted field:
+   `_detect_from_github` calls it on the actionable refs it has already listed, so there are no extra GitHub reads. `_sync_detect_orphans` builds equivalent `ProposalStateRef`s from `_discover_refs` plus `run_shepherd._load_status` (reusing `proposal_state.execution_authorization`/`unrunnable_reason`) and calls the same function. Both paths therefore share one classifier.
 
-```python
-stalled: list[StalledSignal] = field(default_factory=list)
-```
+   The PR-based loop is untouched. A `pr is None` ref continues there exactly as before.
 
-Defaulted for the same reason `skipped_reason` (orphans.py:41-44) and
-`PRSnapshot.head_sha` (gitops_state.py:88-91) are: an activity result recorded
-before this field existed must still deserialize.
+4. **Keep "active set unknown" distinct from "no active loops".**
+   - `detect_orphans` keeps `active_workflow_ids: list[str] | None = None`.
+   - It runs the never-started classifier only when `active_workflow_ids is not None`.
+   - The unpatched replay branch in `reconcile.py` passes one argument, so it gets an empty `never_started`.
+   - The visibility-failure arm already builds an `OrphanDetectionResult` with `skipped_reason`. The new fields default to empty there, and `skipped_reason` covers both signals.
+   - No workflow code changes, so there is no new `workflow.patched` marker and no replay risk. The new data travels inside the existing activity result.
 
-### 2. The predicate
+5. **Threshold and logging.**
+   - In `constants.py`, add `NEVER_STARTED_THRESHOLD_MINUTES_ENV = "NEVER_STARTED_THRESHOLD_MINUTES"`, `DEFAULT_NEVER_STARTED_THRESHOLD_MINUTES = 45` and `never_started_threshold_minutes()` via `_int_env`. The comment should tie the 45 to the sweep's 20-minute grace plus its 15-minute interval.
+   - The activity reads the threshold itself (activities may read env). The workflow input does not change.
+   - Log `activity.logger.warning("NEVER_STARTED service=%s slug=%s status=%s approved_at=%s age_minutes=%s reason=%s", ...)` per signal.
+   - Log one INFO summary line that includes `never_started_unauthorized`.
 
-Evaluated for a ref only when the existing orphan branch has already skipped it
-with `pr is None`, so the two predicates are disjoint by construction and a
-proposal can never appear in both lists:
-
-1. `ref.status in NEVER_STARTED_STATUSES` — `implemented` and `review-fixing`
-   without a PR are a different corruption, out of scope.
-2. No PR at all. In the GitHub path this is `snapshots.get(key) is None`; in the
-   local path it is the `pr is None` the loop already computed. A `closed_unmerged`
-   or `merged` PR is *not* a never-started case and keeps falling through the
-   existing skip.
-3. No matching active DevLoopWorkflow: `_expected_workflow_id(ref.slug, None, ref.service)`
-   not in the active set. The existing helper already handles the missing-repo
-   case by defaulting the owner to `mctlhq` (orphans.py:98), and already returns
-   `None` for a slug with no `issue-<N>-` prefix (incident and pre-Temporal
-   proposals) — those never had a DevLoop, so no active-ID check applies and the
-   ref stays eligible.
-4. No live claim: the `attempt:` block has no `finished_at` and an `expires_at`
-   in the future. This is the guard that keeps a running implementer, which holds
-   a 130-minute lease and has not opened its PR yet, from being reported.
-   Implemented as a local `_attempt_is_live(attempt, now)` mirroring
-   `run_shepherd._attempt_is_fresh`'s parsing idiom rather than importing it,
-   because `_attempt_is_fresh` takes a `ProposalRef` and reads the file itself —
-   and because `IMPLEMENT_ATTEMPT_LEASE` lives in `run_implementer`, which
-   `orphans.py` must never import (tests/test_worker_isolation.py:36).
-5. Age past the threshold. The clock is the first parseable of
-   `attempt.finished_at`, `attempt.started_at`, `approval.approved_at`,
-   `updated_at` — a "last forward progress" timestamp in ADR-010's vocabulary,
-   which also gives `in-progress` a sensible clock. Parsed with the repo's
-   `.replace("Z", "+00:00")` idiom, naive values normalised to UTC, future
-   timestamps treated as age zero, following `_within_settle_window`
-   (run_shepherd.py:1493-1515).
-
-If no timestamp parses, the ref is reported anyway with
-`REASON_NEVER_STARTED_UNKNOWN_AGE` and `age_minutes=None`. This deliberately
-breaks with `_within_settle_window`'s "unknown timestamp means no constraint"
-convention: that function gates an *action*, this one gates a *log line*, and the
-entire point of the issue is that silence is the failure mode. The cost of a
-false positive here is one INFO line.
-
-### 3. Known-versus-unknown active set
-
-Today `_sync_detect_orphans` collapses the distinction at line 55
-(`active_ids = active_workflow_ids or set()`). `ReconcileWorkflow`'s unpatched
-replay branch (reconcile.py:170-175) calls `detect_orphans` with the state dir
-only, so `active_workflow_ids` is `None` and every candidate would look
-workflow-less. The new predicate therefore checks `active_workflow_ids is None`
-and emits no stalled signals in that case, recording it in `skipped_reason` if it
-is not already set. The existing orphan behaviour on that branch is left exactly
-as it is — changing it would be a behaviour change visible to a resumed
-execution, and it is not what this issue is about.
-
-### 4. Surfacing
-
-- The logging loop in `detect_orphans` (orphans.py:154-162) gains a second loop
-  emitting `STALLED service=%s slug=%s status=%s since=%s age_minutes=%s reason=%s`.
-  Distinct prefix, distinct stable reason slug, so a promtail metrics stage can
-  count them separately — `orchestrator/lifecycle/shadow.py:121` records that
-  promtail attaches no labels, so the class has to be in the line itself.
-- `ReconcileWorkflowResult.orphans.stalled` is the workflow-level surface. No new
-  field on `ReconcileWorkflowResult`, no new activity, no new
-  `workflow.patched` marker, and no new command in the history — so
-  `reconcile_apply.prepatch.json` replays unchanged and
-  `reconcile_apply.patched.json` does not need re-recording either. The
-  visibility-failure early return (reconcile.py:110-122) constructs
-  `OrphanDetectionResult` by keyword and picks up the empty default for free.
-
-### 5. Reading the timestamps in the production path
-
-`gitops_state._parse_status_yaml` must return more than `(status, pr_url)`. It
-becomes a small frozen dataclass:
-
-```python
-@dataclass(frozen=True)
-class ParsedStatus:
-    status: str
-    pr_url: str | None
-    approved_at: str | None
-    updated_at: str | None
-    attempt_started_at: str | None
-    attempt_finished_at: str | None
-    attempt_expires_at: str | None
-```
-
-`ProposalStateRef` gains the same five timestamp fields, all defaulted to `None`
-so existing constructions and any recorded result stay valid. `_blob_cache`
-(gitops_state.py:56-57) changes its value type from the tuple to `ParsedStatus`;
-it is an in-process LRU keyed by blob SHA with no persistence, so a deploy starts
-with an empty cache and there is no mixed-shape hazard. Cost is unchanged: the
-blobs are already fetched and already parsed, and only the parsed shape widens —
-no extra GitHub call, which matters for a sweep that runs every 15 minutes over
-212 proposals under one shared token (gitops_state.py:18-27).
-
-For the local `state_dir` path the timestamps come from re-reading
-`ref.status_path` with `run_shepherd._load_status`, the same thing
-`_attempt_is_fresh` does — that path is test/CLI only, so an extra file read per
-actionable ref is not a cost worth optimising away.
-
-### 6. Docs
-
-`docs/adr/005-temporal-reconcile.md` lines 127-136 (the orphan definition) gets
-the second predicate written next to the first.
-`docs/adr/010-lifecycle-ownership-contract.md:48` gets a second row for the
-never-started signal, still "logged only".
-`docs/temporal-flow.md:157` and `docs/diagrams/temporal-flow-schedules.mmd:4`
-describe the `detect_orphans` node and must mention both outputs.
+6. **Docs.** Extend ADR-005's "Orphan definition" with a "Never-started signal" subsection stating the predicate and that it is report-only. Update the `orphans.py` module docstring, which currently defines only the PR orphan.
 
 ## Alternatives
 
-**Loosen the existing predicate to `pr is None or open PR`.** One-line change,
-and the issue explicitly rejects it: the two conditions stop being
-distinguishable at the consumer, the single `reason` string stops meaning one
-thing, and any future alert has to re-derive which case it is holding from
-`pr_url is None`. It also silently changes the meaning of the existing
-`OrphanSignal`, which `lifecycle_reconcile.py` and ADR-010 both reference.
-
-**A separate `detect_stalled` activity called from `ReconcileWorkflow`.** The
-cleanest module boundary, and the most expensive: a new
-`workflow.execute_activity` is a new command, so it needs its own
-`workflow.patched` marker with an `else` branch that can never be deleted
-(tests/test_patch_memoization.py), a new fake in
-`tests/test_reconcile_workflow.py::_fake_activities`, a re-recorded
-`reconcile_apply.patched.json` via `tools/record_workflow_history.py --kind patched`,
-and registration in `worker.py`'s `short_activities`. It would also re-read the
-same 212 blobs the orphan sweep just read, doubling the tick's GitHub cost, or
-require a shared cache across two activities. Rejected: the two predicates
-consume identical inputs (the ref list, the PR snapshots, the active set) and
-belong in one pass.
-
-**Extend the ownership sweep (`reconcile_lifecycle_ownership`, ADR-010) instead.**
-That sweep already classifies entities against liveness and progress bounds and
-has a vocabulary for `stuck`. But ADR-010 lines 838-842 say deliberately that an
-entity with no record and no live execution is "drift `detect_orphans` reports in
-the same tick from the same active set" — the ownership store is scoped to
-entities that have an owner, and a proposal that was never claimed has no
-ownership row to classify. Putting the check there would mean inventing rows for
-entities nobody ever owned, and the sweep issues writes, which this signal must
-not. Rejected as a contract violation, not just a cost.
-
-**Report every never-started proposal with no age threshold.** Simplest, and
-unusable: every proposal reports during the normal window between approval and
-the next implement cron firing, so the signal is noisy from the first tick and
-gets ignored — which is the failure mode #412 already demonstrated a different
-way.
+- **Loosen the existing predicate** so `pr is None` also yields an `OrphanSignal`. Rejected: the issue asks for the two conditions to stay distinguishable. It would also put 120 legacy records into `orphans` immediately, with no age threshold.
+- **Surface `find_stranded_accepted`'s result on the reconcile result** (call it from `ReconcileWorkflow`). Rejected:
+  - it adds a new activity command, and therefore a patch marker, to the workflow;
+  - its grace period is tuned for submitting, not alerting (20 minutes from `updated_at`, not `approved_at`);
+  - it covers `accepted` only;
+  - if the sweep code is the regression, a monitor that shares its code path regresses with it. Sharing only the low-level field extraction keeps the detector independent.
+- **A new top-level `ReconcileWorkflowResult.never_started` field.** Rejected for now: it requires workflow-code changes behind a new `workflow.patched("never-started")`. Nesting the signal in `OrphanDetectionResult` meets the "alongside the existing orphans" requirement with zero replay surface.
 
 ## Platform impact
 
-**Migrations.** None. No schema change to `.status.yaml`, no new key written, no
-gitops write at all. The change is read-only, in the same activity that is
-already read-only.
-
-**Backward compatibility.**
-- `OrphanDetectionResult.stalled` and the new `ProposalStateRef` fields are
-  defaulted, so results and refs recorded before this change deserialize
-  unchanged — the rule already applied at orphans.py:41-44 and
-  gitops_state.py:88-91.
-- `ReconcileWorkflowResult` is untouched.
-- No command is added to `ReconcileWorkflow`, so
-  `tests/test_workflow_replay.py:142-160` passes without a new marker and
-  `reconcile_apply.prepatch.json` must not be re-recorded
-  (`tests/replay_scenarios.py:26-37`).
-- `detect_orphans`' signature is unchanged, so a resumed execution re-executing
-  it from the unpatched branch still matches the worker's signature
-  (reconcile.py:165-169).
-- The existing `ORPHAN` line, its reason string, and the PR-based predicate are
-  byte-identical after this change.
-
-**Resource impact.** Zero extra GitHub calls: the widened parse consumes blobs
-the sweep already downloads, and the never-started branch only runs for refs the
-orphan branch already skipped. The blob cache keeps its SHA key and its
-`_BLOB_CACHE_MAX` bound of 4096; only the cached value grows by five optional
-strings, roughly 0.5 KB per proposal at today's 212 proposals. The extra
-per-tick work is a handful of `datetime.fromisoformat` calls.
-
-**Risks and mitigations.**
-- *Log noise on first deploy.* Every genuinely stalled proposal in the backlog
-  reports on the first tick after rollout, and keeps reporting every 15 minutes
-  until it moves, because the signal is stateless. Mitigation: the reason slugs
-  make the lines trivially greppable, the threshold is env-tunable via
-  `STALLED_NEVER_STARTED_MINUTES` without a redeploy of code, and the signal is
-  INFO with no alert wired, so the blast radius is a log volume increase. The
-  first tick after merge should be read deliberately — it is a backlog census,
-  not an incident.
-- *False positives from an implementer that claims without stamping `attempt:`.*
-  Guard 4 relies on the attempt block existing. If a future claim path skips it,
-  a live implementer reports as stalled. Mitigation: guard 3 (active DevLoop ID)
-  catches the Temporal path independently, and the signal takes no action.
-- *`updated_at` as a fallback clock is coarse.* Any status write refreshes it,
-  so a proposal that flipped status for an unrelated reason gets its age reset
-  and reports later than it should. Mitigation: it is the fourth fallback, used
-  only when `attempt` and `approval` are both absent, and late-reporting is the
-  safe direction for a detector whose competing failure mode is noise.
-- *Worker isolation.* `orphans.py` is explicitly named in
-  `tests/test_worker_isolation.py:82-104` as a module the worker imports at
-  module scope. The new code adds only `os`, `datetime` and
-  `run_shepherd._load_status` — `run_shepherd` is already imported there
-  (orphans.py:16-19) — and must not import `run_implementer` for
-  `IMPLEMENT_ATTEMPT_LEASE`. The test enforces this.
-- *Timezone handling.* `now_iso()` (proposal_state.py:26-33) and the approve CWFT
-  both write `Z`-suffixed UTC, but two legacy files carry a `retry:` key and old
-  hand-edits exist. Naive timestamps are normalised to UTC and future timestamps
-  clamped to age zero, per `_within_settle_window`.
+- **Migrations:** none.
+  - All new dataclass fields are defaulted, so older recorded `OrphanDetectionResult` and `ProposalStateRef` payloads still deserialize.
+  - The blob cache is in-memory.
+- **Backward compatibility:**
+  - `OrphanSignal` and its reason string are unchanged.
+  - The `detect_orphans` signature is unchanged.
+  - Workflow command sequence is unchanged, so existing replay fixtures (`tests/fixtures/histories/reconcile_apply.*.json`) still replay.
+- **Resources:** no additional GitHub API calls. One extra dict lookup per status blob, and an O(n) pass over refs that are already listed.
+- **Risks and mitigations:**
+  - *False positives during the normal approval-to-claim window:* the 45-minute threshold from `approved_at` exceeds the sweep's worst-case claim latency (about 35 minutes).
+  - *Legacy noise:* unauthorized records are counted, not listed. All 120 current `accepted` records are unauthorized, so the first tick in production is expected to emit zero signals and `never_started_unauthorized=120`. That count is a useful baseline in itself.
+  - *Unknown active set:* never-started is suppressed whenever `active_workflow_ids is None` or the visibility query failed.
+  - *Slug without an `issue-N-` prefix* (e.g. an authorized `incident-*`): `expected_dev_loop_id` returns `None`, so no active check applies. That matches `stranded._scan`, which also treats such records as unowned.

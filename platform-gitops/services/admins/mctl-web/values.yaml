@@ -5,14 +5,22 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-web
-  tag: "7.6.2"
+  tag: "7.10.1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
-  # 6.0.0 (pre-redesign rollback) runs nginx on port 80. The base-service
-  # chart binds the container port and the Service port to this single
-  # value, so it must change together with the image tag.
   port: 80
+  # nginx-unprivileged listens on 8080 (mctl-web 7.10.0+). The Service and
+  # Ingress stay on 80 and reach it through the named targetPort; changing
+  # port itself on a live Service fails to apply (gitops#1933).
+  containerPort: 8080
+# nginx-unprivileged runs as uid/gid 101. Pinned here so kubelet and the
+# deploy-time image-user check can verify runAsNonRoot without reading the
+# image; the rest comes from the chart's step-2 defaults, including the /tmp
+# emptyDir that nginx writes its pid file and temp directories into.
+containerSecurityContext:
+  runAsUser: 101
+  runAsGroup: 101
 resources:
   # Right-sized 2026-08-03: p95 0.2m/max 0.51m CPU, 14.4MB/14.4MB mem over
   # 24h — was still at untouched chart defaults.
@@ -24,10 +32,7 @@ resources:
     memory: 256Mi
 env:
   APP_ENV: production
-  t: "123"
-  r: "321"
   NUXT_PUBLIC_FRONT_BASE: https://mctl.ai
-  NUXT_VUE_DEVTOOLS: "true"
 ingress:
   enabled: true
   annotations:
@@ -40,9 +45,6 @@ ingress:
       hosts:
         - mctl.ru
         - mctl.ai
-blueGreen:
-  enabled: true
-  autoPromotionEnabled: true
 externalSecret: {}
 envFrom: []
 extraContainers: []

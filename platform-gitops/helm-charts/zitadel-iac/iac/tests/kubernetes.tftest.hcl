@@ -14,7 +14,8 @@ mock_provider "zitadel" {
 mock_provider "kubernetes" {}
 
 variables {
-  smtp_password = "test"
+  smtp_password        = "test"
+  customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
   platform_admins = jsonencode({
     admin  = jsonencode({ email = "p@example.com", first_name = "P", last_name = "A" })
     kadmin = jsonencode({ email = "q@example.com", first_name = "Q", last_name = "A", kubectl = true })
@@ -128,4 +129,33 @@ run "the_cli_client_is_public_with_pkce_and_loopback_redirects" {
     condition     = zitadel_application_oidc.kubernetes.id_token_userinfo_assertion == true
     error_message = "The API server reads groups from the ID token."
   }
+}
+
+run "admin_retains_cluster_role_when_tenant_roles_are_added" {
+  command = plan
+  plan_options {
+    target = [zitadel_user_grant.kubernetes_admin]
+  }
+  variables {
+    platform_admins = jsonencode({
+      kadmin = jsonencode({ email = "q@example.com", first_name = "Q", last_name = "A", kubectl = true, kubectl_tenants = ["erpact"] })
+    })
+  }
+  assert {
+    condition     = zitadel_user_grant.kubernetes_admin["kadmin"].role_keys == toset(["kubernetes-admins", "erpact"])
+    error_message = "Moving a tenant identity must preserve both its tenant role and the admin's existing cluster role."
+  }
+}
+
+run "unknown_admin_tenant_role_is_refused" {
+  command = plan
+  plan_options {
+    target = [zitadel_user_grant.kubernetes_admin]
+  }
+  variables {
+    platform_admins = jsonencode({
+      kadmin = jsonencode({ email = "q@example.com", first_name = "Q", last_name = "A", kubectl = true, kubectl_tenants = ["missing"] })
+    })
+  }
+  expect_failures = [zitadel_user_grant.kubernetes_admin]
 }

@@ -1,5 +1,19 @@
-status: accepted
-updated_at: 2026-09-11T11:11:17+00:00
-updated_by: _incident-responder
-notes: >-
-  auto-accepted: diagnosis from mctl incident 8c695622-bfed-4b1f-b586-0bd0210417c4
+status: rejected
+updated_at: '2026-10-17T19:33:43Z'
+updated_by: mctl-agents[bot]
+attempt:
+  id: 03c309c30f07af63a8cae911c4d12be7ea57dfb1d27054a5c61930e66b4c63bb
+  started_at: '2026-10-17T12:48:48Z'
+  expires_at: '2026-10-17T14:58:48Z'
+  finished_at: '2026-10-17T12:52:46Z'
+pr: https://github.com/mctlhq/mctl-agent/pull/171
+execution:
+  context_id: ex-8ecdd1677c463842
+  trace_id: bffc5586f7dc8e8f0124b5ca930739ce
+  agent: implementer
+  version: ''
+notes: PR was closed without merging.
+github:
+  state: closed
+  head_sha: 5f44d8d09408e7fb2b5059a7789962440630878c
+  observed_at: '2026-10-17T19:33:43Z'

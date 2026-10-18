@@ -86,6 +86,10 @@ image:
 #   organization (the portal's client id joins its allowlist). Removing a
 #   tenant plans a destroy of its grant, which allowedDeletes refuses until
 #   the address is listed.
+#   Portal customer entry (mctl-web#158, portal.tf): no new action; an
+#   in-place update of the portal client (a second redirect URI, for auth
+#   provider zitadel-customer) and of the data of
+#   backstage/backstage-oidc-zitadel (one key added).
 #   kubectl sign-in (#1881, kubernetes.tf: the Kubernetes project, one role
 #   and project grant per tenant organization, user grants for users whose
 #   Vault entry declares "kubectl": true, the kubectl native client, the
@@ -104,6 +108,21 @@ image:
 #   per tenant organization, user grants for users whose Vault entry declares
 #   "anthropic": true): no new action; all creates. Removing a tenant plans a
 #   destroy of its grant, which allowedDeletes refuses until listed.
+#   Customers organization (customers.tf, mctl-web onboarding B1: the org and
+#   its mctl.ai domain, the GitHub IdP, the org login policy, the mctl-web and
+#   mctl-web-dev projects and clients, three Actions v2 targets with no
+#   executions yet (phase 1), the data of mctl-api/mctl-api-zitadel-hook): no
+#   new action; all creates.
+#   Customers rollout phase 3 (customers_executions.tf: Actions v2 executions,
+#   each group behind a toggle, and account creation on the customers IdP):
+#   no new action. The toggles are set in iac/customers_rollout.auto.tfvars.json
+#   (step 3.1, the token functions, is on). Turning a toggle on plans creates
+#   plus an in-place update of the IdP at step 3.3. Turning one off again
+#   plans destroys, which allowedDeletes refuses until their addresses are
+#   listed; in an incident delete the executions in the console first
+#   (docs/runbooks/zitadel.md). Flipping a target's interrupt_on_error renames
+#   it, which plans a replace that allowedDeletes refuses until the address is
+#   listed.
 # Widen deliberately, in the PR that needs it. "delete" is never an action
 # class here; deletes are allowed per address in allowedDeletes below.
 allowedActions: "no-op read update create"

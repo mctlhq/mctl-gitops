@@ -107,7 +107,19 @@ resource "zitadel_user_grant" "kubernetes_admin" {
   org_id     = local.mctl_org_id
   user_id    = each.value
   project_id = zitadel_project.kubernetes.id
-  role_keys  = [zitadel_project_role.kubernetes_admin.role_key]
+  role_keys = concat(
+    [zitadel_project_role.kubernetes_admin.role_key],
+    [for tenant in try(local.platform_admins[each.key].kubectl_tenants, []) : zitadel_project_role.kubernetes_tenant[tenant].role_key if contains(keys(local.tenants), tenant)],
+  )
+
+  lifecycle {
+    precondition {
+      condition = alltrue([
+        for tenant in try(local.platform_admins[each.key].kubectl_tenants, []) : contains(keys(local.tenants), tenant)
+      ])
+      error_message = "Every kubectl_tenants entry for admin ${each.key} must name an existing tenant."
+    }
+  }
 }
 
 # kubelogin (`kubectl oidc-login`): a public client with PKCE, since a CLI

@@ -1,98 +1,41 @@
 # Tasks: issue-489-authz-decide-tenant-roles-for-work-items
 
-- [ ] 1. Factor the audit-and-log half of `requireTenantRole` in
-  `internal/api/tenant_role.go` into `auditRoleRefusal(r, user, tenant,
-  operation, risk, d roleRefusal)`; `requireTenantRole` calls it. — DoD:
-  no behaviour change; `tenant_role_test.go`, `tenant_role_execute_test.go`
-  and `tenant_role_mcp_test.go` pass unchanged.
-- [ ] 2. In `internal/api/handlers_work_items.go`, add `workItemWriteRole =
-  operations.RoleDeveloper`, typed codes `tenant_role_forbidden` /
-  `tenant_role_unavailable`, and `requireWorkItemRole` (uses
-  `checkTenantRole` + `auditRoleRefusal` + `writeErrorCode`). (depends on
-  1) — DoD: compiles; 403 maps to `tenant_role_forbidden`, 503 to
-  `tenant_role_unavailable`, 500 keeps a generic code.
-- [ ] 3. Call `requireWorkItemRole` in `CreateWorkItem` (after
-  `HasTenantAccess`, before `mutationFor`) and, right after
-  `visibleWorkItem`, in `TransitionWorkItem`, `AppendWorkItemIntent`,
-  `AttachWorkItemExecution`, `ResumeWorkItem` and `LinkWorkItemSurface`;
-  update the package comment. (depends on 2) — DoD: every work-item
-  mutation route except snapshot seal is gated; invisible items still 404.
-- [ ] 4. Call `requireWorkItemRole(..., item.Tenant, "execution_request")` in
-  `CreateExecutionRequest` (`handlers_execution_requests.go`) after
-  `visibleWorkItem` and before `refuseExecutionIdentity`; extend the file's
-  "Who may do what" comment. (depends on 2) — DoD: a viewer gets 403
-  `tenant_role_forbidden` and no request row is written.
-- [ ] 5. In `SyncRepos` (`internal/api/handlers_repos.go`), add `repoSyncRole =
-  operations.RoleDeveloper` and call `requireTenantRole(w, r, user,
-  req.Team, repoSyncRole, "repos.sync", operations.RiskLow)` after
-  `HasTenantAccess`. — DoD: a viewer never reaches the portal proxy.
-- [ ] 6. Add a one-line "No tenant role: <reason>; see docs/tenant-roles.md"
-  note to the header comments of `handlers_action_approvals.go`,
-  `handlers_human_input_response.go`, `handlers_surface_identity.go`,
-  `handlers_work_item_snapshots.go` and the approve/abandon section of
-  `handlers_dev_loop.go`. — DoD: comment-only diff in those files.
-- [ ] 7. Write `docs/tenant-roles.md` with the role ladder, the per-handler
-  decision table (the #487 gates plus every row of #489), "viewer passes no
-  write", "reads are not role-gated", and the Dex/generic-OIDC paragraph
-  referencing #377 and #435. — DoD: every row of the #489 table has a
-  decision and a reason.
-- [ ] 8. Update `docs/work-context-contract.md` "Identity and authorization"
-  to name the `developer` minimum on work-item writes and link
-  `docs/tenant-roles.md`. (depends on 7) — DoD: the doc no longer says
-  authorization is only `IsAdmin` + `HasTenantAccess` + visibility.
-- [ ] 9. Wire a role source into the existing tests that perform work-item or
-  repo-sync writes as non-admin GitHub users: set `GitReader: rolesOf(...)`
-  (`tenant_role_stub_test.go`) with `developer` for those users in
-  `handlers_work_items_test.go` (`workItemsEnv`),
-  `handlers_execution_requests_test.go`, `handlers_work_item_intents_test.go`,
-  `handlers_surface_relay_test.go`, `handlers_delegation_surface_refs_test.go`,
-  `handlers_agent_identity_test.go`, `handlers_agent_run_tokens_test.go`,
-  `handlers_evidence*_test.go`, `handlers_usage_writer_test.go`,
-  `handlers_repos_test.go` and `internal/mcp/workitems_test.go` wherever they
-  hit a gated route. (depends on 3, 4, 5) — DoD: `go test ./...` green with
-  no assertion weakened.
-- [ ] 10. Run `go fmt`, `go vet`, `golangci-lint`. (depends on all) — DoD:
-  clean.
+- [ ] 1. Add the constants `workItemWriteRole`, `workItemExecutionRole` and `reposSyncRole` (all `operations.RoleDeveloper`) in `internal/api/tenant_role.go`. Each gets a doc comment citing #489. — DoD: `go vet` is clean, and each constant is the only place its minimum is declared.
+- [ ] 2. Extract the audit+log part of `requireTenantRole` into `auditRoleRefusal`. Keep `requireTenantRole`'s behaviour byte-identical. (depends on 1) — DoD: the existing `tenant_role_test.go`, `tenant_role_execute_test.go`, `tenant_role_mcp_test.go` and `tenant_authz_principal_test.go` pass unchanged.
+- [ ] 3. Add `wiCodeRoleForbidden = "tenant_role_forbidden"`, `wiCodeRoleUnavailable = "tenant_role_unavailable"` and `requireWorkItemRole` in `internal/api/handlers_work_items.go`. Its comment records the machine-caller exemption: the service principal passes as platform admin; an agent token acting for no human has no tenant groups (`auth.NewAgentUser`, `PrincipalAuthz.Apply`) and, if it ever has a tenant scope, is refused as non-human by `checkTenantRoleByPrincipal`; delegated and relayed requests are decided as the named human principal. It contains no `GitHubLogin()` check. (depends on 2) — DoD: compiles, and the typed codes appear in error bodies.
+- [ ] 4. Call `requireWorkItemRole` in `CreateWorkItem` (after `HasTenantAccess`), `TransitionWorkItem`, `AppendWorkItemIntent`, `AttachWorkItemExecution` and `LinkWorkItemSurface` with `workItemWriteRole`, and in `ResumeWorkItem` and `CreateExecutionRequest` with `workItemExecutionRole`. In every item route the call goes after `visibleWorkItem` and before the body decode and any store write. Add a comment on `SealWorkItemSnapshot` and `executionPlatform` saying why they have no role gate. (depends on 3) — DoD: T1 to T8 pass.
+- [ ] 5. Gate `SyncRepos` in `internal/api/handlers_repos.go` with `requireTenantRole(..., reposSyncRole, "repos-sync", operations.RiskLow)` after `HasTenantAccess` and before the upstream request is built. (depends on 1) — DoD: T9 passes, and the upstream stub records no call on a refusal.
+- [ ] 6. Rewrite the header comment of `internal/api/tenant_role.go`: principal mode is current, and the "Dex / other OIDC has no role" rule applies only to legacy and shadow. — DoD: the comment matches `checkTenantRoleByPrincipal`'s behaviour.
+- [ ] 7. Write `docs/tenant-roles.md`. It covers: principal mode as current and legacy/shadow as rollback modes; the role table; the gated routes and their minimums; the ungated writes and why (action approvals human-admin only #571, human input tied to `actor_refs`, surface identities per-principal, snapshot and claim/fulfil/reject service-only); reads are never role-gated; the machine-caller exemption; and a link to the companion portal issue for repo sync. (depends on 4, 5) — DoD: every row of #489's table has a decision in the doc.
+- [ ] 8. Open the companion issue in the portal repo to raise `/api/github-app-connect/repos/sync` to `developer`, and link it from `docs/tenant-roles.md`. — DoD: the issue exists and is linked.
+- [ ] 9. Release note: say that no GitOps member holds `viewer` (list tenants and members with roles as of release), so no listed member starts getting 403. Re-check principal membership, including any ZITADEL `customers` org principals (for example in `labs`), against the gitops checkout and `TryNamespacesForPrincipal` at release time, and list anyone who would be refused. — DoD: the note is in the PR description and the CHANGELOG entry.
+- [ ] 10. Run `go fmt`, `go vet`, `golangci-lint` and `go test ./...`. — DoD: all green, and the MCP tool count in `server_test.go` is unchanged.
 
 ## Tests
 
-New file `internal/api/tenant_role_workitems_test.go` (and repo-sync cases in
-`handlers_repos_test.go`), using `rolesOf`:
+New file `internal/api/tenant_role_work_items_test.go`, table-driven over all seven gated work-item routes plus repo sync. It uses `principalUser`, `stubPrincipalMembership`/`principalRoles` and `rolesOf` from the existing test helpers.
 
-- [ ] T1. Table test over all seven gated work-item routes: `viewer` -> 403
-  `tenant_role_forbidden`, store unchanged, one `denied` audit entry;
-  `developer` and `owner` -> the route's existing success status.
-- [ ] T2. Admin (`admins` group) and `auth.NewServiceUser()` pass the gate
-  on create/attach/resume without any `MemberRoles` call (`stubRoles.calls`
-  is 0).
-- [ ] T3. A Dex/OIDC user (not GitHub-proven) with tenant access -> 403
-  `tenant_role_forbidden` on create; the message mentions signing in with
-  the GitHub-linked account.
-- [ ] T4. `stubRoles.err` set -> 503 `tenant_role_unavailable`, `error`
-  audit entry, no write; nil `GitReader` -> 503 as well.
-- [ ] T5. Existence is not leaked: a viewer of tenant A on an item of tenant B,
-  and a viewer on another principal's private item in their own tenant, both
-  get 404 `work_item_not_found`, never 403, and `MemberRoles` is not called.
-- [ ] T6. Surface relay: a relayed subject who is `viewer` is refused on
-  `POST /work-items/{id}/execution-requests`; the same relayed subject as
-  `developer` succeeds. Same pair for an agent-delegated subject
-  (`NewDelegatedUser`) on `POST /work-items/{id}/surface-refs`.
-- [ ] T7. Multi-team role resolution is honoured: tenant-level `owner` plus
-  team-level `viewer` (`"t/u=owner|viewer"`) passes; an unrecognised role
-  string is refused.
-- [ ] T8. `SealWorkItemSnapshot`, `DecideActionApproval`,
-  `RespondHumanInput` and surface-identity redeem behave as before with a
-  `viewer`-only role source (regression: no tenant role gate added).
-- [ ] T9. `SyncRepos`: viewer -> 403 and the fake portal server receives no
-  request; developer -> proxied (fake server hit once with the caller's id).
-- [ ] T10. MCP: `mctl_request_work_item_execution` as a viewer surfaces the
-  403 `tenant_role_forbidden` body; the `server_test.go` tool count is
-  unchanged.
+Principal mode (main cases):
+
+- [ ] T1. Principal mode, a GitHub-linked human with principal role `developer`: every gated route succeeds (201/200). With `owner` it also succeeds.
+- [ ] T2. Principal mode, principal role `viewer`: every gated route answers 403 `tenant_role_forbidden`, writes a `denied` audit entry, and the store is unchanged (no item, intent, execution, surface ref or execution request created). This covers `POST /work-items` with `visibility=private`.
+- [ ] T3. Principal mode, a ZITADEL-only human (`auth.NewFederatedUser("zitadel", ..., auth.KindHuman)`, no GitHub login) with role `viewer` is refused 403 on every gated route in three ways: (a) direct; (b) relayed through `NewRelayedPrincipalUser`; (c) delegated through `NewDelegatedPrincipalUser` on the delegation-allowlisted routes (`intents`, `surface-refs`, `execution-requests`). The same identity with `developer` succeeds in all three.
+- [ ] T4. Principal mode, membership reader missing or failing, or a human with an unresolved principal: 503 `tenant_role_unavailable`, an `error` audit entry, and no store write.
+- [ ] T5. The service principal (`auth.NewServiceUser()`) passes the gate on `AttachWorkItemExecution` and `ResumeWorkItem` in principal, legacy and shadow modes. It still gets `requester_forbidden` on `CreateExecutionRequest`, so that existing behaviour is unchanged.
+- [ ] T6. An undelegated agent token (`auth.NewAgentUser`) on a tenant item: 404 `work_item_not_found` (no tenant access), never 200. An agent-shaped caller that is given a tenant group directly in the test is refused 403 by the gate (non-human), which pins down "a tenant-scoped machine token goes through the gate".
+- [ ] T7. Ordering: a `viewer` of tenant A asking about an item in tenant B, or about another principal's private item, gets 404, not 403. A role refusal never reveals that an item exists.
+- [ ] T8. The login is never consulted in principal mode: the legacy `GitReader` is wired to say `owner` while the principal reader says `viewer`, and the result is 403 on every route. This mirrors `TestCheckTenantRole_PrincipalMode`.
+- [ ] T9. `POST /repos/sync`: principal `viewer` gets 403 and the upstream test server receives no request. `developer` is proxied. An unreadable role gives 503.
+
+Rollback modes (regression rows):
+
+- [ ] T10. Legacy mode: a GitHub-proven `viewer` (`rolesOf("erpact/dan=viewer")`) is refused on every gated route, and `developer` passes. A Dex/OIDC human with no GitHub login is refused 403 ("does not carry a tenant role").
+- [ ] T11. Shadow mode: the decision equals the legacy decision, and `shadowTenantRole` records the principal comparison for a gated work-item write.
+
+Ungated groups (pin down "no gate"):
+
+- [ ] T12. A non-admin tenant `owner` is refused on `POST /action-approvals/{id}/decision`, which stays human admin only. A human-input response by a tenant `viewer` named in `actor_refs` succeeds, and one by a tenant `owner` not named in `actor_refs` is refused. GET work-item routes by a `viewer` member succeed.
 
 ## Rollback
 
-All changes are additive checks plus docs, with no schema or data change.
-Revert the PR (or set `workItemWriteRole` / `repoSyncRole` to
-`operations.RoleViewer` as a hot patch, which every member satisfies while
-Dex/OIDC callers stay refused) and redeploy mctl-api through the normal
-release. Nothing persisted depends on the gate, so no data repair is needed.
+Revert the PR. The change is code and docs only: no schema, no env var and no gitops change, so a revert restores today's behaviour (membership-only work-item writes and repo sync) on the next deploy. If only one gate causes trouble, set its constant (for example `workItemExecutionRole` or `reposSyncRole`) to `operations.RoleViewer` in a hotfix. That keeps the gate and its audit trail but admits every listed member. Do not switch `TENANT_AUTHZ_MODE` back to legacy for this. That is a rollback of #377, it is unrelated, and in legacy mode ZITADEL-only humans would lose all role-gated writes.

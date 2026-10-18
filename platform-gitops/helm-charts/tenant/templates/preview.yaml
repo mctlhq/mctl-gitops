@@ -33,6 +33,35 @@ spec:
     {{- range $key, $val := $preview.quotas }}
     {{ $key }}: {{ $val | quote }}
     {{- end }}
+---
+# Readiness observes preview quota without granting workflow or secret access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mctl-api-preview-quota-reader
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mctl-api-preview-quota-reader
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: mctl-api
+    namespace: mctl-api
+roleRef:
+  kind: Role
+  name: mctl-api-preview-quota-reader
+  apiGroup: rbac.authorization.k8s.io
 {{- if .Values.tenant.limitRange.enabled }}
 ---
 apiVersion: v1

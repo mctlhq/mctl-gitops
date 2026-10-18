@@ -13,6 +13,16 @@ image:
 service:
   type: ClusterIP
   port: 8080
+  # -- Port the main container listens on, when it differs from `port`.
+  # Unset means the same as `port`. The Service and Ingress always stay on
+  # `port` and reach the container through the named targetPort `http`, so a
+  # container can move to another port without changing the Service. Do not
+  # change `port` itself on a live service: Service ports merge by number, the
+  # new entry collides with the old one on the name `http`, the apply fails
+  # and the Ingress is left pointing at a port the Service does not have
+  # (gitops#1933). Probes follow only when they name the port: a service that
+  # overrides probes.*.port with a number must move that number too.
+  # containerPort: 8080
 
 # -- Required: resource limits
 resources:
@@ -117,8 +127,44 @@ extraVolumeMounts: []
 
 # -- Pod-level settings
 automountServiceAccountToken: ~
-podSecurityContext: {}
-containerSecurityContext: {}
+# -- Hardening defaults (SOC 2 binder F18). All are allowed by the tenant
+# namespaces' PSS `enforce=baseline`. Step 2 made `runAsNonRoot` and
+# `readOnlyRootFilesystem` the default: the main container must run as a
+# numeric non-root USER and may write only to `writablePaths`. The container
+# requirements are documented at
+# https://docs.mctl.ai/guides/scaffolding#container-requirements, and
+# deploy-service refuses an image that cannot start under them
+# (check-image-user) before anything is committed. A service that cannot meet
+# them yet sets either key to `false` explicitly in its values; that is a
+# platform-side decision, tenants cannot set it through the API.
+# Helm merges a service's map into these defaults, so a service states only
+# what it changes, e.g. `capabilities.add` for an image whose entrypoint drops
+# privileges itself (nginx). Setting a key to null removes the default.
+# `runAsNonRoot` needs a numeric user: kubelet refuses a named USER with
+# CreateContainerConfigError unless `runAsUser` (and `runAsGroup`) are set.
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+# -- Paths the main container may still write when its
+# `readOnlyRootFilesystem` is on. Each becomes an emptyDir (pod-lifetime, node
+# disk) mounted at that path. Ignored while the root filesystem is writable,
+# and skipped for any path extraVolumeMounts already mounts. A service that
+# needs more lists the whole set, e.g. [/tmp, /var/cache/nginx].
+writablePaths:
+  - /tmp
+# -- Defaults merged into the securityContext of every initContainer,
+# extraContainer and the db-init Job container. A container's own
+# securityContext wins key by key, so the merge never loosens it.
+extraContainerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
 podAnnotations: {}
 podLabels: {}
 backstage: {}
@@ -131,6 +177,17 @@ affinity: {}
 # state (e.g. claude-remote's s3-sync sidecar running `mc mirror` on SIGTERM).
 # Leave unset to inherit the Kubernetes default.
 terminationGracePeriodSeconds: ~
+
+# -- Seconds the main container waits in a preStop sleep before it gets
+# SIGTERM. Deleting a pod and removing it from the Service's endpoints happen
+# in parallel, so without a pause the process can exit while Traefik still
+# routes to it, and those requests get a 502 (admins/mctl-web, gitops#1946).
+# Uses the kubelet's native sleep action, so the image needs no shell. Counts
+# against terminationGracePeriodSeconds and must stay below it. Set 0 to turn
+# it off. Not rendered with `strategy.type: Recreate`: there the old pod is out
+# of the endpoints and the new one waits for it to exit, so the sleep would
+# only add downtime to every restart.
+preStopSleepSeconds: 5
 
 # -- Health checks
 probes:

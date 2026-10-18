@@ -1,0 +1,76 @@
+# VMAlertmanager has no authentication, and before this policy any pod in the
+# cluster could reach it: the tenant namespaces' allow-cluster-egress admits
+# all of 10.0.0.0/8. A tenant pod could therefore POST /api/v2/alerts with a
+# made-up alert, and Alertmanager would forward it to mctl-agent with the
+# valid ALERTMANAGER_WEBHOOK_TOKEN (and mctl-agent's poller would read it too),
+# opening a fake incident and possibly an automated fix PR. The bearer token
+# on mctl-agent's /api/v1/alerts does not help against that: the forged alert
+# arrives through the trusted hop.
+#
+# It admits only the in-cluster clients found by inventory (2026-10-16: pod
+# specs, ConfigMaps, Secret values, app repos on main, Alertmanager's own
+# per-handler request counters):
+#   - vmalert: the notifier that delivers every real alert (9093);
+#   - vmagent: the scrape of /metrics (9093; config-reloader's 8435 is not
+#     a scrape target, verified against vmagent's /targets);
+#   - Grafana: the sidecar-provisioned Alertmanager datasource (9093);
+#   - mctl-agent (admins): the reconcile poller, ALERTMANAGER_URL default
+#     (AM_RECONCILE_ENABLED, 9093);
+#   - Alertmanager replicas: cluster gossip (9094 TCP/UDP). One replica
+#     today; listed so scaling up does not split the cluster silently.
+# Everything else is denied. Not affected: config-reloader's /-/reload, which
+# talks to 127.0.0.1 inside the pod; kubelet probes; `kubectl port-forward`.
+#
+# A new client needs an entry here, or it is refused (connection refused
+# under k3s kube-router). A freshly started client pod can be refused for its
+# first few seconds, until kube-router adds its IP to the allow set; vmalert
+# retries delivery and mctl-agent's poller runs again on its next interval.
+#
+# Rollback: delete this file. Alertmanager is then reachable from every pod
+# again, which reopens fake-alert injection into mctl-agent.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vmalertmanager-ingress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vmalertmanager
+      app.kubernetes.io/instance: monitoring-victoria-metrics-k8s-stack
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vmalert
+              app.kubernetes.io/instance: monitoring-victoria-metrics-k8s-stack
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vmagent
+              app.kubernetes.io/instance: monitoring-victoria-metrics-k8s-stack
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+              app.kubernetes.io/instance: monitoring
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: admins
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: base-service
+              app.kubernetes.io/instance: admins-mctl-agent
+      ports:
+        - protocol: TCP
+          port: 9093
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vmalertmanager
+              app.kubernetes.io/instance: monitoring-victoria-metrics-k8s-stack
+      ports:
+        - protocol: TCP
+          port: 9094
+        - protocol: UDP
+          port: 9094

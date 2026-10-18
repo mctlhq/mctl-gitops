@@ -19,6 +19,16 @@ service:
   port: 8080
 backstage:
   kubernetesId: mctl-telegram
+# Non-root on a read-only root filesystem (base-service hardening, step 2).
+# runAsNonRoot is checked by kubelet against a numeric user only, so the
+# ids this image already runs as are pinned (observed 2026-10-16); the
+# chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
 resources:
   # Right-sized 2026-08-03: p95 2.7m/42MB over 24h. requests.cpu trimmed to
   # platform default — no burst rationale was ever applied to the request,
@@ -423,9 +433,22 @@ extraObjects:
               restartPolicy: OnFailure
               # No imagePullSecrets: postgres:17-alpine is a public Docker Hub
               # image (unlike the chart's dbInitJob, which can run GHCR app images).
+              # Restricted-compliant: psql only reads, so the image's own
+              # postgres user (uid 70) on a read-only root is enough.
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 70
+                runAsGroup: 70
+                seccompProfile:
+                  type: RuntimeDefault
               containers:
                 - name: refresh
                   image: postgres:17-alpine
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
                   command: ["sh", "-c"]
                   args:
                     # The UPDATE only un-revokes/extends an EXISTING session row; it
@@ -589,9 +612,13 @@ extraObjects:
               imagePullSecrets:
                 - name: ghcr-credentials
               restartPolicy: Never
+              # Pod Security "restricted" also requires a seccomp profile;
+              # without it every run trips the namespace's warn/audit label.
               securityContext:
                 runAsNonRoot: true
                 runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
               containers:
                 - name: canary
                   # Same image as the deployed service so the probe always
@@ -635,7 +662,6 @@ extraObjects:
                     limits:
                       cpu: "100m"
                       memory: "64Mi"
-
   # Deny /metrics at the edge — mctlhq/mctl-telegram#588. Same two objects as
   # labs/mctl-telegram-preview, verified there first: after that PR synced,
   # https://tg-preview.mctl.ai/metrics answered 403 while

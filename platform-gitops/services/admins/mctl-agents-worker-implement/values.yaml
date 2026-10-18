@@ -54,7 +54,7 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.75.2"
+  tag: "1.84.0"
 imagePullSecrets:
   - name: ghcr-credentials
 command: ["python", "-m", "orchestrator.temporal.worker", "--role", "implementation"]
@@ -89,6 +89,9 @@ containerSecurityContext:
   capabilities:
     drop:
       - ALL
+# Read-only root (the chart default), /tmp from the chart's writablePaths. This
+# role only submits Argo workflows and waits on them (submit_and_wait); the
+# agents themselves run in the Argo pods, not here.
 env:
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents

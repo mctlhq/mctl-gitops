@@ -54,13 +54,16 @@ variable "platform_admins" {
     The Vault secret secret/platform/zitadel/admins as JSON: one field per
     personal platform admin account in the MCTL organization, each a
     JSON-encoded {email, first_name, last_name, preferred_language, username,
-    frappe, github_login, kubectl} (admins.tf). The field name is the stable key of
+    frappe, frappe_access, github_login, kubectl, kubectl_tenants} (admins.tf). The field name is the stable key of
     the account; `username`, optional, is its login name when it differs
     from the key; `frappe`, optional ({sites, roles}, as for tenant users),
     lists the admin for the ERPact copy's Frappe sites and grants their
     sign-in (erpact.tf); `github_login`, optional, is the admin's GitHub
     login, as for tenant users (github-login.tf); `kubectl`, optional
     (true), grants cluster-admin through kubectl sign-in (kubernetes.tf).
+    `kubectl_tenants`, optional (list of existing tenant names), adds those
+    tenant roles to an opted-in admin's Kubernetes grant. `frappe_access`,
+    optional (true), grants ERPact SSO access without provisioning Frappe users.
     This repository is public, so personal data never appears in it.
   EOT
   type        = string
@@ -134,4 +137,71 @@ variable "smtp_password" {
   description = "The Resend API key ZITADEL sends mail with (SMTP password)."
   type        = string
   sensitive   = true
+}
+
+variable "customers_github_idp" {
+  description = <<-EOT
+    The GitHub OAuth App of the customers organization's IdP (customers.tf),
+    as JSON {client_id, client_secret}: the Vault secret
+    secret/platform/zitadel/github-idp, through ExternalSecret
+    zitadel-iac-github-idp. The secret is write-only in the provider and
+    never enters the state.
+  EOT
+  type        = string
+  sensitive   = true
+
+  # A missing or empty field is a failed read, not "no IdP": planning it
+  # would rewrite the IdP with an empty credential and break every customer
+  # sign-in.
+  validation {
+    condition = try(
+      length(trimspace(jsondecode(var.customers_github_idp).client_id)) > 0 &&
+      length(trimspace(jsondecode(var.customers_github_idp).client_secret)) > 0,
+      false
+    )
+    error_message = "customers_github_idp must be JSON {client_id, client_secret} with both non-empty; zitadel-iac-github-idp resolved nothing usable from Vault secret/platform/zitadel/github-idp."
+  }
+}
+
+variable "identity_hook_login_client_user_id" {
+  description = <<-EOT
+    The caller id the identity hook's creation gate allows to create
+    `customers` accounts: Login V2's API identity, as ZITADEL puts it in an
+    execution payload's `userID`. Login V2 authenticates as the System API
+    user `login-client` (infra-components/identity/zitadel/login-service-key.yaml).
+    A System API user lives in the runtime configuration, not in the
+    database, so no provider data source can look it up; it is a value here.
+  EOT
+  type        = string
+  default     = "login-client"
+  # Phase 0 confirmed: against ZITADEL v4.19.2 the execution payload's
+  # userID for Login V2 is this literal, not a numeric id; a numeric value
+  # made the gate refuse sign-up. Change it only if the System API user is
+  # renamed or Login V2 moves to a machine user. A wrong value fails closed:
+  # the gate refuses every customers account creation.
+
+  validation {
+    condition     = length(trimspace(var.identity_hook_login_client_user_id)) > 0
+    error_message = "identity_hook_login_client_user_id must not be empty: the gate would match no caller and refuse every customers account."
+  }
+}
+
+# Customers rollout phase 3 toggles (customers_executions.tf). One per
+# change, in order, each after the previous step's smoke test.
+variable "identity_hook_token_functions_enabled" {
+  description = "Phase 3.1: route preuserinfo and preaccesstoken to the identity hook (non-interrupting)."
+  type        = bool
+  default     = false
+}
+
+variable "identity_hook_create_gate_enabled" {
+  description = "Phase 3.2: gate every user-creating, IdP-linking and user-metadata-writing method through the identity hook. Interrupting and instance-wide."
+  type        = bool
+  default     = false
+}
+
+variable "identity_hook_intent_enabled" {
+  description = "Phase 3.3: the intent response hook, and account creation on the customers GitHub IdP. Requires the create gate."
+  type        = bool
+  default     = false
 }

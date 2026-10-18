@@ -14,6 +14,13 @@ base32 characters; ValidPrincipalID in internal/gitops), and no list may
 name one principal twice: mctl-api refuses to read a tenant whose list
 contradicts itself, which in principal mode locks out every member of it.
 
+An entry may also say what the portal names its catalog User by:
+`catalogKey: principal` (by principalId; a self-service customer account,
+mctl-web docs/plans/site-onboarding-review.md stage C2) or `login` (by
+userId, the default when absent). Any other value is a violation: the portal
+would fall back to the login, which the GitHub login's next holder signs in
+as.
+
 A file that cannot be read or parsed is a violation, not a skip, and so is
 finding no tenant at all: a check that observed nothing has not observed a
 clean repository.
@@ -37,6 +44,9 @@ ISSUE = "mctlhq/mctl-api#377"
 # Kept identical to mctl-api's principalIDRE (internal/gitops).
 PRINCIPAL_ID = re.compile(r"prn_[0-9A-HJKMNP-TV-Z]{26}")
 
+# The catalog keys the portal understands (tenant-backend TenantSync).
+CATALOG_KEYS = ("login", "principal")
+
 
 def _members(scope: str, members: object) -> list[str]:
     """Violations in one member list."""
@@ -53,6 +63,8 @@ def _members(scope: str, members: object) -> list[str]:
             continue
         if member.get("userId"):
             where += f" ({member['userId']})"
+        if "catalogKey" in member and member["catalogKey"] not in CATALOG_KEYS:
+            found.append(f"{where}: catalogKey {member['catalogKey']!r} is not one of {', '.join(CATALOG_KEYS)}")
         pid = member.get("principalId")
         if pid is None or pid == "":
             found.append(f"{where}: no principalId")
@@ -116,7 +128,7 @@ def selftest() -> int:
         "  name: t\n"
         "  members:\n"
         f"    - userId: alice\n      principalId: {PID_A}\n      role: owner\n"
-        f"    - principalId: {PID_B}\n      role: developer\n"
+        f"    - principalId: {PID_B}\n      role: developer\n      catalogKey: principal\n"
         "  teams:\n"
         "    - name: web\n"
         "      members:\n"
@@ -141,6 +153,10 @@ def selftest() -> int:
             True,
         ),
         ("one principal twice in a list", good.replace(PID_B, PID_A), True),
+        ("catalogKey login", good.replace("catalogKey: principal", "catalogKey: login"), False),
+        ("unknown catalogKey", good.replace("catalogKey: principal", "catalogKey: Principal"), True),
+        ("empty catalogKey", good.replace("catalogKey: principal", 'catalogKey: ""'), True),
+        ("null catalogKey", good.replace("catalogKey: principal", "catalogKey: null"), True),
         ("members not a list", "tenant:\n  name: t\n  members:\n    userId: alice\n", True),
         ("member not a mapping", "tenant:\n  name: t\n  members:\n    - alice\n", True),
         ("teams not a list", good.replace("  teams:\n    - name: web\n", "  teams:\n    web:\n"), True),
@@ -171,6 +187,7 @@ def selftest() -> int:
             return 1
     print(
         "selftest OK: detector fires on a missing, empty, malformed or repeated principalId, "
+        "on an unknown catalogKey, "
         "on unreadable structure and on an empty tenants directory; stays quiet on keyed entries"
     )
     return 0

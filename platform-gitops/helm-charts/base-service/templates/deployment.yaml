@@ -57,9 +57,10 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- $writable := include "base-service.writablePaths" . | fromJsonArray }}
       {{- with .Values.initContainers }}
       initContainers:
-        {{- toYaml . | nindent 8 }}
+        {{- include "base-service.hardenedContainers" (dict "containers" . "defaults" $.Values.extraContainerSecurityContext) | nindent 8 }}
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
@@ -77,9 +78,29 @@ spec:
           args:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- /* Recreate starts the new pod only after the old one has exited,
+                 and the old pod leaves the endpoints as soon as it is deleted,
+                 so a sleep cannot keep traffic flowing; it only lengthens the
+                 gap. Rollouts are always blueGreen, so rollout.yaml has no
+                 such case. */}}
+          {{- $recreate := eq (dig "type" "" (.Values.strategy | default dict)) "Recreate" }}
+          {{- with and (not $recreate) .Values.preStopSleepSeconds }}
+          {{- /* Nil-check, not `default`: an explicit 0 is a real grace period. */}}
+          {{- $grace := 30 }}
+          {{- if ne ($.Values.terminationGracePeriodSeconds | toString) "<nil>" }}
+          {{- $grace = $.Values.terminationGracePeriodSeconds }}
+          {{- end }}
+          {{- if ge (int .) (int $grace) }}
+          {{- fail (printf "preStopSleepSeconds (%v) must be below terminationGracePeriodSeconds (%v)" . $grace) }}
+          {{- end }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ . }}
+          {{- end }}
           ports:
             - name: http
-              containerPort: {{ .Values.service.port }}
+              containerPort: {{ .Values.service.containerPort | default .Values.service.port }}
               protocol: TCP
             {{- if .Values.metrics.enabled }}
             - name: metrics
@@ -126,12 +147,18 @@ spec:
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.extraVolumeMounts }}
+          {{- if or .Values.extraVolumeMounts $writable }}
           volumeMounts:
+            {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- range $writable }}
+            - name: {{ include "base-service.writableVolumeName" . }}
+              mountPath: {{ . }}
+            {{- end }}
           {{- end }}
         {{- with .Values.extraContainers }}
-        {{- toYaml . | nindent 8 }}
+        {{- include "base-service.hardenedContainers" (dict "containers" . "defaults" $.Values.extraContainerSecurityContext) | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -153,10 +180,14 @@ spec:
       # applies cleanly.
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- end }}
-      {{- if or .Values.extraVolumes .Values.persistence }}
+      {{- if or .Values.extraVolumes .Values.persistence $writable }}
       volumes:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- range $writable }}
+        - name: {{ include "base-service.writableVolumeName" . }}
+          emptyDir: {}
         {{- end }}
         {{- range $name, $spec := .Values.persistence }}
         {{- if (ne $spec.enabled false) }}
