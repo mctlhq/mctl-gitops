@@ -1,0 +1,15 @@
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tenant-onboarding-acceptance-test
+  namespace: default
+  description: "Tenant onboarding-acceptance-test — namespace, quotas, and network policies"
+  annotations:
+    mctl.me/tenant-name: "onboarding-acceptance-test"
+    backstage.io/managed-by-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/onboarding-acceptance-test/catalog-info.yaml"
+    backstage.io/managed-by-origin-location: "url:https://github.com/mctlhq/mctl-gitops/blob/main/platform-gitops/tenants/onboarding-acceptance-test/catalog-info.yaml"
+spec:
+  type: tenant
+  owner: group:default/admins
+  system: team-onboarding-acceptance-test
+  dependsOn: []
