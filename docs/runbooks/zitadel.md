@@ -369,6 +369,19 @@ on ZITADEL tokens:
   other's codes and either secret can be rotated alone. Rollback of the
   upstream: set `OAUTH_UPSTREAM` back to `github` (or remove it) in
   `bootstrap/templates/mctl-platform/mctl-api.yaml`.
+- **Client `mctl-api-dev`** (project `mctl-api-dev`, organization `MCTL`)
+  is a development twin of `mctl-api-oauth` for local end-to-end runs of
+  `/oauth/authorize` (mctl-api#693). It has the same client shape, with
+  `dev_mode` on and the single redirect
+  `http://localhost:8080/oauth/zitadel/callback`. A local mctl-api behind a
+  `cloudflared tunnel --url` quick tunnel sets `SELF_URL` to the tunnel host
+  and `OAUTH_ZITADEL_REDIRECT_BASE_URL=http://localhost:8080`, so the
+  browser comes back to localhost while clients keep using the tunnel. The
+  client has its own project, so its tokens never carry mctl-api's
+  audience. Copy its id and secret from the keys
+  `MCTL_API_DEV_ZITADEL_CLIENT_ID` / `MCTL_API_DEV_ZITADEL_CLIENT_SECRET` in
+  the same Secret; the deployed mctl-api does not read them. Removal:
+  delete both resources, and the two keys go with them.
 - **Output.** The Job writes the complete `MCTL_OIDC_PROVIDERS` JSON (name
   `zitadel`, issuer `https://auth.mctl.ai`, audience = that client id) into
   `mctl-api/mctl-api-oidc-zitadel`, plus `MCTL_CLI_ZITADEL_CLIENT_ID`, which
