@@ -565,6 +565,9 @@ spec:
                   - tenant: labs
                     service: claude-remote
                     host: claude-remote.mctl.ai
+                  - tenant: admins
+                    service: umami
+                    host: stats.mctl.ai
             {{- if (default dict .Values.surfacePortalToken).enabled }}
             # plugins/work-items-backend (mctlhq/mctl-portal#126). This
             # appConfig is the only config the pod loads, so the repo's

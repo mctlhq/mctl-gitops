@@ -400,6 +400,8 @@ reservedPlatformHosts:
   agent.mctl.ai: [admins]
   docs.mctl.ai: [admins]
   ui.mctl.ai: [admins]
+  # Umami analytics (services/admins/umami).
+  stats.mctl.ai: [admins]
   # ZITADEL, plus the usual identity-provider aliases so none of them can be
   # stood up by a tenant to imitate the sign-in page.
   auth.mctl.ai: [zitadel]
