@@ -433,9 +433,22 @@ extraObjects:
               restartPolicy: OnFailure
               # No imagePullSecrets: postgres:17-alpine is a public Docker Hub
               # image (unlike the chart's dbInitJob, which can run GHCR app images).
+              # Restricted-compliant: psql only reads, so the image's own
+              # postgres user (uid 70) on a read-only root is enough.
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 70
+                runAsGroup: 70
+                seccompProfile:
+                  type: RuntimeDefault
               containers:
                 - name: refresh
                   image: postgres:17-alpine
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
                   command: ["sh", "-c"]
                   args:
                     # The UPDATE only un-revokes/extends an EXISTING session row; it
@@ -599,9 +612,13 @@ extraObjects:
               imagePullSecrets:
                 - name: ghcr-credentials
               restartPolicy: Never
+              # Pod Security "restricted" also requires a seccomp profile;
+              # without it every run trips the namespace's warn/audit label.
               securityContext:
                 runAsNonRoot: true
                 runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
               containers:
                 - name: canary
                   # Same image as the deployed service so the probe always
