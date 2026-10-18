@@ -17,5 +17,7 @@ notes: >-
   no approval block is fabricated here. The mctl-api Slice C contract was
   implemented by hand across PRs #623, #626, #627, #628 and #630, then shipped
   in release PR #625 (mctl-api 4.88.0); issue #571 is closed completed. The
-  remaining #376 critical path is mctl-agents#636 -> natural DevLoop E2E ->
-  owner-gated legacy-relay disable. No implementer retry for #571 is pending.
+  #376 path it fed is done: mctl-agents#636 shipped in 1.76.0, DevLoop 655
+  proved the grant chain, mctl-gitops#1913 turned the legacy relay off, and
+  #376 closed completed on 2026-10-18. No implementer retry for #571 is
+  pending.
