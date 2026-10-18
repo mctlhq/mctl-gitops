@@ -1,78 +1,93 @@
-# Spike report: MCTL governance and decision assurance beyond human-in-the-loop approval
+# Spike: Agent Governance & Decision Assurance report (D1-D5) for mctlhq/.github#182
 
 ## Context
 
-Issue mctlhq/.github#182 is the only required work item of the provisional epic
-`roadmap/epics/agent-governance-decision-assurance.yaml` (parent
-mctlhq/.github#181, `lifecycle: proposed`). It asks for an architecture and
-gap-analysis spike, not a new governance framework. The spike must show, for
-each governed execution path in MCTL, whether the platform can prove the whole
-decision chain: where intent came from, who initiated it, which policy was
-evaluated and why, what the reviewer saw, whether the approver had authority,
-whether the executed operation is exactly the approved one, what happened, and
-whether the chain can be rebuilt later. The output is a durable report in this
-repository (D1 sequence diagram, D2 capability matrix, D3 F1-F10 failure
-analysis, D4 candidate Decision Envelope, D5 one architecture disposition), plus
-a roadmap manifest change that matches the disposition.
+Issue mctlhq/.github#182 asks for an architecture and gap-analysis spike on
+whether MCTL governance holds end to end, beyond simply putting a human in
+front of execution. Human approval is not enough evidence of governance on its
+own. The spike must work out, for each governed action: where the intent came
+from, who initiated it, which policy was evaluated and why, what context the
+reviewer saw, whether the approver had authority, whether the operation that
+ran was exactly the one approved, what the outcome was, and whether the whole
+chain can be rebuilt afterwards. The deliverable is one durable report,
+`docs/spikes/agent-governance-decision-assurance.md`, in `mctlhq/.github`. It
+contains D1 (current-state sequence diagram), D2 (capability matrix, per
+path), D3 (F1-F10 failure analysis), D4 (minimal candidate Decision Envelope
+built from existing contracts) and D5 (exactly one disposition: NO NEW EPIC /
+EXTEND EXISTING / CREATE NEW EPIC).
 
-This matters because human approval alone is not evidence of governance. A
-reviewer can approve with too little context or authority, an approved proposal
-can change, and execution can lose its binding to the decision.
-mctlhq/mctl-agents#681 proves exact content binding for one path, DevLoop
-proposal-content approval. Other paths are known to differ. In the deployed
-`agent-platform/policy.yaml`, the scopes `incident-resolve`, `proposal-status`,
-`agents-state-inbox-write` and `mentor-digest-write` are mutating scopes with
-`requiresApproval: null`. The deployed approve CWFT treats
-`expected_content_digest` as optional and takes `approver` as a caller-supplied
-string. The spike has to state these differences per path, on evidence, and must
-not generalize from #681.
+This proposal replaces the first proposal, which was not approved. It applies
+the owner corrections of 2026-10-18:
+- D5 starts with no prior disposition.
+- The roadmap lifecycle decision goes in a separate PR.
+- Cross-repository source evidence pinned at SHAs is a hard prerequisite.
+- P1 (Temporal DevLoop grant approval) and P2 (standalone/direct GitOps
+  approval) are kept apart.
+- The incident-responder auto-accept is treated neutrally as an
+  autonomous/no-human-gate path until its evidence is read.
+- mctl-agents#681 proves exact-content binding only for P1.
 
 ## User stories
 
-- AS a platform owner I WANT a per-path map of which governance guarantees MCTL enforces today SO THAT I can tell enforced invariants apart from approval UX and planned work.
-- AS an auditor I WANT to know whether one governed action can be rebuilt end to end from durable records SO THAT the question "who decided what, under which policy and authority, and what exactly ran" has an answer that does not depend on sampled traces.
-- AS a roadmap owner I WANT exactly one disposition (NO NEW EPIC / EXTEND EXISTING / CREATE NEW EPIC), with every gap routed to an owner SO THAT the provisional parent #181 is archived, repurposed or refined on purpose.
-- AS an implementer of later follow-ups I WANT each gap to carry evidence, scope, acceptance criteria and an owner SO THAT remediation can be planned without repeating the audit.
-- AS a reader of roadmap status I WANT the report and the manifest to say plainly that the spike delivers no runtime assurance SO THAT closing #182 is never reported as delivered governance.
+- AS the mctl-api owner I WANT one evidence-backed report that shows how each governed path really behaves SO THAT I can decide where governance gaps belong without starting a parallel framework.
+- AS a reviewer of D5 I WANT the disposition to follow from D1-D4 evidence pinned at named SHAs SO THAT the recommendation is not a restatement of the issue text or of an earlier hypothesis.
+- AS an auditor I WANT every claim in the report to cite a file, test, contract or read-only live observation SO THAT I can reproduce it.
+- AS a roadmap owner I WANT the report to state the exact manifest delta it recommends, without applying it SO THAT the lifecycle change of #181 stays a separate owner-reviewed PR.
+- AS the Runtime Assurance owner (#151) I WANT the report to name candidate AssuranceScenarios without implementing them SO THAT the harness stays in one place.
 
 ## Acceptance criteria (EARS)
 
-- WHEN the spike is delivered THE SYSTEM SHALL contain one report at `docs/spikes/agent-governance-decision-assurance.md` with sections D1, D2, D3, D4 and D5, and a list of pinned source revisions for each audited repository (mctlhq/.github, mctl-api, mctl-agents, mctl-gitops, plus any other repository the report cites), following the "Live audit and evidence" convention of `docs/plans/agent-commerce.md`.
-- WHEN D1 describes a governed flow THE SYSTEM SHALL show the actual services, trust boundaries and evaluation order as a sequence diagram (Mermaid or ASCII) for at least these paths: (a) DevLoop proposal-content approval, (b) the direct `mctl-agents-approve` operation (`mctl_trigger_approve`), which bypasses the DevLoop, (c) capability gateway invoke through PolicyCheckpoint, (d) the incident-responder auto-accept path, (e) a commerce invocation (mctlhq/.github#173), and (f) an MCP platform operation that goes through mctl-api. Each step cites a code, contract or test path at a pinned revision, plus the deployed version where one is known.
-- WHEN a D2 row is written THE SYSTEM SHALL fill the columns Capability, Status, Owner/component, Gap and Evidence. Status is one of implemented, partial, missing or owned-by-another-epic, and covers at least: intent provenance, unified identity, approval authority, policy evidence, decision context, immutable proposal, execution binding, approval expiry, replay protection, end-to-end trace, escalation, break-glass and governance metrics.
-- IF the evidence for a capability could not be observed THEN THE SYSTEM SHALL mark the status as "unknown (not observed)" with the reason, and SHALL NOT record it as implemented or missing.
-- WHILE a capability is implemented for one path only THE SYSTEM SHALL record it as partial and name the paths that are covered and the paths that are not. In particular, #681 content binding SHALL NOT be extended to tool calls, commerce actions or send_message-type actions without evidence for each of those paths.
-- WHEN D3 analyses scenarios F1-F10 THE SYSTEM SHALL record, for each one, the current behaviour per affected path, the desired invariant, the evidence (an existing test or a safe, bounded, non-production reproduction), the gap and the owner. The analysis SHALL cover replay, payload mutation, target mutation, authority loss, expiry, delegation, partial failure, policy drift and break-glass.
-- IF a scenario cannot be verified without a production side effect THEN THE SYSTEM SHALL record it as unverified, describe the reproduction it would take, and SHALL NOT perform it.
-- WHEN the report evaluates approval integrity THE SYSTEM SHALL state, for each trust boundary, whether the hash binding and the existing audit are enough or whether stronger authenticated or tamper-evident evidence is needed, and SHALL note that a content hash does not establish approver identity.
-- WHEN the report evaluates identity and authority THE SYSTEM SHALL name the requester or subject, the executing agent, the service or tool identity, the approving human, the tenant and any delegated authority. It SHALL state whether authority is re-evaluated at execution time, and SHALL flag every place where authority or approver identity comes from a caller-supplied string (for example the approve CWFT `approver` parameter).
-- WHEN the report evaluates policy evidence THE SYSTEM SHALL state whether the policy identity and version, the allow/deny/require_approval result and structured reasons are persisted, and how they correlate with the execution. It SHALL NOT propose storing private model reasoning.
-- WHEN D4 is written THE SYSTEM SHALL map every envelope field to an existing MCTL contract, or mark it as new with a reason. It SHALL state whether approvals, attempts, policy evaluations and workflow steps need append-only referenced records rather than singleton fields, and that stored authority claims are evidence, not an authorization substitute. It SHALL also define retention, access and redaction rules so that reconstruction does not depend on logging full private payloads.
-- WHEN the report evaluates observability THE SYSTEM SHALL propose governance metrics (approval and rejection rates and latency, approvals without observable context inspection, mutation and reapproval counts, expired approvals, authority failures, overrides, break-glass events, mismatched execution attempts, escalation rates), together with their instrumentation limits. It SHALL reuse the OTLP primitives from mctlhq/.github#55 and SHALL NOT introduce a second telemetry system or treat sampled traces as a durable audit record.
-- WHEN the report assesses reject, modify-and-resubmit, request-more-context, escalation, override, break-glass, expiry and no-authorized-approver THE SYSTEM SHALL define the allowed bypasses, the authority they require, attribution and audit requirements. It SHALL NOT enable any bypass.
-- WHEN D5 is written THE SYSTEM SHALL state exactly one disposition, and every gap from D2 and D3 SHALL map to an existing owner or epic or to a justified proposed owner.
-- IF D5 is EXTEND EXISTING or NO NEW EPIC THEN THE SYSTEM SHALL set `spec.lifecycle` in `roadmap/epics/agent-governance-decision-assurance.yaml` to `archived` (or record an explicit repurposing), with a header comment pointing at the report and the routed follow-ups.
-- IF D5 is CREATE NEW EPIC THEN THE SYSTEM SHALL refine `roadmap/epics/agent-governance-decision-assurance.yaml` with the required and optional remediation and proof work items and a `dependsOn` DAG. Work items whose issues do not exist yet SHALL be listed in the report as proposed follow-ups, not invented as issue numbers.
-- WHILE the roadmap manifest is changed THE SYSTEM SHALL keep `python3 roadmap/scripts/validate.py roadmap/epics` and the existing `roadmap/tests` passing.
-- WHEN the report is merged THE SYSTEM SHALL state in the report and in the manifest successCriteria that completing the spike does not deliver runtime decision assurance.
-- WHEN the report is added THE SYSTEM SHALL list it in `AGENTS.md` next to the existing Agent Commerce entry.
+Evidence and pinning
+- WHEN the report is written THE SYSTEM SHALL include an "Evidence pins" table with the commit SHA read for each of `mctlhq/.github`, `mctlhq/mctl-api`, `mctlhq/mctl-agents`, `mctlhq/mctl-gitops`, and any other repository used for a substantive claim.
+- IF a mandatory source repository cannot be read THEN THE SYSTEM SHALL stop, record the blocker in the report, and not complete D1-D4 from issue text or gitops comments alone.
+- WHEN a fact cannot be observed even though the mandatory sources were read THE SYSTEM SHALL mark it `unknown (not observed)` and say why. It SHALL NOT mark that fact implemented or missing.
+- WHEN a deployed version or live status is claimed THE SYSTEM SHALL cite a read-only MCTL observation or a gitops path (for example `platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml` image tag) and its date.
+
+Path separation
+- THE SYSTEM SHALL analyse at least these paths separately:
+  - P1: canonical Temporal DevLoop approval (`aar_` grant with `artifact_hash`, then human decision, then grant-authorized `/operations/mctl-agents-approve/execute`, then CWFT `expected_content_digest`, then the implementer gate).
+  - P2: standalone/direct GitOps approval (`mctl_trigger_approve` or direct `mctl-agents-approve` with no DevLoop grant).
+  - P3: the incident-responder autonomous/no-human-gate path.
+  - P4: orchestrator policy-checkpoint governed actions (tool calls and GitHub mutations).
+  - P5: Agent Commerce invocations.
+- WHILE analysing P1 THE SYSTEM SHALL treat mctl-agents#681 as proof of exact-content binding for P1 only. It SHALL NOT extend that proof to P2-P5 without each path's own evidence.
+- WHILE analysing P3 THE SYSTEM SHALL describe it neutrally and SHALL classify it (for F10) only from the policy and authority contract that was read.
+
+Deliverables
+- WHEN D1 is complete THE SYSTEM SHALL provide a sequence diagram per path. Each diagram SHALL show services, trust boundaries and the real evaluation order, and SHALL separate implemented behavior from planned work.
+- WHEN D2 is complete THE SYSTEM SHALL provide, for each path, a matrix with columns Capability | Status | Owner/component | Gap | Evidence.
+  - It SHALL have at least these rows: intent provenance, unified identity, approval authority, policy evidence, decision context, immutable proposal, execution binding, approval expiry, replay protection, end-to-end trace, escalation, break-glass, governance metrics.
+  - Status SHALL be one of implemented / partial / missing / owned by another epic / unknown (not observed).
+- WHEN D3 is complete THE SYSTEM SHALL record, for each of F1-F10:
+  - current behavior per applicable path;
+  - the desired invariant;
+  - evidence, being an existing test or a safe bounded reproduction with no production side effects;
+  - the gap;
+  - the owner.
+- WHEN F1/F2/F5 are analysed THE SYSTEM SHALL state whether `approved(action A) + attempt(action B) -> hard fail` holds, and name the enforcing code.
+- WHEN D4 is complete THE SYSTEM SHALL map every candidate envelope field to an existing MCTL contract field or mark it as a gap. It SHALL also state where append-only references are needed instead of singleton fields: multiple approvals, attempts, policy evaluations and steps.
+- WHEN D5 is written THE SYSTEM SHALL derive exactly one disposition from D1-D4.
+  - It SHALL give every gap an existing owner/epic or a justified proposed owner.
+  - It SHALL state the exact recommended roadmap manifest delta or follow-up action as text only.
+- IF D5 is CREATE NEW EPIC THEN THE SYSTEM SHALL include a refined EpicDefinition draft (required/optional work and dependency DAG) in the report body, not in `roadmap/epics/`.
+- THE SYSTEM SHALL state in the report that completing the spike does not deliver runtime assurance.
+
+Scope fences
+- WHILE the spike PR is open THE SYSTEM SHALL NOT change `roadmap/epics/agent-governance-decision-assurance.yaml` or the lifecycle of #181, beyond non-semantic documentation links.
+- THE SYSTEM SHALL NOT create follow-up issues, ship runtime fixes, enable bypasses, or call any mutating MCTL operation as part of the spike.
+- THE SYSTEM SHALL NOT state or prefer any D5 disposition before D1-D4 are written.
 
 ## Out of scope
 
-- Implementing any runtime control, API, schema, CWFT or policy change in mctl-api, mctl-agents or mctl-gitops. The spike only names the follow-ups.
-- A second authorization framework, a second telemetry system, or a replacement for Unified Identity or policy enforcement.
-- Enabling any override, break-glass or bypass.
-- Requiring human approval for every operation.
-- Storing private model reasoning or chain of thought.
-- A full approval UI.
-- Implementing AssuranceScenario coverage. That belongs to mctlhq/.github#151 (mctl-agents#694-#700). The report may only name candidate scenarios.
-- Creating GitHub issues for follow-ups as part of this change. The report drafts them; filing is a separate governed step.
-- Production side effects of any kind during verification.
+- Runtime fixes in mctl-api, mctl-agents or mctl-gitops; creating follow-up issues.
+- Archiving, activating or refining the roadmap manifest or #181 lifecycle (a separate PR after D5 review).
+- A second authorization framework, a second telemetry system, or an approval UI.
+- Implementing AssuranceScenarios or replay/regression harness work (owned by #151 / mctl-agents#694-#700).
+- Storing or evaluating private model reasoning.
 
 ## Open questions
 
-- The report's location: the issue allows either `docs/spikes/` or `docs/plans/`. This proposal picks a new `docs/spikes/` directory, because the report is an audit outcome and not a plan that is being carried out. A reviewer may prefer `docs/plans/`.
-- The disposition is open by design. This proposal records EXTEND EXISTING as a working hypothesis (the gaps observed so far all fall to existing owners: mctl-api approvals and identity, mctl-agents policy and execution, mctl-gitops policy catalog, #55 observability, #151 assurance). The report must confirm or overturn it on evidence, and the tasks support either outcome.
-- Which commerce and send_message-type paths are deployed today, and in which tenants. The investigator could only read mctl-gitops `platform-gitops/` and could not read the mctl-api or mctl-agents source trees. The implementer must pin and read those revisions.
-- Whether the `incident-resolve` and `proposal-status` scopes without approval (`requiresApproval: null`, which `policy.yaml` itself calls "undecided") count as governed actions that need a gate, or as accepted autonomous scopes that only need attributable evidence. The report should make a recommendation and leave the decision to the owners.
-- The deployed versions differ from the #681 baseline: mctl-api is `4.102.0` in gitops against `4.97.0` in the issue, and the mctl-agents workers are `1.84.0`. The report must pin the revisions it actually audits.
+- Is P4 (policy-checkpoint actions) a "send_message-type" path in the F1 sense? A `send_message` action kind was not confirmed in `orchestrator/policy_checkpoint.py` at the pinned SHA. The report should analyse F1 on the closest real action kinds (GitHub issue comment, work-item write, commerce invoke) and mark Telegram send as `unknown (not observed)` unless its source is read.
+- Is the P2 standalone approve a supported production path or legacy only? The CWFT accepts an empty `expected_content_digest`. The report should treat P2 as in scope and state its binding gap, without assuming it is deprecated.
+- Mandatory repo list: are `mctl-telegram`, `mctl-portal` and `mctl-agent` needed? The report adds them only if a substantive claim depends on them, and pins their SHAs if so.
+- Deployed versions differ from the #681 E2E: api 4.97.0 then, `4.102.0` now in gitops bootstrap. The report should state whether the P1 controls are unchanged between the two, or mark it unverified.

@@ -1,28 +1,42 @@
 # Tasks: issue-182-spike-evaluate-mctl-governance-beyond-hu
 
-- [ ] 1. Pin the evidence base: record the main SHAs of mctlhq/.github, mctl-api, mctl-agents and mctl-gitops, and the deployed tags of mctl-api and the mctl-agents workers (gitops values, plus `mctl_get_service_config` / `mctl_get_service_status` where available), and set the audit date. — DoD: the "Audit method and pinned revisions" table exists in `docs/spikes/agent-governance-decision-assurance.md`, and any unobservable source is stated as such.
-- [ ] 2. Build the path inventory P1-P7 (DevLoop approval, direct mctl-agents-approve, capability gateway invoke, incident-responder auto-accept and incident-resolve, commerce invocation, MCP platform operation, delegated WorkItem execution), and list excluded paths with reasons (depends on 1). — DoD: each path names its entry point, its components and the code or contract files at the pinned SHAs.
-- [ ] 3. Write the D1 Mermaid sequence diagrams per path, with trust boundaries, the identity carried, the evidence persisted, and implemented steps marked apart from planned ones (depends on 2). — DoD: every arrow is backed by a cited file, test or contract, and the actual evaluation order is stated.
-- [ ] 4. Write the dimension sections for scope items 1-8 (intent provenance; identity and authority, including revalidation at execution and caller-supplied strings such as the approve CWFT `approver`; policy evidence, name versus version; decision context classified as present, missing or UX-only per path; approval integrity per trust boundary; end-to-end trace with durable IDs versus sampled spans; reject, override, escalation and break-glass; governance metrics and instrumentation limits on top of the #55 primitives) (depends on 3). — DoD: each section ends with gaps that carry owners.
-- [ ] 5. Write the D2 capability matrix with per-path status for the 13 minimum rows, using only the statuses implemented, partial, missing, owned-by-another-epic or `unknown (not observed: reason)` (depends on 4). — DoD: no row claims `implemented` for paths other than those its evidence covers, and #681 is credited to P1 only unless other paths are proven.
-- [ ] 6. Write the D3 F1-F10 table with the current behaviour per path, the desired invariant, the evidence (an existing test path@SHA or a bounded non-production reproduction), the gap, the owner and an optional candidate AssuranceScenario for #151 (depends on 4). — DoD: all ten rows are filled, and unverifiable rows are marked unverified with the reproduction they would need. No production side effects.
-- [ ] 7. Write D4: map each GovernedDecision field to an existing contract (mctl-api#572 identity evidence, ActionApprovalRequest artifact_hash/intent_hash, WorkItem execution and execution requests, InvocationRecord, commerce receipt, usage ledger, #55 trace id) or mark it new with a reason; specify append-only references for approvals, attempts, evaluations and steps; and define retention, access and redaction (depends on 5, 6). — DoD: no field is left unmapped or without a reason, and the section states that stored authority claims are not authorization.
-- [ ] 8. Write D5: exactly one disposition, plus a routing table (Gap | Owner component | Owner epic | Draft follow-up with evidence, scope and acceptance criteria) and the parent #181 disposition with an explicit non-claim (depends on 5, 6, 7). — DoD: every gap from D2 and D3 appears exactly once, and no follow-up issue numbers are invented.
-- [ ] 9. Update `roadmap/epics/agent-governance-decision-assurance.yaml` to match D5: `lifecycle: archived` with a header comment that points at the report (EXTEND EXISTING / NO NEW EPIC), or a refined set of phases, work items for existing issues only, and a `dependsOn` DAG (CREATE NEW EPIC). Keep the non-claim in successCriteria (depends on 8). — DoD: `python3 roadmap/scripts/validate.py roadmap/epics` passes.
-- [ ] 10. Add the report to `AGENTS.md` next to the Agent Commerce entry (depends on 1). — DoD: the link resolves.
+- [ ] 1. Pin and read the sources. Shallow-clone `mctlhq/.github`, `mctlhq/mctl-api`, `mctlhq/mctl-agents` and `mctlhq/mctl-gitops`, and record each HEAD SHA and the date. Read the anchors listed in design.md "Current state", plus the related tests, in full. Add other repos (for example mctl-telegram, mctl-portal) only if a claim depends on them, and pin their SHAs too.
+  - DoD: the "Evidence pins" table is filled in. If any mandatory repo is unreadable, write a Blockers section and stop before task 4.
+- [ ] 2. Collect read-only deployed evidence (depends on 1). Record:
+  - the mctl-api tag from `platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml`;
+  - the agents worker tags from `platform-gitops/services/admins/mctl-agents-worker*/values.yaml`;
+  - optionally, read-only MCTL calls (`mctl_list_recent_operations`, `mctl_get_dev_loop`, `mctl_list_agent_executions`) that confirm the P1 chain and the presence of audit records.
+  - DoD: every deployed claim has a source and a date, and nothing mutating is called.
+- [ ] 3. Build the path inventory and the trust boundaries (depends on 1).
+  - The paths: P1 DevLoop grant approve, P2 standalone approve, P3 incident-responder autonomous path, P4 policy-checkpoint actions including delegated approval, and P5 commerce.
+  - DoD: each path has an entry point, the components involved, its trust boundaries, and code citations in the form `repo@sha:path#symbol`.
+- [ ] 4. Write D1 (depends on 2, 3): one Mermaid sequence diagram per path, in the actual evaluation order, with implemented and planned steps marked.
+  - DoD: every arrow is backed by a citation, and no step is inferred from issue text alone.
+- [ ] 5. Write scope sections 1-8 (depends on 4). Cover intent provenance, identity/authority (including F3 revalidation at spend versus decide), policy evidence, and the 11-field decision context marked present/missing per path. Also cover approval integrity, the durable end-to-end trace, reject/override/escalation, and the proposed governance metrics with their instrumentation limits.
+  - DoD: each section answers the issue's questions, with evidence or `unknown (not observed)` and a reason.
+- [ ] 6. Write D2 (depends on 5): one capability matrix per path, with the 13 mandatory rows and statuses taken from implemented / partial / missing / owned by another epic / unknown (not observed).
+  - DoD: every row has an owner and an evidence cell. No "implemented" cell lacks a cited test or contract.
+- [ ] 7. Write D3 (depends on 5): an F1-F10 table per applicable path, giving current behavior, the invariant, evidence, gap and owner.
+  - Run safe bounded reproductions locally only: the pinned repos' unit tests, such as `tests/test_proposal_digest*.py`, `tests/test_action_approvals.py` and the mctl-api `workitems` / `api` approval tests, and the approve CWFT digest script against fixture files in a scratch directory.
+  - Name candidate AssuranceScenarios for #151 without implementing them.
+  - DoD: the `approved(A)+attempt(B) -> hard fail` verdict is stated per path, P1 and P2 are kept distinct, and P3 is classified for F10 only from the contract that was read.
+- [ ] 8. Write D4 (depends on 6, 7): map the `GovernedDecision` fields to existing contracts (`ActionApprovalRequest`, `IntentHash`, execution evidence `ToolCallRef`, WorkItem/execution/snapshot, commerce receipt, audit `Entry`, principal IDs). Mark gaps, and decide where append-only references are needed.
+  - DoD: every field is either mapped or marked as a gap, with a citation.
+- [ ] 9. Write D5 (depends on 8): a gap-to-owner table, then exactly one disposition derived from D2/D3, then the recommended roadmap manifest delta and follow-up issue drafts as text only.
+  - If the disposition is CREATE NEW EPIC, include a refined EpicDefinition draft and DAG inline.
+  - DoD: one disposition, every gap owned, and no edit under `roadmap/`.
+- [ ] 10. Assemble `docs/spikes/agent-governance-decision-assurance.md` with the header and non-claims. Optionally add a link line in `AGENTS.md`. Open the PR (depends on 9).
+  - DoD: the PR diff touches only those two files, and the PR body states that the lifecycle change for #181 is a separate PR.
 
 ## Tests
 
-- [ ] T1. `python3 -m pip install -r roadmap/requirements.txt && python3 roadmap/scripts/validate.py roadmap/epics` passes after the manifest edit.
-- [ ] T2. `python3 -m pytest roadmap/tests .github/tests` passes unchanged.
-- [ ] T3. Content check of the report: D1-D5 headings are present; D2 has at least the 13 named rows with five columns; D3 has rows F1-F10; D5 contains exactly one of "NO NEW EPIC", "EXTEND EXISTING" or "CREATE NEW EPIC" as the stated disposition.
-- [ ] T4. Every Mermaid block renders (GitHub preview or `mmdc` locally).
-- [ ] T5. Every cited code reference is a pinned-SHA link or a path qualified by a SHA in the revisions table. No secrets, tokens or tenant payloads appear in the report.
+- [ ] T1. `git diff --name-only origin/main` lists only `docs/spikes/agent-governance-decision-assurance.md` and, optionally, `AGENTS.md`.
+- [ ] T2. `python roadmap/scripts/validate.py` (and the `roadmap/tests` suite) passes unchanged. This confirms that no manifest was touched.
+- [ ] T3. A grep check on the report: it contains the Evidence pins table with 40-hex SHAs for the four mandatory repos; it contains F1 through F10, D1 through D5, and all 13 D2 rows; and it states exactly one disposition token in the D5 heading.
+- [ ] T4. A grep check that no D5 disposition token appears before the D5 section, apart from the neutral list of options in the header.
+- [ ] T5. Every Mermaid block renders, checked with GitHub preview or `mmdc` locally.
+- [ ] T6. The reproduction commands listed in D3 re-run green or produce the documented failure against the pinned SHAs.
 
 ## Rollback
 
-The change is documentation plus one manifest field. Revert the PR. That
-restores `roadmap/epics/agent-governance-decision-assurance.yaml` to
-`lifecycle: proposed`, and the next `roadmap-publish.yml` run republishes the
-previous state. No runtime component is touched, so nothing else needs to be
-rolled back.
+The PR is documentation only. Revert the merge commit, or close the PR unmerged. No runtime, manifest or lifecycle state is affected, so no other rollback is needed.
