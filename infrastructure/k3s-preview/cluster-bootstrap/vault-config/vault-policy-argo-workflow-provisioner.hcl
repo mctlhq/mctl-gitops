@@ -28,6 +28,12 @@ path "auth/kubernetes/role/eso-tenant-*" {
   capabilities = ["create", "read", "update", "delete"]
 }
 
+# Per-tenant roles for tenant workflows (argo-workflow-tenant-{name}, bound
+# to argo-workflow-sa in the tenant namespace, policy tenant-{name}).
+path "auth/kubernetes/role/argo-workflow-tenant-*" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+
 # Read own policy (for debugging/verification)
 path "sys/policies/acl/argo-workflow-provisioner" {
   capabilities = ["read"]

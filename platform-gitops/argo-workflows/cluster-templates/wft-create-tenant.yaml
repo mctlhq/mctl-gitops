@@ -563,6 +563,19 @@ spec:
           echo "Vault policy tenant-${TENANT} created successfully."
           vault policy read "tenant-${TENANT}"
 
+          # The role tenant workflows (deploy, provision-database, retire)
+          # log in with from ${TENANT}/argo-workflow-sa. Bound to the tenant
+          # namespace only, so that SA cannot assume another tenant's role
+          # or the platform role argo-workflow.
+          echo "Creating Kubernetes auth role: argo-workflow-tenant-${TENANT}"
+          vault write "auth/kubernetes/role/argo-workflow-tenant-${TENANT}" \
+            bound_service_account_names=argo-workflow-sa \
+            bound_service_account_namespaces="${TENANT}" \
+            alias_name_source=serviceaccount_uid \
+            token_policies="tenant-${TENANT}" \
+            token_ttl=2h token_max_ttl=2h
+          vault read "auth/kubernetes/role/argo-workflow-tenant-${TENANT}"
+
           # ESO read policy + the Kubernetes auth role that backs the tenant's
           # namespaced SecretStore. Kept separate from tenant-${TENANT} above
           # (which scopes Argo's own read/write) so neither has to widen for

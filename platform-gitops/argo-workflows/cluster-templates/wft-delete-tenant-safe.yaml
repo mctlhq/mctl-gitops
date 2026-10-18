@@ -714,6 +714,11 @@ spec:
             jwt="$KUBE_TOKEN")
           export VAULT_TOKEN
 
+          # Vault answers 204 whether or not the role exists, so any other
+          # outcome (denied, unreachable) fails the step under set -e.
+          vault delete "auth/kubernetes/role/argo-workflow-tenant-${TENANT}"
+          echo "Vault role argo-workflow-tenant-${TENANT} deleted."
+
           if vault policy read "tenant-${TENANT}" > /dev/null 2>&1; then
             vault policy delete "tenant-${TENANT}"
             echo "Vault policy tenant-${TENANT} deleted."

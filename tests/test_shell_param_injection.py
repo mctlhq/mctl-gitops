@@ -29,7 +29,7 @@ CASES = [
     ("tpl-git-commit.yaml", "commit-service", "# git, ssh, yq and helm come from"),
     ("tpl-vault-write.yaml", "write-service-secrets", "echo \"🔐 Authenticating",
      "TEAM=\"$PARAM_TEAM_NAME\""),
-    ("tpl-vault-write.yaml", "delete-service-secrets", "SA_TOKEN=",
+    ("tpl-vault-write.yaml", "delete-service-secrets", "# A tenant namespace may assume",
      "TEAM=\"$PARAM_TEAM_NAME\""),
     ("wft-smoke-test.yaml", "run-onboard", "WF_NAME=$(kubectl create"),
     ("wft-smoke-test.yaml", "check-pod-running", "check_missing_secret_reference()"),

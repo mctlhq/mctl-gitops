@@ -42,6 +42,17 @@
 #    }
 #    EOF
 #
+#    and the role tenant workflows (deploy-service, provision-database,
+#    retire-service) log in with from {TEAM}/argo-workflow-sa. The templates
+#    pick it from the pod's namespace; only argo-workflows gets the role above.
+#
+#    vault write auth/kubernetes/role/argo-workflow-tenant-{TEAM} \
+#      bound_service_account_names=argo-workflow-sa \
+#      bound_service_account_namespaces={TEAM} \
+#      alias_name_source=serviceaccount_uid \
+#      token_policies=tenant-{TEAM} \
+#      token_ttl=2h token_max_ttl=2h
+#
 # TODO (P1): Create a dedicated ServiceAccount (argo-workflow-provisioner-sa)
 # for provisioning workflows, and bind argo-workflow-provisioner policy only
 # to that SA. This way regular CI/CD workflows cannot modify Vault policies.
