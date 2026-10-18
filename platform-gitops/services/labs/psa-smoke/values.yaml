@@ -26,7 +26,7 @@ probes:
   readiness: null
   liveness: null
 env:
-  PSA_SMOKE: "1"
+  PSA_SMOKE: "2"
 externalSecret:
   targetSecret: psa-smoke-secrets
   data:
