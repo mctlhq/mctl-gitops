@@ -280,8 +280,10 @@ spec:
           echo "$PORT" | grep -qE '^[0-9]{1,5}$' || {
             echo "❌ Invalid port: ${PORT}"; exit 1; }
 
-          # git, ssh, yq and helm come from mctl-workflow-tools (sha256-pinned at
-          # build time); this step runs non-root, so it installs nothing.
+          # git, ssh, yq and helm come from mctl-workflow-tools 1.0.0: yq v4.52.4,
+          # helm v3.16.4, sha256-pinned at build time. The yq calls below rely
+          # on v4 (strenv, no startswith), so a tools bump must stay on yq v4.
+          # This step runs non-root, so it installs nothing.
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519

@@ -26,7 +26,7 @@ PH = re.compile(r"\{\{\s*(?:inputs|workflow)\.parameters\.([A-Za-z0-9_.-]+)\s*\}
 # templates that run something before they read their parameters.
 CASES = [
     ("tpl-validate-tenant.yaml", "validate", "# ── 3. Clone"),
-    ("tpl-git-commit.yaml", "commit-service", "apk add"),
+    ("tpl-git-commit.yaml", "commit-service", "# git, ssh, yq and helm come from"),
     ("tpl-vault-write.yaml", "write-service-secrets", "echo \"🔐 Authenticating",
      "TEAM=\"$PARAM_TEAM_NAME\""),
     ("tpl-vault-write.yaml", "delete-service-secrets", "SA_TOKEN=",
