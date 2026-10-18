@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-18T23:01:36Z'
+updated_at: '2026-10-18T23:14:51Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-dd0a4262f1ca6c50
@@ -45,8 +45,4 @@ completion:
       required_total: 4
       optional_total: 1
   primary_observed: true
-ci_blockers_head: 776050f49c587da604467dd2743ce35c3524f503
-ci_blockers:
-- PR validation / lint
-- PR validation / tests
 review_attempts: 1
