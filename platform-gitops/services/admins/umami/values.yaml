@@ -140,6 +140,96 @@ envFrom:
   - secretRef:
       name: admins-umami-db-creds
 extraContainers: []
+# Retention: the privacy pages of mctl.ai and tg.mctl.ai promise that visitor
+# records are deleted after 2 years. Umami has no TTL of its own, so this Job
+# deletes them daily. The schema uses Prisma relationMode "prisma" (no foreign
+# keys), so the order of the DELETEs does not matter; a session goes only once
+# no event still points at it. The final check fails the Job when anything past
+# the cut-off survived, NULL created_at included, so a schema change that adds
+# rows the DELETEs miss shows up as a failed Job instead of silent retention.
+# Saved reports, segments, boards, links, pixels and saved replays are
+# configuration, not visitor records, and are left alone.
+extraObjects:
+  - apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: admins-umami-retention
+      labels:
+        app.kubernetes.io/name: umami
+        mctl.me/component: retention
+    spec:
+      schedule: "23 4 * * *"
+      concurrencyPolicy: Forbid
+      startingDeadlineSeconds: 3600
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      jobTemplate:
+        spec:
+          backoffLimit: 2
+          # Generous: the first runs after a backlog may delete many rows in
+          # one transaction; a daily run normally takes seconds.
+          activeDeadlineSeconds: 3600
+          ttlSecondsAfterFinished: 86400
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: umami
+                mctl.me/component: retention
+            spec:
+              restartPolicy: OnFailure
+              # Restricted-compliant: the image's own postgres user (uid 70),
+              # read-only root; psql needs no writable path.
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 70
+                runAsGroup: 70
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: retention
+                  image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+                  resources:
+                    requests: {cpu: 10m, memory: 32Mi}
+                    limits: {cpu: 200m, memory: 128Mi}
+                  command: ["sh", "-c"]
+                  args:
+                    - |
+                      set -e
+                      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+                      BEGIN;
+                      DELETE FROM website_event  WHERE created_at < now() - interval '2 years';
+                      DELETE FROM event_data     WHERE created_at < now() - interval '2 years';
+                      DELETE FROM session_data   WHERE created_at < now() - interval '2 years';
+                      DELETE FROM revenue        WHERE created_at < now() - interval '2 years';
+                      DELETE FROM session_replay WHERE created_at < now() - interval '2 years';
+                      DELETE FROM heatmap_event  WHERE created_at < now() - interval '2 years';
+                      DELETE FROM session_link   WHERE created_at < now() - interval '2 years';
+                      DELETE FROM session s
+                       WHERE s.created_at < now() - interval '2 years'
+                         AND NOT EXISTS (SELECT 1 FROM website_event e WHERE e.session_id = s.session_id);
+                      DO $$
+                      DECLARE t text; n bigint;
+                      BEGIN
+                        FOREACH t IN ARRAY ARRAY['website_event','event_data','session_data','revenue',
+                                                 'session_replay','heatmap_event','session_link']
+                        LOOP
+                          EXECUTE format('SELECT count(*) FROM %I WHERE created_at IS NULL OR created_at < now() - interval ''2 years''', t) INTO n;
+                          IF n > 0 THEN RAISE EXCEPTION '% rows in % are past retention or have no created_at', n, t; END IF;
+                        END LOOP;
+                      END $$;
+                      COMMIT;
+                      SQL
+                  env:
+                    - name: DATABASE_URL
+                      valueFrom:
+                        secretKeyRef:
+                          name: admins-umami-db-creds
+                          key: DATABASE_URL
 dbSecret:
   vaultPath: "teams/admins/umami/database"
   secretName: "admins-umami-db-creds"

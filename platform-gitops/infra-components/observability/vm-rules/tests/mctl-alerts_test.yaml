@@ -1,4 +1,4 @@
-# Unit tests for mctl-alerts.yaml (groups mctl.argocd, mctl.tenant-quotas and the node alerts).
+# Unit tests for mctl-alerts.yaml (groups mctl.argocd, mctl.tenant-quotas, mctl.umami-retention and the node alerts).
 #
 # rule_files is resolved relative to this file. generated/ is produced by
 # scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so
@@ -262,3 +262,110 @@ tests:
               namespace: erpact
             exp_annotations:
               summary: Namespace erpact CPU usage is at 91.67% of quota
+
+  # ---------------------------------------------------------------------
+  # UmamiRetentionStale / UmamiRetentionJobFailed
+  # promtool's time() starts at 0, so timestamps below are seconds from the
+  # start of the test; 26h = 93600s.
+  # ---------------------------------------------------------------------
+  - interval: 10m
+    name: a retention CronJob that succeeded recently stays quiet
+    input_series:
+      - series: 'kube_cronjob_info{namespace="admins",cronjob="admins-umami-retention"}'
+        values: '1x12'
+      - series: 'kube_cronjob_created{namespace="admins",cronjob="admins-umami-retention"}'
+        values: '0x12'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="admins",cronjob="admins-umami-retention"}'
+        values: '0x12'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: UmamiRetentionStale
+        exp_alerts: []
+
+  - interval: 10m
+    name: no successful retention run for over 26h fires
+    input_series:
+      - series: 'kube_cronjob_info{namespace="admins",cronjob="admins-umami-retention"}'
+        values: '1x170'
+      - series: 'kube_cronjob_created{namespace="admins",cronjob="admins-umami-retention"}'
+        values: '0x170'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="admins",cronjob="admins-umami-retention"}'
+        values: '0x170'
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: UmamiRetentionStale
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: UmamiRetentionStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+              cronjob: admins-umami-retention
+            exp_annotations:
+              summary: >-
+                Umami retention CronJob admins/admins-umami-retention has not succeeded in over 26h — analytics older than 2 years may be kept despite the privacy policy
+
+  - interval: 10m
+    name: a retention CronJob that never succeeded fires once it is 26h old
+    input_series:
+      - series: 'kube_cronjob_info{namespace="admins",cronjob="admins-umami-retention"}'
+        values: '1x170'
+      - series: 'kube_cronjob_created{namespace="admins",cronjob="admins-umami-retention"}'
+        values: '0x170'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: UmamiRetentionStale
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: UmamiRetentionStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+              cronjob: admins-umami-retention
+            exp_annotations:
+              summary: >-
+                Umami retention CronJob admins/admins-umami-retention has not succeeded in over 26h — analytics older than 2 years may be kept despite the privacy policy
+
+  - interval: 10m
+    name: a missing retention CronJob series fires
+    input_series:
+      - series: 'kube_cronjob_info{namespace="admins",cronjob="some-other-job"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: UmamiRetentionStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+              cronjob: admins-umami-retention
+            exp_annotations:
+              summary: >-
+                Umami retention CronJob admins/admins-umami-retention has not succeeded in over 26h — analytics older than 2 years may be kept despite the privacy policy
+
+  - interval: 1m
+    name: a failed retention Job fires; a retried-then-complete one and an unrelated one do not
+    input_series:
+      - series: 'kube_job_status_failed{namespace="admins",job_name="admins-umami-retention-29852500"}'
+        values: '1x20'
+      - series: 'kube_job_complete{namespace="admins",job_name="admins-umami-retention-29852500",condition="true"}'
+        values: '0x20'
+      - series: 'kube_job_status_failed{namespace="admins",job_name="admins-umami-retention-29852400"}'
+        values: '1x20'
+      - series: 'kube_job_complete{namespace="admins",job_name="admins-umami-retention-29852400",condition="true"}'
+        values: '1x20'
+      - series: 'kube_job_status_failed{namespace="admins",job_name="admins-other-29852500"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UmamiRetentionJobFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+              job_name: admins-umami-retention-29852500
+            exp_annotations:
+              summary: >-
+                Umami retention Job admins/admins-umami-retention-29852500 failed — check its logs for the "past retention" check or a database error
