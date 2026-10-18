@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-18T21:02:46Z'
+updated_at: '2026-10-18T21:48:40Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6d6f91ad348f1535
@@ -52,4 +52,4 @@ notes: 'implementer declined to act: Both findings are already fixed in HEAD e28
   budget written in the comment. The CI failure (test_human_input_e2e TimeoutError,
   in a 463s run where 6111 others passed) touches no code in this change (human-input
   investigator path, not grant freshness);'
-review_attempts: 1
+review_attempts: 2
