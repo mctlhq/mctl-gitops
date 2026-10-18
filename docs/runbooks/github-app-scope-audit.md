@@ -31,8 +31,8 @@ the field has a hard **240-character limit** that rejects the whole form
 submission (the existing text must be cleared first, not appended to).
 
 New internal automation goes on `mctl-agents`. If you find yourself adding
-`secrets.APP_ID` to a workflow that pushes, opens a PR, or dispatches
-anything, that is the wrong App.
+`vars.APP_CLIENT_ID` / `secrets.APP_PRIVATE_KEY` to a workflow that pushes,
+opens a PR, or dispatches anything, that is the wrong App.
 
 ## Why the split is forced, not stylistic
 
@@ -54,9 +54,10 @@ App — and every widening silently landed on customers too. See #761 for the
 | | `mctl-app` (MCTL App) | `mctl-agents` |
 |---|---|---|
 | app_id | `2902192` | `4450852` |
+| client_id | `Iv23liEwgXVKPDRzdPrI` | `Iv23li8JGSh7wyKukkQK` |
 | mctlhq installation | `114645135` | `150422769` |
 | Vault creds | `secret/platform/github-app` | `secret/platform/github-app-agents` |
-| Actions secrets | `APP_ID` / `APP_PRIVATE_KEY` | `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY` |
+| Actions credentials | variable `APP_CLIENT_ID`, secret `APP_PRIVATE_KEY` | variable `AGENTS_APP_CLIENT_ID`, secret `AGENTS_APP_PRIVATE_KEY` |
 | Audience | **customers** install it | internal only, never offered |
 | Target permissions | `contents:read`, `metadata:read` | `contents/issues/pull_requests/workflows:write`, `actions:write`, `checks:read`, `metadata:read` |
 
@@ -73,7 +74,7 @@ reappears on that list, treat it as a regression.
 
 ## Consumers
 
-For who can *read* the `AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY` secrets
+For who can *read* the `AGENTS_APP_PRIVATE_KEY` secret
 in the first place (a distinct gap from the App-permission narrowing this
 document covers), see `docs/runbooks/agents-app-secret-exposure.md`.
 
@@ -161,13 +162,13 @@ gh api orgs/mctlhq/installations \
 
 # Every workflow still minting as MCTL App across the workspace.
 # Expected: only mctl-gitops/.github/workflows/build-image.yaml
-grep -rnE '^[^#]*\$\{\{ *secrets\.APP_(ID|PRIVATE_KEY) *\}\}' \
+grep -rnE '^[^#]*\$\{\{ *(vars\.APP_CLIENT_ID|secrets\.APP_PRIVATE_KEY) *\}\}' \
   --include="*.yml" --include="*.yaml" .
 ```
 
 Anchor the pattern outside comments. Several workflows now carry an
-explanatory line naming `secrets.APP_ID` precisely to say they must *not*
-use it; a bare `grep -rn "secrets.APP_ID"` reports all of them and makes a
+explanatory line naming `APP_CLIENT_ID` precisely to say they must *not*
+use it; a bare `grep -rn "APP_CLIENT_ID"` reports all of them and makes a
 clean workspace look dirty.
 
 `gh api repos/mctlhq/<repo>/collaborators/mctl-app[bot]/permission` is
