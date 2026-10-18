@@ -67,7 +67,11 @@ class Vault(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         cls = type(self)
         path, query = self._path()
-        cls.requests.append(("LIST" if "list=true" in query else "GET", path))
+        listing = "list=true" in query
+        cls.requests.append(("LIST" if listing else "GET", path))
+        if not listing:
+            # A read of one path's own metadata, not of its children.
+            return self._send(200 if path in cls.secrets else 404, b"{}")
         if path in cls.list_status:
             return self._send(cls.list_status[path])
         if path in cls.malformed:
@@ -163,6 +167,22 @@ check("DELETE 403: reported as a failed delete, path named",
 # 6. Vault answered 204 but the tree is still there: not a clean retire.
 r = run(FULL, ignore_deletes=True)
 check("deletes not applied: step fails", r.returncode != 0, r.stdout)
+
+# 6b. Same for a service with no subtree: LIST is empty either way, so only
+# a read of the service's own metadata can tell (claude P2 on #1974).
+r = run({"teams/labs/svc"}, ignore_deletes=True)
+check("root-only tree, deletes not applied: step fails",
+      r.returncode != 0 and "want 404" in r.stderr, r.stdout + r.stderr)
+r = run({"teams/labs/svc"})
+check("root-only tree: exit 0 and removed",
+      r.returncode == 0 and "teams/labs/svc" not in Vault.secrets, r.stderr)
+
+# 6c. mctl-api allows a trailing hyphen in team and component names, so a
+# retire of such a service must not be refused (agy P2 on #1974).
+r = run({"teams/labs/svc-", "teams/labs/svc-/database"}, service="svc-")
+check("name with a trailing hyphen: retired",
+      r.returncode == 0 and not {s for s in Vault.secrets if s.startswith("teams/labs/svc-/")
+                                 or s == "teams/labs/svc-"}, r.stdout + r.stderr)
 
 # 7. Names that would widen the recursive walk are refused before any request.
 for team, service in (("labs", ""), ("", "svc"), ("labs", "a/b"), ("labs", ".."),

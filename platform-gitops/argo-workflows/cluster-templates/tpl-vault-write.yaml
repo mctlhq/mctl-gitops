@@ -301,15 +301,18 @@ spec:
           import urllib.parse
           import urllib.request
 
-          NAME = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+          # Same shape as write-service-secrets-from-secret and as mctl-api's
+          # name patterns (a trailing hyphen is allowed there), so every
+          # service that could be written can also be retired.
+          NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
           team = os.environ["PARAM_TEAM_NAME"]
           service = os.environ["PARAM_COMPONENT_NAME"]
           # The walk is recursive, so an empty or odd segment would widen it
           # to the whole team (teams/<t>/) or beyond. Refuse anything that is
-          # not a plain DNS label.
+          # not a single lowercase name segment.
           for label, value in (("team_name", team), ("component_name", service)):
               if not NAME.fullmatch(value):
-                  sys.exit(f"refusing to delete: {label} {value!r} is not a DNS label")
+                  sys.exit(f"refusing to delete: {label} {value!r} is not a plain name")
 
           addr = os.environ["VAULT_ADDR"].rstrip("/")
           token = os.environ.get("VAULT_TOKEN", "")
@@ -369,6 +372,11 @@ spec:
           left = walk(root)
           if left:
               sys.exit(f"Vault still lists {left} under {root} after the delete")
+          # LIST only shows children; the service's own secret needs a read
+          # of its metadata, which must be gone (404).
+          status, _ = call("GET", root)
+          if status != 404:
+              sys.exit(f"secret/metadata/{root} answers HTTP {status} after the delete, want 404")
           print(f"  {len(paths)} path(s) deleted, nothing left under secret/metadata/{root}")
           PY
           echo "✅ Vault cleanup done"
