@@ -164,7 +164,6 @@ spec:
       - host labs-mctl-telegram-preview labs-mctl-telegram-preview all scram-sha-256
       - host labs-mctl-loyalty labs-mctl-loyalty all scram-sha-256
       - host labs-mctl-pairdesk labs-mctl-pairdesk all scram-sha-256
-      - host labs-pfeifenpatenschaft labs-pfeifenpatenschaft all scram-sha-256
       - host labs-pfeifenpatenschaft-backend labs-pfeifenpatenschaft-backend all scram-sha-256
       - host labs-mctl-academy labs-mctl-academy all scram-sha-256
       # Read-only Grafana dashboard role — SELECT-only, see
@@ -274,12 +273,6 @@ spec:
         ensure: present
         passwordSecret:
           name: labs-pfeifenpatenschaft-backend-db-creds
-      - name: labs-pfeifenpatenschaft
-        login: true
-        connectionLimit: 10
-        ensure: present
-        passwordSecret:
-          name: labs-pfeifenpatenschaft-db-creds
       - name: labs-mctl-pairdesk
         login: true
         connectionLimit: 10

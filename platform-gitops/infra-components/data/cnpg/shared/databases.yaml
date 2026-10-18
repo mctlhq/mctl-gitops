@@ -173,17 +173,6 @@ spec:
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: labs-pfeifenpatenschaft-db
-spec:
-  name: "labs-pfeifenpatenschaft"
-  owner: "labs-pfeifenpatenschaft"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
   name: labs-pfeifenpatenschaft-backend-db
 spec:
   name: "labs-pfeifenpatenschaft-backend"
