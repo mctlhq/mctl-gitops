@@ -157,8 +157,8 @@ spec:
           VAULT_ADDR = os.environ["VAULT_ADDR"]
           TEAM = os.environ["PARAM_TEAM_NAME"]
           SERVICE = os.environ["PARAM_COMPONENT_NAME"]
-          NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
-          if not NAME.match(TEAM) or not NAME.match(SERVICE):
+          NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+          if not NAME.fullmatch(TEAM) or not NAME.fullmatch(SERVICE):
               sys.exit("invalid team_name or component_name")
           PATH = f"secret/data/teams/{TEAM}/{SERVICE}"
           KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -286,23 +286,91 @@ spec:
 
           echo "🗑️  Deleting Vault secrets for ${TEAM}/${SERVICE}..."
 
-          # Delete all versions + metadata
-          for path in \
-            "secret/metadata/teams/${TEAM}/${SERVICE}" \
-            "secret/metadata/teams/${TEAM}/${SERVICE}/repo-pat"; do
+          # KV v2 deletes metadata per path: removing teams/<t>/<s> leaves
+          # every secret below it (database, preview, preview/database, ...),
+          # so walk the tree with LIST and delete each secret. Fail closed: a
+          # LIST or DELETE that is neither success nor the documented absence
+          # (404) fails the step instead of reporting a clean retire, and the
+          # tree must LIST as absent afterwards.
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
 
-            HTTP=$(curl -sS -o /dev/null -w "%{http_code}" \
-              -X DELETE \
-              -H "X-Vault-Token: $VAULT_TOKEN" \
-              "${VAULT_ADDR}/v1/${path}")
+          NAME = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+          team = os.environ["PARAM_TEAM_NAME"]
+          service = os.environ["PARAM_COMPONENT_NAME"]
+          # The walk is recursive, so an empty or odd segment would widen it
+          # to the whole team (teams/<t>/) or beyond. Refuse anything that is
+          # not a plain DNS label.
+          for label, value in (("team_name", team), ("component_name", service)):
+              if not NAME.fullmatch(value):
+                  sys.exit(f"refusing to delete: {label} {value!r} is not a DNS label")
 
-            if [ "$HTTP" = "204" ] || [ "$HTTP" = "404" ]; then
-              echo "  ✅ ${path}"
-            else
-              echo "  ⚠️  ${path} returned HTTP ${HTTP}"
-            fi
-          done
+          addr = os.environ["VAULT_ADDR"].rstrip("/")
+          token = os.environ.get("VAULT_TOKEN", "")
+          if not token:
+              sys.exit("Vault login returned no token")
+          root = f"teams/{team}/{service}"
 
+
+          def call(method, path, list_=False):
+              url = f"{addr}/v1/secret/metadata/{urllib.parse.quote(path)}"
+              if list_:
+                  url += "?list=true"
+              req = urllib.request.Request(url, method=method,
+                                           headers={"X-Vault-Token": token})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return resp.status, resp.read()
+              except urllib.error.HTTPError as exc:
+                  return exc.code, exc.read()
+
+
+          def children(path):
+              status, body = call("GET", path, list_=True)
+              if status == 404:
+                  return []
+              if status != 200:
+                  sys.exit(f"LIST secret/metadata/{path} returned HTTP {status}; "
+                           "cannot tell what is stored there, refusing to report a clean retire")
+              try:
+                  return json.loads(body)["data"]["keys"]
+              except (ValueError, KeyError, TypeError):
+                  sys.exit(f"LIST secret/metadata/{path} returned a malformed body")
+
+
+          def walk(path):
+              found = []
+              for key in children(path):
+                  if key.endswith("/"):
+                      found += walk(f"{path}/{key[:-1]}")
+                  else:
+                      found.append(f"{path}/{key}")
+              return found
+
+
+          # Deepest first, the service's own path last.
+          paths = sorted(walk(root), key=lambda p: -p.count("/")) + [root]
+          failed = []
+          for path in paths:
+              status, _ = call("DELETE", path)
+              if status in (204, 404):
+                  print(f"  ✅ secret/metadata/{path}")
+              else:
+                  print(f"  ❌ secret/metadata/{path} returned HTTP {status}")
+                  failed.append(path)
+          if failed:
+              sys.exit(f"{len(failed)} Vault path(s) were not deleted: {failed}")
+          left = walk(root)
+          if left:
+              sys.exit(f"Vault still lists {left} under {root} after the delete")
+          print(f"  {len(paths)} path(s) deleted, nothing left under secret/metadata/{root}")
+          PY
           echo "✅ Vault cleanup done"
         env:
           - name: VAULT_ADDR

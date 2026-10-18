@@ -499,6 +499,12 @@ jobs:
         # version stops the step instead of overwriting the whole secret.
         run: python3 tests/test_tpl_vault_write_parse.py
 
+      - name: Unit-test retire's Vault delete against a fake KV v2 tree
+        # Every secret below teams/<t>/<s> goes (KV v2 deletes per path, so
+        # database/ and preview/ used to survive a retire), nothing outside
+        # it does, and a failed LIST or DELETE fails the step.
+        run: python3 tests/test_tpl_vault_delete_service_tree.py
+
       - name: Unit-test create-tenant's existing-tenant checks
         # create-tenant creates a tenant: an existing one fails validate unless
         # reprovision=true, and the commit step refuses one that appeared
