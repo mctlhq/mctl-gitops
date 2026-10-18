@@ -56,7 +56,7 @@ spec:
             # <registry>/<component_name>; its build-image step runs on this
             # alone, so the check below and the build cannot disagree.
       script:
-        image: alpine/git:2.43.0
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         env:
           - name: PARAM_TEAM_NAME

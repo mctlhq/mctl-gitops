@@ -44,7 +44,7 @@ spec:
           - name: config_patch
             default: ""
       script:
-        image: alpine:3.19
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         env:
           - name: HEALTH_CHECK_PATH
@@ -280,15 +280,10 @@ spec:
           echo "$PORT" | grep -qE '^[0-9]{1,5}$' || {
             echo "❌ Invalid port: ${PORT}"; exit 1; }
 
-          # ── 0. Install dependencies ───────────────────────────────────────────
-          apk add --no-cache openssl curl git ca-certificates openssh-client
-          curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
-            -o /usr/local/bin/yq \
-            "https://github.com/mikefarah/yq/releases/download/v4.52.4/yq_linux_amd64"
-          # Same unverified download as wft-provision-database had; see the
-          # note there. This pod carries the gitops deploy key.
-          echo "0c4d965ea944b64b8fddaf7f27779ee3034e5693263786506ccd1c120f184e8c  /usr/local/bin/yq" | sha256sum -c - >/dev/null
-          chmod +x /usr/local/bin/yq
+          # git, ssh, yq and helm come from mctl-workflow-tools 1.0.0: yq v4.52.4,
+          # helm v3.16.4, sha256-pinned at build time. The yq calls below rely
+          # on v4 (strenv, no startswith), so a tools bump must stay on yq v4.
+          # This step runs non-root, so it installs nothing.
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -484,11 +479,6 @@ spec:
 
             # Validate Helm template before committing
             echo "🔍 Validating Helm template..."
-            curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
-              -o /tmp/helm.tar.gz \
-              "https://get.helm.sh/helm-v3.14.0-linux-amd64.tar.gz" && \
-              tar -xzf /tmp/helm.tar.gz -C /tmp && \
-              mv /tmp/linux-amd64/helm /usr/local/bin/helm
 
             if ! helm template test "platform-gitops/helm-charts/base-service" \
               -f "${DIR}/values.yaml" > /dev/null 2>&1; then
@@ -718,7 +708,7 @@ spec:
           - name: component_name
           - name: component_type
       script:
-        image: alpine:3.19
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         envFrom:
           - configMapRef:
@@ -748,7 +738,6 @@ spec:
           done
 
           # Setup SSH
-          apk add --no-cache openssl curl git openssh-client ca-certificates
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
