@@ -1,0 +1,138 @@
+# Service: umami
+# Team: admins
+
+# Chart: base-service
+
+# Self-hosted, cookieless web analytics for mctl.ai, tg.mctl.ai and
+# docs.mctl.ai. The upstream image, not a build of ours, so nothing bumps it
+# automatically: the tag is moved here by hand, and the digest pins exactly
+# the image that was tested.
+image:
+  repository: ghcr.io/umami-software/umami
+  tag: "3.4.0@sha256:85909afc45bdcda1917394594a087421fdbb05610fded0fa9f6fb861abb2f367"
+service:
+  port: 3000
+backstage:
+  kubernetesId: umami
+# The image runs as nextjs (uid 1001) in group nogroup (gid 65533). Pinned
+# here so kubelet and the deploy-time image-user check can verify
+# runAsNonRoot without reading the image; the rest comes from the chart's
+# defaults (non-root, read-only root, drop ALL). Umami writes nothing to disk
+# at run time, so /tmp from the chart's writablePaths is enough.
+# See https://docs.mctl.ai/guides/scaffolding#container-requirements
+containerSecurityContext:
+  runAsUser: 1001
+  runAsGroup: 65533
+resources:
+  # Measured locally: ~305Mi steady state.
+  requests:
+    cpu: 50m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+probes:
+  # Every start runs `prisma migrate deploy` before the server listens, and
+  # the first one applies the whole schema. The startup probe gives that up to
+  # five minutes (30 x 10s) before liveness takes over.
+  startup:
+    path: /api/heartbeat
+    port: http
+    periodSeconds: 10
+    failureThreshold: 30
+  liveness:
+    path: /api/heartbeat
+    port: http
+    initialDelaySeconds: 0
+    periodSeconds: 15
+  readiness:
+    path: /api/heartbeat
+    port: http
+    initialDelaySeconds: 0
+    periodSeconds: 10
+env:
+  # Next.js standalone binds to $HOSTNAME, which Kubernetes sets to the pod
+  # name; pin the wildcard address the image itself defaults to.
+  HOSTNAME: "0.0.0.0"
+  PORT: "3000"
+  # The tracker is served as /insights.js instead of /script.js, which
+  # content blockers match by name.
+  TRACKER_SCRIPT_NAME: insights.js
+  # Every request arrives through Cloudflare (origin mTLS), which sets this
+  # header to the real client address; X-Forwarded-For would be Traefik's.
+  CLIENT_IP_HEADER: cf-connecting-ip
+  DISABLE_UPDATES: "1"
+  DISABLE_TELEMETRY: "1"
+  # COLLECT_API_ENDPOINT must stay unset: applying it makes Umami write to its
+  # own files at start, which crashes with EROFS on the read-only root.
+  # /api/send is the default and is what the public ingress below routes.
+ingress:
+  enabled: true
+  # stats.mctl.ai is the canonical host. admins-umami.mctl.ai is kept because
+  # Backstage's forward-auth builds the post-login return URL from
+  # <tenant>-<service>.mctl.ai (same pattern as temporal-web). The alias is
+  # registered for forward-auth in bootstrap/templates/mctl-platform/
+  # mctl-portal.yaml (oidcProvider.forwardAuth.hosts).
+  hosts:
+    - stats.mctl.ai
+    - admins-umami.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: umami-tls
+      hosts:
+        - stats.mctl.ai
+        - admins-umami.mctl.ai
+  # The dashboard, its API and the login page sit behind the platform's
+  # Backstage forward-auth, for members of the admins tenant only. Umami's
+  # own login stays on behind it.
+  forwardAuth:
+    enabled: true
+    address: "http://backstage.backstage.svc.cluster.local:7007/api/oidc-provider/forward-auth?tenant=admins&service=umami"
+    trustForwardHeader: false
+# The only two paths the tracked sites need from the internet: the tracker
+# script and the collection endpoint it posts to. Exact paths, no
+# forward-auth, on stats.mctl.ai only. Traefik orders routers by rule length,
+# so `Host(stats.mctl.ai) && Path(/api/send)` outranks the main ingress's
+# `Host(stats.mctl.ai) && PathPrefix(/)` and these requests never reach the
+# forward-auth middleware; every other path still does.
+# No cert-manager annotation here: the certificate is issued once, for the
+# ingress above, and these reuse its secret.
+extraIngresses:
+  - name: admins-umami-tracker
+    hosts:
+      - stats.mctl.ai
+    path: /insights.js
+    pathType: Exact
+    tls:
+      - secretName: umami-tls
+        hosts:
+          - stats.mctl.ai
+  - name: admins-umami-collect
+    hosts:
+      - stats.mctl.ai
+    path: /api/send
+    pathType: Exact
+    tls:
+      - secretName: umami-tls
+        hosts:
+          - stats.mctl.ai
+# APP_SECRET signs Umami's login tokens; rotating it signs everyone out.
+externalSecret:
+  targetSecret: umami-secrets
+  data:
+    - secretKey: APP_SECRET
+      remoteKey: teams/admins/umami
+      property: APP_SECRET
+envFrom:
+  # One list: a second `envFrom:` key would replace this one (gitops#1102).
+  - secretRef:
+      name: umami-secrets
+  # DATABASE_URL, assembled by the chart from teams/admins/umami/database
+  # (shared-pg role and database admins-umami, gitops#1986).
+  - secretRef:
+      name: admins-umami-db-creds
+extraContainers: []
+dbSecret:
+  vaultPath: "teams/admins/umami/database"
+  secretName: "admins-umami-db-creds"
