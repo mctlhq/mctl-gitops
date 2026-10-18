@@ -195,6 +195,27 @@ roleRef:
   name: argo-workflow-helm-deploy
   apiGroup: rbac.authorization.k8s.io
 ---
+# mctl-api submits preview-deploy and preview-delete in the tenant namespace
+# (operations.WorkflowNamespace), so they run as the tenant-local
+# argo-workflow-sa, not the central one bound above. Without this binding
+# `helm list -n {{ $ns }}` is forbidden and preview-deploy waits out its
+# namespace-readiness loop and fails.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-helm-deploy-tenant
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow-sa
+    namespace: {{ $tenantName }}
+roleRef:
+  kind: Role
+  name: argo-workflow-helm-deploy
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
