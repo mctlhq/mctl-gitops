@@ -33,3 +33,7 @@ tenant:
     allowIntraNamespace: true
     allowClusterEgress: true
     allowInternetEgress: false
+  # No workloads of its own; tenant workflow pods meet restricted since
+  # #1964-#1969, and a server-side dry-run found no violating pods here or
+  # in mctl-preview (ROADMAP 3.2, step 2).
+  podSecurityLevel: "restricted"
