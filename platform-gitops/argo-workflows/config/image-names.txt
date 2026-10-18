@@ -49,6 +49,7 @@ reserved zitadel-iac
 grant platform grafana-iac
 grant platform mc
 grant platform mctl-agent
+grant platform mctl-workflow-tools
 grant platform vault-iac
 grant platform zitadel-iac
 
