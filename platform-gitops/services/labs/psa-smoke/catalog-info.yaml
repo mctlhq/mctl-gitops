@@ -1,0 +1,35 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: psa-smoke
+  namespace: labs
+  description: "psa-smoke service"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-psa-smoke
+    backstage.io/kubernetes-id: psa-smoke
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-psa-smoke
+    github.com/source-repo: mctlhq/mctl-gitops
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-psa-smoke
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-gitops
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: worker
+  lifecycle: production
+  owner: group:default/labs
+  system: system:default/team-labs
