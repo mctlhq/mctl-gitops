@@ -636,6 +636,14 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_prestop_sleep.py
 
+      - name: Tenant preview namespaces bind Helm rights only inside the tenant
+        # preview-deploy/delete run as {tenant}/argo-workflow-sa; a binding
+        # for the central SA gave it write access to every tenant's preview
+        # secrets while previews themselves failed (gitops#1969).
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_preview_rbac.py
+
       - name: Unit-test the image-user check in deploy-service
         # runAsNonRoot with a named or root image USER only fails after the
         # deploy is committed (CreateContainerConfigError). check-image-user.sh
