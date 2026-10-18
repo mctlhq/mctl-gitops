@@ -449,6 +449,7 @@ jobs:
             ghcr.io/mctlhq/mctl-portal
             ghcr.io/mctlhq/mctl-telegram
             ghcr.io/mctlhq/mctl-web
+            ghcr.io/mctlhq/mctl-workflow-tools
             ghcr.io/mctlhq/pfeifenpatenschaft-backend
             ghcr.io/mctlhq/portfolio
             ghcr.io/mctlhq/projects-mcp
