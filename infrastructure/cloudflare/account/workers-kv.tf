@@ -39,3 +39,26 @@ output "mctl_web_sessions_kv_id" {
 output "mctl_web_sessions_dev_kv_id" {
   value = cloudflare_workers_kv_namespace.mctl_web_sessions_dev.id
 }
+
+# Invitation requests are business records, separate from authentication state.
+# The Worker stores immutable requests and delivery receipts with 90-day TTLs.
+resource "cloudflare_workers_kv_namespace" "mctl_web_access_requests" {
+  account_id = var.account_id
+  title      = "mctl-web-access-requests"
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "cloudflare_workers_kv_namespace" "mctl_web_access_requests_dev" {
+  account_id = var.account_id
+  title      = "mctl-web-access-requests-dev"
+}
+
+output "mctl_web_access_requests_kv_id" {
+  value = cloudflare_workers_kv_namespace.mctl_web_access_requests.id
+}
+
+output "mctl_web_access_requests_dev_kv_id" {
+  value = cloudflare_workers_kv_namespace.mctl_web_access_requests_dev.id
+}
