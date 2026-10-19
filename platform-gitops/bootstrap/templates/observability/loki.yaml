@@ -28,7 +28,10 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 1536Mi
+              # Lowered 1536Mi->1Gi on 2026-10-20: 7d peak working set
+              # 704Mi. The extra ~0.5Gi of request was reserved but unused;
+              # it funds the platform raises made in the same change.
+              memory: 1Gi
             limits:
               # Steady-state ~16m; 200m gives 12x cushion for compaction bursts.
               # Trimmed 500m→200m on 2026-05-10 (CPU-limits cluster headroom).
@@ -125,7 +128,8 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 96Mi
+              # 2026-10-20: 7d peak working set 152Mi per node.
+              memory: 160Mi
             limits:
               # 24h peak observed 28m on the busiest node (workflow log bursts);
               # 150m gives ~5x cushion. Previously 500m, which was helm chart

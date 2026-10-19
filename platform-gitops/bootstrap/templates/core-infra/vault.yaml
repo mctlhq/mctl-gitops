@@ -90,7 +90,9 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              # Raised 256Mi->384Mi on 2026-10-20: 7d peak working set
+              # 415Mi, steady ~320-345Mi on all three replicas.
+              memory: 384Mi
             limits:
               # Restored 200m→500m on 2026-05-13: steady-state usage reached
               # 101m (50% of 200m limit), triggering CPUThrottlingHigh alerts.
