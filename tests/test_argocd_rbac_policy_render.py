@@ -4,7 +4,7 @@
 the base `policy.csv` from `platform-gitops/argocd/values.yaml` (trimmed)
 followed by every `rbac/tenants/*.csv` fragment (sorted by filename, trimmed).
 `wft-create-tenant` writes one fragment per tenant straight to main and
-`wft-delete-tenant` removes it, so the tenant set changes without a PR.
+`wft-delete-tenant-safe` removes it, so the tenant set changes without a PR.
 
 The first version of this test compared the render with the frozen
 pre-migration snapshot `tests/fixtures/argocd-rbac-policy.baseline.csv`. That

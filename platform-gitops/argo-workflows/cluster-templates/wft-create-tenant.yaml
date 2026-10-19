@@ -221,7 +221,7 @@ spec:
           fi
 
           # BEGIN tenant-ns-guard
-          # Shared by create-tenant, delete-tenant-safe and delete-tenant. Argo
+          # Shared by create-tenant and delete-tenant-safe. Argo
           # templates cannot share a script file, so the copies are kept
           # byte-identical by tests/test_wft_create_tenant_existing.py.
           #
@@ -359,7 +359,7 @@ spec:
           fi
 
           # BEGIN tenant-ns-guard
-          # Shared by create-tenant, delete-tenant-safe and delete-tenant. Argo
+          # Shared by create-tenant and delete-tenant-safe. Argo
           # templates cannot share a script file, so the copies are kept
           # byte-identical by tests/test_wft_create_tenant_existing.py.
           #

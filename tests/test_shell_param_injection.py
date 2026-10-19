@@ -38,7 +38,6 @@ CASES = [
     ("wft-smoke-test.yaml", "check-pod-running", "check_missing_secret_reference()"),
     ("wft-create-tenant.yaml", "create-vault-policy", "echo \"Authenticating"),
     ("wft-delete-tenant-safe.yaml", "delete-vault-policy", "echo \"Authenticating"),
-    ("wft-delete-tenant.yaml", "delete-vault-policy", "echo \"Authenticating"),
     ("wft-deploy-service.yaml", "refresh-apps-appset", "echo \"Triggering hard refresh"),
     ("wft-deploy-service.yaml", "check-image-user", "git clone --depth=1"),
     ("wft-provision-database.yaml", "do-provision", "echo \"🔐 Authenticating with Vault",

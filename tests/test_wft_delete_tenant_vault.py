@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run delete-vault-policy's Vault program against a fake Vault.
 
-delete-tenant and delete-tenant-safe used to probe each policy and ESO role
+delete-tenant-safe (and the removed legacy delete-tenant) used to probe each policy and ESO role
 with `vault policy read ... >/dev/null 2>&1` / `vault read ...` and delete only
 when the probe succeeded, so a denied or unreachable Vault printed "not
 found (already deleted). Skipping." and the step went green with every
@@ -9,7 +9,7 @@ object still in place. The KV cleanup turned a failed LIST into `[]` and
 ignored failed deletes with `|| true`, and it walked only two levels, so
 teams/<t>/<s>/preview/database survived even a clean run.
 
-This extracts the program from both templates rather than restating it,
+This extracts the program from the template rather than restating it,
 serves the three Vault path families from a local HTTP server and asserts on
 what is left.
 
@@ -29,7 +29,7 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 T = ROOT / "platform-gitops/argo-workflows/cluster-templates"
-FILES = ("wft-delete-tenant.yaml", "wft-delete-tenant-safe.yaml")
+FILES = ("wft-delete-tenant-safe.yaml",)
 
 failures = []
 
@@ -51,8 +51,6 @@ def program(fname):
 
 
 SOURCES = {f: program(f) for f in FILES}
-check("both delete-tenant variants carry the same Vault program",
-      len({p for _, p in SOURCES.values()}) == 1)
 for f, (src, _) in SOURCES.items():
     # The old probes: a read whose failure is indistinguishable from absence.
     check(f"{f}: no `vault policy read`/`vault read` probe left",

@@ -584,7 +584,7 @@ spec:
             - name: deploy-key
               mountPath: /secrets/deploy-key
       # Serialize with every other workflow that pushes to mctl-gitops main
-      # (wft-delete-tenant, the other mctl-agents templates). Same mutex name
+      # (wft-delete-tenant-safe, the other mctl-agents templates). Same mutex name
       # so they share one lock.
       #
       # Scoped to this template, NOT the workflow spec: at spec level the lock

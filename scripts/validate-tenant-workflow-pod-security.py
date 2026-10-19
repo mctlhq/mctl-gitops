@@ -83,7 +83,6 @@ PLATFORM_FILES = (
     "wft-bootstrap-platform.yaml",
     "wft-create-tenant.yaml",
     "wft-delete-tenant-safe.yaml",
-    "wft-delete-tenant.yaml",
     "wft-lifecycle-bootstrap.yaml",
     "wft-otel-trace-fixture.yaml",
     "wft-platform-skill-deprecate.yaml",
