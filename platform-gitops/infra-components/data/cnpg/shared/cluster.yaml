@@ -191,7 +191,9 @@ spec:
       - name: backstage
         login: true
         inherit: true
-        connectionLimit: 100  # 2 replicas * ~25 plugin connections during rolling deploy
+        # 19 plugin schemas (pluginDivisionMode: schema) x knex pool max 3 =
+        # 57 per pod, two pods during a rolling deploy. Observed peak 42.
+        connectionLimit: 100
         ensure: present
         passwordSecret:
           name: backstage-db-creds
@@ -311,12 +313,14 @@ spec:
       # Temporal server connects from the temporal namespace via shared-pg-rw.
       # Owns both the temporal (history+matching) and temporal_visibility databases.
       # Connection budget: 4 server roles (frontend/history/matching/worker)
-      # × 20 default + 10 visibility = 120 steady-state, plus admintools spikes
-      # during schema-setup hooks. 200 keeps a comfortable head-room.
+      # × 20 default + 10 visibility = 120 if every pool filled at once, plus
+      # admintools during schema-setup hooks. Observed peak 37 (2026-10-12..20).
+      # 140 covers the full pool budget; the old 200 equalled max_connections,
+      # so this one role could take every slot on shared-pg.
       - name: temporal
         login: true
         inherit: true
-        connectionLimit: 200
+        connectionLimit: 140
         ensure: present
         passwordSecret:
           name: temporal-db-creds

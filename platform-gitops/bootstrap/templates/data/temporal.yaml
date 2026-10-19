@@ -50,7 +50,13 @@ spec:
                       existingSecret: temporal-server-db-creds
                       secretKey: password
                       maxConns: 20
-                      maxIdleConns: 20
+                      # Idle connections are what fills shared-pg: with the
+                      # idle cap equal to maxConns, history kept all 20 open
+                      # after every burst while at most ~15 backends were
+                      # active across the whole cluster (VictoriaMetrics,
+                      # 2026-10-12..20). 5 still serves the steady state;
+                      # bursts open up to maxConns and close the excess.
+                      maxIdleConns: 5
                       maxConnLifetime: "1h"
                   visibility:
                     sql:
@@ -63,7 +69,7 @@ spec:
                       existingSecret: temporal-server-db-creds
                       secretKey: password
                       maxConns: 10
-                      maxIdleConns: 10
+                      maxIdleConns: 5
                       maxConnLifetime: "1h"
 
             # Resource envelope for k3s-preview. Limits trimmed 500m→250m on
