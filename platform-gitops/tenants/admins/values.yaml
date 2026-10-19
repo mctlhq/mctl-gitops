@@ -31,6 +31,10 @@ tenant:
   # patch grant above reaches it only through this binding.
   centralWorkflowSA:
     smokeVerify: true
+  # Keep an initial preview budget without reserving the full production profile.
+  preview:
+    quotas:
+      requests.memory: "512Mi"
   quotas:
     # Bumped 2026-05-30: requests.cpu "1" left only ~60m headroom at
     # steady-state (940m used), so a deploy/rollback workflow pod (100m
