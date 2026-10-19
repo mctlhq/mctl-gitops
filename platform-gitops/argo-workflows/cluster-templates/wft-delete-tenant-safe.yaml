@@ -483,24 +483,12 @@ spec:
               SVC_TYPE="worker-service"
             fi
 
+            # Always argo-workflows, under the platform role. This SA cannot
+            # create Workflows in tenant namespaces (gitops#2001), so the old
+            # "try the tenant namespace first" attempt always failed with a
+            # forbidden error before falling back here.
             TARGET_NS="argo-workflows"
-            if kubectl get ns "${TENANT}" > /dev/null 2>&1; then
-              TARGET_NS="${TENANT}"
-            fi
-
-            set +e
-            WF_NAME=$(create_retire_workflow "${TARGET_NS}" "${SVC}" "${SVC_TYPE}" 2>/tmp/retire.err)
-            CREATE_RC=$?
-            set -e
-            if [ "${CREATE_RC}" -ne 0 ] && [ "${TARGET_NS}" != "argo-workflows" ]; then
-              echo "Workflow submission in namespace ${TARGET_NS} failed, retrying in argo-workflows..."
-              cat /tmp/retire.err || true
-              TARGET_NS="argo-workflows"
-              WF_NAME=$(create_retire_workflow "${TARGET_NS}" "${SVC}" "${SVC_TYPE}")
-            elif [ "${CREATE_RC}" -ne 0 ]; then
-              cat /tmp/retire.err || true
-              exit "${CREATE_RC}"
-            fi
+            WF_NAME=$(create_retire_workflow "${TARGET_NS}" "${SVC}" "${SVC_TYPE}")
 
             echo "Submitted retire workflow ${WF_NAME} for ${SVC_TYPE} in namespace ${TARGET_NS}"
             for i in $(seq 1 80); do
