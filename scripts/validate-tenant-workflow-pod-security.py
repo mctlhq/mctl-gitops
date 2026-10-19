@@ -60,6 +60,7 @@ ENTRY_FILES = (
     "wft-deploy-service.yaml",
     "wft-preview-deploy.yaml",
     "wft-preview-delete.yaml",
+    "wft-preview-reaper.yaml",
     "wft-provision-database.yaml",
     "wft-rollback-service.yaml",
     "wft-retire-service.yaml",
