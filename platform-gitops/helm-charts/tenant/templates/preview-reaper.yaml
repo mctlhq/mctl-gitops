@@ -1,0 +1,33 @@
+{{- if .Values.tenant.preview.enabled }}
+{{- $tenantName := include "tenant.name" . }}
+# Hourly TTL enforcement for {{ $tenantName }}-preview. Lives in the tenant
+# namespace and runs as its argo-workflow-sa, the one SA bound to
+# argo-workflow-helm-deploy in the preview namespace (preview.yaml). A single
+# central reaper would need Helm rights in every tenant's preview namespace,
+# i.e. write access to all their preview secrets, which gitops#1969 removed.
+# The steps are in ClusterWorkflowTemplate preview-reaper: the controller
+# runs with templateReferencing: Strict.
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: preview-reaper
+  namespace: {{ $tenantName }}
+  labels:
+    {{- include "tenant.labels" . | nindent 4 }}
+spec:
+  # `schedules` (a list), not the singular `schedule`: the singular is
+  # deprecated as of Argo 3.6 and removed in 4.0.
+  schedules:
+    - "17 * * * *"
+  timezone: "UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  # Counts, not durations: 24 hourly runs is a day of history, matching the
+  # CWFT's ttlStrategy.
+  successfulJobsHistoryLimit: 24
+  failedJobsHistoryLimit: 24
+  workflowSpec:
+    workflowTemplateRef:
+      name: preview-reaper
+      clusterScope: true
+{{- end }}

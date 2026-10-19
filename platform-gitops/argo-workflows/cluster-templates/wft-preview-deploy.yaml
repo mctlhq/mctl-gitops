@@ -368,8 +368,7 @@ spec:
           # (claude P1 + agy finding 2 on gitops#993.)
           #
           # Neither carries a Pattern in the operations registry, so the
-          # grammar is asserted here. TTL_HOURS is deliberately not
-          # guarded: it reaches only the closing echo, no interpreter.
+          # grammar is asserted here.
           case "$TAG" in
             "" | *[!A-Za-z0-9._-]* )
               echo "❌ image_tag must match the OCI tag grammar [A-Za-z0-9._-]; got: ${TAG}" >&2
@@ -383,6 +382,20 @@ spec:
               exit 1
               ;;
           esac
+          # TTL_HOURS becomes the release's expiry, which preview-reaper
+          # enforces, so it is arithmetic input now and checked like PORT.
+          # Same grammar as the registry pattern ^[0-9]{1,4}$, asserted
+          # here rather than trusted, like TAG and PORT above. Leading zeros
+          # are stripped because sh reads 08 as a bad octal number.
+          case "$TTL_HOURS" in
+            "" | *[!0-9]* | ?????* )
+              echo "❌ ttl_hours must be 1-4 decimal digits; got: ${TTL_HOURS}" >&2
+              exit 1
+              ;;
+          esac
+          TTL_HOURS=$(echo "$TTL_HOURS" | sed 's/^0*//')
+          TTL_HOURS="${TTL_HOURS:-0}"
+          EXPIRES_AT=$(( $(date +%s) + TTL_HOURS * 3600 ))
 
           PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
@@ -462,6 +475,7 @@ spec:
             ${PORT:+--set service.port="${PORT}"} \
             --set-string "podLabels.mctl\\.ai/preview=true" \
             --set-string "podLabels.mctl\\.ai/preview-id=${PREVIEW_ID}" \
+            --labels "mctl.ai/expires-at=${EXPIRES_AT}" \
             --wait --timeout=5m
 
           echo "Preview deployed: https://${HOST} (release: ${RELEASE}, namespace: ${NS}, ttl: ${TTL_HOURS}h)"
