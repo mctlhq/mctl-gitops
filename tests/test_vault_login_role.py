@@ -29,7 +29,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 T = ROOT / "platform-gitops/argo-workflows/cluster-templates"
 # Templates that only ever run in argo-workflows and need the platform role.
 PLATFORM_ONLY = {
-    "wft-create-tenant.yaml", "wft-delete-tenant.yaml", "wft-delete-tenant-safe.yaml",
+    "wft-create-tenant.yaml", "wft-delete-tenant-safe.yaml",
     "cwft-rotate-github-token.yaml", "wft-smoke-test.yaml",
     "cwft-zitadel-login-consolidation.yaml", "wft-bootstrap-platform.yaml",
 }
@@ -118,7 +118,7 @@ if m:
                 'token_policies="tenant-${TENANT}"'):
         check(f"create-tenant role: {arg}", arg in args, args)
     check("create-tenant role: no wildcard namespace", "*" not in args, args)
-for f in ("wft-delete-tenant.yaml", "wft-delete-tenant-safe.yaml"):
+for f in ("wft-delete-tenant-safe.yaml",):
     src = (T / f).read_text()
     # delete-vault-policy deletes and reads back each role; its behaviour is
     # exercised in tests/test_wft_delete_tenant_vault.py.

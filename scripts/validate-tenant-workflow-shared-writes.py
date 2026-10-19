@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fail when a tenant workflow template writes a path not scoped to one tenant.
 
-`wft-create-tenant.yaml`, `wft-delete-tenant.yaml` and
-`wft-delete-tenant-safe.yaml` all run concurrently for different tenants.
+`wft-create-tenant.yaml` and `wft-delete-tenant-safe.yaml` both run
+concurrently for different tenants.
 Two concurrent runs are only safe from a git-merge-conflict-then-`set -e`-abort
 if every write they make lands on a path that differs between tenants. That
 was violated once already: both `create-tenant` runs used to `awk`-insert a
@@ -38,7 +38,6 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = ROOT / "platform-gitops/argo-workflows/cluster-templates"
 TEMPLATE_FILES = (
     "wft-create-tenant.yaml",
-    "wft-delete-tenant.yaml",
     "wft-delete-tenant-safe.yaml",
 )
 

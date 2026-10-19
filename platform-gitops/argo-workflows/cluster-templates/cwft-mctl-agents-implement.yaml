@@ -901,7 +901,7 @@ spec:
       # Mutex scoped to just this template (not the whole workflow spec):
       # only this step actually writes to mctl-gitops main, so it's the
       # only part that needs to serialize against cwft-mctl-agents-run /
-      # wft-delete-tenant. Holding the shared lock for the entire
+      # wft-delete-tenant-safe. Holding the shared lock for the entire
       # multi-minute implementer run (clone + Claude SDK + push) starved
       # other main-writers and was implicated in workflow_failed incidents
       # from mutex contention.

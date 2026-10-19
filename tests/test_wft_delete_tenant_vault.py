@@ -29,7 +29,7 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 T = ROOT / "platform-gitops/argo-workflows/cluster-templates"
-FILES = ("wft-delete-tenant.yaml", "wft-delete-tenant-safe.yaml")
+FILES = ("wft-delete-tenant-safe.yaml",)
 
 failures = []
 
