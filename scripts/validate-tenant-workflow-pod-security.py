@@ -93,6 +93,9 @@ PLATFORM_FILES = (
 )
 
 TOOLS_IMAGE = "ghcr.io/mctlhq/mctl-workflow-tools:"
+# A digest pin is the whole sha256, not just the "@sha256:" marker: a typo'd
+# digest would otherwise pass here and fail later with a confusing message.
+DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 TOOLS_DOCKERFILE = ROOT / "platform-gitops/images/mctl-workflow-tools/Dockerfile"
 PINS_DIR = ROOT / "platform-gitops"
 PIN_RE = re.compile(r"ghcr\.io/mctlhq/mctl-workflow-tools:[^\s\"']+")
@@ -192,8 +195,8 @@ def check_steps(name: str, doc: dict) -> list[str]:
         image = str(body.get("image") or "")
         if SSH_RE.search(code) and not image.startswith(TOOLS_IMAGE):
             bad.append(f"{where}: uses ssh but runs {image!r}; ssh needs a passwd entry, use {TOOLS_IMAGE}<tag>")
-        if image.startswith(TOOLS_IMAGE) and "@sha256:" not in image:
-            bad.append(f"{where}: {image!r} must be pinned by digest (@sha256:...), not by tag alone")
+        if image.startswith(TOOLS_IMAGE) and not DIGEST_RE.search(image):
+            bad.append(f"{where}: {image!r} must be pinned by digest (@sha256:<64 hex>), not by tag alone")
         bad += _check_container_sc(where, body.get("securityContext"), required=False)
     return bad
 
@@ -236,7 +239,7 @@ def check_pins(text: str, pins: list[tuple[str, str]]) -> list[str]:
         return ["mctl-workflow-tools Dockerfile: header lacks a 'published:' or 'built-from: sha256:' line"]
     ref = published.group(1)
     bad = []
-    if not ref.startswith(TOOLS_IMAGE) or "@sha256:" not in ref:
+    if not ref.startswith(TOOLS_IMAGE) or not DIGEST_RE.search(ref):
         bad.append(f"mctl-workflow-tools Dockerfile: published {ref!r} must be {TOOLS_IMAGE}<tag>@sha256:<digest>")
     start = text.find("\nFROM ")
     body = text[start + 1:] if start >= 0 else ""
@@ -327,6 +330,10 @@ def selftest() -> int:
         s = _step(d, "tpl-git-commit.yaml", "commit-service")
         s["image"] = s["image"].split("@")[0]
 
+    def m_bad_digest(d):
+        s = _step(d, "tpl-git-commit.yaml", "commit-service")
+        s["image"] = s["image"].split("@")[0] + "@sha256:zz"
+
     def m_priv(d):
         _step(d, "cwft-global-workflow-completion-hook.yaml", "notify-completion")["securityContext"] = {
             "privileged": True}
@@ -336,11 +343,17 @@ def selftest() -> int:
              ("init keeps caps", m_init_drop, True), ("apk add", m_apk, True),
              ("write /usr/local/bin", m_usrlocal, True), ("ssh on alpine/git", m_ssh_image, True),
              ("template securityContext", m_tpl_sc, True), ("privileged step", m_priv, True),
-             ("tools image by tag only", m_tag_only, True)]
+             ("tools image by tag only", m_tag_only, True),
+             ("tools image with a malformed digest", m_bad_digest, True)]
     # Mutations of the inputs outside the templates: (label, wft names, Dockerfile, pins).
     # The package cases pass pins=None: any body edit also breaks the
     # built-from hash, which would mask a package check that stopped working.
     # A header-only edit must stay green: the hash covers FROM onwards.
+    # Published line and every pin moved to the same malformed digest, so only
+    # the format check can catch it (the pin-equality check stays satisfied).
+    bad_ref = re.sub(r"@sha256:[0-9a-f]{64}", "@sha256:zz", pins[0][1]) if pins else ""
+    bad_digest = (re.sub(r"(^#\s+published:\s+)\S+", lambda m: m.group(1) + bad_ref, dockerfile, flags=re.M),
+                  [(w, bad_ref) for w, _ in pins])
     other_tag = [(w, p.replace(":1.0.0@", ":1.0.1@") if ":1.0.0@" in p else p + "x") for w, p in pins]
     extra = [("unclassified wft", names | {"wft-new-tenant-op.yaml"}, dockerfile, pins, True),
              ("Dockerfile drops py3-yaml", names, dockerfile.replace(" py3-yaml", ""), None, True),
@@ -356,7 +369,8 @@ def selftest() -> int:
              ("published line missing", names, re.sub(r"^#\s+published:.*$", "", dockerfile, flags=re.M),
               pins, True),
              ("one pin on another build", names, dockerfile, pins[:1] and [other_tag[0]] + pins[1:], True),
-             ("no pins found", names, dockerfile, [], True)]
+             ("no pins found", names, dockerfile, [], True),
+             ("published digest malformed", names, bad_digest[0], bad_digest[1], True)]
     ok = True
     for label, mut, should_fail in cases + [(lbl, None, sf) for lbl, _, _, _, sf in extra]:
         docs = copy.deepcopy(base)
