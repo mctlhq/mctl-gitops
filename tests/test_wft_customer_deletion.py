@@ -34,6 +34,15 @@ class CustomerDeletionWorkflow(unittest.TestCase):
         for step in ['begin-customer-account', 'complete-customer-account']:
             self.assertIn('delete_customer_account', tasks[step]['when'])
 
+    def test_retire_runs_in_argo_workflows(self):
+        # The central SA cannot create Workflows in tenant namespaces, so a
+        # tenant-namespace submission can only fail; retire must go straight
+        # to argo-workflows.
+        src = self.templates['retire-tenant-services']['script']['source']
+        self.assertIn('TARGET_NS="argo-workflows"', src)
+        self.assertNotIn('TARGET_NS="${TENANT}"', src)
+        self.assertEqual(src.count('create_retire_workflow "'), 1)
+
     def test_callback_observation(self):
         for template, bodies in {
             'customer-account-step': [('200', '{"status":"succeeded","stage":"complete"}', True), ('503', '{"details":{"stage":"site-sessions"}}', False), ('200', '{}', False), ('200', '{"status":"succeeded","stage":"begin"}', False)],
