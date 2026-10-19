@@ -78,6 +78,41 @@ variable "etcd_s3_secret_key" {
 
 # --- Kube-Hetzner Module ---
 
+# Inputs of the module's own kustomization (terraform_data.kustomization).
+# When any of them changes, the module re-runs `kubectl apply -k` on its
+# bundled manifests, and those include a kured DaemonSet WITHOUT resources.
+# extra-manifests/kured.yaml.tpl owns the real one, but the module re-applies
+# a user manifest only when that file's rendered content changes, so the base
+# copy won the last write: on 2026-10-20 the #2035 apply dropped kured's
+# requests and limits. Feeding a hash of these inputs into the kured template
+# changes its rendered content whenever the base layer is replaced, so the user
+# layer re-applies in the same run, after the base (it depends_on it).
+# Anything added here that feeds the module's kustomization triggers must also
+# go into base_kustomization_inputs.
+locals {
+  install_k3s_version = "v1.33.13+k3s1"
+  hetzner_ccm_version = "v1.33.0"
+  hetzner_csi_version = "v2.21.2"
+  kured_version       = "1.21.0"
+
+  hetzner_ccm_merge_values = <<-EOT
+    resources:
+      requests:
+        cpu: 100m
+        memory: 96Mi
+      limits:
+        memory: 192Mi
+  EOT
+
+  base_kustomization_inputs = sha1(jsonencode([
+    local.install_k3s_version,
+    local.hetzner_ccm_version,
+    local.hetzner_csi_version,
+    local.kured_version,
+    local.hetzner_ccm_merge_values,
+  ]))
+}
+
 module "kube-hetzner" {
   providers = {
     hcloud = hcloud
@@ -263,25 +298,20 @@ module "kube-hetzner" {
   # any values change here (CCM or CSI resources, for example) would have
   # silently upgraded all of them in the same apply. On 2026-10-20 that would
   # have been CCM v1.33.0 -> v1.39.0, CSI v2.21.2 -> v2.24.0 and kured
-  # 1.21.0 -> 1.23.0. Bump these lines for a deliberate, reviewed upgrade.
+  # 1.21.0 -> 1.23.0. For a deliberate, reviewed upgrade bump the value in the
+  # locals block at the top of this file, never the argument line here: the
+  # locals feed base_kustomization_inputs, which keeps kured re-applying.
   # sys_upgrade_controller_version is already pinned by its module default
   # (v0.18.0, matches live).
-  hetzner_ccm_version = "v1.33.0"
-  hetzner_csi_version = "v2.21.2"
-  kured_version       = "1.21.0"
+  hetzner_ccm_version = local.hetzner_ccm_version
+  hetzner_csi_version = local.hetzner_csi_version
+  kured_version       = local.kured_version
 
   # The chart default is requests 100m/50Mi with no limit. The 7-day peak
   # working set was 72Mi on 2026-10-19, above the request, and nothing bounded
   # it. No CPU limit: the CCM reconciles routes and load balancers and should
   # not be throttled.
-  hetzner_ccm_merge_values = <<-EOT
-    resources:
-      requests:
-        cpu: 100m
-        memory: 96Mi
-      limits:
-        memory: 192Mi
-  EOT
+  hetzner_ccm_merge_values = local.hetzner_ccm_merge_values
 
   # --- Upgrades ---
   # Disabled: single control-plane node — draining it takes down the API server.
@@ -297,10 +327,20 @@ module "kube-hetzner" {
   # OLDER v1.33.12 while all nodes were already on v1.33.13 — the hash mismatch
   # spawned apply jobs that perpetually re-cordoned the un-drainable single
   # control-plane (NodeCordoned alert storm, 2026-06-27). Pinning to the
-  # nodes' current version stops the churn; bump this line for controlled
-  # future upgrades. Matches the live `kubectl patch plan ... spec.version`
+  # nodes' current version stops the churn; for controlled future upgrades
+  # bump local.install_k3s_version at the top of this file, not this line.
+  # Matches the live `kubectl patch plan ... spec.version`
   # mitigation applied 2026-06-27.
-  install_k3s_version = "v1.33.13+k3s1"
+  install_k3s_version = local.install_k3s_version
+
+  # Re-applies extra-manifests/kured.yaml.tpl whenever the module's own
+  # kustomization is replaced (see base_kustomization_inputs above), and
+  # renders its image tag from the same kured_version the module gets.
+  # tests/test_k3s_kured_single_owner.py checks this wiring.
+  extra_kustomize_parameters = {
+    base_kustomization_inputs = local.base_kustomization_inputs
+    kured_version             = local.kured_version
+  }
 
   # SOC F20: Kubernetes API audit. preinstall_exec writes the policy file
   # before k3s starts (from-zero rebuilds). control_planes_custom_config

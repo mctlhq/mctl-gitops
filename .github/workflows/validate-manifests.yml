@@ -441,6 +441,13 @@ jobs:
         # plane, so it is exercised here against synthetic plans.
         run: python3 tests/test_k3s_plan_guard.py
 
+      - name: Check the k3s-preview kured manifest follows the module inputs
+        # kube-hetzner re-applies its own kured DaemonSet, without resources,
+        # whenever its kustomization is replaced; ours re-applies only when its
+        # rendered content changes. The hash annotation and the templated tag
+        # keep ours winning and on the same version (#2036).
+        run: python3 tests/test_k3s_kured_single_owner.py
+
       - name: Check the in-cluster Access login probe against its sources
         # The CronJob in infra-components/observability/blackbox carries two
         # copies it cannot read at run time: scripts/access-login-probe.py as
