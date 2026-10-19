@@ -76,7 +76,10 @@ class PreviewDeleteTLSSecret(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_script(self, **extra):
-        proc = subprocess.run(["sh", "-c", self.script["source"]],
+        # bash, not sh: the image's sh (busybox ash) accepts
+        # `set -o pipefail`, but /bin/sh on the CI runner is dash, which
+        # rejects it before the script does anything.
+        proc = subprocess.run(["bash", "-c", self.script["source"]],
                               env={**self.env, **extra},
                               capture_output=True, text=True)
         return proc, self.calls.read_text().splitlines()
@@ -98,8 +101,10 @@ class PreviewDeleteTLSSecret(unittest.TestCase):
         self.assertIn(self.WANT, calls)
 
     def test_kubectl_error_fails_the_step(self):
-        proc, _ = self.run_script(HELM_PRESENT_NS="none", KUBECTL_RC="1")
+        proc, calls = self.run_script(HELM_PRESENT_NS="none", KUBECTL_RC="1")
         self.assertNotEqual(proc.returncode, 0)
+        # Not vacuous: the failure must come from the kubectl call.
+        self.assertEqual(calls[-1], self.WANT)
 
     def test_image_has_kubectl(self):
         self.assertTrue(self.script["image"].startswith("ghcr.io/mctlhq/mctl-workflow-tools:"),
