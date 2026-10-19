@@ -513,9 +513,31 @@ extraObjects:
                 mctl.me/component: demo-reviewer-watch
             spec:
               restartPolicy: OnFailure
-              containers:
-                - name: watch
+              # Restricted-compliant, like demo-session-refresh: the old single
+              # container ran `apk add curl` as root, which the labs restricted
+              # PodSecurity admission rejects. postgres:17-alpine has psql but no
+              # curl and mctl-workflow-tools has curl but no psql, so the
+              # read-only queries run first as uid 70 and hand the alert text to
+              # the sender through an emptyDir; an empty file means stay quiet.
+              # No imagePullSecrets: both images are public.
+              securityContext:
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              volumes:
+                - name: work
+                  emptyDir:
+                    sizeLimit: 1Mi
+              initContainers:
+                - name: query
                   image: postgres:17-alpine
+                  securityContext:
+                    runAsUser: 70
+                    runAsGroup: 70
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
                   resources:
                     requests:
                       cpu: 25m
@@ -523,15 +545,43 @@ extraObjects:
                     limits:
                       cpu: 200m
                       memory: 128Mi
+                  volumeMounts:
+                    - name: work
+                      mountPath: /work
                   command: ["sh", "-c"]
                   args:
-                    - "set -eu\napk add --no-cache curl >/dev/null 2>&1 || true\ncommand -v curl >/dev/null || { echo \"ERROR: curl unavailable, cannot send alerts\" >&2; exit 1; }\nq() { psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -tA -c \"$1\"; }\nsend() {\n  curl -fsS -X POST \"https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage\" \\\n    --data-urlencode \"chat_id=${TELEGRAM_CHAT_ID}\" \\\n    --data-urlencode \"disable_web_page_preview=true\" \\\n    --data-urlencode \"text=$1\" >/dev/null 2>&1 || echo \"WARN: telegram send failed\" >&2\n}\nDEMO_UID=$(q \"SELECT id FROM users WHERE telegram_login_id='8745115872';\") || { echo \"ERROR: DB unreachable\" >&2; exit 1; }\nif [ -z \"$DEMO_UID\" ]; then\n  send \"\U0001F534 mctl-telegram demo reviewer @mashkovd — demo user (telegram_login_id 8745115872) is MISSING from the DB. Reviewer login is broken.\"\n  echo \"ALERT: demo user missing\"; exit 0\nfi\nACTIVE=$(q \"SELECT count(*) FROM telegram_accounts WHERE user_id=$DEMO_UID AND revoked_at IS NULL;\") || { echo \"ERROR: query failed (active)\" >&2; exit 1; }\nCALLS=$(q \"SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND created_at > now() - interval '12 hours';\") || { echo \"ERROR: query failed (calls)\" >&2; exit 1; }\nERRORS=$(q \"SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND status='error' AND created_at > now() - interval '12 hours';\") || { echo \"ERROR: query failed (errors)\" >&2; exit 1; }\nLATEST=$(q \"SELECT tool_name||' '||status||' @ '||to_char(created_at,'MM-DD HH24:MI') FROM audit_logs WHERE user_id=$DEMO_UID ORDER BY id DESC LIMIT 1;\") || { echo \"ERROR: query failed (latest)\" >&2; exit 1; }\necho \"active=$ACTIVE calls_12h=$CALLS errors_12h=$ERRORS latest=${LATEST:-none}\"\nif [ \"${ACTIVE:-0}\" -eq 0 ]; then\n  send \"\U0001F534 mctl-telegram demo reviewer session DOWN @mashkovd — 0 active sessions for reviewer 8745115872; the ChatGPT reviewer will hit Sign-in interrupted. Recover: in-pod mctl-telegram-login on @mctlhq (OPERATOR_GITHUB_LOGIN=tg:8745115872, --qr).\"\n  echo \"ALERT: session down\"\nelif [ \"${CALLS:-0}\" -gt 0 ]; then\n  send \"\U0001F440 mctl-telegram reviewer activity (12h): ${CALLS} calls, ${ERRORS} errors. Latest: ${LATEST}. Session healthy (${ACTIVE} active).\"\n  echo \"INFO: reviewer activity\"\nelse\n  echo \"quiet: session healthy, no reviewer activity in 12h — no Telegram sent\"\nfi\n"
+                    - "set -eu\n: > /work/message\nq() { psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -tA -c \"$1\"; }\nalert() { printf '%s' \"$1\" > /work/message; }\nDEMO_UID=$(q \"SELECT id FROM users WHERE telegram_login_id='8745115872';\") || { echo \"ERROR: DB unreachable\" >&2; exit 1; }\nif [ -z \"$DEMO_UID\" ]; then\n  alert \"\U0001F534 mctl-telegram demo reviewer @mashkovd — demo user (telegram_login_id 8745115872) is MISSING from the DB. Reviewer login is broken.\"\n  echo \"ALERT: demo user missing\"; exit 0\nfi\nACTIVE=$(q \"SELECT count(*) FROM telegram_accounts WHERE user_id=$DEMO_UID AND revoked_at IS NULL;\") || { echo \"ERROR: query failed (active)\" >&2; exit 1; }\nCALLS=$(q \"SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND created_at > now() - interval '12 hours';\") || { echo \"ERROR: query failed (calls)\" >&2; exit 1; }\nERRORS=$(q \"SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND status='error' AND created_at > now() - interval '12 hours';\") || { echo \"ERROR: query failed (errors)\" >&2; exit 1; }\nLATEST=$(q \"SELECT tool_name||' '||status||' @ '||to_char(created_at,'MM-DD HH24:MI') FROM audit_logs WHERE user_id=$DEMO_UID ORDER BY id DESC LIMIT 1;\") || { echo \"ERROR: query failed (latest)\" >&2; exit 1; }\necho \"active=$ACTIVE calls_12h=$CALLS errors_12h=$ERRORS latest=${LATEST:-none}\"\nif [ \"${ACTIVE:-0}\" -eq 0 ]; then\n  alert \"\U0001F534 mctl-telegram demo reviewer session DOWN @mashkovd — 0 active sessions for reviewer 8745115872; the ChatGPT reviewer will hit Sign-in interrupted. Recover: in-pod mctl-telegram-login on @mctlhq (OPERATOR_GITHUB_LOGIN=tg:8745115872, --qr).\"\n  echo \"ALERT: session down\"\nelif [ \"${CALLS:-0}\" -gt 0 ]; then\n  alert \"\U0001F440 mctl-telegram reviewer activity (12h): ${CALLS} calls, ${ERRORS} errors. Latest: ${LATEST}. Session healthy (${ACTIVE} active).\"\n  echo \"INFO: reviewer activity\"\nelse\n  echo \"quiet: session healthy, no reviewer activity in 12h — no Telegram sent\"\nfi\n"
                   env:
                     - name: DATABASE_URL
                       valueFrom:
                         secretKeyRef:
                           name: labs-mctl-telegram-db-creds
                           key: DATABASE_URL
+              containers:
+                - name: send
+                  image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+                  resources:
+                    requests:
+                      cpu: 25m
+                      memory: 32Mi
+                    limits:
+                      cpu: 200m
+                      memory: 128Mi
+                  volumeMounts:
+                    - name: work
+                      mountPath: /work
+                      readOnly: true
+                  command: ["sh", "-c"]
+                  args:
+                    - "set -eu\n[ -s /work/message ] || exit 0\ncurl -fsS -X POST \"https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage\" \\\n  --data-urlencode \"chat_id=${TELEGRAM_CHAT_ID}\" \\\n  --data-urlencode \"disable_web_page_preview=true\" \\\n  --data-urlencode \"text@/work/message\" >/dev/null 2>&1 || echo \"WARN: telegram send failed\" >&2\n"
+                  env:
                     - name: TELEGRAM_BOT_TOKEN
                       valueFrom:
                         secretKeyRef:
