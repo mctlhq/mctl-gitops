@@ -96,7 +96,9 @@ spec:
           type: Directory
       containers:
       - name: kured
-        image: ghcr.io/kubereboot/kured:1.21.0
+        # Rendered from local.kured_version in kube.tf, the same value the module
+        # gets. This manifest wins the last write, so its tag is the one that runs.
+        image: ghcr.io/kubereboot/kured:${kured_version}
         imagePullPolicy: IfNotPresent
         securityContext:
           privileged: true

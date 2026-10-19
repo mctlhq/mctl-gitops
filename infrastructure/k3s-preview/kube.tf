@@ -334,9 +334,12 @@ module "kube-hetzner" {
   install_k3s_version = local.install_k3s_version
 
   # Re-applies extra-manifests/kured.yaml.tpl whenever the module's own
-  # kustomization is replaced; see base_kustomization_inputs above.
+  # kustomization is replaced (see base_kustomization_inputs above), and
+  # renders its image tag from the same kured_version the module gets.
+  # tests/test_k3s_kured_single_owner.py checks this wiring.
   extra_kustomize_parameters = {
     base_kustomization_inputs = local.base_kustomization_inputs
+    kured_version             = local.kured_version
   }
 
   # SOC F20: Kubernetes API audit. preinstall_exec writes the policy file
