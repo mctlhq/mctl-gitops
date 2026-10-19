@@ -42,7 +42,9 @@ metadata:
   namespace: pg-restore-drill
 spec:
   instances: 1
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.11   # тот же major!
+  # Тот же образ, что у shared-pg (cluster.yaml), вместе с digest.
+  # Секции backup нет намеренно: drill-кластер не должен писать в архив прода.
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11@sha256:70664ebcfa1100361b5bdc28bbf06fdbe08db2dc4ad7bd14de33c5e05fe8ea8e
   storage:
     storageClass: hcloud-volumes
     size: 40Gi
@@ -68,10 +70,16 @@ spec:
 Проверка:
 ```bash
 kubectl create ns pg-restore-drill
-kubectl get secret cnpg-backup-r2 -n platform-db -o yaml | \
-  sed 's/namespace: .*/namespace: pg-restore-drill/' | kubectl apply -f -
+# Копируются только два ключа. Копия через `get -o yaml | sed` переносит
+# ownerReferences на ExternalSecret из platform-db, а ссылки на владельца
+# между namespace недопустимы: GC может удалить такой Secret.
+kubectl -n pg-restore-drill create secret generic cnpg-backup-r2 \
+  --from-literal=ACCESS_KEY_ID="$(kubectl -n platform-db get secret cnpg-backup-r2 -o jsonpath='{.data.ACCESS_KEY_ID}' | base64 -d)" \
+  --from-literal=SECRET_ACCESS_KEY="$(kubectl -n platform-db get secret cnpg-backup-r2 -o jsonpath='{.data.SECRET_ACCESS_KEY}' | base64 -d)"
 kubectl apply -f restore-drill.yaml
 kubectl -n pg-restore-drill wait cluster/shared-pg-drill --for=condition=Ready --timeout=15m
+# При bootstrap через recovery CNPG создаёт пустую базу `app`, если её нет:
+# в копии она лишняя, это ожидаемо.
 # сверить данные: список БД + счётчики строк в паре ключевых таблиц
 kubectl -n pg-restore-drill exec shared-pg-drill-1 -c postgres -- psql -c '\l'
 kubectl -n pg-restore-drill exec shared-pg-drill-1 -c postgres -- \
@@ -212,3 +220,4 @@ Forgejo-том сюда не пишется: его drill идёт каждый 
 | 2026-08-14 | etcd snapshot ls | PARTIAL | Local snapshots present on CP (`etcd-snapshot-mctl-preprod-control-plane-fsn1-bnt-*`, ~105MiB, last 2026-08-14 12:00, ~12h cadence). `k3s etcd-snapshot ls --etcd-s3` failed: `s3 configuration was not set`. R2 listing with in-cluster backup creds: AccessDenied / NoSuchBucket. Off-cluster etcd backup is not live. |
 | 2026-08-15 | etcd S3 enablement | OK | `terraform apply` delivered `etcd_s3_backup` onto the CP. On-demand `k3s etcd-snapshot save` showed `s3://mctl-etcd-snapshots/k3s-preview/...` in `etcd-snapshot ls`; object confirmed by an independent R2 listing (50.6 MB). Closed gitops#841. Full restore drill still outstanding. |
 | 2026-08-16 | etcd snapshot → R2 | OK | Off-cluster etcd backup подтверждён живым. `kubectl get etcdsnapshotfile`: 17 снапшотов, из них 6 с `spec.s3`, все `readyToUse: true`, по расписанию каждые 6 часов (18:00 / 00:00 / 06:00 / 12:00), последний 2026-08-16T12:00:02Z. Закрывает PARTIAL от 2026-08-14, где `--etcd-s3` отдавал `s3 configuration was not set` (включено 2026-08-15, gitops#841). **Проверено наличие снапшотов в S3, не восстановление из них** — полноценный etcd restore drill остаётся непройденным. |
+| 2026-10-19 | CNPG restore (R2) | OK | First drill of the R2 lineage (backups moved off MinIO in 2026-10). Restored `shared-pg` into `pg-restore-drill` from `s3://vault-backup/postgres-backups/shared-pg` on operator 1.27.1, image 17.11, in 5 min (21:11:29Z to 21:16:32Z), with WAL replayed to about 21:15Z. All 25 prod databases are present with the same size and table count; the extra empty `app` is created by the recovery bootstrap. Namespace and volume deleted after the drill. |
