@@ -281,7 +281,7 @@ spec:
           image:
             registry: ghcr.io
             repository: mctlhq/mctl-portal
-            tag: 4.25.1
+            tag: 4.26.0
             pullSecrets:
               - ghcr-credentials
           resources:
