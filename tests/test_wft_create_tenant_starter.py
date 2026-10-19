@@ -64,7 +64,8 @@ class StarterProfile(unittest.TestCase):
         _, quotas = self.generate('standard')
         self.assertEqual(quotas['profile-test']['requests.memory'], '8Gi')
         self.assertNotIn('requests.storage', quotas['profile-test'])
-        self.assertEqual(quotas['profile-test-preview']['requests.memory'], '2Gi')
+        self.assertEqual(quotas['profile-test-preview']['requests.memory'], '256Mi')
+        self.assertEqual(quotas['profile-test-preview']['limits.memory'], '1Gi')
 
     def test_profile_is_bound_through_workflow_input_and_env(self):
         self.assertIn({'name': 'PARAM_WORKSPACE_PROFILE', 'value': '{{inputs.parameters.workspace_profile}}'}, COMMIT['script']['env'])

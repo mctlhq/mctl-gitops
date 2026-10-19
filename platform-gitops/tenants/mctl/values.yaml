@@ -20,7 +20,10 @@ tenant:
     limits.cpu: "3"
     limits.memory: "4Gi"
     pods: "1"
-    persistentvolumeclaims: "5"
+    # Set to 0 on 2026-10-20: this tenant is documented as running no
+    # workloads, so it keeps no volume allowance.
+    persistentvolumeclaims: "0"
+    requests.storage: "0"
     services: "10"
   limitRange:
     enabled: true

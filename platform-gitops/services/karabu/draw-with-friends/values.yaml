@@ -22,13 +22,16 @@ podSecurityContext:
 containerSecurityContext:
   runAsNonRoot: true
   readOnlyRootFilesystem: true
+# Memory lowered 2026-10-20: 7d peak working set 48Mi. The old 256Mi request
+# took half of karabu's 512Mi requests quota, so a second replica or a
+# rollout surge left no room for a deploy workflow.
 resources:
   requests:
     cpu: 200m
-    memory: 256Mi
+    memory: 128Mi
   limits:
     cpu: 500m
-    memory: 512Mi
+    memory: 384Mi
 env:
   APP_ENV: production
   NODE_ENV: production

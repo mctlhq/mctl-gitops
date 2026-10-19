@@ -43,6 +43,9 @@ tenant:
     limits.memory: "9Gi"
     pods: "30"
     persistentvolumeclaims: "5"
+    # Added 2026-10-20: a PVC count alone does not bound storage; every
+    # PVC on the default class is a billed Hetzner volume.
+    requests.storage: "30Gi"
     services: "20"
   limitRange:
     enabled: true
