@@ -179,6 +179,7 @@ spec:
       - host zitadel zitadel all scram-sha-256
       # Grafana's own database (bootstrap/templates/observability/monitoring.yaml)
       - host grafana grafana all scram-sha-256
+      - host labs-smoke-test-svc labs-smoke-test-svc all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -225,6 +226,12 @@ spec:
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
+      - name: labs-smoke-test-svc
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: labs-smoke-test-svc-db-creds
       - name: admins-umami
         login: true
         connectionLimit: 10
