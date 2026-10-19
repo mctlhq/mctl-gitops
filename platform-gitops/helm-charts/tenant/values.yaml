@@ -62,11 +62,24 @@ tenant:
     authMountPath: "kubernetes"
 
   # -- ExternalSecrets in this namespace that Argo Workflows may patch by name.
-  # Workflow RBAC is otherwise read-only on ExternalSecrets, because the Role is
-  # bound to the central argo-workflow-sa in every tenant namespace and blanket
-  # write would let one workflow repoint another tenant's secret. List only
+  # Workflow RBAC is otherwise read-only on ExternalSecrets, because the Role
+  # can also be bound to the central argo-workflow-sa (centralWorkflowSA below)
+  # and blanket write would let one workflow repoint another tenant's secret. List only
   # objects a platform workflow genuinely force-refreshes.
   externalSecretPatchTargets: []
+
+  # -- What the central argo-workflows/argo-workflow-sa may do in this
+  # tenant's namespace. mctl-api runs tenant workflows as the tenant-local
+  # argo-workflow-sa, so the central SA only needs a grant here for a
+  # platform workflow that targets this namespace from argo-workflows.
+  centralWorkflowSA:
+    # Bind argo-workflow-smoke-verify (reads, pods/exec, the
+    # externalSecretPatchTargets patch): the team wft-smoke-test runs
+    # against, and tenants whose ExternalSecrets cwft-rotate-github-token
+    # refreshes.
+    smokeVerify: false
+    # Deployments a CronWorkflow in argo-workflows may `rollout restart`.
+    restartDeployments: []
 
   # -- LimitRange defaults (applied to containers without explicit limits)
   limitRange:
