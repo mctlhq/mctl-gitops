@@ -10,7 +10,11 @@ spec:
   source:
     repoURL: https://cloudnative-pg.github.io/charts
     chart: cloudnative-pg
-    targetRevision: 0.23.0
+    # Upgraded one operator minor at a time (#2014): 1.25.0 -> 1.26.1 here.
+    # From 1.26 the admission webhook warns on barmanObjectStore in
+    # shared-pg (deprecated, not rejected); that path has to move to the
+    # Barman Cloud Plugin before the minor that removes it.
+    targetRevision: 0.25.0
     helm:
       values: |
         crds:
