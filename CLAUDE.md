@@ -96,6 +96,9 @@ For which repos/workflows can read the `mctl-agents` GitHub App's raw
 signing key (`AGENTS_APP_PRIVATE_KEY`), see
 `docs/runbooks/agents-app-secret-exposure.md`.
 
+For which mctl-agents surfaces run under the ADR 014 policy checkpoint and
+which are known gaps, see `docs/runbooks/policy-checkpoint-coverage.md`.
+
 ## Terraform (k3s-preview cluster)
 
 See `infrastructure/k3s-preview/README.md` for full runbook.

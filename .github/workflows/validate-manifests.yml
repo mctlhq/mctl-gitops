@@ -427,6 +427,13 @@ jobs:
         # "Producer amendment: DevLoop traces").
         run: python3 tests/test_cwft_execution_trace_env.py
 
+      - name: Unit-test the mctl-agents policy checkpoint coverage
+        # mctlhq/.github#181: every mctl-agents surface is classified in
+        # platform-gitops/governance/policy-checkpoint-coverage.yaml, governed
+        # surfaces declare MCTL_POLICY_APPROVALS=mctl-api, and known gaps
+        # (bypass-open) stay visible and tracked.
+        run: python3 tests/test_policy_checkpoint_coverage.py
+
       - name: Unit-test the k3s-preview apply guard
         # terraform.yml refuses a cluster plan that destroys infrastructure or
         # re-runs node provisioners (#1534). It only meets a real plan during

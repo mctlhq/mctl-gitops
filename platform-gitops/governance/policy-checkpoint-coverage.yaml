@@ -1,0 +1,124 @@
+# Policy checkpoint coverage of every mctl-agents execution surface.
+# Issue: mctlhq/.github#181 (governance: productionize policy and approval).
+# ADR 014 (mctl-agents) defines the checkpoint; this file declares where it is
+# deployed and where it is not. Enforced by
+# tests/test_policy_checkpoint_coverage.py in validate-manifests.yml.
+# Runbook: docs/runbooks/policy-checkpoint-coverage.md
+#
+# Every container that runs the mctl-agents image (the CWFTs
+# cwft-mctl-agents-*.yaml and the three mctl-agents-worker* values files) must
+# have exactly one entry. cwft-mctl-agents-approve.yaml (alpine/git) and the
+# mctl-agents-daily CronWorkflow (no container, only a workflowTemplateRef to
+# the `run` surface) run no mctl-agents image and need no entry.
+#
+# boundary (closed set), for governed: false entries:
+#   no-model-session  no SDK session, so no model-selected actions
+#   no-mctl-token     cannot call mctl-api as the admin principal
+#   operator-operation deterministic step behind an admin-only mctl-api operation
+#   bypass-open       known gap kept visible; tracked_by is mandatory
+#
+# rollout: staged marks a governed surface that does not carry
+# MCTL_POLICY_APPROVALS yet. Task 5(b) of the proposal flips these after the
+# investigator evidence (runbook T5); then the marker is removed and CI
+# requires the env.
+schema: mctl-policy-coverage/v1
+policy: mctl-agents/policy/v1
+approvals_backend: mctl-api
+# mctl-api refuses an approval request with incomplete decision context;
+# mctl-agents sends the full context from 1.86.1 (mctlhq/mctl-agents#714).
+min_approvals_version: 1.86.1
+surfaces:
+  - id: worker-control
+    kind: worker
+    path: services/admins/mctl-agents-worker/values.yaml
+    governed: true
+    rollout: staged
+    note: runs DevLoopWorkflow, merge-watch and the execution dispatcher
+  - id: worker-exec
+    kind: worker
+    path: services/admins/mctl-agents-worker-exec/values.yaml
+    governed: false
+    boundary: no-model-session
+    reason: submit_and_wait only, no agent SDK; executes operations already decided by the control worker
+  - id: worker-implement
+    kind: worker
+    path: services/admins/mctl-agents-worker-implement/values.yaml
+    governed: false
+    boundary: no-model-session
+    reason: implementation dispatch only, no agent SDK
+  - id: investigate
+    kind: cwft
+    path: argo-workflows/cluster-templates/cwft-mctl-agents-investigate.yaml
+    template: run-investigator
+    governed: true
+  - id: implement
+    kind: cwft
+    path: argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml
+    template: run-implementer
+    governed: true
+    rollout: staged
+  - id: shepherd
+    kind: cwft
+    path: argo-workflows/cluster-templates/cwft-mctl-agents-shepherd.yaml
+    template: run-shepherd
+    governed: true
+    rollout: staged
+    # run_shepherd.py forces NO_APPROVALS in the shepherd pod by design, so the
+    # investigator evidence does not cover this surface (owner note R5).
+    note: shepherd pod forces NO_APPROVALS by design (run_shepherd.py)
+  - id: reconcile
+    kind: cwft
+    path: argo-workflows/cluster-templates/cwft-mctl-agents-reconcile.yaml
+    template: run-reconcile
+    governed: true
+    rollout: staged
+    note: run_shepherd --reconcile, no model
+  - id: run
+    kind: cwft
+    path: argo-workflows/cluster-templates/cwft-mctl-agents-run.yaml
+    template: run-orchestrator
+    governed: true
+    rollout: staged
+    note: covers RUN_MODE full, mentor-only and single-service
+  - id: usage-collector
+    kind: cwft
+    path: argo-workflows/cluster-templates/cwft-mctl-agents-usage-collector.yaml
+    template: collect-usage
+    governed: false
+    boundary: no-model-session
+    reason: run_usage_collector reads the usage ledger; no model and no MCTL_TOKEN
+  # Bash transport: the PreToolUse checkpoint gates mcp__* tools only, so a
+  # model with Bash and MCTL_TOKEN in the same env can call mctl-api directly.
+  # Acceptance criterion 2 is NOT closed by this manifest.
+  - id: investigate-bash
+    kind: transport
+    of: investigate
+    governed: false
+    boundary: bypass-open
+    tracked_by: mctlhq/mctl-agents#717
+    related: mctlhq/mctl-api#723
+    reason: PreToolUse gates mcp__* only; Bash can call mctl-api with MCTL_TOKEN
+  - id: implement-bash
+    kind: transport
+    of: implement
+    governed: false
+    boundary: bypass-open
+    tracked_by: mctlhq/mctl-agents#717
+    related: mctlhq/mctl-api#723
+    reason: PreToolUse gates mcp__* only; Bash can call mctl-api with MCTL_TOKEN
+  - id: shepherd-bash
+    kind: transport
+    of: shepherd
+    governed: false
+    boundary: bypass-open
+    tracked_by: mctlhq/mctl-agents#717
+    related: mctlhq/mctl-api#723
+    reason: PreToolUse gates mcp__* only; Bash can call mctl-api with MCTL_TOKEN
+  - id: run-bash
+    kind: transport
+    of: run
+    governed: false
+    boundary: bypass-open
+    tracked_by: mctlhq/mctl-agents#717
+    related: mctlhq/mctl-api#723
+    reason: PreToolUse gates mcp__* only; Bash can call mctl-api with MCTL_TOKEN
