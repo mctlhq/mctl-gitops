@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-19T12:34:29Z'
+updated_at: '2026-10-19T12:49:25Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-4a774f571ea3d61a
@@ -47,13 +47,13 @@ completion:
       optional_total: 1
   primary_observed: true
 review_attempts: 1
-refusals: 1
+refusals: 2
 refusals_head: 87edf593a504e3f063be25edd5ceb3a897a81a7a
-notes: 'implementer declined to act: Reviewer text 1 and 2 are the same finding: the
-  P2 asks that merge prerequisites R1 (file/link the mctl-api companion issue) and
-  R3 (30-day mctl-agents-approve audit for no-digest callers) be resolved or surfaced
-  in the PR description. Both are human or orchestrator actions on the PR description
-  and external systems (another repo, the audit log). They are not changes to this
-  working tree, and the instructions forbid editing other repos. The required-digest
-  behavior in cwft-mctl-agents-approve.yaml is the approved design of issue 1979 (fail-closed,
-  approval_content_unbound), so relaxing it woul'
+notes: 'implementer declined to act: Reviewer text 1 (P2, cwft-mctl-agents-approve.yaml:75)
+  and Reviewer text 2 (P1 top-level comment) are the same single item: the PR description
+  lacks the mctl-api companion issue link (tasks.md R1) and the 30-day mctl-agents-approve
+  audit result for no-digest callers (R3). Both are PR-description and human-process
+  prerequisites, not defects in repo files; the reviewer itself says ''resolve R1/R3
+  or at minimum update the PR description''. The required-digest behaviour is the
+  approved proposal''s intended design (fail closed with approval_content_unbound),
+  so reverting it to optional would defeat is'
