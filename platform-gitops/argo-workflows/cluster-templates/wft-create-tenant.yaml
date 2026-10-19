@@ -943,8 +943,8 @@ spec:
           PVCS=5; SERVICES=10; MAX_CPU=2; MAX_MEMORY=5Gi
           STORAGE_QUOTA=""; PREVIEW_BLOCK=""
           if [ "$WORKSPACE_PROFILE" = starter ]; then
-            CPU_REQ=250m; CPU_LIM=1; MEM_REQ=512Mi; MEM_LIM=1Gi; PODS=5
-            PVCS=1; SERVICES=5; MAX_CPU=1; MAX_MEMORY=1Gi
+            CPU_REQ=500m; CPU_LIM=2; MEM_REQ=512Mi; MEM_LIM=1Gi; PODS=5
+            PVCS=1; SERVICES=5; MAX_CPU=2; MAX_MEMORY=1Gi
             STORAGE_QUOTA='    requests.storage: "10Gi"'
             PREVIEW_BLOCK=$(cat <<'STARTER_PREVIEW'
             preview:

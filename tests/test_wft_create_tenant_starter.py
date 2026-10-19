@@ -35,9 +35,9 @@ class StarterProfile(unittest.TestCase):
         tenant, quotas = self.generate('starter')
         prod, preview = quotas['profile-test'], quotas['profile-test-preview']
         self.assertEqual(prod['requests.memory'], '512Mi')
-        self.assertEqual(prod['requests.cpu'], '250m')
+        self.assertEqual(prod['requests.cpu'], '500m')
         self.assertEqual(prod['limits.memory'], '1Gi')
-        self.assertEqual(prod['limits.cpu'], '1')
+        self.assertEqual(prod['limits.cpu'], '2')
         self.assertEqual(prod['requests.storage'], '10Gi')
         self.assertEqual(prod['persistentvolumeclaims'], '1')
         self.assertEqual(preview['requests.memory'], '256Mi')
@@ -46,6 +46,19 @@ class StarterProfile(unittest.TestCase):
         self.assertEqual(preview['requests.storage'], '0')
         self.assertEqual(preview['persistentvolumeclaims'], '0')
         self.assertEqual(tenant['limitRange']['max']['memory'], '1Gi')
+
+    def test_default_app_rollout_and_workflow_containers_fit(self):
+        # Old + new app, workflow main + executor wait all receive defaults.
+        # Read those defaults from generated values, not a second profile copy.
+        tenant, quotas = self.generate('starter')
+        count = 4
+        lr = tenant['limitRange']
+        self.assertLessEqual(count * int(lr['defaultRequest']['cpu'].removesuffix('m')),
+                             int(quotas['profile-test']['requests.cpu'].removesuffix('m')))
+        self.assertLessEqual(count * int(lr['default']['cpu'].removesuffix('m')),
+                             1000 * int(quotas['profile-test']['limits.cpu']))
+        self.assertLessEqual(count * int(lr['defaultRequest']['memory'].removesuffix('Mi')), 512)
+        self.assertLessEqual(count * int(lr['default']['memory'].removesuffix('Mi')), 1024)
 
     def test_standard_preserves_existing_defaults_and_supplied_quotas(self):
         _, quotas = self.generate('standard')
