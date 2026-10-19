@@ -99,9 +99,13 @@ env:
   # rejected with invalid_redirect_uri (464 attempts in 48h from one client
   # on 2026-09-21..23, zero accepted). The cursor:// scheme stays unsupported
   # (custom schemes are never accepted); this only admits the hosted host.
+  # Town (www.town.com), an AI assistant with hosted MCP connectors, registers
+  # with https://www.town.com/api/mcp/oauth/callback (its client metadata
+  # document at https://www.town.com/.well-known/oauth-client-id lists only
+  # that one); town.com is listed too for the apex form of the same callback.
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,www.cursor.com,cursor.com,localhost,127.0.0.1
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1
   # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
   # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
   # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR

@@ -15,10 +15,10 @@ tenant:
   # Keep an initial preview budget without reserving the full production profile.
   preview:
     quotas:
-      requests.memory: "512Mi"
+      requests.memory: "256Mi"
   quotas:
     requests.cpu: "1"
-    requests.memory: "2Gi"
+    requests.memory: "512Mi"
     limits.cpu: "2"
     limits.memory: "3Gi"
     pods: "10"

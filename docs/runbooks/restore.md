@@ -42,7 +42,7 @@ metadata:
   namespace: pg-restore-drill
 spec:
   instances: 1
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.2   # тот же major!
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11   # тот же major!
   storage:
     storageClass: hcloud-volumes
     size: 40Gi

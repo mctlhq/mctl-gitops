@@ -31,7 +31,7 @@ tenant:
   # Keep an initial preview budget without reserving the full production profile.
   preview:
     quotas:
-      requests.memory: "512Mi"
+      requests.memory: "256Mi"
   quotas:
     # Bumped 2026-09-19 (3rd): projects-mcp deploy-service workflow's validate
     # pod (needs limits.cpu=1) went Pending — used was 11300m/12000m with 16

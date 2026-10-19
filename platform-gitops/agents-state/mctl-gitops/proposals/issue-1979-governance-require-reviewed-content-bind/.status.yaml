@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-10-19T11:56:11Z'
+status: review-stuck
+updated_at: '2026-10-19T13:04:10Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-cb5d2e57da8fbd8b
-  trace_id: 6aa5a4a257f3fd793bbb0fa4d82a3520
-  agent: issue-investigator
+  context_id: ex-4a774f571ea3d61a
+  trace_id: 85b4ca903978ea39e244a7dc8b7e6913
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -19,7 +19,43 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-10-19T11:56:11Z'
-  content_digest: 'sha256:fa2623cc9fb2bead5e3a91b812cd0ddcd59ff0fccb6640b70a1f36fdbd115e9a'
-  approval_ref: 'aar_39e2134706b7423fbb51029f050b8a8c'
+  content_digest: sha256:fa2623cc9fb2bead5e3a91b812cd0ddcd59ff0fccb6640b70a1f36fdbd115e9a
+  approval_ref: aar_39e2134706b7423fbb51029f050b8a8c
+attempt:
+  id: a5223d4971ebcdfd2bcce3d7ac53bd40b02fa0181f1c5d14008481ca4b7371e4
+  started_at: '2026-10-19T11:59:55Z'
+  expires_at: '2026-10-19T14:09:55Z'
+  finished_at: '2026-10-19T12:01:40Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/2012
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-f452ec64
+  authoritative:
+    completion_id: ic-e66f16d113fcda72
+    content_hash: sha256:e66f16d113fcda72a54a2aadd10a4a9f931aa7c0ba2a71b71b33b5148f61c9f0
+    proposal_digest: sha256:fa2623cc9fb2bead5e3a91b812cd0ddcd59ff0fccb6640b70a1f36fdbd115e9a
+    attempt_id: a5223d4971ebcdfd2bcce3d7ac53bd40b02fa0181f1c5d14008481ca4b7371e4
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 11a6ef80bd5c92e8e3e7cfe1c89f9e430bb812f4
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 1
+  primary_observed: true
+review_attempts: 1
+refusals: 3
+refusals_head: 87edf593a504e3f063be25edd5ceb3a897a81a7a
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: Findings 1 (P2) and 2 (P1, which is only
+  the review summary restating finding 1) ask for the PR description to link the mctl-api
+  companion issue (R1) and to list the 30-day mctl-agents-approve audit result (R3).
+  Neither is a change to files in this repo. The PR body lives on GitHub and I cannot
+  edit it. The companion issue lives in the mctl-api repo, and the audit history is
+  not available in the working tree. Making the digest optional again would contradict
+  the approved proposal''s requirement that approval bind to reviewed content, so
+  I made no code change. A human or the orchestrator should'

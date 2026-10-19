@@ -39,3 +39,15 @@ These notes are part of the approved scope. The implementation PRs state how eac
 - [ ] R3. The PR states plainly that acceptance criterion 2 (governed transports cannot be bypassed) is not closed by this change. The Bash / `MCTL_TOKEN` path stays `bypass-open` and is tracked by the companion issues.
 - [ ] R4. The mctl-api companion ("governed operations require a redeemed approval receipt") borders on mctlhq/mctl-api#721. Do not open a competing issue: if it falls inside #721's scope, add it to #721 as a comment. Otherwise file it with an explicit link to #721 and a stated boundary.
 - [ ] R5. The shepherd manifest entry notes that the shepherd pod forces `NO_APPROVALS` by design (`run_shepherd.py`). Task 5(b) waits for the T5 evidence on the investigator only; that evidence is not presented as covering the other surfaces.
+
+## Resolved facts and tracking issues (2026-10-19)
+
+The first implementer run (`mctl-agents-implement-811dbde6`) stopped with no commits because these facts and the companion issue numbers were missing. They are recorded here so tasks 1, 5 and 6 can proceed. Checked against mctl-agents main.
+
+- Task 1 / Open question 1, `MIN_APPROVALS_VERSION`: **1.86.1**. `MCTL_POLICY_APPROVALS=mctl-api` exists since 1.54.0, but mctl-api 4.107.0 (in production) refuses an approval request whose decision context is incomplete, and mctl-agents sends the full context only from 1.86.1 (mctlhq/mctl-agents#714). Every surface already runs 1.86.1, so no version bump is planned.
+- Task 1 / Open question 2, credential: `ActionApprovalClient` (`orchestrator/action_approvals.py`) authenticates with `MCTL_TOKEN` against `MCTL_API_BASE_URL` (default `https://api.mctl.ai`, https only). No approval-writer token, Vault key or ExternalSecret entry is needed.
+- Task 1, unknown value: already fails closed. `configured_approvals()` in `orchestrator/policy_checkpoint.py` maps an unrecognised `MCTL_POLICY_APPROVALS` value to `_MisconfiguredApprovals`, whose lookup returns `APPROVAL_UNKNOWN`; that maps to `CODE_APPROVAL_LOOKUP_ERROR`, which is in `UNDECIDED_CODES`, so the decision is DENY. The function named in task 6 and design §Runtime misconfiguration, `configured_policy()`, is the merge-approval selector and is not involved; no mctl-agents change is needed for this part.
+- Task 6, companion issues (filed, open):
+  - mctl-agents: mctlhq/mctl-agents#717, keep the mctl-api token out of agent tool subprocesses. Use it as `tracked_by` for every model-running template's Bash transport (`bypass-open`).
+  - mctl-api: mctlhq/mctl-api#723, require a consumed approval receipt for governed agent operations. Filed separately from mctlhq/mctl-api#721 with a stated boundary, and linked from #721 (owner note R4).
+- Task 6 is therefore done; R1 and R2 are satisfied. Task 1's DoD (facts in the PR description) still applies: copy this section into the implementer PR.
