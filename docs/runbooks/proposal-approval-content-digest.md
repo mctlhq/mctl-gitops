@@ -16,12 +16,16 @@ CWFT still agree.
 
 ## Which path to use
 
-| Path | Digest | Action needed |
-|------|--------|---------------|
-| DevLoop approve (`mctl_approve_dev_loop`, `POST /api/v1/agents/dev-loop/<id>/approve`) | sent from the action-approval grant | none: preferred path |
-| Direct REST call by a human admin | must be in the request body | compute it, see below |
-| `mctl_trigger_approve` MCP tool | the tool has no digest parameter yet | use the REST call until mctlhq/mctl-api#722 adds it |
-| Agent / service principal without a grant | mctl-api refuses a digest in the body | not supported; the legacy relay is already refused in production |
+Who may put the digest in the request body depends on the caller. A human
+admin supplies it themselves; a service principal may not, because only a
+grant carries a human's decision, so mctl-api takes the digest from the grant.
+
+| Caller and path | Where the digest comes from | Action needed |
+|-----------------|-----------------------------|---------------|
+| DevLoop approve (`mctl_approve_dev_loop`, `POST /api/v1/agents/dev-loop/<id>/approve`) | mctl-api, from the exercised action-approval grant | none: preferred path |
+| Human admin, direct REST call | the human, in the request body | compute it, see below |
+| Human admin, `mctl_trigger_approve` MCP tool | nowhere yet: the tool has no digest parameter | use the REST call until mctlhq/mctl-api#722 adds it |
+| Service or agent principal, no grant | not accepted: mctl-api refuses a body digest from a service principal (only a grant may carry one) | not supported; this caller's legacy relay is already refused in production |
 
 ## Manual fallback: direct approve by a human
 

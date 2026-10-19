@@ -44,16 +44,18 @@ def from_dir(d):
     return digest(lambda n: (d / n).read_bytes() if (d / n).is_file() else None)
 
 
-def from_rev(rev, d):
+def from_rev(rev, d, cwd=None):
     d = d.rstrip("/")
     for args in (["rev-parse", "--verify", f"{rev}^{{commit}}"],
                  ["cat-file", "-e", f"{rev}:{d}"]):
-        r = subprocess.run(["git", *args], capture_output=True, text=True)
+        r = subprocess.run(["git", *args], capture_output=True, text=True,
+                           cwd=cwd)
         if r.returncode != 0:
             sys.exit(f"error: git {' '.join(args)} failed: {r.stderr.strip()}")
 
     def read(n):
-        r = subprocess.run(["git", "show", f"{rev}:{d}/{n}"], capture_output=True)
+        r = subprocess.run(["git", "show", f"{rev}:{d}/{n}"],
+                           capture_output=True, cwd=cwd)
         return r.stdout if r.returncode == 0 else None
     return digest(read)
 
@@ -76,7 +78,33 @@ def selftest():
                              text=True, check=True).stdout
         got = from_dir(p)
         assert out == got, f"CWFT {out} != helper {got}"
+    selftest_rev()
     print("ok")
+
+
+def selftest_rev():
+    """--rev hashes the committed bytes at that revision, not the tree."""
+    with tempfile.TemporaryDirectory() as t:
+        def git(*args):
+            subprocess.run(["git", "-c", "user.name=selftest",
+                            "-c", "user.email=selftest@invalid",
+                            "-c", "commit.gpgsign=false", *args],
+                           cwd=t, check=True, capture_output=True)
+        git("init", "-q")
+        d = pathlib.Path(t) / "p"
+        d.mkdir()
+        (d / "requirements.md").write_bytes(b"req\n")
+        (d / "tasks.md").write_bytes("täsk\n".encode())
+        git("add", "-A")
+        git("commit", "-q", "-m", "reviewed")
+        reviewed = from_dir(d)
+        assert from_rev("HEAD", "p", cwd=t) == reviewed, "--rev != working tree"
+        (d / "tasks.md").write_bytes(b"changed after review\n")
+        git("commit", "-qam", "edit")
+        assert from_rev("HEAD~1", "p/", cwd=t) == reviewed, "--rev not pinned"
+        assert from_rev("HEAD", "p", cwd=t) == from_dir(d) != reviewed
+        (d / "tasks.md").write_bytes(b"uncommitted\n")
+        assert from_rev("HEAD", "p", cwd=t) != from_dir(d), "--rev read the tree"
 
 
 def main(argv):

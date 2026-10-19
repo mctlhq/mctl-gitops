@@ -75,7 +75,8 @@ spec:
         # Required. The proposal content digest the approval was decided for
         # (mctl-agents#681). mctl-api sets it from the exercised grant's
         # artifact_hash; a direct approver computes it with
-        # scripts/proposal-content-digest.py over the bytes they reviewed.
+        # scripts/proposal-content-digest.py over the bytes they reviewed
+        # (docs/runbooks/proposal-approval-content-digest.md).
         # The flip refuses unless the files hash to exactly this value, and
         # an already accepted record must carry it. Empty is refused with
         # approval_content_unbound: there is no mode that hashes whatever is
