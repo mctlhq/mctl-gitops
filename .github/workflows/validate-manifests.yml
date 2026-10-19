@@ -687,6 +687,14 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_tenant_pod_security_level.py
 
+      - name: The central workflow SA holds only opted-in grants in tenant namespaces
+        # It used to hold argo-workflow-helm-deploy and smoke-verify in every
+        # tenant; only labs (smoke-test, claude-remote restart) and admins
+        # (rotate-github-token) are targeted from argo-workflows.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_central_sa_bindings.py
+
       - name: Unit-test the image-user check in deploy-service
         # runAsNonRoot with a named or root image USER only fails after the
         # deploy is committed (CreateContainerConfigError). check-image-user.sh

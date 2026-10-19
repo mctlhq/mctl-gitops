@@ -27,6 +27,10 @@ tenant:
   externalSecretPatchTargets:
     - admins-mctl-agent-base-service
     - admins-mctl-agents-worker-base-service
+  # cwft-rotate-github-token runs as the central argo-workflow-sa, so the
+  # patch grant above reaches it only through this binding.
+  centralWorkflowSA:
+    smokeVerify: true
   quotas:
     # Bumped 2026-05-30: requests.cpu "1" left only ~60m headroom at
     # steady-state (940m used), so a deploy/rollback workflow pod (100m

@@ -23,13 +23,16 @@ PH = re.compile(r"\{\{\s*(?:inputs|workflow)\.parameters\.([A-Za-z0-9_.-]+)\s*\}
 
 # (file, template, stop[, start]): `stop` is the text of the first line that is
 # NOT part of the prelude; the optional `start` is the first prelude line, for
-# templates that run something before they read their parameters.
+# templates that run something before they read their parameters. Both must be
+# executed lines, not comments: comments get reworded in passing (#1966 did it
+# to commit-service) and a moved marker silently changes what the case covers.
 CASES = [
-    ("tpl-validate-tenant.yaml", "validate", "# ── 3. Clone"),
-    ("tpl-git-commit.yaml", "commit-service", "# git, ssh, yq and helm come from"),
+    ("tpl-validate-tenant.yaml", "validate", "echo \"📥 Cloning mctl-gitops for validation"),
+    ("tpl-git-commit.yaml", "commit-service", "mkdir -p ~/.ssh"),
     ("tpl-vault-write.yaml", "write-service-secrets", "echo \"🔐 Authenticating",
      "TEAM=\"$PARAM_TEAM_NAME\""),
-    ("tpl-vault-write.yaml", "delete-service-secrets", "# A tenant namespace may assume",
+    ("tpl-vault-write.yaml", "delete-service-secrets",
+     "SA_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)",
      "TEAM=\"$PARAM_TEAM_NAME\""),
     ("wft-smoke-test.yaml", "run-onboard", "WF_NAME=$(kubectl create"),
     ("wft-smoke-test.yaml", "check-pod-running", "check_missing_secret_reference()"),
@@ -37,10 +40,10 @@ CASES = [
     ("wft-delete-tenant-safe.yaml", "delete-vault-policy", "echo \"Authenticating"),
     ("wft-delete-tenant.yaml", "delete-vault-policy", "echo \"Authenticating"),
     ("wft-deploy-service.yaml", "refresh-apps-appset", "echo \"Triggering hard refresh"),
-    ("wft-deploy-service.yaml", "check-image-user", "# Read-only and public"),
-    ("wft-provision-database.yaml", "do-provision", "# ── Authenticate with Vault",
+    ("wft-deploy-service.yaml", "check-image-user", "git clone --depth=1"),
+    ("wft-provision-database.yaml", "do-provision", "echo \"🔐 Authenticating with Vault",
      "TEAM=\"$PARAM_TEAM_NAME\""),
-    ("wft-retire-service.yaml", "cleanup-db-from-gitops", "# ── Set up SSH for git",
+    ("wft-retire-service.yaml", "cleanup-db-from-gitops", "mkdir -p ~/.ssh",
      "TEAM=\"$PARAM_TEAM_NAME\""),
 ]
 
@@ -110,6 +113,8 @@ with tempfile.TemporaryDirectory() as d:
     have_jq = True
 
     for fname, name, stop, *rest in CASES:
+        check(f"{name}: prelude markers are executed lines, not comments",
+              not any(m.lstrip().startswith("#") for m in [stop] + rest), f"{[stop] + rest}")
         tmpl = template(fname, name)
         src = tmpl["script"]["source"]
         shell = (tmpl["script"].get("command") or ["sh"])[0]
