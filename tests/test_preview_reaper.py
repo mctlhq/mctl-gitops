@@ -15,7 +15,12 @@ although the docs and the mctl_create_preview description promise it.
   - keeps going after one failed uninstall, then fails the run;
   - takes its namespace from the workflow, not from a parameter;
 - the tenant chart renders the CronWorkflow into every tenant namespace with
-  preview enabled, and AppProject platform admits CronWorkflow.
+  preview enabled, except where tenant.preview.reaper is off (erpact: an
+  external-manifests namespace, where argo-workflow-sa is denied), and
+  AppProject platform admits CronWorkflow;
+- the reaper pod's requests, with the executor's init and wait containers,
+  fit every such tenant's ResourceQuota (the first run sat Pending in two
+  tenants with 100m/128Mi quotas).
 
 Run: python3 tests/test_preview_reaper.py
 PREVIEW_TEST_SHELL picks the shell the scripts run under (default bash);
@@ -205,19 +210,32 @@ class Deploy(unittest.TestCase):
             self.assertNotEqual(rc, 0, ttl)
 
 
+def render_tenants():
+    for values in sorted(TENANTS.glob("*/values.yaml")):
+        tenant = values.parent.name
+        out = subprocess.run(
+            ["helm", "template", f"tenant-{tenant}", str(CHART), "-f", str(values),
+             "--namespace", tenant], capture_output=True, text=True, check=True).stdout
+        yield tenant, yaml.safe_load(values.read_text()), [d for d in yaml.safe_load_all(out) if d]
+
+
+def quantity(value):
+    value = str(value)
+    for suffix, factor in (("m", 1 / 1000), ("Ki", 2**10), ("Mi", 2**20), ("Gi", 2**30)):
+        if value.endswith(suffix):
+            return float(value[:-len(suffix)]) * factor
+    return float(value)
+
+
 class Wiring(unittest.TestCase):
     def test_every_preview_tenant_gets_the_cronworkflow(self):
         checked = 0
-        for values in sorted(TENANTS.glob("*/values.yaml")):
-            tenant = values.parent.name
-            out = subprocess.run(
-                ["helm", "template", f"tenant-{tenant}", str(CHART), "-f", str(values),
-                 "--namespace", tenant], capture_output=True, text=True, check=True).stdout
-            docs = [d for d in yaml.safe_load_all(out) if d]
+        for tenant, values, docs in render_tenants():
             preview = [d for d in docs if d["kind"] == "Namespace"
                        and d["metadata"].get("labels", {}).get("mctl.me/preview") == "true"]
             crons = [d for d in docs if d["kind"] == "CronWorkflow"]
-            if not preview:
+            reaper = values["tenant"].get("preview", {}).get("reaper", True)
+            if not preview or not reaper:
                 self.assertEqual(crons, [], tenant)
                 continue
             checked += 1
@@ -231,6 +249,32 @@ class Wiring(unittest.TestCase):
             # The singular `schedule` is removed in Argo 4.0.
             self.assertNotIn("schedule", cron["spec"])
             self.assertEqual(cron["spec"]["schedules"], ["17 * * * *"])
+        self.assertGreater(checked, 0)
+
+    def test_external_manifests_tenant_has_no_reaper(self):
+        # Pods in erpact may use only SA default (bootstrap
+        # externalManifestNamespaces), so a reaper there fails every hour.
+        values = yaml.safe_load((TENANTS / "erpact/values.yaml").read_text())
+        self.assertIs(values["tenant"]["preview"]["reaper"], False)
+
+    def test_reaper_pod_fits_every_tenant_quota(self):
+        doc = yaml.safe_load(REAPER.read_text())
+        patch = yaml.safe_load(doc["spec"]["podSpecPatch"])
+        main = doc["spec"]["templates"][0]["script"]["resources"]["requests"]
+        init = next(c for c in patch["initContainers"] if c["name"] == "init")
+        wait = next(c for c in patch["containers"] if c["name"] == "wait")
+        checked = 0
+        for tenant, _, docs in render_tenants():
+            if not any(d["kind"] == "CronWorkflow" for d in docs):
+                continue
+            quota = next(d for d in docs if d["kind"] == "ResourceQuota"
+                         and d["metadata"]["namespace"] == tenant)["spec"]["hard"]
+            for key in ("cpu", "memory"):
+                # A pod is charged max(init, sum of containers).
+                need = max(quantity(init["resources"]["requests"][key]),
+                           quantity(main[key]) + quantity(wait["resources"]["requests"][key]))
+                self.assertLessEqual(need, quantity(quota[f"requests.{key}"]), (tenant, key))
+            checked += 1
         self.assertGreater(checked, 0)
 
     def test_project_admits_cronworkflow(self):

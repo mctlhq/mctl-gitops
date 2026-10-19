@@ -1,4 +1,4 @@
-{{- if .Values.tenant.preview.enabled }}
+{{- if and .Values.tenant.preview.enabled .Values.tenant.preview.reaper }}
 {{- $tenantName := include "tenant.name" . }}
 # Hourly TTL enforcement for {{ $tenantName }}-preview. Lives in the tenant
 # namespace and runs as its argo-workflow-sa, the one SA bound to
