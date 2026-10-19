@@ -197,6 +197,9 @@ extraObjects:
                     requests: {cpu: 10m, memory: 32Mi}
                     limits: {cpu: 200m, memory: 128Mi}
                   command: ["sh", "-c"]
+                  # Kubernetes rewrites "$$" to "$" in args (its $(VAR) escape), so a
+                  # bare $$ dollar quote reaches psql as "$" and the DO block fails.
+                  # Use a named tag instead.
                   args:
                     - |
                       set -e
@@ -212,7 +215,7 @@ extraObjects:
                       DELETE FROM session s
                        WHERE s.created_at < now() - interval '2 years'
                          AND NOT EXISTS (SELECT 1 FROM website_event e WHERE e.session_id = s.session_id);
-                      DO $$
+                      DO $check$
                       DECLARE t text; n bigint;
                       BEGIN
                         FOREACH t IN ARRAY ARRAY['website_event','event_data','session_data','revenue',
@@ -221,7 +224,7 @@ extraObjects:
                           EXECUTE format('SELECT count(*) FROM %I WHERE created_at IS NULL OR created_at < now() - interval ''2 years''', t) INTO n;
                           IF n > 0 THEN RAISE EXCEPTION '% rows in % are past retention or have no created_at', n, t; END IF;
                         END LOOP;
-                      END $$;
+                      END $check$;
                       COMMIT;
                       SQL
                   env:
