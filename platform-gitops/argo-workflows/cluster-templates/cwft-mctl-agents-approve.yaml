@@ -16,9 +16,11 @@ metadata:
         2. flip-status — proposed → accepted for the {service, slug} pair,
            recording approver identity and the content digest of
            requirements.md, design.md, tasks.md and proposed-content.md
-           (mctl-agents#658). With expected_content_digest set, refuses
+           (mctl-agents#658). Requires expected_content_digest and refuses
            unless the files still hash to it: the digest the human approved
-           (mctl-agents#681). With approval_ref set, also records which
+           (mctl-agents#681). An empty digest is refused with
+           approval_content_unbound; refusals print an `approve_refusal:`
+           line on stderr and set the refusal_code output. With approval_ref set, also records which
            mctl-api approval grant (`aar_`) the flip exercised.
            Idempotent: already-accepted exits 0
            so Temporal retries and rebase races never fail the loop; any
@@ -70,12 +72,15 @@ spec:
         # audit trail (#150); "unknown" when the caller predates the field.
         value: "unknown"
       - name: expected_content_digest
-        # Optional. The proposal content digest the approval was decided for
+        # Required. The proposal content digest the approval was decided for
         # (mctl-agents#681). mctl-api sets it from the exercised grant's
-        # artifact_hash, never from the caller. When set, the flip refuses
-        # unless the files hash to exactly this value, and an already
-        # accepted record must carry it. Empty keeps the #658 behaviour:
-        # record the digest of whatever is there at flip time.
+        # artifact_hash; a direct approver computes it with
+        # scripts/proposal-content-digest.py over the bytes they reviewed.
+        # The flip refuses unless the files hash to exactly this value, and
+        # an already accepted record must carry it. Empty is refused with
+        # approval_content_unbound: there is no mode that hashes whatever is
+        # present at flip time. The default stays "" only so an omitted
+        # argument reaches the typed refusal instead of failing submission.
         value: ""
       - name: approval_ref
         # Optional. The mctl-api approval grant (`aar_...`) this flip
@@ -152,6 +157,15 @@ spec:
           - name: status-update
             path: /tmp/status-out
             optional: true
+        parameters:
+          # Typed refusal code (approval_content_unbound,
+          # approval_content_mismatch, approval_content_digest_malformed).
+          # Whether Argo collects this from a failed step is not guaranteed;
+          # the stderr `approve_refusal:` line is the primary evidence.
+          - name: refusal_code
+            valueFrom:
+              path: /tmp/refusal_code
+              default: ""
       initContainers:
         - name: clone-gitops
           image: alpine/git:2.43.0
@@ -218,19 +232,6 @@ spec:
             echo "❌ service and slug are both required" >&2
             exit 1
           fi
-          # A set expected digest must be well formed: a malformed one is a
-          # broken caller, not a reason to fall back to hashing at flip time.
-          if [ -n "$WORKFLOW_EXPECTED_DIGEST" ]; then
-            case "$WORKFLOW_EXPECTED_DIGEST" in
-              sha256:*[!0-9a-f]*|sha256:)
-                echo "❌ expected_content_digest is not sha256:<64 hex>" >&2
-                exit 1 ;;
-              sha256:????????????????????????????????????????????????????????????????) ;;
-              *)
-                echo "❌ expected_content_digest is not sha256:<64 hex>" >&2
-                exit 1 ;;
-            esac
-          fi
           # A set grant reference must be an mctl-api `aar_` id. It is written
           # into YAML below, so a malformed value is a broken caller: refuse
           # rather than sanitize it into some other id.
@@ -256,6 +257,26 @@ spec:
               echo "❌ service/slug must be plain directory names" >&2
               exit 1 ;;
           esac
+          # Typed refusal: message, one machine-readable stderr line, and the
+          # code in /tmp/refusal_code for the refusal_code output parameter.
+          refuse() {
+            echo "❌ $2" >&2
+            echo "approve_refusal: code=$1 service=${WORKFLOW_SERVICE} slug=${WORKFLOW_SLUG} expected=${WORKFLOW_EXPECTED_DIGEST:--} current=${3:--}" >&2
+            printf '%s' "$1" > /tmp/refusal_code
+            exit 1
+          }
+          # The digest must come from the caller, from before the decision.
+          # Never hash whatever is present at flip time and call it approved.
+          if [ -z "$WORKFLOW_EXPECTED_DIGEST" ]; then
+            refuse approval_content_unbound "expected_content_digest is required: an approval must bind to the content that was reviewed (compute it with scripts/proposal-content-digest.py)"
+          fi
+          case "$WORKFLOW_EXPECTED_DIGEST" in
+            sha256:*[!0-9a-f]*|sha256:)
+              refuse approval_content_digest_malformed "expected_content_digest is not sha256:<64 hex>" ;;
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *)
+              refuse approval_content_digest_malformed "expected_content_digest is not sha256:<64 hex>" ;;
+          esac
           STATUS_FILE="/workdir/mctl-gitops/platform-gitops/agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/.status.yaml"
           if [ ! -f "$STATUS_FILE" ]; then
             echo "❌ No .status.yaml at agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/ — nothing to approve" >&2
@@ -276,12 +297,9 @@ spec:
             # Not when this approval was decided for other content: an
             # accepted record carrying another digest was approved by someone
             # else for something else, and this decision does not cover it.
-            if [ -n "$WORKFLOW_EXPECTED_DIGEST" ]; then
-              RECORDED=$(sed -n "s/^  content_digest:[[:space:]]*'\{0,1\}\([^']*\)'\{0,1\}[[:space:]]*$/\1/p" "$STATUS_FILE" | head -1)
-              if [ "$RECORDED" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
-                echo "❌ ${WORKFLOW_SLUG} is already accepted with content digest '${RECORDED:-<none>}', not the approved ${WORKFLOW_EXPECTED_DIGEST}" >&2
-                exit 1
-              fi
+            RECORDED=$(sed -n "s/^  content_digest:[[:space:]]*'\{0,1\}\([^']*\)'\{0,1\}[[:space:]]*$/\1/p" "$STATUS_FILE" | head -1)
+            if [ "$RECORDED" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
+              refuse approval_content_mismatch "${WORKFLOW_SLUG} is already accepted with content digest '${RECORDED:-<none>}', not the approved ${WORKFLOW_EXPECTED_DIGEST}" "${RECORDED:--}"
             fi
             echo "ℹ️  ${WORKFLOW_SLUG} is already accepted — no-op." >&2
             echo -n "noop"
@@ -334,9 +352,8 @@ spec:
           # The human decided the content behind the expected digest
           # (mctl-agents#681). Content changed since is not what was approved:
           # refuse before any edit, never record the new digest as approved.
-          if [ -n "$WORKFLOW_EXPECTED_DIGEST" ] && [ "$CONTENT_DIGEST" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
-            echo "❌ ${WORKFLOW_SLUG} changed after it was approved: the files hash to ${CONTENT_DIGEST}, the approval was for ${WORKFLOW_EXPECTED_DIGEST}" >&2
-            exit 1
+          if [ "$CONTENT_DIGEST" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
+            refuse approval_content_mismatch "${WORKFLOW_SLUG} changed after it was approved: the files hash to ${CONTENT_DIGEST}, the approval was for ${WORKFLOW_EXPECTED_DIGEST}" "$CONTENT_DIGEST"
           fi
           # A proposed record that already carries an approval block would be
           # flipped without a digest of this content, and once accepted it can
@@ -373,7 +390,7 @@ spec:
           # indicators in first position (`@alice`, a bare `-`), which are
           # invalid unquoted. The charset excludes ' itself, so plain quoting
           # is always safe. No approval block exists here (refused above).
-          printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n  content_digest: '%s'\n" "$APPROVER_SAFE" "$NOW" "$CONTENT_DIGEST" >> "$STATUS_FILE"
+          printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n  content_digest: '%s'\n  digest_binding: 'reviewed'\n" "$APPROVER_SAFE" "$NOW" "$WORKFLOW_EXPECTED_DIGEST" >> "$STATUS_FILE"
           # The grant reference, validated above to the aar_ charset, which
           # excludes the quote, so plain single quoting is safe.
           if [ -n "$WORKFLOW_APPROVAL_REF" ]; then
