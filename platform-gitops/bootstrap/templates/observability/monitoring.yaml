@@ -36,18 +36,31 @@ spec:
               resources:
                 requests:
                   cpu: 100m
-                  memory: 1400Mi
+                  # Raised 1400Mi->1600Mi on 2026-10-20: steady working set
+                  # ~1.5-1.7Gi on 2026-10-19.
+                  memory: 1600Mi
                 limits:
                   cpu: 750m
                   # Raised 1536Mi→2Gi on 2026-06-26: working set sat at ~1409Mi
                   # (~92% of the 1536Mi cap), firing recurring ">80% memory used"
                   # warnings and risking OOM. Request stays 1400Mi (no scheduling
                   # change); the bump is pure headroom.
-                  memory: 2Gi
+                  # Raised 2Gi->2560Mi on 2026-10-20: one broad 7-day
+                  # history query from the 2026-10-19 resource audit pushed
+                  # the working set to 2046Mi and OOMKilled vmsingle
+                  # (21:27:40Z). The per-query caps below are the real fix;
+                  # this is headroom so the TSDB itself is not the victim.
+                  memory: 2560Mi
               extraArgs:
                 search.maxConcurrentRequests: "16"
                 search.maxQueueDuration: "30s"
                 search.cacheTimestampOffset: "12h"
+                # Per-query memory guard (2026-10-20; default 0 = unlimited):
+                # a query whose rollup state needs more than this fails with
+                # an error instead of OOM-killing the whole process. Sample
+                # and duration caps keep their defaults (1e9 / 30s) so the
+                # 28d SLO rules are unaffected.
+                search.maxMemoryPerQuery: "300MB"
               storage:
                 accessModes: ["ReadWriteOnce"]
                 resources:
@@ -258,12 +271,13 @@ spec:
           kube-state-metrics:
             enabled: true
             resources:
+              # 2026-10-20: 7d peak working set 173Mi (90% of 192Mi).
               requests:
                 cpu: 50m
-                memory: 64Mi
+                memory: 128Mi
               limits:
                 cpu: 250m
-                memory: 192Mi
+                memory: 256Mi
 
           victoria-metrics-operator:
             resources:
@@ -296,6 +310,15 @@ spec:
                   # scrape/remote-write bursts. 500m restores burst headroom.
                   cpu: 500m
                   memory: 512Mi
+              # Operator-injected config-reloader sidecar had a request but
+              # no limit (2026-10-20 audit); 7d peak ~22Mi.
+              configReloaderResources:
+                requests:
+                  cpu: 10m
+                  memory: 25Mi
+                limits:
+                  cpu: 50m
+                  memory: 64Mi
 
           # VMAlert replaces Prometheus's alerting engine
           vmalert:
@@ -310,6 +333,15 @@ spec:
                 limits:
                   cpu: 250m
                   memory: 256Mi
+              # Operator-injected config-reloader sidecar had a request but
+              # no limit (2026-10-20 audit); 7d peak ~22Mi.
+              configReloaderResources:
+                requests:
+                  cpu: 10m
+                  memory: 25Mi
+                limits:
+                  cpu: 50m
+                  memory: 64Mi
 
           grafana:
             enabled: true
@@ -487,6 +519,16 @@ spec:
                   # default folder regardless of folderAnnotation, silently
                   # defeating the Internal-folder ACL plan.
                   foldersFromFilesStructure: true
+              # Applies to both k8s-sidecar containers (grafana-sc-dashboard,
+              # grafana-sc-datasources), which ran with no requests or
+              # limits. 7d peaks 85Mi / 75Mi (2026-10-20).
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 96Mi
+                limits:
+                  cpu: 100m
+                  memory: 192Mi
             plugins:
               - victoriametrics-metrics-datasource
             resources:
@@ -500,6 +542,24 @@ spec:
           alertmanager:
             enabled: true
             spec:
+              # Declared 2026-10-20 instead of relying on operator defaults
+              # (same values the operator applied; 7d peak 60Mi).
+              resources:
+                requests:
+                  cpu: 30m
+                  memory: 64Mi
+                limits:
+                  cpu: 100m
+                  memory: 256Mi
+              # Operator-injected config-reloader sidecar had a request but
+              # no limit (2026-10-20 audit); 7d peak ~22Mi.
+              configReloaderResources:
+                requests:
+                  cpu: 10m
+                  memory: 25Mi
+                limits:
+                  cpu: 50m
+                  memory: 64Mi
               secrets:
                 - alertmanager-telegram-secret
                 - alertmanager-mctl-agent-webhook
