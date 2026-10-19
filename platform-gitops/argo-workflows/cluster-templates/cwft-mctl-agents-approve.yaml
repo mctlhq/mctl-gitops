@@ -18,7 +18,8 @@ metadata:
            requirements.md, design.md, tasks.md and proposed-content.md
            (mctl-agents#658). With expected_content_digest set, refuses
            unless the files still hash to it: the digest the human approved
-           (mctl-agents#681).
+           (mctl-agents#681). With approval_ref set, also records which
+           mctl-api approval grant (`aar_`) the flip exercised.
            Idempotent: already-accepted exits 0
            so Temporal retries and rebase races never fail the loop; any
            other status (implemented, needs-triage, ...) fails loudly.
@@ -75,6 +76,15 @@ spec:
         # unless the files hash to exactly this value, and an already
         # accepted record must carry it. Empty keeps the #658 behaviour:
         # record the digest of whatever is there at flip time.
+        value: ""
+      - name: approval_ref
+        # Optional. The mctl-api approval grant (`aar_...`) this flip
+        # exercises. mctl-api sets it from the grant it has just verified and
+        # spent, never from the caller, and refuses it in a request body.
+        # Recorded as `approval.approval_ref`, so an accepted record names
+        # the decision behind it and anything acting on the record can look
+        # that decision up in mctl-api instead of trusting the file. Empty
+        # (a manual approve with no grant) records no reference.
         value: ""
 
   # ── No PVC ──────────────────────────────────────────────────────────────
@@ -200,6 +210,8 @@ spec:
             value: "{{workflow.parameters.approver}}"
           - name: WORKFLOW_EXPECTED_DIGEST
             value: "{{workflow.parameters.expected_content_digest}}"
+          - name: WORKFLOW_APPROVAL_REF
+            value: "{{workflow.parameters.approval_ref}}"
         source: |
           set -e
           if [ -z "$WORKFLOW_SERVICE" ] || [ -z "$WORKFLOW_SLUG" ]; then
@@ -218,6 +230,24 @@ spec:
                 echo "❌ expected_content_digest is not sha256:<64 hex>" >&2
                 exit 1 ;;
             esac
+          fi
+          # A set grant reference must be an mctl-api `aar_` id. It is written
+          # into YAML below, so a malformed value is a broken caller: refuse
+          # rather than sanitize it into some other id.
+          if [ -n "$WORKFLOW_APPROVAL_REF" ]; then
+            case "$WORKFLOW_APPROVAL_REF" in
+              aar_*[!A-Za-z0-9_-]*|aar_)
+                echo "❌ approval_ref is not an aar_ id" >&2
+                exit 1 ;;
+              aar_*) ;;
+              *)
+                echo "❌ approval_ref is not an aar_ id" >&2
+                exit 1 ;;
+            esac
+            if [ "${#WORKFLOW_APPROVAL_REF}" -gt 128 ]; then
+              echo "❌ approval_ref is longer than 128 characters" >&2
+              exit 1
+            fi
           fi
           # service/slug become path components below — refuse separators
           # and dot-dot so a crafted value cannot escape agents-state/.
@@ -344,6 +374,11 @@ spec:
           # invalid unquoted. The charset excludes ' itself, so plain quoting
           # is always safe. No approval block exists here (refused above).
           printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n  content_digest: '%s'\n" "$APPROVER_SAFE" "$NOW" "$CONTENT_DIGEST" >> "$STATUS_FILE"
+          # The grant reference, validated above to the aar_ charset, which
+          # excludes the quote, so plain single quoting is safe.
+          if [ -n "$WORKFLOW_APPROVAL_REF" ]; then
+            printf "  approval_ref: '%s'\n" "$WORKFLOW_APPROVAL_REF" >> "$STATUS_FILE"
+          fi
           # Post-edit verification: the flip this workflow exists to make
           # must actually be on disk before the commit step runs, otherwise
           # fail loudly here — a partially-updated file would otherwise be
