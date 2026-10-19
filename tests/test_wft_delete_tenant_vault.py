@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Run delete-vault-policy's Vault program against a fake Vault.
 
-delete-tenant-safe (and the removed legacy delete-tenant) used to probe each policy and ESO role
-with `vault policy read ... >/dev/null 2>&1` / `vault read ...` and delete only
-when the probe succeeded, so a denied or unreachable Vault printed "not
-found (already deleted). Skipping." and the step went green with every
-object still in place. The KV cleanup turned a failed LIST into `[]` and
-ignored failed deletes with `|| true`, and it walked only two levels, so
-teams/<t>/<s>/preview/database survived even a clean run.
+delete-tenant-safe (and the removed legacy delete-tenant) used to probe each
+policy and ESO role with `vault policy read ... >/dev/null 2>&1` /
+`vault read ...` and delete only when the probe succeeded, so a denied or
+unreachable Vault printed "not found (already deleted). Skipping." and the
+step went green with every object still in place. The KV cleanup turned a
+failed LIST into `[]` and ignored failed deletes with `|| true`, and it walked
+only two levels, so teams/<t>/<s>/preview/database survived even a clean run.
 
 This extracts the program from the template rather than restating it,
 serves the three Vault path families from a local HTTP server and asserts on
