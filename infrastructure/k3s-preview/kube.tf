@@ -298,7 +298,9 @@ module "kube-hetzner" {
   # any values change here (CCM or CSI resources, for example) would have
   # silently upgraded all of them in the same apply. On 2026-10-20 that would
   # have been CCM v1.33.0 -> v1.39.0, CSI v2.21.2 -> v2.24.0 and kured
-  # 1.21.0 -> 1.23.0. Bump these lines for a deliberate, reviewed upgrade.
+  # 1.21.0 -> 1.23.0. For a deliberate, reviewed upgrade bump the value in the
+  # locals block at the top of this file, never the argument line here: the
+  # locals feed base_kustomization_inputs, which keeps kured re-applying.
   # sys_upgrade_controller_version is already pinned by its module default
   # (v0.18.0, matches live).
   hetzner_ccm_version = local.hetzner_ccm_version
@@ -325,8 +327,9 @@ module "kube-hetzner" {
   # OLDER v1.33.12 while all nodes were already on v1.33.13 — the hash mismatch
   # spawned apply jobs that perpetually re-cordoned the un-drainable single
   # control-plane (NodeCordoned alert storm, 2026-06-27). Pinning to the
-  # nodes' current version stops the churn; bump this line for controlled
-  # future upgrades. Matches the live `kubectl patch plan ... spec.version`
+  # nodes' current version stops the churn; for controlled future upgrades
+  # bump local.install_k3s_version at the top of this file, not this line.
+  # Matches the live `kubectl patch plan ... spec.version`
   # mitigation applied 2026-06-27.
   install_k3s_version = local.install_k3s_version
 
