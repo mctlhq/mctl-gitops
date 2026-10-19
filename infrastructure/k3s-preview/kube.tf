@@ -256,6 +256,33 @@ module "kube-hetzner" {
   # --- CCM ---
   hetzner_ccm_use_helm = true
 
+  # Pin the add-ons to the versions running today. Left null, the module
+  # resolves each one to the LATEST GitHub release at plan time (data.tf), but
+  # only re-applies them when terraform_data.kustomization is replaced. The
+  # live cluster therefore sat on the versions from the last replace, while
+  # any values change here (CCM or CSI resources, for example) would have
+  # silently upgraded all of them in the same apply. On 2026-10-20 that would
+  # have been CCM v1.33.0 -> v1.39.0, CSI v2.21.2 -> v2.24.0 and kured
+  # 1.21.0 -> 1.23.0. Bump these lines for a deliberate, reviewed upgrade.
+  # sys_upgrade_controller_version is already pinned by its module default
+  # (v0.18.0, matches live).
+  hetzner_ccm_version = "v1.33.0"
+  hetzner_csi_version = "v2.21.2"
+  kured_version       = "1.21.0"
+
+  # The chart default is requests 100m/50Mi with no limit. The 7-day peak
+  # working set was 72Mi on 2026-10-19, above the request, and nothing bounded
+  # it. No CPU limit: the CCM reconciles routes and load balancers and should
+  # not be throttled.
+  hetzner_ccm_merge_values = <<-EOT
+    resources:
+      requests:
+        cpu: 100m
+        memory: 96Mi
+      limits:
+        memory: 192Mi
+  EOT
+
   # --- Upgrades ---
   # Disabled: single control-plane node — draining it takes down the API server.
   # Re-enable only after adding a second CP node (or migrating to HA).
