@@ -31,3 +31,11 @@
 - At the same time, change the affected manifest entries to `governed: false` with boundary `bypass-open` and a `tracked_by` reference to the rollback reason. The coverage test will not accept a governed surface without the env, so the rollback stays explicit instead of silent.
 - Wait about 3 minutes for Argo CD to sync before submitting new runs. In-flight Argo runs keep the template snapshot they were submitted with.
 - If the CI test itself misbehaves, revert the `validate-manifests.yml` step. The manifest and env declarations can stay.
+
+## Owner review notes (2026-10-19)
+These notes are part of the approved scope. The implementation PRs state how each one is handled.
+- [ ] R1. Every `tracked_by` reference points at a real, open issue before the manifest merges. Do task 6 before the PR that adds the manifest (task 3), or land both in the same PR.
+- [ ] R2. Resolve Open questions 1 and 2 from mctl-agents main before task 5. `ActionApprovalClient` reads `MCTL_TOKEN`, so no new approval-writer token or Vault key is expected; confirm this. Check whether `configured_policy()` already fails closed on an unknown `MCTL_POLICY_APPROVALS` value (`_MisconfiguredApprovals`). If it does, drop that part of the mctl-agents companion issue and cite the existing code instead.
+- [ ] R3. The PR states plainly that acceptance criterion 2 (governed transports cannot be bypassed) is not closed by this change. The Bash / `MCTL_TOKEN` path stays `bypass-open` and is tracked by the companion issues.
+- [ ] R4. The mctl-api companion ("governed operations require a redeemed approval receipt") borders on mctlhq/mctl-api#721. Do not open a competing issue: if it falls inside #721's scope, add it to #721 as a comment. Otherwise file it with an explicit link to #721 and a stated boundary.
+- [ ] R5. The shepherd manifest entry notes that the shepherd pod forces `NO_APPROVALS` by design (`run_shepherd.py`). Task 5(b) waits for the T5 evidence on the investigator only; that evidence is not presented as covering the other surfaces.

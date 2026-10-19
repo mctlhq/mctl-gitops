@@ -25,3 +25,9 @@
 
 ## Rollback
 Revert the PR. The CWFT returns to the optional-digest behaviour, ArgoCD resyncs the ClusterWorkflowTemplate in about 3 minutes, and Workflows submitted after that snapshot the old template. No data migration needs undoing. Records flipped in the meantime carry an extra `approval.digest_binding` key, which is harmless to readers that ignore it and does not need to be removed. The helper script and test are additive and are removed by the same revert.
+
+## Owner review notes (2026-10-19)
+These notes are part of the approved scope. The implementation PR states how each one is handled.
+- [ ] R1. Task 6 is a merge prerequisite, not a follow-up. The mctl-api companion issue is filed (or an existing one is linked) and referenced from the PR. Until it lands, the PR says plainly that refusal evidence is only the stderr line and the Argo output parameter, and that nothing is persisted in the mctl-api audit store.
+- [ ] R2. Verify that Argo collects the `refusal_code` output parameter from a failed step. If it does not, keep the stderr line as the primary evidence and say so in the PR and in the parameter comment.
+- [ ] R3. Before merge, check the `mctl-agents-approve` audit history for at least the last 30 days, not only the last 50 rows, for callers that send no digest. List any such caller in the PR. Document the manual-approve fallback: compute the digest with `scripts/proposal-content-digest.py` first, then pass it as `expected_content_digest`. Update any operator-facing text that still describes approving without a digest.
