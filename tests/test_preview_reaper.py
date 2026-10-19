@@ -9,8 +9,8 @@ although the docs and the mctl_create_preview description promise it.
 - preview-reaper (run with stub kubectl/helm/date on PATH):
   - reaps an expired release (helm uninstall, then its ${RELEASE}-tls),
     keeps an unexpired one, and reads the newest revision of each release;
-  - leaves a release with no or a malformed label alone and fails the run
-    (unknown lifetime is not "expired");
+  - leaves a release with no, a malformed or an over-long label alone and
+    fails the run (unknown lifetime is not "expired");
   - fails without deleting anything when the Secret listing fails;
   - keeps going after one failed uninstall, then fails the run;
   - takes its namespace from the workflow, not from a parameter;
@@ -18,6 +18,9 @@ although the docs and the mctl_create_preview description promise it.
   preview enabled, and AppProject platform admits CronWorkflow.
 
 Run: python3 tests/test_preview_reaper.py
+PREVIEW_TEST_SHELL picks the shell the scripts run under (default bash);
+CI also runs the Reaper and Deploy cases under busybox sh in an alpine
+container, the shell the tools image actually uses.
 """
 import json
 import os
@@ -36,6 +39,10 @@ CHART = pathlib.Path("platform-gitops/helm-charts/tenant")
 TENANTS = pathlib.Path("platform-gitops/tenants")
 PROJECT = pathlib.Path("platform-gitops/bootstrap/templates/projects/project-platform.yaml")
 NOW = 1_800_000_000
+# The scripts run under the tools image's sh (busybox ash, which takes
+# `set -o pipefail`); /bin/sh on the CI runner is dash, which does not, so
+# bash stands in for it unless PREVIEW_TEST_SHELL says otherwise.
+SHELL = os.environ.get("PREVIEW_TEST_SHELL", "bash")
 
 KUBECTL_STUB = """#!/bin/sh
 echo "kubectl $*" >> "$CALLS"
@@ -57,7 +64,7 @@ echo {NOW}
 """
 
 
-def release_secret(name, version, expires=None):
+def helm_release_record(name, version, expires=None):
     labels = {"name": name, "owner": "helm", "status": "deployed",
               "version": str(version)}
     if expires is not None:
@@ -91,10 +98,7 @@ class Reaper(unittest.TestCase):
     def run_reaper(self, items, **extra):
         self.listing.write_text(json.dumps({"items": items}))
         self.calls.write_text("")
-        # The script runs under the tools image's sh (busybox ash, which
-        # takes `set -o pipefail`); /bin/sh on the CI runner is dash, which
-        # does not, so bash stands in for it here.
-        proc = subprocess.run(["bash", "-c", self.script["source"]],
+        proc = subprocess.run([SHELL, "-c", self.script["source"]],
                               env={**self.env, **extra},
                               capture_output=True, text=True)
         return proc, self.calls.read_text().splitlines()
@@ -105,12 +109,12 @@ class Reaper(unittest.TestCase):
 
     def test_reaps_expired_keeps_unexpired(self):
         proc, calls = self.run_reaper([
-            release_secret("preview-a-111111", 1, NOW - 60),
-            release_secret("preview-b-222222", 1, NOW + 3600),
+            helm_release_record("preview-a-111111", 1, NOW - 60),
+            helm_release_record("preview-b-222222", 1, NOW + 3600),
         ])
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self.uninstalled(calls), ["preview-a-111111"])
-        self.assertIn("helm uninstall preview-a-111111 -n labs-preview --wait", calls)
+        self.assertIn("helm uninstall preview-a-111111 -n labs-preview --wait --timeout 2m", calls)
         self.assertIn("kubectl delete secret preview-a-111111-tls -n labs-preview"
                       " --ignore-not-found", calls)
         self.assertNotIn("kubectl delete secret preview-b-222222-tls -n labs-preview"
@@ -118,32 +122,34 @@ class Reaper(unittest.TestCase):
 
     def test_newest_revision_decides(self):
         proc, calls = self.run_reaper([
-            release_secret("preview-a-111111", 1, NOW - 60),
-            release_secret("preview-a-111111", 10, NOW + 3600),
-            release_secret("preview-a-111111", 2, NOW - 60),
+            helm_release_record("preview-a-111111", 1, NOW - 60),
+            helm_release_record("preview-a-111111", 10, NOW + 3600),
+            helm_release_record("preview-a-111111", 2, NOW - 60),
         ])
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self.uninstalled(calls), [])
 
     def test_unlabeled_or_malformed_is_left_and_fails(self):
-        for expires in (None, "soon"):
+        # 12 digits is past any real expiry; 20 is past the shell's integer
+        # range, where `[ -gt ]` errors out and must not read as "expired".
+        for expires in (None, "soon", "1" * 12, "9" * 20):
             proc, calls = self.run_reaper([
-                release_secret("preview-a-111111", 1, expires),
-                release_secret("preview-b-222222", 1, NOW - 60),
+                helm_release_record("preview-a-111111", 1, expires),
+                helm_release_record("preview-b-222222", 1, NOW - 60),
             ])
             self.assertNotEqual(proc.returncode, 0, expires)
             self.assertEqual(self.uninstalled(calls), ["preview-b-222222"], expires)
 
     def test_listing_failure_deletes_nothing(self):
-        proc, calls = self.run_reaper([release_secret("preview-a-111111", 1, NOW - 60)],
+        proc, calls = self.run_reaper([helm_release_record("preview-a-111111", 1, NOW - 60)],
                                       LIST_RC="1")
         self.assertNotEqual(proc.returncode, 0)
         self.assertEqual(self.uninstalled(calls), [])
 
     def test_one_failure_does_not_stop_the_rest(self):
         proc, calls = self.run_reaper([
-            release_secret("preview-a-111111", 1, NOW - 60),
-            release_secret("preview-b-222222", 1, NOW - 60),
+            helm_release_record("preview-a-111111", 1, NOW - 60),
+            helm_release_record("preview-b-222222", 1, NOW - 60),
         ], FAIL_RELEASE="preview-a-111111")
         self.assertNotEqual(proc.returncode, 0)
         self.assertEqual(self.uninstalled(calls), ["preview-a-111111", "preview-b-222222"])
@@ -182,7 +188,7 @@ class Deploy(unittest.TestCase):
             date.write_text(DATE_STUB)
             date.chmod(0o755)
             proc = subprocess.run(
-                ["bash", "-c", "set -eu\n" + self.ttl_block() + '\necho "$EXPIRES_AT"'],
+                [SHELL, "-c", "set -eu\n" + self.ttl_block() + '\necho "$EXPIRES_AT"'],
                 env={"PATH": f"{d}:{os.environ['PATH']}", "TTL_HOURS": ttl},
                 capture_output=True, text=True)
         return proc.returncode, proc.stdout.strip()
@@ -191,9 +197,10 @@ class Deploy(unittest.TestCase):
         self.assertEqual(self.expires_for("24"), (0, str(NOW + 24 * 3600)))
         self.assertEqual(self.expires_for("08"), (0, str(NOW + 8 * 3600)))
         self.assertEqual(self.expires_for("0"), (0, str(NOW)))
+        self.assertEqual(self.expires_for("9999"), (0, str(NOW + 9999 * 3600)))
 
     def test_rejects_non_numeric_ttl(self):
-        for ttl in ("", "1h", "1;id", "-1"):
+        for ttl in ("", "1h", "1;id", "-1", "99999"):
             rc, _ = self.expires_for(ttl)
             self.assertNotEqual(rc, 0, ttl)
 
@@ -221,6 +228,9 @@ class Wiring(unittest.TestCase):
             self.assertEqual(cron["spec"]["workflowSpec"]["workflowTemplateRef"],
                              {"name": "preview-reaper", "clusterScope": True})
             self.assertEqual(cron["spec"]["concurrencyPolicy"], "Forbid")
+            # The singular `schedule` is removed in Argo 4.0.
+            self.assertNotIn("schedule", cron["spec"])
+            self.assertEqual(cron["spec"]["schedules"], ["17 * * * *"])
         self.assertGreater(checked, 0)
 
     def test_project_admits_cronworkflow(self):

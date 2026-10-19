@@ -54,8 +54,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CWFT_DIR = ROOT / "platform-gitops/argo-workflows/cluster-templates"
 
-# Must match the workflows mctl-api runs in the tenant namespace (every
-# template not listed in operations.WorkflowNamespace's platform cases).
+# Every workflow that runs in a tenant namespace: the ones mctl-api submits
+# there (every template not listed in operations.WorkflowNamespace's platform
+# cases), plus preview-reaper, which the tenant chart's CronWorkflow starts.
 ENTRY_FILES = (
     "wft-deploy-service.yaml",
     "wft-preview-deploy.yaml",

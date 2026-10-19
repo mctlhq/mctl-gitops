@@ -692,10 +692,15 @@ jobs:
         # Nothing deleted expired previews before preview-reaper; a May
         # preview release was still on record in October. Runs the reaper's
         # own script with stub kubectl/helm/date and renders the tenant
-        # chart's CronWorkflow for every tenant.
+        # chart's CronWorkflow for every tenant. The second run repeats the
+        # script cases under busybox sh, the shell of the tools image the
+        # pod runs (the runner's /bin/sh is dash, so the first uses bash).
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_preview_reaper.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'apk add -q jq && pip install -q pyyaml &&
+              python3 tests/test_preview_reaper.py Reaper Deploy'
 
       - name: Only workflow SAs read every Secret in a tenant namespace
         # The namespace holds the gitops deploy key and github-actions-pat.

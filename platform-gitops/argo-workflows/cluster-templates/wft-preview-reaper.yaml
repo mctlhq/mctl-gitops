@@ -10,13 +10,15 @@ metadata:
       ${RELEASE}-tls Secret cert-manager leaves behind (same cleanup as
       preview-delete). Run hourly by the CronWorkflow preview-reaper that
       the tenant chart renders into each tenant namespace with preview
-      enabled. Before it, nothing enforced ttl_hours at all.
+      enabled. Before it, nothing enforced ttl_hours at all. A failed
+      run is how an unknown lifetime or a failed cleanup surfaces: alert
+      PreviewReaperFailing (vm-rules/preview-reaper-alerts.yaml).
 spec:
   entrypoint: reap
   serviceAccountName: argo-workflow-sa
   activeDeadlineSeconds: 900
   ttlStrategy:
-    secondsAfterSuccess: 3600
+    secondsAfterSuccess: 86400
     secondsAfterFailure: 259200
   # Pod Security "restricted": runs in the tenant namespace, like
   # preview-delete; see the note there for why podSpecPatch repeats the
@@ -94,7 +96,11 @@ spec:
                 errors=$((errors + 1))
                 continue
                 ;;
-              *[!0-9]*)
+              # More than 11 digits is no unix time this platform will
+              # see, and a value past the shell's integer range would make
+              # `[ -gt ]` error out, which reads as false: "cannot compare"
+              # must not fall through to the reap below.
+              *[!0-9]* | ????????????*)
                 echo "ERROR: ${RELEASE}: malformed mctl.ai/expires-at=${EXPIRES}; not deleting" >&2
                 errors=$((errors + 1))
                 continue
@@ -107,7 +113,9 @@ spec:
             fi
             echo "reap ${RELEASE}: expired $(( (NOW - EXPIRES) / 60 )) min ago"
             # One failure does not stop the others; the run still fails.
-            if helm uninstall "${RELEASE}" -n "${NS}" --wait \
+            # --timeout 2m keeps several slow releases inside the 900s
+            # deadline; whatever is left is picked up next hour.
+            if helm uninstall "${RELEASE}" -n "${NS}" --wait --timeout 2m \
               && kubectl delete secret "${RELEASE}-tls" -n "${NS}" --ignore-not-found; then
               reaped=$((reaped + 1))
             else

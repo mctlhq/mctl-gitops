@@ -384,11 +384,12 @@ spec:
           esac
           # TTL_HOURS becomes the release's expiry, which preview-reaper
           # enforces, so it is arithmetic input now and checked like PORT.
-          # The registry pattern is ^[0-9]{1,4}$; leading zeros are
-          # stripped because sh reads 08 as a bad octal number.
+          # Same grammar as the registry pattern ^[0-9]{1,4}$, asserted
+          # here rather than trusted, like TAG and PORT above. Leading zeros
+          # are stripped because sh reads 08 as a bad octal number.
           case "$TTL_HOURS" in
-            "" | *[!0-9]* )
-              echo "❌ ttl_hours must be a decimal integer; got: ${TTL_HOURS}" >&2
+            "" | *[!0-9]* | ?????* )
+              echo "❌ ttl_hours must be 1-4 decimal digits; got: ${TTL_HOURS}" >&2
               exit 1
               ;;
           esac

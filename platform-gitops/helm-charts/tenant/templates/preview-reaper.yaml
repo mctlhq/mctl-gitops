@@ -15,12 +15,17 @@ metadata:
   labels:
     {{- include "tenant.labels" . | nindent 4 }}
 spec:
-  schedule: "17 * * * *"
+  # `schedules` (a list), not the singular `schedule`: the singular is
+  # deprecated as of Argo 3.6 and removed in 4.0.
+  schedules:
+    - "17 * * * *"
   timezone: "UTC"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 3
+  # Counts, not durations: 24 hourly runs is a day of history, matching the
+  # CWFT's ttlStrategy.
+  successfulJobsHistoryLimit: 24
+  failedJobsHistoryLimit: 24
   workflowSpec:
     workflowTemplateRef:
       name: preview-reaper
