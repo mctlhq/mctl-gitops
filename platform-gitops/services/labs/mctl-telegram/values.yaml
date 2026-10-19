@@ -106,6 +106,18 @@ env:
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
   OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1
+  # Client ID Metadata Documents (CIMD, mctlhq/mctl-telegram#773, 0.81.0): a
+  # client whose client_id is an https URL on a listed host gets its redirect
+  # URIs from the document at that URL instead of registering. Accepted only,
+  # not advertised: OAUTH_CIMD_ADVERTISE stays unset so clients that prefer
+  # CIMD when it is announced (ChatGPT) keep using DCR (see mctl-api#693/#694).
+  # Exact hosts only; removing a host here cuts off that client's refreshes,
+  # turning OAUTH_CIMD_ACCEPT off does not (mctl-telegram SECURITY.md). Town
+  # publishes https://www.town.com/.well-known/oauth-client-id (none auth, one
+  # callback). Its hosts stay in OAUTH_ALLOWED_IMPLICIT_HOSTS until Town is
+  # confirmed on CIMD and its connections have re-authorized.
+  OAUTH_CIMD_ACCEPT: "true"
+  OAUTH_CIMD_ALLOWED_HOSTS: www.town.com
   # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
   # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
   # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR
