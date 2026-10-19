@@ -630,6 +630,15 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_security_context.py
 
+      - name: Service Jobs and CronJobs pass restricted PodSecurity, gated ones too
+        # Tenant namespaces enforce restricted PSA, so a non-compliant Job is
+        # never admitted. Renders every service once as committed and once
+        # with each renderIf env flag forced on, so a gated CronJob (e.g.
+        # mctl-telegram's demo-reviewer-watch) is checked before the flag flips.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_service_extra_jobs_restricted.py
+
       - name: Unit-test base-service's containerPort on both workload kinds
         # service.containerPort moves only the container; the Service and
         # Ingress stay on service.port (gitops#1933 broke docs.mctl.ai by
