@@ -9,6 +9,10 @@ tenant:
     - userId: mashkovd
       principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
       role: owner
+  # Keep an initial preview budget without reserving the full production profile.
+  preview:
+    quotas:
+      requests.memory: "512Mi"
   quotas:
     requests.cpu: "100m"
     requests.memory: "256Mi"

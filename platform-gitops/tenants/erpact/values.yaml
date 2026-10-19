@@ -27,6 +27,10 @@ tenant:
   # requests on purpose: Frappe idles low and bursts on page loads and
   # background jobs. One PVC in practice (erpact-data, 20Gi); the count
   # stays at the tenant default of 5.
+  # Keep an initial preview budget without reserving the full production profile.
+  preview:
+    quotas:
+      requests.memory: "512Mi"
   quotas:
     requests.cpu: "1500m"
     requests.memory: "5Gi"
