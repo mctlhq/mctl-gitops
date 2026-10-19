@@ -72,7 +72,9 @@ spec:
           - name: preview_id
             value: "{{workflow.parameters.preview_id}}"
       script:
-        image: alpine/helm:3.16.4
+        # mctl-workflow-tools, not alpine/helm: the TLS cleanup below needs
+        # kubectl as well as helm. Same digest preview-deploy pins.
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         env:
           - name: PARAM_TEAM_NAME
@@ -114,3 +116,11 @@ spec:
           if [ -z "${uninstalled}" ]; then
             echo "Release ${RELEASE} not found in ${NS_PREVIEW} or ${TEAM} — already deleted or never existed"
           fi
+
+          # preview-deploy sets ingress.tls[0].secretName=${RELEASE}-tls.
+          # cert-manager creates that Secret for the Ingress's Certificate
+          # and does not delete it with the Certificate, so helm uninstall
+          # leaves it behind. Runs whether or not the release was found, so
+          # it also removes Secrets orphaned by earlier deletes. Any error
+          # other than not-found fails the step (set -e).
+          kubectl delete secret "${RELEASE}-tls" -n "${NS_PREVIEW}" --ignore-not-found
