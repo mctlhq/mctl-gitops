@@ -680,6 +680,14 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_tenant_preview_rbac.py
 
+      - name: preview-delete removes the preview's TLS Secret
+        # cert-manager keeps ${RELEASE}-tls after its Certificate is gone, so
+        # helm uninstall alone left one orphan Secret per preview. Runs the
+        # template's script with stub helm/kubectl.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_delete_tls_secret.py
+
       - name: Only workflow SAs read every Secret in a tenant namespace
         # The namespace holds the gitops deploy key and github-actions-pat.
         # The team's Argo UI SSO account reads only the artifact credentials
