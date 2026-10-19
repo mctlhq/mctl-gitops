@@ -415,12 +415,18 @@ jobs:
           fi
 
       # --- Checkout source repo ---
+      # persist-credentials: false keeps the checkout token out of
+      # .git/config. This directory, .git included, is the build context
+      # below, and the Dockerfile comes from the source repository, so no
+      # credential may be left in it. Nothing after this step runs git
+      # against the remote.
       - name: Checkout source repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.git_ref }}
           token: ${{ steps.checkout_token.outputs.token }}
+          persist-credentials: false
 
       # --- Resolve GHCR push token ---
       # GITHUB_TOKEN canary. GHCR_PAT is a classic PAT with write:packages; it
@@ -498,6 +504,18 @@ jobs:
           done
           echo "::error::docker pull $image failed after 5 attempts"
           exit 1
+
+      # The checkout above must leave no credential in the build context.
+      # Refuse to build if .git/config carries an auth header or a URL with
+      # embedded credentials; an unreadable config is a refusal too.
+      - name: Check build context for credentials
+        run: |
+          set -euo pipefail
+          [ -r .git/config ] || { echo "::error::cannot read .git/config"; exit 1; }
+          if grep -Eiq 'extraheader|authorization:|://[^/@[:space:]]+@' .git/config; then
+            echo "::error::.git/config in the build context holds a credential; refusing to build"
+            exit 1
+          fi
 
       # Base images in service Dockerfiles (golang, alpine, node, python,
       # nginx, oven/bun) come from Docker Hub, which times out in bursts from
