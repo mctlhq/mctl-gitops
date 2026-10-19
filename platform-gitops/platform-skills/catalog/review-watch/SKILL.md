@@ -28,7 +28,7 @@ in place AND current:
 
 ```bash
 mkdir -p ~/.claude/tmp && chmod 700 ~/.claude/tmp
-grep -qF 'BOTFILTER='"'"'select(.user.login == "claude[bot]")'"'"'' ~/.claude/tmp/review-watch.sh
+grep -qF "AGY_MARKER='<!-- agy-review'" ~/.claude/tmp/review-watch.sh
 ```
 
 If the file is missing or the grep fails, (re)write it via Bash heredoc (the
@@ -59,6 +59,11 @@ with every change to the script body. Two regressions taught this:
 - On 2026-09-23 Codex was dropped from `BOTFILTER`. Every older body defines
   `QUOTA_RE=` too, so the predicate is now the claude-only `BOTFILTER` line
   itself.
+- On 2026-10-19 `AGY_MARKER` became a prefix (`'<!-- agy-review'`, closing
+  quote right after it) so Livri's `sha=<head>` markers match. Every older body
+  defines the claude-only `BOTFILTER` too, so the predicate is now the new
+  `AGY_MARKER` assignment, which no older body contains: theirs all close the
+  comment (`-->`) inside the quotes.
 
 (The 2026-09-01 move out of `/tmp` did not need a new predicate: nothing has
 ever been written to the new path, so the first bootstrap there writes a fresh
@@ -99,7 +104,12 @@ BOTFILTER='select(.user.login == "claude[bot]")'
 # matched anything: every watcher reported agy_comments=0 while agy was
 # posting normally. On mctl-agent#105 that hid two real P2 findings, which
 # were only caught by checking `gh api .../issues/<N>/comments` by hand.
-AGY_MARKER='<!-- agy-review -->'
+#
+# A PREFIX, matched with `contains`: Livri-app's agy-review.yml writes
+# `<!-- agy-review sha=<head> -->` (and `... failed -->`) since Livri-app/.github#24,
+# so the closed form would stop seeing every agy review on Livri PRs. The prefix
+# matches both organisations' forms.
+AGY_MARKER='<!-- agy-review'
 
 # A quota/rate-limit notice is NOT a review. It has burned this watcher twice,
 # from opposite directions, so it is handled explicitly rather than left to the
