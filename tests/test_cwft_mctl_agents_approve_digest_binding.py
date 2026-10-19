@@ -142,13 +142,21 @@ def t8(root, tmp):
     mutated, n = re.subn(r'if \[ -z "\$WORKFLOW_EXPECTED_DIGEST" \]; then',
                          "if false; then", SOURCE, count=1)
     assert n == 1, "mutation did not apply"
-    mutated = mutated.replace('sha256:*[!0-9a-f]*|sha256:)', 'sha256:*[!0-9a-f]*)')
-    mutated = mutated.replace('*)\n              refuse approval_content_digest_malformed',
-                              '"")\n              ;;\n            *)\n              refuse approval_content_digest_malformed', 1)
-    run(SOURCE, root, tmp, "")
+    # The old behaviour tolerated an empty digest all the way to the flip.
+    for old, rep in [
+            ('sha256:*[!0-9a-f]*|sha256:)', '"")\n              ;;\n            sha256:*[!0-9a-f]*|sha256:)'),
+            ('if [ "$CONTENT_DIGEST" != "$WORKFLOW_EXPECTED_DIGEST" ]; then',
+             'if [ -n "$WORKFLOW_EXPECTED_DIGEST" ] && [ "$CONTENT_DIGEST" != "$WORKFLOW_EXPECTED_DIGEST" ]; then')]:
+        assert old in mutated, old
+        mutated = mutated.replace(old, rep, 1)
+    pdir = run(SOURCE, root, tmp, "")
     real = execute(SOURCE, root, tmp, "")
     assert real.returncode == 1 and code(tmp) == "approval_content_unbound"
-    assert "[ -n \"$WORKFLOW_EXPECTED_DIGEST\" ]" not in SOURCE
+    (tmp / "refusal_code").unlink(missing_ok=True)
+    # The mutant must flip unbound content, proving the guard is load-bearing.
+    mut = execute(mutated, root, tmp, "")
+    assert mut.returncode == 0 and mut.stdout == "flipped", (mut.stdout, mut.stderr)
+    assert yaml.safe_load((pdir / ".status.yaml").read_text())["status"] == "accepted"
 
 
 for n, f in [("T1 unbound proposed", t1), ("T2 unbound accepted", t2),
