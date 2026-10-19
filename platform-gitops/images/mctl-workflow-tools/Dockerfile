@@ -10,7 +10,16 @@
 # Built by .github/workflows/build-image.yaml with
 #   repo=mctlhq/mctl-gitops  dockerfile_path=platform-gitops/images/mctl-workflow-tools/Dockerfile
 #   image_name=ghcr.io/mctlhq/mctl-workflow-tools  team_name=platform
-#   image_tag=<alpine>-<n>, bumped on every change to this file
+#   image_tag=<semver> (no v prefix), bumped on every change to this file
+#
+# published is the build every template pins; built-from is the sha256 of
+# this file from FROM to the end, as that build saw it. Both are checked by
+# scripts/validate-tenant-workflow-pod-security.py: a template pinning
+# anything else, or a body that no longer hashes to built-from, fails CI. To
+# change the body: dispatch build-image with git_ref=<your branch> and a new
+# image_tag, then update published, built-from and every pin in the same PR.
+#   published: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
+#   built-from: sha256:1ff3df518563587b8a53b5e788707f601c496d653f311164edd6c245ae60af57
 #
 # Downloaded binaries are pinned by sha256: these steps carry the gitops
 # deploy key and Vault tokens. yq matches the version and digest the

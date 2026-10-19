@@ -22,6 +22,12 @@ tenant:
   # supplies it through extraExternalSecrets any more, so it must stay on.
   ghcrCredentials:
     enabled: true
+  # wft-smoke-test runs against labs from argo-workflows, and the weekly
+  # cronworkflow-labs-claude-remote-restart restarts claude-remote.
+  centralWorkflowSA:
+    smokeVerify: true
+    restartDeployments:
+      - labs-claude-remote-base-service
   quotas:
     # Bumped 2026-09-19 (3rd): projects-mcp deploy-service workflow's validate
     # pod (needs limits.cpu=1) went Pending — used was 11300m/12000m with 16

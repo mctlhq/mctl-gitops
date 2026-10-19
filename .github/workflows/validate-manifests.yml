@@ -630,6 +630,15 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_security_context.py
 
+      - name: Service Jobs and CronJobs pass restricted PodSecurity, gated ones too
+        # Tenant namespaces enforce restricted PSA, so a non-compliant Job is
+        # never admitted. Renders every service once as committed and once
+        # with each renderIf env flag forced on, so a gated CronJob (e.g.
+        # mctl-telegram's demo-reviewer-watch) is checked before the flag flips.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_service_extra_jobs_restricted.py
+
       - name: Unit-test base-service's containerPort on both workload kinds
         # service.containerPort moves only the container; the Service and
         # Ingress stay on service.port (gitops#1933 broke docs.mctl.ai by
@@ -677,6 +686,14 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_tenant_pod_security_level.py
+
+      - name: The central workflow SA holds only opted-in grants in tenant namespaces
+        # It used to hold argo-workflow-helm-deploy and smoke-verify in every
+        # tenant; only labs (smoke-test, claude-remote restart) and admins
+        # (rotate-github-token) are targeted from argo-workflows.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_central_sa_bindings.py
 
       - name: Unit-test the image-user check in deploy-service
         # runAsNonRoot with a named or root image USER only fails after the

@@ -2,129 +2,190 @@
 
 ## Current state
 
-Action approvals (`internal/workitems/action_approvals.go`):
+**Action approvals** (`internal/workitems/action_approvals.go`):
 
-- `ActionApprovalRequest` (`aar_`) is single use: `pending -> approved | denied`, then `approved -> consumed`. `expired` is never stored; `effectiveState` derives it lazily from `expires_at`.
-- `IntentHash(ActionIntent)` is a sha256 hash over `mctl-action-intent/v1`, with length-prefixed `execution_id, action_kind, target, args_digest, policy_rule_id, policy_version, artifact_hash, work_item_id`. This is the exact-action hash.
-- Canonical principals are dual-written: `requested_by_principal_id`, `via_principal_id`, `decided_by_principal_id`, `decided_via_principal_id`. Actor and subject come from #376 D2: `actor_kind`, `actor_name`, `subject_principal_id`, `subject_kind`, `agent_run_id`.
-- `CreateActionApproval` caps `expires_at` at `MaxApprovalTTL = 7 * 24h`. The requester chooses the TTL.
-- `DecideActionApproval` refuses self-decision and anything that is not pending or that has expired. It records the decider, `decided_at` and the reason. It records no authority basis.
-- `ConsumeActionApproval` is one CAS: `WHERE id=$1 AND state='approved' AND intent_hash=$2 AND expires_at > $3`. Typed refusals are `ErrApprovalConsumed`, `Denied`, `Expired`, `NotApproved` and `IntentMismatch`.
+- `ActionApprovalRequest` (`aar_`, schema `actionapproval/v1`) is single use. States go `pending -> approved | denied`, then `approved -> consumed`. `expired` is never stored; `effectiveState` derives it lazily from `expires_at`.
+- `IntentHash(ActionIntent)` is the exact-action hash: sha256 over `mctl-action-intent/v1` with length-prefixed `execution_id, action_kind, target, args_digest, policy_rule_id, policy_version, artifact_hash, work_item_id`. The doc comment says clients reproduce this encoding, so it must not change.
+- Canonical principals are dual-written (#373): `requested_by_principal_id`, `via_principal_id`, `decided_by_principal_id`, `decided_via_principal_id`. Actor and subject (#376 D2) are `actor_kind`, `actor_name`, `subject_principal_id`, `subject_kind`, `agent_run_id`.
+- Schema evolution is done with `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` inside `actionApprovalSchema`.
+- `CreateActionApproval` validates bounds and runs `scanSecrets` on every field. It caps `expires_at` at `MaxApprovalTTL = 7 * 24h`.
+- `DecideActionApproval` refuses self-decision and any request that is not pending or has expired. It records the decider, `decided_at` and the reason. It does not check context completeness and records no authority basis.
+- `ConsumeActionApproval` is one CAS: `WHERE id=$1 AND state='approved' AND intent_hash=$2 AND expires_at > $3`. Refusals are typed: `ErrApprovalConsumed`, `ErrApprovalDenied`, `ErrApprovalExpired`, `ErrApprovalNotApproved` and `ErrApprovalIntentMismatch`.
+- There is no risk or side-effect classification, no intent-source reference, and no policy decision or reasons on the row. A reviewer reading `GET /api/v1/action-approvals/{id}` sees the target, `args_digest` and the policy rule id/version, and nothing that says what kind of side effect is being approved or why the policy asked for approval. This is the #182 F6 gap.
 
-HTTP layer:
+**HTTP layer**:
 
-- `internal/api/handlers_action_approvals.go`: `isHumanAdmin` gates decisions. `isDirectService` gates create and consume. `actionApprovalRefusals` maps store errors to codes (`approval_expired`, `approval_intent_mismatch`, ...). `auditActionApproval` records ids and hashes only, never args or the reason text. The privacy stance this proposal keeps comes from here.
-- `internal/api/handlers_approval_grant.go`: an agent run presenting `X-MCTL-On-Behalf-Of: aar_...` on `mctl-agents-approve` is authorized by the grant instead of the admin gate. The path is `prepareApprovalGrant` (kind check, `approverName(a.DecidedBy)`, content digest required), then `bindApprovalGrant` (target must belong to the execution's DevLoop; it rebuilds the intent with the constants `devLoopApprovalPolicyRule="dev-loop.human-approval"` and `devLoopApprovalPolicyVersion="v1"`), then `spendApprovalGrant`. `spendApprovalGrant` is called last in `ExecuteOperation` (`internal/api/handlers_write.go` around line 452), right before `Executor.Submit`. **The decider's current authority is never checked.** The approval carries the authority of a decision that may be days old.
-- `internal/api/handlers_dev_loop.go` (around line 648) decides the newest pending `aar_` for a DevLoop approve signal.
-- `internal/api/handlers_commerce.go`: `policyDecisionOf` already exposes `{policy_rule_id, policy_version}` of an `aar_` as a `commerce.PolicyDecisionRef` on receipts. `checkApprovalOwner` notes "Approvals carry no tenant yet (mctl-api#489)".
+- `internal/api/handlers_action_approvals.go`:
+  - `actionApprovalBody` holds the create fields. `isDirectService` gates create and consume; `isHumanAdmin` gates decide.
+  - `actionApprovalRefusals` maps sentinels to `aarCode*` codes, and `writeActionApprovalError` writes them through `writeErrorCode(w, status, code, msg, details)` (`internal/api/handlers_read.go:932`). Today `details` is always nil.
+  - `auditActionApproval` records ids and hashes only, "never args or the reason text". It hard-codes `operations.RiskLow` on create and `RiskMedium` on decide. `auditActionApprovalRefusal` records the code and ids.
+  - `writeActionApproval` emits `{"schema_version", "approval"}`.
+- `internal/api/handlers_approval_grant.go` implements the agent-run grant path for `mctl-agents-approve` (`X-MCTL-On-Behalf-Of: aar_...`):
+  - `prepareApprovalGrant` runs the kind check and `approverName(a.DecidedBy)`.
+  - `bindApprovalGrant` rebuilds the intent with the constants `devLoopApprovalPolicyRule = "dev-loop.human-approval"` and `devLoopApprovalPolicyVersion = "v1"`.
+  - `spendApprovalGrant` calls `WorkItems.ConsumeActionApproval` and runs last, right before `Executor.Submit` in `ExecuteOperation` (`handlers_write.go`).
+  - None of these checks the decider's current authority.
+- `internal/api/handlers_dev_loop.go` (~line 634-660) decides the newest pending `mctl-agents-approve` `aar_` for a DevLoop approve signal, through `DecideActionApproval` with the caller's principal ids.
+- `internal/api/handlers_surface_identity.go:349` `checkHumanPrincipal(ctx, auth.PrincipalResolver, prn)` already type-asserts `auth.HumanPrincipalChecker`. It maps `auth.ErrPrincipalDisabled` and `auth.ErrIdentityRefused` to typed codes, and maps any other error (including the store being unable to check) to "store could not answer", which becomes a 503. This proposal reuses that helper's shape.
+- `internal/api/handlers_commerce.go` exposes `{policy_rule_id, policy_version}` of an `aar_` as `commerce.PolicyDecisionRef`. It notes "Approvals carry no tenant yet (mctl-api#489)".
 
-Identity and authz:
+**Identity, authz and policy**:
 
-- `internal/auth/principal_authz.go`: `PrincipalAuthz.Apply` sets `platformAdmin = Admins[prn] && actingPrincipal == ""` from `ADMIN_PRINCIPALS`. `api.Options.AdminPrincipals map[string]bool` (`internal/api/router.go:154`) is the same set. It is parsed at boot in `cmd/api/main.go` (`cfg.adminPrincipals()`), so removing an admin takes a redeploy, and after that the set is authoritative.
-- `internal/principals/resolver.go`: `Resolver.CheckHumanPrincipal(ctx, prn)` returns `auth.ErrPrincipalDisabled` for a disabled or merged principal, `auth.ErrIdentityRefused` for one that is missing or not human, and `ErrUnresolved` for a failed read. Answers are cached, and `Forget` drops them on merge or unlink. `principals.StatusDisabled` is set by link/merge/customer deletion (`internal/principals/link.go`).
-- `internal/operations/registry.go`: `RiskLevel` is `low|medium|high` per operation. This is the existing risk/side-effect classification.
-- `docs/tenant-roles.md`: principal mode is current. Action-approval decisions are human platform admin only, and tenant owners cannot approve.
+- `internal/auth/principal_authz.go`: in principal mode, a platform admin is a principal listed in `ADMIN_PRINCIPALS`. `api.Options.AdminPrincipals map[string]bool` and `TenantAuthzMode` (`internal/api/router.go:144-154`) are parsed at boot in `cmd/api/main.go`, from env `TENANT_AUTHZ_MODE` and `ADMIN_PRINCIPALS`.
+- `internal/principals/resolver.go:199` `CheckHumanPrincipal` returns:
+  - `auth.ErrPrincipalDisabled` for a disabled or merged principal or a customer deletion;
+  - `auth.ErrIdentityRefused` for a missing principal or one that is not human;
+  - `ErrUnresolved` for a failed read.
+  Answers are cached.
+- `internal/operations/registry.go`: `RiskLevel` (`low|medium|high`) per operation. `mctl-agents-approve` is `RiskMedium` (line ~941). `Registry.Get(name)` looks an operation up.
+- `docs/tenant-roles.md`: decisions on action approvals are made by human platform admins only.
 
-Deployed state checked:
+**Deployed state checked**:
 
-- `$MCTL_GITOPS_ROOT/services/`: holds only `admins/`, `karabu/` and `labs/` directories. `admins/` lists `mctl-agents-worker*` and `mctl-design`. **No `mctl-api` values.yaml was found in this checkout**, so the deployed `TENANT_AUTHZ_MODE`, `ADMIN_PRINCIPALS` and replica count were not observed. `grep -r TENANT_AUTHZ_MODE services tenants` returned nothing. This means the value could not be observed; it does not mean the variable is unset.
-- mctl MCP tools: not called. The design does not depend on a live tenant, hostname or service config. The claim that principal mode is in force is taken from `docs/tenant-roles.md` ("`TENANT_AUTHZ_MODE=principal` is the current mode"), not from deployed state.
+- `mcp__mctl__mctl_get_service_config(team=admins, service=mctl-api)` returned an error: "service not found: admins/mctl-api". mctl-api is not a catalogue service under `admins`, so its deployed config could not be observed through this tool.
+- `$MCTL_GITOPS_ROOT/services/`: has `admins/`, `karabu/` and `labs/`. No `mctl-api/values.yaml` exists there. `grep -rl mctl-api services` matches only consumers (`mctl-agents-worker*`, `mctl-telegram`, and others), not mctl-api's own deployment.
+- `helm/values.yaml` in the clone has chart defaults `TENANT_AUTHZ_MODE: ""` and `ADMIN_PRINCIPALS: ""`. These are defaults, not deployed values.
+- Conclusion: the deployed `TENANT_AUTHZ_MODE`, `ADMIN_PRINCIPALS` and replica count were **not observed**. The design does not depend on them. The admin-membership check runs only in principal mode and records `skipped_legacy_mode` otherwise. The claim that principal mode is current comes from `docs/tenant-roles.md`, not from deployed state. This gap is recorded under Open questions in requirements.md.
 
 ## Proposed solution
 
-Add a small `internal/governance` package that composes the existing primitives. It is a contract and a check, not a new authorization model.
+Add a small `internal/governance` package that composes the existing primitives. It is a contract plus a check, not a new authorization model. Authority is still `ADMIN_PRINCIPALS` plus `auth.HumanPrincipalChecker`, and policy identity is still `policy_rule_id`/`policy_version`.
 
-### 1. Decision context (references only)
+### 1. Policy registry with context defaults
 
-`governance.DecisionContext` (schema `decisioncontext/v1`) is a read-side projection of an `ActionApprovalRequest` plus new authority evidence:
+```go
+type Policy struct {
+    Version    string   // current version
+    Decision   string   // "require_approval"
+    Reasons    []string // reason codes, e.g. "human-gate:dev-loop"
+    SideEffect string   // none|read|write|destructive|external
+}
+var Policies = map[string]Policy{
+    "dev-loop.human-approval": {Version: "v1", Decision: "require_approval",
+        Reasons: []string{"dev-loop.proposal-acceptance"}, SideEffect: "write"},
+}
+func (p PolicySet) Check(ruleID, version string) (status string, err error) // ok | unregistered | ErrPolicyDrift
+```
+
+`handlers_approval_grant.go` reads `devLoopApprovalPolicyRule`/`Version` from this map, so there is one source of truth. Tests inject a `PolicySet` through `api.Options.Policies`, which defaults to `governance.Policies`. This is how the F9 v1 -> v2 drift is exercised.
+
+### 2. Mandatory decision context (F6)
+
+New columns on `action_approval_requests`, all `ADD COLUMN IF NOT EXISTS`, default `''`/NULL:
+
+| Column | Notes |
+|---|---|
+| `risk_level` | Server-derived from `operations.Registry` when `action_kind` is a registered operation; otherwise client-sent. |
+| `side_effect` | Client-sent, or the registry default for the policy. |
+| `intent_source` | `<kind>:<ref>`. Defaults to `work_item:<wi_>`, else `execution:<we_>`. |
+| `policy_decision` | Client-sent or registry default. |
+| `policy_reasons` | `TEXT[]`, at most 8 codes of at most 128 bytes, `[a-z0-9._:-]`. Client-sent or registry default. |
+| `decided_context_digest` | Written at decision time. |
+| `authority_basis` | Written at decision time. |
+| `authz_mode` | Written at decision time. |
+| `fresh_until` | `TIMESTAMPTZ`, written at decision time. |
+
+`actionApprovalBody` and `ActionApprovalInput` gain the five context fields. `validate()` applies `checkText` and `scanSecrets` to them as it does to every other field. A `risk_level` that contradicts the registry is refused with 400 `approval_context_invalid`, so a client cannot downgrade the risk of a known operation.
+
+`governance.DecisionContext` (schema `decisioncontext/v1`) is a read-side projection:
 
 ```
-intent:     execution_id, work_item_id, agent_run_id, action_kind
+mandatory:  target, args_digest, intent_hash, artifact_hash?,
+            risk_level, side_effect, intent_source, execution_id,
+            policy{rule_id, version, decision, reasons}
 actor:      actor_kind, actor_name, requested_by_principal_id, via_principal_id
 subject:    subject_principal_id, subject_kind
-tenant:     ""                                   (reserved for mctl-api#489)
-target, args_digest, artifact_hash, intent_hash
-policy:     rule_id, version, decision (approve|deny), revalidation (registered|unregistered)
-risk_level: operations.RiskLevel of action_kind if it names a registered operation, else ""
+tenant:     ""   (reserved, mctl-api#489)
 authority:  decided_by_principal_id, decided_via_principal_id,
-            basis ("platform_admin" | "unrecorded"), authz_mode
+            basis (platform_admin | unrecorded), authz_mode
 time:       created_at, decided_at, expires_at, fresh_until
+context_digest, decided_context_digest, context_complete, missing_fields[]
 ```
 
-The context reuses only stored ids, hashes and enums. The reason text and args are excluded. `writeActionApproval` adds it as `decision_context` to the existing JSON (additive). There is no new route and no MCP tool change.
+`ContextDigest(ctx)` is sha256 over `mctl-decision-context/v1\n` followed by `<field>:<len>:<value>\n` lines, in a fixed order: `intent_hash, target, args_digest, artifact_hash, risk_level, side_effect, intent_source, policy_rule_id, policy_version, policy_decision, policy_reasons (joined by ',')`. This is the same length-prefixed style as `IntentHash`, so any client can reproduce it. The intent hash itself is unchanged.
 
-### 2. Authority evidence at decision time
+`writeActionApproval` adds `decision_context` next to `approval`. The change is additive JSON, with no new route and no MCP change.
 
-New nullable/defaulted columns go on `action_approval_requests`, added with `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in `actionApprovalSchema`, matching the existing migration style:
+**Decide** (`handlers_action_approvals.DecideActionApproval` and `handlers_dev_loop.go` ~648): before the store call, build the context from the row plus live registry values.
 
-- `authority_basis TEXT NOT NULL DEFAULT ''` (`platform_admin`; empty means recorded before this change, read as `unrecorded`)
-- `authz_mode TEXT NOT NULL DEFAULT ''`
-- `risk_level TEXT NOT NULL DEFAULT ''`
-- `fresh_until TIMESTAMPTZ` (NULL for legacy rows)
+- An `approve` with `!context_complete` returns 422 `approval_context_incomplete` with `details.missing_fields`, and no grant is created.
+- An optional `context_digest` in `actionDecisionBody` that differs from the current digest returns 409 `approval_context_changed`. This proves the reviewer approved what they were shown.
+- On success, `ActionDecisionInput` carries `ContextDigest`, `AuthorityBasis = "platform_admin"`, `AuthzMode` and `FreshFor`. The store writes `decided_context_digest`, `authority_basis`, `authz_mode` and `fresh_until = LEAST(expires_at, now + FreshFor)` in the same `UPDATE ... WHERE state='pending'`.
+- A `deny` skips the completeness check.
 
-`ActionDecisionInput` gains `AuthorityBasis`, `AuthzMode` and `FreshFor time.Duration`. `DecideActionApproval` writes `fresh_until = LEAST(expires_at, now + FreshFor)` for approvals. Denials store it too, which does no harm. `risk_level` is set at create from `Registry.Get(action_kind)` when found. The callers that fill these are `handlers_action_approvals.DecideActionApproval` and `handlers_dev_loop` (line ~648), both of which already pass `isHumanAdmin`. Authority basis is always `platform_admin` because no other decider exists.
-
-### 3. Policy registry
-
-`governance.Policies` is a static map from `policy_rule_id` to the current version, seeded with `dev-loop.human-approval: v1`. `handlers_approval_grant.go` reads its constants from this map, so there is one source. `Policies.Check(ruleID, version)` returns `ok`, `ErrPolicyDrift`, or `unregistered`. `unregistered` fails closed only when `ACTION_APPROVAL_REQUIRE_REGISTERED_POLICY=true`. Bumping a policy version in code makes every outstanding approval under the old version refuse with `approval_policy_drift`.
-
-### 4. Execution-time revalidation
+### 3. Execution-time revalidation
 
 ```go
 type LiveAuthority struct {
-    Mode      string                      // h.opts.TenantAuthzMode
-    Admins    map[string]bool             // h.opts.AdminPrincipals
-    Principal auth.HumanPrincipalChecker  // h.opts.Principals (Resolver), may be nil
-    Policies  Policies
-    Now       time.Time
+    Mode     string                 // h.opts.TenantAuthzMode
+    Admins   map[string]bool        // h.opts.AdminPrincipals
+    Checker  auth.PrincipalResolver // h.opts.Principals; asserted to HumanPrincipalChecker
+    Policies PolicySet
+    Registry *operations.Registry
+    Now      time.Time              // h.now(), injectable
 }
 func Revalidate(ctx context.Context, a *workitems.ActionApprovalRequest, live LiveAuthority) (Result, error)
 ```
 
-The checks run in order, and the first failure wins:
+The checks run in this order, and the first failure wins:
 
-1. Freshness: if `fresh_until` is set and `!fresh_until.After(now)`, return `ErrApprovalStale`. (`expires_at` is still enforced by the store.)
-2. Decider principal: if `decided_by_principal_id` is empty, return `ErrAuthorityRevoked` (409 `approval_authority_revoked`). A decision recorded with no canonical principal cannot be revalidated, and a 503 retry would never succeed, so it fails closed and asks for reapproval. `CheckHumanPrincipal` then maps `ErrPrincipalDisabled` and `ErrIdentityRefused` to `ErrDeciderDisabled`, and `ErrUnresolved` or a nil checker to `ErrAuthorityUnavailable` (503).
-3. Admin membership: in principal mode, `!Admins[decided_by_principal_id]` returns `ErrAuthorityRevoked`. In other modes the result records `skipped_legacy_mode`.
-4. Policy: `Policies.Check`.
+1. **Context (F6c):** if `decided_context_digest != ""` and the recomputed digest differs, return `ErrContextChanged`.
+2. **Freshness (F4):** if `fresh_until != nil && !fresh_until.After(now)`, return `ErrApprovalStale`. `expires_at` stays with the store CAS (`ErrApprovalExpired`).
+3. **Decider (F3):** an empty `decided_by_principal_id` returns `ErrAuthorityRevoked`. Otherwise `checkHumanPrincipal` is called. `ErrPrincipalDisabled` or `ErrIdentityRefused` returns `ErrDeciderDisabled`. A missing checker or an unresolved read returns `ErrAuthorityUnavailable` (503, fail closed).
+4. **Admin membership (F3):** in principal mode, `!Admins[prn]` returns `ErrAuthorityRevoked`. In other modes the result records `skipped_legacy_mode`.
+5. **Policy (F9):** `Policies.Check` returns `ErrPolicyDrift` on a version mismatch. An unregistered rule is recorded, and fails only in strict mode.
 
-Call sites:
+**Call sites:**
 
-- `handlers_action_approvals.ConsumeActionApproval`: after `visibleActionApproval` and before `WorkItems.ConsumeActionApproval`.
-- `handlers_approval_grant.spendApprovalGrant`: before `WorkItems.ConsumeActionApproval`. This keeps the existing "spend last, after every check that could still refuse" ordering in `ExecuteOperation`.
+- `handlers_action_approvals.ConsumeActionApproval`: after `visibleActionApproval`, before `WorkItems.ConsumeActionApproval`.
+- `handlers_approval_grant.spendApprovalGrant`: before `WorkItems.ConsumeActionApproval`. This keeps the "spend last" ordering in `ExecuteOperation`, so a refusal never reaches `Executor.Submit`.
 
-Both map errors through new entries in `actionApprovalRefusals` (`approval_authority_revoked`, `approval_decider_disabled`, `approval_policy_drift`, `approval_stale` at 409, and `approval_authority_unavailable` at 503). `writeErrorCode` details carry `{"reapproval_required": true}`, except for the 503. Each refusal is audited through `auditActionApprovalRefusal` (code and ids only).
+**Store CAS:** the CAS gains `AND (fresh_until IS NULL OR fresh_until > $3)`, and its read-back maps a row that is approved but stale to `ErrApprovalStale`. Freshness is therefore enforced atomically. Authority and policy are checked milliseconds before the CAS, against facts that need a redeploy (`ADMIN_PRINCIPALS`, `Policies`) or a principal-store transaction to change. The residual TOCTOU is documented as bounded.
 
-The store CAS gains `AND (fresh_until IS NULL OR fresh_until > $3)`, and the refusal read-back maps a stale row to the new `ErrApprovalStale` sentinel. Freshness is therefore atomic, while authority and policy are checked immediately before the CAS. The window between the two is milliseconds against authority changes that need a redeploy (`ADMIN_PRINCIPALS`) or a merge/disable transaction. The residual TOCTOU is documented as bounded, not eliminated.
+### 4. Typed refusals
+
+New entries go in `actionApprovalRefusals`. `writeActionApprovalError` gains a per-entry `reapproval bool`, and when it is set, writes `details: {"reapproval_required": true}`:
+
+| Code | HTTP | reapproval_required | #182 |
+|---|---|---|---|
+| `approval_context_incomplete` (decide) | 422 | n/a (no grant made) | F6 |
+| `approval_context_invalid` (create) | 400 | n/a | F6 |
+| `approval_context_changed` | 409 | true | F6 |
+| `approval_stale` | 409 | true | F4 |
+| `approval_expired` (existing; detail added) | 409 | true | F4 |
+| `approval_authority_revoked` | 409 | true | F3 |
+| `approval_decider_disabled` | 409 | true | F3 |
+| `approval_authority_unavailable` | 503 | false (retry; approval not spent) | F3 |
+| `approval_policy_drift` | 409 | true | F9 |
+
+mctl-agents matches codes by substring. Callers should key on `details.reapproval_required` instead, and the contract document says so.
+
+Every refusal is audited through `auditActionApprovalRefusal` (code and ids only). The success audit gains `revalidation`, `policy_version`, `authority_basis`, `context_digest` and `fresh_until`. `auditActionApproval` uses the stored `risk_level` instead of the hard-coded `RiskLow`/`RiskMedium` when the row has one.
 
 ### 5. Contract document
 
-`docs/decision-context-contract.md` covers the field list, which facts are captured versus revalidated, the drift-to-outcome table, freshness semantics, the privacy rule, and the mapping to #182 F3/F4/F6/F9. It is linked from `docs/tenant-roles.md`.
-
-Drift-to-outcome table:
-
-| Fact | Captured at decision | Revalidated at execution | Drift outcome |
-|---|---|---|---|
-| intent (exact action) | intent_hash | yes, by the CAS (existing) | 409 approval_intent_mismatch |
-| expiry | expires_at | yes, by the CAS (existing) | 409 approval_expired |
-| decision freshness | fresh_until | yes, by the CAS (new) | 409 approval_stale, reapprove |
-| decider is admin | authority_basis, decided_by_principal_id | yes (principal mode) | 409 approval_authority_revoked, reapprove |
-| decider principal active/human | decided_by_principal_id | yes | 409 approval_decider_disabled, reapprove |
-| policy version | policy_rule_id/version | yes (registered rules) | 409 approval_policy_drift, reapprove |
-| live fact unreadable | n/a | n/a | 503 approval_authority_unavailable, retry |
-| risk level | risk_level | no (evidence only) | n/a |
-| tenant | reserved | no (until #489) | n/a |
+`docs/decision-context-contract.md` covers the mandatory field list, captured versus revalidated facts, the table above, freshness semantics (`expires_at` is the requester's hard bound; `fresh_until` is the decision-age bound; both are checked at consume), the privacy rule (references, digests, enums and reason codes only; never args or reason text), and the #182 mapping table exactly as in the issue. It is linked from `docs/tenant-roles.md`. The OpenAPI spec (`internal/openapi/openapi.yaml`) gains the new body fields, the `decision_context` object and the error codes.
 
 ## Alternatives
 
-1. **Revoke outstanding approvals eagerly when an admin is removed or a policy is bumped** (a sweeper that marks rows denied or revoked). Dropped because admin removal is a boot-time env change and principal disable happens in several transactions (`link.go`, customer deletion), so every one of those paths would need a hook, and a missed one is a silent pass. Lazy revalidation at the single spend point covers every cause by construction.
-2. **Embed authority and policy facts in the intent hash** (for example, hash the admin-set digest). Dropped because that changes `mctl-action-intent/v1`, which clients reproduce (the IntentHash doc), and an unrelated admin addition would invalidate every approval. Revalidation must ask whether this decider still holds authority, not whether the world is byte-identical.
-3. **Store a full decision snapshot (payload, reason, args) as JSON.** Dropped on privacy grounds: it contradicts the existing audit stance ("never args or the reason text") and the issue's reference/redaction requirement. The context is fully reconstructable from ids and digests that point at the work item, execution and evidence stores.
+1. **Revoke outstanding approvals eagerly** when an admin is removed or a policy is bumped, with a sweeper that marks rows revoked. Dropped. Admin removal is a boot-time env change, and principal disable happens on several paths (`internal/principals/link.go`, customer deletion). Each of those would need a hook, and a missed hook is a silent pass. Lazy revalidation at the single spend point covers every cause by construction.
+2. **Fold context and authority into `IntentHash`.** Dropped. It changes `mctl-action-intent/v1`, which clients reproduce, and an unrelated admin-set change would invalidate every approval. A separate `context_digest` binds the reviewer-visible context without breaking the action hash.
+3. **Store a full decision snapshot (payload, reason, args) as JSON.** Dropped on privacy grounds. It contradicts the existing audit stance and the issue's reference/redaction requirement. The context can be reconstructed from ids and digests that point at the work item, execution and evidence stores.
 
 ## Platform impact
 
-- **Migration**: four additive columns via `ADD COLUMN IF NOT EXISTS`, which follows the existing #373/#376 pattern in `actionApprovalSchema`. No backfill. Legacy rows read as `authority_basis: "unrecorded"`, `fresh_until: null`.
-- **Backward compatibility**: the JSON responses are additive (`decision_context`). New refusal codes appear only on consume. **Behaviour change**: an approved but unconsumed `aar_` whose decider has since been removed from `ADMIN_PRINCIPALS`, or whose principal is disabled, becomes unspendable on deploy. That is the intended fix. mctl-agents callers that already handle `approval_expired` by requesting a new approval must handle the new codes the same way (see the `reapproval_required` detail). A follow-up issue should be filed on mctl-agents.
-- **Freshness default**: 24h is shorter than the 7d TTL, so DevLoop approvals decided more than 24h before the implementer runs will need reapproval. Set `ACTION_APPROVAL_MAX_DECISION_AGE=168h` to keep today's behaviour if this proves disruptive.
-- **Resource impact**: one cached `CheckHumanPrincipal` lookup per consume. The resolver cache absorbs it. Consume volume is low (one per side effect).
-- **Risks and mitigations**: (a) A principal-store outage blocks consumes with 503. This is deliberate fail-closed behaviour, consistent with `ErrPrincipalAuthzUnavailable`, and the approval is not spent, so a retry works. (b) Legacy rows with an empty `decided_by_principal_id` become unspendable. They are at most 7 days old, and the release note says so. (c) A shared policy constant drifting from `bindApprovalGrant` is avoided by reading both from `governance.Policies`.
+- **Migration:** nine additive columns via `ADD COLUMN IF NOT EXISTS`, following the #373/#376 pattern. No backfill. Legacy rows read as `authority_basis: "unrecorded"`, `fresh_until: null` and `decided_context_digest: ""`, so the consume-time digest check is skipped for them.
+- **Backward compatibility:**
+  - Responses are additive. New refusal codes appear on decide and consume only.
+  - The DevLoop gate keeps working without an mctl-agents change. `risk_level` comes from the registry (`mctl-agents-approve` = medium), `side_effect`, `policy_decision` and `policy_reasons` come from `governance.Policies`, and `intent_source` defaults to `work_item:`/`execution:`.
+  - **Behaviour changes:**
+    - an approved but unconsumed `aar_` whose decider has left `ADMIN_PRINCIPALS`, or whose decider's principal is disabled, becomes unspendable on deploy (the intended fix);
+    - a pending request under an unregistered policy that lacks context cannot be approved;
+    - DevLoop approvals decided more than 24h before the implementer runs need reapproval. Set `ACTION_APPROVAL_MAX_DECISION_AGE=168h` to keep today's horizon.
+  - A follow-up issue on mctl-agents should switch re-grant logic to `details.reapproval_required`.
+- **Resource impact:** one cached `CheckHumanPrincipal` lookup and one sha256 per consume and decide. Volume is one per side effect, which is negligible.
+- **Risks and mitigations:**
+  - A principal-store outage blocks consumes with 503. This is deliberate fail-closed behaviour; the approval is not spent, and a retry succeeds.
+  - A registry risk change (for example, an operation raised to `high`) changes the context digest and forces reapproval of outstanding grants for that operation. This is intended, and documented.
+  - Policy constants drifting from `bindApprovalGrant` is prevented by reading both from `governance.Policies`.
+  - Import cycles are avoided because `governance` imports `workitems`, `auth` and `operations`, and none of those imports it.

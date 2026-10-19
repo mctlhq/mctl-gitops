@@ -80,7 +80,8 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list"]
   {{- /* Blanket write was dropped: this Role is also bound to the central
-      argo-workflows/argo-workflow-sa in every tenant namespace, so patch/update
+      argo-workflows/argo-workflow-sa (in every tenant namespace until
+      tenant.centralWorkflowSA made it opt-in), so patch/update
       on all ExternalSecrets let one workflow repoint another tenant's secret at
       an arbitrary Vault path. Smoke tests refresh via the ArgoCD app's
       refresh=hard annotation (wft-smoke-test), not by patching. */}}
@@ -117,8 +118,13 @@ roleRef:
   kind: Role
   name: argo-workflow-smoke-verify
   apiGroup: rbac.authorization.k8s.io
+{{- if $.Values.tenant.centralWorkflowSA.smokeVerify }}
 ---
-# Bind central workflow SA (argo-workflows ns) to smoke-verify Role in this namespace.
+# Bind central workflow SA (argo-workflows ns) to smoke-verify Role in this
+# namespace, for the platform workflows that inspect it from argo-workflows:
+# wft-smoke-test (deployments, pods/exec, ExternalSecrets of its team) and
+# cwft-rotate-github-token (externalSecretPatchTargets). Opt-in, see
+# tenant.centralWorkflowSA in values.yaml.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -134,6 +140,7 @@ roleRef:
   kind: Role
   name: argo-workflow-smoke-verify
   apiGroup: rbac.authorization.k8s.io
+{{- end }}
 ---
 # SSO RBAC: the team's SSO SA (in argo-workflows ns) may view workflows here,
 # never create or change them. Tenant workflows are submitted by the portal
@@ -317,14 +324,36 @@ roleRef:
   kind: Role
   name: argo-workflow-helm-deploy
   apiGroup: rbac.authorization.k8s.io
+{{- with $.Values.tenant.centralWorkflowSA.restartDeployments }}
 ---
-# Bind CENTRAL workflow SA (argo-workflows ns) to helm-deploy Role for preview workflows.
-# The tenant-local binding above targets the per-namespace SA; this one targets the SA
-# that actually runs workflow pods (which live in the argo-workflows namespace).
+# Lets the central workflow SA (argo-workflows ns) `kubectl rollout restart`
+# the listed Deployments here, for CronWorkflows that live in argo-workflows
+# (cronworkflow-labs-claude-remote-restart). It used to hold the whole
+# argo-workflow-helm-deploy Role in every tenant namespace (write on
+# Deployments, Secrets, Services, Pods), which nothing it runs needs: preview
+# and deploy workflows run as the tenant-local SA. Reads stay namespace-wide
+# because `rollout status` lists and watches; the patch is limited by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-central-restart
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      {{- toYaml . | nindent 6 }}
+    verbs: ["patch"]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: argo-workflow-helm-deploy-central
+  name: argo-workflow-central-restart
   namespace: {{ $ns }}
   labels:
     {{- include "tenant.labels" $ | nindent 4 }}
@@ -334,8 +363,9 @@ subjects:
     namespace: argo-workflows
 roleRef:
   kind: Role
-  name: argo-workflow-helm-deploy
+  name: argo-workflow-central-restart
   apiGroup: rbac.authorization.k8s.io
+{{- end }}
 ---
 # Artifact repository credentials — required by Argo Workflows argoexec init
 # container. Secret name kept as "minio-artifact-credentials" (legacy), but
