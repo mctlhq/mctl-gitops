@@ -78,6 +78,9 @@ tenant:
     # for pelican-proxy-staging and future expansion.
     pods: "30"
     persistentvolumeclaims: "2"
+    # Added 2026-10-20: a PVC count alone does not bound storage; every
+    # PVC on the default class is a billed Hetzner volume.
+    requests.storage: "20Gi"
     services: "25"
   limitRange:
     enabled: true

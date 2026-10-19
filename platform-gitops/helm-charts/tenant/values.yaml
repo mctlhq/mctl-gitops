@@ -134,13 +134,20 @@ tenant:
   # Disable only if this tenant must not run preview-deploy at all.
   preview:
     enabled: true
+    # 2026-10-20: requests.memory 2Gi -> 256Mi (the value every tenant
+    # already overrode to, c9b23208f) and limits cpu 4 -> 2, memory
+    # 4Gi -> 1Gi. The override left limits at 16x requests, an overcommit
+    # allowance no preview has used (all six *-preview namespaces were
+    # empty in the 2026-10-19 audit). A tenant that needs a bigger preview
+    # overrides these per tenant.
     quotas:
       requests.cpu: "1"
-      requests.memory: "2Gi"
-      limits.cpu: "4"
-      limits.memory: "4Gi"
+      requests.memory: "256Mi"
+      limits.cpu: "2"
+      limits.memory: "1Gi"
       pods: "8"
       persistentvolumeclaims: "1"
+      requests.storage: "10Gi"
       services: "8"
 
   # -- Pod Security Standards enforce level for the tenant's namespaces,
