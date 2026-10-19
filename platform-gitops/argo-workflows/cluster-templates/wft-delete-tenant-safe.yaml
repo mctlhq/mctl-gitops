@@ -1143,9 +1143,7 @@ spec:
           # the label, so the selector and the policy must stay in step: a
           # labelled object under any other name fails the whole delete. A
           # failed list or delete returns non-zero; "No resources
-          # found" is the API's empty listing, not an error. Kept byte-identical
-          # between delete-tenant and delete-tenant-safe by
-          # tests/test_wft_create_tenant_existing.py.
+          # found" is the API's empty listing, not an error.
           delete_tenant_argocd_rbac() {
             if ! kubectl delete rolebinding,role -n argocd -l "mctl.me/tenant=$1"; then
               echo "ERROR: could not delete the argocd Roles/RoleBindings labelled mctl.me/tenant=$1."

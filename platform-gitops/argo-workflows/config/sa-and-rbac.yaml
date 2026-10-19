@@ -213,7 +213,7 @@ roleRef:
 # in namespace argocd, traced through cluster-templates/:
 #   create-tenant       list Applications (collision check), get tenant-<T>,
 #                       refresh annotation on ApplicationSet tenants
-#   delete-tenant(-safe) list Applications team=<T>, delete them and
+#   delete-tenant-safe  list Applications team=<T>, delete them and
 #                       tenant-<T>, refresh annotation on ApplicationSets apps
 #                       and tenants, list and delete the Roles/RoleBindings
 #                       labelled mctl.me/tenant=<T> (argo-workflow-argocd-<ns>)

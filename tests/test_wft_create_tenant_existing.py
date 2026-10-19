@@ -421,13 +421,10 @@ with tempfile.TemporaryDirectory() as d:
 
 RBAC_RE = re.compile(r"^# BEGIN tenant-argocd-rbac-cleanup\n.*?^# END tenant-argocd-rbac-cleanup\n",
                      re.S | re.M)
-rbac_blocks = {}
-for fname in ("wft-delete-tenant-safe.yaml",):
-    src = ALL_TEMPLATES[fname]["delete-k8s-resources"]["script"]["source"]
-    found = RBAC_RE.findall(src)
-    check(f"{fname} carries exactly one tenant-argocd-rbac-cleanup block",
-          len(found) == 1, f"found {len(found)}")
-    rbac_blocks[fname] = found[0] if found else None
+found = RBAC_RE.findall(
+    ALL_TEMPLATES["wft-delete-tenant-safe.yaml"]["delete-k8s-resources"]["script"]["source"])
+check("wft-delete-tenant-safe.yaml carries exactly one tenant-argocd-rbac-cleanup block",
+      len(found) == 1, f"found {len(found)}")
 
 # delete-tenant-safe.
 for fname in ("wft-delete-tenant-safe.yaml",):
