@@ -145,10 +145,14 @@ spec:
     #
     # The chart derives GOMEMLIMIT and GOMAXPROCS from these limits, so the Go
     # runtime follows the new numbers without further configuration.
+    #
+    # 2026-10-20: requests.memory 128Mi -> 192Mi. The 7-day peak working set
+    # was 202Mi on 2026-10-19, so 128Mi no longer covered the steady state the
+    # comment above sized it for. The 512Mi limit still leaves 2.5x headroom.
     resources:
       requests:
         cpu: "100m"
-        memory: "128Mi"
+        memory: "192Mi"
       limits:
         cpu: "1000m"
         memory: "512Mi"
