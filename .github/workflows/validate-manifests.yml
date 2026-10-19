@@ -563,6 +563,13 @@ jobs:
         # so the block's own text is replayed here.
         run: python3 tests/test_cwft_shepherd_commit_pathspecs.py
 
+      - name: Unit-test the mctl-agents-approve reviewed-digest binding
+        # The approval flip must refuse an empty or mismatched digest and
+        # never self-bind to bytes first seen at flip time (gitops#1979).
+        run: |
+          python3 tests/test_cwft_mctl_agents_approve_digest_binding.py
+          python3 scripts/proposal-content-digest.py --selftest
+
       - name: Unit-test the portal OAuth registration drift detector
         # The MCP server's `auth_credentials` is write-only: the API accepts it
         # and never returns it, so OpenTofu keeps what was last applied in

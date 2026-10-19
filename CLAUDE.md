@@ -99,6 +99,9 @@ signing key (`AGENTS_APP_PRIVATE_KEY`), see
 For which mctl-agents surfaces run under the ADR 014 policy checkpoint and
 which are known gaps, see `docs/runbooks/policy-checkpoint-coverage.md`.
 
+For approving a proposal by hand now that `mctl-agents-approve` requires the
+reviewed content digest, see `docs/runbooks/proposal-approval-content-digest.md`.
+
 ## Terraform (k3s-preview cluster)
 
 See `infrastructure/k3s-preview/README.md` for full runbook.
