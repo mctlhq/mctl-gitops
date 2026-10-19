@@ -65,6 +65,11 @@ kind: DaemonSet
 metadata:
   name: kured
   namespace: kube-system
+  annotations:
+    # Hash of the module kustomization inputs (kube.tf, base_kustomization_inputs).
+    # It changes whenever the module re-applies its own kured DaemonSet, which
+    # has no resources, so this manifest re-applies in the same run and wins.
+    mctl.ai/base-kustomization-inputs: "${base_kustomization_inputs}"
 spec:
   selector:
     matchLabels:
