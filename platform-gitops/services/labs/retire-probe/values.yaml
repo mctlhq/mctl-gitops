@@ -43,3 +43,9 @@ externalSecret:
 envFrom:
   - secretRef:
       name: retire-probe-secrets
+# Built from platform-gitops/images/smoke-app/Dockerfile (USER 65534:65534).
+# Pinned so the offline image-user check and kubelet can verify the uid.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
