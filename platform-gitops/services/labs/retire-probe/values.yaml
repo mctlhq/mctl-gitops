@@ -1,0 +1,45 @@
+# Worker: retire-probe
+# Team: labs
+# Chart: base-service (ingress disabled)
+
+image:
+  repository: ghcr.io/mctlhq/retire-probe
+  tag: "main"
+imagePullSecrets:
+  - name: ghcr-credentials
+ingress:
+  enabled: false
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 15
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 60
+    periodSeconds: 15
+env: {}
+externalSecret:
+  targetSecret: retire-probe-secrets
+  data:
+    - secretKey: RETIRE_PROBE_TOKEN
+      remoteKey: teams/labs/retire-probe
+      property: RETIRE_PROBE_TOKEN
+envFrom:
+  - secretRef:
+      name: retire-probe-secrets
