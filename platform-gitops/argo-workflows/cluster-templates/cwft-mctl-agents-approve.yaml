@@ -235,6 +235,10 @@ spec:
           # into YAML below, so a malformed value is a broken caller: refuse
           # rather than sanitize it into some other id.
           if [ -n "$WORKFLOW_APPROVAL_REF" ]; then
+            if [ "${#WORKFLOW_APPROVAL_REF}" -gt 128 ]; then
+              echo "❌ approval_ref is longer than 128 characters" >&2
+              exit 1
+            fi
             case "$WORKFLOW_APPROVAL_REF" in
               aar_*[!A-Za-z0-9_-]*|aar_)
                 echo "❌ approval_ref is not an aar_ id" >&2
@@ -244,10 +248,6 @@ spec:
                 echo "❌ approval_ref is not an aar_ id" >&2
                 exit 1 ;;
             esac
-            if [ "${#WORKFLOW_APPROVAL_REF}" -gt 128 ]; then
-              echo "❌ approval_ref is longer than 128 characters" >&2
-              exit 1
-            fi
           fi
           # service/slug become path components below — refuse separators
           # and dot-dot so a crafted value cannot escape agents-state/.
