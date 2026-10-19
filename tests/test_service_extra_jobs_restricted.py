@@ -18,6 +18,8 @@ CronJob or Pod must:
 - have a RuntimeDefault or Localhost seccomp profile (pod or container),
 - not be privileged,
 
+a pod that pulls a ghcr.io/mctlhq/ image must set imagePullSecrets (those
+packages are private, so without it every run sits in ImagePullBackOff),
 and no script may install packages at runtime (that needs root and an
 unpinned network fetch).
 
@@ -33,6 +35,7 @@ import yaml
 CHART = pathlib.Path("platform-gitops/helm-charts/base-service")
 SERVICES = pathlib.Path("platform-gitops/services")
 GATE_FLAG = re.compile(r"\.Values\.env\.([A-Za-z0-9_]+)")
+PRIVATE_REGISTRY = "ghcr.io/mctlhq/"
 PACKAGE_INSTALL = re.compile(r"\b(apk\s+add|apt-get\s+install|apt\s+install|yum\s+install|dnf\s+install|pip3?\s+install)\b")
 
 failures = []
@@ -84,6 +87,9 @@ def check_pod(where, spec):
         script = "\n".join(str(x) for x in (c.get("command") or []) + (c.get("args") or []))
         hit = PACKAGE_INSTALL.search(script)
         check(not hit, f"{name}: installs packages at runtime ({hit.group(0) if hit else ''})")
+        if str(c.get("image", "")).startswith(PRIVATE_REGISTRY):
+            check(spec.get("imagePullSecrets"),
+                  f"{name}: pulls {c['image']} without imagePullSecrets")
 
 
 def gate_flags(values_file):

@@ -512,6 +512,9 @@ extraObjects:
                 app.kubernetes.io/name: mctl-telegram
                 mctl.me/component: demo-reviewer-watch
             spec:
+              # mctl-workflow-tools is a private GHCR image; postgres is public.
+              imagePullSecrets:
+                - name: ghcr-credentials
               restartPolicy: OnFailure
               # Restricted-compliant, like demo-session-refresh: the old single
               # container ran `apk add curl` as root, which the labs restricted
@@ -519,7 +522,6 @@ extraObjects:
               # curl and mctl-workflow-tools has curl but no psql, so the
               # read-only queries run first as uid 70 and hand the alert text to
               # the sender through an emptyDir; an empty file means stay quiet.
-              # No imagePullSecrets: both images are public.
               securityContext:
                 runAsNonRoot: true
                 seccompProfile:
