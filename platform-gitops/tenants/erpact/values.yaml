@@ -29,6 +29,11 @@ tenant:
   # stays at the tenant default of 5.
   # Keep an initial preview budget without reserving the full production profile.
   preview:
+    # erpact is in bootstrap externalManifestNamespaces: its pods may use
+    # only SA default, so the reaper (argo-workflow-sa) would be denied
+    # every hour. Platform workflows, preview-deploy included, cannot run
+    # here, so there are no previews for it to reap.
+    reaper: false
     quotas:
       requests.memory: "256Mi"
   quotas:
