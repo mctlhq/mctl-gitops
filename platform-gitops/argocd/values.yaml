@@ -214,12 +214,13 @@ argo-cd:
             - ops.mctl.ai
           secretName: argocd-tls
     resources:
+      # 2026-10-20: 7d peak working set 190Mi sat at the 192Mi limit.
       requests:
         cpu: 50m
-        memory: 64Mi
+        memory: 128Mi
       limits:
         cpu: 250m
-        memory: 192Mi
+        memory: 256Mi
     metrics:
       enabled: true
       serviceMonitor:
@@ -245,7 +246,10 @@ argo-cd:
         # the 100m request badly underrepresented real usage for scheduler
         # bin-packing. 500m covers steady-state with headroom.
         cpu: 500m
-        memory: 768Mi
+        # Raised 768Mi->1280Mi on 2026-10-20: 7d peak working set 1580Mi,
+        # live ~1.2Gi. A request at half of real usage hides ~800Mi from
+        # the scheduler. Limit and GOMEMLIMIT are unchanged.
+        memory: 1280Mi
     env:
       - name: GOMEMLIMIT
         value: "1800MiB"
@@ -314,27 +318,32 @@ argo-cd:
 
   applicationSet:
     resources:
+      # 2026-10-20: 7d peak working set 190Mi sat at the 192Mi limit.
       requests:
         cpu: 50m
-        memory: 64Mi
+        memory: 128Mi
       limits:
         cpu: 300m
-        memory: 192Mi
+        memory: 256Mi
 
   notifications:
     resources:
+      # 2026-10-20: 7d peak working set 82Mi; request raised to match.
       requests:
         cpu: 25m
-        memory: 32Mi
+        memory: 64Mi
       limits:
         cpu: 100m
         memory: 128Mi
 
   redis:
     resources:
+      # Raised 2026-10-20: OOMKilled 2026-10-18 at the 128Mi limit, 7d peak
+      # working set 127Mi. Redis is ArgoCD's cache; an OOM drops it and
+      # forces a full re-render of every Application.
       requests:
         cpu: 25m
-        memory: 32Mi
+        memory: 64Mi
       limits:
         cpu: 100m
-        memory: 128Mi
+        memory: 256Mi

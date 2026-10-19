@@ -24,10 +24,12 @@ spec:
             cpu: 50m
             # Observed RSS ~269Mi; 300Mi gives 12% buffer. Raised 128Mi→300Mi
             # on 2026-05-10 (RAM real>requests gap on Global RAM dashboard).
-            memory: 300Mi
+            memory: 320Mi
           limits:
             cpu: 250m
-            memory: 384Mi
+            # Raised 384Mi->512Mi on 2026-10-20: 7d peak working set 361Mi
+            # (94% of the old limit).
+            memory: 512Mi
 
   destination:
     server: {{ .Values.spec.destination.server }}

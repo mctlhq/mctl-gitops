@@ -134,6 +134,11 @@ tenant:
   # Disable only if this tenant must not run preview-deploy at all.
   preview:
     enabled: true
+    # -- Render the hourly CronWorkflow preview-reaper (ttl_hours
+    # enforcement). Off only where no platform workflow can run in the
+    # tenant namespace (bootstrap externalManifestNamespaces: pods there may
+    # use only SA default, so the reaper's argo-workflow-sa is denied).
+    reaper: true
     # 2026-10-20: requests.memory 2Gi -> 256Mi (the value every tenant
     # already overrode to, c9b23208f) and limits cpu 4 -> 2, memory
     # 4Gi -> 1Gi. The override left limits at 16x requests, an overcommit
