@@ -21,8 +21,13 @@ spec:
   # Mirrored by SharedPgInstanceMissing in observability/vm-rules/shared-pg-alerts.yaml.
   instances: 2
 
-  # CNPG operator defaults (explicitly set to prevent ArgoCD OutOfSync)
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.2
+  # Pinned so ArgoCD does not report OutOfSync against the operator default.
+  # The bare 17.x tag is the legacy "system" image (Debian bullseye, with
+  # barman-cloud, which barmanObjectStore below needs); its digest equals
+  # 17.11-system-bullseye. Staying on bullseye keeps glibc, and with it
+  # index collation, unchanged across minor bumps. The operator rolls the
+  # standby first, then switches over (primaryUpdateMethod below).
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11@sha256:70664ebcfa1100361b5bdc28bbf06fdbe08db2dc4ad7bd14de33c5e05fe8ea8e
 
   # Backups go OFF-cluster to R2: the previous in-cluster MinIO target died
   # together with the very cluster/PVCs it was protecting against. Same R2
