@@ -32,6 +32,11 @@ tenant:
   preview:
     quotas:
       requests.memory: "256Mi"
+      # Kept at the pre-2026-10-20 chart default: claude-remote declares
+      # ~2.2Gi of container limits (main 2048Mi + sidecars), so a preview
+      # of it needs more than the 1Gi chart default.
+      limits.cpu: "4"
+      limits.memory: "4Gi"
   quotas:
     # Bumped 2026-09-19 (3rd): projects-mcp deploy-service workflow's validate
     # pod (needs limits.cpu=1) went Pending — used was 11300m/12000m with 16
