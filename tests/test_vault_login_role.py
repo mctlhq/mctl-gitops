@@ -120,8 +120,11 @@ if m:
     check("create-tenant role: no wildcard namespace", "*" not in args, args)
 for f in ("wft-delete-tenant.yaml", "wft-delete-tenant-safe.yaml"):
     src = (T / f).read_text()
+    # delete-vault-policy deletes and reads back each role; its behaviour is
+    # exercised in tests/test_wft_delete_tenant_vault.py.
     check(f"{f} deletes the tenant role",
-          'vault delete "auth/kubernetes/role/argo-workflow-tenant-${TENANT}"' in src)
+          'f"argo-workflow-tenant-{tenant}"' in src
+          and 'delete(f"auth/kubernetes/role/{role}", "role")' in src)
 
 if failures:
     print("\nFAILURES:\n" + "\n".join(failures), file=sys.stderr)

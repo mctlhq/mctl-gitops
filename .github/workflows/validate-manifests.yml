@@ -505,6 +505,12 @@ jobs:
         # it does, and a failed LIST or DELETE fails the step.
         run: python3 tests/test_tpl_vault_delete_service_tree.py
 
+      - name: Unit-test delete-tenant's Vault cleanup against a fake Vault
+        # Roles, policies and the whole teams/<t> tree go and read back as
+        # absent; a denied or unreachable Vault fails the step instead of
+        # being reported as "not found, skipping".
+        run: python3 tests/test_wft_delete_tenant_vault.py
+
       - name: Tenant workflows log in to Vault with their own tenant role
         # A template reachable from a tenant namespace picks its Vault role
         # from the pod's namespace and never asks for the platform role
