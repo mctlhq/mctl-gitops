@@ -99,7 +99,12 @@ BOTFILTER='select(.user.login == "claude[bot]")'
 # matched anything: every watcher reported agy_comments=0 while agy was
 # posting normally. On mctl-agent#105 that hid two real P2 findings, which
 # were only caught by checking `gh api .../issues/<N>/comments` by hand.
-AGY_MARKER='<!-- agy-review -->'
+#
+# A PREFIX, matched with `contains`: Livri-app's agy-review.yml writes
+# `<!-- agy-review sha=<head> -->` (and `... failed -->`) since Livri-app/.github#24,
+# so the closed form would stop seeing every agy review on Livri PRs. The prefix
+# matches both organisations' forms.
+AGY_MARKER='<!-- agy-review'
 
 # A quota/rate-limit notice is NOT a review. It has burned this watcher twice,
 # from opposite directions, so it is handled explicitly rather than left to the
