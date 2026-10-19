@@ -696,7 +696,7 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: hashicorp/vault:1.15
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         env:
           - name: PARAM_TENANT_NAME
@@ -708,73 +708,121 @@ spec:
           TENANT="$PARAM_TENANT_NAME"
 
           echo "Authenticating to Vault via Kubernetes auth..."
-          KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
-            role=argo-workflow \
-            jwt="$KUBE_TOKEN")
+          SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          VAULT_TOKEN=$(curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
+            grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
           export VAULT_TOKEN
 
-          # Vault answers 204 whether or not the role exists, so any other
-          # outcome (denied, unreachable) fails the step under set -e.
-          vault delete "auth/kubernetes/role/argo-workflow-tenant-${TENANT}"
-          echo "Vault role argo-workflow-tenant-${TENANT} deleted."
+          # Fail closed. Each delete must answer success or the documented
+          # absence (204/404), and each object must read back as 404
+          # afterwards, so a denied or unreachable Vault fails the step
+          # instead of printing "not found, skipping" and leaving the
+          # tenant's roles, policies or secrets behind. KV v2 deletes
+          # metadata per path, so teams/<t>/ is walked with LIST and every
+          # secret below it is deleted (database, preview, preview/database).
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
 
-          if vault policy read "tenant-${TENANT}" > /dev/null 2>&1; then
-            vault policy delete "tenant-${TENANT}"
-            echo "Vault policy tenant-${TENANT} deleted."
-          else
-            echo "Vault policy tenant-${TENANT} not found (already deleted). Skipping."
-          fi
+          # The tree walk is recursive, so an empty or odd name would widen it
+          # to teams/ or beyond. Same pattern as validate-tenant-exists and
+          # wft-create-tenant, so every tenant that could be created can be
+          # deleted; fullmatch, because `$` also matches before a newline.
+          NAME = re.compile(r"[a-z0-9][a-z0-9-]{1,62}")
+          tenant = os.environ["PARAM_TENANT_NAME"]
+          if not NAME.fullmatch(tenant):
+              sys.exit(f"refusing to delete: tenant_name {tenant!r} is not a tenant name")
+          addr = os.environ["VAULT_ADDR"].rstrip("/")
+          token = os.environ.get("VAULT_TOKEN", "")
+          if not token:
+              sys.exit("Vault login returned no token")
 
-          # ESO role + policy created by wft-create-tenant. Left behind, the
-          # role would still be assumable by anything that later lands a
-          # ServiceAccount named tenant-eso in a namespace reusing this name.
-          if vault read "auth/kubernetes/role/eso-tenant-${TENANT}" > /dev/null 2>&1; then
-            vault delete "auth/kubernetes/role/eso-tenant-${TENANT}"
-            echo "Vault ESO role eso-tenant-${TENANT} deleted."
-          else
-            echo "Vault ESO role eso-tenant-${TENANT} not found. Skipping."
-          fi
 
-          if vault policy read "eso-tenant-${TENANT}" > /dev/null 2>&1; then
-            vault policy delete "eso-tenant-${TENANT}"
-            echo "Vault policy eso-tenant-${TENANT} deleted."
-          else
-            echo "Vault policy eso-tenant-${TENANT} not found. Skipping."
-          fi
+          def call(method, path, list_=False):
+              url = f"{addr}/v1/{urllib.parse.quote(path)}"
+              if list_:
+                  url += "?list=true"
+              req = urllib.request.Request(url, method=method,
+                                           headers={"X-Vault-Token": token})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return resp.status, resp.read()
+              except urllib.error.HTTPError as exc:
+                  return exc.code, exc.read()
 
-          if vault read "auth/kubernetes/role/eso-tenant-${TENANT}-preview" > /dev/null 2>&1; then
-            vault delete "auth/kubernetes/role/eso-tenant-${TENANT}-preview"
-            echo "Vault ESO role eso-tenant-${TENANT}-preview deleted."
-          else
-            echo "Vault ESO role eso-tenant-${TENANT}-preview not found. Skipping."
-          fi
 
-          if vault policy read "eso-tenant-${TENANT}-preview" > /dev/null 2>&1; then
-            vault policy delete "eso-tenant-${TENANT}-preview"
-            echo "Vault policy eso-tenant-${TENANT}-preview deleted."
-          else
-            echo "Vault policy eso-tenant-${TENANT}-preview not found. Skipping."
-          fi
+          failed = []
 
-          echo "Cleaning up Vault secrets under teams/${TENANT}/..."
-          SERVICES=$(vault kv list -format=json -mount=secret "teams/${TENANT}/" 2>/dev/null || echo "[]")
-          if [ "$SERVICES" != "[]" ]; then
-            for SVC in $(echo "$SERVICES" | sed 's/[][]//g' | tr ',' '\n' | tr -d '" '); do
-              SUB_KEYS=$(vault kv list -format=json -mount=secret "teams/${TENANT}/${SVC}" 2>/dev/null || echo "[]")
-              if [ "$SUB_KEYS" != "[]" ]; then
-                for KEY in $(echo "$SUB_KEYS" | sed 's/[][]//g' | tr ',' '\n' | tr -d '" '); do
-                  vault kv metadata delete -mount=secret "teams/${TENANT}/${SVC}${KEY}" 2>/dev/null && \
-                    echo "  Deleted secret teams/${TENANT}/${SVC}${KEY}" || true
-                done
-              fi
-              vault kv metadata delete -mount=secret "teams/${TENANT}/${SVC}" 2>/dev/null && \
-                echo "  Deleted secret teams/${TENANT}/${SVC}" || true
-            done
-            echo "Vault secrets for tenant ${TENANT} cleaned up."
-          else
-            echo "No Vault secrets found for tenant ${TENANT}."
-          fi
+
+          def delete(path, what):
+              status, _ = call("DELETE", path)
+              if status not in (204, 404):
+                  print(f"  ❌ {what} {path}: DELETE returned HTTP {status}")
+                  failed.append(path)
+                  return
+              status, _ = call("GET", path)
+              if status != 404:
+                  print(f"  ❌ {what} {path}: answers HTTP {status} after the delete, want 404")
+                  failed.append(path)
+                  return
+              print(f"  ✅ {what} {path} absent")
+
+
+          # The tenant workflow role and the ESO roles/policies wft-create-tenant
+          # made. Left behind, a role stays assumable by any ServiceAccount of
+          # that name in a namespace that later reuses the tenant's name.
+          for role in (f"argo-workflow-tenant-{tenant}", f"eso-tenant-{tenant}",
+                       f"eso-tenant-{tenant}-preview"):
+              delete(f"auth/kubernetes/role/{role}", "role")
+          for policy in (f"tenant-{tenant}", f"eso-tenant-{tenant}",
+                         f"eso-tenant-{tenant}-preview"):
+              delete(f"sys/policies/acl/{policy}", "policy")
+
+
+          def children(path):
+              status, body = call("GET", f"secret/metadata/{path}", list_=True)
+              if status == 404:
+                  return []
+              if status != 200:
+                  sys.exit(f"LIST secret/metadata/{path} returned HTTP {status}; "
+                           "cannot tell what is stored there, refusing to report a clean delete")
+              try:
+                  return json.loads(body)["data"]["keys"]
+              except (ValueError, KeyError, TypeError):
+                  sys.exit(f"LIST secret/metadata/{path} returned a malformed body")
+
+
+          def walk(path):
+              found = []
+              for key in children(path):
+                  if key.endswith("/"):
+                      found += walk(f"{path}/{key[:-1]}")
+                  else:
+                      found.append(f"{path}/{key}")
+              return found
+
+
+          root = f"teams/{tenant}"
+          # Deepest first, the tenant's own path last.
+          paths = sorted(walk(root), key=lambda p: -p.count("/")) + [root]
+          for path in paths:
+              delete(f"secret/metadata/{path}", "secret")
+          if failed:
+              sys.exit(f"{len(failed)} Vault object(s) were not deleted: {failed}")
+          left = walk(root)
+          if left:
+              sys.exit(f"Vault still lists {left} under {root} after the delete")
+          print(f"  {len(paths)} secret path(s) deleted, nothing left under secret/metadata/{root}")
+          PY
+          echo "Vault cleanup for tenant ${TENANT} done."
 
     - name: delete-tenant-from-git
       inputs:
