@@ -22,7 +22,7 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Streaming replication between instances and pooler -> primary.
+    # Streaming replication between instances.
     - from:
         - podSelector: {}
     # CNPG operator: reconciliation, failover, backup orchestration.
