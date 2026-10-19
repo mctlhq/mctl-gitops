@@ -10,15 +10,17 @@ spec:
   source:
     repoURL: https://cloudnative-pg.github.io/charts
     chart: cloudnative-pg
-    # Upgraded one operator minor at a time (#2014): 1.26.1 -> 1.27.1 here.
-    # From 1.26 the admission webhook warns on barmanObjectStore in
-    # shared-pg (deprecated, not rejected); that path has to move to the
-    # Barman Cloud Plugin before the minor that removes it.
+    # Upgraded one operator minor at a time (#2014): 1.27.1 -> 1.28.1 here.
+    # 1.28.1, not 1.28.0: 1.28.0 could leave PgBouncer on wrong TLS
+    # certificates after the upgrade (fixed in 1.28.1, cnpg#9397).
+    # barmanObjectStore in shared-pg is deprecated since 1.26 and removed in
+    # 1.29.0 (the webhook says so), so 1.28 is the last minor before the
+    # Barman Cloud Plugin migration. Do not go past it until that is done.
     # From 1.27 the liveness probe shuts down a primary that can reach
     # neither the API server nor any other instance. shared-pg's instances
     # reach each other through allow-shared-pg-ingress (same-namespace pods,
     # all ports), so an API server outage alone does not trip it.
-    targetRevision: 0.26.1
+    targetRevision: 0.27.1
     helm:
       values: |
         crds:
