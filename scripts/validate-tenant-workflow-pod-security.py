@@ -30,9 +30,12 @@ Checked for every step in ENTRY_FILES and REFERENCED_FILES:
 
 Also: every wft-*.yaml is classified as tenant (ENTRY_FILES) or platform
 (PLATFORM_FILES), so a new tenant workflow cannot slip past this gate
-unlisted; and the tools Dockerfile still installs what the steps call
+unlisted; the tools Dockerfile still installs what the steps call
 (the steps no longer install anything, so a dropped package would only
-surface as "not found" at runtime).
+surface as "not found" at runtime); and every mctl-workflow-tools pin under
+platform-gitops/ is the Dockerfile's recorded `published:` build, whose
+`built-from:` hash still matches the Dockerfile body, so the package check
+describes the image that actually runs.
 
 Run with --selftest to prove the detector still detects.
 """
@@ -41,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -91,11 +95,16 @@ PLATFORM_FILES = (
 
 TOOLS_IMAGE = "ghcr.io/mctlhq/mctl-workflow-tools:"
 TOOLS_DOCKERFILE = ROOT / "platform-gitops/images/mctl-workflow-tools/Dockerfile"
+PINS_DIR = ROOT / "platform-gitops"
+PIN_RE = re.compile(r"ghcr\.io/mctlhq/mctl-workflow-tools:[^\s\"']+")
 # Alpine packages the steps call now that they install nothing themselves:
 # python3 + py3-yaml for rewrite_preview_values.py and tpl-vault-write's
 # heredoc, openssh-client + git for the gitops pushes, curl/openssl/jq
-# throughout. yq/helm/kubectl are downloaded and sha256-checked separately.
-TOOLS_PACKAGES = ("bash", "curl", "git", "jq", "openssh-client", "openssl", "python3", "py3-yaml")
+# throughout, ca-certificates for every https call (its loss shows up as a
+# TLS verification failure, not a missing binary). yq/helm/kubectl are
+# downloaded and sha256-checked separately.
+TOOLS_PACKAGES = ("bash", "ca-certificates", "curl", "git", "jq", "openssh-client", "openssl",
+                  "python3", "py3-yaml")
 TOOLS_BINARIES = ("YQ_VERSION", "HELM_VERSION", "KUBECTL_VERSION")
 ROOT_ONLY_RE = re.compile(r"\b(apk add|apt-get|apt install|yum install|dnf install)\b|/usr/local/bin/")
 SSH_RE = re.compile(r"git@github\.com|~/\.ssh|\$HOME/\.ssh|\bssh\b")
@@ -219,13 +228,47 @@ def check_dockerfile(text: str) -> list[str]:
     return bad
 
 
+def check_pins(text: str, pins: list[tuple[str, str]]) -> list[str]:
+    """Every pin is the recorded published build, and that build's recorded
+    source is still the Dockerfile body (FROM to the end)."""
+    published = re.search(r"^#\s+published:\s+(\S+)\s*$", text, re.M)
+    built_from = re.search(r"^#\s+built-from:\s+sha256:([0-9a-f]{64})\s*$", text, re.M)
+    if not published or not built_from:
+        return ["mctl-workflow-tools Dockerfile: header lacks a 'published:' or 'built-from: sha256:' line"]
+    ref = published.group(1)
+    bad = []
+    if not ref.startswith(TOOLS_IMAGE) or "@sha256:" not in ref:
+        bad.append(f"mctl-workflow-tools Dockerfile: published {ref!r} must be {TOOLS_IMAGE}<tag>@sha256:<digest>")
+    start = text.find("\nFROM ")
+    body = text[start + 1:] if start >= 0 else ""
+    if hashlib.sha256(body.encode()).hexdigest() != built_from.group(1):
+        bad.append("mctl-workflow-tools Dockerfile: body changed since the published build (built-from "
+                   "hash mismatch); rebuild, then update published, built-from and every pin")
+    if not pins:
+        bad.append(f"no {TOOLS_IMAGE} pins found under {PINS_DIR}; the scan is broken")
+    bad += [f"{where}: pins {pin!r}, but the Dockerfile's published build is {ref!r}"
+            for where, pin in pins if pin != ref]
+    return bad
+
+
+def _pins() -> list[tuple[str, str]]:
+    found = []
+    for path in sorted(PINS_DIR.rglob("*.y*ml")):
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            found += [(f"{path.relative_to(ROOT)}:{n}", m.group(0)) for m in PIN_RE.finditer(line)]
+    return found
+
+
 def violations(docs: dict[str, dict], wft_names: set[str] | None = None,
-               dockerfile: str | None = None) -> list[str]:
+               dockerfile: str | None = None,
+               pins: list[tuple[str, str]] | None = None) -> list[str]:
     found = []
     if wft_names is not None:
         found += check_classified(wft_names)
     if dockerfile is not None:
         found += check_dockerfile(dockerfile)
+        if pins is not None:
+            found += check_pins(dockerfile, pins)
     for fname, doc in docs.items():
         if fname in ENTRY_FILES:
             found += check_entry(fname, doc)
@@ -249,6 +292,7 @@ def selftest() -> int:
     base = _load(CWFT_DIR)
     names = _wft_names()
     dockerfile = TOOLS_DOCKERFILE.read_text()
+    pins = _pins()
 
     def m_nonroot(d):
         del d["wft-deploy-service.yaml"]["spec"]["securityContext"]["runAsNonRoot"]
@@ -294,17 +338,34 @@ def selftest() -> int:
              ("write /usr/local/bin", m_usrlocal, True), ("ssh on alpine/git", m_ssh_image, True),
              ("template securityContext", m_tpl_sc, True), ("privileged step", m_priv, True),
              ("tools image by tag only", m_tag_only, True)]
-    # Mutations of the inputs outside the templates: (label, wft names, Dockerfile).
-    extra = [("unclassified wft", names | {"wft-new-tenant-op.yaml"}, dockerfile),
-             ("Dockerfile drops py3-yaml", names, dockerfile.replace(" py3-yaml", "")),
-             ("Dockerfile drops yq", names, re.sub(r"^ARG YQ_VERSION=.*$", "", dockerfile, flags=re.M))]
+    # Mutations of the inputs outside the templates: (label, wft names, Dockerfile, pins).
+    # The package cases pass pins=None: any body edit also breaks the
+    # built-from hash, which would mask a package check that stopped working.
+    # A header-only edit must stay green: the hash covers FROM onwards.
+    other_tag = [(w, p.replace(":1.0.0@", ":1.0.1@") if ":1.0.0@" in p else p + "x") for w, p in pins]
+    extra = [("unclassified wft", names | {"wft-new-tenant-op.yaml"}, dockerfile, pins, True),
+             ("Dockerfile drops py3-yaml", names, dockerfile.replace(" py3-yaml", ""), None, True),
+             ("Dockerfile drops ca-certificates", names, dockerfile.replace(" ca-certificates", ""),
+              None, True),
+             ("Dockerfile drops yq", names, re.sub(r"^ARG YQ_VERSION=.*$", "", dockerfile, flags=re.M),
+              None, True),
+             ("Dockerfile body edited, hash kept", names,
+              dockerfile.replace("USER 1000:1000", "USER 1000:1000\nRUN true"), pins, True),
+             ("Dockerfile header comment edited", names,
+              dockerfile.replace("# syntax=docker/dockerfile:1\n", "# syntax=docker/dockerfile:1\n# note\n"),
+              pins, False),
+             ("published line missing", names, re.sub(r"^#\s+published:.*$", "", dockerfile, flags=re.M),
+              pins, True),
+             ("one pin on another build", names, dockerfile, pins[:1] and [other_tag[0]] + pins[1:], True),
+             ("no pins found", names, dockerfile, [], True)]
     ok = True
-    for label, mut, should_fail in cases + [(lbl, None, True) for lbl, _, _ in extra]:
+    for label, mut, should_fail in cases + [(lbl, None, sf) for lbl, _, _, _, sf in extra]:
         docs = copy.deepcopy(base)
         if mut:
             mut(docs)
-        n, df = next(((n, df) for lbl, n, df in extra if lbl == label), (names, dockerfile))
-        found = violations(docs, n, df)
+        n, df, pn = next(((n, df, pn) for lbl, n, df, pn, _ in extra if lbl == label),
+                         (names, dockerfile, pins))
+        found = violations(docs, n, df, pn)
         if bool(found) != should_fail:
             print(f"selftest FAIL: {label}: violations={found[:3]}, expected failure={should_fail}")
             ok = False
@@ -319,12 +380,13 @@ def main() -> int:
     args = ap.parse_args()
     if args.selftest:
         return selftest()
-    found = violations(_load(CWFT_DIR), _wft_names(), TOOLS_DOCKERFILE.read_text())
+    found = violations(_load(CWFT_DIR), _wft_names(), TOOLS_DOCKERFILE.read_text(), _pins())
     for v in found:
         print(f"ERROR: {v}", file=sys.stderr)
     if found:
         return 1
-    print(f"tenant workflow pod security ok ({len(ENTRY_FILES)} entry, {len(REFERENCED_FILES)} referenced)")
+    print(f"tenant workflow pod security ok ({len(ENTRY_FILES)} entry, {len(REFERENCED_FILES)} referenced, "
+          f"{len(_pins())} tools pins)")
     return 0
 
 
