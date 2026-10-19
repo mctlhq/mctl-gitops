@@ -162,11 +162,38 @@ roleRef:
   name: argo-workflows-view
   apiGroup: rbac.authorization.k8s.io
 ---
-# SSO RBAC: give the team's SSO SA access to events/secrets/pods/logs for log viewing
+# SSO RBAC: what the Argo UI needs, as the team's SSO SA, to show a run's
+# events and logs. Live logs come from pods/log; archived logs are read from
+# the artifact repository with the credentials Secret the controller config
+# names (bootstrap core-infra/argo-workflows.yaml artifactRepository), which
+# argo-server fetches with the signed-in user's client. That one Secret is all
+# it reads: the old binding to the cluster-wide argo-workflows-admin-extra
+# gave tenant members get on every Secret here, including the gitops deploy
+# key and github-actions-pat the tenant workflows mount. Named apart from the
+# old sso-team-logs binding because a roleRef cannot change in place.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sso-team-log-viewer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["minio-artifact-credentials"]
+    verbs: ["get"]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: sso-team-logs
+  name: sso-team-log-viewer
   namespace: {{ $ns }}
   labels:
     {{- include "tenant.labels" $ | nindent 4 }}
@@ -175,15 +202,37 @@ subjects:
     name: sso-team-{{ $tenantName }}
     namespace: argo-workflows
 roleRef:
-  kind: ClusterRole
-  name: argo-workflows-admin-extra
+  kind: Role
+  name: sso-team-log-viewer
   apiGroup: rbac.authorization.k8s.io
 ---
-# Allow mctl-api to submit and manage workflows in this namespace.
+# Allow mctl-api to submit and manage workflows in this namespace: create,
+# watch, and patch to resume or abort the suspended Workflow of a secret
+# handoff (mctl-api internal/operations/executor.go, secret_handoff.go);
+# resourcequotas for its quota reads (internal/k8s/quotas.go). Its own Role,
+# not argo-workflow-runner: that one is the workflow pods' and carries get on
+# every Secret here, which mctl-api never reads (see mctl-api-secret-handoff
+# below). Named apart from the old mctl-api-workflow-submitter binding
+# because a roleRef cannot change in place.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mctl-api-workflows
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: mctl-api-workflow-submitter
+  name: mctl-api-workflows
   namespace: {{ $ns }}
   labels:
     {{- include "tenant.labels" $ | nindent 4 }}
@@ -193,7 +242,7 @@ subjects:
     namespace: mctl-api
 roleRef:
   kind: Role
-  name: argo-workflow-runner
+  name: mctl-api-workflows
   apiGroup: rbac.authorization.k8s.io
 ---
 # mctl-api hands secret workflow inputs (deploy-service secret_env_vars) to

@@ -656,6 +656,14 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_tenant_preview_rbac.py
 
+      - name: Only workflow SAs read every Secret in a tenant namespace
+        # The namespace holds the gitops deploy key and github-actions-pat.
+        # The team's Argo UI SSO account reads only the artifact credentials
+        # its log view needs, and mctl-api reads none.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_secret_readers.py
+
       - name: Tenant Pod Security labels follow tenant.podSecurityLevel
         # The templates read these keys from the top level while the chart
         # documented them under tenant:, so a per-tenant flip to restricted
