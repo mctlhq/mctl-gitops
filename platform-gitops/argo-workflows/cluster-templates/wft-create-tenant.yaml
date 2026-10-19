@@ -47,6 +47,9 @@ spec:
         value: ""
       - name: description
         value: ""
+      - name: workspace_profile
+        value: "standard"
+        enum: [standard, starter]
       - name: quota_cpu_req
         value: "1"
       - name: quota_cpu_lim
@@ -149,6 +152,8 @@ spec:
                   value: "{{workflow.parameters.display_name}}"
                 - name: description
                   value: "{{workflow.parameters.description}}"
+                - name: workspace_profile
+                  value: "{{workflow.parameters.workspace_profile}}"
                 - name: quota_cpu_req
                   value: "{{workflow.parameters.quota_cpu_req}}"
                 - name: quota_cpu_lim
@@ -647,6 +652,7 @@ spec:
           - name: tenant_name
           - name: display_name
           - name: description
+          - name: workspace_profile
           - name: quota_cpu_req
           - name: quota_cpu_lim
           - name: quota_memory_req
@@ -680,6 +686,8 @@ spec:
             value: "{{inputs.parameters.display_name}}"
           - name: PARAM_DESCRIPTION
             value: "{{inputs.parameters.description}}"
+          - name: PARAM_WORKSPACE_PROFILE
+            value: "{{inputs.parameters.workspace_profile}}"
           - name: PARAM_QUOTA_CPU_REQ
             value: "{{inputs.parameters.quota_cpu_req}}"
           - name: PARAM_QUOTA_CPU_LIM
@@ -721,6 +729,11 @@ spec:
           # The whole block is bound through env, not just the unvalidated
           # half: a reader should not have to cross-check the registry to
           # know which of these lines is safe.
+          WORKSPACE_PROFILE="${PARAM_WORKSPACE_PROFILE:-standard}"
+          case "$WORKSPACE_PROFILE" in
+            standard|starter) ;;
+            *) echo "ERROR: unsupported workspace profile" >&2; exit 1 ;;
+          esac
           TENANT="$PARAM_TENANT_NAME"
           DISPLAY_NAME="$PARAM_DISPLAY_NAME"
           DESCRIPTION="$PARAM_DESCRIPTION"
@@ -926,6 +939,28 @@ spec:
             MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      role: owner' "$CREATOR_USER_ID")
           fi
 
+          # The starter envelope is authoritative here, not caller-supplied quotas.
+          PVCS=5; SERVICES=10; MAX_CPU=2; MAX_MEMORY=5Gi
+          STORAGE_QUOTA=""; PREVIEW_BLOCK=""
+          if [ "$WORKSPACE_PROFILE" = starter ]; then
+            CPU_REQ=250m; CPU_LIM=1; MEM_REQ=512Mi; MEM_LIM=1Gi; PODS=5
+            PVCS=1; SERVICES=5; MAX_CPU=1; MAX_MEMORY=1Gi
+            STORAGE_QUOTA='    requests.storage: "10Gi"'
+            PREVIEW_BLOCK=$(cat <<'STARTER_PREVIEW'
+            preview:
+              quotas:
+                requests.cpu: "100m"
+                requests.memory: "256Mi"
+                limits.cpu: "500m"
+                limits.memory: "512Mi"
+                requests.storage: "0"
+                persistentvolumeclaims: "0"
+                pods: "3"
+                services: "3"
+          STARTER_PREVIEW
+            )
+          fi
+
           # Write values.yaml
           cat > "${TENANT_DIR}/values.yaml" <<EOF
           # Tenant configuration for: ${TENANT}
@@ -942,8 +977,9 @@ spec:
               limits.cpu: "${CPU_LIM}"
               limits.memory: "${MEM_LIM}"
               pods: "${PODS}"
-              persistentvolumeclaims: "5"
-              services: "10"
+              persistentvolumeclaims: "${PVCS}"
+              services: "${SERVICES}"
+          ${STORAGE_QUOTA}
             limitRange:
               enabled: true
               default:
@@ -953,8 +989,9 @@ spec:
                 cpu: "100m"
                 memory: "128Mi"
               max:
-                cpu: "2"
-                memory: "5Gi"
+                cpu: "${MAX_CPU}"
+                memory: "${MAX_MEMORY}"
+          ${PREVIEW_BLOCK}
             networking:
               allowIntraNamespace: true
               allowClusterEgress: true

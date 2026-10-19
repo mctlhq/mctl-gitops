@@ -537,7 +537,9 @@ jobs:
         # principal id, or any value but login/principal, fails the step
         # instead of falling back to a login-keyed owner. Runs the template's
         # own extracted case and members blocks.
-        run: python3 tests/test_wft_create_tenant_catalog_key.py
+        run: |
+          python3 tests/test_wft_create_tenant_catalog_key.py
+          python3 tests/test_wft_create_tenant_starter.py
 
       - name: Unit-test customer deletion callbacks and completion gates
         run: python3 tests/test_wft_customer_deletion.py
