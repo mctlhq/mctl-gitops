@@ -1,21 +1,27 @@
-"""k3s-preview kured: the user manifest must win and follow kube.tf (#2036).
+"""k3s-preview kured and system-upgrade-controller: the user manifests must win
+and follow kube.tf (#2036).
 
-kube-hetzner bundles its own kured DaemonSet without resources and re-applies
-it whenever terraform_data.kustomization is replaced. The real DaemonSet lives
-in infrastructure/k3s-preview/extra-manifests/kured.yaml.tpl, and the module
-re-applies a user manifest only when its rendered content changes. The #2035
-apply replaced the base layer and kured silently lost its requests and limits.
+kube-hetzner bundles its own kured DaemonSet and system-upgrade-controller
+Deployment, both without resources, and re-applies them whenever
+terraform_data.kustomization is replaced. The real objects live in
+infrastructure/k3s-preview/extra-manifests/, and the module re-applies a user
+manifest only when its rendered content changes. The #2035 apply replaced the
+base layer and kured silently lost its requests and limits.
 
 K1. The module arguments that feed the base kustomization triggers read from
     `local.<same name>`, so a bump has exactly one place to go.
 K2. base_kustomization_inputs hashes every one of those locals, so a change
     to any of them changes the rendered kured manifest.
-K3. extra_kustomize_parameters passes base_kustomization_inputs and
-    kured_version into the user templates.
+K3. extra_kustomize_parameters passes base_kustomization_inputs,
+    kured_version and sys_upgrade_controller_version into the user templates.
 K4. kured.yaml.tpl renders the hash as an annotation and the image tag from
     kured_version, with no other placeholder. Rendering with a different
     value for either changes the output, and the rendered DaemonSet keeps
     its resources.
+K5. system-upgrade-controller.yaml.tpl does the same for the Deployment, is
+    listed in kustomization.yaml.tpl, and stays a COMPLETE Deployment: the
+    module applied upstream's with `kubectl apply`, so a partial one would
+    make kubectl's three-way merge delete the fields it leaves out.
 
 No pytest, matching the plain `python3 tests/<file>.py` convention.
 
@@ -33,12 +39,15 @@ ROOT = Path(__file__).resolve().parent.parent
 K3S = ROOT / "infrastructure/k3s-preview"
 KUBE_TF = K3S / "kube.tf"
 KURED_TPL = K3S / "extra-manifests/kured.yaml.tpl"
+SUC_TPL = K3S / "extra-manifests/system-upgrade-controller.yaml.tpl"
+KUSTOMIZATION_TPL = K3S / "extra-manifests/kustomization.yaml.tpl"
 
 TRACKED = [
     "install_k3s_version",
     "hetzner_ccm_version",
     "hetzner_csi_version",
     "kured_version",
+    "sys_upgrade_controller_version",
     "hetzner_ccm_merge_values",
 ]
 
@@ -67,7 +76,7 @@ def block(src: str, header_re: str) -> str:
 
 
 def render(tpl: str, params: dict[str, str]) -> str:
-    """templatefile() for the subset kured.yaml.tpl uses: ${name} only."""
+    """templatefile() for the subset the user templates use: ${name} only."""
     names = set(re.findall(r"\$\{([^}]*)\}", tpl))
     missing = names - params.keys()
     if missing:
@@ -99,7 +108,7 @@ def main() -> int:
             check(name in hashed, f"K2: base_kustomization_inputs does not hash local.{name}")
 
     # K3
-    for name in ("base_kustomization_inputs", "kured_version"):
+    for name in ("base_kustomization_inputs", "kured_version", "sys_upgrade_controller_version"):
         check(
             re.search(rf"^\s*{name}\s*=\s*local\.{name}\s*$", params_body, re.M) is not None,
             f"K3: extra_kustomize_parameters must pass {name} = local.{name}",
@@ -127,11 +136,47 @@ def main() -> int:
         for key, other in (("base_kustomization_inputs", "b" * 40), ("kured_version", "9.9.9")):
             check(render(tpl, {**params, key: other}) != out, f"K4: changing {key} does not change the rendered manifest")
 
+    # K5
+    tpl = SUC_TPL.read_text()
+    params = {"base_kustomization_inputs": "a" * 40, "sys_upgrade_controller_version": "v0.18.0"}
+    try:
+        out = render(tpl, params)
+    except KeyError as e:
+        failures.append(f"K5: {e}")
+        out = ""
+    if out:
+        docs = [d for d in yaml.safe_load_all(out) if d]
+        check(
+            [(d.get("kind"), d["metadata"].get("name")) for d in docs] == [("Deployment", "system-upgrade-controller")],
+            f"K5: expected exactly the system-upgrade-controller Deployment, found {[d.get('kind') for d in docs]}",
+        )
+        if docs:
+            d = docs[0]
+            ann = (d["metadata"].get("annotations") or {}).get("mctl.ai/base-kustomization-inputs")
+            check(ann == params["base_kustomization_inputs"], f"K5: hash annotation renders as {ann!r}")
+            spec = d.get("spec") or {}
+            pod = (spec.get("template") or {}).get("spec") or {}
+            check(bool(spec.get("selector")) and bool(spec.get("strategy")), "K5: Deployment lost its selector or strategy")
+            for field in ("affinity", "tolerations", "volumes", "serviceAccountName"):
+                check(bool(pod.get(field)), f"K5: pod spec lost {field}; a partial Deployment strips live fields")
+            vols = [v["name"] for v in pod.get("volumes") or []]
+            check(vols[:1] == ["ca-certificates"], f"K5: the module's ca-certificates volume must come first, got {vols}")
+            c = (pod.get("containers") or [{}])[0]
+            check(c.get("image") == "rancher/system-upgrade-controller:v0.18.0", f"K5: image renders as {c.get('image')!r}")
+            for field in ("env", "envFrom", "securityContext", "volumeMounts"):
+                check(bool(c.get(field)), f"K5: container lost {field}; a partial Deployment strips live fields")
+            res = c.get("resources") or {}
+            check(bool(res.get("requests")) and bool(res.get("limits")), "K5: rendered Deployment lost its resources")
+        for key, other in (("base_kustomization_inputs", "b" * 40), ("sys_upgrade_controller_version", "v9.9.9")):
+            check(render(tpl, {**params, key: other}) != out, f"K5: changing {key} does not change the rendered manifest")
+    listed = (yaml.safe_load(KUSTOMIZATION_TPL.read_text()) or {}).get("resources") or []
+    check("system-upgrade-controller.yaml" in listed, "K5: kustomization.yaml.tpl does not list system-upgrade-controller.yaml")
+
     if failures:
         for f in failures:
             print("FAIL", f)
         return 1
-    print("ok: K1-K4")
+    print("ok: K1-K5")
     return 0
 
 
