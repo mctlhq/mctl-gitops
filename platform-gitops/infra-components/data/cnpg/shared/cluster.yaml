@@ -193,6 +193,7 @@ spec:
         inherit: true
         # 19 plugin schemas (pluginDivisionMode: schema) x knex pool max 3 =
         # 57 per pod, two pods during a rolling deploy. Observed peak 42.
+        # SharedPgRoleConnectionsHigh mirrors this limit at 80% (80).
         connectionLimit: 100
         ensure: present
         passwordSecret:
@@ -225,8 +226,12 @@ spec:
         # update has three pods at once, each holding 11-15 connections
         # (measured 2026-10-09: 15 + 13 + 11 = 39). At 40 the surge pod hit
         # the limit again and its agent registry and domains stores stayed
-        # disabled, so it never became Ready. 64 covers three pods at init
-        # with headroom; mctl-api#508 tracks shrinking the per-store pools.
+        # disabled, so it never became Ready.
+        # Since mctl-api 4.109.1 (mctl-api#728) every store shares one pool
+        # per database URL, 8 connections by default (DB_POOL_MAX_CONNS), so
+        # the worst case is 3 pods x (2 URLs x 8 + 3 unpooled) = 57. Measured
+        # right after that rollout: 4 per pod. SharedPgRoleConnectionsHigh
+        # (vm-rules/shared-pg-alerts.yaml) mirrors this limit at 80%.
         connectionLimit: 64
         ensure: present
         passwordSecret:
@@ -316,7 +321,10 @@ spec:
       # × 20 default + 10 visibility = 120 if every pool filled at once, plus
       # admintools during schema-setup hooks. Observed peak 37 (2026-10-12..20).
       # 140 covers the full pool budget; the old 200 equalled max_connections,
-      # so this one role could take every slot on shared-pg.
+      # so this one role could take every slot on shared-pg. The 20 above 120
+      # is for admintools and a server pod restarting while its predecessor
+      # still holds its pool. SharedPgRoleConnectionsHigh mirrors this limit
+      # at 80% (112).
       - name: temporal
         login: true
         inherit: true

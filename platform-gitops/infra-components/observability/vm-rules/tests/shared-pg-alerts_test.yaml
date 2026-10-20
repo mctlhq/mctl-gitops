@@ -73,6 +73,7 @@ tests:
       - {eval_time: 30m, alertname: SharedPgWALArchivingStale, exp_alerts: []}
       - {eval_time: 2h, alertname: SharedPgWALArchivingStale, exp_alerts: []}
       - {eval_time: 2h, alertname: SharedPgConnectionsHigh, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgRoleConnectionsHigh, exp_alerts: []}
       - {eval_time: 2h, alertname: SharedPgVolumeFillingUp, exp_alerts: []}
       - {eval_time: 2h, alertname: SharedPgVolumeAlmostFull, exp_alerts: []}
       - {eval_time: 2h, alertname: SharedPgInstanceMetricsIncomplete, exp_alerts: []}
@@ -376,3 +377,47 @@ tests:
               description: >-
                 shared-pg-2 exports cnpg_collector_up but not max_connections or in_recovery, so SharedPgConnectionsHigh, SharedPgNoPrimary and the primary-joined rules cannot see it.
                 Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpginstancemetricsincomplete
+
+  # Per-role budget: summed across pods, datname and state, compared with 80%
+  # of each role's connectionLimit. mctl-api 52 > 51 fires (three pods of a
+  # rolling update), temporal at exactly 112 does not (strictly above), and
+  # backstage 81 > 80 fires. A role the rule does not list (forgejo, 90) stays
+  # quiet even though it is above every threshold.
+  - interval: 1m
+    name: a role above 80% of its connectionLimit fires SharedPgRoleConnectionsHigh
+    input_series:
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="mctl-api",usename="mctl-api",state="idle"}'
+        values: '40x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="mctl-api",usename="mctl-api",state="active"}'
+        values: '12x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="temporal",usename="temporal",state="idle"}'
+        values: '100x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="temporal_visibility",usename="temporal",state="idle"}'
+        values: '12x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="backstage",usename="backstage",state="idle"}'
+        values: '81x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="forgejo",usename="forgejo",state="idle"}'
+        values: '90x30'
+    alert_rule_test:
+      - {eval_time: 5m, alertname: SharedPgRoleConnectionsHigh, exp_alerts: []}
+      - eval_time: 15m
+        alertname: SharedPgRoleConnectionsHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              usename: mctl-api
+            exp_annotations:
+              summary: "shared-pg role mctl-api is above 80% of its connectionLimit"
+              description: >-
+                Role mctl-api holds 52 connections, over 80% of its connectionLimit. New connections for this role start failing at the limit even though shared-pg has free slots.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgroleconnectionshigh
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              usename: backstage
+            exp_annotations:
+              summary: "shared-pg role backstage is above 80% of its connectionLimit"
+              description: >-
+                Role backstage holds 81 connections, over 80% of its connectionLimit. New connections for this role start failing at the limit even though shared-pg has free slots.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgroleconnectionshigh

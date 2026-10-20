@@ -78,6 +78,14 @@ Safety rules:
 
 **Safe actions.** Find the leaking client; check the per-role connectionLimit in cluster.yaml. Restart the offending client, not the database.
 
+## SharedPgRoleConnectionsHigh
+
+**Meaning.** One of mctl-api, temporal or backstage holds over 80% of its role `connectionLimit` in `infra-components/data/cnpg/shared/cluster.yaml`. At the limit that role's new connections fail with "too many connections for role" while shared-pg still has free slots.
+
+**First checks.** `sum by (usename) (cnpg_backends_total{namespace="platform-db"})`; `pg_stat_activity` grouped by `usename, application_name, client_addr` to find the pod. Is a rolling update running (three mctl-api pods)?
+
+**Safe actions.** Restart the pod holding the excess, not the database. mctl-api's budget is `DB_POOL_MAX_CONNS` (default 8) per database URL per pod; temporal's is `maxConns` in `bootstrap/templates/data/temporal.yaml`. Raise a `connectionLimit` only together with the threshold in this rule.
+
 ## SharedPgVolumeFillingUp
 
 **Meaning.** A shared-pg PVC is over 80% used.
