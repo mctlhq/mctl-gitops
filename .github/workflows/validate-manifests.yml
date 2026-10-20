@@ -441,11 +441,12 @@ jobs:
         # plane, so it is exercised here against synthetic plans.
         run: python3 tests/test_k3s_plan_guard.py
 
-      - name: Check the k3s-preview kured manifest follows the module inputs
-        # kube-hetzner re-applies its own kured DaemonSet, without resources,
-        # whenever its kustomization is replaced; ours re-applies only when its
-        # rendered content changes. The hash annotation and the templated tag
-        # keep ours winning and on the same version (#2036).
+      - name: Check the k3s-preview kured and SUC manifests follow the module inputs
+        # kube-hetzner re-applies its own kured DaemonSet and
+        # system-upgrade-controller Deployment, without resources, whenever
+        # its kustomization is replaced; ours re-apply only when their
+        # rendered content changes. The hash annotation and the templated tags
+        # keep ours winning and on the same versions (#2036).
         run: python3 tests/test_k3s_kured_single_owner.py
 
       - name: Check the in-cluster Access login probe against its sources

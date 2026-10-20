@@ -80,13 +80,15 @@ variable "etcd_s3_secret_key" {
 
 # Inputs of the module's own kustomization (terraform_data.kustomization).
 # When any of them changes, the module re-runs `kubectl apply -k` on its
-# bundled manifests, and those include a kured DaemonSet WITHOUT resources.
-# extra-manifests/kured.yaml.tpl owns the real one, but the module re-applies
-# a user manifest only when that file's rendered content changes, so the base
-# copy won the last write: on 2026-10-20 the #2035 apply dropped kured's
-# requests and limits. Feeding a hash of these inputs into the kured template
-# changes its rendered content whenever the base layer is replaced, so the user
-# layer re-applies in the same run, after the base (it depends_on it).
+# bundled manifests, and those include a kured DaemonSet and a
+# system-upgrade-controller Deployment, both WITHOUT resources.
+# extra-manifests/kured.yaml.tpl and system-upgrade-controller.yaml.tpl own
+# the real ones, but the module re-applies a user manifest only when that
+# file's rendered content changes, so the base copy won the last write: on
+# 2026-10-20 the #2035 apply dropped kured's requests and limits. Feeding a
+# hash of these inputs into both templates changes their rendered content
+# whenever the base layer is replaced, so the user layer re-applies in the
+# same run, after the base (it depends_on it).
 # Anything added here that feeds the module's kustomization triggers must also
 # go into base_kustomization_inputs.
 locals {
@@ -94,6 +96,10 @@ locals {
   hetzner_ccm_version = "v1.33.0"
   hetzner_csi_version = "v2.21.2"
   kured_version       = "1.21.0"
+
+  # Equal to the module default; pinned here so a module upgrade cannot move
+  # it without a matching change to extra-manifests/system-upgrade-controller.yaml.tpl.
+  sys_upgrade_controller_version = "v0.18.0"
 
   hetzner_ccm_merge_values = <<-EOT
     resources:
@@ -109,6 +115,7 @@ locals {
     local.hetzner_ccm_version,
     local.hetzner_csi_version,
     local.kured_version,
+    local.sys_upgrade_controller_version,
     local.hetzner_ccm_merge_values,
   ]))
 }
@@ -301,11 +308,10 @@ module "kube-hetzner" {
   # 1.21.0 -> 1.23.0. For a deliberate, reviewed upgrade bump the value in the
   # locals block at the top of this file, never the argument line here: the
   # locals feed base_kustomization_inputs, which keeps kured re-applying.
-  # sys_upgrade_controller_version is already pinned by its module default
-  # (v0.18.0, matches live).
-  hetzner_ccm_version = local.hetzner_ccm_version
-  hetzner_csi_version = local.hetzner_csi_version
-  kured_version       = local.kured_version
+  hetzner_ccm_version            = local.hetzner_ccm_version
+  hetzner_csi_version            = local.hetzner_csi_version
+  kured_version                  = local.kured_version
+  sys_upgrade_controller_version = local.sys_upgrade_controller_version
 
   # The chart default is requests 100m/50Mi with no limit. The 7-day peak
   # working set was 72Mi on 2026-10-19, above the request, and nothing bounded
@@ -333,13 +339,15 @@ module "kube-hetzner" {
   # mitigation applied 2026-06-27.
   install_k3s_version = local.install_k3s_version
 
-  # Re-applies extra-manifests/kured.yaml.tpl whenever the module's own
-  # kustomization is replaced (see base_kustomization_inputs above), and
-  # renders its image tag from the same kured_version the module gets.
+  # Re-applies extra-manifests/kured.yaml.tpl and
+  # system-upgrade-controller.yaml.tpl whenever the module's own kustomization
+  # is replaced (see base_kustomization_inputs above), and renders their image
+  # tags from the same versions the module gets.
   # tests/test_k3s_kured_single_owner.py checks this wiring.
   extra_kustomize_parameters = {
-    base_kustomization_inputs = local.base_kustomization_inputs
-    kured_version             = local.kured_version
+    base_kustomization_inputs      = local.base_kustomization_inputs
+    kured_version                  = local.kured_version
+    sys_upgrade_controller_version = local.sys_upgrade_controller_version
   }
 
   # SOC F20: Kubernetes API audit. preinstall_exec writes the policy file
