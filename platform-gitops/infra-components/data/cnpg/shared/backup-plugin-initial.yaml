@@ -1,0 +1,18 @@
+# One-shot base backup through the Barman Cloud Plugin, taken right after
+# the switch (#2014) instead of waiting for the next 02:00 ScheduledBackup:
+# it proves the plugin can write a base backup to R2 and gives the restore
+# drill a plugin-written base to recover from. Harmless once completed;
+# remove after the first scheduled plugin backup lands.
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: shared-pg-plugin-initial
+  annotations:
+    # After the Cluster (wave 0) has switched to the plugin.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  cluster:
+    name: shared-pg
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
