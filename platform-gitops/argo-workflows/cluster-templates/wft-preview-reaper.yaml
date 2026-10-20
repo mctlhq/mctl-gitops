@@ -23,10 +23,16 @@ spec:
   # Pod Security "restricted": runs in the tenant namespace, like
   # preview-delete; see the note there for why podSpecPatch repeats the
   # container-level fields and sets HOME.
-  # init and wait get explicit requests because the tenant LimitRange
-  # would otherwise give each its defaultRequest (100m/128Mi), and the pod
-  # (main + wait: 110m/192Mi) then exceeds the smallest tenant quotas
-  # (100m/128Mi), where it never starts. With these it requests 20m/96Mi.
+  # init, wait and main get explicit requests because the tenant LimitRange
+  # would otherwise give each its defaultRequest (100m/128Mi), and a pod
+  # then exceeds the smallest tenant quotas (100m/128Mi), where it never
+  # starts. main's requests sit here, not only on the script template,
+  # because this patch also reaches the pod of the controller-wide exit
+  # hook (workflowDefaults: global-workflow-completion-hook), which has no
+  # resources of its own. Without it that pod asks for 110m and stays
+  # Pending forever, the workflow never completes, and concurrencyPolicy
+  # Forbid then skips every later tick. With these each pod requests
+  # 20m/96Mi.
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000
@@ -66,6 +72,10 @@ spec:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
         env:
           - name: HOME
             value: /tmp

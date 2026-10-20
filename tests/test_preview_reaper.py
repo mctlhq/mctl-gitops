@@ -20,7 +20,8 @@ although the docs and the mctl_create_preview description promise it.
   AppProject platform admits CronWorkflow;
 - the reaper pod's requests, with the executor's init and wait containers,
   fit every such tenant's ResourceQuota (the first run sat Pending in two
-  tenants with 100m/128Mi quotas).
+  tenants with 100m/128Mi quotas), and so does the pod of the global exit
+  hook, which gets its main requests only from the podSpecPatch.
 
 Run: python3 tests/test_preview_reaper.py
 PREVIEW_TEST_SHELL picks the shell the scripts run under (default bash);
@@ -260,9 +261,14 @@ class Wiring(unittest.TestCase):
     def test_reaper_pod_fits_every_tenant_quota(self):
         doc = yaml.safe_load(REAPER.read_text())
         patch = yaml.safe_load(doc["spec"]["podSpecPatch"])
-        main = doc["spec"]["templates"][0]["script"]["resources"]["requests"]
         init = next(c for c in patch["initContainers"] if c["name"] == "init")
         wait = next(c for c in patch["containers"] if c["name"] == "wait")
+        # The patch reaches every pod of the workflow, the exit hook's
+        # (global-workflow-completion-hook, no resources of its own)
+        # included, so main's requests must come from the patch: the
+        # script template's own would only cover the reaper pod.
+        main = next(c for c in patch["containers"] if c["name"] == "main")["resources"]["requests"]
+        self.assertEqual(main, doc["spec"]["templates"][0]["script"]["resources"]["requests"])
         checked = 0
         for tenant, _, docs in render_tenants():
             if not any(d["kind"] == "CronWorkflow" for d in docs):
