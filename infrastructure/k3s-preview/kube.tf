@@ -110,6 +110,78 @@ locals {
         memory: 192Mi
   EOT
 
+  # Replaces the module's default CSI values wholesale, so the node affinity
+  # below is the module default (locals.tf hetzner_csi_values, 2.19.1) copied
+  # verbatim: keep the node plugin off the control plane and off Robot servers.
+  # Requests are the 7-day peak working set on 2026-10-20 rounded up, limits
+  # about twice that. No CPU limits: a throttled attacher or provisioner stalls
+  # every volume attach in the cluster.
+  hetzner_csi_values = <<-EOT
+    controller:
+      resources:
+        csiAttacher:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            memory: 128Mi
+        csiResizer:
+          requests:
+            cpu: 10m
+            memory: 96Mi
+          limits:
+            memory: 192Mi
+        csiProvisioner:
+          requests:
+            cpu: 10m
+            memory: 96Mi
+          limits:
+            memory: 192Mi
+        livenessProbe:
+          requests:
+            cpu: 5m
+            memory: 32Mi
+          limits:
+            memory: 64Mi
+        hcloudCSIDriver:
+          requests:
+            cpu: 10m
+            memory: 48Mi
+          limits:
+            memory: 128Mi
+    node:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: "node-role.kubernetes.io/control-plane"
+                    operator: DoesNotExist
+                  - key: "instance.hetzner.cloud/provided-by"
+                    operator: NotIn
+                    values:
+                      - robot
+      resources:
+        csiNodeDriverRegistrar:
+          requests:
+            cpu: 5m
+            memory: 24Mi
+          limits:
+            memory: 48Mi
+        livenessProbe:
+          requests:
+            cpu: 5m
+            memory: 48Mi
+          limits:
+            memory: 96Mi
+        hcloudCSIDriver:
+          requests:
+            cpu: 10m
+            memory: 48Mi
+          limits:
+            memory: 128Mi
+  EOT
+
   base_kustomization_inputs = sha1(jsonencode([
     local.install_k3s_version,
     local.hetzner_ccm_version,
@@ -117,6 +189,7 @@ locals {
     local.kured_version,
     local.sys_upgrade_controller_version,
     local.hetzner_ccm_merge_values,
+    local.hetzner_csi_values,
   ]))
 }
 
@@ -318,6 +391,9 @@ module "kube-hetzner" {
   # it. No CPU limit: the CCM reconciles routes and load balancers and should
   # not be throttled.
   hetzner_ccm_merge_values = local.hetzner_ccm_merge_values
+
+  # CSI controller and node plugin resources; see the locals block.
+  hetzner_csi_values = local.hetzner_csi_values
 
   # --- Upgrades ---
   # Disabled: single control-plane node — draining it takes down the API server.
