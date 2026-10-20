@@ -22,6 +22,9 @@ K5. system-upgrade-controller.yaml.tpl does the same for the Deployment, is
     listed in kustomization.yaml.tpl, and stays a COMPLETE Deployment: the
     module applied upstream's with `kubectl apply`, so a partial one would
     make kubectl's three-way merge delete the fields it leaves out.
+K6. hetzner_csi_values replaces the module's default CSI values wholesale, so
+    it must carry the default node affinity (control plane DoesNotExist,
+    provided-by NotIn robot) and set resources for every chart container.
 
 No pytest, matching the plain `python3 tests/<file>.py` convention.
 
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 import yaml
@@ -49,7 +53,13 @@ TRACKED = [
     "kured_version",
     "sys_upgrade_controller_version",
     "hetzner_ccm_merge_values",
+    "hetzner_csi_values",
 ]
+
+CSI_CONTAINERS = {
+    "controller": ["csiAttacher", "csiResizer", "csiProvisioner", "livenessProbe", "hcloudCSIDriver"],
+    "node": ["csiNodeDriverRegistrar", "livenessProbe", "hcloudCSIDriver"],
+}
 
 failures: list[str] = []
 
@@ -172,11 +182,37 @@ def main() -> int:
     listed = (yaml.safe_load(KUSTOMIZATION_TPL.read_text()) or {}).get("resources") or []
     check("system-upgrade-controller.yaml" in listed, "K5: kustomization.yaml.tpl does not list system-upgrade-controller.yaml")
 
+    # K6
+    heredoc = re.search(r"^\s*hetzner_csi_values\s*=\s*<<-EOT\n(.*?)^\s*EOT\s*$", locals_src, re.S | re.M)
+    check(heredoc is not None, "K6: local.hetzner_csi_values must be a <<-EOT heredoc")
+    if heredoc:
+        csi = yaml.safe_load(textwrap.dedent(heredoc.group(1))) or {}
+        terms = (
+            (((csi.get("node") or {}).get("affinity") or {}).get("nodeAffinity") or {})
+            .get("requiredDuringSchedulingIgnoredDuringExecution", {})
+            .get("nodeSelectorTerms")
+            or [{}]
+        )
+        exprs = {(e.get("key"), e.get("operator"), tuple(e.get("values") or ())) for e in terms[0].get("matchExpressions") or []}
+        for want in (
+            ("node-role.kubernetes.io/control-plane", "DoesNotExist", ()),
+            ("instance.hetzner.cloud/provided-by", "NotIn", ("robot",)),
+        ):
+            check(want in exprs, f"K6: CSI node affinity lost the module default {want}")
+        for part, names in CSI_CONTAINERS.items():
+            res = (csi.get(part) or {}).get("resources") or {}
+            for name in names:
+                r = res.get(name) or {}
+                check(
+                    bool((r.get("requests") or {}).get("memory")) and bool((r.get("limits") or {}).get("memory")),
+                    f"K6: {part}.resources.{name} needs a memory request and limit",
+                )
+
     if failures:
         for f in failures:
             print("FAIL", f)
         return 1
-    print("ok: K1-K5")
+    print("ok: K1-K6")
     return 0
 
 
