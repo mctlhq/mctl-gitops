@@ -1,0 +1,55 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: plugin-barman-cloud
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://cloudnative-pg.github.io/charts
+    chart: plugin-barman-cloud
+    # Barman Cloud Plugin (#2014, step 1 of the migration off the in-tree
+    # barmanObjectStore, which CNPG 1.29 removes). Installing it changes
+    # nothing for shared-pg by itself: the operator only discovers the
+    # plugin through the labelled `barman-cloud` Service; a cluster uses it
+    # once its spec.plugins names barman-cloud.cloudnative-pg.io, which is
+    # the next, separate step.
+    # 0.8.1 ships plugin v0.15.1, which needs CNPG >= 1.26 (1.28.1 runs
+    # here) and cert-manager for the operator <-> plugin mTLS certificates
+    # (the chart creates its own self-signed Issuer for them).
+    targetRevision: 0.8.1
+    helm:
+      values: |
+        crds:
+          create: true
+        # Same tier as the operator: backups and WAL archiving stop when
+        # the plugin is evicted. Chart default is no resources (BestEffort).
+        priorityClassName: platform-data-critical
+        resources:
+          requests:
+            cpu: 20m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    # Must be the operator's namespace: the operator looks for plugin
+    # Services only in the namespace it runs in.
+    namespace: cnpg-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
