@@ -202,6 +202,20 @@ spec:
         items:
           - key: github-token
             path: github-token
+    # Least-privilege credentials for agent runs (mctlhq/mctl-agents#737):
+    # a pod-bound ServiceAccount token with an audience only mctl-api's
+    # run-token exchange accepts. mctl-api verifies it with TokenReview, finds
+    # the pod and this Workflow, and issues a run token scoped to the
+    # investigate surface and this run's execution_id. It grants nothing in
+    # the Kubernetes API (mctl-agents-runner has no role bindings), and
+    # kubelet rotates it well inside the run's 2h deadline.
+    - name: mctl-api-run-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: mctl-api-agent-run
+              expirationSeconds: 3600
+              path: token
 
   templates:
     - name: investigate-issue
@@ -788,6 +802,18 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Scoped run token for the MCP connection (mctlhq/mctl-agents#737):
+          # off | observe | enforce. observe exchanges the projected token
+          # above (and revokes the result at once) to prove the path, and
+          # keeps MCP on MCTL_TOKEN while naming the scope in a shadow header
+          # that mctl-api only counts. enforce connects MCP with the run
+          # token and fails the run if the exchange fails. Needs mctl-api
+          # with the exchange enabled and an agent image with run_token.py;
+          # an older image ignores it.
+          - name: MCTL_RUN_TOKEN_MODE
+            value: observe
+          - name: MCTL_RUN_TOKEN_SA_TOKEN_FILE
+            value: /var/run/secrets/mctl-api/token
           # Usage-writer token (mctlhq/.github#50): the only credential the
           # usage producer may use to append this run's model-usage records
           # to mctl-api. It may do nothing else there. Optional: absent (the
@@ -873,6 +899,9 @@ spec:
             mountPath: /workdir
           - name: github-token-file
             mountPath: /var/run/gh
+            readOnly: true
+          - name: mctl-api-run-token
+            mountPath: /var/run/secrets/mctl-api
             readOnly: true
 
     # ── 2. Commit & push back to mctl-gitops ──────────────────────────────

@@ -256,6 +256,13 @@ spec:
             GIT_CONFIG_KEY_0: "safe.directory"
             GIT_CONFIG_VALUE_0: "*"
             LOKI_URL: "http://loki-stack.monitoring.svc.cluster.local:3100"
+            # Agent run token exchange (mctlhq/mctl-agents#737): the audience
+            # an agent pod's projected ServiceAccount token must carry for
+            # POST /api/v1/agent-run-tokens/exchange. Unset disables the route
+            # (503). Must match the projected volume in
+            # cwft-mctl-agents-investigate.yaml. Needs the pods/get and
+            # tokenreviews/create grants in mctl-api-rbac.yaml.
+            AGENT_RUN_EXCHANGE_AUDIENCE: "mctl-api-agent-run"
             # Argo Workflows step-log archive, backing mctl_get_workflow_logs.
             # Distinct from LOKI_URL above: promtail feeds Loki from long-lived
             # service pods under the ArgoCD naming convention, so Loki can never

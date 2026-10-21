@@ -14,6 +14,12 @@ rules:
   - apiGroups: ["argoproj.io"]
     resources: ["clusterworkflowtemplates"]
     verbs: ["get", "list"]
+  # Agent run token exchange (mctlhq/mctl-agents#737): mctl-api reads the
+  # pod a presented ServiceAccount token is bound to, to find its Workflow.
+  # get only -- no list, no logs, no exec, no secrets.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -76,4 +82,30 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: mctl-api-customer-namespace-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# Agent run token exchange (mctlhq/mctl-agents#737): mctl-api verifies an
+# agent pod's projected ServiceAccount token with TokenReview. Only that one
+# verb, rather than system:auth-delegator, which also grants
+# SubjectAccessReview.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mctl-api-token-reviewer
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mctl-api-token-reviewer
+subjects:
+  - kind: ServiceAccount
+    name: mctl-api
+    namespace: mctl-api
+roleRef:
+  kind: ClusterRole
+  name: mctl-api-token-reviewer
   apiGroup: rbac.authorization.k8s.io
