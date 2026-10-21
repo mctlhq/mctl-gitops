@@ -1,0 +1,20 @@
+status: proposed
+updated_at: '2026-10-21T22:41:08Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-92a51285f27ee8fb
+  trace_id: a42b5bc939a900a544f83e99e419b378
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-alice
+  issue: 69
+  url: https://github.com/mctlhq/mctl-alice/issues/69
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-29ec54ddf9c83a47
+  content_hash: sha256:29ec54ddf9c83a47a53bcb488e3849236b28b49f8ac760b31cef1a7b7301cb80
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
