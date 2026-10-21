@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-alice
-  tag: "2.2.2-candidate-1a8e158"
+  tag: "2.2.2"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
