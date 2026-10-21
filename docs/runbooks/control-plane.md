@@ -70,6 +70,30 @@ From-zero rebuilds write the file in `preinstall_exec` and pass
 cluster the file must exist **before** a terraform apply that adds those
 args, or the apiserver will refuse to start.
 
+### All apiserver args live in config.yaml, never in config.yaml.d
+
+`control_planes_custom_config` is the only place for `kube-apiserver-arg`
+(audit and the ZITADEL OIDC flags of #1881). Do not add a drop-in under
+`/etc/rancher/k3s/config.yaml.d/` with the same key: k3s lets a drop-in's
+list **replace** the list from `config.yaml` (only a key spelled
+`kube-apiserver-arg+` appends), so every arg Terraform writes silently stops
+applying while the plan and apply look clean.
+
+That happened once. The audit args were first rolled out by hand on
+2026-08-15 as `config.yaml.d/audit.yaml`. When the OIDC flags were applied on
+2026-10-14 the apiserver came up with the drop-in's five audit args and none
+of the OIDC ones. The drop-in was moved to
+`/root/k3s-audit-dropin-2026-08-15.yaml.bak` and k3s restarted.
+
+Check what the apiserver actually runs with, not what the file says
+(`k3s.io/node-args` on the Node does not show it reliably either):
+
+```bash
+ssh root@<cp> "journalctl -u k3s --since -10min --no-pager \
+  | grep 'Running kube-apiserver' | tail -1 \
+  | grep -o -E -- '--(oidc|audit)-[a-z-]+=[^ ]+'"
+```
+
 ## F9 — Vault JWT for GitHub Actions (live)
 
 `auth/jwt` is mounted. Role `github-actions` is live. GHA `build-image.yaml`
