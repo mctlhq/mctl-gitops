@@ -10,17 +10,20 @@ spec:
   source:
     repoURL: https://cloudnative-pg.github.io/charts
     chart: cloudnative-pg
-    # Upgraded one operator minor at a time (#2014): 1.27.1 -> 1.28.1 here.
-    # 1.28.1, not 1.28.0: 1.28.0 could leave PgBouncer on wrong TLS
-    # certificates after the upgrade (fixed in 1.28.1, cnpg#9397).
-    # barmanObjectStore in shared-pg is deprecated since 1.26 and removed in
-    # 1.29.0 (the webhook says so), so 1.28 is the last minor before the
-    # Barman Cloud Plugin migration. Do not go past it until that is done.
+    # Upgraded one operator minor at a time (#2014): 1.28.1 -> 1.29.1 here.
+    # The charts repo follows only the newest operator minor, so 0.28.3
+    # (1.29.1) is the last chart for 1.29; 1.29.2+ have no chart.
+    # In-tree barmanObjectStore (still used by shared-pg) is deprecated and,
+    # per the 1.30.0 notes, removed in 1.31.0. 1.30 is therefore the last
+    # minor before the Barman Cloud Plugin migration must be finished. Do not
+    # retry that migration below 1.28.4 / 1.29.2 / 1.30.0: older operators
+    # deadlock the switchover when a WAL-archiver plugin is enabled on a
+    # running cluster (cnpg#10981, fixed by cnpg#11032; hit on 2026-10-21).
     # From 1.27 the liveness probe shuts down a primary that can reach
     # neither the API server nor any other instance. shared-pg's instances
     # reach each other through allow-shared-pg-ingress (same-namespace pods,
     # all ports), so an API server outage alone does not trip it.
-    targetRevision: 0.27.1
+    targetRevision: 0.28.3
     helm:
       values: |
         crds:
