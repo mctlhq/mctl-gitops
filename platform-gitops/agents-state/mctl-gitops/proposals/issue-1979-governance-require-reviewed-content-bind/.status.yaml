@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-10-19T13:04:10Z'
+status: merged
+updated_at: '2026-10-21T14:10:47Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-4a774f571ea3d61a
@@ -46,9 +46,6 @@ completion:
       required_total: 4
       optional_total: 1
   primary_observed: true
-review_attempts: 1
-refusals: 3
-refusals_head: 87edf593a504e3f063be25edd5ceb3a897a81a7a
 notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
   was never charged — the proposal is not at fault; a human must reconcile the review
   with the operator decision. Last reason: Findings 1 (P2) and 2 (P1, which is only
@@ -59,3 +56,9 @@ notes: 'The implementer declined to act 3 time(s) and the findings still stand. 
   not available in the working tree. Making the digest optional again would contradict
   the approved proposal''s requirement that approval bind to reviewed content, so
   I made no code change. A human or the orchestrator should'
+github:
+  state: merged
+  head_sha: e3dc12966569d10bbb908def5669a128c519c8fa
+  observed_at: '2026-10-21T14:10:47Z'
+merged_at: '2026-10-21T14:10:47Z'
+merge_commit: 9d8e7aedb917430f9d763df378e5992422d096cc
