@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-alice
-  tag: "2.2.1"
+  tag: "2.2.2-candidate-1a8e158"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -20,6 +20,9 @@ replicaCount: 1
 # shared Postgres (CNPG), so a rolling update is safe and avoids the gap.
 strategy:
   type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
 # Non-root on a read-only root filesystem (base-service hardening, step 2).
 # runAsNonRoot is checked by kubelet against a numeric user only, so the
 # ids this image already runs as are pinned (observed 2026-10-16); the
