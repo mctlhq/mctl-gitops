@@ -170,8 +170,17 @@ spec:
     # repository: an incident record in mctl-api, which a revert commit does
     # not bring back. On incident-responder-default it sits next to
     # proposal-status, so the whole chain (diagnose, accept the proposal,
-    # close the incident) runs with no human step. `null` below says that is
-    # how it works today. Whether it should have a gate is undecided.
+    # close the incident) runs with no human step.
+    #
+    # Decided 2026-10-21 (mctl-agents#703): it stays autonomous, with no
+    # human gate, so `null` below is now a decision and not only a record
+    # of the present. The basis is that the action is bound and
+    # attributable rather than approved: the mctl-agents policy checkpoint
+    # grants resolve and acknowledge only to the incident responder (a
+    # wildcard mctl tool grant does not cover them, mctl-agents 1.88.3),
+    # and mctl-api writes an audit row and the resolver for every
+    # successful incident change (mctl-api 4.114.0). See
+    # GHSA-x7vf-q75q-9467.
     - name: incident-resolve
       mutating: true
       requiresApproval: null
