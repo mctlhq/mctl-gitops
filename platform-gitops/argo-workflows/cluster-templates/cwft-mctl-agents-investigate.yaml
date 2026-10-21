@@ -80,7 +80,7 @@ spec:
         # https://github.com/mctlhq/mctl-telegram/issues/123
         # run-investigator fails fast with a clear message if empty.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.86.1
+        value: ghcr.io/mctlhq/mctl-agents:1.88.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -814,6 +814,16 @@ spec:
           # provenance). mctl-api accepts them since 4.66.0 (mctl-api#473).
           - name: MCTL_EVIDENCE_AMENDMENT_2
             value: "true"
+          # Durable decision/attempt records (mctlhq/mctl-api#701): each
+          # governed side effect opens a decision in mctl-api and records its
+          # attempts, using the evidence-writer token above. Never fatal: a
+          # write that does not land is counted as dropped, never as recorded.
+          # Needs mctl-agents >= 1.88.0 and mctl-api >= 4.113.0. Enabled on
+          # investigate first, the one fully governed surface that carries the
+          # evidence token; the staged surfaces follow once records are seen.
+          # Rollback: remove it (off by default).
+          - name: MCTL_DECISION_RECORDS
+            value: "on"
           # Policy checkpoint approvals backend (ADR 014; mctlhq/.github#181).
           # A non-read mcp__mctl__* call creates or redeems a durable approval
           # request in mctl-api instead of being blocked outright. Authenticates
