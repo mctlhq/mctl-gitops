@@ -41,7 +41,7 @@ or a second copy of business logic. Everything is built under an isolated
 ### Executable surface
 - WHEN `mctl-runtime doctor` runs THE SYSTEM SHALL report the binary version, the credential source in use (named only, never its value), upstream reachability, and the allowlist size. It SHALL exit non-zero on any failed check.
 - WHEN `mctl-runtime init --host fixture` runs, with or without `--dry-run`, THE SYSTEM SHALL print the generated host MCP config to stdout and SHALL NOT write any file.
-- IF `init` is given `--write --config-dir <dir>` THEN THE SYSTEM SHALL write only inside `<dir>`, and SHALL refuse unless `<dir>` is a fixture or temporary directory passed explicitly. It SHALL never default to a real host config path.
+- IF `init` is given `--write --config-dir <dir>` THEN THE SYSTEM SHALL write only inside `<dir>`, and SHALL refuse unless `<dir>` is an explicitly supplied directory inside a test-created temporary root containing a fixture marker; canonicalize both paths, require the target to remain below that root, and reject symlinks escaping it. A caller-supplied arbitrary directory or a denylist of known host paths is insufficient. It SHALL never default to a real host config path.
 - WHEN `mctl-runtime proxy` runs THE SYSTEM SHALL serve MCP over stdio to the host and forward allowlisted calls to one configured upstream over MCP streamable HTTP.
 
 ### J2 bridge semantics
@@ -64,7 +64,7 @@ or a second copy of business logic. Everything is built under an isolated
 - WHILE preflight is enabled THE SYSTEM SHALL only narrow: it may refuse locally, and it SHALL NOT synthesise a success or skip the upstream call for an allowed tool.
 
 ### J5 correlation
-- WHEN a proxied call completes THE SYSTEM SHALL emit one structured stderr line with: `invocation_id`, the host JSON-RPC request id, tool name, the SHA-256 of the canonical arguments, the upstream request or session id when present, outcome, `is_error`, and latency.
+- WHEN a proxied call completes THE SYSTEM SHALL emit one structured stderr line with: `invocation_id`, the host JSON-RPC request id, tool name, the SHA-256 of the canonical arguments, the upstream request id when present and a SHA-256 hash of the upstream session id (never the raw session id), outcome, `is_error`, and latency.
 - THE SYSTEM SHALL send `X-Mctl-Invocation-Id` upstream on each forwarded call.
 - THE SYSTEM SHALL NOT persist arguments or results, and SHALL NOT create any local database or on-disk audit file.
 
@@ -98,7 +98,7 @@ or a second copy of business logic. Everything is built under an isolated
 
 ## Open questions
 
-- The upstream request or execution id the runtime should correlate on is unknown. I could not observe whether `api.mctl.ai/mcp` returns a per-request id header. The spike correlates on `Mcp-Session-Id` plus any `X-Request-Id` the upstream returns, and records the gap if neither identifies a request.
+- The upstream request or execution id the runtime should correlate on is unknown. I could not observe whether `api.mctl.ai/mcp` returns a per-request id header. The spike correlates on a SHA-256 hash of `Mcp-Session-Id` plus any `X-Request-Id` the upstream returns, and records the gap if neither identifies a request.
 - Rust MCP library: `rmcp` (the official Rust SDK) versus a hand-rolled JSON-RPC subset. The proposal prefers `rmcp` pinned at an exact version and falls back to a minimal hand-rolled subset if `rmcp` cannot do stdio-to-streamable-HTTP passthrough at that version. The report records which was used and why.
 - macOS arm64 cross-build needs either a macOS runner or an SDK on Linux. The optional CI workflow uses a `macos-14` runner. If that is not permitted, the macOS result is recorded as "not measured", never as success.
 - The baseline language for the thin adapter: Python is assumed, because the `mcp==1.29.0` SDK is already pinned in `uv.lock`. A Node baseline is not built, and only ecosystem evidence is cited for it.
