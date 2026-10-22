@@ -18,7 +18,9 @@ Until it is explained:
   dashboards, reports or agent output.
 - Do not use Tempo for completeness-critical counts (spans per run, "every
   step of run X", SLO ratios). Count ingest with the collector
-  (`otelcol_exporter_sent_spans_total{exporter="otlp/backend"}`) or Tempo's
+  (`otelcol_exporter_sent_spans{exporter="otlp_grpc/backend"}`; the
+  collector exports these without a `_total` suffix and with the
+  `otlp_grpc` exporter type) or Tempo's
   `tempo_distributor_spans_received_total` instead.
 - Reading a trace to understand what happened is fine; a missing span in a
   fetched trace is not evidence the step did not run.
