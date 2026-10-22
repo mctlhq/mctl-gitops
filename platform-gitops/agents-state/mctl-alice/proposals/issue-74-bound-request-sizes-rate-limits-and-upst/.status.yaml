@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-22T18:38:10Z'
+status: merged
+updated_at: '2026-10-22T19:09:28Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-08d3c388aae46ae0
@@ -47,9 +47,10 @@ completion:
       required_total: 4
       optional_total: 1
   primary_observed: true
-review_attempts: 3
 notes: 'implementer declined to act: All findings already fixed in HEAD 8f2483a: (1)
   http-server.ts:704-706 always charges ip bucket, token key is extra dimension, test
   updated; (2) rate-limit.ts:94,109 /auth/qr-status has own qrstatus bucket (90/min);
   (3) http-server.ts handlePostMessage(req,res,parsed ?? raw). Finding 4 is a summary
   comment of 1-3.'
+merged_at: '2026-10-22T19:09:28Z'
+merge_commit: eaf49633b7d01dd3da76148b4e948f145d659ac9
