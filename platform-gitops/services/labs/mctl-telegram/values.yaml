@@ -126,6 +126,16 @@ env:
   OAUTH_CIMD_ACCEPT: "true"
   OAUTH_CIMD_ADVERTISE: "true"
   OAUTH_CIMD_ALLOWED_HOSTS: chatgpt.com,claude.ai,vscode.dev,www.town.com
+  # Client tool profiles (mctl-telegram 0.87.0, docs/design/core-profiles.md,
+  # runbook "Client tool profiles"): a token minted for a listed client sees
+  # only that profile's tools, re-resolved at every refresh. Town is bound by
+  # its CIMD client_id, matched byte for byte, to core-reply (owner,
+  # 2026-10-22). No redirect_uri record yet: while any exists, refresh
+  # families issued before 0.87.0 (2026-10-22) with no client_id record are
+  # refused once and must authorize again; they age out by 2026-11-21.
+  # Rollback: drop the record; the client returns to its scope surface at its
+  # next refresh.
+  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"}]'
   # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
   # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
   # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR
