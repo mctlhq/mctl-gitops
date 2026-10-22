@@ -200,5 +200,8 @@ externalSecret:
     # by name — gh picks up GITHUB_TOKEN on its own.
 
 # Bounded DevLoop rollout; other workflow types remain unsampled.
+# Off since the #1280 soak closed (2026-10-22): the eval Tempo is torn down
+# and no permanent trace backend exists yet. The Tempo adoption PR turns it
+# back on (docs/plans/tempo-adoption.md, if merged).
 otel:
-  enabled: true
+  enabled: false
