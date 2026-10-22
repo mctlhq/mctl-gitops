@@ -10,6 +10,15 @@ imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 8080
+# /metrics on its own port (mctlhq/mctl-alice#93): the Service gets a
+# `metrics` port that no Ingress routes to, so it is reachable only inside
+# the cluster; the app port answers 404 for /metrics. Scraped by the native
+# VMServiceScrape in bootstrap/templates/mctl-platform/mctl-alice-monitor.yaml,
+# hence serviceMonitor: false.
+metrics:
+  enabled: true
+  port: 9464
+  serviceMonitor: false
 backstage:
   kubernetesId: mctl-alice
 replicaCount: 1
@@ -45,6 +54,9 @@ env:
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
   AUTH_REQUIRED: "true"
+  # Starts the separate /metrics listener (mctlhq/mctl-alice#93); keep in
+  # sync with metrics.port above. Ignored by images without it.
+  METRICS_PORT: "9464"
   # Rate-limit key for anonymous clients (mctl-alice >= 2.2.9). Traefik
   # rewrites X-Forwarded-For to the Cloudflare edge address, so the client is
   # only visible in CF-Connecting-IP, which Cloudflare overwrites on every
@@ -107,62 +119,3 @@ externalSecret:
       remoteKey: teams/labs/mctl-alice
       property: YANDEX_CLIENT_SECRET
 extraContainers: []
-# Deny /metrics at the edge. mctl-alice serves /metrics on the app port for
-# the in-cluster VMServiceScrape (bootstrap/templates/mctl-platform/
-# mctl-alice-monitor.yaml), the same shape as mctl-telegram, and these are the
-# same two objects mctl-telegram uses for it (mctlhq/mctl-telegram#588; read
-# the comments there for why each field is what it is). The app itself also
-# answers 404 to a /metrics request carrying X-Forwarded-For or another proxy
-# header (mctl-alice >= the release with mctlhq/mctl-alice#93); this route is
-# the primary control and that check the second layer.
-#
-# Labels are literal, not `include "base-service.labels"`: a values file must
-# parse as YAML before extra-objects.yaml runs tpl over it, so only quoted
-# scalars can carry templates here.
-extraObjects:
-  - apiVersion: traefik.io/v1alpha1
-    kind: Middleware
-    metadata:
-      name: '{{ include "base-service.fullname" . }}-deny-metrics'
-      labels:
-        app.kubernetes.io/name: base-service
-        app.kubernetes.io/instance: labs-mctl-alice
-        app.kubernetes.io/part-of: mctl-platform
-        app.kubernetes.io/managed-by: Helm
-        mctl.me/component: metrics-edge-deny
-    spec:
-      # traefik v3 has no 403 middleware; an allowlist nothing can match
-      # (192.0.2.0/24, TEST-NET-1, RFC 5737) is how "deny" is spelled.
-      # ipAllowList is the traefik.io (v3) field name.
-      ipAllowList:
-        sourceRange:
-          - 192.0.2.0/24
-  - apiVersion: traefik.io/v1alpha1
-    kind: IngressRoute
-    metadata:
-      name: '{{ include "base-service.fullname" . }}-metrics-deny'
-      labels:
-        app.kubernetes.io/name: base-service
-        app.kubernetes.io/instance: labs-mctl-alice
-        app.kubernetes.io/part-of: mctl-platform
-        app.kubernetes.io/managed-by: Helm
-        mctl.me/component: metrics-edge-deny
-    spec:
-      # websecure only: the web entrypoint redirects every request to https
-      # before any router matches (traefik static config, kube-hetzner).
-      entryPoints:
-        - websecure
-      routes:
-        # Explicit priority so the deny wins over the chart Ingress's
-        # Host(...) && PathPrefix(/) regardless of rule-length ordering.
-        - match: Host(`alice.mctl.ai`) && PathPrefix(`/metrics`)
-          kind: Rule
-          priority: 1000
-          middlewares:
-            - name: '{{ include "base-service.fullname" . }}-deny-metrics'
-          services:
-            - name: '{{ include "base-service.fullname" . }}'
-              # Literal; keep in sync with service.port above.
-              port: 8080
-      tls:
-        secretName: mctl-alice-tls

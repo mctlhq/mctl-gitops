@@ -234,6 +234,8 @@ metrics:
   port: 9090
   path: /metrics
   interval: 30s
+  # false: keep the port, render no ServiceMonitor (scrape with a VMServiceScrape).
+  serviceMonitor: true
 
 # -- Optional: blue-green deployment via Argo Rollouts
 # When enabled, renders a Rollout instead of Deployment + a preview Service.

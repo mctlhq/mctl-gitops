@@ -265,9 +265,9 @@ tests:
                 The VMServiceScrape mctl-alice (bootstrap/templates/mctl-platform/
                 mctl-alice-monitor.yaml) has delivered no mctl_alice_build_info
                 for 15 minutes, so every other mctl-alice metric alert is
-                blind. A 404 on the scrape means /metrics saw a proxy header
-                or the image predates mctlhq/mctl-alice#93; `up` for the target
-                says whether the scrape itself fails.
+                blind. A refused connection on port 9464 means the image
+                predates mctlhq/mctl-alice#93 or METRICS_PORT is unset; `up`
+                for the target says whether the scrape itself fails.
       - eval_time: 16m
         alertname: MctlAliceProbeAbsent
         exp_alerts:

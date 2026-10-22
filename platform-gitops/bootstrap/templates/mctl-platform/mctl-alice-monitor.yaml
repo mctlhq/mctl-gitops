@@ -2,18 +2,17 @@
 # auth failures, rate-limit hits and Yandex upstream outcomes, read by
 # vm-rules/mctl-alice-alerts.yaml.
 #
-# Native VMServiceScrape rather than the chart's `metrics.enabled`, for the
-# reason mctl-agents-worker-monitor.yaml gives: that would render a
-# monitoring.coreos.com ServiceMonitor, which the VM operator converts and
-# leaves for ArgoCD to report as drift, and open a second port nothing needs.
+# Native VMServiceScrape rather than the chart's ServiceMonitor, for the
+# reason mctl-agents-worker-monitor.yaml gives: the VM operator converts a
+# monitoring.coreos.com ServiceMonitor and leaves it for ArgoCD to report as
+# drift. The alice values set metrics.serviceMonitor: false for that reason.
 #
-# `port: http`: mctl-alice serves /metrics on the app listener (8080), like
-# mctl-telegram. The scrape reaches the pod directly and carries no proxy
-# header, which is what the app requires before answering; requests through
-# the ingress are denied at the edge (extraObjects in
-# services/labs/mctl-alice/values.yaml) and refused by the app as well.
+# `port: metrics` (9464): mctl-alice serves /metrics only on that separate
+# listener. The chart's Ingress routes the `http` port alone, so the endpoint
+# is not reachable from outside the cluster; labs admits the monitoring
+# namespace on every port (NetworkPolicy allow-ingress-from-monitoring).
 #
-# Until a mctl-alice release with #93 is deployed, /metrics answers 404 and
+# Until a mctl-alice release with #93 is deployed nothing listens on 9464 and
 # this target reports up=0; nothing else changes.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
@@ -33,6 +32,6 @@ spec:
     matchNames:
       - labs
   endpoints:
-    - port: http
+    - port: metrics
       path: /metrics
       interval: 30s

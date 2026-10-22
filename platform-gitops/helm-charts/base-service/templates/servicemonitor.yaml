@@ -1,4 +1,7 @@
-{{- if .Values.metrics.enabled }}
+{{- /* serviceMonitor: false keeps the metrics port but renders no
+    monitoring.coreos.com ServiceMonitor, which the VM operator converts and
+    ArgoCD then reports as drift; scrape with a native VMServiceScrape instead. */}}
+{{- if and .Values.metrics.enabled (ne (toString .Values.metrics.serviceMonitor) "false") }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
