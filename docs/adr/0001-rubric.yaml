@@ -2,9 +2,10 @@
 # comparison: Traceway, Grafana Tempo, Langfuse, Arize Phoenix, SigNoz).
 #
 # Frozen means frozen: every `dimensions[].candidates[].score` and
-# `citation` below is null/empty in THIS commit, and stays that way until
-# mctlhq/mctl-gitops#1280 runs the live evaluation and fills them in from
-# measurements. tests/test_adr_rubric_frozen.py (T6) enforces both the
+# `citation` below was null/empty until mctlhq/mctl-gitops#1280 ran the live
+# evaluation and filled them in from measurements (2026-10-22, see
+# `verdict_record`). Since then the test checks the scored-state contract
+# instead: every cell is a cited score or a cited "not measured". tests/test_adr_rubric_frozen.py (T6) enforces both the
 # freeze and that this file's weights agree with the Markdown table in
 # docs/adr/0001-agent-execution-trace-backend.md, so the two cannot drift
 # apart and the rubric cannot be retrofitted to a favourite after scores
@@ -34,11 +35,23 @@ dimensions:
       search by workflow/repo/issue/PR/agent; error navigation; cross-link to
       logs where useful.
     candidates:
-      traceway: {score: null, citation: ""}
-      tempo: {score: null, citation: ""}
-      langfuse: {score: null, citation: ""}
-      phoenix: {score: null, citation: ""}
-      signoz: {score: null, citation: ""}
+      traceway: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      tempo:
+        score: 4
+        citation: >-
+          Measured 2026-10-10..22 (#1280 verdict record): in every fetched
+          trace each parent resolves except the documented virtual DevLoop
+          root;
+          Temporal/Argo/agent/tool spans visible; TraceQL search by
+          workflow/repo/issue/agent/status in 2.5-12 s through Grafana;
+          Loki<->Tempo links work both ways. Friction: trace-by-id over R2 is
+          3-8 s and times out under bulk reads (see operations), and a
+          time-bounded trace-by-id returned 5,092 of 6,930 in-window spans
+          (9 of 48 investigator traces came back without their investigator
+          spans); unexplained, ingest counters show no loss, so 4 not 5.
+      langfuse: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      phoenix: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      signoz: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
 
   - key: ai_agent_observability
     name: AI/agent observability
@@ -49,11 +62,19 @@ dimensions:
       conversation/session/agent-run grouping; ability to show one DevLoop
       run without storing full prompts/completions.
     candidates:
-      traceway: {score: null, citation: ""}
-      tempo: {score: null, citation: ""}
-      langfuse: {score: null, citation: ""}
-      phoenix: {score: null, citation: ""}
-      signoz: {score: null, citation: ""}
+      traceway: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      tempo:
+        score: 2
+        citation: >-
+          Measured: gen_ai.usage input/output/cache_read/cache_creation tokens
+          stored as integers and aggregatable per model/agent with TraceQL; tool
+          and MCP spans present; one DevLoop run = one trace. No per-call or
+          per-execution cost and no session/conversation UX: cost needs the
+          mctl-native contract (.github#48). Same level as the openclaw-llm-
+          usage baseline (decision rule branch 3).
+      langfuse: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      phoenix: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      signoz: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
 
   - key: data_ownership_portability
     name: Data ownership / portability
@@ -63,11 +84,19 @@ dimensions:
       ability to remove the backend with zero producer-code changes;
       backup/restore and retention controls.
     candidates:
-      traceway: {score: null, citation: ""}
-      tempo: {score: null, citation: ""}
-      langfuse: {score: null, citation: ""}
-      phoenix: {score: null, citation: ""}
-      signoz: {score: null, citation: ""}
+      traceway: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      tempo:
+        score: 4
+        citation: >-
+          Measured: AGPL-3.0 self-hosted; R2 blocks read back as vParquet4 with
+          pyarrow outside Tempo (2 blocks, 6 traces / 353 spans decoded);
+          producers depend only on OpenTelemetry/OTLP and export to the
+          Collector, so removing Tempo is a Collector/GitOps change; retention
+          336h configured. Backup/restore was not exercised and retention
+          deletion fell outside the window.
+      langfuse: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      phoenix: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      signoz: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
 
   - key: operations
     name: Operations
@@ -78,11 +107,22 @@ dimensions:
       storage/etc.); expected maintenance burden at mctl scale (three cx43
       workers).
     candidates:
-      traceway: {score: null, citation: ""}
-      tempo: {score: null, citation: ""}
-      langfuse: {score: null, citation: ""}
-      phoenix: {score: null, citation: ""}
-      signoz: {score: null, citation: ""}
+      traceway: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      tempo:
+        score: 3
+        citation: >-
+          Measured at the 2026-10-22 17:00Z cutoff: single binary, 1 pod, 0
+          restarts in 12 d, no PVC, peak working set 484 MiB of 1 GiB, CPU 0.008
+          cores avg / 0.28 peak, 1,266 blocks flushed and 0 failed, 0 discarded
+          spans, one natural R2 PUT 500 absorbed by retry (alert went pending,
+          never fired). After the cutoff, a full-window trace-by-id enumeration
+          throttled the 1-CPU pod to 80% and raised the working set to 898 MiB
+          (past the 80% line) with R2 range-read timeouts; ingestion was
+          unaffected. The read path needs its own limits before production. HA
+          and upgrades not exercised.
+      langfuse: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      phoenix: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      signoz: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
 
   - key: security_privacy
     name: Security / privacy
@@ -93,11 +133,19 @@ dimensions:
       payloads or private Telegram content; useful debugging/cost
       attribution from metadata-first telemetry.
     candidates:
-      traceway: {score: null, citation: ""}
-      tempo: {score: null, citation: ""}
-      langfuse: {score: null, citation: ""}
-      phoenix: {score: null, citation: ""}
-      signoz: {score: null, citation: ""}
+      traceway: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      tempo:
+        score: 4
+        citation: >-
+          Measured: poisoned fixture (13.10, 10 traces) stored every planted
+          value as ****, including a ghp_-shaped value under a neutral key;
+          final scan of all scanned spans found 0 credential-shaped values and
+          no unmasked prompt/argument keys. Redaction lives in the Collector,
+          not in Tempo; Tempo itself runs single-tenant without auth and is
+          reachable only through NetworkPolicy and Grafana.
+      langfuse: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      phoenix: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      signoz: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
 
   - key: evals_quality_loop
     name: Evals / quality loop
@@ -108,11 +156,17 @@ dimensions:
       evals rather than forcing backend-owned semantics; usefulness for
       tool-selection/context/retrieval evaluation.
     candidates:
-      traceway: {score: null, citation: ""}
-      tempo: {score: null, citation: ""}
-      langfuse: {score: null, citation: ""}
-      phoenix: {score: null, citation: ""}
-      signoz: {score: null, citation: ""}
+      traceway: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      tempo:
+        score: 0
+        citation: >-
+          Measured as absent: Tempo has no mechanism to attach an eval score,
+          dataset or experiment to an execution; a score could only travel as a
+          span attribute written by the producer, which was not built or tested
+          in this round.
+      langfuse: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      phoenix: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
+      signoz: {score: null, citation: "not deployed in this round: the 2026-10-10 bake-off scope amendment limited #1280 to Tempo, so this cell was not measured"}
 
 # 0-5 cell scale, shared across every dimension above. A score is only ever
 # assigned by #1280 from a measurement or a documented, reproducible test
@@ -180,7 +234,32 @@ permitted_verdicts:
   - "ADOPT TEMPO / mctl-native only"
   - "CONTINUE COMPARISON with an explicit unresolved blocker"
 
-verdict: null
+verdict: "ADOPT TEMPO / mctl-native only"
+
+# Recorded by mctlhq/mctl-gitops#1280 on 2026-10-22. Only Tempo was deployed
+# (bake-off scope amendment, 2026-10-10), so only its column is scored; every
+# other cell carries the reason it was not measured. The window was closed
+# early by owner decision (ADR "Window amendment"), so these scores rest on
+# 293 h of the declared 324 h.
+verdict_record:
+  window_declared: "2026-10-10T11:55Z/2026-10-23T23:59Z"
+  window_actual: "2026-10-10T11:55Z/2026-10-22T17:00Z"
+  weighted_total:
+    tempo: 315
+  baseline_ai_agent_observability:
+    score: 2
+    citation: >-
+      Read from the openclaw-llm-usage dashboard as last committed (removed
+      with the openclaw runtime in 79227e9e2): tokens incl. cached by
+      provider and pod, request rates, per-command attribution from Loki; no
+      cost, no tool spans, no per-run tree. Not a deployed candidate, so this
+      is a reading of the dashboard definition, not a measurement.
+  decision_rule_branch: 3
+  decision_rule_reasoning: >-
+    Branches 1 and 2 compare candidates against each other and only one was
+    measured, so neither can be satisfied by evidence. Branch 3 holds: Tempo's
+    ai_agent_observability (2) does not exceed the baseline (2) by more than
+    one point.
 
 # Stage A paper screen: what was verified against this clone/issue text
 # versus what is only asserted by issue #903 itself. A row whose evidence is
