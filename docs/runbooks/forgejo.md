@@ -62,7 +62,7 @@ any web login, and setting `ENABLE_INTERNAL_SIGNIN: true` restores the form.
 - Database: shared-pg CNPG backup to R2 (see `docs/runbooks/restore.md`).
 - Volume: CronJob `forgejo-backup`, daily 03:30 UTC, tarball of `/data`
   (minus `queues/`, `indexers/`) to
-  `s3://forgejo-backup/forgejo-backups/`, last 14 kept. The archive is
+  `s3://forgejo-backup/forgejo-backups/`, last 2 kept. The archive is
   crash-consistent; run `git fsck` on restored repositories.
 - The R2 token is bucket-scoped on purpose and must stay that way: the shared
   `platform/vault/r2-backup` key also reaches Vault snapshots and every CNPG
