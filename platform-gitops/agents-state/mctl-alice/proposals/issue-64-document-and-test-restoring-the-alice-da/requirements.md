@@ -50,14 +50,20 @@ section 5: "restore a backup").
   `labs-mctl-alice` role, leaving the live database untouched until the
   switch-over step.
 - WHEN the operator switches over THE SYSTEM SHALL keep the app's
-  `DATABASE_URL`, pg_hba rule and CNPG `Database` resource unchanged. To do
-  this it scales the app to zero, renames the live database to a dated
-  `-pre-restore` name, renames the restored database to `labs-mctl-alice`, and
-  scales the app back up.
+  `DATABASE_URL` and CNPG `Database` resource unchanged. Any temporary pg_hba
+  access for verification is narrowly scoped and removed after verification.
+  Before scaling, suspend ArgoCD auto-sync/self-heal (including any parent
+  reconciler that can re-enable it), record its prior settings, confirm they
+  remain suspended, then scale the app to zero and wait for all app pods to stop.
+  Only then rename the live database to a dated
+  `-pre-restore` name, rename the restored database to `labs-mctl-alice`, and
+  scale the app back up. After verification or rollback, restore the recorded
+  reconciliation settings and confirm the desired replica count and sync state.
 - WHEN `node dist/restore-check.js` runs against a database URL THE SYSTEM
   SHALL report, without writing anything: the row count for each table; whether
   every expected table exists and is owned by, or fully usable by, the
-  connecting role; how many encrypted credentials are not under the active key;
+  application role; check SELECT, INSERT, UPDATE and DELETE individually and
+  require all four (plus schema USAGE and any required sequence privileges); how many encrypted credentials are not under the active key;
   how many no configured key can decrypt; and how many bearer-secret values are
   not `sha256:` digests.
 - IF any expected table is missing, any table is not usable by the connecting
@@ -68,6 +74,12 @@ section 5: "restore a backup").
 - WHEN the check runs in a container that has no `ENCRYPTION_KEY` and no
   `ENCRYPTION_KEYS` THE SYSTEM SHALL fail the decryption check instead of
   falling back to the development key.
+- WHEN the verifier connects THE SYSTEM SHALL use a one-off Node pod with the
+  application role over authenticated PostgreSQL TCP/TLS, a narrowly scoped
+  temporary pg_hba rule for the restored database and that role, and the required
+  NetworkPolicy allowance. Prepare those changes through the owning GitOps path;
+  remove them afterwards. `SET ROLE` cannot replace connection authentication,
+  and a separate pod cannot use the database pod's local postgres socket.
 - WHEN the exercise has been performed THE SYSTEM SHALL have a dated entry in
   the runbook's "Exercise log" section. The entry records the recovery target
   time, the elapsed time of each phase, the check output (counts only), any
