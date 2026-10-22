@@ -241,6 +241,10 @@ spec:
               # receiver (see docs/runbooks/otel-collector.md).
               otlp/backend:
                 endpoint: {{ .Values.otelCollector.backendEndpoint | quote }}
+                {{- if .Values.otelCollector.backendInsecure }}
+                tls:
+                  insecure: true
+                {{- end }}
                 sending_queue:
                   enabled: true
                   num_consumers: 4

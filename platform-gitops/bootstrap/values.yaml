@@ -19,10 +19,15 @@ otelCollector:
   # clusterName/environment.
   clusterName: mctl-preprod
   environment: preprod
-  # Empty until a trace backend is chosen. With this empty, the collector's
-  # traces pipeline lists only the debug exporter -- see
-  # docs/runbooks/otel-collector.md for the one-key swap procedure.
-  backendEndpoint: ""
+  # The permanent trace backend: Tempo in `tracing` (the `tracing` block
+  # below; ADR 0001 verdict, docs/plans/tempo-adoption.md). Set it back to ""
+  # for the cheapest rollback -- the collector keeps only the debug exporter
+  # -- see docs/runbooks/otel-collector.md for the one-key swap procedure.
+  backendEndpoint: "tempo.tracing.svc.cluster.local:4317"
+  # Plaintext OTLP/gRPC to backendEndpoint. Tempo's receiver is
+  # cluster-internal and admits only `monitoring` (tracing/tempo/
+  # networkpolicy.yaml), the same trust boundary the eval fan-out used.
+  backendInsecure: true
   # issue-903: generalized fan-out for the trace-backend comparison spike.
   # Empty by default, so the rendered collector ConfigMap stays
   # byte-identical to the backendEndpoint-only render. Each entry is
@@ -220,6 +225,131 @@ otelCollector:
           # eval/tempo/servicescrape.yaml.
           serviceMonitor:
             enabled: false
+
+# Permanent trace backend (mctlhq/mctl-gitops#1280 verdict, ADR 0001:
+# ADOPT TEMPO / mctl-native only; plan docs/plans/tempo-adoption.md, approved
+# by the owner 2026-10-22). A separate deployment, not the bake-off sandbox
+# promoted: its own namespace `tracing`, its own Application (tracing-tempo,
+# bootstrap/templates/observability/tracing.yaml) and its own manifests
+# (infra-components/observability/tracing/tempo/). It reuses the soak's R2
+# bucket `tempo-traces` and Vault secret/platform/r2-tempo, so traces from
+# the soak stay readable within retention. Runbook: docs/runbooks/tempo.md.
+#
+# KNOWN LIMITATION (owner, 2026-10-22): during the soak a time-bounded
+# trace-by-id returned 5,092 of 6,930 in-window spans, cause unexplained
+# (ADR 0001 Decision). Until it is explained, nothing may promise or rely on
+# complete trace or span enumeration from this Tempo, and it is not a source
+# for completeness-critical counts -- the collector and Tempo ingest counters
+# are.
+tracing:
+  enabled: true
+  # The namespace's ResourceQuota/LimitRange are plain manifests in
+  # manifestsPath (tracing/tempo/namespace-policy.yaml), not values: they
+  # must sync inside the Application, not from root-app (tracing.yaml).
+  tempo:
+    # The version the soak measured: community chart `tempo` 2.4.0 ->
+    # Tempo 2.10.8 (resolved 2026-10-10, digest
+    # sha256:fad57f9ddd7d65f46158ee3455d32b7de6b3c1e4a3ce35757d2a8c5b2eb4481b).
+    # Moving to the 3.x line is its own change.
+    repoURL: https://grafana-community.github.io/helm-charts
+    chart: tempo
+    targetRevision: "2.4.0"
+    manifestsPath: platform-gitops/infra-components/observability/tracing/tempo
+    values:
+      fullnameOverride: tempo
+      # Single binary (target=all). The compactor in it enforces retention,
+      # so it must not be split out.
+      replicas: 1
+      tempo:
+        reportingEnabled: false
+        # A ballast counts as live heap for the Go GC; with GOMEMLIMIT below
+        # the runtime would collect continuously.
+        memBallastSizeMbs: 0
+        # 14 days, half the bucket's 30-day lifecycle rule, so Tempo deletes
+        # its blocks before the bucket expires them underneath it.
+        retention: 336h
+        extraArgs:
+          config.expand-env: "true"
+        extraEnvFrom:
+          - secretRef:
+              name: tempo-r2
+        extraEnv:
+          # Soft limit below the 2Gi container limit.
+          - name: GOMEMLIMIT
+            value: "1600MiB"
+        # The soak's main lesson: one bulk trace-by-id run over ~200 blocks
+        # throttled the 1-CPU sandbox to 80% and took its working set to
+        # 898 MiB. Twice the sandbox's limits, and the read path is bounded
+        # so a heavy reader gets errors instead of starving ingestion.
+        resources:
+          requests:
+            cpu: 200m
+            memory: 768Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        querier:
+          # Default 20. Each query fans out into block reads against R2.
+          max_concurrent_queries: 4
+        queryFrontend:
+          # Default 2000 queued requests per tenant; past 100 the frontend
+          # answers 429 instead of queueing work the querier cannot drain.
+          max_outstanding_per_tenant: 100
+          # Upper bound on every frontend API request, trace-by-id included
+          # (default 0 = none). The unranged full-window fetch in the soak
+          # held the pod at its CPU limit with no end; this ends it instead.
+          api_timeout: 1m
+          trace_by_id:
+            # Parallel block-shard reads per trace-by-id (default: all at
+            # once).
+            concurrent_shards: 4
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+        # tempo.receivers stays at the chart default: the chart's
+        # _ports.tpl dereferences every protocol key, so it cannot be
+        # narrowed through values. The NetworkPolicies decide what reaches
+        # the pod (tracing/tempo/networkpolicy.yaml).
+        storage:
+          trace:
+            backend: s3
+            s3:
+              bucket: ${TEMPO_S3_BUCKET}
+              endpoint: ${TEMPO_S3_ENDPOINT}
+              access_key: ${TEMPO_S3_ACCESS_KEY}
+              secret_key: ${TEMPO_S3_SECRET_KEY}
+              region: auto
+              forcepathstyle: true
+            local: null
+            # WAL on the emptyDir below. It survives a container restart but
+            # not a pod deletion or reschedule, so up to one block duration
+            # (5 minutes) of unflushed spans can be lost. A STANDING accepted
+            # risk, explicitly accepted by the owner on 2026-10-22: the
+            # default StorageClass is a billed Hetzner volume.
+            wal:
+              path: /var/tempo/wal
+        ingester:
+          max_block_duration: 5m
+        extraVolumeMounts:
+          - name: tempo-data
+            mountPath: /var/tempo
+      persistence:
+        enabled: false
+      extraVolumes:
+        - name: tempo-data
+          emptyDir:
+            sizeLimit: 2Gi
+      tempoQuery:
+        enabled: false
+      serviceAccount:
+        automountServiceAccountToken: false
+      # Off: vmagent runs selectAllByDefault: true (monitoring.yaml:287), the
+      # #1159 double-scrape. The one scrape is tracing/tempo/servicescrape.yaml.
+      serviceMonitor:
+        enabled: false
 
 # Usage-writer principal for the FinOps usage ledger (mctlhq/.github#50,
 # variant B): service:mctl-agents-usage, which may only append usage records

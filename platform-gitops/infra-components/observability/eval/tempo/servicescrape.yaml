@@ -10,7 +10,7 @@
 # (tempo-prom-metrics, :3200), see pushgateway/servicescrape.yaml for why.
 #
 # job="tempo" (the Service name, the operator's default jobLabel) is what
-# vm-rules/tempo-eval-alerts.yaml matches on.
+# vm-rules/tempo-alerts.yaml (renamed from tempo-eval-alerts.yaml) matched on.
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
 metadata:

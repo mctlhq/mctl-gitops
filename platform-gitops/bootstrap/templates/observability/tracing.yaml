@@ -1,0 +1,66 @@
+{{- /*
+The permanent trace backend (mctlhq/mctl-gitops#1280 verdict, ADR 0001:
+ADOPT TEMPO / mctl-native only; docs/plans/tempo-adoption.md). A separate
+deployment, not the bake-off sandbox promoted: eval-namespace.yaml and
+eval-candidates.yaml stay the disposable path, this file is the kept one.
+
+root-app renders only two objects here: the cluster-scoped Namespace and the
+Application in `argocd`. Everything namespaced inside `tracing` -- the
+default-deny NetworkPolicies, the ResourceQuota/LimitRange, the
+ExternalSecret, the scrape -- lives in the Application's own manifestsPath,
+synced in waves before the StatefulSet. That is deliberate: Argo CD
+validates every task of a sync against the LIVE AppProject before any wave
+runs, so a root-app sync that both adds `tracing` to project `default` and
+creates the first resource inside it loops on "one or more synchronization
+tasks are not valid" (gitops#1925). With this split root-app's own tasks
+are all valid against the old project, the project update lands in the same
+sync, and the Application syncs once its destination is permitted.
+
+The Namespace is empty until that Application's first wave applies
+default-deny-all, and nothing else deploys into it.
+
+Runbook: docs/runbooks/tempo.md.
+*/}}
+{{- if .Values.tracing.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tracing
+  labels:
+    mctl.ai/purpose: trace-backend
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tracing-tempo
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: {{ .Values.tracing.tempo.repoURL }}
+      chart: {{ .Values.tracing.tempo.chart }}
+      targetRevision: {{ .Values.tracing.tempo.targetRevision | quote }}
+      helm:
+        valuesObject:
+          {{- .Values.tracing.tempo.values | toYaml | nindent 10 }}
+    - repoURL: {{ .Values.spec.source.repoURL }}
+      targetRevision: {{ .Values.spec.source.targetRevision }}
+      path: {{ .Values.tracing.tempo.manifestsPath }}
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: tracing
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+{{- end }}

@@ -255,7 +255,7 @@ spec:
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
               default|cert-manager|traefik|vault|external-secrets|monitoring|platform|\
               temporal|backstage|minio|database|forgejo|zitadel|\
-              local-path-storage|system-upgrade|observability-eval|\
+              local-path-storage|system-upgrade|observability-eval|tracing|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
@@ -393,7 +393,7 @@ spec:
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
               default|cert-manager|traefik|vault|external-secrets|monitoring|platform|\
               temporal|backstage|minio|database|forgejo|zitadel|\
-              local-path-storage|system-upgrade|observability-eval|\
+              local-path-storage|system-upgrade|observability-eval|tracing|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\

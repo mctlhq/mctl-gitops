@@ -217,17 +217,16 @@ and `eval-candidates.yaml` (one ArgoCD Application per entry in
 `tempo` candidate is enabled. With the key `false`, all of them render
 nothing.
 
-**Current state (#1280, 2026-10-10): the sandbox is open with one
-candidate, Tempo.** The collector therefore exports every span it receives
-to `debug` **and** to `otlp/eval-tempo`
-(`tempo.observability-eval.svc.cluster.local:4317`). No workload emits OTLP
-to the collector yet, so in practice only the fixture emitter below reaches
-Tempo; when a producer is instrumented, its spans fan out to Tempo too, and
-that is a recorded amendment to the bake-off, not a side effect. Export
-problems towards Tempo raise `TempoEvalCollectorExportFailures` /
-`TempoEvalCollectorDroppedSpans` (Telegram only). Closing the sandbox
-(`otelCollector.eval.enabled: false`) removes the exporter in the same
-commit.
+**Current state (2026-10-22): the sandbox is closed and Tempo is the
+permanent backend.** The #1280 soak ended with ADOPT TEMPO / mctl-native
+only (ADR 0001); the sandbox was torn down in #2073. The collector exports
+every span to `debug` **and** to `otlp/backend`
+(`otelCollector.backendEndpoint` = `tempo.tracing.svc.cluster.local:4317`,
+`backendInsecure: true`), the permanent Tempo in namespace `tracing`
+(`docs/runbooks/tempo.md`). Export problems towards it raise both the
+generic `OtelCollectorExportFailures` / `OtelCollectorQueueNearFull` above
+and the Telegram-only `TempoCollectorExportFailures` /
+`TempoCollectorDroppedSpans` (`vm-rules/tempo-alerts.yaml`).
 
 `platform-gitops/argo-workflows/cluster-templates/wft-otel-trace-fixture.yaml`
 is a registered `ClusterWorkflowTemplate` (`otel-trace-fixture`) that POSTs
