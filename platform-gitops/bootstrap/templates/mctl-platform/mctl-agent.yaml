@@ -117,9 +117,10 @@ spec:
         # ticket stores its trace_id. Older tags emit spans only. Spans go to
         # the Collector, never to a backend directly; where they land is the
         # Collector's choice (today the #1280 Tempo eval). Turning this off
-        # restores the untraced agent, which works unchanged.
+        # restores the untraced agent, which works unchanged. Off since the
+        # #1280 soak closed (2026-10-22), until the Tempo adoption PR.
         otel:
-          enabled: true
+          enabled: false
         envFrom:
           - secretRef:
               name: mctl-agent-secrets
