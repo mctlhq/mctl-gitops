@@ -52,6 +52,8 @@ TRACKED = [
     "hetzner_csi_version",
     "kured_version",
     "sys_upgrade_controller_version",
+    "traefik_version",
+    "cert_manager_version",
     "hetzner_ccm_merge_values",
     "hetzner_csi_values",
 ]

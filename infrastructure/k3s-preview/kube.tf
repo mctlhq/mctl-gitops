@@ -97,6 +97,17 @@ locals {
   hetzner_csi_version = "v2.21.2"
   kured_version       = "1.21.0"
 
+  # The module's Traefik and cert-manager HelmCharts default to an unpinned
+  # chart ("" and "*"), which resolves to the newest chart whenever
+  # helm-controller re-runs the install job. A k3s minor upgrade always re-runs
+  # it: the job's config hash covers its pod template, and the bundled
+  # klipper-helm image changes (v0.11.1-build20260615 in v1.33.13+k3s1,
+  # v0.13.3-build20260727 in v1.34.12+k3s1, the planned upgrade). Pinned to the charts running on
+  # 2026-10-22 so the k3s upgrade does not also upgrade ingress and ACME.
+  # Bump them here, deliberately, in their own change.
+  traefik_version      = "42.0.0"
+  cert_manager_version = "v1.20.3"
+
   # Equal to the module default; pinned here so a module upgrade cannot move
   # it without a matching change to extra-manifests/system-upgrade-controller.yaml.tpl.
   sys_upgrade_controller_version = "v0.18.0"
@@ -188,6 +199,8 @@ locals {
     local.hetzner_csi_version,
     local.kured_version,
     local.sys_upgrade_controller_version,
+    local.traefik_version,
+    local.cert_manager_version,
     local.hetzner_ccm_merge_values,
     local.hetzner_csi_values,
   ]))
@@ -385,6 +398,8 @@ module "kube-hetzner" {
   hetzner_csi_version            = local.hetzner_csi_version
   kured_version                  = local.kured_version
   sys_upgrade_controller_version = local.sys_upgrade_controller_version
+  traefik_version                = local.traefik_version
+  cert_manager_version           = local.cert_manager_version
 
   # The chart default is requests 100m/50Mi with no limit. The 7-day peak
   # working set was 72Mi on 2026-10-19, above the request, and nothing bounded
