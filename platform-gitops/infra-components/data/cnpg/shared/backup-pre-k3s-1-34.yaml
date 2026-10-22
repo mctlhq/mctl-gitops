@@ -1,0 +1,15 @@
+# One-shot base backup before the k3s 1.34 upgrade (#2066), so the newest
+# restorable base predates the control-plane restart and the node drains.
+# Replaces backup-r2-initial.yaml: that Backup (shared-pg-r2-initial) was
+# recreated during the 2026-10-21 plugin rollback and failed mid pod roll;
+# a failed Backup restores nothing, and pruning it deletes no data in R2.
+# Harmless once completed; remove after the upgrade.
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: shared-pg-pre-k3s-1-34
+spec:
+  cluster:
+    name: shared-pg
+  method: barmanObjectStore
+  target: prefer-standby
