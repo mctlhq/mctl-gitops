@@ -21,7 +21,10 @@ K4. kured.yaml.tpl renders the hash as an annotation and the image tag from
 K5. system-upgrade-controller.yaml.tpl does the same for the Deployment, is
     listed in kustomization.yaml.tpl, and stays a COMPLETE Deployment: the
     module applied upstream's with `kubectl apply`, so a partial one would
-    make kubectl's three-way merge delete the fields it leaves out.
+    make kubectl's three-way merge delete the fields it leaves out. It
+    tolerates node.kubernetes.io/unschedulable: the controller is the only
+    thing that uncordons the control plane after the k3s-server plan, so it
+    must be schedulable on the cordoned node (2026-10-22 deadlock).
 K6. hetzner_csi_values replaces the module's default CSI values wholesale, so
     it must carry the default node affinity (control plane DoesNotExist,
     provided-by NotIn robot) and set resources for every chart container.
@@ -171,6 +174,15 @@ def main() -> int:
             check(bool(spec.get("selector")) and bool(spec.get("strategy")), "K5: Deployment lost its selector or strategy")
             for field in ("affinity", "tolerations", "volumes", "serviceAccountName"):
                 check(bool(pod.get(field)), f"K5: pod spec lost {field}; a partial Deployment strips live fields")
+            check(
+                any(
+                    t.get("key") == "node.kubernetes.io/unschedulable"
+                    and t.get("operator") == "Exists"
+                    and t.get("effect") in (None, "NoSchedule")
+                    for t in pod.get("tolerations") or []
+                ),
+                "K5: controller must tolerate node.kubernetes.io/unschedulable, or a reschedule during the k3s-server plan deadlocks the upgrade",
+            )
             vols = [v["name"] for v in pod.get("volumes") or []]
             check(vols[:1] == ["ca-certificates"], f"K5: the module's ca-certificates volume must come first, got {vols}")
             c = (pod.get("containers") or [{}])[0]
