@@ -196,15 +196,15 @@ argo-cd:
 
   # Server ingress configuration
   server:
-    # SOC F11: singleton server. minAvailable 1 allows 0 voluntary evictions
-    # (drain/kured). Replica count stays 1. Rolling updates still work because
-    # Deployments do not use the Eviction API.
-    # TEMPORARY: 2 replicas for the k3s 1.34 upgrade window (#2066). The
-    # agent upgrade Plan drains each worker with no timeout; with a single
-    # replica this PDB allows 0 evictions, so the drain would retry for
-    # hours with the node cordoned (the 2026-06-27 NodeCordoned storm).
-    # Two replicas let the drain evict one while the other serves. Revert to
-    # 1 (remove this line) once all nodes run 1.34.
+    # SOC F11: two replicas behind minAvailable 1. With one replica this PDB
+    # allows 0 voluntary evictions, so a node drain (kured, the SUC agent
+    # plan, which has no drain timeout) retries for hours with the node
+    # cordoned: the 2026-06-27 NodeCordoned storm. Two replicas let a drain
+    # evict one while the other keeps serving the UI and the GitHub webhook.
+    # Added for the k3s 1.34 upgrade (#2068) and kept: the 2026-10-22 drains
+    # of all three workers went through without a stall. Cost: one more
+    # 128Mi request; peak CPU over 14 days was 0.1 core, so this is for
+    # availability, not load.
     replicas: 2
     pdb:
       enabled: true
@@ -280,9 +280,11 @@ argo-cd:
     enabled: false
 
   repoServer:
-    # SOC F11: singleton repo-server. Same drain protection as server.pdb.
-    # TEMPORARY: 2 replicas for the k3s 1.34 upgrade window (#2066), same
-    # reason as server.replicas above. Revert to 1 afterwards.
+    # SOC F11: two replicas, same drain reasoning as server.replicas above.
+    # Load also justifies it here: before #2068 the single repo-server was
+    # CPU-throttled in up to 72% of periods at its 1-CPU limit (5m windows,
+    # 14 days to 2026-10-22), and argocd_repo_pending_request_total was >= 1
+    # for 612 minutes in that window and peaked at 7.
     replicas: 2
     pdb:
       enabled: true
