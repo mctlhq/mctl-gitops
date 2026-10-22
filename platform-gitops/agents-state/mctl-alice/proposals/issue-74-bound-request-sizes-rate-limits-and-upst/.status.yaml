@@ -1,10 +1,10 @@
-status: proposed
-updated_at: '2026-10-22T17:24:32Z'
+status: implemented
+updated_at: '2026-10-22T18:23:30Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-8d718eb4a92b9a60
-  trace_id: 8ff56bb2511ec9769316cd46be850abb
-  agent: issue-investigator
+  context_id: ex-08d3c388aae46ae0
+  trace_id: 5f836231d964de11a7de2b35f16197c3
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -18,3 +18,38 @@ context:
   content_hash: sha256:b189f6d54dfdf1ceb4262927133f7c341a5583cb797136f513e0177b29c4e64e
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-22T17:26:52Z'
+  content_digest: sha256:7841f8068baba60f4e4081ac46c1fbf62d2b2894367aa5910a2f6b1163a1b7fb
+  digest_binding: reviewed
+  approval_ref: aar_3efa58c5bdd04678b01c10343dada47b
+attempt:
+  id: 794262f67d97ad7e9de0441289b005325191d43abbc612c7124ea73005768edf
+  started_at: '2026-10-22T17:28:15Z'
+  expires_at: '2026-10-22T19:38:15Z'
+  finished_at: '2026-10-22T17:34:51Z'
+pr: https://github.com/mctlhq/mctl-alice/pull/75
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-8662c0ec
+  authoritative:
+    completion_id: ic-1fbe0d41b08b5024
+    content_hash: sha256:1fbe0d41b08b5024e4ba7db66716563c28ad8164154c06d7c490d11cb7aa3006
+    proposal_digest: sha256:7841f8068baba60f4e4081ac46c1fbf62d2b2894367aa5910a2f6b1163a1b7fb
+    attempt_id: 794262f67d97ad7e9de0441289b005325191d43abbc612c7124ea73005768edf
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 46fa69e3eb8db7944d04d2e2892f5d28f11eab69
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 1
+  primary_observed: true
+review_attempts: 2
+notes: 'implementer declined to act: All findings already fixed in HEAD 8f2483a: (1)
+  http-server.ts:704-706 always charges ip bucket, token key is extra dimension, test
+  updated; (2) rate-limit.ts:94,109 /auth/qr-status has own qrstatus bucket (90/min);
+  (3) http-server.ts handlePostMessage(req,res,parsed ?? raw). Finding 4 is a summary
+  comment of 1-3.'

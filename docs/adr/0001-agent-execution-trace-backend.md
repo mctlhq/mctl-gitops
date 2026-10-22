@@ -1,6 +1,6 @@
 # ADR 0001: Agent execution trace backend
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Numbering note.** `docs/adr/` does not exist anywhere else in
 `mctlhq/mctl-gitops` before this proposal. ADR-007, ADR-008 and ADR-010 are
@@ -380,12 +380,127 @@ teardown commit (runbook step 9) also removes the producer's OTLP env and
 `otel.enabled`, so nothing keeps emitting into a Collector that has no trace
 backend.
 
+## Window amendment: soak closed early (#1280, recorded 2026-10-22, after the declaration)
+
+**This changes a declared parameter after measurements had started.** The
+soak declaration above fixes the window before any measurement so that its
+length cannot be chosen after looking at the data. This amendment shortens
+it anyway, and says so here rather than leaving the earlier end date in
+place.
+
+- **Decision.** The owner shortened the window on 2026-10-22.
+- **Reason.** Operator capacity. The operator budget available for this
+  work would not stretch to a separate closing session after the declared
+  end, so the owner chose to close now. No measurement prompted it: no
+  stop rule had fired, and no result was pending that an earlier end would
+  avoid.
+- **Declared window:** 2026-10-10 11:55Z (the synthetic proof) to
+  2026-10-23 23:59Z, 13 days 12 h 04 min (324 h 04 min).
+- **Actual window:** 2026-10-10 11:55Z to **2026-10-22 17:00Z**, 12 days
+  05 h 05 min (293 h 05 min). Every counter in the verdict is read at
+  17:00Z, and every check run after it is reported separately.
+- **Shortfall:** 1 day 6 h 59 min (30 h 59 min). The actual window is
+  90.4% of the declared one, 9.6% shorter.
+- **Consequence.** The verdict below rests on a shorter window than the
+  one declared. The missing 31 hours would have carried more of the same
+  traffic: Tempo received between 3 and 1,330 spans a day (UTC days 11 to
+  21 October). So the volume, the stop rules and the privacy scan each lack
+  about one more day of the same kind of data. Nothing else changes. The synthetic volume, the producer cap, storage, retention
+  and the teardown date of 2026-10-24 stay as declared.
+
 ## Decision
 
-<!-- VERDICT: UNFILLED -->
+**ADOPT TEMPO / mctl-native only** (#1280, recorded 2026-10-22).
 
-Not yet decided. The live evaluation that produces the scores for the
-matrix above is tracked as mctlhq/mctl-gitops#1280. This section is filled
-by that issue with exactly one of the seven verdicts listed under
-"Permitted verdicts", and this ADR's status moves from Proposed to Accepted
-at the same time.
+**Caveat first: the window was shortened.** This verdict rests on a soak
+window of 293 hours, not the 324 hours declared before the measurements.
+The owner closed it 30 h 59 min early for operator capacity; see "Window
+amendment" above. It is a verdict on less evidence than was promised, and
+it should be read that way.
+
+**Scope of the evidence.** Only Tempo was deployed (bake-off scope
+amendment). The other four candidates' cells are null with that reason, so
+this is not a finding that Tempo beats them. It is a finding that Tempo,
+with mctl's own dashboards, is good enough to keep, and that nothing
+measured here justifies running an AI-specialist backend next to it.
+
+**Scores** (Tempo column of `docs/adr/0001-rubric.yaml`; each cell's
+citation is the evidence):
+
+| Dimension | Weight | Tempo | Weighted |
+|---|---|---|---|
+| Trace reconstruction | 25 | 4 | 100 |
+| AI/agent observability | 25 | 2 | 50 |
+| Data ownership / portability | 20 | 4 | 80 |
+| Operations | 15 | 3 | 45 |
+| Security / privacy | 10 | 4 | 40 |
+| Evals / quality loop | 5 | 0 | 0 |
+| **Total** | **100** | | **315 / 500** |
+
+**Decision rule.** Branches 1 and 2 rank candidates against each other.
+With one candidate measured, neither can be met by evidence. Branch 3
+holds: Tempo's AI/agent score (2) does not exceed what the
+`openclaw-llm-usage` dashboard pattern delivered (also 2: tokens by
+provider, no cost, no tool spans) by more than one point. Branch 3 is the
+deliberate default, and its verdict is ADOPT TEMPO / mctl-native only.
+
+**What decided it**, from the soak record on #1280:
+
+- **Volume.** Tempo received 7,170 spans by 17:00Z. Of those, 240 are the
+  pre-window synthetic proof, 40 the poisoned privacy fixture and 1 a
+  manual `release-tail.export-check` span of unrecorded origin (16 October),
+  so synthetic spans total 281 of the 5,000 allowed. Producer spans were
+  about 6,890, far under the 500,000 cap. Traffic was real but light: 139
+  traces in the window, enumerated identically by every TraceQL query
+  shape tried.
+- **Nothing lost on the way.** Collector accepted = Collector sent to
+  Tempo = Tempo received = 7,170 spans at 17:00Z. Refused 0, discarded 0,
+  failed flushes 0, exporter queue never above 0. No stop rule fired inside
+  the window.
+- **Traces reconstruct, when read whole.** In every fetched trace each
+  span's parent resolves, except the documented DevLoop virtual root, which
+  is never exported. TraceQL finds runs by workflow, repository, issue,
+  agent and error status in 2.5–12 s through Grafana (the 12 s under
+  concurrent load).
+- **But a time-bounded trace-by-id can return part of a trace.** Fetching
+  all 139 traces with a bounded range (`start` 1 h before the trace, `end`
+  100 h after) returned 5,092 spans against 6,930 received in the window.
+  Per UTC day the two agree exactly from 10 to 14 October and fall short
+  from 15 October. In 9 of the 48 traces that search matches on the
+  investigator service, the fetched body has no investigator span at all.
+  The unbounded fetch that would settle it timed out and was not repeated
+  (see the read-path finding below). So the shortfall is a read-path
+  completeness limit, not loss: the ingest counters above agree to the
+  span. It is still unexplained, not ruled out, and it is why
+  reconstruction scores 4 rather than 5.
+- **Blocks are portable.** Two blocks downloaded from R2 decode as
+  vParquet4 with `pyarrow`, with no Tempo involved. Producers carry only
+  OpenTelemetry, so removing Tempo needs no producer change.
+- **Privacy holds.** The poisoned fixture's planted values are all stored
+  as `****`.
+  A final scan of every fetched span (all 139 traces, every attribute
+  key and value) found no credential, token or e-mail. The only matches
+  were the fixture's own `authorization` key with value `****`; prompt and
+  tool-argument fields (`gen_ai.prompt.0.content`, `mcp.tool.arguments`)
+  are `****` in all 21 occurrences. The longest attribute value is 63
+  characters. The scan covers the spans the bounded fetch returned, not
+  the shortfall above.
+- **The weak point is the read path.** On 2026-10-17 one R2 `PUT` returned
+  500 and was retried; the object-storage alert went pending and never
+  fired. After the cutoff, the verdict's own full-window trace-by-id enumeration
+  throttled the 1-CPU pod to 80% and pushed its working set to 898 MiB,
+  past the 80% stop-rule line, with R2 range reads timing out. No restart,
+  and ingestion was unaffected (0 discarded, 0 failed flushes, accepted =
+  sent). A permanent deployment needs query limits and more headroom than
+  this sandbox had.
+- **Not observed.** Producer isolation under a backend outage: Tempo and
+  R2 never became unavailable during the window, and no outage was staged.
+  Backup/restore, retention deletion and upgrades were not exercised.
+
+**What this does not do.** It does not move anything out of
+`observability-eval`. Adoption is a separate pull request with its own
+owner approval: a permanent home, storage, retention, replicas and query
+limits, and which producers keep exporting. The sandbox is torn down in
+its own commit after that, following runbook steps 9 and 10. This ADR is
+not the FinOps source of truth (`mctlhq/.github#48`). Cost per execution
+stays an mctl-native contract.
