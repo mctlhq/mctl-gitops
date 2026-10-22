@@ -1,5 +1,10 @@
 # Tracing bake-off sandbox — operator runbook (issue #903 / #1280)
 
+> **Closed 2026-10-22.** The sandbox was torn down (#2073) and Tempo adopted
+> as a permanent deployment: see `docs/runbooks/tempo.md`. The `TempoEval*`
+> alerts below are now `Tempo*` in `vm-rules/tempo-alerts.yaml`. Kept as the
+> record of how the round ran.
+
 **This runbook is the procedure `mctlhq/mctl-gitops#1280` executes.**
 `mctlhq/mctl-gitops#1355` landed the offline half (a `ResourceQuota` /
 `LimitRange`, a pinned candidate catalogue, a collector exporter fan-out
@@ -279,14 +284,19 @@ and the datasource ConfigMap disappear from the render in the same commit.
 
 Then, outside git:
 
-- **Remove the "Tempo (eval)" datasource from Grafana** (Connections → Data
-  sources, or `DELETE /api/datasources/uid/tempo-eval`).
+- **Remove the "Tempo (eval)" datasource from Grafana.** It was
+  provisioned, so the API refuses (`Cannot delete read-only data source`)
+  and pruning the ConfigMap does not remove it either: list it under
+  `deleteDatasources` in a provisioning file. In #1280 the adoption change
+  does that (`tempo-datasource.yaml`).
 - **If Tempo is not selected, empty the `tempo-traces` bucket** (and revoke
   its token and the Vault entry once nothing reads it). Waiting for the
   30-day lifecycle rule is acceptable only if the owner says so on #1280.
 - If Tempo **is** selected, its permanent home (namespace, storage,
   retention, replicas, real producers) is a new change under a separate
   owner gate; nothing in this sandbox is promoted in place.
+  For #1280 that change is the `tracing` deployment; see
+  `docs/runbooks/tempo.md`.
 
 ## 10. Verify nothing is left running
 

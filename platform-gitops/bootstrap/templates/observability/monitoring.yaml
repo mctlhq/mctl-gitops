@@ -752,17 +752,15 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "MctlAgentsScheduledDispatch.*"
-                  # The Tempo tracing bake-off (#1280,
-                  # vm-rules/tempo-eval-alerts.yaml). Telegram only, no
-                  # ticket: every remedy is an operator's (resize Tempo,
-                  # restore R2 access, end the bake-off), and the runbook's
-                  # producer-isolation step scales Tempo to zero on purpose.
-                  # Prefix match so the next TempoEval alert does not default
-                  # to agent-only. Remove with that file once the bake-off is
-                  # decided.
+                  # The permanent Tempo in `tracing` (#1280 verdict,
+                  # vm-rules/tempo-alerts.yaml, renamed from the bake-off's
+                  # TempoEval* rules). Telegram only, no ticket: every remedy
+                  # is an operator's (resize Tempo, restore R2 access), not
+                  # something mctl-agent can act on. Prefix match so the next
+                  # Tempo alert does not default to agent-only.
                   - receiver: telegram
                     matchers:
-                      - alertname =~ "TempoEval.*"
+                      - alertname =~ "Tempo.*"
                   # Platform/infra Applications (projects default + platform)
                   # also page a human, in ADDITION to mctl-agent — hence
                   # continue: true, which lets the catch-all route below still

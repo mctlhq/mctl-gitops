@@ -1,6 +1,13 @@
 # Tempo adoption and eval-sandbox teardown (#1280 follow-up)
 
-**Status: plan, awaiting owner approval. Nothing here is applied.**
+**Status: approved by the owner on 2026-10-22 as written, Option A
+(teardown first). The teardown merged as #2073; the adoption is the pull
+request that carries this file. Operating notes: `docs/runbooks/tempo.md`.**
+
+Owner conditions recorded with the approval: the emptyDir WAL is an
+explicitly accepted standing risk; the partial-read anomaly (5,092 of 6,930
+spans) does not block deployment but blocks any claim or use that assumes
+complete span enumeration until it is explained.
 
 ADR 0001 ("Agent execution trace backend") records the verdict **ADOPT
 TEMPO / mctl-native only** from the #1280 soak. The soak window was closed

@@ -1,25 +1,78 @@
 {{- /*
-Grafana datasource for the Tempo bake-off candidate (#1280), provisioned
-the same way as loki-datasource.yaml: a ConfigMap labelled
-grafana_datasource: "1" that Grafana's datasource sidecar picks up.
+Grafana datasources for Tempo, provisioned the same way as
+loki-datasource.yaml: ConfigMaps labelled grafana_datasource: "1" that
+Grafana's datasource sidecar picks up.
 
-Rendered only while the sandbox is open AND the tempo candidate is enabled,
-so it cannot point Grafana at a Service that does not exist. The URL is
-Tempo's HTTP API (3200) on the Service named by the candidate's
-fullnameOverride (bootstrap/values.yaml); the NetworkPolicy that lets
-Grafana reach it is
-infra-components/observability/eval/tempo/networkpolicy.yaml.
+"Tempo" (uid `tempo`) is the permanent backend in `tracing`
+(bootstrap/values.yaml `tracing`, #1280 verdict). Its ConfigMap also carries
+the `deleteDatasources` entry for "Tempo (eval)": Grafana keeps a
+provisioned datasource in its database after its file disappears and
+refuses to delete it through the API ("Cannot delete read-only data
+source"), so the bake-off's datasource is removed the provisioning way.
+Drop that entry once Grafana no longer lists it.
 
-Teardown note: Grafana keeps a provisioned datasource in its database after
-the file disappears. The bake-off runbook's teardown step removes the
-"Tempo (eval)" datasource explicitly.
+KNOWN LIMITATION (owner, 2026-10-22): a time-bounded trace-by-id returned
+5,092 of 6,930 in-window spans during the soak, cause unexplained (ADR 0001
+Decision). Nothing built on this datasource may claim complete trace or
+span enumeration until that is explained (docs/runbooks/tempo.md).
 
-A template comment rather than a YAML one, so the eval-off render emits
-no document at all.
+"Tempo (eval)" (uid `tempo-eval`) is the bake-off candidate (#1280), rendered
+only while the sandbox is open AND the tempo candidate is enabled, so it
+cannot point Grafana at a Service that does not exist.
+
+Template comments rather than YAML ones, so a render with both off emits no
+document at all.
 */}}
+{{- if .Values.tracing.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-grafana-datasource
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  tempo-datasource.yaml: |
+    apiVersion: 1
+    deleteDatasources:
+      - name: Tempo (eval)
+        orgId: 1
+    datasources:
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        url: http://tempo.tracing.svc.cluster.local:3200
+        access: proxy
+        isDefault: false
+        editable: false
+        jsonData:
+          # Trace -> logs (mctlhq/mctl-agent#97): a span's pod log stream,
+          # around the span. The Collector stamps k8s.namespace.name and
+          # k8s.pod.name on every span, and promtail labels the same pod with
+          # `namespace` and `pod`; the tag mapping renames one to the other
+          # and the mapped-tags variable (the documented form) renders the selector, so
+          # the link only appears when both attributes are present. Agent pods
+          # log one `[trace] trace_id=...` anchor line; worker lines inside a
+          # traced activity end in `trace_id=...`. The uid is Loki's
+          # (loki-datasource.yaml).
+          tracesToLogsV2:
+            datasourceUid: P8E80F9AEF21F6940
+            spanStartTimeShift: '-1m'
+            spanEndTimeShift: '1m'
+            filterByTraceID: false
+            filterBySpanID: false
+            tags:
+              - key: k8s.namespace.name
+                value: namespace
+              - key: k8s.pod.name
+                value: pod
+            customQuery: true
+            query: '{$${__tags}}'
+{{- end }}
 {{- if .Values.otelCollector.eval.enabled }}
 {{- range .Values.otelCollector.eval.candidates }}
 {{- if and .enabled (eq .name "tempo") }}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
