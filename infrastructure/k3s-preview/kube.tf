@@ -92,7 +92,11 @@ variable "etcd_s3_secret_key" {
 # Anything added here that feeds the module's kustomization triggers must also
 # go into base_kustomization_inputs.
 locals {
-  install_k3s_version = "v1.33.13+k3s1"
+  # v1.34: CloudNativePG 1.30 is tested upstream on Kubernetes 1.34-1.36 only.
+  # The add-on pins below are tested on 1.34 as they stand (CCM v1.33.0 and
+  # CSI v2.21.2 run k3s v1.33-v1.36 in their e2e matrix; kured 1.21.0 and
+  # system-upgrade-controller v0.18.0 are built against client-go 0.34).
+  install_k3s_version = "v1.34.12+k3s1"
   hetzner_ccm_version = "v1.33.0"
   hetzner_csi_version = "v2.21.2"
   kured_version       = "1.21.0"
@@ -102,7 +106,7 @@ locals {
   # helm-controller re-runs the install job. A k3s minor upgrade always re-runs
   # it: the job's config hash covers its pod template, and the bundled
   # klipper-helm image changes (v0.11.1-build20260615 in v1.33.13+k3s1,
-  # v0.13.3-build20260727 in v1.34.12+k3s1, the planned upgrade). Pinned to the charts running on
+  # v0.13.3-build20260727 in v1.34.12+k3s1). Pinned to the charts running on
   # 2026-10-22 so the k3s upgrade does not also upgrade ingress and ACME.
   # Bump them here, deliberately, in their own change.
   traefik_version      = "42.0.0"
