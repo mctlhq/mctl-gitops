@@ -926,6 +926,20 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "SharedPg.*"
+                  # mctl-alice (vm-rules/mctl-alice-alerts.yaml): a public
+                  # service whose failures (Yandex upstream outages, sign-in
+                  # failing, auth spikes) mostly need an operator, not a
+                  # remediation. continue: true so mctl-agent still gets its
+                  # ticket through the matcher-less route at the end; NOT
+                  # listed in the mctl-agent catch-all, which carries no
+                  # routing of its own. All rules there are warning, so the
+                  # critical route below cannot page them a second time; a
+                  # critical MctlAlice* rule needs MctlAlice.* in that route's
+                  # exclusion too. Prefix match so a new rule is covered.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlAlice.*"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram

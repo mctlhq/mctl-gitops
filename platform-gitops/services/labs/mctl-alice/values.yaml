@@ -10,6 +10,15 @@ imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 8080
+# /metrics on its own port (mctlhq/mctl-alice#93): the Service gets a
+# `metrics` port that no Ingress routes to, so it is reachable only inside
+# the cluster; the app port answers 404 for /metrics. Scraped by the native
+# VMServiceScrape in bootstrap/templates/mctl-platform/mctl-alice-monitor.yaml,
+# hence serviceMonitor: false.
+metrics:
+  enabled: true
+  port: 9464
+  serviceMonitor: false
 backstage:
   kubernetesId: mctl-alice
 replicaCount: 1
@@ -45,6 +54,9 @@ env:
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
   AUTH_REQUIRED: "true"
+  # Starts the separate /metrics listener (mctlhq/mctl-alice#93); keep in
+  # sync with metrics.port above. Ignored by images without it.
+  METRICS_PORT: "9464"
   # Rate-limit key for anonymous clients (mctl-alice >= 2.2.9). Traefik
   # rewrites X-Forwarded-For to the Cloudflare edge address, so the client is
   # only visible in CF-Connecting-IP, which Cloudflare overwrites on every

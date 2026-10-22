@@ -286,3 +286,25 @@ spec:
         - https://ops.mctl.ai/healthz
         - https://grafana.mctl.ai/api/health
         - https://agent.mctl.ai/healthz
+---
+# mctl-alice (alice.mctl.ai) through the edge, for MctlAliceDown in
+# vm-rules/mctl-alice-alerts.yaml. Its own job rather than a platform-web
+# target so the alert names the service and its runbook. /healthz for the
+# reason mctl-api-healthz gives: Traefik only routes to Ready endpoints, and
+# the pod's readiness probe is /healthz too, so an unready pod fails this
+# probe just as it fails users.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMProbe
+metadata:
+  name: mctl-alice-healthz
+  namespace: monitoring
+spec:
+  jobName: mctl-alice-healthz
+  interval: 60s
+  module: http_2xx
+  vmProberSpec:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      targets:
+        - https://alice.mctl.ai/healthz
