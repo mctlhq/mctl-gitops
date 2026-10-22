@@ -45,6 +45,11 @@ env:
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
   AUTH_REQUIRED: "true"
+  # Rate-limit key for anonymous clients (mctl-alice >= 2.2.9). Traefik
+  # rewrites X-Forwarded-For to the Cloudflare edge address, so the client is
+  # only visible in CF-Connecting-IP, which Cloudflare overwrites on every
+  # request; the websecure allowlist admits only Cloudflare addresses.
+  CLIENT_IP_HEADER: cf-connecting-ip
 probes:
   startup:
     path: /healthz
