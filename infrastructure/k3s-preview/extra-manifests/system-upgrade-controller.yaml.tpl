@@ -125,6 +125,14 @@ spec:
       - effect: NoExecute
         key: node-role.kubernetes.io/etcd
         operator: Exists
+      # Not in upstream. The k3s-server plan cordons the only control plane,
+      # and only this controller uncordons it once the job completes. If the
+      # pod is rescheduled meanwhile (the 2026-10-22 k3s 1.34 apply re-applied
+      # this Deployment mid-upgrade), it cannot land on the cordoned node and
+      # the upgrade deadlocks until someone uncordons by hand.
+      - effect: NoSchedule
+        key: node.kubernetes.io/unschedulable
+        operator: Exists
       volumes:
       - hostPath:
           path: /var/lib/ca-certificates
