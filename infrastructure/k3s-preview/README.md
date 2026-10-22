@@ -9,7 +9,7 @@ Uses the [`kube-hetzner`](https://github.com/kube-hetzner/terraform-hcloud-kube-
 | Property | Value |
 |----------|-------|
 | Name | `mctl-preprod` |
-| K3s version | v1.33 (managed by kube-hetzner) |
+| K3s version | v1.34.12+k3s1 (pinned: `local.install_k3s_version` in `kube.tf`) |
 | Region | `eu-central` (Frankfurt) |
 | Control plane | 1 × cx33 — single node, non-HA |
 | Workers | 3 × cx43 |
