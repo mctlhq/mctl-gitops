@@ -200,8 +200,9 @@ env:
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
-  # Reviewer/demo password-bypass login (ChatGPT App Directory review). OFF
-  # after the review: /oauth/authorize must not expose the password form.
+  # Reviewer/demo password-bypass login. ON for the Claude Directory review
+  # (2026-10-22); turn OFF after the review: /oauth/authorize must not expose
+  # the password form outside a review window.
   # DEMO_REVIEWER_USERNAME/PASSWORD still sync from Vault via
   # labs-mctl-telegram-demo; rotate DEMO_REVIEWER_PASSWORD at
   # secret/data/platform/mctl-telegram/demo after this flag is false (do not
@@ -213,8 +214,15 @@ env:
   # Telegram OIDC/session login rather than this password bypass, and must
   # carry per-account send_enabled=false so probes stay read-only even though
   # ALLOW_SEND is true globally.
-  DEMO_REVIEWER_ENABLED: "false"
+  DEMO_REVIEWER_ENABLED: "true"
   DEMO_REVIEWER_TG_ID: "8745115872"
+  # Claude Directory review (2026-10-22): the only peer the reviewer identity
+  # may really write to (send_message / send_reply, mctl-telegram 0.88.0+;
+  # every other write is refused). user:8745115872 is the demo account's own
+  # Saved Messages, so a reviewer's test send reaches no third party. Delivery
+  # also needs ALLOW_SEND=true (set above) and send_enabled=true on the demo
+  # account. Empty or unset means the reviewer can write nowhere.
+  DEMO_REVIEWER_WRITE_PEERS: "user:8745115872"
 # Downward-API identity for the mctl_telegram_replica_id info gauge. The
 # service resolves replica_id as REPLICA_ID > POD_NAME > "unknown"
 # (internal/config/config.go), so without this the gauge is published with
