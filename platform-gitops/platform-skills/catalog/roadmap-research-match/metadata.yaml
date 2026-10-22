@@ -1,0 +1,8 @@
+name: roadmap-research-match
+title: Roadmap Research Match
+description: Match a normalized roadmap idea against existing roadmap items and related implementation issues
+visibility: admin
+status: active
+owner: platform
+runtimes:
+- mcp
