@@ -1,0 +1,38 @@
+# Scrape mctl-alice's /metrics (mctlhq/mctl-alice#93): HTTP status classes,
+# auth failures, rate-limit hits and Yandex upstream outcomes, read by
+# vm-rules/mctl-alice-alerts.yaml.
+#
+# Native VMServiceScrape rather than the chart's `metrics.enabled`, for the
+# reason mctl-agents-worker-monitor.yaml gives: that would render a
+# monitoring.coreos.com ServiceMonitor, which the VM operator converts and
+# leaves for ArgoCD to report as drift, and open a second port nothing needs.
+#
+# `port: http`: mctl-alice serves /metrics on the app listener (8080), like
+# mctl-telegram. The scrape reaches the pod directly and carries no proxy
+# header, which is what the app requires before answering; requests through
+# the ingress are denied at the edge (extraObjects in
+# services/labs/mctl-alice/values.yaml) and refused by the app as well.
+#
+# Until a mctl-alice release with #93 is deployed, /metrics answers 404 and
+# this target reports up=0; nothing else changes.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: mctl-alice
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      # base-service is shared by every labs service; the instance label pins
+      # this scrape to mctl-alice.
+      app.kubernetes.io/instance: labs-mctl-alice
+      app.kubernetes.io/name: base-service
+  namespaceSelector:
+    matchNames:
+      - labs
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
