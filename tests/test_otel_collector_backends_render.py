@@ -606,13 +606,44 @@ check(
     f"otlp/eval-tempo missing from traces pipeline exporters, got {tempo_pipeline_exporters}",
 )
 
-# --- Committed default (#1280) -----------------------------------------------
-# What bootstrap/values.yaml actually ships: the sandbox open with tempo as
-# the only candidate. Relative to the eval-off baseline the collector gains
+def _loki_ds_raw(docs):
+    cms = find(docs, "ConfigMap", name="loki-grafana-datasource", namespace="monitoring")
+    return yaml.safe_load(next(iter(cms[0]["data"].values())))["datasources"][0] if cms else {}
+
+
+# --- Committed default: sandbox closed (#1280 teardown, runbook section 10) ---
+# The soak closed on 2026-10-22 and bootstrap/values.yaml ships the sandbox
+# off. Nothing from the bake-off may render: no eval exporter in the
+# collector, no Tempo (eval) datasource, no observability-eval Namespace or
+# candidate Application, no Loki derived field pointing at tempo-eval.
+
+shipped_docs = helm_template(DEFAULT_VALUES)
+shipped_cfg = collector_config(shipped_docs)
+check(
+    not [e for e in shipped_cfg["exporters"] if e.startswith("otlp/eval-")],
+    f"committed default still renders an eval exporter: {list(shipped_cfg['exporters'])}",
+)
+check(
+    shipped_cfg["service"]["pipelines"]["traces"]["exporters"] == ["debug"],
+    f"committed traces pipeline should be back to [debug], got {shipped_cfg['service']['pipelines']['traces']['exporters']}",
+)
+check(not find(shipped_docs, "ConfigMap", name="tempo-eval-grafana-datasource"),
+      "committed default still renders the Tempo (eval) datasource")
+check(not find(shipped_docs, "Namespace", name="observability-eval"),
+      "committed default still renders the observability-eval Namespace")
+check(not _eval_apps(shipped_docs), "committed default still renders an observability-eval candidate Application")
+check(not _loki_ds_raw(shipped_docs).get("jsonData", {}).get("derivedFields"),
+      "committed default still links Loki to a Tempo datasource that no longer exists")
+
+# --- Tempo round as it ran (#1280) -------------------------------------------
+# The committed tempo candidate rendered with the sandbox open, as it was
+# during the soak. Relative to the eval-off baseline the collector gains
 # exactly one exporter and nothing else; the Grafana datasource renders and
 # points at the same Service the collector exports to.
 
-committed_docs = helm_template(DEFAULT_VALUES)
+committed_docs = helm_template(
+    DEFAULT_VALUES, _write_values(_eval_values(True, [dict(tempo_candidate, enabled=True)]))
+)
 committed_cfg = collector_config(committed_docs)
 committed_traces = committed_cfg["service"]["pipelines"]["traces"]
 check(

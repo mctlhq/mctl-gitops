@@ -121,5 +121,8 @@ externalSecret:
       property: mctl-token
 
 # Execution traces (mctl-agents#195): see MCTL_TRACE_WORKFLOW_TYPES in env.
+# Off since the #1280 soak closed (2026-10-22): the eval Tempo is torn down
+# and no permanent trace backend exists yet. The Tempo adoption PR turns it
+# back on (docs/plans/tempo-adoption.md, if merged).
 otel:
-  enabled: true
+  enabled: false

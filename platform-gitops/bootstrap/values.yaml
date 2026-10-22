@@ -41,16 +41,17 @@ otelCollector:
   # in otel-collector.yaml (issue #1355) -- a candidate with no otlpEndpoint
   # is deployed but receives no spans.
   #
-  # OPEN since mctlhq/mctl-gitops#1280's Tempo round: the bake-off was cut
-  # to ONE candidate (Tempo, single binary) by owner decision, see
-  # docs/runbooks/tracing-bake-off.md. teardownAfter is enforced by
-  # scripts/validate-eval-teardown-date.py (at most 14 days out, CI-red on
-  # main once it passes). Closing the sandbox is the one-commit teardown in
-  # that runbook's section 9: enabled: false here, every candidate's
-  # enabled: false, teardownAfter: "".
+  # CLOSED: mctlhq/mctl-gitops#1280's Tempo round (one candidate, single
+  # binary) ended 2026-10-22 with the verdict ADOPT TEMPO / mctl-native only
+  # (docs/adr/0001-agent-execution-trace-backend.md). This is the one-commit
+  # teardown from docs/runbooks/tracing-bake-off.md section 9. The candidate
+  # entry stays as the record of what was measured; a permanent Tempo is a
+  # separate change (docs/plans/tempo-adoption.md), not this sandbox
+  # reopened. Reopening it would again need teardownAfter, which
+  # scripts/validate-eval-teardown-date.py enforces (at most 14 days out).
   eval:
-    enabled: true
-    teardownAfter: "2026-10-24"
+    enabled: false
+    teardownAfter: ""
     # issue #1355 / #1280: ResourceQuota (eval-namespace.yaml's
     # observability-eval-quota) rendered into observability-eval only while
     # eval.enabled is true. Sized for the one candidate actually deployed --
@@ -91,7 +92,7 @@ otelCollector:
     # self-managed shape to pin (an SDK that ships to Grafana Cloud).
     candidates:
       - name: tempo
-        enabled: true
+        enabled: false
         # The COMMUNITY chart, single binary. grafana/helm-charts' `tempo`
         # and `tempo-distributed` are deprecated since January 2026; the
         # maintained single-binary chart moved to grafana-community.
