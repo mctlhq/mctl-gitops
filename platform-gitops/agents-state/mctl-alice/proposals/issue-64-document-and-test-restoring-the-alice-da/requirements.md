@@ -11,8 +11,8 @@ nor mctl-gitops has a procedure for restoring this one database without
 touching the nine other tenant databases on the same cluster. Restoring the
 cluster in place would roll every tenant back. No one has ever rehearsed a
 restore, so nobody knows whether a restored database can be decrypted with
-the current key, keeps the hashed-secret invariant, and is usable by the app
-role.
+the encryption key material required by the selected recovery point, keeps the
+hashed-secret invariant, and is usable by the app role.
 
 The issue asks for four things: a runbook in `docs/` that restores the cluster
 backup to a scratch cluster at a point in time, runs `pg_dump` on only the alice
@@ -29,19 +29,27 @@ section 5: "restore a backup").
   a bad migration without rolling back other tenants.
 - AS the platform operator I WANT a read-only check that tells me whether a
   restored database is usable (users present, grants correct, credentials
-  decryptable with the current key, no clear-text bearer secrets) SO THAT I only
-  switch traffic to a database the app can actually serve from.
+  decryptable with the key material required by the recovery point, no clear-text
+  bearer secrets) SO THAT I only switch traffic to a database the app can actually
+  serve from.
 - AS the launch owner I WANT evidence that the procedure has been run once SO THAT
   the "restore a backup" gate in the launch plan is backed by a recorded result.
 
 ## Acceptance criteria (EARS)
 
 - WHEN an operator opens `docs/runbooks/restore-database.md` THE SYSTEM SHALL
-  describe, in order: choosing a recovery target time, bootstrapping a scratch
-  CNPG cluster from the shared cluster's backups with that target, running
-  `pg_dump` on only the `labs-mctl-alice` database, restoring it into a fresh
-  database, running the verification check, switching the app over, verifying
-  the live service, and tearing down the scratch cluster.
+  describe, in order: choosing a recovery target time, confirming the encryption
+  key epoch/material required by that target, bootstrapping a scratch CNPG cluster
+  from the shared cluster's backups with that target, running `pg_dump` on only
+  the `labs-mctl-alice` database, restoring that dump into a fresh database,
+  running the verification check, switching the app over, verifying the live
+  service, and tearing down the scratch cluster.
+- BEFORE recovery proceeds beyond target selection THE SYSTEM SHALL map the
+  selected target time to the encryption key material that can decrypt data at
+  that point and SHALL verify that all required historical/current key material
+  is available. IF the required key material cannot be identified or obtained,
+  recovery SHALL stop before switch-over. The current production key MUST NOT be
+  assumed to be sufficient for an older recovery point.
 - WHILE the scratch recovery cluster exists THE SYSTEM SHALL have no `backup`
   or WAL-archive destination configured on it, so that the production backup
   archive is never written to. The runbook states this as a hard precondition.
@@ -49,6 +57,11 @@ section 5: "restore a backup").
   into a new database (`labs-mctl-alice-restore`) owned by the
   `labs-mctl-alice` role, leaving the live database untouched until the
   switch-over step.
+- BEFORE a production database rename/switch-over THE SYSTEM SHALL require a
+  successful restore verification: `restore-check` reports `ok: true`, no
+  expected table is missing, required ownership/privileges are valid, no stored
+  credential has a decryption failure with the recovery-point key material, and
+  no clear-text bearer secret remains. Any failure is a hard stop for switch-over.
 - WHEN the operator switches over THE SYSTEM SHALL keep the app's
   `DATABASE_URL`, pg_hba rule and CNPG `Database` resource unchanged. To do
   this it scales the app to zero, renames the live database to a dated
@@ -66,12 +79,18 @@ section 5: "restore a backup").
   and name the failing check without printing any secret, token, cookie or
   ciphertext value.
 - WHEN the check runs in a container that has no `ENCRYPTION_KEY` and no
-  `ENCRYPTION_KEYS` THE SYSTEM SHALL fail the decryption check instead of
-  falling back to the development key.
+  `ENCRYPTION_KEYS` THE SYSTEM SHALL fail before connecting instead of falling
+  back to the development key.
+- WHEN the recorded exercise is performed THE SYSTEM SHALL use the actual CNPG
+  PITR path plus an actual `pg_dump -Fc` and `pg_restore` round trip. A
+  `CREATE TABLE ... AS` copy MAY be used by an automated integration test when
+  PostgreSQL client binaries are unavailable, but SHALL NOT satisfy the
+  end-to-end restore exercise or launch-readiness gate.
 - WHEN the exercise has been performed THE SYSTEM SHALL have a dated entry in
   the runbook's "Exercise log" section. The entry records the recovery target
-  time, the elapsed time of each phase, the check output (counts only), any
-  deviation from the runbook, and whether the scratch target was torn down.
+  time, the encryption-key epoch/material check (without key values), the elapsed
+  time of each phase, the check output (counts only), any deviation from the
+  runbook, and whether the scratch target was torn down.
 - WHILE writing the runbook and exercise log THE SYSTEM SHALL contain no
   internal hostnames, object-store bucket or path names, endpoint URLs, Vault
   paths or credentials. It refers to the cluster's own backup configuration by
@@ -91,8 +110,10 @@ section 5: "restore a backup").
   delivers a manual runbook and one manual exercise.
 - Restoring the SQLite backend (`src/storage/oauth-storage.ts`,
   `src/storage/telemetry-storage.ts`). The hosted deployment does not use it.
-- Key escrow. The runbook only states that keys must be kept for as long as
-  the backups that need them (README "Rotating the encryption key", step 4).
+- Implementing a new key-escrow system. This proposal does require the runbook
+  to fail closed when the historical/current key material needed by the selected
+  recovery point is unavailable, and to preserve old keys for at least as long
+  as backups that depend on them remain recoverable.
 
 ## Open questions
 
