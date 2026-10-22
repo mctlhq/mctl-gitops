@@ -7,11 +7,13 @@
   is unchanged, and the existing `tests/postgres-storage.test.ts` and
   `tests/hosted-postgres.test.ts` pass.
 - [ ] 2. Add `src/storage/restore-check.ts` with
-  `checkRestoredDatabase(pool, { asRole? })` (depends on 1). It checks tables,
-  owners and privileges, row counts, decryption of every envelope in
+  `checkRestoredDatabase(pool)` (depends on 1). It checks tables,
+  owners and every required privilege separately (all of SELECT/INSERT/UPDATE/DELETE,
+  schema USAGE and required sequence rights), row counts, decryption of every envelope in
   `ENCRYPTED_COLUMNS` (ok/stale/failed via `decryptToken`/`rotateRow` with
   `rewrite=false`) and clear-text secret counts, all inside a
-  `BEGIN READ ONLY` transaction that is rolled back. — DoD: it returns a typed
+  `BEGIN READ ONLY` transaction on one checked-out pool client that is rolled
+  back before the client is released. — DoD: it returns a typed
   report with `ok: boolean` and per-check results, and no secret values,
   ciphertexts or row keys appear in the report.
 - [ ] 3. Add the CLI `src/restore-check.ts` and the `package.json` script
@@ -23,9 +25,13 @@
   target selection, the scratch recovery `Cluster` manifest template (with no
   `spec.backup` and a warning box), dumping only `labs-mctl-alice`, restoring
   into `labs-mctl-alice-restore` with `--no-owner --role=labs-mctl-alice` and
-  `statement_timeout=0`, the verification with `restore-check`, the rename
-  switch-over, live verification, cleanup, rollback of the switch-over, the
-  "What to check after a restore" section, and an empty "Exercise log" table.
+  `statement_timeout=0`, verification from a one-off Node Pod using `envFrom.secretRef` and authenticated
+  TCP/TLS as the app role, with narrow temporary pg_hba/NetworkPolicy access via
+  the owning GitOps path and cleanup; no local-postgres/`--as-role` shortcut;
+  the rename switch-over only after ArgoCD and parent reconciliation are suspended
+  and all app pods are stopped, live verification, cleanup, rollback of the switch-over, the
+  "What to check after a restore" section, and an empty "Exercise log" table. Record and restore prior reconciliation
+  settings after verification or rollback.
   — DoD: a grep shows no internal hostnames, object-store names, endpoint
   URLs, Vault paths or credentials. The reviewer confirms that only public
   resource names appear.
@@ -37,7 +43,9 @@
   Recover to a target time at least one hour old, dump `labs-mctl-alice`,
   restore it into a fresh database on the scratch cluster, run the
   rename switch-over there, run `restore-check` from a one-off pod that has
-  the production key, optionally start a non-ingress app pod and probe
+  the required key through a Secret reference and connects as the app role over
+  authenticated TCP/TLS using scratch-only access rules and working scratch
+  credentials; remove the access rules afterwards, optionally start a non-ingress app pod and probe
   `/readyz`, then tear everything down. Production traffic is not switched.
   — DoD: the check exits 0 (or each failure is explained), and the scratch
   namespace, PVCs and dump are deleted.
@@ -53,7 +61,8 @@
 - [ ] T1. Unit test (`tests/restore-check.test.ts`, mocked pool): the report
   flags a missing table, a table not owned by or usable by the role, a
   clear-text `oauth_tokens.access_token`, and an envelope encrypted under a
-  different key. The serialized report contains none of the seeded token,
+  different key. Seed SELECT-only access and assert failure for the missing
+  INSERT/UPDATE/DELETE rights; missing schema or sequence rights must also fail. The serialized report contains none of the seeded token,
   cookie or ciphertext strings.
 - [ ] T2. Real-Postgres test (in `tests/hosted-postgres.test.ts` style, skipped
   without `TEST_POSTGRES_URL`): seed two users with credentials through
@@ -78,8 +87,10 @@
   refactor is behaviour-neutral.
 - Exercise: delete the scratch namespace (Cluster, PVCs, secrets, dump). It
   never touches `shared-pg` or the live database.
-- A real switch-over that goes wrong: scale `labs-mctl-alice` to 0, rename
+- A real switch-over that goes wrong: record and suspend ArgoCD and parent
+  reconciliation, verify it remains suspended, then scale `labs-mctl-alice` to 0, rename
   `labs-mctl-alice` back to `labs-mctl-alice-restore` and
   `labs-mctl-alice-pre-restore-<yyyymmdd>` back to `labs-mctl-alice`, then
-  scale up again. The runbook keeps the pre-restore database for 7 days so
+  scale up again. Restore the recorded reconciliation settings after verification
+  and confirm sync/health. The runbook keeps the pre-restore database for 7 days so
   this stays possible.
