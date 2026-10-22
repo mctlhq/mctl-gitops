@@ -194,7 +194,7 @@ MUST_REJECT = [
     "minio", "database", "platform-db", "platform-events", "forgejo", "zitadel",
     "cnpg-system", "reflector-system", "argo-rollouts", "grafana-iac",
     "vault-human-auth-iac", "local-path-storage", "system-upgrade",
-    "observability-eval", "kube-foo", "argonaut", "foo-system", "platform-x",
+    "observability-eval", "tracing", "kube-foo", "argonaut", "foo-system", "platform-x",
     "mctl-x", "grafana-x", "vaultx",
     # Platform Argo CD Application names and their hyphen-prefixes (mirrors
     # IsReservedTenantName in mctl-api internal/operations/reserved_tenant.go).
