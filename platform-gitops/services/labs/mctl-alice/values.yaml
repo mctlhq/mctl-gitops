@@ -45,6 +45,10 @@ env:
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
   AUTH_REQUIRED: "true"
+  # One-shot: rewrites clear-text OAuth/session secrets stored before 2.2.3
+  # as sha256 hashes on the next start. Remove in a follow-up PR once the pod
+  # logs "Rehashed N stored secrets".
+  REHASH_STORED_SECRETS: "true"
 probes:
   startup:
     path: /healthz
