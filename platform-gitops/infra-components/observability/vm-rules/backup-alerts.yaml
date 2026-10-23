@@ -277,6 +277,8 @@ spec:
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgbackupstale
         # The right-hand side is deliberately unfiltered: a failure with no
         # success at all (every instance reports 0 available) still fires.
+        # The plugin emits last_failed = 0 (not absence) when nothing has
+        # failed (verified live 2026-10-23), which is what `> 0` filters out.
         - alert: SharedPgBackupFailed
           expr: |
             max by (namespace) (barman_cloud_cloudnative_pg_io_last_failed_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"} > 0)
