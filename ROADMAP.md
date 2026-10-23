@@ -9,6 +9,11 @@
 > ёмкость под новые workspace — **1 слот** (память переподписана: 49.9 GiB
 > committed при 43.98 GiB allocatable). Платящих клиентов и биллинга нет.
 > Исполнитель — один человек + Claude-агенты. Обновлять по мере выполнения.
+>
+> Визуальная версия этого плана — артефакт
+> <https://claude.ai/artifact/9xF29UW7dcxVPp91rZBpL7>. **При любом изменении
+> этого файла обновлять и артефакт** (тот же URL, через Artifact tool с `url`),
+> чтобы страница и источник не расходились.
 
 ## 0. Что изменилось с августа
 
@@ -74,9 +79,10 @@
   `GITHUB_TOKEN`, затем удалить оба секрета. PAT истёк 2026-10-12 молча.
 - [ ] Vault ACL-инцидент Valkey 09-17 (`#` в ACL-файле валит старт) — добавить
   lint ACL в `validate-manifests.yml`.
-- [ ] mctl-agent `CLAUDE.md` снова отстал (9 skills / SQLite / Go 1.24 при 12 /
-  Postgres / Go 1.26) — обновить и подумать о тесте, который сверяет число
-  skills в CLAUDE.md с `register.go`, как `server_test.go` делает для tools.
+- [x] mctl-agent `CLAUDE.md` снова отстал (9 skills / SQLite / Go 1.24 при 12 /
+  Postgres / Go 1.26) — обновлён, и добавлен `TestClaudeMDSkillCount`, который
+  сверяет число skills в CLAUDE.md с `register.go`, как `server_test.go` делает
+  для tools ([mctl-agent#180](https://github.com/mctlhq/mctl-agent/pull/180)).
 
 ## 3. Горизонт 1 — квартал: выдержать первых пользователей
 
