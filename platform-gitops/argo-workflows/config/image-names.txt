@@ -66,6 +66,7 @@ grant labs mctl-academy
 grant labs mctl-alice
 grant labs mctl-loyalty
 grant labs mctl-pairdesk
+grant labs mctl-rules
 grant labs mctl-telegram
 grant labs mctl-telegram-preview
 grant labs pfeifenpatenschaft-backend
