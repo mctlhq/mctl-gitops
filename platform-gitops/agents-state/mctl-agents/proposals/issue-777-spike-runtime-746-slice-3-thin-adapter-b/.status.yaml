@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-23T18:10:06Z'
+updated_at: '2026-10-23T18:50:15Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-a9b7078bd86f1bb1
@@ -47,3 +47,7 @@ completion:
       required_total: 4
       optional_total: 1
   primary_observed: true
+github:
+  state: open
+  head_sha: 319a3da5d18edf613dada01b913d12f679761186
+  observed_at: '2026-10-23T18:50:15Z'
