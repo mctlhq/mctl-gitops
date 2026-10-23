@@ -10,7 +10,11 @@
   DoD: an "Environment" section in `docs/spikes/707-pyrefly-type-check.md`
   with the SHA, Python, uv, mypy (2.3.1 from `uv.lock`), Pyrefly `1.4.0`, CPU
   model, cores, memory and OS filled from a linked workflow run; no timing in
-  the report comes from the implementer pod.
+  the report comes from the implementer pod; the workflow's checkout step
+  uses `actions/checkout` with `fetch-depth: 0` (or runs
+  `git fetch origin 68f10afcb8a96d7b1c54d5d56819d8e39979c275` before
+  `git worktree add`), and the linked run's log shows the worktree created
+  at that SHA.
 - [ ] 2. Baseline mypy exactly as CI (`uv sync --locked`, `uv run --locked mypy`)
   on the pinned SHA (depends on 1) — DoD: exit code, diagnostic count and raw
   output saved to `docs/spikes/707/diagnostics/mypy.txt`; the exit code is 0,
@@ -95,9 +99,13 @@
   paths under `orchestrator/`, `config/` or `tools/` (so it is a mutation of
   checked scope) and applies cleanly against the pinned SHA
   `68f10afcb8a96d7b1c54d5d56819d8e39979c275`, checked out in a temporary
-  `git worktree` (`git apply --check` forward succeeds there). The test does
-  not run against moving main and has no skip-on-drift path; it skips only
-  when the pinned commit is absent from the clone, with that reason.
+  `git worktree` (`git apply --check` forward succeeds there). Before the
+  worktree, the test checks `git cat-file -e <sha>^{commit}` and, if absent,
+  runs `git fetch --depth=1 origin <sha>`. The test does not run against
+  moving main and has no skip-on-drift path. When the commit is still
+  absent it fails under `CI=true` (so a shallow CI clone can never turn it
+  into a silent skip) and skips with that reason only outside CI, e.g. in
+  the offline implementer pod.
 - [ ] T4. Existing `lint` job (Ruff + mypy) and full test suite stay green on
   the spike PR.
 
