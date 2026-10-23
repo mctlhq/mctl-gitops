@@ -62,7 +62,6 @@ surfaces:
     path: argo-workflows/cluster-templates/cwft-mctl-agents-shepherd.yaml
     template: run-shepherd
     governed: true
-    rollout: staged
     # run_shepherd.py forces NO_APPROVALS in the shepherd pod by design, so the
     # investigator evidence does not cover this surface (owner note R5).
     note: shepherd pod forces NO_APPROVALS by design (run_shepherd.py)

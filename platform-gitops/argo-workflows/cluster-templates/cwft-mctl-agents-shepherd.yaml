@@ -732,6 +732,21 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Policy checkpoint approvals backend (ADR 014; mctlhq/.github#181,
+          # mctl-gitops#1980), as on investigate: a non-read mcp__mctl__* call
+          # creates or redeems a durable approval request in mctl-api instead
+          # of being blocked outright. Authenticates with MCTL_TOKEN; needs
+          # mctl-agents >= 1.86.1. Must stay a literal (see
+          # platform-gitops/governance/policy-checkpoint-coverage.yaml).
+          # Today this changes no decision here: the shepherd's model session
+          # has no MCP server, its own merges are ALLOW, and an agent-definition
+          # merge decides with NO_APPROVALS whatever this says (run_shepherd.py,
+          # per-tick execution ids). It makes the approval store the default
+          # for any future REQUIRE_APPROVAL checkpoint in this pod.
+          # Rollback: remove it (REQUIRE_APPROVAL then blocks) and mark the
+          # manifest entry governed: false with a tracked_by.
+          - name: MCTL_POLICY_APPROVALS
+            value: mctl-api
           # Usage-writer token (mctlhq/.github#50): the only credential the
           # usage producer may use to append this run's model-usage records
           # to mctl-api. It may do nothing else there. Optional: absent (the
