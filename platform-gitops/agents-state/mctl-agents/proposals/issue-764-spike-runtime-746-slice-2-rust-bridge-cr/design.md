@@ -23,11 +23,14 @@ Vocabulary and rules to mirror (read, not changed):
 Deployed state checked:
 
 - `$MCTL_GITOPS_ROOT/services/admins/`: the deployed mctl-agents services are `mctl-agents-worker`, `mctl-agents-worker-exec`, `mctl-agents-worker-implement`. No runtime, proxy or `mctl-runtime` service exists. This slice deploys nothing, so no further deployed config is relevant.
+- Re-checked in this run: `$MCTL_GITOPS_ROOT/services/admins/` still lists only the three worker services above, and `ls ~/.cargo` and `which cargo` still fail in the investigator image.
 - mctl MCP tools: not called in this run. The behaviour of `https://api.mctl.ai/mcp` (whether it sends `X-Request-Id`, whether it accepts a static human bearer token) is therefore not observed here, as it was not in #746; neither is needed for offline cargo tests and both stay under Open questions.
 
 ## Proposed solution
 
-### Dependency strategy: std-only crate
+### Dependency strategy: std-only crate (owner-confirmed)
+
+The owner settled this in clarification request `hir-4ecbf111aa835878` with the answer "std-only, http-only upstream in slice 2". The reasoning follows.
 
 `cargo build --locked` fails whenever Cargo would rewrite `Cargo.lock`. Adding any registry crate requires a lock entry with a `checksum`, which cannot be obtained without network access; the implementer and shepherd both lack network and `cargo`. A std-only crate keeps the committed lockfile valid as is (the single package entry), makes `cargo audit` trivially clean, and makes the tests trivially offline. This is the issue's sanctioned fallback ("hand-rolled `initialize`/`tools/list`/`tools/call`/`ping` subset"); the README records the choice and why `rmcp` was not used. Cost: the upstream client speaks `http://` only (the fake upstream on `127.0.0.1`); an `https://` URL is refused up front with `provider-unavailable` and a stderr diagnostic `https upstream requires TLS (deferred, see README)`. Adding TLS is a later slice (see Alternatives and Open questions).
 
@@ -112,7 +115,7 @@ All code must pass `clippy -D warnings` on 1.85.0 for `--all-targets`. Unix-only
 
 ## Alternatives
 
-1. **`rmcp` (exact pin) plus `tokio`, `reqwest`/`ureq` with `rustls`, `serde_json`, `uuid`, `sha2`, `clap`.** Less hand-written code and real TLS, which is what the eventual binary-size measurement needs. Rejected as the default because the offline implementer cannot write correct `Cargo.lock` entries (registry checksums for 50+ crates), so `cargo build --locked` would fail on the first CI run and neither implementer nor shepherd could fix it; `rmcp`'s MSRV against `1.85.0` is also unverified. It becomes viable if a human with cargo pushes a `cargo generate-lockfile` fix-up commit; that choice is the clarification question.
+1. **`rmcp` (exact pin) plus `tokio`, `reqwest`/`ureq` with `rustls`, `serde_json`, `uuid`, `sha2`, `clap`.** Less hand-written code and real TLS, which is what the eventual binary-size measurement needs. Rejected as the default because the offline implementer cannot write correct `Cargo.lock` entries (registry checksums for 50+ crates), so `cargo build --locked` would fail on the first CI run and neither implementer nor shepherd could fix it; `rmcp`'s MSRV against `1.85.0` is also unverified. It would have been viable if a human with cargo pushed a `cargo generate-lockfile` fix-up commit. The owner declined that option in `hir-4ecbf111aa835878`.
 2. **Minimal deps (`serde_json` only, plus hand-rolled HTTP).** Halves the hand-written code, but still needs checksummed lock entries (serde, serde_core, itoa, memchr, ryu), so it has the same `--locked` failure as option 1 for little gain.
 3. **Skip byte-equal schema forwarding by re-serializing through a generic map.** Simpler JSON, but fails T2 (`inputSchema` byte-equal) whenever upstream key order is not sorted. Rejected; the ordered `Value` with number source text is kept.
 
