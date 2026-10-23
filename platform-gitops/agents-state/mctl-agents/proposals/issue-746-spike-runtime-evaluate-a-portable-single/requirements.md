@@ -83,6 +83,23 @@ or a second copy of business logic. Everything is built under an isolated
 
   It SHALL record the same available dimensions for a thin Python baseline adapter and for direct MCP.
 - THE SYSTEM SHALL produce exactly one final recommendation in that report, justified against every GO criterion of the issue. Follow-up issue drafts SHALL be included only for confirmed GO gaps.
+- THE REPORT SHALL explicitly evaluate whether model-provider routing, fallback, BYOK and provider abstraction belong outside a portable runtime and should instead remain in a model control plane such as Cloudflare AI Gateway / `createAI`. It SHALL cross-reference `mctlhq/.github#184` G4 rather than implementing model routing in this spike.
+
+## External architecture evidence added before approval
+
+### Cloudflare `createAI` / AI Gateway (2026-10-21)
+
+Treat Cloudflare `createAI` as a boundary benchmark, not a selected dependency. Cloudflare now exposes Workers AI, AI Gateway catalog models, dynamic routes, provider-native model objects, fallback/retries, BYOK and related gateway behavior behind one model-access surface. The spike must therefore answer whether putting model routing/fallback/BYOK/provider abstraction into `mctl-runtime` would create an unnecessary second control-plane responsibility. Unless the experiment proves a concrete local model-routing job, keep #746 focused on host bootstrap, MCP/capability bridging, credential isolation, refusal UX and evidence correlation.
+
+Production adoption of Cloudflare `createAI` / AI Gateway is out of scope. Any model-routing product finding belongs with `mctlhq/.github#184` G4.
+
+Source: https://developers.cloudflare.com/changelog/post/2026-10-21-createai/
+
+### Cloudflare MCP `/sse` retirement (2026-10-22)
+
+Cloudflare's product-specific MCP servers now serve `/mcp` only; `/sse` returns `410 Gone`. This does **not** add a new implementation requirement because this proposal already uses stdio on the host-facing side and MCP Streamable HTTP on the upstream side. Do not add legacy `/sse` support or compatibility code to the spike.
+
+Source: https://developers.cloudflare.com/changelog/post/2026-10-22-cloudflare-mcp-servers-retire-sse/
 
 ## Out of scope
 
@@ -95,6 +112,8 @@ or a second copy of business logic. Everything is built under an isolated
 - OS keychain integration and loopback credential handoff beyond an interface sketch and design evaluation.
 - Rewriting any existing service in Rust, or replacing MCP with another protocol.
 - Supporting more than the `fixture` host plus, optionally, one real host shape (Claude Code) for printed config.
+- Implementing model-provider routing, fallback, BYOK or Cloudflare `createAI` integration inside `mctl-runtime`.
+- Supporting legacy MCP SSE transport solely for compatibility with retired `/sse` endpoints.
 
 ## Open questions
 
