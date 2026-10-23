@@ -96,17 +96,19 @@ spec:
             # anything else refuses startup. Rollback: remove this line
             # (empty = on).
             MCTL_AGENTS_APPROVE_LEGACY_APPROVER: "false"
-            # Agent receipt gate (mctlhq/mctl-api#723), observe stage.
-            # Governed MCP calls from service:mctl-agent all still run; each
-            # one is audited as `agent-receipt-gate` (status succeeded, or
-            # observed with a code) and counted in
-            # mcp_agent_receipt_gate_total{mode,code}. A presented receipt is
-            # checked read-only and never spent. v1 binds an approval to
-            # principal + tool + one use, not to the exact arguments. Move to
-            # "enforce" only in a separate PR, after the audit rows and the
-            # counter show the producer (mctl-agents >= 1.87.0) attaching
-            # valid receipts. Rollback: remove this line (empty = off).
-            MCTL_AGENT_RECEIPT_GATE: "observe"
+            # Agent receipt gate (mctlhq/mctl-api#723), enforce stage
+            # (mctlhq/mctl-gitops#1980). A governed MCP call from the direct
+            # service:mctl-agent principal must carry a valid action approval
+            # receipt; without one it is refused, and a valid receipt is spent
+            # (one receipt, one call). Observe ran from 2026-10-20 20:57Z to
+            # 2026-10-23 and saw zero governed calls from that principal: its
+            # MCP traffic is reads, so enforce refuses only calls that bypass
+            # the policy checkpoint (the Bash / MCTL_TOKEN path). v1 binds an
+            # approval to principal + tool + one use, not to the exact
+            # arguments. Agent principals (run tokens, mctlhq/mctl-agents#737)
+            # are not gated here; their token scope limits them instead.
+            # Rollback: set "observe" (audit only), or remove the line (off).
+            MCTL_AGENT_RECEIPT_GATE: "enforce"
             AUTH_REQUIRED: "true"
             BACKSTAGE_URL: https://app.mctl.ai
             # Explicit full-account deletion remains direct-human-admin only.
