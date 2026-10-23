@@ -32,7 +32,6 @@ surfaces:
     kind: worker
     path: services/admins/mctl-agents-worker/values.yaml
     governed: true
-    rollout: staged
     note: runs DevLoopWorkflow, merge-watch and the execution dispatcher
   - id: worker-exec
     kind: worker

@@ -137,6 +137,16 @@ env:
   # Live proof: mctl-agents#490. Set to "false" to turn it off again; a
   # request left claimed is re-claimable once its lease lapses.
   EXECUTION_REQUEST_DISPATCHER: "true"
+  # Policy checkpoint approvals backend (ADR 014; mctlhq/.github#181,
+  # mctl-gitops#1980), as on investigate. In this worker it backs the
+  # DevLoop's gated activities (a REQUIRE_APPROVAL action answers
+  # approval_pending and starts an ActionApprovalWaitWorkflow instead of being
+  # refused) and the in-process agent runs' mcp__mctl__* checkpoint.
+  # Authenticates with MCTL_TOKEN; needs mctl-agents >= 1.86.1. Must stay a
+  # literal (platform-gitops/governance/policy-checkpoint-coverage.yaml).
+  # Rollback: remove it (REQUIRE_APPROVAL then blocks) and mark the manifest
+  # entry governed: false with a tracked_by.
+  MCTL_POLICY_APPROVALS: mctl-api
 envFrom:
   - secretRef:
       name: mctl-agents-worker-secrets
