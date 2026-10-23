@@ -16,7 +16,7 @@
   - pass results through unchanged, including `isError`;
   - map upstream failures to `provider-unavailable`, `provider-timeout` and `credential-rejected` (401/403), within a bounded timeout and without crashing the session.
 
-  — DoD: integration tests T2 to T7 pass.
+  — DoD: integration tests T2 to T7 pass. Do not add legacy MCP SSE transport support: the target upstream contract is Streamable HTTP `/mcp`.
 - [ ] 5. Write `src/correlation.rs` (depends on 4). For each call it creates an `invocation_id` (UUIDv4), sends the `X-Mctl-Invocation-Id` header upstream, and writes one stderr JSON line with these fields: `invocation_id`, `host_request_id`, `tool`, `args_sha256`, `upstream_session_id`, `upstream_request_id`, `outcome`, `is_error`, `latency_ms`. It writes no file or DB. — DoD: T8 passes.
 - [ ] 6. Write the `init --host fixture|claude-code` subcommand (depends on 3). It is dry-run by default and prints config to stdout, referencing the credential only by env var name or file path. `--write` requires an explicit `--config-dir` and refuses known real host config locations under `$HOME`. Also write `doctor`: version, credential source name, file mode, upstream round trip, allowlist count, and allowlisted tools missing upstream; it exits non-zero on failure. — DoD: T9 and T10 pass.
 - [ ] 7. Build the in-process fake upstream for the cargo integration tests, plus a fixture-host driver that spawns the binary over stdio (supports 4 to 6). The fake upstream scripts these tools: `mctl_whoami` (ok), `deny_tool`, `approval_tool`, `slow_tool`, and `secret_tool` (upstream only). It also has knobs for 401, connection reset, and header echo. — DoD: `cargo test` is fully offline and deterministic, and passes 3 consecutive runs.
@@ -39,6 +39,8 @@
   - answers to Q1 to Q10;
   - the J3 credential analysis, including what the runtime does not isolate;
   - the J6 x402 design note with a sequence diagram and a `PaymentChallengeHandler` sketch (Refuse-only, with no payment code);
+  - a boundary benchmark against Cloudflare AI Gateway / `createAI`: whether model-provider routing, fallback, BYOK and provider abstraction should remain outside `mctl-runtime`, with any model-routing product finding routed to `mctlhq/.github#184` G4 rather than implemented here;
+  - a transport note recording that Cloudflare retired `/sse` for its product MCP servers and that #746 deliberately targets stdio locally + Streamable HTTP `/mcp` upstream, with no legacy SSE compatibility work;
   - a GO-criteria checklist with evidence per line;
   - exactly one decision token;
   - repository and ownership recommendations and follow-up issue drafts only if the decision is GO.
