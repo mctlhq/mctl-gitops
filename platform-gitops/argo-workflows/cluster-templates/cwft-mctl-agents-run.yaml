@@ -469,6 +469,16 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Policy checkpoint approvals backend (ADR 014; mctlhq/.github#181,
+          # mctl-gitops#1980), as on investigate: a non-read mcp__mctl__* call
+          # creates or redeems a durable approval request in mctl-api instead
+          # of being blocked outright. Authenticates with MCTL_TOKEN; needs
+          # mctl-agents >= 1.86.1. Must stay a literal (see
+          # platform-gitops/governance/policy-checkpoint-coverage.yaml).
+          # Rollback: remove it (REQUIRE_APPROVAL then blocks) and mark the
+          # manifest entry governed: false with a tracked_by.
+          - name: MCTL_POLICY_APPROVALS
+            value: mctl-api
           # GitHub PAT for the researcher's sibling-repo scan.
           # Without it the researcher falls through to the unauthenticated
           # GitHub API (60 req/h, no private-repo access) and reports
