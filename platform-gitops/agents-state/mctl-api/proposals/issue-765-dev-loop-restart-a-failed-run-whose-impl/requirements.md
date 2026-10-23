@@ -122,8 +122,9 @@ missing, unbound to the failed run, or unreadable keeps the old refusal.
 - Does a `Failed` DevLoopWorkflow release its lifecycle-ownership row and end
   its canonical `we_` execution, as the abandon path does? If not, the new
   run's acquire or its approval could hit a conflict or `execution_ambiguous`.
-  The live acceptance step on mctlhq/mctl-agents#746 (reaching the approval
-  gate and being approvable) is the check. A failure there needs a follow-up
+  The owner-run live acceptance on a throwaway test issue (reaching the
+  approval gate and being approvable) is the check; #746 itself is not
+  restarted. A failure there needs a follow-up
   in mctl-agents, not in this route.
 - Freshness: the completion is read from mctl-api's periodically refreshed
   gitops checkout. A trigger made before the refresh may see no completion and

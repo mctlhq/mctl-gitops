@@ -46,14 +46,19 @@
 
   DoD: the openapi lint/test (if any) passes and the `server_test.go` tool
   count is unchanged.
-- [ ] 6. (depends on 4, after deploy) Live acceptance: call
-  `mctl_trigger_issue(issue_url=https://github.com/mctlhq/mctl-agents/issues/746, use_temporal=true)`.
+- [ ] 6. (depends on 4, after deploy; owner-run, not part of the implementer
+  PR's DoD) Live acceptance on a dedicated throwaway test issue, never on
+  mctlhq/mctl-agents#746: the owner opens a test issue, lets its DevLoop fail
+  after implement with `no_commits` and `head_sha: null`, then calls
+  `mctl_trigger_issue(issue_url=<test issue>, use_temporal=true)`.
   DoD:
   - The response shows `outcome: restarted_after_failure` and
     `previous_run_id` equal to the failed run.
   - `mctl_get_dev_loop` shows `Running`, and the new run reaches the approval
     gate with a fresh proposal.
   - The audit entry records both runs.
+  - `dev-loop-mctlhq-mctl-agents-746` is not touched: its continuation runs
+    as separate slice issues (owner decision 2026-10-23, mctlhq/.github#215).
 
 ## Tests
 
