@@ -809,11 +809,13 @@ spec:
           # that mctl-api only counts. enforce connects MCP with the run
           # token and fails the run if the exchange fails. Needs mctl-api
           # with the exchange enabled and an agent image with run_token.py;
-          # an older image ignores it. Back to observe: investigate runs
-          # submitted without an execution_id cannot be bound to a run token,
-          # so enforce failed them (mctlhq/mctl-agents#752).
+          # an older image ignores it. Enforce since mctl-api 4.117.0
+          # (mctlhq/mctl-api#768) binds runs without an execution_id too, and
+          # observe showed both kinds exchange; every enforced run probes an
+          # out-of-scope read and expects 403. The pod's REST clients still
+          # use MCTL_TOKEN (mctlhq/mctl-agents#752).
           - name: MCTL_RUN_TOKEN_MODE
-            value: observe
+            value: enforce
           - name: MCTL_RUN_TOKEN_SA_TOKEN_FILE
             value: /var/run/secrets/mctl-api/token
           # Usage-writer token (mctlhq/.github#50): the only credential the
