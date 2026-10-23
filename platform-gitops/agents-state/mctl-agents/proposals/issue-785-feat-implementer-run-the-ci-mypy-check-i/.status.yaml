@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-23T22:33:12Z'
+updated_at: '2026-10-23T22:35:34Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-e4e299be79dcdd4b
@@ -47,13 +47,7 @@ completion:
       required_total: 4
       optional_total: 1
   primary_observed: true
-ci_blockers_head: b853a09369fbc82974a07311c4f177e73d35c302
-ci_blockers:
-- PR validation / tests
-refusals: 1
-refusals_head: b853a09369fbc82974a07311c4f177e73d35c302
-notes: 'implementer declined to act: Infrastructure/network failure, not a code defect:
-  6726 tests passed, 19 skipped, and the single error was at fixture setup of tests/test_action_approval_wait.py::test_approve_by_signal_consumes_then_runs_once:
-  ''RuntimeError: Failed starting test server: error sending request for url (https://temporal.download/temporal-test-server/default?arch=amd64&platform=linux&sdk-name=sdk-python&sdk-version=1.31.0)''.
-  WorkflowEnvironment.start_time_skipping() could not download the Temporal test server
-  binary; no code change on this PR can fix that. A re-run should clear it.'
+github:
+  state: open
+  head_sha: b853a09369fbc82974a07311c4f177e73d35c302
+  observed_at: '2026-10-23T22:35:34Z'
