@@ -82,13 +82,20 @@ spec:
               # Reuse the cluster's proven kubectl+jq image (also used by the
               # PVC/PV janitors); avoid retired bitnami/kubectl tags.
               image: alpine/k8s:1.33.12
+              # The script loads every Workflow in the namespace as one JSON
+              # document and runs jq over it. With ~100 live Workflows that
+              # document is ~15 MB and jq's in-memory tree is several times
+              # that, which OOMKilled every run at 128Mi on 2026-10-23 (78
+              # failed shepherd runs kept alive by a 3d secondsAfterFailure
+              # TTL). 512Mi gives ~30x the document; the request stays small
+              # because the pod lives for seconds every two minutes.
               resources:
                 requests:
                   cpu: 10m
-                  memory: 32Mi
+                  memory: 64Mi
                 limits:
-                  cpu: 100m
-                  memory: 128Mi
+                  cpu: 200m
+                  memory: 512Mi
               env:
                 - name: TG_BOT_TOKEN
                   valueFrom:
