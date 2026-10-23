@@ -260,8 +260,9 @@ API or schema. Every check that cannot be completed refuses the restart.
     `ALLOW_DUPLICATE` cannot be conditioned on which run closed. The comment
     is extended to cover this branch.
   - *Lifecycle-ownership or `we_` left open by a Failed run.* Not visible
-    from mctl-api. The live acceptance on mctl-agents#746 verifies the new
-    run reaches the approval gate and can be approved. If it cannot, a
+    from mctl-api. The owner-run live acceptance on a throwaway test issue
+    (not mctl-agents#746) verifies the new run reaches the approval gate and
+    can be approved. If it cannot, a
     follow-up goes to mctl-agents.
   - *Approval semantics.* A restart never approves anything. The new run
     re-investigates and parks at the approval gate.
