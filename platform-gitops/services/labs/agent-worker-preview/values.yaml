@@ -110,6 +110,10 @@ probes:
 env:
   AGENT_API_BASE_URL: "http://labs-mctl-telegram-preview-base-service:8080/api/agent/v1"
   AGENT_MAX_BUDGET_USD: "0.50"
+  # Jobs of different conversations run in parallel, up to this many
+  # (mctlhq/mctl-telegram#872, owner OK 2026-10-24; 1..10, default 1). One
+  # conversation is still served strictly in order.
+  AGENT_WORKER_CONCURRENCY: "2"
   # AGENT_CREDENTIAL_DOMAIN_ID names, in non-secret form, the quota domain the
   # worker's `claude` CLI bills against — the Vault path of the dedicated
   # Claude Code OAuth credential below, NOT the credential. It is exported as

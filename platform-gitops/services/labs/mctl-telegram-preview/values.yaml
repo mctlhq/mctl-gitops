@@ -242,11 +242,21 @@ env:
   # mctlhq/mctl-agents#760): publish telegram.message.* to the operator stream
   # only when the conversation worker did not handle the event (deny,
   # require_approval, worker failure). Safe here because agent-worker-preview
-  # claims this instance's jobs. Known gap, documented on the flag: a job no
-  # worker ever claims stays pending and is never routed, so while the worker
-  # is down the operator sees nothing for those events. Revert to "false" if
-  # the worker is retired or stopped for long.
+  # claims this instance's jobs. Since mctl-telegram 0.93.0 (#872) a job no
+  # worker claims within AGENT_UNCLAIMED_ROUTE_AFTER is routed too, so a
+  # stopped worker no longer hides events from the operator. Revert to
+  # "false" if the worker is retired.
   EVENTS_OPERATOR_ROUTING: "true"
+  # Live turn coalescing (mctlhq/mctl-telegram#872, owner OK 2026-10-24): a
+  # burst of messages in one conversation becomes one agent turn once the
+  # conversation is quiet for AGENT_TURN_QUIET, capped at AGENT_TURN_MAX_WAIT.
+  # "0s" turns coalescing off. Requires agent-worker-preview on the same
+  # release first: an older worker would see only the turn's head event.
+  AGENT_TURN_QUIET: "3s"
+  AGENT_TURN_MAX_WAIT: "15s"
+  # A job nobody claimed for this long is routed to the operator
+  # (worker_unclaimed). Must exceed AGENT_TURN_MAX_WAIT while coalescing is on.
+  AGENT_UNCLAIMED_ROUTE_AFTER: "5m"
 ingress:
   enabled: true
   hosts:
