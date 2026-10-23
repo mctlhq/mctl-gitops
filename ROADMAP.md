@@ -72,6 +72,16 @@
   flow: заявка → письмо-решение → вход через ZITADEL/GitHub → starter workspace
   → подключение MCP. Слово «invitation» в docs не встречается ни разу.
 - [ ] Stage C1c: убрать legacy GitHub OAuth на сайте (после 31.10 по плану).
+- [x] Письмо об одобрении приглашения вело на `#contact` вместо входа — исправлено
+  (ссылка на `#request-access` + «Already invited? Sign in» + напоминание про
+  verified email в GitHub, [mctl-web#197](https://github.com/mctlhq/mctl-web/pull/197));
+  нашёл первый внешний приглашённый 20.10.
+- [ ] Первый внешний приглашённый (@NaMax66) так и не вошёл: Login V2 показывает
+  общую страницу «access is by invitation», причина отказа hook'а видна только в
+  логах mctl-api (`intent_*`). Разобрать по логам; одобрение истекает через 7 дней
+  после решения — при необходимости переодобрить. Продуктовый вывод: причина отказа
+  должна доходить до оператора (алерт/Telegram на `intent_customer_create_not_allowed`,
+  `intent_no_verified_email` для одобренных id).
 
 ### 2.3 Хвосты, которые уже стреляли
 - [ ] **Добить `GHCR_PAT`/`GH_PACKAGES_TOKEN`**: допереключить mctl-web, mctl-docs,
