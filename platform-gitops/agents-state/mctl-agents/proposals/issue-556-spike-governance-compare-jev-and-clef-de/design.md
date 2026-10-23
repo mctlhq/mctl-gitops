@@ -117,6 +117,8 @@ combine(det_verdict, result, threshold) -> simulated_verdict:
 - Location: `tests/fixtures/semantic_decision/v1/*.json`.
 - Each fixture carries: the request, `deterministic_verdict` (recomputed and asserted in tests from `evaluate(BUILTIN_POLICY, ActionRequest(...))`), `expected_recommendation`, `danger` (bool), `label_status` (`agreed` or `contested`), `pair_id` (for minimal pairs), and `notes`.
 - At least 40 fixtures in total, with at least 6 per scenario, covering the classes listed in requirements.md.
+- At least 10 of them are `danger: true` with `deterministic_verdict: ALLOW` (the escalation-relevant set).
+- Each fixture also records `labelled_by` and `confirmed_by` (two different people; the second labeler is a named reviewer on the spike PR).
 - Historical shapes from mctl-agents#183 and mctl-telegram#602 are rewritten as synthetic, sanitized equivalents.
 
 ### 6. Measurement and report
@@ -133,7 +135,7 @@ combine(det_verdict, result, threshold) -> simulated_verdict:
   - the adversarial subset;
   - cost at 1k, 100k and 1M decisions, using measured median tokens and the price recorded at run time.
 - The deterministic-only baseline is computed from the fixtures alone, with zero latency and zero cost.
-- The live run happens once, from a one-off pod in namespace `admins` started by an operator. It uses the existing worker image with the harness file mounted, or `uv run` from a checkout. Credentials come from operator env and are never committed.
+- Replay-only (owner, 2026-10-23): there is no live run in this spike. The live providers are written and tested against recorded or synthetic responses; the report shows the deterministic-only baseline and the harness output on replay data, and marks every live metric (latency, accuracy, cost, calibration per vendor) as "not measured". A live run, from a one-off pod in `admins` with a hard spend cap and a named approver, is a follow-up issue whose body the report includes.
 
 ### 7. Spike document
 
@@ -160,11 +162,11 @@ What happens next depends on the recommendation:
 ## Platform impact
 
 - **Migrations and backward compatibility**: none. The spike adds new files under `tools/`, `tests/` and `docs/spikes/`. No production module, policy version, env var or gitops value changes. `BUILTIN_POLICY` and its version string stay untouched, so existing approval intent hashes are unaffected.
-- **Resource impact**: one short-lived operator pod in `admins`, and about 40 fixtures x 2 providers x 5 repeats = about 400 calls. At about 1k tokens each, that is under $0.05 at the quoted list prices. CI runs only the replay provider, so it costs nothing and makes no network calls.
+- **Resource impact**: none beyond CI. The spike is replay-only: no operator pod, no vendor calls, no spend. CI runs only the replay provider and makes no network calls. (For the follow-up: about 40 fixtures x 2 providers x 5 repeats = about 400 calls, under $0.05 at the quoted list prices, still to be capped and approved.)
 - **Risks and mitigations**:
   - *Leakage to vendors*: only synthetic or sanitized fixtures are sent. The builder screens with `contains_credential` and enforces length bounds. There is no raw persistence by default.
   - *Accidental production import*: a test asserts that `orchestrator/` does not reference the spike module.
   - *Model output treated as authority*: there is a property test over every fixture x every possible result (each recommendation x each signal status x confidence extremes), asserting that `STRICTNESS[combine] >= STRICTNESS[det]` and that `combine` never yields ALLOW when `det != ALLOW`.
   - *Vendor facts drift or are wrong*: the harness records resolved model IDs and the run-time price input, and the document states the observation date.
   - *Fixture policy drift*: the recorded deterministic verdict is re-asserted against `evaluate` in tests, so a policy change shows up as a failing test, not as stale results.
-  - *Credential handling*: tokens are read only from env, never logged. The JSONL writer drops any key matched by the redaction key screen.
+  - *Credential handling*: no credentials exist or are created in this spike. In the follow-up, tokens are read only from env, never logged, and the JSONL writer drops any key matched by the redaction key screen.
