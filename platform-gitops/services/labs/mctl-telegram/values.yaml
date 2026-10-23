@@ -153,6 +153,16 @@ env:
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
   # a human to receive and enter the SMS code -> "sign-in session has expired".
   OAUTH_CODE_TTL: "30m"
+  # ROLLOUT_MARKER restarts the pod when its value changes; the line below
+  # records why the current value was set.
+  # This rollout clears a chain of enable_access login goroutines parked on
+  # the per-user login mutex: an abandoned phone->code flow holds the mutex
+  # for the whole OAUTH_CODE_TTL (30m), every later attempt for the same
+  # account times out at the phone step (90s) and queues behind it, and each
+  # queued goroutine sends a fresh login code the moment it gets the mutex.
+  # Observed 2026-10-23 16:44Z-17:18Z on the canary account after the D2
+  # revoke probe; the fix belongs in mctl-telegram (supersede, not queue).
+  ROLLOUT_MARKER: "2026-10-23-clear-parked-login-flows"
   # Production security policy: short-lived access tokens (1h) enforced for OAuth 2.1 refresh token rotation
   OAUTH_ACCESS_TOKEN_TTL: "1h"
   # Walkthrough video embedded on /demo (ChatGPT App Directory review).
