@@ -200,9 +200,11 @@ env:
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
-  # Reviewer/demo password-bypass login. ON for the Claude Directory review
-  # (2026-10-22); turn OFF after the review: /oauth/authorize must not expose
-  # the password form outside a review window.
+  # Reviewer/demo password-bypass login. OFF since 2026-10-23: the Claude
+  # Directory review has not started, and the flag also enables the reviewer
+  # write guard, which blocks Local Bridge device revocation on 8745115872.
+  # Turn it ON again only for the review window: /oauth/authorize must not
+  # expose the password form outside one.
   # DEMO_REVIEWER_USERNAME/PASSWORD still sync from Vault via
   # labs-mctl-telegram-demo; rotate DEMO_REVIEWER_PASSWORD at
   # secret/data/platform/mctl-telegram/demo after this flag is false (do not
@@ -214,7 +216,7 @@ env:
   # Telegram OIDC/session login rather than this password bypass, and must
   # carry per-account send_enabled=false so probes stay read-only even though
   # ALLOW_SEND is true globally.
-  DEMO_REVIEWER_ENABLED: "true"
+  DEMO_REVIEWER_ENABLED: "false"
   DEMO_REVIEWER_TG_ID: "8745115872"
   # Claude Directory review (2026-10-22): the only peer the reviewer identity
   # may really write to (send_message / send_reply, mctl-telegram 0.88.0+;
