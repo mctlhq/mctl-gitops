@@ -76,7 +76,6 @@ surfaces:
     path: argo-workflows/cluster-templates/cwft-mctl-agents-run.yaml
     template: run-orchestrator
     governed: true
-    rollout: staged
     note: covers RUN_MODE full, mentor-only and single-service
   - id: usage-collector
     kind: cwft
