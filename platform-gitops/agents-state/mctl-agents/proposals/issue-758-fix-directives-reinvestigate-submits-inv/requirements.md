@@ -1,0 +1,32 @@
+# Reinvestigate directive: submit investigate with the owning DevLoop's execution identity, fail closed otherwise
+
+## Context
+`@MCTL reinvestigate` is handled by `orchestrator/run_issue_directive_poller.py`, which runs as `directive_scan_activity` inside the Temporal worker (`orchestrator/temporal/activities/issue_poll.py`). Its `submit_investigate(issue_url, slug, requested_by)` POSTs the `mctl-agents-investigate` operation with only `{"issue_url": ...}`. The `cwft-mctl-agents-investigate` ClusterWorkflowTemplate declares optional `work_item_id` / `execution_id` parameters. mctl-api's run-token binder (`agent_run_binding.go`) refuses to issue a token for a Workflow whose `execution_id` argument is empty (`agent_run_exchange_refused`, `reason: workflow_without_execution`). Under `MCTL_RUN_TOKEN_MODE=enforce`, every directive-submitted investigate run fails at `orchestrator.run_token`. The DevLoop path is not affected, because `DevLoopWorkflow.run` (`orchestrator/temporal/workflows/dev_loop.py`) forwards its own canonical `we_` as `execution_id`.
+
+The refusal is correct; the defect is that one submitter still produces runs with no execution identity. A canonical DevLoop parked at approval holds its WorkItem's execution as `Running`, so minting a second execution on that item would be refused (`execution_active`). The fix therefore hands the investigate run the execution identity of the live DevLoop that owns the issue, which is what the loop itself does for its own investigate step. When no such identity is available, the poller refuses to submit and says so on the issue. It no longer submits a run that is bound to be refused.
+
+## User stories
+- AS a maintainer I WANT `@MCTL reinvestigate` to work while investigate runs with run-token enforce SO THAT I can rewrite a proposal without dropping investigate back to observe.
+- AS a platform operator I WANT every directive-submitted investigate run to carry a store execution id SO THAT each one can be bound to a scoped run token and audited against its WorkItem.
+- AS a maintainer I WANT a clear reply when a reinvestigate cannot be dispatched SO THAT I know which supported path to use, instead of finding a failed Argo run later.
+
+## Acceptance criteria (EARS)
+- WHEN the poller handles an authorized, recognised, unambiguous, overwritable reinvestigate directive THE SYSTEM SHALL resolve an execution identity before the policy checkpoint and the POST in `submit_investigate`.
+- WHEN the issue's DevLoopWorkflow (`dev-loop-mctlhq-<repo>-<n>`) is Running and its `work_context` query returns a non-empty `work_item_id` and an `execution_id` that is a store execution (`we_` prefix, `work_context.snapshots.is_store_execution`) THE SYSTEM SHALL submit `mctl-agents-investigate` with `issue_url`, `work_item_id`, `execution_id`, `temporal_workflow_id` and `temporal_run_id` taken from that loop.
+- WHEN such a run is submitted THE SYSTEM SHALL produce an mctl-agents-investigate audit row with a non-empty `execution_id`, and the run SHALL exchange a run token successfully under `MCTL_RUN_TOKEN_MODE=enforce`.
+- IF no Running DevLoopWorkflow exists for the issue, or its `work_context` has no `work_item_id`, or its `execution_id` is not a `we_` store execution (a pre-#636 seed hash or an empty value) THEN THE SYSTEM SHALL NOT POST the operation, SHALL post one acked reply that names the reason and the supported alternative, and SHALL return a new outcome `no-execution`.
+- IF the DevLoop lookup cannot be answered (Temporal unreachable, query timeout, or a query failure other than "workflow not found") THEN THE SYSTEM SHALL NOT POST the operation and SHALL treat the result like a transient dispatch failure: the comment is left unacked, the retry is counted toward `MAX_DISPATCH_ATTEMPTS`, and the existing give-up reply is posted after the last attempt.
+- WHILE `--dry-run` is set THE SYSTEM SHALL resolve and log the execution identity it would forward, and SHALL NOT POST or reply.
+- THE SYSTEM SHALL NOT mint, attach, or end any WorkItem execution from the poller, and SHALL NOT start, signal or update a DevLoopWorkflow. The only Temporal calls are a describe and a read-only query.
+
+## Out of scope
+- Adding a "reinvestigate" signal or Update to `DevLoopWorkflow`, so that the loop runs the re-investigation itself. This is recorded as a follow-up; see design.md Alternatives.
+- Minting a standalone WorkItem execution for issues with no live DevLoop (legacy direct-Argo proposals). See Open questions.
+- Making `@MCTL investigate` (without `re`) a recognised verb (`directives.VERBS`).
+- Changing mctl-api's binder, the CWFT manifest in mctl-gitops, or flipping `MCTL_RUN_TOKEN_MODE` on the investigate template.
+- Threading `requested_by` through to the CWFT (still blocked on the CWFT manifest; see the `submit_investigate` docstring).
+
+## Open questions
+- No-live-loop case: the issue's first "Expected" bullet asks the poller to mint a WorkItem execution. This proposal refuses instead. A `we_` that the poller attached for a bare Argo run would have no owner to end it: the investigator does not advance a `--execution-id` it was handed ("its owner advances its phase", `_resolve_work_context_ref`). While it stays non-terminal, mctl-api refuses every later execution on the item (`execution_active`), which would block the next DevLoop for that issue. If the maintainers want that path, the alternatives are (a) routing it through an mctl-api execution request (`start`), so the dispatcher owns the lifecycle, or (b) letting the poller end the execution on a later tick after it reads the Argo phase. Both need a decision on ownership. Proceeding with fail-closed.
+- Sharing the loop's `we_`: the investigate run uses the DevLoop's own Running execution while the loop is parked at approval. This is the same identity the loop gives its own investigate step, and the loop's grant-freshness check (`check_grant_freshness`, `GRANT_FRESHNESS_INTERVAL`) supersedes the stale `aar_` after the proposal is rewritten. Is it acceptable for mctl-api's binder and audit that two Argo runs (the loop's original investigate and the directive's) appear under one `we_`? The investigate CWFT comment says "Execution identity for THIS attempt", which suggests one per attempt.
+- The deployed investigate template in the gitops checkout currently reads `MCTL_RUN_TOKEN_MODE: observe` (reverted under mctlhq/mctl-agents#752), while the issue describes enforce from mctl-gitops#2078. Re-enabling enforce is a separate gitops change, to make after this ships.
