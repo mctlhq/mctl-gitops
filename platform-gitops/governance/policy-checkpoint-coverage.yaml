@@ -55,7 +55,6 @@ surfaces:
     path: argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml
     template: run-implementer
     governed: true
-    rollout: staged
   - id: shepherd
     kind: cwft
     path: argo-workflows/cluster-templates/cwft-mctl-agents-shepherd.yaml
