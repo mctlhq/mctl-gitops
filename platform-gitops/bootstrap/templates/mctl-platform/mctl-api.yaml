@@ -63,9 +63,12 @@ spec:
             # start, so when a rollout depends on generated configuration
             # (for example zitadel-iac output), bump only after it is applied.
             # The line below records why the current value was set.
-            # This rollout loads the claude-haiku-5-5 usage price card, which
-            # mctl-api reads only at startup.
-            ROLLOUT_MARKER: "2026-10-17-usage-pricing-haiku-5-5"
+            # This rollout replaces replica mctl-api-6f4bb4b99f-qpnxg, which
+            # started 2026-10-22T22:52Z while Temporal was down (k3s 1.34
+            # upgrade window): its Temporal client failed to dial once and
+            # stayed nil, so every DevLoop call that landed on it answered
+            # 503 "dev-loop Temporal client not configured" (mctl-api#764).
+            ROLLOUT_MARKER: "2026-10-23-temporal-client-dead-replica"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
