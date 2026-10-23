@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-10-23T16:06:03Z'
+status: implemented
+updated_at: '2026-10-23T16:27:15Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-226861362c2a2be4
-  trace_id: 233f14d414cfe3cf6ac1b6ab6c1bf3de
-  agent: issue-investigator
+  context_id: ex-8bfe8d99ea442b62
+  trace_id: a01ede1fa7d5b7f64872ce8c134c0ea1
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -19,8 +19,31 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-10-23T16:06:03Z'
-  content_digest: 'sha256:984c0be41fc41a4be45ebe340ff679aad1dd8c26db60f73c0e283c1f0b9092f0'
-  digest_binding: 'reviewed'
-  approval_ref: 'aar_54dc445931624fd5bf805c624be95c02'
+  content_digest: sha256:984c0be41fc41a4be45ebe340ff679aad1dd8c26db60f73c0e283c1f0b9092f0
+  digest_binding: reviewed
+  approval_ref: aar_54dc445931624fd5bf805c624be95c02
+attempt:
+  id: 46d0e2105d4397d544ee2a864d82d2019ea3e46252cd41b57892cf43c8e1dfdf
+  started_at: '2026-10-23T16:07:28Z'
+  expires_at: '2026-10-23T18:17:28Z'
+  finished_at: '2026-10-23T16:27:15Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/775
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-12916b40
+  authoritative:
+    completion_id: ic-d0f9b81782eef2ce
+    content_hash: sha256:d0f9b81782eef2ced060f9a416d2f270c0df9cf2bacd4f31ded763e13238ca32
+    proposal_digest: sha256:984c0be41fc41a4be45ebe340ff679aad1dd8c26db60f73c0e283c1f0b9092f0
+    attempt_id: 46d0e2105d4397d544ee2a864d82d2019ea3e46252cd41b57892cf43c8e1dfdf
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 435e64e47e66d7a8f00c121c41b61090bd6d0bef
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 1
+  primary_observed: true
