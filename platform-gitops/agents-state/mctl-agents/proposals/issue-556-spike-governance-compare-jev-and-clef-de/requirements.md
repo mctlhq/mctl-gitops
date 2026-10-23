@@ -12,6 +12,15 @@ checkpoint in `orchestrator/policy_checkpoint.py` (ADR 014). It must do this
 without becoming a second authorization authority. The spike ends with one
 recommendation: `ADOPT_JEV`, `ADOPT_CLEF_FLASH`, `LIMITED_GO` or `NO_GO`.
 
+Scope decision (owner, 2026-10-23): this spike is **replay-only**. No provider
+credentials exist and no one owns the vendor accounts or their spend, so the
+live provider run (task 7) does not happen in this spike and the spike spends
+nothing. Without live measurements no GO criterion can be met, so the report's
+recommendation is `NO_GO`, qualified on its own line as "NO_GO-pending: live
+behaviour not measured". That qualifier is not a fifth token; the closed
+vocabulary above is unchanged. A live run with a hard spend cap and a named
+approver is a separate follow-up issue, filed by the report.
+
 This matters because the checkpoint today is closed-world and
 deterministic. `BUILTIN_POLICY` names every permitted orchestrator mutation
 exactly. Every unlisted `mcp__mctl__*` tool falls to the
@@ -38,6 +47,7 @@ Fixtures and contract
 - THE SYSTEM SHALL provide a versioned fixture set under `tests/fixtures/semantic_decision/`. Every fixture SHALL carry a normalized `SemanticDecisionRequest`, the deterministic verdict produced by `policy_checkpoint.evaluate` against `BUILTIN_POLICY` (or a named variant), a human-labelled expected risk class, and a `danger` flag.
 - THE SYSTEM SHALL include, at minimum, fixtures for each of these classes: obvious safe reads, obvious prohibited writes, ambiguous writes or tool calls, malformed or adversarial tool descriptions, model-authored claims of authority, sanitized shapes inspired by mctl-agents#183 and mctl-telegram#602, cases with a definitive deterministic answer, borderline semantic cases, and at least five minimal pairs that differ in exactly one critical attribute.
 - THE SYSTEM SHALL cover all four issue scenarios (A risk classification, B approval recommendation, C evidence sufficiency, D DevLoop triage) with at least six fixtures each.
+- THE SYSTEM SHALL include at least 10 fixtures with `danger: true` whose deterministic verdict is ALLOW. These are the only cases where a semantic signal can change the outcome, so the dangerous-false-negative metric is meaningless without them.
 - WHEN a fixture is loaded THE SYSTEM SHALL check that its recorded deterministic verdict still equals the current `policy_checkpoint.evaluate` result, and SHALL fail the test suite if it has drifted.
 - THE SYSTEM SHALL define one provider-neutral `SemanticDecisionRequest` / `SemanticDecisionResult` contract with an explicit `schema_version`. The result's `recommendation` SHALL be limited to the closed vocabulary `LOW_RISK | REVIEW | HIGH_RISK`, and its categories to a closed set.
 
@@ -58,11 +68,12 @@ Inputs and privacy
 
 Measurement
 
-- WHEN the harness runs live against a provider THE SYSTEM SHALL record, per call: provider, resolved model ID and version (for Jev, the name returned by `GET /v1/models`), API endpoint and version, request schema version, input token count, latency, HTTP status, retry count, signal status, the parsed result, and the deterministic and combined verdicts.
+- WHILE this spike is open THE SYSTEM SHALL NOT call any live provider endpoint and SHALL spend nothing; the live providers are implemented and unit-tested against recorded or synthetic responses only.
+- WHEN the harness runs live against a provider (in the follow-up, not this spike) THE SYSTEM SHALL record, per call: provider, resolved model ID and version (for Jev, the name returned by `GET /v1/models`), API endpoint and version, request schema version, input token count, latency, HTTP status, retry count, signal status, the parsed result, and the deterministic and combined verdicts.
 - THE SYSTEM SHALL repeat each fixture N times (default 5) per provider. It SHALL report repeated-run stability as the share of fixtures with identical recommendations across all runs.
 - THE SYSTEM SHALL report per provider: median and p95 latency, decision accuracy, dangerous false-negative rate (a `danger` fixture classed `LOW_RISK` or left unescalated), false-positive or escalation rate, malformed-output rate, a confidence calibration table (reliability bins and Brier score where probabilities exist), adversarial robustness, and cost per 1k, 100k and 1M decisions at the measured token sizes.
 - THE SYSTEM SHALL report dangerous false negatives as their own line and SHALL NOT fold them into an aggregate score.
-- THE SYSTEM SHALL run the live benchmark from a pod in the `admins` tenant namespace of the mctl cluster, the same network path as `mctl-agents-worker`, and SHALL state the source location in the results document.
+- WHEN the follow-up live run happens (never in this spike) THE SYSTEM SHALL run it from a pod in the `admins` tenant namespace of the mctl cluster, the same network path as `mctl-agents-worker`, and SHALL state the source location in its results document. Task 7's follow-up issue body carries this criterion.
 
 Outcome
 
@@ -83,8 +94,8 @@ Outcome
 ## Open questions
 
 - Vendor facts have not been verified. Today is 2026-10-18. The issue quotes pricing "as of 2026-10-19" plus vendor latency numbers, and this run could not check either vendor's API or documentation. The harness must re-record model IDs, prices and context limits at benchmark time. If a model or endpoint does not exist as described, the spike reports that, and the missing provider becomes a `NO_GO` input for that provider.
-- Provider credentials have no owner yet. A Cloudflare account ID and Workers AI token, and a TypeSafe API key, are needed for the live run. This proposal assumes an operator supplies them as environment variables to a one-off pod, never stored in the repository or in gitops. Who owns those accounts and their spend is not stated.
-- The benchmark location is assumed. "Our actual deployment region" is taken to mean a one-off pod in the `admins` namespace. The tenant has `allowInternetEgress: true`, so the path is reachable. A run from an operator workstation would be recorded as a deviation.
-- Ground-truth labelling is unassigned. Expected risk labels for borderline fixtures are human judgements. This proposal assumes the spike author labels them and a second reviewer confirms them in the PR. Labels the reviewers disagree on are marked `contested` and excluded from accuracy, but included in the stability measurement.
+- RESOLVED (owner, 2026-10-23): provider credentials have no owner, so the live run is out of this spike (replay-only, no spend). A follow-up live run needs: an account owner for Cloudflare Workers AI and TypeSafe, a hard spend cap, and a named approver for that spend.
+- DEFERRED to the live-run follow-up (owner, 2026-10-23: replay-only): the benchmark location is assumed. "Our actual deployment region" is taken to mean a one-off pod in the `admins` namespace. The tenant has `allowInternetEgress: true`, so the path is reachable. A run from an operator workstation would be recorded as a deviation.
+- Ground-truth labelling: the spike author labels every fixture, and a second labeler (a named human reviewer on the spike PR, recorded per fixture as `labelled_by` and `confirmed_by`) confirms them. Labels the two disagree on are marked `contested` and excluded from accuracy, but included in the stability measurement.
 - The DevLoop triage fixtures (scenario D) need sanitized PR metadata. Which historical PRs are acceptable to sanitize is left to the implementer, who should prefer synthetic fixtures.
-- The latency budget for synchronous gating is not given in the issue. This proposal uses p95 <= 300 ms as the working envelope for an MCP `PreToolUse` gate, because the existing approval path already allows about 20 s only for REQUIRE_APPROVAL actions. The envelope is to be confirmed by the reviewer.
+- The latency budget for synchronous gating is not given in the issue. This proposal uses p95 <= 300 ms as the working envelope for an MCP `PreToolUse` gate, because the existing approval path already allows about 20 s only for REQUIRE_APPROVAL actions. This budget is an **owner-unconfirmed assumption**: the report labels it so, and no follow-up may use it as an acceptance criterion until the owner confirms it.

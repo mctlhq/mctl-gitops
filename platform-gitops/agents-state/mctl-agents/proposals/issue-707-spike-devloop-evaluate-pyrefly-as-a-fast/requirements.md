@@ -92,7 +92,8 @@ production behaviour; it produces a report plus throwaway benchmark assets.
 ## Out of scope
 
 - Replacing or weakening the mypy CI gate; adding Pyrefly to `pyproject.toml`,
-  `uv.lock` or the CI workflow.
+  `uv.lock` or the CI `lint` workflow (`pr-validation.yml`). The spike-only
+  measurement workflow `spike-707-bench.yml` is in scope; it gates nothing.
 - Type-checking `tests/` or raising strictness (e.g. `disallow_untyped_defs`).
 - Source changes made to reach parity between checkers.
 - Shipping any checker in the production image (`Dockerfile`).
@@ -101,17 +102,18 @@ production behaviour; it produces a report plus throwaway benchmark assets.
 
 ## Open questions
 
-- The issue pins baseline SHA `68f10afcb8a96d7b1c54d5d56819d8e39979c275`; this
-  investigation's (shallow) clone is at `cd068a8e2a2e45fd767bd4ac7989b037ab554f61`
-  and could not resolve the pinned SHA. Proceeding as: measure on the pinned
-  SHA if reachable from the spike branch's history, otherwise on the spike
-  branch's merge-base with main, recorded explicitly in the report.
-- The issue asks for "machine/runner CPU + OS". Proceeding as: one primary
-  environment (the machine the implementer runs the spike on, with CPU model,
-  core count and OS recorded) named in the report; a GitHub-hosted
-  `ubuntu-latest` figure is optional and, if present, labelled separately.
-- Which Pyrefly version: the latest release available on PyPI when the spike
-  runs, invoked as `uvx pyrefly==<exact>` so nothing enters `uv.lock`.
+- RESOLVED (operator review 2026-10-23): the issue's baseline SHA
+  `68f10afcb8a96d7b1c54d5d56819d8e39979c275` resolves on mctl-agents (commit
+  dated 2026-10-18). All measurements run on that SHA; there is no
+  merge-base fallback.
+- RESOLVED (operator review 2026-10-23): the measurement environment is one
+  GitHub-hosted `ubuntu-latest` runner, driven by a spike-only workflow
+  (`workflow_dispatch` plus `pull_request` on `docs/spikes/707/**`). The report
+  records the runner's CPU model, core count, memory and OS as printed by the
+  workflow. The implementer pod (250m CPU, 128Mi) is not a measurement
+  environment: it is too small and too noisy for p95 timings.
+- RESOLVED (operator review 2026-10-23): Pyrefly is pinned to `1.4.0` and
+  invoked as `uvx pyrefly==1.4.0` so nothing enters `uv.lock`.
 - The implementer runtime image has no type checker (`--no-dev`). Whether
   shipping one there is acceptable is a follow-up decision; the spike only
   measures and reports the size/latency cost of doing so.

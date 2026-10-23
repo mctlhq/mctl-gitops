@@ -50,32 +50,46 @@ Type checking in `mctl-agents` today:
 Deployed state checked:
 
 - `$MCTL_GITOPS_ROOT/services/admins/mctl-agents-worker-implement/values.yaml`:
-  the implementer worker runs image `ghcr.io/mctlhq/mctl-agents` tag `1.84.0`,
+  the implementer worker runs image `ghcr.io/mctlhq/mctl-agents` tag `1.92.0`,
   i.e. the `--no-dev` image built from `Dockerfile`; no type checker present.
 - `$MCTL_GITOPS_ROOT/services/admins/` also holds `mctl-agents-worker` and
   `mctl-agents-worker-exec`; not otherwise relevant, as the spike changes no
   deployed service.
-- Clone history: shallow clone at `cd068a8e2a2e45fd767bd4ac7989b037ab554f61`;
-  the issue's pinned SHA `68f10afc...` could not be resolved locally (recorded
-  under Open questions).
+- The issue's pinned SHA `68f10afcb8a96d7b1c54d5d56819d8e39979c275` resolves
+  on mctl-agents (commit dated 2026-10-18; confirmed in the 2026-10-23
+  operator review). The investigation's shallow clone could not see it, which
+  is why an earlier draft carried a merge-base fallback; that fallback is
+  removed.
 - mctl MCP tools were not called: the spike is dev/CI tooling only and asserts
   nothing about runtime configuration beyond the image tag above.
 
 ## Proposed solution
 
 A documentation-and-scripts spike, merged as one PR that touches only
-`docs/spikes/707-pyrefly-type-check.md`, `docs/spikes/707/` and one guard test. Nothing in
-`pyproject.toml`, `uv.lock`, `.github/workflows/`, `Dockerfile` or runtime code
-changes.
+`docs/spikes/707-pyrefly-type-check.md`, `docs/spikes/707/`, one guard test and
+one spike-only measurement workflow `.github/workflows/spike-707-bench.yml`.
+Nothing in `pyproject.toml`, `uv.lock`, `.github/workflows/pr-validation.yml`,
+any other existing workflow, `Dockerfile` or runtime code changes. The
+measurement workflow follows the `portable-runtime-spike.yml` precedent:
+spike-scoped triggers, no secrets, deleted when the spike closes.
 
 The PR also adds one guard test, `tests/test_spike_707_report.py` (see
 tasks.md), so the "no gate change" invariant is checked mechanically.
 
-1. **Pinned environment.** Measure on the issue's SHA (or, if unreachable,
-   the spike branch's merge-base with main, stated in the report). Pyrefly is
-   run as `uvx pyrefly==<exact version>` so it never enters the lockfile; mypy
+1. **Pinned environment.** Measure on the issue's SHA
+   `68f10afcb8a96d7b1c54d5d56819d8e39979c275`, checked out in a `git worktree`
+   so later commits on main cannot move the baseline. A shallow clone hid
+   this SHA before, so every checkout that builds the worktree fetches it
+   first: `actions/checkout` with `fetch-depth: 0` in the workflow, and
+   `git fetch origin 68f10afcb8a96d7b1c54d5d56819d8e39979c275` in the
+   implementer clone and in T3. Run every timed
+   measurement on one environment: a GitHub-hosted `ubuntu-latest` runner via
+   `.github/workflows/spike-707-bench.yml` (`workflow_dispatch` and
+   `pull_request` on `docs/spikes/707/**`; it uploads `results.json` and the
+   raw diagnostics as an artifact). Not the implementer pod (250m CPU, 128Mi).
+   Pyrefly is run as `uvx pyrefly==1.4.0` so it never enters the lockfile; mypy
    is run as `uv run --locked mypy` (2.3.1). Record Python, uv, both versions,
-   CPU model/cores, OS.
+   CPU model, core count, memory and OS as the workflow prints them.
 
 2. **Configurations, kept separate.**
    - (A) auto-migrated: run Pyrefly at the repo root with no Pyrefly config so
@@ -140,7 +154,7 @@ tasks.md), so the "no gate change" invariant is checked mechanically.
    - For `PYREFLY_INNER_LOOP_ONLY`/`REPLACE_MYPY`, the report names the
      integration point. The default candidate is the implementer prompt's
      "Service-specific notes" in `agents/mctl-agents/.claude/agents/implementer.md`
-     invoking `uvx pyrefly==<pin> check --config <committed config>`, with the
+     invoking `uvx pyrefly==1.4.0 check --config <committed config>`, with the
      open delivery question (the `--no-dev` image) costed: per-run `uvx`
      download vs a pinned image layer. The report includes a ready-to-file
      follow-up issue body; the spike does not apply it.
@@ -158,16 +172,18 @@ touched.
 - **Measure only clean-main error counts and checker speed.** Cheaper, but the
   issue states clean-main counts are insufficient; without the mutation oracle
   a faster checker that misses `Optional` misuse would look like a win.
-- **Run the spike entirely in a GitHub Actions workflow.** Gives runner-native
-  numbers, but needs a new workflow file in this repo, and hosted-runner noise
-  makes p95 less stable; kept as an optional second environment instead.
+- **Run the timings in the implementer pod or on a developer laptop.** No new
+  workflow file, but the pod (250m CPU, 128Mi) is too small and too noisy for
+  p95, and a laptop is not reproducible by reviewers. Rejected in the
+  2026-10-23 operator review in favour of one spike-only `ubuntu-latest`
+  workflow.
 
 ## Platform impact
 
 - Migrations: none. Backward compatibility: unaffected; mypy stays the only
   configured checker and the `lint` job is unchanged.
-- Resource impact: a few minutes of local compute; a Pyrefly binary fetched by
-  `uvx` into the uv cache only on the spike machine.
+- Resource impact: a few minutes of GitHub-hosted `ubuntu-latest` runner time
+  per run; a Pyrefly binary fetched by `uvx` into the runner's uv cache only.
 - Repo footprint: one Markdown report and a small `docs/spikes/707/` directory
   (script, explicit config, patches, results JSON, raw diagnostics). Raw
   diagnostic files are kept small by storing normalised output; if they
@@ -176,7 +192,8 @@ touched.
   - Mutation patch accidentally applied to source on the branch: the harness
     reverts in a `finally` block and refuses to start on a dirty tree; a test
     asserts the spike PR leaves the gate files unchanged; review checks the
-    diff touches only `docs/spikes/707*` and `tests/test_spike_707_report.py`.
+    diff touches only `docs/spikes/707*`, `tests/test_spike_707_report.py` and
+    `.github/workflows/spike-707-bench.yml`.
   - Scope mismatch skews results: file-set diff is a required section of the
     report.
   - Pyrefly reading `[tool.mypy]` from `pyproject.toml` differently than
