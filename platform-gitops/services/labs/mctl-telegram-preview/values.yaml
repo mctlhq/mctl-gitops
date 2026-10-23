@@ -238,6 +238,15 @@ env:
   # transaction commits, the outbox relay XADDs a reference-only envelope to
   # mctl:events:telegram. The password comes from the -events secret below.
   EVENTS_VALKEY_URL: "redis://telegram-producer@valkey.platform-events.svc.cluster.local:6379/0"
+  # Operator routing (mctlhq/mctl-telegram#858 task 4, decision 1 on
+  # mctlhq/mctl-agents#760): publish telegram.message.* to the operator stream
+  # only when the conversation worker did not handle the event (deny,
+  # require_approval, worker failure). Safe here because agent-worker-preview
+  # claims this instance's jobs. Known gap, documented on the flag: a job no
+  # worker ever claims stays pending and is never routed, so while the worker
+  # is down the operator sees nothing for those events. Revert to "false" if
+  # the worker is retired or stopped for long.
+  EVENTS_OPERATOR_ROUTING: "true"
 ingress:
   enabled: true
   hosts:
