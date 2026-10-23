@@ -608,6 +608,14 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "VaultAudit.*"
+                  # Identity-hook refusals and failures
+                  # (vm-rules/zitadel-hook-alerts.yaml): an invitee stuck on
+                  # Login V2's generic page, or the hook answering 503, needs
+                  # an operator (re-approve, ask for a verified email, fix a
+                  # dependency) — there is nothing for mctl-agent to patch.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ZitadelHook.*"
                   # A stale agents pipeline usually means its own model/auth
                   # path is unavailable, so route directly to an operator.
                   - receiver: telegram

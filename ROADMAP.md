@@ -79,9 +79,11 @@
 - [ ] Первый внешний приглашённый (@NaMax66) так и не вошёл: Login V2 показывает
   общую страницу «access is by invitation», причина отказа hook'а видна только в
   логах mctl-api (`intent_*`). Разобрать по логам; одобрение истекает через 7 дней
-  после решения — при необходимости переодобрить. Продуктовый вывод: причина отказа
-  должна доходить до оператора (алерт/Telegram на `intent_customer_create_not_allowed`,
-  `intent_no_verified_email` для одобренных id).
+  после решения — при необходимости переодобрить.
+- [x] Причина отказа hook'а теперь доходит до оператора: счётчик
+  `mctl_api_zitadel_hook_decisions_total{target,kind,reason}` в mctl-api и алерты
+  `ZitadelHookSignInRefused` / `ZitadelHookFailing` → Telegram
+  (`vm-rules/zitadel-hook-alerts.yaml`, маршрут в monitoring.yaml).
 
 ### 2.3 Хвосты, которые уже стреляли
 - [ ] **Добить `GHCR_PAT`/`GH_PACKAGES_TOKEN`**: допереключить mctl-web, mctl-docs,
