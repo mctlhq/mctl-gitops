@@ -15,7 +15,7 @@
   on the pinned SHA (depends on 1) — DoD: exit code, diagnostic count and raw
   output saved to `docs/spikes/707/diagnostics/mypy.txt`; the exit code is 0,
   or the report explains every diagnostic behind a non-zero exit.
-- [ ] 3. Pyrefly config (A): run `uvx pyrefly==<pin> check` with no Pyrefly
+- [ ] 3. Pyrefly config (A): run `uvx pyrefly==1.4.0 check` with no Pyrefly
   config so it discovers `[tool.mypy]`; capture the effective config
   (depends on 1) — DoD: the resolved Pyrefly configuration quoted verbatim
   in the report (the tool's own dump, not a paraphrase); output in

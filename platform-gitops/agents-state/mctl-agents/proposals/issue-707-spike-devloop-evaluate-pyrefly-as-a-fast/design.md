@@ -78,7 +78,11 @@ tasks.md), so the "no gate change" invariant is checked mechanically.
 
 1. **Pinned environment.** Measure on the issue's SHA
    `68f10afcb8a96d7b1c54d5d56819d8e39979c275`, checked out in a `git worktree`
-   so later commits on main cannot move the baseline. Run every timed
+   so later commits on main cannot move the baseline. A shallow clone hid
+   this SHA before, so every checkout that builds the worktree fetches it
+   first: `actions/checkout` with `fetch-depth: 0` in the workflow, and
+   `git fetch origin 68f10afcb8a96d7b1c54d5d56819d8e39979c275` in the
+   implementer clone and in T3. Run every timed
    measurement on one environment: a GitHub-hosted `ubuntu-latest` runner via
    `.github/workflows/spike-707-bench.yml` (`workflow_dispatch` and
    `pull_request` on `docs/spikes/707/**`; it uploads `results.json` and the
@@ -150,7 +154,7 @@ tasks.md), so the "no gate change" invariant is checked mechanically.
    - For `PYREFLY_INNER_LOOP_ONLY`/`REPLACE_MYPY`, the report names the
      integration point. The default candidate is the implementer prompt's
      "Service-specific notes" in `agents/mctl-agents/.claude/agents/implementer.md`
-     invoking `uvx pyrefly==<pin> check --config <committed config>`, with the
+     invoking `uvx pyrefly==1.4.0 check --config <committed config>`, with the
      open delivery question (the `--no-dev` image) costed: per-run `uvx`
      download vs a pinned image layer. The report includes a ready-to-file
      follow-up issue body; the spike does not apply it.
