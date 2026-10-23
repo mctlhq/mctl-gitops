@@ -70,9 +70,9 @@ surfaces:
     kind: cwft
     path: argo-workflows/cluster-templates/cwft-mctl-agents-reconcile.yaml
     template: run-reconcile
-    governed: true
-    rollout: staged
-    note: run_shepherd --reconcile, no model
+    governed: false
+    boundary: no-mctl-token
+    reason: run_shepherd --reconcile has no model session and maps no MCTL_TOKEN; it only rewrites .status.yaml, which commit-and-push re-checks before pushing
   - id: run
     kind: cwft
     path: argo-workflows/cluster-templates/cwft-mctl-agents-run.yaml
