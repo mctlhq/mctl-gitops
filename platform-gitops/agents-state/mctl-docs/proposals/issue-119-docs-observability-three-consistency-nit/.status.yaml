@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-24T10:53:59Z'
+updated_at: '2026-10-24T11:11:10Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6c8498f5001a54fc
@@ -47,3 +47,11 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
+refusals: 1
+refusals_head: 10e2847d3b75e031b9a4ffa83aeb6ac4e41cafff
+notes: 'implementer declined to act: Reviewer text 1 is an approval (P1: 0, P2: 0,
+  P3: 0), not a defect. Advisory 1 is invalid: Homebrew-core''s `kubelogin` formula
+  is int128/kubelogin (the OIDC plugin, `kubectl oidc-login`); the Azure plugin is
+  a separate formula, `azure-kubelogin`. The tap path int128/kubelogin/kubelogin is
+  the legacy install route. `brew install kubelogin` in docs/guides/kubectl.md:34
+  and docs/public/llms-full.txt:1266 is correct.'
