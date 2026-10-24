@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-24T11:26:11Z'
+status: review-stuck
+updated_at: '2026-10-24T11:41:12Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6c8498f5001a54fc
@@ -47,11 +47,13 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
-refusals: 2
+refusals: 3
 refusals_head: 10e2847d3b75e031b9a4ffa83aeb6ac4e41cafff
-notes: 'implementer declined to act: Reviewer text 1 is an approval with P1: 0, P2:
-  0, P3: 0, so nothing to fix. Advisory 1 is refuted: the homebrew-core formula `kubelogin`
-  is int128/kubelogin (the kubectl OIDC plugin, `brew install kubelogin`); the Azure
-  plugin is the separate tap formula `Azure/kubelogin/kubelogin`. So docs/guides/kubectl.md:34
-  and docs/public/llms-full.txt:1266 are correct. The line is also pre-existing guide
-  content, not part of this PR''s issue-119 scope.'
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: Reviewer text 1 is an approval (P1: 0,
+  P2: 0, P3: 0) with nothing to fix. Advisory 1 is incorrect: the homebrew-core formula
+  `kubelogin` is int128/kubelogin (the kubectl OIDC plugin); the Azure plugin is installed
+  from its own tap as `Azure/kubelogin/kubelogin`. So `brew install kubelogin` at
+  docs/guides/kubectl.md:34 and docs/public/llms-full.txt:1266 is correct. `int128/kubelogin/kubelogin`
+  is not a published tap.'
