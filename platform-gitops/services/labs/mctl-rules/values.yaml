@@ -1,0 +1,81 @@
+# Service: mctl-rules
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-rules
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 3000
+backstage:
+  kubernetesId: mctl-rules
+# Non-root on a read-only root filesystem. The image pins its user to
+# uid/gid 10001 (Dockerfile), which kubelet needs as a number for
+# runAsNonRoot; the chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+# Next.js plus the native Zen rules engine; evaluation is CPU-bound.
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+env:
+  APP_BASE_URL: https://labs-mctl-rules.mctl.ai
+  OIDC_ISSUER: https://app.mctl.ai/api/oidc-provider
+  OIDC_CLIENT_ID: mctl-rules
+  S3_ENDPOINT: https://pending.r2.cloudflarestorage.com
+  S3_REGION: auto
+  S3_BUCKET: mctl-rules-artifacts
+  S3_FORCE_PATH_STYLE: "true"
+  S3_PREFIX: rules
+ingress:
+  enabled: true
+  hosts:
+    - labs-mctl-rules.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-rules-tls
+      hosts:
+        - labs-mctl-rules.mctl.ai
+# /readyz also checks the R2 bucket, which has no credentials yet
+# (S3_* are placeholders); switch readiness to /readyz once they land.
+probes:
+  liveness:
+    path: /healthz
+  readiness:
+    path: /healthz
+envFrom:
+  - secretRef:
+      name: labs-mctl-rules-db-creds
+  - secretRef:
+      name: mctl-rules-secrets
+dbSecret:
+  vaultPath: teams/labs/mctl-rules/database
+  secretName: labs-mctl-rules-db-creds
+externalSecret:
+  targetSecret: mctl-rules-secrets
+  data:
+    - secretKey: AUTH_SECRET
+      remoteKey: teams/labs/mctl-rules
+      property: AUTH_SECRET
+    - secretKey: OIDC_CLIENT_SECRET
+      remoteKey: teams/labs/mctl-rules
+      property: OIDC_CLIENT_SECRET
+    - secretKey: S3_ACCESS_KEY_ID
+      remoteKey: teams/labs/mctl-rules
+      property: S3_ACCESS_KEY_ID
+    - secretKey: S3_SECRET_ACCESS_KEY
+      remoteKey: teams/labs/mctl-rules
+      property: S3_SECRET_ACCESS_KEY
+extraContainers: []
