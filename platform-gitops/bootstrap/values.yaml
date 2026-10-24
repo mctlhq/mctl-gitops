@@ -533,6 +533,8 @@ reservedPlatformHosts:
   ui.mctl.ai: [admins]
   # Umami analytics (services/admins/umami).
   stats.mctl.ai: [admins]
+  # mctl-rules public host (services/labs/mctl-rules).
+  rules.mctl.ai: [labs]
   # ZITADEL, plus the usual identity-provider aliases so none of them can be
   # stood up by a tenant to imitate the sign-in page.
   auth.mctl.ai: [zitadel]
