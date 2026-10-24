@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-24T10:56:42Z'
+updated_at: '2026-10-24T11:13:29Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-13572ce969f98b32
@@ -47,3 +47,4 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
+merge_owner: pr-steward
