@@ -62,6 +62,39 @@ roleRef:
   kind: Role
   name: mctl-api-preview-quota-reader
   apiGroup: rbac.authorization.k8s.io
+---
+# mctl_list_previews (mctl-api#698) lists preview Helm releases by reading
+# Deployments labelled app.kubernetes.io/instance=preview-<service>-<id>.
+# Read-only and Deployments only: Helm release Secrets would be the more
+# literal source, but list on secrets cannot be narrowed to Helm storage and
+# would expose every synced preview credential to mctl-api.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mctl-api-preview-reader
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mctl-api-preview-reader
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: mctl-api
+    namespace: mctl-api
+roleRef:
+  kind: Role
+  name: mctl-api-preview-reader
+  apiGroup: rbac.authorization.k8s.io
 {{- if .Values.tenant.limitRange.enabled }}
 ---
 apiVersion: v1

@@ -12,8 +12,9 @@ For every tenant values file in platform-gitops/tenants/ with preview on:
 - the tenant-local argo-workflow-sa is bound to argo-workflow-helm-deploy in
   {tenant}-preview;
 - no RoleBinding in {tenant}-preview has a subject outside the tenant's own
-  namespaces, except mctl-api's resourcequota reader (read-only, asserted
-  separately).
+  namespaces, except mctl-api's two readers: resourcequotas (readiness) and
+  apps/deployments (mctl_list_previews, mctl-api#698). Both are asserted
+  read-only on exactly those resources, so neither can widen to secrets.
 
 Run: python3 tests/test_tenant_preview_rbac.py
 """
@@ -26,6 +27,12 @@ import yaml
 CHART = pathlib.Path("platform-gitops/helm-charts/tenant")
 TENANTS = pathlib.Path("platform-gitops/tenants")
 QUOTA_READER = "mctl-api-preview-quota-reader"
+PREVIEW_READER = "mctl-api-preview-reader"
+# Role -> the only (apiGroup, resource) pairs mctl-api may read through it.
+MCTL_API_READERS = {
+    QUOTA_READER: {("", "resourcequotas")},
+    PREVIEW_READER: {("apps", "deployments")},
+}
 
 failures = []
 
@@ -72,7 +79,7 @@ for values_file in sorted(TENANTS.glob("*/values.yaml")):
     for b in bindings:
         name = b["metadata"]["name"]
         for s in b["subjects"]:
-            if name == QUOTA_READER:
+            if name in MCTL_API_READERS:
                 check(s == {"kind": "ServiceAccount", "name": "mctl-api", "namespace": "mctl-api"},
                       f"{tenant}: unexpected subject {s} on {name} in {ns}")
                 continue
@@ -81,14 +88,19 @@ for values_file in sorted(TENANTS.glob("*/values.yaml")):
                   f"{s.get('namespace')}/{s['name']}, outside the tenant. Preview "
                   "workflows run as the tenant-local argo-workflow-sa")
 
-    quota = roles.get(QUOTA_READER)
-    check(quota is not None, f"{tenant}: {QUOTA_READER} Role missing in {ns}")
-    if quota:
-        verbs = {v for r in quota["rules"] for v in r["verbs"]}
-        res = {x for r in quota["rules"] for x in r["resources"]}
-        check(verbs <= {"get", "list", "watch"} and res == {"resourcequotas"},
-              f"{tenant}: {QUOTA_READER} must stay read-only on resourcequotas "
-              f"(verbs {sorted(verbs)}, resources {sorted(res)})")
+    for reader, allowed in MCTL_API_READERS.items():
+        role = roles.get(reader)
+        check(role is not None, f"{tenant}: {reader} Role missing in {ns}")
+        if not role:
+            continue
+        verbs = {v for r in role["rules"] for v in r["verbs"]}
+        pairs = {(g, x) for r in role["rules"]
+                 for g in r.get("apiGroups", []) for x in r["resources"]}
+        check(verbs <= {"get", "list", "watch"} and pairs == allowed,
+              f"{tenant}: {reader} must stay read-only on {sorted(allowed)} "
+              f"(verbs {sorted(verbs)}, resources {sorted(pairs)})")
+        check(any(b["roleRef"]["name"] == reader for b in bindings),
+              f"{tenant}: {reader} Role in {ns} is not bound to mctl-api")
 
 check(checked > 0, "no tenant renders a preview namespace; the test checked nothing")
 
