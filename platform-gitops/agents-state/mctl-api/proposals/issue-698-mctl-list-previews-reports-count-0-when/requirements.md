@@ -1,5 +1,25 @@
 # mctl_list_previews: fail closed on unreadable state and list the real preview Helm releases
 
+## Amendments (2026-10-24, reviewer) — these override the rest of this file
+
+- **A1. RBAC is not the implementer's job.** design.md section 4 says the
+  mctl-gitops RBAC is a separate PR that this change only references, but
+  task 7 told the implementer to open it. The design wins. The grant is
+  mctlhq/mctl-gitops#2124: Role and RoleBinding `mctl-api-preview-reader`,
+  `get,list` on `apps/deployments` in `{tenant}-preview`, no secret verbs,
+  pinned read-only by `tests/test_tenant_preview_rbac.py`. A reviewer
+  authored it, and it is merged and synced before this proposal is
+  approved. The implementer makes no change outside mctlhq/mctl-api and
+  opens no PR in any other repository.
+- **A2. Rollout order is RBAC, then API.** The RBAC lands first, so the new
+  `ListPreviews` never meets a forbidden read in a synced tenant. A tenant
+  whose app has not synced still gets 503, which is correct: never a false
+  empty list.
+- **A3. Source of truth confirmed.** Reading Deployments by the
+  `app.kubernetes.io/instance` label, rather than Helm release Secrets, is
+  accepted for the reason given: `list secrets` cannot be narrowed to Helm
+  storage.
+
 ## Context
 
 `GET /api/v1/previews` (`ListPreviews` in `internal/api/handlers_read.go`) and the
