@@ -12,7 +12,9 @@ against the templates and values files, never restating them:
 3. A governed surface's default image meets `min_approvals_version`.
 4. A non-governed boundary holds mechanically: `no-model-session` has no
    CLAUDE_CODE_OAUTH_TOKEN and no agent entry point; `no-mctl-token` has no
-   MCTL_TOKEN.
+   MCTL_TOKEN. A transport entry is `bypass-open`, or `no-mctl-token` when
+   the surface it belongs to maps no MCTL_TOKEN and runs at least the entry's
+   `min_image_version`.
 5. `bypass-open` needs `tracked_by`; a summary line keeps the gap visible.
 6. No manifest anywhere sets MCTL_POLICY_APPROVALS to none, empty or valueFrom.
 
@@ -28,6 +30,7 @@ import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 BOUNDARIES = ("no-model-session", "no-mctl-token", "operator-operation", "bypass-open")
+TRANSPORT_BOUNDARIES = ("bypass-open", "no-mctl-token")
 ENV = "MCTL_POLICY_APPROVALS"
 AGENT_ENTRY = re.compile(r"run_issue_investigator|run_implementer|run_shepherd|run_all")
 MANIFEST = "platform-gitops/governance/policy-checkpoint-coverage.yaml"
@@ -140,8 +143,30 @@ def analyze(root):
         if s.get("kind") == "transport":
             if s.get("of") not in ids:
                 failures.append(f"{sid}: transport 'of' names no surface")
-            if s.get("boundary") != "bypass-open":
-                failures.append(f"{sid}: transport entries must be bypass-open")
+            boundary = s.get("boundary")
+            if boundary not in TRANSPORT_BOUNDARIES:
+                failures.append(f"{sid}: transport entries must be one of {TRANSPORT_BOUNDARIES}, got {boundary!r}")
+            elif boundary == "no-mctl-token":
+                # The transport is the agent's own tool subprocesses: they can
+                # reach no admin credential once the surface's container maps
+                # no MCTL_TOKEN, and its image no longer needs one for its
+                # own REST calls (mctlhq/mctl-agents#717).
+                of = next((o for o in surfaces if o.get("id") == s.get("of") and o.get("kind") != "transport"), None)
+                of_info = found.get((of.get("path"), of.get("template"))) if of else None
+                need = version_of(s.get("min_image_version"))
+                if not s.get("reason"):
+                    failures.append(f"{sid}: non-governed entry needs a reason")
+                if need is None:
+                    failures.append(f"{sid}: no-mctl-token transport needs a valid min_image_version")
+                if of_info is None:
+                    failures.append(f"{sid}: no-mctl-token transport names no discovered surface")
+                    continue
+                if "MCTL_TOKEN" in of_info["env"] or "MCTL_TOKEN" in of_info["strings"]:
+                    failures.append(f"{sid}: no-mctl-token transport, but {s.get('of')} still maps MCTL_TOKEN")
+                got = version_of(of_info["image"].rpartition(":")[2])
+                if need is not None and (got is None or got < need):
+                    failures.append(f"{sid}: image {of_info['image']} is older than min_image_version")
+                continue
         info = found.get((s.get("path"), s.get("template")))
         if s.get("governed"):
             if info is None:
@@ -268,6 +293,37 @@ def self_test():
         p = gp / (cwft + "cwft-mctl-agents-usage-collector.yaml")
         edit(p, lambda t: t.replace("        env:\n", "        env:\n          - name: MCTL_TOKEN\n            value: x\n", 1))
     expect("no-mctl-token surface maps MCTL_TOKEN", token_leak, "usage-collector")
+
+    investigate_tpl = cwft + "cwft-mctl-agents-investigate.yaml"
+    manifest = "governance/policy-checkpoint-coverage.yaml"
+
+    def closed_transport(gp, keep_token=False, image="99.0.0"):
+        edit(gp / manifest, lambda t: re.sub(
+            r"(  - id: investigate-bash\n(?:    .*\n)*?)    boundary: bypass-open\n",
+            r"\g<1>    boundary: no-mctl-token\n    min_image_version: 99.0.0\n", t, count=1))
+
+        def tpl(t):
+            if not keep_token:
+                t = re.sub(r"\n( +)- name: MCTL_TOKEN\n\1  valueFrom:\n(?:\1    .*\n)+",
+                           "\n", t, count=1)
+            return re.sub(r"(value: ghcr\.io/mctlhq/mctl-agents:)[0-9.]+", rf"\g<1>{image}", t, count=1)
+        edit(gp / investigate_tpl, tpl)
+    expect("no-mctl-token transport whose surface keeps MCTL_TOKEN",
+           lambda gp: closed_transport(gp, keep_token=True), "still maps MCTL_TOKEN")
+    expect("no-mctl-token transport on an older image",
+           lambda gp: closed_transport(gp, image="1.0.0"), "older than min_image_version")
+
+    def closed_transport_ok(gp):
+        closed_transport(gp)
+        fails, _, _ = analyze(gp.parent)
+        if any("investigate-bash" in f for f in fails):
+            raise AssertionError(fails)
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            make_fixture(tmp, closed_transport_ok)
+            results.append(("fixture: a closed no-mctl-token transport passes", True, ""))
+        except AssertionError as exc:
+            results.append(("fixture: a closed no-mctl-token transport passes", False, str(exc)))
     return results
 
 

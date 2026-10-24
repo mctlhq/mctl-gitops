@@ -794,14 +794,12 @@ spec:
           # above only seeds the very first call before any refresh happens.
           - name: GITHUB_TOKEN_FILE
             value: /var/run/gh/github-token
-          # Optional MCP token — lets the investigator inspect live service
-          # metrics/status while shaping the proposal. Degrades gracefully.
-          - name: MCTL_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: mctl-token
-                optional: true
+          # No MCTL_TOKEN here (mctlhq/mctl-agents#717, option c): the run's
+          # MCP connection and its own REST calls (work item reads, the
+          # snapshot seal) use the scoped run token below, so nothing in this
+          # container -- the agent's tools included -- holds the admin
+          # credential. The notify-telegram exit handler is a separate
+          # container and keeps its own (mctlhq/mctl-agents#752).
           # Scoped run token for the MCP connection (mctlhq/mctl-agents#737):
           # off | observe | enforce. observe exchanges the projected token
           # above (and revokes the result at once) to prove the path, and
@@ -812,8 +810,11 @@ spec:
           # an older image ignores it. Enforce since mctl-api 4.117.0
           # (mctlhq/mctl-api#768) binds runs without an execution_id too, and
           # observe showed both kinds exchange; every enforced run probes an
-          # out-of-scope read and expects 403. The pod's REST clients still
-          # use MCTL_TOKEN (mctlhq/mctl-agents#752).
+          # out-of-scope read and expects 403. Since mctl-agents 1.98.0 the
+          # pod's work-item REST calls use the run token too (#717), which
+          # is what lets MCTL_TOKEN leave this container. Enforce is required
+          # for that: off/observe would fall back to a MCTL_TOKEN that is no
+          # longer mapped, and the work context would answer unknown.
           - name: MCTL_RUN_TOKEN_MODE
             value: enforce
           - name: MCTL_RUN_TOKEN_SA_TOKEN_FILE
@@ -856,8 +857,11 @@ spec:
             value: "on"
           # Policy checkpoint approvals backend (ADR 014; mctlhq/.github#181).
           # A non-read mcp__mctl__* call creates or redeems a durable approval
-          # request in mctl-api instead of being blocked outright. Authenticates
-          # with MCTL_TOKEN; needs mctl-agents >= 1.86.1. It must stay a
+          # request in mctl-api instead of being blocked outright. Needs
+          # mctl-agents >= 1.86.1. This container maps no MCTL_TOKEN, so the
+          # approvals lookup has no credential and a REQUIRE_APPROVAL call is
+          # DENY (fail closed); the investigate scope admits only read tools
+          # anyway (mctlhq/mctl-agents#717 slice 4). It must stay a
           # literal: tests/test_policy_checkpoint_coverage.py rejects anything
           # else, see platform-gitops/governance/policy-checkpoint-coverage.yaml.
           # Rollback: remove it (REQUIRE_APPROVAL then blocks) and mark the

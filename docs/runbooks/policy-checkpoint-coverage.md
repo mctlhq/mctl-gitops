@@ -29,7 +29,15 @@ Each entry is one execution surface: a worker values file or a template of a
   `operator-operation` (all checked mechanically) or `bypass-open` (a known
   gap, needs `tracked_by`; CI prints `bypass-open: N` on every run).
 
-Known gap, stated plainly: the Bash and `MCTL_TOKEN` path of every
+Transport entries (`kind: transport`, the agent's Bash and other tool
+subprocesses) are `bypass-open`, or `no-mctl-token` once their surface's
+container maps no `MCTL_TOKEN` and its image is at least the entry's
+`min_image_version` (both checked). `investigate-bash` is `no-mctl-token`:
+the investigator's MCP and REST calls use its scoped run token
+(mctlhq/mctl-agents#717 option c), so a tool can reach only what the
+`investigate` scope admits.
+
+Known gap, stated plainly: the Bash and `MCTL_TOKEN` path of every other
 model-running template is `bypass-open`. The checkpoint does not gate Bash, so
 "governed transports cannot be bypassed" is NOT achieved by this manifest.
 Tracked by mctlhq/mctl-agents#717 and mctlhq/mctl-api#723 (separate from
