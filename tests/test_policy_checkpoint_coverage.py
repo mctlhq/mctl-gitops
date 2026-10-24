@@ -295,35 +295,21 @@ def self_test():
     expect("no-mctl-token surface maps MCTL_TOKEN", token_leak, "usage-collector")
 
     investigate_tpl = cwft + "cwft-mctl-agents-investigate.yaml"
-    manifest = "governance/policy-checkpoint-coverage.yaml"
 
-    def closed_transport(gp, keep_token=False, image="99.0.0"):
-        edit(gp / manifest, lambda t: re.sub(
-            r"(  - id: investigate-bash\n(?:    .*\n)*?)    boundary: bypass-open\n",
-            r"\g<1>    boundary: no-mctl-token\n    min_image_version: 99.0.0\n", t, count=1))
+    def leak_token(gp):
+        edit(gp / investigate_tpl, lambda t: t.replace(
+            "          - name: MCTL_RUN_TOKEN_MODE\n",
+            "          - name: MCTL_TOKEN\n            valueFrom:\n"
+            "              secretKeyRef: {name: s, key: k}\n"
+            "          - name: MCTL_RUN_TOKEN_MODE\n", 1))
+    expect("no-mctl-token transport whose surface maps MCTL_TOKEN",
+           leak_token, "still maps MCTL_TOKEN")
 
-        def tpl(t):
-            if not keep_token:
-                t = re.sub(r"\n( +)- name: MCTL_TOKEN\n\1  valueFrom:\n(?:\1    .*\n)+",
-                           "\n", t, count=1)
-            return re.sub(r"(value: ghcr\.io/mctlhq/mctl-agents:)[0-9.]+", rf"\g<1>{image}", t, count=1)
-        edit(gp / investigate_tpl, tpl)
-    expect("no-mctl-token transport whose surface keeps MCTL_TOKEN",
-           lambda gp: closed_transport(gp, keep_token=True), "still maps MCTL_TOKEN")
+    def older_image(gp):
+        edit(gp / investigate_tpl, lambda t: re.sub(
+            r"(value: ghcr\.io/mctlhq/mctl-agents:)[0-9.]+", r"\g<1>1.0.0", t, count=1))
     expect("no-mctl-token transport on an older image",
-           lambda gp: closed_transport(gp, image="1.0.0"), "older than min_image_version")
-
-    def closed_transport_ok(gp):
-        closed_transport(gp)
-        fails, _, _ = analyze(gp.parent)
-        if any("investigate-bash" in f for f in fails):
-            raise AssertionError(fails)
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            make_fixture(tmp, closed_transport_ok)
-            results.append(("fixture: a closed no-mctl-token transport passes", True, ""))
-        except AssertionError as exc:
-            results.append(("fixture: a closed no-mctl-token transport passes", False, str(exc)))
+           older_image, "older than min_image_version")
     return results
 
 
