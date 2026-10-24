@@ -108,6 +108,12 @@ spec:
                         - argocd
                         - vault
                         - platform-db
+                        # Temporal services exit when shared-pg is unreachable
+                        # at startup. A moved pod gets its new IP admitted by
+                        # kube-router network policy only after ~30s, so the
+                        # first run (2026-10-24) crash-restarted temporal-worker
+                        # once on its new node.
+                        - temporal
               plugins:
                 balance:
                   enabled:
