@@ -77,3 +77,18 @@ Report (D-D)
 - The envelope is reference-only, so it may carry no CI conclusion or mergeability. The prototype then derives `observed_state_digest` and the rule match from reference fields only (event type, subject, head revision/state ref). If those are insufficient to tell "CI failed" from "CI passed", the fixture adds a typed `observed` sidecar standing in for the re-observation `channel.py` would do, and the report records this as a gap that the follow-up must fill.
 - The current deployed route policy (`mctl-events-policy` in `services/labs/claude-remote/values.yaml`) admits only `github.pull_request.*` and `github.pull_request_review.submitted` from source `mctl-api`. The fixtures should use these types. Check runs and check suites may not be routed today, and the report should state this.
 - Whether "two events in one wake cycle" is bounded by a time window or by one Channel delivery batch is not specified. This proposal treats a wake cycle as the batch passed to `decide_wake_cycle`, and leaves the window as a follow-up parameter.
+
+## Review amendments, 2026-10-24 (owner review; these override the text above where they differ)
+
+Verified against mctlhq/mctl-claude-remote `events/mctl_events/envelope.py` on the default branch. The envelope's top-level key set is closed (`specversion, id, type, source, occurred_at, correlation_id, subject`), and `subject` values are identifiers only. The envelope therefore **never** carries CI conclusion, mergeability or review severity. The `observed` state is the primary path, not a fallback. The canonical schema is mctlhq/.github `events/schemas/event-envelope.v1.schema.json`; cite it next to `envelope.py`.
+
+- A1. `decide()` SHALL take the re-observed state as a separate, typed, keyword argument: `observed: ObservedState | None`. It SHALL NOT be a key inside the envelope, and the envelope keeps its closed-shape validation unchanged. `ObservedState` is a frozen dataclass with closed vocabularies:
+  - `checks`: `success | failure | pending | unknown`;
+  - `mergeable`: `clean | blocked | dirty | unknown`;
+  - `max_review_severity`: `P1 | P2 | P3 | none | unknown`;
+  - `head_sha`.
+
+  It stands in for the re-observation that `channel.py` would do through the GitHub MCP tools. Rules match only on `type` and `ObservedState` fields. `decide_wake_cycle()` takes `observed_by_resource: Mapping[str, ObservedState]`, keyed by the watched-resource key.
+- A2. `observed_state_digest` SHALL be computed over the watched-resource key **plus** the canonical `ObservedState`. It SHALL NOT be computed over the envelope id, `occurred_at` or the event type alone. WHEN `observed` is `None` or any of its fields is `unknown` THE SYSTEM SHALL NOT return `IGNORE` via `no_state_change`, because unknown is never "unchanged". Required test: the same PR and the same `head_sha`, with `checks` moving from `pending` to `failure`, SHALL give a different digest and `NOTIFY`, not `IGNORE`.
+- A3. `no_state_change` SHALL be evaluated from the loaded YAML rule set, not hard-coded. WHEN the rule is absent from the loaded rules THE SYSTEM SHALL fall through to normal rule matching. This is what makes the T5 mutation for T1 able to turn red. A test SHALL assert that, with `no_state_change` removed, the unchanged-digest fixture no longer yields `IGNORE` with `rule_id=no_state_change`.
+- A4. Fixture event types SHALL satisfy the envelope's three-segment `type` pattern (`github.pull_request.<action>`, `github.pull_request_review.submitted`). Rule `match.type` MAY use a trailing `*` glob, and the glob semantics SHALL be tested.
