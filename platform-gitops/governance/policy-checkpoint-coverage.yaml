@@ -11,7 +11,9 @@
 # mctl-agents-daily CronWorkflow (no container, only a workflowTemplateRef to
 # the `run` surface) run no mctl-agents image and need no entry.
 #
-# boundary (closed set), for governed: false entries:
+# boundary (closed set), for governed: false entries (a transport entry is
+# bypass-open, or no-mctl-token with min_image_version when its surface maps
+# no MCTL_TOKEN):
 #   no-model-session  no SDK session, so no model-selected actions
 #   no-mctl-token     cannot call mctl-api as the admin principal
 #   operator-operation deterministic step behind an admin-only mctl-api operation
@@ -90,10 +92,11 @@ surfaces:
     kind: transport
     of: investigate
     governed: false
-    boundary: bypass-open
-    tracked_by: mctlhq/mctl-agents#717
-    related: mctlhq/mctl-api#723
-    reason: PreToolUse gates mcp__* only; Bash can call mctl-api with MCTL_TOKEN
+    boundary: no-mctl-token
+    # The first mctl-agents whose investigate REST calls use the run token.
+    min_image_version: 1.98.0
+    related: mctlhq/mctl-agents#717
+    reason: run-investigator maps no MCTL_TOKEN; MCP and REST use the scoped investigate run token (reads, and a seal bound to its own execution), so Bash reaches nothing the scope refuses
   - id: implement-bash
     kind: transport
     of: implement
