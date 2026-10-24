@@ -1,5 +1,29 @@
 # Design: issue-763-fix-implementer-use-refs-not-closes-in-p
 
+
+## Amendments (2026-10-24, reviewer) — these override the text below
+
+- **A1/A2 — `_parse_issue_binding`.** It accepts exactly one shape: a mapping
+  with keys `repository` (str matching `^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$`)
+  and `number` (int >= 1, `bool` rejected), with no other keys. It returns
+  `(repository_lower, number)` or raises. Remove the `owner/repo#N`, `N`/`#N`
+  and `{repo, number|issue}` shapes and the "repo defaults to `mctlhq/.github`"
+  rule. Step 1d changes: a manifest without `spec.github.issue` is NOT skipped.
+  The schema requires the field, so its absence is an `observation-error`
+  (step `spike-manifest:<name>`), the same as an unparseable binding.
+- **A3 — fixtures.** Tests load verbatim copies of real manifests from
+  `mctlhq/.github` main into `tests/fixtures/spike_manifests/` (at least
+  `security-finding-lifecycle.yaml` and `duet-sessions.yaml`), with the source
+  commit SHA recorded in a comment in the test module. They must not use
+  hand-built dicts.
+- **A4 — token.** The token path is resolved: the implementer token is the
+  unscoped `mctl-agents` target of `cwft-rotate-github-token.yaml`, and its
+  installation covers all repositories. Remove the "read access NOT confirmed"
+  risk as a pre-merge blocker and keep it as a post-deploy check. If a future
+  change narrows the implementer token (mctl-agents#737), `mctlhq/.github`
+  `contents: read` must stay in that scope. Otherwise every lookup fails and
+  every PR falls back to `Refs`.
+
 ## Current state
 - `orchestrator/run_implementer.py:_issue_closing_line(ref)` (around line 3557)
   reads `.status.yaml` via `_load_status(ref.status_path)`, and for a

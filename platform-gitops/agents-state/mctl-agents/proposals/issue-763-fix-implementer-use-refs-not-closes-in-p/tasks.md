@@ -22,6 +22,34 @@
   `tests/test_spike_issue.py` / `tests/test_run_implementer_issue_reference.py` —
   DoD: full `pytest` passes.
 
+
+## Amendments (2026-10-24, reviewer) — these override the rest of this file
+
+- Task 1 DoD: `_parse_issue_binding` accepts only `{repository, number}`
+  (design A1/A2). An absent `spec.github.issue` is an `observation-error`, not
+  a skip.
+- **T4 replaced:** non-spike title, and the listing returns the verbatim
+  `security-finding-lifecycle.yaml` fixture (bound to `mctlhq/.github#209`)
+  for source issue `mctlhq/.github#209`. Expect `Refs` and outcome
+  `spike-manifest`. Repeat with `MCTLHQ/.GITHUB` as the source repo to cover
+  case-insensitivity.
+- **T11 (new, regression on real data):** non-spike title for
+  `mctlhq/mctl-agents#763`, and the listing returns the verbatim fixtures
+  (none bind #763). Expect `Closes mctlhq/mctl-agents#763` and outcome
+  `not-spike`. Mutation check: restore the original string-only parser or the
+  "unparseable present binding" path, and T11 must fail.
+- **T12 (new):** a manifest whose `spec.github.issue` is
+  `"mctlhq/.github#209"` (string), `209` (int), `{repo: ..., number: 209}`, or
+  is missing. Each gives `Refs` and `observation-error` with
+  `step=spike-manifest:<name>`.
+- **T13 (new):** `number: true` and `number: 0` give `observation-error`.
+- **Post-deploy verification (DoD for the release, recorded on the issue):**
+  the first DevLoop PR opened after the release for a non-spike issue carries
+  `Closes`, and its workflow log shows
+  `spike-classification: ... outcome=not-spike`. If it shows
+  `outcome=observation-error step=spike-list`, the token cannot read
+  `mctlhq/.github`: revert the release.
+
 ## Tests
 - [ ] T1. Spike title `spike(security): finding lifecycle` -> body ends with
   `Refs mctlhq/.github#209`; assert no closing keyword regex
