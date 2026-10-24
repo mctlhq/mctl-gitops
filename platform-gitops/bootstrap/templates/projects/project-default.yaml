@@ -59,6 +59,7 @@
       "https://emberstack.github.io/helm-charts"
       "https://grafana.github.io/helm-charts"
       "https://helm.releases.hashicorp.com"
+      "https://kubernetes-sigs.github.io/descheduler/"
       "https://open-telemetry.github.io/opentelemetry-helm-charts"
       "https://victoriametrics.github.io/helm-charts/"
 }}
