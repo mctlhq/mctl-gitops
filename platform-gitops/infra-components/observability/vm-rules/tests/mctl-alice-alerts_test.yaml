@@ -319,6 +319,56 @@ tests:
                 describe pod` shows why it fails, and /readyz in the pod says
                 whether credential storage (shared-pg) is reachable.
 
+  # kube-state-metrics rescheduled: its pod IP is the instance label, so every
+  # restart counter continues as a new series. The pod did not restart.
+  # promtool cannot show the false positive this guards against: Prometheus'
+  # increase() reads a new series' first sample as a baseline, while
+  # VictoriaMetrics reads it as growth from zero, which is what fired this
+  # with "6 restarts" on 2026-10-24. The next case is the one promtool can
+  # check both ways.
+  - interval: 1m
+    name: kube-state-metrics moving to a new instance is not a restart
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",instance="10.42.6.188:8080"}'
+        values: '6x4 _x6'
+      - series: 'kube_pod_container_status_restarts_total{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",instance="10.42.5.158:8080"}'
+        values: '_x5 6x5'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlAliceRestarting
+        exp_alerts: []
+
+  # A restart in the gap while kube-state-metrics moves: the old instance last
+  # saw 1, the new one first sees 2, then a third restart follows. Counting
+  # per instance splits that into 1 + 1 and misses it; collapsing instance
+  # first sees one counter go 0 -> 3.
+  - interval: 1m
+    name: restarts that straddle a kube-state-metrics move still count
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",instance="10.42.6.188:8080"}'
+        values: '0 0 0 1 1 _x6'
+      - series: 'kube_pod_container_status_restarts_total{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",instance="10.42.5.158:8080"}'
+        values: '_x5 2 2 2 3 3 3'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlAliceRestarting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-alice
+              namespace: labs
+              pod: labs-mctl-alice-base-service-abc
+            exp_annotations:
+              summary: mctl-alice pod labs-mctl-alice-base-service-abc restarted
+                3 times in 30 minutes
+              description: >-
+                The container has restarted at least twice in 30 minutes.
+                The generic KubePodCrashLooping and ContainerOOMKilled alerts
+                reach only mctl-agent; this one reaches a human. `kubectl
+                -n labs logs --previous labs-mctl-alice-base-service-abc`
+                has the last crash, and the pod's lastState says whether it
+                was OOMKilled (limit 256Mi).
+
   - interval: 1m
     name: two restarts in 30 minutes fire; one does not
     input_series:

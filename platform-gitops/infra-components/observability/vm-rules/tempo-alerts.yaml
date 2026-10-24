@@ -88,7 +88,11 @@ spec:
             max by (pod) (
               kube_pod_container_status_last_terminated_reason{namespace="tracing",container="tempo",reason="OOMKilled"}
               and on (namespace, pod, container)
-              increase(kube_pod_container_status_restarts_total{namespace="tracing",container="tempo"}[15m]) > 0
+              increase(
+                (max by (namespace, pod, container) (
+                  kube_pod_container_status_restarts_total{namespace="tracing",container="tempo"}
+                ))[15m:1m]
+              ) > 0
             ) > 0
           labels:
             severity: warning
@@ -103,10 +107,15 @@ spec:
 
         - alert: TempoRestarting
           # Any cause, OOM included: two restarts inside 30 minutes is a pod
-          # that is not staying up.
+          # that is not staying up. instance is collapsed before increase()
+          # for the reason given on MctlAliceRestarting (mctl-alice-alerts.yaml).
           expr: |
             max by (pod) (
-              increase(kube_pod_container_status_restarts_total{namespace="tracing",container="tempo"}[30m])
+              increase(
+                (max by (namespace, pod, container) (
+                  kube_pod_container_status_restarts_total{namespace="tracing",container="tempo"}
+                ))[30m:1m]
+              )
             ) >= 2
           labels:
             severity: warning
