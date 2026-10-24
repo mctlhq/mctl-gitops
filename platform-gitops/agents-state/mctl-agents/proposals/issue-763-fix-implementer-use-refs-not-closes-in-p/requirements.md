@@ -1,5 +1,40 @@
 # Implementer PRs reference spike issues with `Refs`, not `Closes`
 
+
+## Amendments (2026-10-24, reviewer) — these override the text below
+
+- **A1. Binding shape is fixed by schema, not guessed.** `mctlhq/.github`
+  `roadmap/schemas/spike-definition.schema.json` makes `spec.github.issue`
+  REQUIRED and types it as `common-v1alpha1.json#/$defs/issueRef`: an object
+  `{repository: "<owner>/<repo>", number: <integer >= 1>}` with
+  `additionalProperties: false`. All five manifests on `mctlhq/.github` main
+  (checked 2026-10-24) use exactly this shape, e.g.
+  `issue: {repository: mctlhq/.github, number: 209}`. This resolves the first
+  open question.
+- **A2. Only the canonical shape binds.** The acceptance criterion "named by
+  `spec.github.issue`" means: `repository` (compared case-insensitively) and
+  `number` (compared as an integer) of that object equal the source issue. Any
+  other value, including an absent `spec.github.issue`, a string such as
+  `owner/repo#N`, a bare integer, or an object with other keys, is a manifest
+  that does not match the schema. That is an `observation-error` (fail to
+  `Refs`), never a skip and never a match.
+- **A3. Regression criterion, made concrete.** WHEN the title is not
+  spike-prefixed AND every manifest in the listing is a schema-valid
+  SpikeDefinition whose binding names a different issue THE SYSTEM SHALL emit
+  `Closes <repo>#<N>` with outcome `not-spike`. This must be proven against the
+  verbatim bytes of the real manifests, not hand-written fixtures. Why: the
+  original design accepted only shapes that no real manifest uses and treated
+  an unparseable binding as an observation error, so on real data the first
+  manifest would have failed, and every non-spike DevLoop PR would have
+  switched to `Refs`. Auto-close would have stopped org-wide.
+- **A4. Credential, partially resolved.** The implementer reads GitHub with
+  the token in `argo-workflows/mctl-agents-secrets`. That token is minted by
+  `cwft-rotate-github-token.yaml` target `mctl-agents` with NO `scope`, from an
+  installation with `repository_selection: all`, so it can read
+  `mctlhq/.github` today. A narrower per-run token (mctl-agents#737) could
+  remove that access. The second open question therefore becomes a post-deploy
+  verification (see tasks.md), not a pre-merge blocker.
+
 ## Context
 The Tier 2 implementer (`orchestrator/run_implementer.py`) builds every PR body in
 `_pr_title_and_body`, which unconditionally appends the line produced by
