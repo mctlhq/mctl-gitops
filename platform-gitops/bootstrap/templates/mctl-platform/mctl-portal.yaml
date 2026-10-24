@@ -278,6 +278,11 @@ spec:
           automountServiceAccountToken: true
 
         backstage:
+          # Env from backstage-secrets is read only at pod start, so a rotated
+          # Vault value needs a restart. Bump this to roll the pod after ESO
+          # has synced the new value.
+          podAnnotations:
+            mctl.ai/secret-rollout: "2026-10-24-mctl-rules-oidc"
           image:
             registry: ghcr.io
             repository: mctlhq/mctl-portal
