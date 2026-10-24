@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-10-24T11:41:12Z'
+status: merged
+updated_at: '2026-10-24T11:50:20Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-6c8498f5001a54fc
@@ -47,8 +47,6 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
-refusals: 3
-refusals_head: 10e2847d3b75e031b9a4ffa83aeb6ac4e41cafff
 notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
   was never charged — the proposal is not at fault; a human must reconcile the review
   with the operator decision. Last reason: Reviewer text 1 is an approval (P1: 0,
@@ -57,3 +55,9 @@ notes: 'The implementer declined to act 3 time(s) and the findings still stand. 
   from its own tap as `Azure/kubelogin/kubelogin`. So `brew install kubelogin` at
   docs/guides/kubectl.md:34 and docs/public/llms-full.txt:1266 is correct. `int128/kubelogin/kubelogin`
   is not a published tap.'
+github:
+  state: merged
+  head_sha: 10e2847d3b75e031b9a4ffa83aeb6ac4e41cafff
+  observed_at: '2026-10-24T11:50:20Z'
+merged_at: '2026-10-24T11:50:20Z'
+merge_commit: 44b4217cb885fcdfd77395e956df7a9afa332fd4
