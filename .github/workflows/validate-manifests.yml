@@ -497,6 +497,13 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_check_image_name.py
 
+      - name: Unit-test build-image's source repository check
+        # A private repository with no PAT builds only when mctl-api answers
+        # 200 with bound: true for the same team/repo (gitops#2146). This runs
+        # the step's own script against a fake curl: every other answer, an
+        # unreachable mctl-api or a missing OIDC token must refuse.
+        run: python3 tests/test_build_image_source_repo_check.py
+
       - name: Unit-test tpl-git-commit's yq handling
         # The static check above proves no yq expression interpolates a shell
         # variable. This proves the shape that replaced it actually resists
