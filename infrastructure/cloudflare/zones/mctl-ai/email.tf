@@ -1,7 +1,7 @@
 # Email Routing for mctl.ai. Ten addresses forward to one mailbox, obukhov@
-# to its owner's own, and the catch-all drops everything else — enabled
-# deliberately as #1089 item 7, so that the declared state and the intent
-# are the same thing.
+# and moonqua@ each to their owner's own, and the catch-all drops
+# everything else — enabled deliberately as #1089 item 7, so that the
+# declared state and the intent are the same thing.
 #
 # Not managed: Email Routing verification status, which is runtime state per
 # mctlhq/.github#47.
@@ -290,6 +290,45 @@ resource "cloudflare_email_routing_rule" "abuse" {
     },
   ]
   name     = "Forward abuse@mctl.ai"
+  priority = 0
+  source   = "api"
+  zone_id  = local.zone_id
+}
+
+# moonqua@mctl.ai is the owner's Claude account (the Anthropic organization
+# routes it to ZITADEL SSO by its domain, see docs/runbooks/zitadel.md), so
+# the ZITADEL invitation and Anthropic's own mail must reach it. The rule was
+# created in the dashboard on 2026-10-22 and imported 2026-10-25. Its
+# destination is declared in infrastructure/cloudflare/account
+# (email-routing.tf) and was already verified when imported.
+variable "email_routing_destination_moonqua" {
+  description = "The personal mailbox moonqua@mctl.ai forwards to."
+  type        = string
+  sensitive   = true
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.email_routing_destination_moonqua))
+    error_message = "email_routing_destination_moonqua must be one well-formed e-mail address (CF_MCTL_AI_EMAIL_MOONQUA)."
+  }
+}
+
+resource "cloudflare_email_routing_rule" "moonqua" {
+  actions = [
+    {
+      type  = "forward"
+      value = [var.email_routing_destination_moonqua]
+    },
+  ]
+  enabled = true
+  matchers = [
+    {
+      field = "to"
+      type  = "literal"
+      value = "moonqua@mctl.ai"
+    },
+  ]
+  name     = "Forward moonqua@mctl.ai"
   priority = 0
   source   = "api"
   zone_id  = local.zone_id

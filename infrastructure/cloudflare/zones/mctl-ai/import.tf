@@ -111,6 +111,11 @@ import {
 }
 
 import {
+  to = cloudflare_email_routing_rule.moonqua
+  id = "${local.zone_id}/7f64595b1ca849379f15c631d79b92ec"
+}
+
+import {
   to = cloudflare_email_routing_rule.dmarc
   id = "${local.zone_id}/653a2dac00e347598e0a52acd840af78"
 }

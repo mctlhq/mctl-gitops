@@ -111,6 +111,7 @@ jobs:
       TF_VAR_portal_pilot_emails: ${{ inputs.root == 'infrastructure/cloudflare/account' && secrets.CF_PORTAL_PILOT_EMAILS || '' }}
       TF_VAR_email_routing_destination: ${{ (inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' || inputs.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_DESTINATION || '' }}
       TF_VAR_email_routing_destination_obukhov: ${{ (inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' || inputs.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_OBUKHOV || '' }}
+      TF_VAR_email_routing_destination_moonqua: ${{ (inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' || inputs.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_MOONQUA || '' }}
       TF_IN_AUTOMATION: '1'
       # Two copies, one per job, because Actions cannot share an env value
       # across jobs — no YAML anchors in workflows, and `env` at workflow level
@@ -332,6 +333,7 @@ jobs:
       TF_VAR_portal_pilot_emails: ${{ inputs.root == 'infrastructure/cloudflare/account' && secrets.CF_PORTAL_PILOT_EMAILS || '' }}
       TF_VAR_email_routing_destination: ${{ (inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' || inputs.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_DESTINATION || '' }}
       TF_VAR_email_routing_destination_obukhov: ${{ (inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' || inputs.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_OBUKHOV || '' }}
+      TF_VAR_email_routing_destination_moonqua: ${{ (inputs.root == 'infrastructure/cloudflare/zones/mctl-ai' || inputs.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_MOONQUA || '' }}
       TF_IN_AUTOMATION: '1'
       # Two copies, one per job, because Actions cannot share an env value
       # across jobs — no YAML anchors in workflows, and `env` at workflow level

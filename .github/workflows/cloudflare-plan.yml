@@ -414,6 +414,7 @@ jobs:
       TF_VAR_portal_pilot_emails: ${{ matrix.root == 'infrastructure/cloudflare/account' && secrets.CF_PORTAL_PILOT_EMAILS || '' }}
       TF_VAR_email_routing_destination: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_DESTINATION || '' }}
       TF_VAR_email_routing_destination_obukhov: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_OBUKHOV || '' }}
+      TF_VAR_email_routing_destination_moonqua: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_MOONQUA || '' }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
