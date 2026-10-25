@@ -1302,10 +1302,20 @@ spec:
           TEXT=$(printf '%s mctl-agents: %s — %s (%ss)\n%s' \
             "$ICON" "$SUBJECT" "$WORKFLOW_STATUS" "$WORKFLOW_DURATION" "$UI_URL")
 
-          # Telegram leg. JSON-encode the body via jq so a quote / newline /
+          # Telegram leg: failures only.
+          # A DevLoop item used to produce a ✅ from investigate, another from
+          # implement, and one per shepherd tick: 2026-10-19..24 carried more than
+          # 100 of them against a handful of real outcomes. The outcome a human
+          # acts on is the PR's terminal state, which shepherd reports once
+          # (merged / rejected / review-stuck); a Succeeded run here is a step
+          # on the way and stays silent. Failed/Error/Unknown always notify.
+          #
+          # JSON-encode the body via jq so a quote / newline /
           # backslash in WORKFLOW_ISSUE_URL cannot malform the payload and
           # silently drop the notification.
-          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ]; then
+            echo "ℹ️  Succeeded — shepherd reports the PR outcome; skipping Telegram leg."
+          elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             TG_BODY=$(jq -nc --arg chat "$TG_CHAT_ID" --arg text "$TEXT" \
               '{chat_id: $chat, text: $text, disable_web_page_preview: true}')
             curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
