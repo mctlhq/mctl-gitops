@@ -95,7 +95,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # OIDC JWT for Vault JWT auth (ROADMAP 3.3). No long-lived VAULT_TOKEN.
+      # OIDC JWTs: Vault JWT auth (ROADMAP 3.3, no long-lived VAULT_TOKEN)
+      # and the mctl-api repository-binding check in "Check source repository".
       id-token: write
     steps:
       # --- Image name: build only names owned by the requesting team ---
@@ -294,14 +295,17 @@ jobs:
       #     tpl-git-commit writes once, at onboard. To build from another
       #     repository, change that annotation in a reviewed PR first.
       #   * a component not registered yet (onboard): a repository GitHub
-      #     reports as public, or one the team bound a Vault PAT for (the
-      #     Tier 1 step found one for this team/component). A private
-      #     repository reachable only through the MCTL App cannot be
-      #     onboarded by a direct dispatch.
+      #     reports as public, one the team bound a Vault PAT for (the
+      #     Tier 1 step found one for this team/component), or a private
+      #     repository the team connected through the MCTL App. The last is
+      #     asked of mctl-api (GET /api/v1/ci/build-repo-binding) with this
+      #     job's OIDC token: mctl-api answers only to this workflow file on
+      #     main, so the answer cannot be forged by whoever dispatched it.
       # A registration this step cannot read (a component directory without
-      # catalog-info.yaml, an unparsable file, no annotation) and a
-      # visibility lookup that does not answer 200 or 404 refuse the build:
-      # they are unknowns, not "unregistered" or "public".
+      # catalog-info.yaml, an unparsable file, no annotation), a visibility
+      # lookup that does not answer 200 or 404, and a binding lookup that
+      # does not answer 200 with a boolean refuse the build: they are
+      # unknowns, not "unregistered", "public" or "not bound".
       - name: Check source repository
         if: steps.caller.outputs.direct == 'true'
         env:
@@ -310,6 +314,8 @@ jobs:
           INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
           HAS_PAT: ${{ steps.vault_pat.outputs.has_pat }}
           GH_TOKEN: ${{ github.token }}
+          MCTL_API_URL: https://api.mctl.ai
+          MCTL_API_AUDIENCE: https://api.mctl.ai
         run: |
           set -euo pipefail
           # Shape already checked by the Vault step, which runs first.
@@ -355,6 +361,39 @@ jobs:
                 -H "Accept: application/vnd.github+json" \
                 "https://api.github.com/repos/${INPUT_REPO}" || echo 000
             }
+            # Not public: allowed only if mctl-api says the team's GitHub
+            # App installation binds this repository. Exits 0 when bound,
+            # 1 when mctl-api answers "not bound"; anything else refuses.
+            app_bound() {
+              local tok code bound team repo
+              [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] \
+                || refuse "no OIDC token available to ask mctl-api about ${INPUT_REPO}"
+              tok=$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${MCTL_API_AUDIENCE}" | jq -r '.value // empty') \
+                || refuse "could not mint an OIDC token for mctl-api"
+              [ -n "$tok" ] || refuse "could not mint an OIDC token for mctl-api"
+              echo "::add-mask::${tok}"
+              code=$(curl -sS -o "$resp" -w '%{http_code}' -G \
+                -H "Authorization: Bearer ${tok}" \
+                -H "User-Agent: mctl-gitops-build-image" \
+                --data-urlencode "team=${INPUT_TEAM_NAME}" \
+                --data-urlencode "repo=${INPUT_REPO}" \
+                "${MCTL_API_URL}/api/v1/ci/build-repo-binding" || echo 000)
+              unset tok
+              [ "$code" = "200" ] \
+                || refuse "could not ask mctl-api whether ${INPUT_REPO} is bound to ${INPUT_TEAM_NAME} (HTTP ${code}); not building"
+              bound=$(jq -r 'if (.bound|type) == "boolean" then .bound else "invalid" end' "$resp") \
+                || refuse "unreadable binding answer for ${INPUT_REPO}"
+              team=$(jq -r '.team // empty' "$resp")
+              repo=$(jq -r '.repo // empty' "$resp")
+              [ "$team" = "$INPUT_TEAM_NAME" ] && [ "$(lower "$repo")" = "$want" ] \
+                || refuse "mctl-api answered for ${team:-?}/${repo:-?}, not ${INPUT_TEAM_NAME}/${INPUT_REPO}"
+              case "$bound" in
+                true) return 0 ;;
+                false) return 1 ;;
+                *) refuse "malformed binding answer for ${INPUT_REPO}" ;;
+              esac
+            }
             code=$(lookup -H "Authorization: Bearer ${GH_TOKEN}")
             case "$code" in
               401|403) code=$(lookup) ;;
@@ -363,17 +402,21 @@ jobs:
               200)
                 visibility=$(jq -r '.visibility // empty' "$resp") \
                   || refuse "unreadable response for ${INPUT_REPO}"
-                [ "$visibility" = "public" ] \
-                  || refuse "${INPUT_REPO} is not public (${visibility:-unknown}) and no repository PAT is bound for ${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
                 ;;
               404)
-                refuse "${INPUT_REPO} is not public or does not exist, and no repository PAT is bound for ${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
+                visibility=""
                 ;;
               *)
                 refuse "could not read the visibility of ${INPUT_REPO} (HTTP ${code}); not building"
                 ;;
             esac
-            echo "source repository: ${INPUT_REPO} (not registered; public)"
+            if [ "$visibility" = "public" ]; then
+              echo "source repository: ${INPUT_REPO} (not registered; public)"
+            elif app_bound; then
+              echo "source repository: ${INPUT_REPO} (not registered; bound to ${INPUT_TEAM_NAME} through the GitHub App)"
+            else
+              refuse "${INPUT_REPO} is not public, no repository PAT is bound for ${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}, and the team's GitHub App installation does not bind it"
+            fi
           fi
 
       # --- Tier 2: GitHub App token ---
