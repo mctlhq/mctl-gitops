@@ -1,6 +1,6 @@
 #!/bin/sh
 # Usage:
-#   check-image-user.sh check [--image-user <user>] <checkout> <team> <component> <image-tag> [<default-repository>]
+#   check-image-user.sh check [--image-user <user>] [--uid-out <file>] <checkout> <team> <component> <image-tag> [<default-repository>]
 #   check-image-user.sh fetch-user <image-ref>
 #
 # check: decides whether a service's image can start under the security
@@ -33,6 +33,14 @@
 # (default linux/amd64, the cluster's nodes).
 #
 # --image-user skips the registry read and uses the given value; tests use it.
+#
+# --uid-out names a file that receives the image's numeric user as `uid` or
+# `uid:gid` when the verdict came from a numeric image USER, and is left empty
+# otherwise (a security-context uid, a refusal, an unknown). onboard pins it as
+# runAsUser/runAsGroup, so the committed values carry the uid kubelet and the
+# offline sweep in tests/test_check_image_user.py can verify (gitops#2149).
+# The gid is written only when the image names a numeric one; with `USER 101`
+# the runtime group comes from the image's /etc/passwd, which is not read here.
 #
 # Exit 0: allowed (possibly with a warning). Exit 1: refused. Exit 2: could
 # not decide (bad input, a render or registry read that failed). A failed
@@ -178,15 +186,40 @@ classify_user() {
   esac
 }
 
+# The pin for a numeric USER: `uid`, or `uid:gid` when the group is numeric
+# too. expr normalises leading zeros in decimal (sh arithmetic would read
+# them as octal).
+pin_of() {
+  u=$(expr "${1%%:*}" + 0) || return 1
+  g=""
+  case "$1" in *:*) g=${1#*:} ;; esac
+  case "$g" in
+    ""|*[!0-9]*) echo "$u" ;;
+    *) echo "${u}:$(expr "$g" + 0)" ;;
+  esac
+}
+
 check() {
   IMAGE_USER_SET=false
   IMAGE_USER=""
-  if [ "${1:-}" = "--image-user" ]; then
-    [ "$#" -ge 2 ] || die "--image-user needs a value"
-    IMAGE_USER_SET=true; IMAGE_USER=$2; shift 2
+  UID_OUT=""
+  while :; do
+    case "${1:-}" in
+      --image-user)
+        [ "$#" -ge 2 ] || die "--image-user needs a value"
+        IMAGE_USER_SET=true; IMAGE_USER=$2; shift 2 ;;
+      --uid-out)
+        [ "$#" -ge 2 ] && [ -n "$2" ] || die "--uid-out needs a file"
+        UID_OUT=$2; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  # Emptied first, so every verdict but a numeric image USER leaves no pin.
+  if [ -n "$UID_OUT" ]; then
+    : > "$UID_OUT" || die "cannot write ${UID_OUT}"
   fi
   [ "$#" -eq 4 ] || [ "$#" -eq 5 ] \
-    || die "usage: check [--image-user <user>] <checkout> <team> <component> <image-tag> [<default-repository>]"
+    || die "usage: check [--image-user <user>] [--uid-out <file>] <checkout> <team> <component> <image-tag> [<default-repository>]"
   root=$1 team=$2 component=$3 tag=$4 default_repo=${5:-}
 
   for pair in "team:$team" "component:$component"; do
@@ -279,6 +312,9 @@ check() {
   kind=$(classify_user "$IMAGE_USER")
   case "$kind" in
     uid)
+      if [ -n "$UID_OUT" ]; then
+        pin_of "$IMAGE_USER" > "$UID_OUT" || die "cannot write ${UID_OUT}"
+      fi
       echo "OK: ${image} runs as USER ${IMAGE_USER} (${mode})"
       return 0
       ;;

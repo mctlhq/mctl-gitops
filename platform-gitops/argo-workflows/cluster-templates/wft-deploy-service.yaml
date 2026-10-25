@@ -202,10 +202,11 @@ spec:
           # context the chart will give it (runAsNonRoot with a named or
           # root USER ends in CreateContainerConfigError after the commit).
           # Without runAsNonRoot it only warns. update-config does not
-          # change the image, so it is not checked.
+          # change the image, so the step exits before checking it. It still
+          # runs rather than being skipped by `when`: commit reads its
+          # image_user output, and a skipped task has no outputs to resolve.
           - name: check-image-user
             dependencies: [validate, build-image]
-            when: "\"{{workflow.parameters.action}}\" != \"update-config\""
             template: check-image-user
             arguments:
               parameters:
@@ -308,6 +309,10 @@ spec:
                   value: "{{workflow.parameters.service_template}}"
                 - name: config_patch
                   value: "{{workflow.parameters.config_patch}}"
+                # The image's numeric USER; onboard pins it as runAsUser/
+                # runAsGroup (gitops#2149).
+                - name: image_user
+                  value: "{{tasks.check-image-user.outputs.parameters.image_user}}"
 
           # Step 5: patch autoscaling block in values.yaml (conditional)
           - name: patch-autoscaling
@@ -445,6 +450,13 @@ spec:
       inputs:
         parameters:
           - name: image_tag
+      # `uid` or `uid:gid` when the image's USER is numeric, else empty.
+      outputs:
+        parameters:
+          - name: image_user
+            valueFrom:
+              path: /tmp/image-user
+              default: ""
       # The commit waits on this step; a stuck clone or registry read must
       # fail the deploy rather than hold it open.
       activeDeadlineSeconds: 300
@@ -456,6 +468,8 @@ spec:
           - configMapRef:
               name: mctl-platform-config
         env:
+          - name: PARAM_ACTION
+            value: "{{workflow.parameters.action}}"
           - name: PARAM_TEAM_NAME
             value: "{{workflow.parameters.team_name}}"
           - name: PARAM_COMPONENT_NAME
@@ -481,6 +495,12 @@ spec:
           REGISTRY="$PARAM_CONTAINER_REGISTRY"
           TAG="$PARAM_IMAGE_TAG"
 
+          : > /tmp/image-user
+          if [ "$PARAM_ACTION" = "update-config" ]; then
+            echo "update-config does not change the image; not checked"
+            exit 0
+          fi
+
           # Read-only and public: the chart, the service's values and the
           # script, all from main, as the commit step will see them.
           git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
@@ -488,7 +508,7 @@ spec:
           # On onboard the service has no values.yaml yet; the service
           # templates name the image <registry>/<component>.
           sh /tmp/mctl-gitops/platform-gitops/argo-workflows/scripts/check-image-user.sh check \
-            /tmp/mctl-gitops "$TEAM" "$COMPONENT" "$TAG" "${REGISTRY}/${COMPONENT}"
+            --uid-out /tmp/image-user /tmp/mctl-gitops "$TEAM" "$COMPONENT" "$TAG" "${REGISTRY}/${COMPONENT}"
       volumes:
         - name: ghcr-credentials
           secret:
