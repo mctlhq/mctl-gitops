@@ -19,11 +19,12 @@ to be imported.
 
 `email-routing.tf` holds the Email Routing destination addresses, which are
 account objects even though only `zones/mctl-ai` forwards to them: the shared
-mailbox (imported) and `obukhov@mctl.ai`'s own. Both arrive from repository
-secrets. A new address must be verified by its owner before the zone rule
-that forwards to it is applied, so this root is applied first. Reading and
-writing them needs `Account -> Email Routing Addresses` on the account read
-token and on `CF_APPLY_TOKEN_ACCOUNT`.
+mailbox (imported), `obukhov@mctl.ai`'s own and `moonqua@mctl.ai`'s own
+(imported). All arrive from repository secrets. A new address must be
+verified by its owner before the zone rule that forwards to it is applied,
+so this root is applied first. Reading and writing them needs
+`Account -> Email Routing Addresses` on the account read token and on
+`CF_APPLY_TOKEN_ACCOUNT`.
 
 A second application bypassing Access for the bare `/` path existed
 2026-09-19 – 2026-09-20, so a public HTML landing page there (explaining how

@@ -6,9 +6,9 @@
 # adds an address comes first, the owner verifies, and only then is the
 # zones/mctl-ai rule that forwards to it applied.
 #
-# Both addresses are personal and this repository is public, so they arrive
-# from repository secrets, as in zones/mctl-ai: CF_MCTL_AI_EMAIL_DESTINATION
-# and CF_MCTL_AI_EMAIL_OBUKHOV, passed as TF_VAR_* by cloudflare-plan.yml,
+# Every address is personal and this repository is public, so they arrive
+# from repository secrets, as in zones/mctl-ai: CF_MCTL_AI_EMAIL_DESTINATION,
+# CF_MCTL_AI_EMAIL_OBUKHOV and CF_MCTL_AI_EMAIL_MOONQUA, passed as TF_VAR_* by cloudflare-plan.yml,
 # cloudflare-apply.yml and cloudflare-drift.yml. No defaults: an unset secret
 # fails the plan instead of planning an address nobody owns.
 
@@ -56,4 +56,28 @@ resource "cloudflare_email_routing_address" "shared" {
 resource "cloudflare_email_routing_address" "obukhov" {
   account_id = var.account_id
   email      = var.email_routing_destination_obukhov
+}
+
+variable "email_routing_destination_moonqua" {
+  description = "The personal mailbox moonqua@mctl.ai forwards to."
+  type        = string
+  sensitive   = true
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.email_routing_destination_moonqua))
+    error_message = "email_routing_destination_moonqua must be one well-formed e-mail address (CF_MCTL_AI_EMAIL_MOONQUA)."
+  }
+}
+
+# Created and verified in the dashboard on 2026-10-22, imported 2026-10-25
+# together with the zones/mctl-ai rule that forwards to it.
+import {
+  to = cloudflare_email_routing_address.moonqua
+  id = "${var.account_id}/7803873e2fcf42238a25c3d91b11cde8"
+}
+
+resource "cloudflare_email_routing_address" "moonqua" {
+  account_id = var.account_id
+  email      = var.email_routing_destination_moonqua
 }
