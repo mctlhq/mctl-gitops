@@ -1,0 +1,179 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: mctl-agents-scout
+  annotations:
+    workflows.argoproj.io/description: |
+      Daily tech-news scout (mctlhq/mctl-agents#797): fetches the RSS feeds
+      in agents/_scout/sources.yaml, scores new items against the platform
+      map and the spike backlog, and sends a top-10 digest to Telegram.
+
+      Runs `python -m orchestrator.run_scout` inside ghcr.io/mctlhq/mctl-agents.
+      Model sessions have no tools, no MCP and no MCTL_TOKEN. GitHub access
+      is read-only (search and contents GETs); the only write is one
+      Telegram sendMessage. No gitops clone, no git push, no mutex.
+spec:
+  serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: mctl-agents
+      mctl.ai/team: admins
+  ttlStrategy:
+    secondsAfterCompletion: 259200
+  # About seven feed fetches plus a few batched model sessions. A generous
+  # margin over the realistic ceiling, not a measured floor.
+  activeDeadlineSeconds: 1200
+  entrypoint: scout
+  onExit: notify-telegram
+
+  arguments:
+    parameters:
+      - name: dry_run
+        value: "false"
+        # "true" prints the digest to the step log and sends nothing; the
+        # Telegram secrets are then not needed.
+      - name: agent_image
+        value: ghcr.io/mctlhq/mctl-agents:1.100.0
+        # 1.100.0 predates the scout. Bump to the first release that ships
+        # orchestrator.run_scout before un-suspending the CronWorkflow.
+
+  volumes:
+    - name: workdir
+      emptyDir:
+        sizeLimit: 256Mi
+
+  templates:
+    - name: scout
+      # Same least-privilege posture as collect-usage in
+      # cwft-mctl-agents-usage-collector.yaml: no Kubernetes API token in the
+      # agent container, restricted pod security.
+      serviceAccountName: mctl-agents-runner
+      automountServiceAccountToken: false
+      executor:
+        serviceAccountName: mctl-agents-executor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      container:
+        image: "{{workflow.parameters.agent_image}}"
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        imagePullPolicy: IfNotPresent
+        command: ["/entrypoint.sh"]
+        args:
+          - "sh"
+          - "-c"
+          - |
+            set -e
+            set -- python -m orchestrator.run_scout
+            if [ "$WORKFLOW_DRY_RUN" = "true" ]; then
+              set -- "$@" --dry-run
+            fi
+            printf '→'; printf ' %s' "$@"; printf '\n'
+            exec "$@"
+        env:
+          - name: WORKFLOW_DRY_RUN
+            value: "{{workflow.parameters.dry_run}}"
+          # run_scout uses it as the run id in each spike draft.
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          # Auth: OAuth (Claude Pro/Max), as on every other mctl-agents
+          # template. Do NOT add ANTHROPIC_API_KEY in parallel. Not optional:
+          # the scout cannot score without it.
+          - name: CLAUDE_CODE_OAUTH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: claude-code-oauth-token
+          # Read-only use: spike:scout dedupe search and the spike backlog.
+          - name: GITHUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: github-token
+          # @MCTL_AI_bot, referenced from secret/platform/mctl-telegram/login
+          # (see secrets/mctl-agents-scout-telegram.yaml). optional: true so a
+          # dry_run one-shot schedules even if the ExternalSecret has not
+          # synced; a real run without it exits non-zero before fetching.
+          - name: SCOUT_TELEGRAM_BOT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-scout-telegram
+                key: bot-token
+                optional: true
+          # The owner's private chat, the same id the agents' failure notices
+          # already use. A user id is a valid chat id for any bot the owner
+          # has started, so it carries over to @MCTL_AI_bot unchanged.
+          - name: SCOUT_TELEGRAM_CHAT_ID
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-chat-id
+                optional: true
+          - name: SCOUT_BUDGET_USD
+            value: "1.00"
+        resources:
+          requests: { cpu: 100m, memory: 256Mi, ephemeral-storage: 256Mi }
+          limits:   { cpu: "1",  memory: 1Gi,   ephemeral-storage: 512Mi }
+        volumeMounts:
+          - name: workdir
+            mountPath: /workdir
+
+    # ── Telegram notification (onExit) ──────────────────────────────────
+    # Failure-only, through the agents' notification bot. A successful run
+    # has already delivered the digest itself.
+    - name: notify-telegram
+      script:
+        image: alpine:3.19
+        command: [sh]
+        env:
+          - name: TG_BOT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-bot-token
+                optional: true
+          - name: TG_CHAT_ID
+            valueFrom:
+              secretKeyRef:
+                name: mctl-agents-secrets
+                key: telegram-chat-id
+                optional: true
+          - name: WORKFLOW_STATUS
+            value: "{{workflow.status}}"
+          - name: WORKFLOW_NAME
+            value: "{{workflow.name}}"
+          - name: WORKFLOW_DURATION
+            value: "{{workflow.duration}}"
+        source: |
+          set +e
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ]; then
+            echo "scout succeeded; the digest was the notification."
+            exit 0
+          fi
+          apk add --no-cache curl ca-certificates >/dev/null 2>&1
+          case "$WORKFLOW_STATUS" in
+            Failed) ICON="❌" ;;
+            Error)  ICON="⚠️" ;;
+            *)      ICON="⏳" ;;
+          esac
+          UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
+          TEXT="${ICON} mctl-agents: scout — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
+          if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+            curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
+              -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\":\"${TG_CHAT_ID}\",\"text\":\"${TEXT}\",\"disable_web_page_preview\":true}"
+          else
+            echo "ℹ️  TG_BOT_TOKEN or TG_CHAT_ID not set; skipping Telegram leg."
+          fi
+          exit 0
