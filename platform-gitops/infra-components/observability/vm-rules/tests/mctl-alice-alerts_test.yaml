@@ -180,6 +180,37 @@ tests:
                 cluster (10 s deadline); mostly 5xx means Yandex is failing.
 
   - interval: 1m
+    name: a lull between bursts keeps a failing upstream firing, then it resolves
+    input_series:
+      # Half of Quasar calls fail for 40 minutes, then the traffic stops: the
+      # count floor goes false at about 55m.
+      - series: 'mctl_alice_upstream_requests_total{namespace="labs",upstream="quasar",outcome="ok"}'
+        values: '0+2x40 80x60'
+      - series: 'mctl_alice_upstream_requests_total{namespace="labs",upstream="quasar",outcome="error"}'
+        values: '0+2x40 80x60'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: MctlAliceUpstreamErrorRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-alice
+              upstream: quasar
+            exp_annotations:
+              summary: 'mctl-alice: 50% of Yandex quasar calls are failing'
+              description: >-
+                More than 20% of calls to the Yandex quasar upstream (and
+                at least five) timed out, failed at the network level or answered
+                5xx over 15 minutes, sustained for 10. For quasar this is
+                the speaker-control path users see as broken tools. Split
+                by outcome: sum by (outcome) (rate(mctl_alice_upstream_requests_total{upstream="quasar"}[15m])).
+                Mostly timeout means Yandex is slow or unreachable from the
+                cluster (10 s deadline); mostly 5xx means Yandex is failing.
+      - eval_time: 90m
+        alertname: MctlAliceUpstreamErrorRatioHigh
+        exp_alerts: []
+
+  - interval: 1m
     name: upstream 4xx (a user's expired cookie) is not upstream failure
     input_series:
       - series: 'mctl_alice_upstream_requests_total{namespace="labs",upstream="quasar",outcome="ok"}'

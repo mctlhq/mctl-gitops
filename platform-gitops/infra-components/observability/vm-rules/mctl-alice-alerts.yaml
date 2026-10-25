@@ -227,6 +227,10 @@ spec:
             and
             sum by (upstream) (increase(mctl_alice_upstream_requests_total{namespace="labs",outcome=~"timeout|error|5xx"}[15m])) >= 5
           for: 10m
+          # Calls come in bursts, so a broken upstream drops under the count
+          # floor between them: on 24.10, while yandex.ru/quasar was down,
+          # the rule resolved and fired again six times for one outage.
+          keep_firing_for: 30m
           labels:
             severity: warning
             service: mctl-alice
