@@ -15,7 +15,8 @@ resources:
     memory: 128Mi
   limits:
     cpu: 500m
-    memory: 256Mi
+    # Headless Chromium; 512Mi is what the tenant tested the worker with.
+    memory: 512Mi
 probes:
   startup:
     path: /healthz
