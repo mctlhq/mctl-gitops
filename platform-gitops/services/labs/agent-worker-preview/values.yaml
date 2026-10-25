@@ -38,7 +38,12 @@ resources:
     # it, since 500m demonstrably still throttled sometimes. Do not trim
     # this again from a steady-state p95/max sample alone.
     cpu: 1000m
-    memory: 256Mi
+    # RAISED 2026-10-25 from 256Mi: with AGENT_WORKER_CONCURRENCY=2 two
+    # `claude` CLI processes share this limit, and the worker was OOMKilled
+    # 10 times on 2026-10-24 00:12-01:13Z (peak 217Mi at concurrency 1
+    # before). Each kill lost the claimed jobs: 4 dead letters and 4
+    # unclaimed routes (mctlhq/mctl-agents#760). Request stays 128Mi.
+    memory: 512Mi
     ephemeral-storage: 1Gi
 automountServiceAccountToken: false
 podSecurityContext:
