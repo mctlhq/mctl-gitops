@@ -15,7 +15,8 @@ resources:
     memory: 128Mi
   limits:
     cpu: 500m
-    memory: 256Mi
+    # Headless Chromium; 512Mi is what the tenant tested the worker with.
+    memory: 512Mi
 probes:
   startup:
     path: /healthz
@@ -39,3 +40,17 @@ env:
   NEWS_RESEARCH_HOUR: "8"
   NEWS_PUBLISH_HOUR: "10"
   NEWS_BROWSER_ENABLED: "true"
+externalSecret:
+  targetSecret: news-factory-secrets
+  data:
+    - secretKey: NEWS_FACTORY_TOKEN
+      remoteKey: teams/namax66/news-factory
+      property: NEWS_FACTORY_TOKEN
+envFrom:
+  - secretRef:
+      name: news-factory-secrets
+# The image's USER (10001:10001, read from its config in GHCR), pinned so
+# kubelet and tests/test_check_image_user.py can verify runAsNonRoot.
+containerSecurityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
