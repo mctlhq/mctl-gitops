@@ -54,3 +54,9 @@ envFrom:
 containerSecurityContext:
   runAsUser: 10001
   runAsGroup: 10001
+# TEMPORARY, revert by 2026-11-01 together with tenant.podSecurityLevel in
+# tenants/namax66/values.yaml: Chromium's own sandbox creates namespaces
+# (clone/unshare/setns), which RuntimeDefault refuses.
+podSecurityContext:
+  seccompProfile:
+    type: Unconfined
