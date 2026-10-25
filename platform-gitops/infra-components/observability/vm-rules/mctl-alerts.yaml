@@ -437,6 +437,13 @@ spec:
     - name: mctl.workload-health
       rules:
         - alert: ContainerOOMKilled
+          # The restart arm collapses instance before increase(), for the
+          # reason given on MctlAliceRestarting (mctl-alice-alerts.yaml): a
+          # kube-state-metrics reschedule starts every restart counter as a new
+          # series, and VictoriaMetrics' increase() counts its first sample as
+          # growth. It mattered most here: last_terminated_reason stays
+          # OOMKilled for the life of the pod, so each KSM move re-raised every
+          # past OOM in the cluster.
           expr: |
             max by (namespace, pod, container) (
               max_over_time(
@@ -447,7 +454,9 @@ spec:
             max by (namespace, pod, container) (
               kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}
               and on (namespace, pod, container)
-              increase(kube_pod_container_status_restarts_total[15m]) > 0
+              increase(
+                (max by (namespace, pod, container) (kube_pod_container_status_restarts_total))[15m:1m]
+              ) > 0
             ) > 0
           labels:
             severity: warning
