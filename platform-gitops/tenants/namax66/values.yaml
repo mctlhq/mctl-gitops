@@ -1,0 +1,46 @@
+# Tenant configuration for: namax66
+# Created by: wft-create-tenant workflow
+# Managed by: ArgoCD ApplicationSet (applicationset-tenants)
+tenant:
+  name: namax66
+  displayName: "namax66"
+  description: "ai news"
+  members:
+    - userId: NaMax66
+      principalId: prn_01M5SBQPSN5MTH8N1TTY4PPT6X
+      role: owner
+      catalogKey: principal
+  quotas:
+    requests.cpu: "500m"
+    requests.memory: "512Mi"
+    limits.cpu: "2"
+    limits.memory: "1Gi"
+    pods: "5"
+    persistentvolumeclaims: "1"
+    services: "5"
+    requests.storage: "10Gi"
+  limitRange:
+    enabled: true
+    default:
+      cpu: "500m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "1Gi"
+  preview:
+    quotas:
+      requests.cpu: "100m"
+      requests.memory: "256Mi"
+      limits.cpu: "500m"
+      limits.memory: "512Mi"
+      requests.storage: "0"
+      persistentvolumeclaims: "0"
+      pods: "3"
+      services: "3"
+  networking:
+    allowIntraNamespace: true
+    allowClusterEgress: true
+    allowInternetEgress: false
