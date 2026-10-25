@@ -36,7 +36,7 @@ probes:
     periodSeconds: 15
 env:
   NEWS_API_BASE: https://sales-with.ai/api/ai
-  NEWS_SCHEDULE_ENABLED: "false"
+  NEWS_SCHEDULE_ENABLED: "true"
   NEWS_RESEARCH_HOUR: "8"
   NEWS_PUBLISH_HOUR: "10"
   NEWS_BROWSER_ENABLED: "true"
