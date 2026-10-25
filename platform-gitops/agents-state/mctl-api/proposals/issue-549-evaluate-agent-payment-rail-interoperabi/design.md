@@ -2,228 +2,271 @@
 
 ## Current state
 
-The commerce core is `internal/commerce` (Go, pgx), exposed by
-`internal/api/handlers_commerce.go`, `internal/api/handlers_commerce_budget.go`
-and the read-only MCP tools in `internal/mcp/commerce.go`
-(`mctl_get_commerce_budget`, `mctl_list_commerce_invocations`,
-`mctl_get_commerce_receipt`). `docs/commerce-ledger.md` documents it.
+The commerce core lives in `internal/commerce` and is documented in
+`docs/commerce-ledger.md` (C2 #547, C3 #548, C4 server half of
+mctl-agents#619, entitlements #614).
 
-Facts that constrain any external rail, all read in the clone:
-
-1. **One authorizer interface.** `PaymentAuthorizer` in
-   `internal/commerce/budget.go` is `Adapter()`, `Authorize`, `Capture`,
-   `Void`, `Status`. Every operation is idempotent on
-   `PaymentOperationKey(invocationID, op)` (`mctl-pay/v1:<invocation_id>:<operation>`);
-   same key with different parameters is `ErrPaymentConflict`.
-   `PaymentRequest` carries `Key`, `InvocationID`, `TenantID`,
-   `PayerAccountID`, `Money`, `FundsMode`, `QuoteDigest`; its comment says a
-   payment proof "is an input here and nowhere else".
-2. **Feature negotiation is strict.** `requiredFeatures =
-   {auth_capture, void, status_lookup}`; `checkAdapter` refuses an adapter
-   missing any, or one whose `FundsModes` lacks `simulated`.
-   `UseAuthorizer` applies it at configuration time. Optional features exist
-   as constants: `partial_capture`, `refund`, `async_settlement`,
-   `simulation`.
-3. **Authorize runs inside the ledger transaction.** `Store.Reserve` calls
-   `s.auth.Authorize(ctx, tx, ...)` under the tenant-budget advisory lock and
-   row locks, between the budget check / `holdEntitlementUnit` and the
-   reservation insert. A `Denied` result commits no reservation; `Unknown`
-   keeps the hold with `payment_status: unknown`.
-4. **Unknown is never denied.** `resolveUnknownHold` and
-   `resolveAuthorization` resolve an unknown authorization only through
-   `Status` on the same key; `settlePayment` calls `Status` before issuing
-   `Capture`/`Void`, so a lost response is replayed, not reissued.
-   `reserved -> dispatching` is refused while payment is unknown.
-5. **Execution fence.** `…/dispatch` writes a 60 s `dispatch_deadline` once
-   and returns an Ed25519 authorization bound to `provider_operation_key`,
-   `args_digest`, `tenant_id`, etc. (`internal/commerce/dispatch.go`).
-   Providers dedupe on `provider_operation_key`. A `dispatched` row cannot be
-   released; only an observed outcome finalizes it; `outcome_unknown` is
-   resolved by `…/finalize`, never by time.
-6. **Money.** `Money` is ISO 4217 minor units, checked against the
-   `currencyExponents` table in `internal/commerce/types.go`; there is no
-   token/crypto asset and no FX. Budgets are a limit, never a balance
-   (`budget.go` header comment); `funds_mode` is `simulated` by CHECK
-   constraint; `checkFundsMode` refuses `live`.
-7. **Receipt.** `internal/commerce/receipt.go` projects an allowlist:
-   ids, `quote_digest`, `price`, `funds_mode`, `phase`, the five facts
-   (`execution_outcome`, `usage_quantity`, `charge_status`, `payment_status`,
-   `settlement_status`), timestamps and `policy_decision`. It deliberately
-   omits payment proofs, `external_ref`, `authorization_id`, `capture_id`.
-   There is no rail, network, settlement asset or external reference field.
-8. **Invoice-backed entitlements already exist** (mctl-api#614,
-   `commerce_entitlements`, `holdEntitlementUnit` / `captureEntitlementUnit`
-   / `releaseEntitlementUnit` in `budget.go`): finite unit packages granted
-   by an admin against an `invoice_ref`, consumed FIFO in `Reserve`. This is
-   the account-funded shape in unit form, with external payment entirely
-   out of band.
-9. **No x402 code.** `grep -ri x402` over the clone finds nothing; the
-   mctl-api#616 pilot / PR #617 is not merged into this main
-   (HEAD `53c1fc6`). Its evidence is therefore "in progress" for this
-   evaluation.
+- **Adapter contract.** `internal/commerce/budget.go` defines
+  `PaymentAuthorizer` with `Adapter() AdapterInfo`, `Authorize(ctx, q,
+  PaymentRequest)`, `Capture(ctx, q, key, authorizationID, Money)`,
+  `Void(ctx, q, key, authorizationID)` and `Status(ctx, q, key)`. Every
+  operation is idempotent on its key (`mctl-pay/v1:<invocation_id>:<operation>`);
+  the same key with different parameters is `ErrPaymentConflict`. The comment
+  on the interface already anticipates that "a future external rail ignores
+  [the querier] and the core treats its answer as unknown until status
+  confirms it". `PaymentRequest` is the only place a payment proof may enter
+  ("A payment proof, when a future rail needs one, is an input here and
+  nowhere else").
+- **Feature negotiation.** Constants `FeatureAuthCapture`, `FeatureVoid`,
+  `FeatureStatusLookup`, `FeaturePartialCapture`, `FeatureRefund`,
+  `FeatureAsyncSettlement`, `FeatureSimulation`;
+  `requiredFeatures = {auth_capture, void, status_lookup}`. `checkAdapter`
+  refuses an adapter missing any required feature or not listing
+  `FundsModeSimulated`; `Store.UseAuthorizer` runs it at install time.
+- **Only adapter.** `SimulatedAuthorizer` records operations in
+  `commerce_payment_operations` inside the ledger transaction and denies
+  anything not `funds_mode: simulated` with `funds-mode-unavailable`.
+- **Unknown is never denied.** An unclassifiable or missing adapter answer
+  leaves the hold with `payment_status: unknown` (409 `payment-unknown`);
+  `reserved -> dispatching` is refused until a `…/reserve` retry resolves it
+  via `Status` on the same key, never a fresh authorize
+  (`TestUnknownAuthorizationIsNeverDenied`, budget_test.go:609). Capture and
+  void are preceded by the same status lookup.
+- **Money and currency.** `Money` in `internal/commerce/types.go` is integer
+  minor units with an ISO 4217 code validated against `currencyExponents`
+  (EUR, USD, GBP, CHF, PLN, CZK, SEK, ...). There is no asset type for USDC
+  or HBAR, and budgets fix their currency once used.
+- **Binding.** `quote_digest` (`mctl-commerce-quote/v1`) and
+  `terms_binding` (`mctl-commerce-terms/v1`) are pinned to golden vectors in
+  `digest_test.go`. `tenant_id`, `principal_id`, `payer_account_id`
+  (`acct_tenant_<tenant>`) are derived server-side, never from a body.
+- **Dispatch fence.** `internal/commerce/dispatch.go` signs an Ed25519
+  `mctl-commerce-dispatch/v1` authorization over invocation, provider
+  operation key, capability, schema hash, args digest, tenant and deadline;
+  replays are deterministic and providers dedupe on `provider_operation_key`.
+- **Account-funded today.** `commerce_entitlements` grant finite units
+  against a verified `invoice_ref` (admin only), held on `…/reserve` and
+  captured/released on finalize; budgets are monthly limits, never balances.
+  This is already an "invoice funds an allowance consumed by governed usage"
+  shape with no external rail at execution time.
+- **Receipt.** `internal/commerce/receipt.go` `Receipt` is an explicit
+  allowlist (ids, quote digest, terms, tenant, payer account, principal,
+  price, five facts, phase, policy decision ref) and carries no payment proof
+  or `external_ref` contents. It has no rail, network, asset or settlement
+  amount fields.
+- **Routing/MCP.** `internal/api/router.go` wires `Commerce *commerce.Store`;
+  MCP read tools `mctl_get_commerce_budget`, `mctl_list_commerce_invocations`,
+  `mctl_get_commerce_receipt` exist.
+- **x402 evidence (#616 / draft PR #617, branch
+  `feat/x402-mcp-check-testnet`, last updated 2026-10-13, OPEN, not merged).**
+  An isolated Node 24 experiment under `experiments/x402-mcp-check`: x402 v2
+  `exact` / EIP-3009 only, Base Sepolia `eip155:84532`, test USDC
+  `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, fixed 10000 atomic units
+  (0.01 USDC), facilitator `https://x402.org/facilitator` (`/supported`,
+  `/verify`, `/settle`), MCP profile `2025-06-18`, JSON-response only (SSE
+  rejected as a profile limitation). Specs pinned at x402-foundation/x402
+  commit `6c470a80c6145b27fcbb4f6359c47a6a8cfe5887` (`specs/transports-v2/mcp.md`,
+  `specs/schemes/exact/scheme_exact_evm.md`); hosted facilitator version is
+  not pin-able. Buyer is binding-aware (signs a nonce bound to request,
+  endpoint, payer and terms); generic-client interoperability is not
+  established; server never accepts private keys. 42 offline tests pass with
+  injected facilitator and chain fixtures. PR text: "No live testnet transfer,
+  external wallet signature, hosted-facilitator conformance proof or real
+  public target proof has been performed." It also states the simulated
+  `PaymentAuthorizer` is not treated as an x402 reserve/capture/void adapter
+  and introduces no EUR/USDC conversion.
+- **External sources skimmed (unpinned, secondary).** MPP: Tempo + Stripe,
+  submitted to IETF as `draft-ryan-httpauth-payment`; intents `charge`
+  (settles per request) and `session` (lock funds, off-chain vouchers,
+  periodic settlement); spec repo github.com/tempoxyz/mpp-specs, docs mpp.dev.
+  Hedera Agent Accounts: announced October 2026; per-agent accounts with
+  total/daily/per-transaction caps and payee allowlists enforced by smart
+  contract, revocable by owner, MCP server + REST + relayer ("Agentic Payment
+  Services"), HBAR/USDC, stated x402 compatibility; limited partner testnet
+  Q4 2026, public testnet targeted Q1 2027. None of these were read at a
+  pinned revision during investigation.
 
 Deployed state checked:
-- `mctl_get_service_config(team=admins, service=mctl-api)`: error
-  "service not found: admins/mctl-api" -- mctl-api is not a catalogue
-  service under that tenant; deployed config not observed.
+
+- `gh pr view 617 -R mctlhq/mctl-api` and `gh issue view 616`: both OPEN; PR
+  draft, unmerged; body and README quoted above.
 - `$MCTL_GITOPS_ROOT/services/` listing: tenants `admins`, `karabu`, `labs`;
-  no `mctl-api` directory; `grep -ri "commerce\|x402"` over `services/`
-  found nothing. Whether `COMMERCE_*` env vars are set in production is
-  therefore unobserved (recorded under Open questions in requirements.md).
-  This change is docs and tests only, so the gap does not affect it.
+  no `mctl-api` service directory, and `grep -r COMMERCE_` found nothing.
+  The deployed mctl-api configuration (whether `COMMERCE_DB_URL`,
+  `COMMERCE_ACCEPT_DISABLED` or dispatch keys are set) could not be observed
+  from this checkout. This is recorded as a gap, not as "commerce disabled".
+- mctl MCP tools were not called; this proposal changes no deployed
+  configuration.
 
 ## Proposed solution
 
-Deliver the evaluation as two repo artifacts, change no runtime code, and
-recommend **`DEFER_EXTERNAL_PAYMENT`**.
+The work is primarily a decision record, plus a small, inert code slice that
+makes the classification and envelope machine-checkable. No adapter is
+installed, no route changes, `funds_mode: live` stays refused.
 
-### Artifact A: `docs/payment-rail-evaluation.md` (decision record)
+### 1. Decision record `docs/payment-rail-interop.md`
 
-Sections: contract under test (facts 1-7 above), comparison matrix,
-adapter capability classification, non-custodial verdicts,
-ambiguity/reconciliation analysis, streaming/long-running verdict,
-eligibility/secrets/fee constraints, external receipt envelope,
-recommendation, re-entry criteria. Linked from `docs/commerce-ledger.md`
-("Adapter contract" section) with one sentence. Versions not verified
-against vendor specs during writing are marked "not pinned" -- never guessed.
+Sections:
 
-Comparison matrix (content of the record; the investigator's current
-understanding, to be verified and version-pinned in task 1):
+1. **Contract under test.** The `PaymentAuthorizer` operations, required
+   features, phase machine and the invariant, quoted from
+   `internal/commerce/budget.go` and `docs/commerce-ledger.md`. Every rail is
+   measured against this exact contract; nothing is relaxed per rail.
+2. **Source pins.** A table: rail, artifact (spec commit / draft revision /
+   SDK version / vendor page + access date), what it was used for. Unpinned
+   claims are flagged and excluded from the decision.
+3. **Comparison matrix.** One column per rail, one row per field listed in
+   the issue. Lifecycle cells use the classification below.
+4. **Adapter capability classification.** For each rail and each of
+   `Authorize`, `Capture`, `Void`, `Status`, `partial_capture`, `refund`,
+   `async_settlement`: `native`, `emulated-with-evidence` (and how), or
+   `unsupported`. Working hypotheses to verify against pins:
+   - x402 `exact`: verify-then-settle; no hold, no void after settle.
+     Mapping candidate "authorize = facilitator verify (no funds move),
+     capture = settle at finalize, void = never call settle (nonce expires)";
+     must check EIP-3009 `validBefore` vs dispatch + finalize window and that
+     an unsettled signed authorization cannot be settled by a third party
+     after "void" (it can, until expiry, by anyone holding it: classify void
+     as `unsupported` unless the facilitator or nonce cancellation
+     (`cancelAuthorization`, payer-signed) provides it). Refund
+     `unsupported` in-protocol. Status = facilitator response + chain
+     reconciliation from #617's `reconcile.mjs`.
+   - MPP `charge`: like x402 exact. MPP `session`: closest to
+     reserve/capture (locked deposit, cumulative vouchers, close); classify
+     only from the pinned spec.
+   - Account-funded: maps natively onto existing entitlement hold/capture/
+     release and budget holds; the external rail (invoice/top-up/chargeback)
+     sits before execution, outside `PaymentAuthorizer`'s hot path.
+   - Hedera: owner-signed caps enforced on-chain; agent requests spend; no
+     known hold/void primitive; classify from pinned docs or mark
+     `unpinned` if only partner testnet exists.
+5. **Custody.** Per rail: who signs, where the key lives, whether MCTL can stay
+   non-custodial. x402/MPP: payer wallet signs (as in #617's external
+   signing-bundle helper); Hedera: owner wallet sets limits, agent key or
+   relayer submits; account-funded: no payer key at all.
+6. **Ambiguity and retries.** Per rail, map lost authorize/settle responses to
+   `payment_status: unknown`, name the status/reconcile API (x402: facilitator
+   `/settle` replay + chain `AuthorizationUsed` log by nonce; MPP: per pinned
+   spec; Hedera: mirror node / HCS record; account-funded: ledger-local), and
+   show that the idempotency key `mctl-pay/v1:<invocation_id>:<op>` plus a
+   rail-level nonce derived from the invocation prevents a duplicate economic
+   charge. Execution uncertainty stays on the existing `outcome_unknown` path
+   and provider `provider_operation_key` dedupe; no rail permits blind
+   re-execution.
+7. **Currency.** Accounting currency (ISO 4217 in `Money`) and settlement
+   asset (CAIP-19-style `network` + `asset` + atomic amount) are separate.
+   A rail whose terms are priced in its asset needs the terms themselves to be
+   priced in that asset, which `currencyExponents` does not allow today; the
+   record states this as a blocker per rail rather than inventing FX.
+8. **Fees, latency, minimum charge; MCP errors; streaming/long-running;
+   generic client; eligibility/KYC/secrets.** One subsection each, cells
+   cited. Streaming and long-running calls are rejected for the first proof
+   unless a rail natively supports metered sessions (MPP session is the only
+   candidate) and the dispatch fence (60 s `dispatch_deadline`) can cover it.
+9. **External receipt / reconciliation envelope** (see 2).
+10. **Decision.** Exactly one token with a rubric (below), why it beats every
+    rejected alternative, and either the bounded proof scope or the re-entry
+    criteria.
 
-| Dimension | x402 (`exact`) | MPP | Account-funded allowance | Hedera (Agent Accounts / Payments MCP / allowances) |
-|---|---|---|---|---|
-| Versions | x402 spec + SDK + facilitator + network as used by #617: not pinned until #617 evidence is read | not pinned | n/a (internal) | Hedera SDK / Agent Kit / MCP servers: not pinned |
-| Quote binding | Server-issued payment requirements (amount, asset, payTo, resource, expiry); MCTL must embed `quote_digest` in the resource/extra field and verify on receipt -- binding is MCTL's, not the rail's | Challenge/credential; binding to MCTL `quote_digest` likewise MCTL-side | `quote_digest` already bound by the ledger | Transfer memo / scheduled tx can carry `quote_digest`; binding MCTL-side |
-| exact payment | yes | yes | n/a | yes (transfer) |
-| spend cap | not in `exact` | session/limit model claimed; unverified | yes (budget limit, existing) | yes: owner-approved allowance (HIP-336 style), revocable |
-| reserve/authorize -> capture | no: verify+settle, no hold | unverified; do not assume | yes (ledger hold = existing simulated adapter semantics) | partial: allowance approval is a cap, not a per-invocation hold |
-| void | no (nothing held; settled payment can only be refunded) | unverified | yes | allowance can be reduced; settled transfer cannot be voided |
-| refund | not a protocol operation (merchant-initiated transfer) | unverified | yes (credit back to allowance) | new reverse transfer only |
-| status/reconcile | facilitator settle response + chain lookup by tx hash | unverified | yes (ledger) | mirror node lookup by transaction id |
-| Signer custody | buyer signs a transfer authorization; MCTL need not hold buyer key; MCTL as merchant needs only a receive address | buyer-side wallet/credential; MCTL custody not required as far as known | none (no keys) | owner signs allowance; spender (agent) key is held by whoever runs the agent -- non-custodial for MCTL only if the agent runtime, not mctl-api, holds it |
-| Replay/idempotency | per-authorization nonce prevents double settlement of the same signature; a client retry with a fresh signature is a second payment unless MCTL keys on `invocation_id` | unverified | `mctl-pay/v1` key (existing) | transaction id (payer + valid-start) is unique; a fresh tx id is a second payment |
-| Lost response | settle may have happened with no response; recover only by chain lookup | unverified | n/a (same DB tx) | mirror-node query of the deterministic tx id |
-| Execution uncertainty | payment settles at request time, before/with execution: a settled payment with `outcome_unknown` has no void, only refund | unverified | handled by existing finalize/release | as x402 |
-| Settlement asset vs accounting | stablecoin token (e.g. USDC) on a chain network vs ISO 4217 `Money`; no FX allowed | unverified | same currency (ISO 4217) | HBAR or HTS token vs ISO 4217; no FX allowed |
-| Fee / latency / min charge | network + facilitator fee, seconds; unmeasured | unmeasured | zero marginal | network fee small, finality seconds; unmeasured |
-| MCP error semantics | HTTP 402 challenge; MCP transport needs a binding-aware client to surface it | 402-based; same | existing 422 codes (`budget-exhausted`, `payment-denied`) | tool-level errors from Payments MCP; unverified |
-| Streaming / long-running | rejected for first proof | rejected | rejected | rejected |
-| Generic client | requires x402-aware buyer | requires MPP-aware buyer | any MCP client | requires Hedera-aware agent |
-| Secrets / KYC | merchant receive address; facilitator account; possible KYC/geo for fiat off-ramp | merchant onboarding with provider; unverified | invoicing only | Hedera account for MCTL as recipient; operator key custody for any MCTL-run account |
-| Ledger mapping | cannot satisfy `requiredFeatures` honestly; would need a prepaid/settle-first shape the ledger does not have | unknown until pinned | maps 1:1 onto existing entitlements / budget | allowance-as-cap does not map to per-invocation `Authorize`/`Void` |
+### 2. Canonical envelope (inert type + golden test)
 
-Adapter capability classification (encoded in Artifact B):
+Add `internal/commerce/rail.go` with:
 
-| Profile | Features declared | `checkAdapter` |
-|---|---|---|
-| `x402-exact` | `status_lookup` | refused (no `auth_capture`, no `void`, no `simulated`) |
-| `mpp` | `status_lookup` (only what is verified) | refused |
-| `hedera-allowance` | `status_lookup`, `async_settlement` | refused |
-| `account-funded` | `auth_capture`, `void`, `status_lookup`, `refund`, `simulation` | accepted, but it is an internal ledger mode, not an external rail |
+```go
+// ExternalPaymentEnvelope is the rail-independent receipt/reconciliation
+// record of docs/payment-rail-interop.md. Not yet persisted or served.
+type ExternalPaymentEnvelope struct {
+    SchemaVersion       int    // 1
+    InvocationID        string
+    QuoteDigest         string
+    ActionDigest        string // args_digest-bound action, from the dispatch fence
+    PayerPrincipalID    string
+    TenantID            string
+    PayerAccountID      string
+    Rail                string // "x402", "mpp", "account", "hedera", "simulated"
+    Network             string // e.g. "eip155:84532"; "" for account
+    Asset               string // e.g. CAIP-19 asset id; ISO code for account
+    AccountingAmount    Money  // ISO 4217 minor units, the ledger price
+    SettlementAmount    string // decimal string of asset atomic units
+    ExternalPaymentRef  string // tx hash / payment id, opaque
+    PaymentState        string // the ledger payment_status vocabulary
+    ExecutionState      string // execution_outcome vocabulary
+    ReconciliationState string // "pending", "matched", "mismatch", "unresolved"
+}
+```
 
-Non-custodial verdict: x402 and MPP -- MCTL can stay non-custodial (buyer
-signs; MCTL only receives). Hedera -- non-custodial only if the spender key
-lives in the agent runtime/owner wallet, never in mctl-api; any MCTL-run
-spender account is custody and is rejected. Account-funded -- no keys.
+and `RailCapability` / `ClassifyRail` constants (`native`,
+`emulated-with-evidence`, `unsupported`) holding the classification table from
+the record, plus a function `RequiredFeaturesSatisfied(rail) bool` that reuses
+`requiredFeatures`. Nothing calls it from `Store`; it exists so the decision's
+claim "rail X cannot pass `checkAdapter` as specified" is a unit test, not
+prose. The envelope never carries payment proofs, signatures or idempotency
+keys, matching the `Receipt` allowlist rule.
 
-Ambiguity/no-double-charge: for every external rail the only safe retry is
-`Status` on a reference MCTL recorded *before* the external call. Today
-`Authorize` runs inside the DB transaction (fact 3), so the external
-reference cannot be durably recorded before the network call and a crash
-between rail settle and commit loses it. Retries therefore cannot be proven
-single-charge for any external rail on the current contract. This is the
-main structural reason for deferral.
+### Decision rubric (applied after evidence collection)
 
-### External receipt / reconciliation envelope (recommended, not built)
+A rail may be adopted only if, from pinned evidence, all hold: (a) binding to
+quote digest + payer + tenant + expiry is possible; (b) MCTL stays
+non-custodial; (c) every required feature is `native` or
+`emulated-with-evidence` without faking; (d) lost-response recovery exists
+without blind re-execution; (e) a testnet path is available now; (f) the
+settlement asset can be priced without FX. Otherwise:
+`MULTI_RAIL_FOUNDATION` only if two or more rails pass (c) through the same
+contract change; `DEFER_EXTERNAL_PAYMENT` if none passes.
 
-Rail-independent fields any future adapter must persist (new table, later
-proposal), keyed by `invocation_id`:
+**Provisional expectation from the evidence available today (to be confirmed
+or overturned by task 2-4, not preselected):** x402 fails (c) for `Void` as
+the contract stands and (e) for live proof (#616 has none); MPP and Hedera fail
+(e)/pinning (Hedera public testnet not yet available); account-funded passes
+(a)-(d) but is not an external rail at execution and the issue bars a new
+stored-value product. The likely outcome is `DEFER_EXTERNAL_PAYMENT` with x402
+as the leading retest candidate. Re-entry criteria to record if so:
+1. #616 live Base Sepolia transfer with an external-wallet signature,
+   facilitator settle, and chain reconciliation of a deliberately lost settle
+   response;
+2. an accepted ADR 020 amendment for a "settle-on-finalize" adapter class
+   (authorize = verify, capture = settle, void = payer-side cancellation or
+   proven expiry) or a rail with native void;
+3. a terms pricing decision for non-ISO settlement assets (asset-priced terms,
+   no FX);
+4. a pinned MPP session spec revision or a Hedera public testnet, whichever
+   arrives first, retested against the same matrix.
 
-- `invocation_id`, `quote_digest`, `payment_op_key` (`mctl-pay/v1:…`)
-- `principal_id`, `subject_principal_id`, `delegation_grant_id`,
-  `tenant_id`, `payer_account_id`
-- `rail` (`simulated|x402|mpp|hedera|account_funded`), `rail_version`,
-  `network`, `facilitator_id`
-- accounting money: `accounting_currency`, `authorized_minor`,
-  `captured_minor` (ISO 4217, from `Money`)
-- settlement money: `settlement_asset` (asset id, not ISO 4217),
-  `settlement_asset_decimals`, `settlement_authorized_units`,
-  `settlement_settled_units` -- never derived from accounting money; no FX
-  rate field exists until a separate FX design
-- `external_payment_ref` (tx hash / tx id / provider id), stored but never
-  exposed on the tenant receipt (fact 7 allowlist stays)
-- `payment_status` (existing vocabulary), `execution_status`
-  (`execution_outcome`), `reconciliation_status`
-  (`not_required|pending|matched|mismatch|unresolved`)
-- `recorded_intent_at`, `external_observed_at`, `reconciled_at`
-
-### Recommendation: `DEFER_EXTERNAL_PAYMENT`
-
-Reasons, each grounded above: (a) no external rail satisfies
-`requiredFeatures` without faking `auth_capture`/`void`; (b) `Authorize`
-inside the ledger transaction cannot record an external reference before an
-external call, so single-charge under retry is unprovable; (c) `Money` has no
-settlement-asset concept and FX is a non-goal; (d) #616/#617 has no observed
-live testnet proof; (e) account-funded is not an external rail and its
-non-stored-value form already exists as entitlements (#614); adopting a
-funded balance is stored value, which the issue does not authorize.
-
-Re-entry criteria (all required before an `ADOPT_*` proposal):
-
-1. mctl-api#616 passes its own live testnet acceptance (for x402), or an
-   equivalent pinned testnet run for the candidate rail.
-2. An approved design for an out-of-transaction adapter call: commit an
-   intent row with the external idempotency reference first, call the rail,
-   then record the result in a second transaction; `Status` on the intent
-   resolves every crash window.
-3. The envelope above exists with settlement money separate from `Money`.
-4. A settle-first lifecycle is modelled explicitly (e.g. a new declared
-   feature such as `settle_on_authorize` with refund-only compensation) via
-   an ADR 020 amendment, rather than relaxing `requiredFeatures`.
-
-First candidate on re-entry: x402 `exact` on a testnet, restricted to
-`per_call` terms with no execution-dependent capture, because its evidence
-track (#616) is furthest along. That is a later, separately reviewed scope.
-
-### Artifact B: `internal/commerce/rail_profiles_test.go`
-
-A table-driven test in package `commerce` declaring the four `AdapterInfo`
-profiles above and asserting `checkAdapter` refuses the three external ones
-with `ErrAdapterIneligible` and names the first missing required feature,
-and accepts `account-funded`. It changes no production code and pins the
-classification so a future relaxation of `requiredFeatures` breaks a test
-that points at the decision record.
+If the evidence instead supports adoption, the record drafts one governed
+testnet proof: canonical principal -> tenant authority -> policy ->
+`…/budget/precheck` -> approval -> `…/reserve` (adapter `Authorize`) ->
+`…/dispatch` fence -> provider execution -> `…/finalize` (`Capture`/`Void`)
+-> envelope + reconciliation, with `funds_mode` remaining non-live until a
+separate review.
 
 ## Alternatives
 
-- **`ADOPT_X402`**: furthest evidence track, non-custodial buyer signing.
-  Dropped: `exact` has no hold/void, so it either fails `checkAdapter` or
-  requires faking `auth_capture`; settle-before-execution conflicts with
-  `per_successful_call`; #617 has no live proof in this clone.
-- **`MULTI_RAIL_FOUNDATION`** (build the envelope, out-of-transaction call
-  and settle-first feature now): the right eventual shape, but it builds
-  money-moving infrastructure with no rail proven to need its exact shape;
-  kept as re-entry criteria 2-4 instead.
-- **`ADOPT_ACCOUNT_FUNDED`**: cleanest fit (already accepted by
-  `checkAdapter` semantics, no keys). Dropped: it is not an external payment
-  rail, its invoice-backed unit form already exists (#614), and a funded
-  monetary balance is a stored-value product the issue does not authorize.
-- **`ADOPT_HEDERA` / `ADOPT_MPP`**: allowance model is attractive for owner
-  control and revocation, but neither maps to per-invocation
-  authorize/void, versions are unpinned, and Hedera non-custody depends on
-  where the spender key runs.
+- **Adopt x402 now on the strength of #617.** Rejected for this slice: #617 is
+  offline-fixture evidence only, uses its own SQLite store and identity, and
+  explicitly is not a reserve/capture/void adapter. Adopting it would either
+  fake `Void` or add a second ledger/authorization path.
+- **Relax `requiredFeatures` so exact-settle rails install.** Rejected: it
+  would let a rail that has already moved funds be "voided" by the ledger
+  while money stays transferred, contradicting the release/finalize rules in
+  `docs/commerce-ledger.md`. A contract change belongs in ADR 020 and is a
+  re-entry criterion, not a side effect of this research.
+- **Purely prose decision with no code.** Considered; the small inert
+  classification and envelope type is kept because it makes the
+  "cannot pass `checkAdapter`" claims test-checked and gives the next slice a
+  fixed envelope shape. It can be dropped without affecting the decision if
+  reviewers prefer docs only.
 
 ## Platform impact
 
-- Migrations: none. Backward compatibility: unaffected; no route, MCP tool,
-  env var or table changes, so the MCP tool count in
-  `internal/mcp/server_test.go` is unchanged.
-- Resources: none at runtime. The new test uses no database
-  (`checkAdapter` is pure), so it runs without `TEST_DATABASE_URL`.
-- Risks: (1) external protocol facts in the record go stale or are wrong --
-  mitigated by version pinning, "not pinned" markers, and a dated
-  "evaluated as of" header; (2) the record is read as authorization to
-  build a rail -- mitigated by the explicit `DEFER_EXTERNAL_PAYMENT`
-  verdict and re-entry criteria; (3) #617 lands with a different conclusion
-  -- the record has an evidence section to update, the verdict holds until
-  criteria 2-4 are met.
+- No migrations, no new routes, no MCP tool changes (the `server_test.go`
+  tool count is unchanged), no env vars.
+- `internal/commerce/rail.go` is unexported from the request path; no
+  behaviour change. `checkAdapter`, `requiredFeatures` and live-funds refusal
+  are untouched and covered by an added test.
+- Risk: the record makes claims about fast-moving third-party protocols.
+  Mitigation: every material claim pinned with revision and access date;
+  unpinned claims excluded from the decision.
+- Risk: the record is read as authorizing real payments. Mitigation: a header
+  stating it authorizes no funds, wallets, payouts or production rails, as the
+  issue requires.
+- Resource impact: none at runtime.
