@@ -15,6 +15,9 @@ anything is committed. This runs that script:
   * against a copy of the chart with the default turned off, so the check
     follows the chart rather than a copy of its default;
   * against this repository's services, which must all pass today;
+  * for the uid it hands to onboard (--uid-out), and through commit-service's
+    own pin block, so an onboarded service passes that sweep with no manual
+    edit (gitops#2149);
 
 and checks that deploy-service runs it between the build and the commit.
 
@@ -34,6 +37,8 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "platform-gitops/argo-workflows/scripts/check-image-user.sh"
 CHART = REPO / "platform-gitops/helm-charts/base-service"
 WFT = REPO / "platform-gitops/argo-workflows/cluster-templates/wft-deploy-service.yaml"
+COMMIT_TPL = REPO / "platform-gitops/argo-workflows/cluster-templates/tpl-git-commit.yaml"
+SERVICE_TEMPLATES = REPO / "platform-gitops/argo-workflows/service-templates"
 
 failures = []
 
@@ -198,6 +203,114 @@ for values in sorted((REPO / "platform-gitops/services").glob("*/*/values.yaml")
           "the image's real uid) so this offline check, and kubelet, can verify it:\n"
           f"{p.stdout}{p.stderr}")
 
+# --uid-out: the pin onboard commits. Written only when the verdict came from
+# a numeric image USER; emptied for every other verdict, so a stale pin from
+# an earlier run can never be committed.
+UID_OUT_CASES = [
+    # (label, values, image user, want file)
+    ("onboard, uid:gid", None, "10001:10001", "10001:10001"),
+    ("onboard, uid only", None, "101", "101"),
+    ("onboard, leading zeros are decimal", None, "0101:007", "101:7"),
+    ("onboard, named group", None, "10001:app", "10001"),
+    ("onboard, named user", None, "app", ""),
+    ("onboard, no USER", None, "", ""),
+    ("security context decides", {"containerSecurityContext": {"runAsNonRoot": True, "runAsUser": 1000}},
+     "10001", ""),
+]
+for label, values, user, want in UID_OUT_CASES:
+    root = checkout(values)
+    out_file = root / "image-user"
+    out_file.write_text("stale:1")
+    try:
+        p = subprocess.run(["sh", str(SCRIPT), "check", "--image-user", user, "--uid-out", str(out_file),
+                            str(root), "labs", "svc", "1.2.3", "ghcr.io/mctlhq/svc"],
+                           capture_output=True, text=True)
+        got = out_file.read_text().strip()
+    finally:
+        shutil.rmtree(root)
+    check(got == want, f"--uid-out {label}: wrote {got!r}, want {want!r}\n{p.stdout}{p.stderr}")
+
+# commit-service's onboard pin block, run verbatim with real yq over each
+# service template the way onboard renders it: with the uid from --uid-out the
+# values pass the repo-wide sweep above (offline, named image user); without
+# it they are refused, so this is a detector both ways. A pin the template
+# already carries is kept.
+commit_src = next(t for t in yaml.safe_load(COMMIT_TPL.read_text())["spec"]["templates"]
+                  if t["name"] == "commit-service")["script"]["source"]
+m = re.search(r"\n( *)# Pin the image's numeric USER.*?\n(\1if \[ -n \"\$IMAGE_USER\" \]; then\n.*?\n\1fi)\n",
+              commit_src, re.S)
+check(m is not None, "commit-service has no image_user pin block")
+onboard = re.search(r'if \[ "\$ACTION" = "onboard" \]; then\n(.*?)\n *elif \[ "\$ACTION" = "deploy" \]', commit_src, re.S)
+check(onboard is not None and m is not None and m.group(2) in onboard.group(1),
+      "the pin block must sit in the onboard branch only: deploy must not touch a hand-set pin")
+check(commit_src.count("PIN_UID") == commit_src.count("PIN_UID", m.start(), m.end()) if m else False,
+      "PIN_UID is used outside the onboard pin block")
+if m and shutil.which("yq"):
+    pin_block = "\n".join(l[len(m.group(1)):] for l in m.group(2).splitlines())
+
+    def onboard_values(tpl, image_user, preset=None):
+        d = pathlib.Path(tempfile.mkdtemp())
+        shutil.copytree(CHART, d / "platform-gitops/helm-charts/base-service")
+        svc = d / "platform-gitops/services/labs/svc"
+        svc.mkdir(parents=True)
+        body = tpl.read_text()
+        for k, v in (("__TEAM_NAME__", "labs"), ("__SERVICE_NAME__", "svc"), ("__IMAGE_TAG__", "1.0.0"),
+                     ("__PORT__", "8080"), ("__HOST__", "svc.example.com")):
+            body = body.replace(k, v)
+        (svc / "values.yaml").write_text(body)
+        if preset is not None:
+            subprocess.run(["yq", "eval", "-i", f".containerSecurityContext.runAsUser = {preset}",
+                            str(svc / "values.yaml")], check=True)
+        p = subprocess.run(["sh", "-c", 'set -e\nDIR="$1"\nIMAGE_USER="$2"\n' + pin_block, "sh",
+                            str(svc), image_user], capture_output=True, text=True)
+        check(p.returncode == 0, f"pin block failed for {tpl.parent.name}: {p.stderr}")
+        return d, yaml.safe_load((svc / "values.yaml").read_text())
+
+    def sweep(root):
+        return subprocess.run(["sh", str(SCRIPT), "check", "--image-user", "app", str(root), "labs", "svc",
+                               "1.2.3"], capture_output=True, text=True)
+
+    templates = sorted(SERVICE_TEMPLATES.glob("*/values.yaml.tpl"))
+    check(templates, "no service templates found")
+    for tpl in templates:
+        for image_user, want_csc, want_rc in (("10001:10001", {"runAsUser": 10001, "runAsGroup": 10001}, 0),
+                                               ("101", {"runAsUser": 101}, 0),
+                                               ("", {}, None)):
+            root, values = onboard_values(tpl, image_user)
+            try:
+                csc = values.get("containerSecurityContext") or {}
+                got = {k: csc[k] for k in ("runAsUser", "runAsGroup") if k in csc}
+                check(got == want_csc, f"{tpl.parent.name} onboard with {image_user!r}: pinned {got}, want {want_csc}")
+                p = sweep(root)
+                if want_rc is not None:
+                    check(p.returncode == want_rc,
+                          f"{tpl.parent.name} onboarded with {image_user!r} fails the sweep:\n{p.stdout}{p.stderr}")
+                else:
+                    check(p.returncode != 0,
+                          f"{tpl.parent.name} with no pin passes the sweep; the case above proves nothing")
+            finally:
+                shutil.rmtree(root)
+        root, values = onboard_values(tpl, "10001:10001", preset=1000)
+        try:
+            check(values["containerSecurityContext"]["runAsUser"] == 1000,
+                  f"{tpl.parent.name}: the onboard pin overwrote a runAsUser the template carries")
+        finally:
+            shutil.rmtree(root)
+elif m:
+    failures.append("yq not on PATH: the onboard pin block was not exercised")
+
+# commit-service refuses an image_user that is not a uid with an optional
+# numeric gid, before anything reaches yq.
+v = re.search(r'\n( *)(if \[ -n "\$IMAGE_USER" \]; then\n *reject_multiline "image_user".*?\n\1fi)\n', commit_src, re.S)
+r = re.search(r"^ *(reject_multiline\(\) \{\n.*?\n *\})$", commit_src, re.S | re.M)
+check(v is not None and r is not None, "commit-service has no image_user validation")
+if v and r:
+    for value, ok in (("10001", True), ("10001:10001", True), ("0", False), ("10001:", False),
+                      ("app", False), ("10001:app", False), ("1 | .image.tag = 1", False), ("10001\n2", False)):
+        p = subprocess.run(["sh", "-c", r.group(1) + "\n" + v.group(2), "sh"], env={"IMAGE_USER": value, "PATH": "/usr/bin:/bin"},
+                           capture_output=True, text=True)
+        check((p.returncode == 0) == ok, f"image_user {value!r}: exit {p.returncode}, want {'accept' if ok else 'refuse'}")
+
 # Every registry call is bounded and retried: the step gates the commit, so a
 # stalled registry must not hang the deploy. Each curl goes through http().
 src = SCRIPT.read_text()
@@ -218,12 +331,29 @@ check(task is not None, "deploy-service has no check-image-user task")
 if task:
     check({"validate", "build-image"} <= set(task.get("dependencies", [])),
           f"check-image-user must follow validate and build-image: {task.get('dependencies')}")
-    check("update-config" in task.get("when", ""), f"check-image-user must skip update-config: {task.get('when')}")
+    # commit reads its output, and a task skipped by `when` has none to
+    # resolve; update-config is skipped inside the step instead.
+    check("when" not in task, f"check-image-user must not be skipped by `when`: {task.get('when')}")
 check("check-image-user" in tasks.get("commit", {}).get("dependencies", []),
       "commit must depend on check-image-user")
+commit_args = {a["name"]: a["value"] for a in tasks.get("commit", {}).get("arguments", {}).get("parameters", [])}
+check(commit_args.get("image_user") == "{{tasks.check-image-user.outputs.parameters.image_user}}",
+      f"commit must receive check-image-user's image_user: {commit_args.get('image_user')}")
 body = next((t for t in wft["spec"]["templates"] if t["name"] == "check-image-user"), None)
 check(body is not None and "check-image-user.sh check" in body["script"]["source"],
       "the check-image-user template must run check-image-user.sh check")
+if body is not None:
+    src_body = body["script"]["source"]
+    outs = {o["name"]: o for o in body.get("outputs", {}).get("parameters", [])}
+    out_path = outs.get("image_user", {}).get("valueFrom", {}).get("path")
+    check(out_path is not None and f"--uid-out {out_path}" in src_body,
+          f"check-image-user must write its image_user output with --uid-out: {out_path}")
+    check(outs.get("image_user", {}).get("valueFrom", {}).get("default") == "",
+          "the image_user output needs an empty default")
+    skip = src_body.find('"$PARAM_ACTION" = "update-config"')
+    check(0 <= skip < src_body.find("check-image-user.sh check")
+          and f": > {out_path}" in src_body[:skip],
+          "check-image-user must empty its output and exit for update-config before checking")
 check(body is not None and body.get("activeDeadlineSeconds"),
       "the check-image-user template must carry an activeDeadlineSeconds")
 # The registry budget fits inside that deadline with room for the clone and
