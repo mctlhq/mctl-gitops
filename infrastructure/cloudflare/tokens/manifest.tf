@@ -244,6 +244,12 @@ locals {
       name     = "tempo-traces (observability-eval Tempo, bucket-scoped)"
       policies = [{ permission_groups = [local.pg.r2_bucket_item_write], resources = { "${local.r2_bucket}tempo-traces" = "*" } }]
     },
+    {
+      # Created 2026-10-24 with the rules.mctl.ai launch (gitops#2131); keys
+      # live in Vault teams/labs/mctl-rules.
+      name     = "mctl-rules-artifacts (labs mctl-rules app)"
+      policies = [{ permission_groups = [local.pg.r2_bucket_item_write], resources = { "${local.r2_bucket}mctl-rules-artifacts" = "*" } }]
+    },
 
     # --- Created from the dashboard's R2 page, all named "R2 Account Token" ---
     # Inventoried as found on 2026-10-16. Three of them can write every bucket
