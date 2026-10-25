@@ -39,3 +39,12 @@ env:
   NEWS_RESEARCH_HOUR: "8"
   NEWS_PUBLISH_HOUR: "10"
   NEWS_BROWSER_ENABLED: "true"
+externalSecret:
+  targetSecret: news-factory-secrets
+  data:
+    - secretKey: NEWS_FACTORY_TOKEN
+      remoteKey: teams/namax66/news-factory
+      property: NEWS_FACTORY_TOKEN
+envFrom:
+  - secretRef:
+      name: news-factory-secrets
