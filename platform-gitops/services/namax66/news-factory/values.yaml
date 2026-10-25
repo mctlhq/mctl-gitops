@@ -1,0 +1,41 @@
+# Worker: news-factory
+# Team: namax66
+# Chart: base-service (ingress disabled)
+
+image:
+  repository: ghcr.io/mctlhq/news-factory
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+ingress:
+  enabled: false
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 15
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 60
+    periodSeconds: 15
+env:
+  NEWS_API_BASE: https://sales-with.ai/api/ai
+  NEWS_SCHEDULE_ENABLED: "false"
+  NEWS_RESEARCH_HOUR: "8"
+  NEWS_PUBLISH_HOUR: "10"
+  NEWS_BROWSER_ENABLED: "true"
