@@ -270,6 +270,29 @@ spec:
 
           kube-state-metrics:
             enabled: true
+            # Pin `instance` to a constant. It is the only label tied to the
+            # kube-state-metrics pod, so a reschedule (10.42.6.188 ->
+            # 10.42.5.158 on 2026-10-24) re-created every object series, and
+            # VictoriaMetrics' increase() counted each new series' first
+            # sample as growth: alerts and panels showed whole restart
+            # histories as fresh restarts. Collapsing `instance` in queries
+            # fixes it one query at a time and costs a subquery; a 24h:1m
+            # subquery over a 7d panel OOM-killed vmsingle (mctl-gitops#2137).
+            # Safe only while replicas == 1: a second replica would write to
+            # the same series. endpoints is a list, so the chart default is
+            # restated in full (chart 0.72.5 values.yaml).
+            vmScrape:
+              spec:
+                endpoints:
+                  - port: http
+                    honorLabels: true
+                    relabelConfigs:
+                      - action: replace
+                        targetLabel: instance
+                        replacement: kube-state-metrics
+                    metricRelabelConfigs:
+                      - action: labeldrop
+                        regex: (uid|container_id|image_id)
             resources:
               # 2026-10-20: 7d peak working set 173Mi (90% of 192Mi).
               requests:

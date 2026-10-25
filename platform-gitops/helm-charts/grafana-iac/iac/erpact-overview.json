@@ -155,7 +155,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase((max by (namespace,pod,container)(kube_pod_container_status_restarts_total{namespace=\"erpact\"}))[24h:1m])) or vector(0)",
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"erpact\"}[24h])) or vector(0)",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -689,7 +689,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (pod, container) (increase((max by (namespace,pod,container)(kube_pod_container_status_restarts_total{namespace=\"erpact\",pod=~\"$pod\"}))[1h:1m])) > 0",
+          "expr": "sum by (pod, container) (increase(kube_pod_container_status_restarts_total{namespace=\"erpact\",pod=~\"$pod\"}[1h])) > 0",
           "legendFormat": "{{pod}}/{{container}}",
           "datasource": {
             "type": "prometheus",

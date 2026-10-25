@@ -71,7 +71,7 @@
             "type": "prometheus",
             "uid": "erpact-metrics"
           },
-          "expr": "sum(increase((max by (namespace,pod,container)(kube_pod_container_status_restarts_total))[24h:1m])) or vector(0)",
+          "expr": "sum(increase(kube_pod_container_status_restarts_total[24h])) or vector(0)",
           "instant": true
         }
       ],
@@ -268,7 +268,7 @@
             "type": "prometheus",
             "uid": "erpact-metrics"
           },
-          "expr": "sum by (pod, container) (increase((max by (namespace,pod,container)(kube_pod_container_status_restarts_total))[1h:1m])) > 0",
+          "expr": "sum by (pod, container) (increase(kube_pod_container_status_restarts_total[1h])) > 0",
           "legendFormat": "{{pod}}/{{container}}"
         }
       ]
