@@ -2311,7 +2311,7 @@ data:
               },
               "editorMode": "code",
               "exemplar": true,
-              "expr": "sum(increase(kube_pod_container_status_restarts_total{cluster=~\"$cluster\"}[$__rate_interval])) by(namespace,cluster) > 0",
+              "expr": "sum(increase((max by (cluster,namespace,pod,container)(kube_pod_container_status_restarts_total{cluster=~\"$cluster\"}))[$__rate_interval:1m])) by(namespace,cluster) > 0",
               "interval": "",
               "legendFormat": "{{ namespace }}",
               "range": true,

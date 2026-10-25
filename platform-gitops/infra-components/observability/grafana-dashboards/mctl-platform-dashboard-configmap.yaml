@@ -212,7 +212,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "sum(increase(kube_pod_container_status_restarts_total[1h]))",
+              "expr": "sum(increase((max by (namespace,pod,container)(kube_pod_container_status_restarts_total))[1h:1m]))",
               "legendFormat": "Restarts"
             }
           ]
@@ -345,7 +345,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\",pod=~\"$pod\"}[1h]))",
+              "expr": "sum(increase((max by (namespace,pod,container)(kube_pod_container_status_restarts_total{namespace=~\"$namespace\",pod=~\"$pod\"}))[1h:1m]))",
               "legendFormat": "Restarts"
             }
           ]
