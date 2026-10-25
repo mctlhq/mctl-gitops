@@ -5,6 +5,11 @@ tenant:
   name: namax66
   displayName: "namax66"
   description: "ai news"
+  # TEMPORARY, revert by 2026-11-01: news-factory runs Chromium with its own
+  # sandbox, which needs seccomp Unconfined, and baseline forbids that. Kept
+  # for one week so the tenant can switch to --no-sandbox; then back to the
+  # default (baseline) by reverting this PR.
+  podSecurityLevel: privileged
   members:
     - userId: NaMax66
       principalId: prn_01M5SBQPSN5MTH8N1TTY4PPT6X
