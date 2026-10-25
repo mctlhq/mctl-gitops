@@ -101,11 +101,12 @@ tenant:
     # Allow egress to cluster-internal services (Vault, ArgoCD, DNS, etc.)
     allowClusterEgress: true
     # Allow egress to the internet (0.0.0.0/0)
-    # Closed by default; opt in per tenant (admin/platform teams, services
-    # calling external APIs). Argo Workflow pods get internet egress
-    # unconditionally via allow-workflow-internet-egress, so builds/deploys
-    # work either way. All existing tenants set this explicitly.
-    allowInternetEgress: false
+    # Open by default (owner decision, 2026-10-25): tenant workloads such as
+    # background workers routinely call external APIs, and a closed default
+    # made every new workspace file a request first. RFC1918 and the node
+    # public CIDRs stay excluded, so cluster and node isolation is unchanged.
+    # Opt out per tenant with false. All existing tenants set this explicitly.
+    allowInternetEgress: true
     # -- Node public addresses, excluded from the internet-egress rules.
     # The private-subnet exceptions in allow-cluster-egress do not cover these:
     # a pod with internet egress can otherwise reach a node's public IP, where
