@@ -571,6 +571,14 @@ jobs:
         # so the block's own text is replayed here.
         run: python3 tests/test_cwft_shepherd_commit_pathspecs.py
 
+      - name: Unit-test the shepherd's verify and Telegram gates
+        # post-deploy-verify runs only after a tick that may have merged, and
+        # a Succeeded tick reaches Telegram only with a terminal transition.
+        # Both read markers commit-and-push derives from the staged diff; the
+        # three scripts are run from the template against real git and jq,
+        # with kubectl, curl and sleep stubbed.
+        run: python3 tests/test_cwft_shepherd_verify_gate.py
+
       - name: Unit-test the mctl-agents-approve reviewed-digest binding
         # The approval flip must refuse an empty or mismatched digest and
         # never self-bind to bytes first seen at flip time (gitops#1979).

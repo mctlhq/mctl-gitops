@@ -202,6 +202,32 @@ tests:
                 last 30 minutes. Check its last termination reason and logs
                 ({namespace="tracing"} in Loki).
 
+  # Restarts in the gap while kube-state-metrics moves to a new pod IP (the
+  # instance label): per instance this reads as 1 + 0, collapsed it is 0 -> 2.
+  # The false positive the same change removes is VictoriaMetrics-only; see
+  # the comment on the matching cases in mctl-alice-alerts_test.yaml.
+  - interval: 1m
+    name: restarts that straddle a kube-state-metrics move still count
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="tracing",container="tempo",pod="tempo-0",instance="10.42.6.188:8080"}'
+        values: '0x5 1x3 _x12'
+      - series: 'kube_pod_container_status_restarts_total{namespace="tracing",container="tempo",pod="tempo-0",instance="10.42.5.158:8080"}'
+        values: '_x9 2x11'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TempoRestarting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: tempo
+              pod: tempo-0
+            exp_annotations:
+              summary: "Tempo is restarting repeatedly"
+              description: >-
+                tempo-0 restarted 2 times in the
+                last 30 minutes. Check its last termination reason and logs
+                ({namespace="tracing"} in Loki).
+
   # ---------------------------------------------------------------------
   # Ingest: TempoIngestRefused / TempoDiscardedSpans
   # ---------------------------------------------------------------------

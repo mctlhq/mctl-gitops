@@ -1230,12 +1230,15 @@ spec:
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
           TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
 
-          # Telegram leg. Skip a Succeeded run that found nothing to do —
-          # an unconditional ✅ on every empty-queue run drowned out real
-          # activity. Failed/Error/Unknown always notify regardless of
-          # activity.
-          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_ACTIVITY" = "none" ]; then
-            echo "ℹ️  Succeeded with no activity (empty proposal queue) — skipping Telegram leg."
+          # Telegram leg: failures only.
+          # A DevLoop item used to produce a ✅ from investigate, another from
+          # implement, and one per shepherd tick: 2026-10-19..24 carried more than
+          # 100 of them against a handful of real outcomes. The outcome a human
+          # acts on is the PR's terminal state, which shepherd reports once
+          # (merged / rejected / review-stuck); a Succeeded run here is a step
+          # on the way and stays silent. Failed/Error/Unknown always notify.
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ]; then
+            echo "ℹ️  Succeeded (activity=${WORKFLOW_ACTIVITY}) — shepherd reports the PR outcome; skipping Telegram leg."
           elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
               -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \

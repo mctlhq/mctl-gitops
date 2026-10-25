@@ -207,6 +207,58 @@ tests:
         alertname: ContainerOOMKilled
         exp_alerts: []
 
+  # kube-state-metrics rescheduled (new pod IP, so a new instance label) with
+  # no new OOMKill. lastState still says OOMKilled, so only the restart join
+  # stands between this and an alert for every pod that ever OOMed. In
+  # VictoriaMetrics a per-instance increase() reads the new series' first
+  # sample as growth and fired here; promtool's increase() does not, so this
+  # case only holds the shape. The next one is red without the fix.
+  - interval: 1m
+    name: kube-state-metrics moving to a new instance does not re-raise an old OOMKill
+    input_series:
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service",reason="OOMKilled",instance="10.42.6.188:8080"}'
+        values: '1x4 _x6'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service",reason="OOMKilled",instance="10.42.5.158:8080"}'
+        values: '_x5 1x5'
+      - series: 'kube_pod_container_status_restarts_total{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service",instance="10.42.6.188:8080"}'
+        values: '3x4 _x6'
+      - series: 'kube_pod_container_status_restarts_total{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service",instance="10.42.5.158:8080"}'
+        values: '_x5 3x5'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ContainerOOMKilled
+        exp_alerts: []
+
+  - interval: 1m
+    name: an OOMKill restart during a kube-state-metrics move still alerts
+    input_series:
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service",reason="OOMKilled",instance="10.42.5.158:8080"}'
+        values: '_x5 1x5'
+      - series: 'kube_pod_container_status_restarts_total{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service",instance="10.42.6.188:8080"}'
+        values: '0x4 _x6'
+      - series: 'kube_pod_container_status_restarts_total{namespace="admins",pod="admins-mctl-agents-worker-base-service-1",container="base-service",instance="10.42.5.158:8080"}'
+        values: '_x5 1x5'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ContainerOOMKilled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: admins
+              pod: admins-mctl-agents-worker-base-service-1
+              container: base-service
+            exp_annotations:
+              summary: >-
+                Container base-service in admins/admins-mctl-agents-worker-base-service-1
+                was OOMKilled
+              description: >-
+                The container hit its memory limit and the kernel killed it.
+                A node-level memory alert will not catch this: the container
+                dies at its own limit long before the node is under pressure,
+                and the spike collapses within minutes. Compare
+                container_memory_rss against container_spec_memory_limit_bytes
+                for this pod, then either raise the limit or find what grew.
+
   # ---------------------------------------------------------------------
   # mctl.tenant-quotas. The kubelet exports container usage twice
   # (/metrics/cadvisor and /metrics/resource); only the cAdvisor copy counts.

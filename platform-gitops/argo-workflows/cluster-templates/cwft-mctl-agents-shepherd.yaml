@@ -1034,13 +1034,28 @@ spec:
           ALLOWED_RE='^platform-gitops/agents-state/(.+/\.status\.yaml|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$'
 
           # /tmp/onexit is the onExit channel, collected as an optional artifact.
+          #
+          # Besides `activity` it carries two files post-deploy-verify and
+          # notify-telegram read:
+          #   merged          — "yes" when a .status.yaml in this commit flips
+          #                     to merged, "no" when it provably does not, and
+          #                     "unknown" (the seed) on any path that exits
+          #                     before deciding. Only "no" lets post-deploy-verify
+          #                     skip; a refused handoff stays "unknown" and is
+          #                     verified as before.
+          #   transitions.txt — one "<status> <path>" line per terminal flip
+          #                     (merged / rejected / review-stuck), the only
+          #                     outcomes a succeeded tick reports to Telegram.
           mkdir -p /tmp/onexit
+          printf %s unknown > /tmp/onexit/merged
+          : > /tmp/onexit/transitions.txt
 
           if [ ! -d /artifact ] \
              || { [ -z "$(find /artifact/tree -type f -print -quit 2>/dev/null)" ] \
                   && [ ! -s /artifact/deleted.lst ]; }; then
             echo "ℹ️  No agents-state updates handed off — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
+            printf %s no > /tmp/onexit/merged
             exit 0
           fi
 
@@ -1100,6 +1115,7 @@ spec:
           if [ -z "$AGENT_STATE_CHANGES" ]; then
             echo "ℹ️  No agents-state updates — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
+            printf %s no > /tmp/onexit/merged
             exit 0
           fi
 
@@ -1137,8 +1153,25 @@ spec:
             # change git ignores).
             echo "ℹ️  No status updates after staging — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
+            printf %s no > /tmp/onexit/merged
             exit 0
           fi
+
+          # Written before the commit and push, not after: the merge already
+          # happened on GitHub inside run-shepherd, so a push that fails below
+          # must not make this tick look merge-free to post-deploy-verify.
+          record_transitions() {
+            git diff --cached -U0 -- "$SPEC_STATUS" \
+              | awk '/^\+\+\+ b\//{p=substr($0,7)} /^\+status:/{print $2, p}' \
+              | tr -d "\"'" \
+              | grep -E '^(merged|rejected|review-stuck) ' > /tmp/onexit/transitions.txt || true
+            if grep -q '^merged ' /tmp/onexit/transitions.txt; then
+              printf %s yes > /tmp/onexit/merged
+            else
+              printf %s no > /tmp/onexit/merged
+            fi
+          }
+          record_transitions
 
           DATE=$(date -u +%Y-%m-%d)
           if [ -n "$WORKFLOW_SLUG" ]; then
@@ -1208,6 +1241,20 @@ spec:
       inputs:
         parameters:
           - name: started_at
+        artifacts:
+          # Whether this tick merged anything, and whether the shepherd attempt
+          # itself finished. Same literal keys notify-telegram reads; both
+          # optional, and an absent file reads as "unknown", which verifies.
+          - name: activity
+            path: /onexit/commit
+            optional: true
+            s3:
+              key: "{{workflow.name}}/onexit-activity.tgz"
+          - name: shepherd-status
+            path: /onexit/shepherd
+            optional: true
+            s3:
+              key: "{{workflow.name}}/onexit-shepherd-status.tgz"
       outputs:
         artifacts:
           # The onExit channel for every signal this step produces. Same
@@ -1260,11 +1307,40 @@ spec:
           : > /tmp/onexit/degraded.txt
           : > /tmp/onexit/degraded_unfiltered.txt
 
-          # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
-          # plus a buffer for the per-resource health re-evaluation pass
-          # that runs on the next tick after a sync.
-          echo "Sleeping 300s for ArgoCD to reconcile post-merge…"
-          sleep 300
+          # Verify only a tick that may have merged something. Before this,
+          # every tick slept 300s and then failed on ANY app that went Degraded
+          # after the workflow started, merge or not: on 2026-10-23 about 60
+          # ticks failed in nine hours, each blaming a flapping
+          # argocd/labs-mctl-telegram on a run that had only addressed review
+          # comments. Skipping needs both facts positively: commit-and-push
+          # recorded merged=no AND the shepherd attempt reported succeeded. A
+          # missing file, "unknown", or a crashed attempt (which may have
+          # merged before it died) all verify exactly as before.
+          MERGED=$(cat /onexit/commit/merged 2>/dev/null || echo "unknown")
+          SHEPHERD_STATUS=$(cat /onexit/shepherd/shepherd_status 2>/dev/null || echo "unknown")
+          SKIP_VERIFY=""
+          if [ "$MERGED" = "no" ] && [ "$SHEPHERD_STATUS" = "succeeded" ]; then
+            SKIP_VERIFY=1
+            echo "No merge this tick (merged=no, shepherd=succeeded) — skipping the post-merge wait and Degraded check."
+          else
+            echo "merged=${MERGED} shepherd=${SHEPHERD_STATUS} — verifying."
+            # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
+            # plus a buffer for the per-resource health re-evaluation pass
+            # that runs on the next tick after a sync.
+            echo "Sleeping 300s for ArgoCD to reconcile post-merge…"
+            sleep 300
+          fi
+
+          # The unfiltered snapshot gates incident resolution in onExit, so a
+          # skipped verification still has to produce it. See the note at the
+          # end of this script.
+          write_unfiltered() {
+            printf '%s' "$1" | jq -r '
+              .items[]
+              | select(.status.health.status == "Degraded")
+              | "\(.metadata.namespace)/\(.metadata.name)"
+            ' | tr '\n' ' ' > /tmp/onexit/degraded_unfiltered.txt
+          }
 
           THRESHOLD="${STARTED_AT}"
           echo "Listing applications that became Degraded after ${THRESHOLD}…"
@@ -1297,6 +1373,12 @@ spec:
             printf 'kubectl-failed' > /tmp/onexit/verify_status
             echo "kubectl-failed (rc=$RC)" > /tmp/onexit/degraded.txt
             exit 1
+          fi
+
+          if [ -n "$SKIP_VERIFY" ]; then
+            write_unfiltered "$RAW"
+            printf 'skipped' > /tmp/onexit/verify_status
+            exit 0
           fi
 
           # Compare timestamps as epoch seconds, not strings.
@@ -1349,11 +1431,7 @@ spec:
           # uses this unfiltered list, not the filtered degraded.txt, to
           # decide whether it's safe to resolve the shepherd fingerprint.
           FRESH="${RAW2:-$RAW}"
-          printf '%s' "$FRESH" | jq -r '
-            .items[]
-            | select(.status.health.status == "Degraded")
-            | "\(.metadata.namespace)/\(.metadata.name)"
-          ' | tr '\n' ' ' > /tmp/onexit/degraded_unfiltered.txt
+          write_unfiltered "$FRESH"
 
           # Last line of the script, deliberately: everything above this
           # point can fail, and until it is reached the verdict stays
@@ -1496,6 +1574,9 @@ spec:
           #                    the grace period
           #   degraded       — ran, apps still Degraded; list in degraded.txt
           #   kubectl-failed — ran, could not read Applications 3× in a row
+          #   skipped        — the tick merged nothing, so there was nothing
+          #                    to verify; degraded_unfiltered.txt is still
+          #                    written
           #   incomplete     — the step was killed or errored out before its
           #                    last line, or the file is absent entirely
           #
@@ -1528,6 +1609,15 @@ spec:
           # itself never completed. See run-shepherd for where this is
           # written.
           SHEPHERD_STATUS=$(cat /onexit/shepherd/shepherd_status 2>/dev/null || echo "unknown")
+
+          # Terminal proposal flips this tick committed, "<status> <path>" per
+          # line (see commit-and-push). Rendered as "<status>: <service>/<slug>".
+          TRANSITIONS=$(sed -E \
+            -e 's#platform-gitops/agents-state/##' \
+            -e 's#/proposals/#/#' \
+            -e 's#/\.status\.yaml$##' \
+            -e 's#^([a-z-]+) #\1: #' \
+            /onexit/commit/transitions.txt 2>/dev/null)
 
           # Stable dedup key for this recurring job. Two failures of the same
           # {service, slug} scope collapse into one open incident instead of
@@ -1588,14 +1678,20 @@ spec:
           if [ -n "$VERIFY_NOTE" ]; then
             TEXT=$(printf '%s\n⚠️ %s' "$TEXT" "$VERIFY_NOTE")
           fi
+          if [ -n "$TRANSITIONS" ]; then
+            TEXT=$(printf '%s\n%s' "$TEXT" "$TRANSITIONS")
+          fi
 
-          # Telegram leg. Skip a Succeeded run that transitioned nothing —
-          # at the hourly cadence that's the steady-state outcome, and an
-          # unconditional ✅ every hour drowned out real merges/rejections.
-          # Failed/Error/Unknown (incl. a post-deploy-verify degraded-apps
-          # failure) always notify regardless of activity.
-          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_ACTIVITY" = "none" ]; then
-            echo "ℹ️  Succeeded with no activity (no proposal transitions) — skipping Telegram leg."
+          # Telegram leg. A Succeeded run reports only a terminal outcome —
+          # merged, rejected or review-stuck — so each PR produces one message
+          # when it is done instead of one per tick. Skipping on
+          # activity=none alone was not enough: a proposal in review-fixing
+          # commits a .status.yaml update on every tick, and 2026-10-19..24
+          # carried four ✅ per PR (issue-64, -74, -781, -1979) that said
+          # nothing but "still working". Failed/Error/Unknown (incl. a
+          # post-deploy-verify degraded-apps failure) always notify.
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -z "$TRANSITIONS" ]; then
+            echo "ℹ️  Succeeded with no terminal transition (activity=${WORKFLOW_ACTIVITY}) — skipping Telegram leg."
           elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             # JSON-encoded with jq, not shell interpolation. $TEXT carries the
             # slug, the service name and the degraded-app list, so a double
