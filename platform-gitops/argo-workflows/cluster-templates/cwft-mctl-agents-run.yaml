@@ -895,12 +895,13 @@ spec:
           UI_URL="https://workflows.mctl.ai/workflows/argo-workflows/${WORKFLOW_NAME}"
           TEXT="${ICON} mctl-agents: ${SUBJECT} — ${WORKFLOW_STATUS} (${WORKFLOW_DURATION}s)\n${UI_URL}"
 
-          # Telegram leg. Suppress the routine "✅ Succeeded" ping for the
-          # incident-responder cron — it fires up to 24x/day and a clean
-          # triage run needs no human attention; Failed/Error still notifies
-          # for every mode, and other modes' Succeeded pings are untouched.
-          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_MODE" = "incident-responder" ]; then
-            echo "ℹ️  Suppressing Succeeded ping for incident-responder (routine run)."
+          # Telegram leg: failures only, for every mode. incident-responder
+          # was silenced first (up to 24 runs a day); the daily `full` and
+          # single-service runs are just as routine, and what they produce
+          # (proposals) reaches a human through the shepherd's terminal
+          # report. Failed/Error/Unknown still notify for every mode.
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ]; then
+            echo "ℹ️  Suppressing Succeeded ping for ${WORKFLOW_MODE} (routine run)."
           elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             curl -s -o /dev/null -w 'telegram http=%{http_code}\n' \
               -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
