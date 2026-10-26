@@ -9,6 +9,8 @@
 - [ ] 2. Wire provenance into `UsageRecorder` (depends on 1): add a `provenance` constructor arg, resolve it in
   `from_env` (scoped value, else `os.environ`), and in `_plan` set `provider` and `price_source` for third-party
   sessions. Add the `_FORBIDDEN_COST_FIELDS` guard.
+  Add the optional `session_env` to `UsageRecorder.from_env` and to `tracing.agent_run(..., session_env=None)`,
+  and pass `options.env` from the investigator and implementer call sites.
   DoD: default records are unchanged byte for byte. Third-party records carry the declared `provider` and
   `price_source` and ignore `ModelUsage.provider`. No record ever carries a cost field.
 - [ ] 3. Collector parity in `orchestrator/run_usage_collector.py` (depends on 1): add `price_source` to
@@ -48,6 +50,10 @@
 - [ ] T6. `tests/test_usage_collector*` (the existing collector test module): `price_source` is forwarded when
   valid and dropped with a warning when invalid. The rest of the batch is still sent.
 - [ ] T7. `tests/test_tracing_agents.py`: `gen_ai.provider.name` follows the provenance.
+- [ ] T9. A recorder built through `tracing.agent_run(..., session_env={"ANTHROPIC_BASE_URL":
+  "https://inference.hetzner.com/api"})`, with `os.environ` holding no base URL and no `attribute_model`, records
+  `provider="unknown"` and `price_source="unknown"`. With `session_env` holding no base URL, the record is
+  today's.
 - [ ] T8. The scoped provenance does not leak: after the `with attribute_model(...)` block, a new recorder
   resolves the default.
 

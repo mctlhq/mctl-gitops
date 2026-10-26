@@ -64,9 +64,18 @@ Deployed state checked:
   style as `correlate`. A lane wraps its `anyio.run` in it, using the `env` it put into `ClaudeAgentOptions`.
   The provenance comes from the session env, not from the runner's process env, because the base URL may exist
   only in the options env.
-- `UsageRecorder.__init__` gains `provenance: ModelProvenance | None`. `from_env` resolves it in this order:
-  the scoped `_PROVENANCE`, else `provenance_for_env(os.environ)`. That way a process-wide override is also
-  caught.
+- `UsageRecorder.__init__` gains `provenance: ModelProvenance | None`. `from_env` gains an optional
+  `session_env: Mapping[str, str] | None` and resolves provenance in this order:
+  1. the scoped `_PROVENANCE`;
+  2. `provenance_for_env({**os.environ, **session_env})` when a session env is given;
+  3. `provenance_for_env(os.environ)`.
+  `tracing.agent_run(agent, model, *, session_env=None)` threads `session_env` through to `from_env`. Callers
+  that build `ClaudeAgentOptions` pass `options.env`: `run_issue_investigator.py` ~L2537,
+  `run_implementer.py` ~L2710. This matters because the provider seam of mctlhq/mctl-agents#824 sets
+  `ANTHROPIC_BASE_URL` only in `options.env`. A provider session that nobody wrapped in `attribute_model`
+  must still fail closed to `unknown`/`unknown`. Without this it would be recorded with the CLI's
+  `firstParty` provider and priced from the Anthropic catalog. A process-wide override is still caught by
+  step 3.
 - `_plan`:
   - Third-party provenance: `record["provider"] = provenance.provider` and
     `record["price_source"] = provenance.price_source`. The CLI's `ModelUsage.provider` is ignored, and
