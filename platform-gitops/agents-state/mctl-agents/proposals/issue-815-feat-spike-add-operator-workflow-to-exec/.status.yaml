@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-26T13:48:30Z'
+status: merged
+updated_at: '2026-10-26T14:02:37Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-aca7f3de037fa63c
@@ -26,7 +26,8 @@ approval:
   approval_ref: aar_fd4bb3ee838d48e29da14a4fc6387f64
 pr: https://github.com/mctlhq/mctl-agents/pull/816
 github:
-  state: open
-  observed_at: '2026-10-26T13:18:21Z'
-  head_sha: 4f0cdd921e50e797305d1be45dc22f8c43791d3c
-review_attempts: 5
+  state: merged
+  head_sha: 01aa73cd18b5ba0f7046f7e2344cd56981de0481
+  observed_at: '2026-10-26T14:02:37Z'
+merged_at: '2026-10-26T14:02:37Z'
+merge_commit: 53d0ff47138629675e24d0f6b865098312457387
