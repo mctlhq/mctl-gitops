@@ -47,12 +47,28 @@ not part of this proposal.
 - WHILE a session targets a provider THE SYSTEM SHALL blank every Anthropic credential
   (`ANTHROPIC_API_KEY`, `ANTHROPIC_API_KEY_SECONDARY`, `CLAUDE_CODE_OAUTH_TOKEN`,
   `CLAUDE_CODE_OAUTH_TOKEN_SECONDARY`, and any other inherited `ANTHROPIC_*` value it does not set itself),
-  and blank the raw `credential_env` variable in the child env.
+  and blank the raw `credential_env` variable in the child env. The child env here is the **effective** env
+  the CLI receives: the inherited process environment overlaid with the builder's `options.env`, because the
+  SDK layers `env` over `os.environ`. A builder that passes a sparse `env` SHALL NOT let an inherited
+  Anthropic credential through.
+- WHILE a session targets a provider THE SYSTEM SHALL set `CLAUDE_CONFIG_DIR` to an empty per-session
+  directory, so the CLI cannot read a stored Anthropic login from the worker's home and send it to the
+  third-party `base_url`.
+- WHEN the session env is checked for surviving Anthropic credential values THE SYSTEM SHALL ignore original
+  values that are empty, so an inherited `ANTHROPIC_API_KEY=""` does not fail a session that leaks nothing.
 - IF the env var named by `credential_env` is unset or empty when a provider session is built THEN THE
   SYSTEM SHALL raise and build no session. It SHALL NOT fall back to Anthropic.
 - WHILE a selection carries a provider THE SYSTEM SHALL refuse it on any path that consumes only a model
   string (the `config/settings.py` module constants), so the provider cannot be dropped silently.
 - WHEN no profile declares a provider THE SYSTEM SHALL produce session options identical to today's.
+- WHEN a plan is resolved THE SYSTEM SHALL compute `model_policy_version` from the policy file that was
+  actually loaded (`MODEL_POLICY_PATH` when set, else the committed default), so the pin always covers the
+  file that supplied the provider endpoint. With `MODEL_POLICY_PATH` unset the value is unchanged.
+- WHEN a plan carrying a provider is logged THE SYSTEM SHALL include the provider `name` and `base_url` in
+  `ExecutionPlan.to_log_dict()`.
+- IF a module-level selection in `config/settings.py` resolves to a provider profile THEN THE SYSTEM SHALL
+  fail at import, which stops the whole worker process rather than one task. This is intended fail-closed
+  behaviour and SHALL be documented as such.
 - WHEN the offline test suite runs THE SYSTEM SHALL include a test that builds a provider session from a
   fixture policy targeting `https://inference.hetzner.com/api`, with an environment seeded with every
   Anthropic credential, and asserts that no Anthropic credential value appears anywhere in the resulting
@@ -69,15 +85,15 @@ not part of this proposal.
 - Provisioning the Hetzner credential in Vault/ExternalSecrets or the Argo workflow templates (mctl-gitops).
 - Removing or refactoring `tools/hetzner_inference_spike.py`.
 
+## Decisions (owner review, 2026-10-27)
+- A non-`https` `base_url` is rejected, including loopback. Tests use an `https://` URL and make no network
+  call.
+- The Hetzner profile lives only in a test fixture until adoption. The committed policy and the
+  `model_policy_version` of existing plans do not change.
+- `GITHUB_TOKEN`/`GH_TOKEN` stay as they are in this change, because no task is routed to a provider. Before
+  any task is routed to a provider profile (adoption), the provider session must either blank them or get a
+  read-only token. This is a precondition of adoption, not part of this change.
+
 ## Open questions
-- Should a provider session also blank `GITHUB_TOKEN`/`GH_TOKEN`? The spike did, but production builders
-  such as the implementer need them for `git`/`gh`. This proposal keeps them as they are and treats blanking
-  them as a separate decision about how much the third-party model is trusted.
-- Should a non-`https` `base_url` be allowed for loopback test servers? The proposal rejects it. Tests use
-  an `https://` URL and make no network call.
-- Should the committed `config/model-policy.yaml` define an `experimental_hetzner` profile with no task
-  routed to it, or should the Hetzner profile live only in a test fixture until adoption? The proposal
-  ships it in a test fixture only, so the committed policy and the `model_policy_version` of existing plans
-  do not change.
 - Which string-only call sites (e.g. `SERVICE_AGENT_MODEL` in `run_service_agent.py`, `run_implementer.py`)
   should later learn to carry a provider? For now they fail closed when routed to one.

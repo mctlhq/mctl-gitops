@@ -15,14 +15,17 @@
   `config/model_policy.py`. It blanks every `ANTHROPIC_*` key, `CLAUDE_CODE_OAUTH_TOKEN*` and the raw
   credential env. It sets `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, all six model slots and
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. It raises on a missing or empty credential and asserts that
-  no original Anthropic credential value survives. — DoD: the function has no I/O and is covered by T3-T5.
+  no non-empty original Anthropic credential value survives (empty originals are skipped). — DoD: the function has no I/O and is covered by T3-T5.
 - [ ] 4. (depends on 3) Add `provider: ProviderSpec | None = None` to `orchestrator/options.py::_scrubbed`.
-  When set, apply `provider_session_env` after the existing token scrubbing, require `fallback_model is None`
-  and a non-empty `options.model`. — DoD: with `provider=None` all existing tests in `tests/test_options.py`
+  When set, apply `provider_session_env` to the effective env `{**os.environ, **options.env}` after the
+  existing token scrubbing, set `CLAUDE_CONFIG_DIR` to a fresh empty `tempfile.mkdtemp` directory, and require
+  `fallback_model is None` and a non-empty `options.model`. — DoD: with `provider=None` all existing tests in `tests/test_options.py`
   and `tests/test_usage_ledger.py` pass unchanged.
 - [ ] 5. (depends on 2, 4) Add `provider: ProviderSpec | None = None` to `orchestrator/resolver.py::ExecutionPlan`,
   filled from `model_selection.provider` in `execute()`. Pass `provider=plan.provider` from both `_scrubbed`
-  calls in `build_issue_investigator_options_from_plan`. — DoD: the existing plan and equivalence tests pass,
+  calls in `build_issue_investigator_options_from_plan`. Include `provider` (`name`, `base_url`) in
+  `ExecutionPlan.to_log_dict()`. Make `_model_policy_version()` hash the policy path `resolve_model` loaded
+  (`MODEL_POLICY_PATH` when set, else `DEFAULT_POLICY_PATH`). — DoD: the existing plan and equivalence tests pass,
   and a plan built against the fixture policy carries the provider into the session env.
 - [ ] 6. (depends on 2) In `config/settings.py`, raise `ModelPolicyError` at import if any module-level
   selection (`SERVICE_AGENT_SELECTION`, `MENTOR_SELECTION`, `SHEPHERD_SELECTION`, `SCOUT_*_SELECTION`)
@@ -31,7 +34,8 @@
 - [ ] 7. (depends on 1) Add `tests/fixtures/model-policy-provider.yaml`. It holds the current profiles plus
   `experimental_hetzner` (`model: Qwen/Qwen3.6-35B-A3B-FP8`, `base_url: https://inference.hetzner.com/api`,
   `credential_env: HETZNER_INFERENCE_API_KEY`) and a test-only task routed to it. Document the `provider`
-  block in `docs/model-policy-providers.md` (not in `config/model-policy.yaml`, whose bytes stay unchanged). — DoD:
+  block, the import-time fail-closed behaviour of `config/settings.py`, and the adoption precondition on
+  GitHub tokens in `docs/model-policy-providers.md` (not in `config/model-policy.yaml`, whose bytes stay unchanged). — DoD:
   the fixture is used by T1-T6, `config/model-policy.yaml` is byte-identical, so `model_policy_version` of
   existing plans does not change.
 - [ ] 8. (optional, depends on 3) Express the provider part of `tools/hetzner_inference_spike.py::hetzner_session_env`
@@ -49,10 +53,13 @@
   `ANTHROPIC_API_KEY`, `ANTHROPIC_API_KEY_SECONDARY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
   `CLAUDE_CODE_OAUTH_TOKEN_SECONDARY` and an extra `ANTHROPIC_FOO`, plus `HETZNER_INFERENCE_API_KEY=hz-sentinel`.
   Build the options through `build_issue_investigator_options_from_plan` with a plan resolved from the
-  fixture policy (monkeypatched `os.environ`, no network). Assert that no Anthropic sentinel value appears
-  in any value of `options.env`, that `ANTHROPIC_AUTH_TOKEN == "hz-sentinel"`, that `ANTHROPIC_BASE_URL`
+  fixture policy (monkeypatched `os.environ`, no network). Compute the effective child env
+  `{**os.environ, **options.env}` and assert on it, not on `options.env` alone: no Anthropic sentinel value
+  appears in any of its values, that `ANTHROPIC_AUTH_TOKEN == "hz-sentinel"`, that `ANTHROPIC_BASE_URL`
   matches the policy, that all six slots equal the model, that `HETZNER_INFERENCE_API_KEY == ""` in the
-  child env, and that `fallback_model is None`.
+  child env, that `CLAUDE_CONFIG_DIR` is set to an existing empty directory, and that `fallback_model is None`.
+  Repeat with a builder that passes a sparse `env` (e.g. only `PROPOSAL_DIR`) through `_scrubbed(provider=...)`
+  and assert the same on the effective env.
 - [ ] T4. `provider_session_env` raises `ModelPolicyError` when `HETZNER_INFERENCE_API_KEY` is unset or empty.
 - [ ] T5. `provider_session_env` raises when the provider credential value equals an Anthropic credential
   value (copied credential).
@@ -60,6 +67,11 @@
   keeps today's precedence.
 - [ ] T7. Re-importing `config.settings` with `MODEL_POLICY_PATH` pointing at a policy that routes
   `service_agent` to the provider profile raises `ModelPolicyError`.
+- [ ] T9. `provider_session_env` with `ANTHROPIC_API_KEY=""` (and no other Anthropic value) builds the env
+  without raising.
+- [ ] T10. With `MODEL_POLICY_PATH` pointing at the fixture, the plan's `model_policy_version` is the hash of
+  the fixture, not of `config/model-policy.yaml`. With it unset, the value equals today's. `to_log_dict()`
+  of a provider plan contains `provider.name` and `provider.base_url`.
 - [ ] T8. Regression: with the committed policy, `_scrubbed(options)` and every builder produce the same env as
   before (existing `tests/test_options.py` equivalence tests).
 
