@@ -78,32 +78,43 @@ The committed file, and therefore every existing plan's `model_policy_version`, 
   Without a provider, precedence is unchanged.
 
 ### 3. Session env (new pure function, `config/model_policy.py`)
-`provider_session_env(provider, model, env) -> dict[str, str]`:
+`provider_session_env(provider, model, env) -> dict[str, str]`, where `env` is the **effective** env the CLI
+will receive (`{**os.environ, **(options.env or {})}`, built by the caller), never a sparse builder env:
 - Copies `env`, blanks every key starting with `ANTHROPIC_` plus `CLAUDE_CODE_OAUTH_TOKEN`,
   `CLAUDE_CODE_OAUTH_TOKEN_SECONDARY` and `ANTHROPIC_API_KEY_SECONDARY`, and blanks `provider.credential_env`.
 - Sets `ANTHROPIC_BASE_URL = provider.base_url`, `ANTHROPIC_AUTH_TOKEN = env[provider.credential_env]`,
   every name in a module constant `MODEL_SLOTS` (the same six names as the spike's `_MODEL_SLOTS`) to
   `model`, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
 - Raises `ModelPolicyError` if the credential is unset or empty. It does not fall back.
-- Afterwards it asserts that no value in the result equals any original Anthropic credential value. This is
-  a belt-and-braces check that also catches a credential copied under another name, such as an
-  `ANTHROPIC_AUTH_TOKEN` equal to an OAuth token.
+- Afterwards it asserts that no value in the result equals any **non-empty** original Anthropic credential
+  value. This is a belt-and-braces check that also catches a credential copied under another name, such as
+  an `ANTHROPIC_AUTH_TOKEN` equal to an OAuth token. Empty originals are skipped: blanking produces many `""`
+  values, and an inherited `ANTHROPIC_API_KEY=""` must not fail a session that leaks nothing.
 It is pure and has no I/O, so it is testable offline. Keeping it beside the policy keeps one owner for the
 provider contract.
 
 ### 4. Wiring
 - `orchestrator/options.py::_scrubbed(options, *, provider: ProviderSpec | None = None)`. After the existing
-  scrubbing, when `provider` is set, it applies `provider_session_env(provider, options.model, options.env)`,
-  asserts `options.fallback_model is None`, and refuses an empty `options.model`. With `provider=None` its
+  scrubbing, when `provider` is set, it builds the effective env `{**os.environ, **options.env}` and applies
+  `provider_session_env(provider, options.model, effective_env)`, so an inherited credential is blanked even
+  when a builder passed a sparse `env`. It also sets `CLAUDE_CONFIG_DIR` to a fresh empty directory
+  (`tempfile.mkdtemp(prefix="mctl-provider-claude-")`), so the CLI cannot pick up a stored Anthropic login
+  from the worker's home. Builders here use `setting_sources=["project"]`, so no user-level settings are lost.
+  It asserts `options.fallback_model is None`, and refuses an empty `options.model`. With `provider=None` its
   behaviour is unchanged, so every existing builder produces identical options.
 - `orchestrator/resolver.py`: `ExecutionPlan` gains `provider: ProviderSpec | None` (default None), filled
-  from `model_selection.provider`. `build_issue_investigator_options_from_plan` passes
+  from `model_selection.provider`, and `to_log_dict()` includes `provider` (`name`, `base_url`) when set.
+  `_model_policy_version()` today hashes `DEFAULT_POLICY_PATH` while `resolve_model` honours
+  `MODEL_POLICY_PATH`. It changes to hash the path that `resolve_model` actually loaded, so the pin covers
+  the file that supplied the endpoint. With `MODEL_POLICY_PATH` unset, as in every deployed workflow, the
+  value is unchanged. `build_issue_investigator_options_from_plan` passes
   `provider=plan.provider` to both of its `_scrubbed` calls. This is the one path where a provider can reach
   a session in this change, and it is the declarative path every new lane is meant to take.
 - `config/settings.py`: after resolving the module-level selections, it raises `ModelPolicyError` if any of
   them carries a provider. The `*_MODEL` string constants cannot carry the endpoint, so routing those tasks
   to a provider profile must fail at import instead of sending a Qwen model name to Anthropic or bypassing
-  the seam.
+  the seam. This stops the whole worker process at import, not a single task. That is intended fail-closed
+  behaviour and is documented in `docs/model-policy-providers.md`.
 
 ### 5. Spike harness
 `tools/hetzner_inference_spike.py` is left as is. The task list includes an optional follow-up that
@@ -141,8 +152,8 @@ allowlist on top. It is not required for the acceptance criteria.
 - Ops: adoption will need `HETZNER_INFERENCE_API_KEY` injected into the relevant workflow pod via mctl-gitops.
   That is tracked separately.
 
-## Open questions
-- Whether provider sessions should also blank GitHub tokens (see requirements.md).
-- Whether loopback `http://` should be allowed for local proxies.
-- Whether to commit an unrouted `experimental_hetzner` profile now or only at adoption. Committing it would
-  change `model_policy_version` for every plan, which is why this design does not commit it.
+## Decisions (owner review, 2026-10-27)
+- GitHub tokens: unchanged here. Blanking them or giving a read-only token is a precondition of adoption.
+- Loopback `http://` is not allowed.
+- The `experimental_hetzner` profile stays in a test fixture until adoption, so `model_policy_version` does
+  not change.
