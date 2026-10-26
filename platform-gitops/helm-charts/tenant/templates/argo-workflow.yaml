@@ -235,6 +235,15 @@ rules:
   - apiGroups: [""]
     resources: ["resourcequotas"]
     verbs: ["get", "list"]
+  # Tenant-scoped pod state and events for diagnostics (mctl-api#812):
+  # GET /api/v1/pods/{team}/{app} and GET /api/v1/events/{team}. list only;
+  # no pods/log, watch, Secrets, ConfigMaps or write verbs.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
