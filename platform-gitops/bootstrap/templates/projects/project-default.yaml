@@ -78,6 +78,7 @@
       "kube-system"
       "labs"
       "local-path-storage"
+      "mctl-agents-egress"
       "mctl-api"
       "monitoring"
       "platform-db"

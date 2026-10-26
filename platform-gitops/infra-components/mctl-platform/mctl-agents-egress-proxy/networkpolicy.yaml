@@ -1,0 +1,73 @@
+# NetworkPolicies of the agent-egress-proxy namespace (#2159). Synced in the
+# first wave, before the Deployment, so the proxy never runs unrestricted.
+#
+# Ingress: only agent step pods may use the proxy. All eight mctl-agents
+# CWFTs label their pods app.kubernetes.io/name: mctl-agents through
+# spec.podMetadata.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-ingress
+  namespace: mctl-agents-egress
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argo-workflows
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-agents
+      ports:
+        - port: 3128
+          protocol: TCP
+---
+# Egress: DNS plus public 80/443 only. Node public IPs are excluded so the
+# proxy cannot be used to reach kubelet or the API server from outside the
+# cluster network (same CIDRs as helm-charts/tenant/values.yaml
+# nodePublicCIDRs).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-proxy-egress
+  namespace: mctl-agents-egress
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              # Instance metadata (169.254.169.254) and loopback.
+              - 169.254.0.0/16
+              - 127.0.0.0/8
+              - 78.47.58.237/32
+              - 91.99.127.137/32
+              - 91.99.152.207/32
+              - 91.99.112.66/32
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP
