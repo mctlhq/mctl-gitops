@@ -33,11 +33,15 @@ Events read: `GET /api/v1/events/{team}` and MCP `mctl_list_namespace_events`
 MCP tools
 - THE SYSTEM SHALL register both tools with names that `auth.IsReadTool` admits (`mctl_get_...` / `mctl_list_...`), `ReadOnlyHint=true` and `DestructiveHint=false`, and SHALL record them in `recordedHints` and `TestReadOnlyToolsAreTheRecordedSet`.
 - WHILE an `AgentScopeInvestigate` run token is used, THE SYSTEM SHALL admit the two new GET routes through that scope's route list.
+- WHILE a `support` run token (S0a) is used, THE SYSTEM SHALL admit both routes through the `support` route list with the `{team}` segment bound to the token's tenant (`BindTenant`), and SHALL admit both MCP tools through `supportTools` with their `team` argument required and equal to the bound tenant. A `support` token reading another tenant's pods or events SHALL get 403 `agent_scope_denied`.
+
+Kubernetes RBAC
+- THE PLATFORM SHALL grant the mctl-api ServiceAccount `list` on `pods` and `list` on `events` (core API group) in every tenant namespace, through the tenant chart's `mctl-api-workflows` Role, before the mctl-api release that serves these routes is deployed. No `get`/`list` on Secrets, ConfigMaps or `pods/log`, and no write verb, is added.
 
 Workflow leak
 - WHEN a non-admin caller lists workflows, THE SYSTEM SHALL omit every audit row whose parameters are unreadable, and every audit row whose derived tenant is empty unless the caller is an agent scope with `ReadAllTenants` (see Open questions).
 - WHEN an admin lists workflows, THE SYSTEM SHALL continue to return empty-tenant rows.
-- WHILE a caller carries a tenant-bound support identity (introduced by S0a), THE SYSTEM SHALL return only rows whose team equals the bound tenant.
+- WHILE a caller carries a tenant-bound support identity, THE SYSTEM SHALL keep returning only rows whose team equals the bound tenant. That rule and `User.BoundTenant()` are owned by S0a (mctlhq/mctl-api#811, task 7); S0b SHALL NOT redefine or stub them, and its change SHALL keep S0a's bound-tenant tests green.
 
 ## Out of scope
 - The support scope itself (S0a) and read auditing (S0c).
@@ -46,8 +50,13 @@ Workflow leak
 - Any write action on pods (restart, delete).
 - Node-level information (node names, node conditions) beyond what an event message itself states.
 
+## Decisions (owner amendment, 2026-10-26)
+
+- Ordering: S0b is implemented after S0a's PR (mctlhq/mctl-api#811) has merged. S0b builds on S0a's `support` scope, `User.BoundTenant()` and bound-tenant `ListWorkflows` rule instead of stubbing them, so the two PRs do not both edit the same lines.
+- Split on `ListWorkflows`: S0a owns the bound-tenant branch (a support token sees only its own tenant's rows, never empty-tenant rows). S0b owns the non-admin leak fix (empty-tenant and unreadable rows hidden from non-admins, except `ReadAllTenants` agent scopes for empty-tenant rows).
+- Support scope: S0b adds its two routes to the `support` route list and its two tools to `supportTools`, as S0a's requirements already state ("The S0b diagnostics routes are added when S0b defines them").
+- RBAC: granted in mctl-gitops, in the tenant chart's `mctl-api-workflows` Role (task 0), as its own gitops PR merged and synced before the mctl-api release. Today that Role grants only `workflows` and `resourcequotas`; the existing `get pods` is in `argo-workflows` (Role `mctl-api-workflow-submitter`), not in tenant namespaces. See design.md, Current state.
+
 ## Open questions
-- Where the mctl-api ServiceAccount's RBAC lives. It is not in this repo's `helm/` chart or in the visible gitops `services/` and `tenants/` paths. The reads need `list` on `pods` and `events` (core and/or `events.k8s.io`) in tenant namespaces. The existing `k8s.AgentRunBinding` already does `get pods`, so some pod read exists. Verify, and grant `list` if missing, in the platform repo that owns it. Until then the reads answer 503, not empty.
 - Pod selection label. The design selects by `app.kubernetes.io/instance={team}-{app}`. That follows the ArgoCD app name `{team}-{app}` and Loki's pod regex `{ns}-{app}-.+` in internal/loki. It falls back to the pod-name prefix `{team}-{app}-` when the label matches nothing. Confirm against the base-service chart.
 - Agent scopes with `ReadAllTenants` (the issue-investigator scope) are not admins. Read literally, the fix hides platform workflow rows from them too. The proposal keeps those rows visible to admins and to `ReadAllTenants` agent scopes only, because those scopes already read every tenant and use platform rows for diagnosis. The reviewer should confirm or tighten this.
-- S0a (support scope with a bound tenant) has not landed: `internal/auth` has no support scope today. The `team == bound tenant` rule is implemented as a hook that S0a fills in, or directly if S0a merges first (see design).
