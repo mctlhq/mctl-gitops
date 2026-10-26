@@ -63,6 +63,7 @@ Inputs: `--occurrence soc_...`, `--issue-url https://github.com/mctlhq/<repo>/is
    - `201` gives `started(attempt_id)` or `replayed`;
    - `remediation_attempt_active` gives `already_active(active_attempt_id re-read)`;
    - every other refusal is passed through.
+0. **Start guard (runs before step 1).** `GET /api/v1/agents/dev-loop/{workflow_id_for(issue_url)}`. A 404 continues. A 200 refuses with `devloop_exists(workflow_id, status)`, because a DevLoop past implement cannot be restarted (#748) and an attempt bound to it would never get a landed revision. Any other answer refuses with `unknown`. The operator then files a new tracking issue, and so a new workflow id.
 5. The operator then starts the DevLoop exactly as today (`mctl_trigger_issue use_temporal=true`). The approval gate is untouched.
 
 Keying the idempotency on `state_version` makes a replay of the same request a server-side `replayed`. A second request after the attempt exists sees a newer `state_version` and fixing state, and the server refuses it with `remediation_attempt_active`/`invalid_transition`. Either way it is deterministic.
@@ -108,6 +109,13 @@ Reopening happens in mctl-api, from provider observations. The runner's part:
 - Strategy selection reads only structural fields and the PR-reviewed regression-test mapping. A provider cannot pick the regression check.
 - When the operator writes the DevLoop tracking issue, finding text appears there as quoted untrusted data. The investigator already treats issue bodies as untrusted.
 
+### 7. Credentials
+
+- Both the hook and the sweep take the bearer from `orchestrator.run_token.mctl_api_bearer()`. In the Temporal workers this is `MCTL_TOKEN` (Vault `platform/mctl-agents`, `mctl-token`): none of the worker values set `MCTL_RUN_TOKEN_MODE`, and enforce mode exists only in the investigate CWFT.
+- mctl-api grants `security:remediate` only to its static service principal (`MCTL_AGENT_SERVICE_TOKEN`). So the writes succeed only if `mctl-token` is that same principal. This slice does not assume it: a 403 on any write is reported loudly, as `refused(forbidden)` with the route and the bearer kind, and the sweep exits non-zero. The future CronWorkflow must mount `MCTL_TOKEN` from the same Vault path and must not set enforce mode.
+- `run_security_verifier.py` refuses to start under `MCTL_RUN_TOKEN_MODE=enforce`. A run token is confined to its own work item (`agentOwnsAttempt`), so a sweep over many occurrences cannot work with one.
+- The hook runs inside a DevLoop, but on the worker's `MCTL_TOKEN`, not on a per-run token. Moving it to run tokens later would need `permissions:["security:remediate"]` in the mint body and would still be limited to the DevLoop's own work item. That is enough for the hook, but out of scope here.
+
 ## Alternatives
 
 1. **Drive remediation from a new Temporal workflow (`SecurityRemediationWorkflow`) that owns the whole cycle and wraps a DevLoop as a child.** Dropped. It introduces a second durable owner per remediation, overlapping ADR-010 lifecycle ownership. It also complicates the approval park, which already lives in `DevLoopWorkflow`, and #748 shows a reached-implement DevLoop cannot be restarted anyway. A thin hook plus an idempotent sweep reuses the existing loop unchanged.
@@ -121,7 +129,7 @@ Reopening happens in mctl-api, from provider observations. The runner's part:
 - **Backward compatibility:** the DevLoop change is behind `workflow.patched("security-record-landed")`. Old histories replay unchanged, and the new `DevLoopResult.security` field defaults to None. Non-security DevLoops pay one `GET /occurrences` per merged PR. If the store answers 503 (disabled or not configured), the activity answers `unknown` and the loop continues.
 - **Resource impact:** the sweep is bounded at 50 occurrences, 10 pages and per-request timeouts of 10 s. No model calls, so cost is nil.
 - **Risks and mitigations:**
-  - Missing `security:remediate`: writes return 403 and are reported as `refused(forbidden)`, with no state change. This is surfaced in the sweep output.
+  - Missing `security:remediate`: writes return 403 and are reported as `refused(forbidden)`, with no state change. The sweep exits non-zero, so a credential mismatch (see section 7) shows up as a failed run rather than as an empty one.
   - Wrong DevLoop match: exact equality on `devloop_workflow_id`, plus `repository` filtering, plus `expected_state_version`.
   - Double write on retry: idempotency keys are derived from immutable inputs.
   - Hostile provider text: dropped at parse time, with a test pinning it.

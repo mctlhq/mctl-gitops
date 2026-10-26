@@ -19,10 +19,12 @@ Code read in the clone (HEAD `a94a4db`):
 - `helm/templates/deployment.yaml` injects env from `envFromSecret`, `envFromExtraSecret` and `envFromOptionalSecrets`. `helm/values.yaml` has `replicaCount: 1`.
 
 Deployed state checked:
-- `mctl_get_service_config(team=admins, service=mctl-api)`: error "service not found: admins/mctl-api". mctl-api is not a catalogue tenant service, so its deployed config was not observed through this tool.
-- `$MCTL_GITOPS_ROOT/services/*`: tenants `admins`, `karabu`, `labs`, `namax66`. None has an `mctl-api` directory, so mctl-api's deployed `values.yaml` (replicas, `SELF_URL`, `OAUTH_TOKEN_TTL`, secret wiring) is not in this checkout.
-- `services/labs/mctl-telegram/values.yaml` (around line 359) records that mctl-telegram previously sourced `OAUTH_JWT_SECRET` from mctl-api's Vault path `secret/data/platform/mctl-api/oauth`, and that an mctl-api rotation then silently invalidated mctl-telegram tokens. It now uses its own key. This is concrete evidence of the shared-secret coupling the issue describes, and it shows the Vault path where mctl-api's OAuth secret lives.
-- Gaps (see Open questions): the replica count, the access-token TTL in production and the exact secret projection were not observed. The design does not depend on them, except that keys must reach every replica identically, which is true of any env-from-secret projection.
+- `mctl_get_service_config(team=admins, service=mctl-api)` answers "service not found": mctl-api is not a catalogue tenant service, so that tool cannot show its config.
+- Owner review amendment (2026-10-26), read from mctl-gitops `origin/main`: mctl-api is deployed by `platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml`. It sets `replicaCount: 2` (not the chart default of 1), `SELF_URL: https://api.mctl.ai` and `envFromSecret: mctl-api-secrets`.
+- The Secret `mctl-api-secrets` is produced by the ExternalSecret `platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml` (`refreshInterval: 1h`). It lists every key explicitly (`spec.data[]` with `secretKey` / `remoteRef.key` / `remoteRef.property`) and has no `dataFrom` extract. For example, `OAUTH_JWT_SECRET` comes from `platform/mctl-api/oauth`, property `jwt-secret`. **A property written to Vault alone never reaches the pod.** `OAUTH_JWT_SIGNING_KEYS` needs its own `data[]` entry in that file, added by a separate mctl-gitops PR.
+- Env from a Secret is read only at process start. A changed key set therefore takes effect only after the ExternalSecret has refreshed (up to 1h, or force-synced) **and** both replicas have rolled.
+- `services/labs/mctl-telegram/values.yaml` (around line 359) records that mctl-telegram once sourced `OAUTH_JWT_SECRET` from mctl-api's Vault path `secret/data/platform/mctl-api/oauth`, and that an mctl-api rotation then silently invalidated mctl-telegram tokens. It now uses its own key. This is concrete evidence of the shared-secret coupling the issue describes.
+- Not observed: the production access-token TTL (`OAUTH_TOKEN_TTL` is not set in `mctl-api.yaml`, so the code default of 1h applies unless another source sets it).
 
 ## Proposed solution
 
@@ -86,7 +88,7 @@ New metrics are registered next to the federation ones in `internal/auth/federat
 
 ### 5. Configuration (`cmd/api/main.go`, `helm/`)
 
-New `Config` fields and env vars: `OAUTH_ACCESS_TOKEN_AUDIENCE`, `OAUTH_JWT_SIGNING_ALG`, `OAUTH_JWT_SIGNING_KEYS`, `OAUTH_JWT_KEY_RETENTION`, `OAUTH_JWT_ACCEPT_HS256` (default true) and `OAUTH_JWT_REQUIRE_AUD` (default false). They are wired after `NewOAuthServer` in the same way `AccessTokenTTL` is. `validate()` refuses `ACCEPT_HS256=false` while `SIGNING_ALG=HS256`, which would refuse every token the server mints. The Helm chart needs no template change: `OAUTH_JWT_SIGNING_KEYS` comes in through the existing `envFromSecret` (the Vault-synced secret at `secret/data/platform/mctl-api/oauth`).
+New `Config` fields and env vars: `OAUTH_ACCESS_TOKEN_AUDIENCE`, `OAUTH_JWT_SIGNING_ALG`, `OAUTH_JWT_SIGNING_KEYS`, `OAUTH_JWT_KEY_RETENTION`, `OAUTH_JWT_ACCEPT_HS256` (default true) and `OAUTH_JWT_REQUIRE_AUD` (default false). They are wired after `NewOAuthServer` in the same way `AccessTokenTTL` is. `validate()` refuses `ACCEPT_HS256=false` while `SIGNING_ALG=HS256`, which would refuse every token the server mints. The Helm chart needs no template change: `OAUTH_JWT_SIGNING_KEYS` comes in through the existing `envFromSecret: mctl-api-secrets`. The value does not arrive by itself, though. `mctl-api-secrets` is an ExternalSecret with an explicit per-key list, so the key must be added there in mctl-gitops (see Platform impact). Startup must treat an **absent** `OAUTH_JWT_SIGNING_KEYS` as "no asymmetric keys", which is valid while `SIGNING_ALG=HS256`. It must treat a **present but unparsable** value as fatal. An empty mapping must never silently read as "no keys" once an asymmetric alg is selected.
 
 ### 6. Rollout order (satisfies the issue's ordering constraint)
 
@@ -94,11 +96,12 @@ New `Config` fields and env vars: `OAUTH_ACCESS_TOKEN_AUDIENCE`, `OAUTH_JWT_SIGN
 |---|---|---|
 | A | Deploy this PR with the defaults | `aud` is minted and enforced. Foreign `aud` is refused immediately (T10 closed). Aud-less HS256 tokens are accepted and counted. |
 | B | After at least 1 TTL, once `oauth_jwt_audless_accepted_total` stops increasing, set `OAUTH_JWT_REQUIRE_AUD=true` | Grace ends. |
-| C | Provision an EdDSA key in Vault and set `OAUTH_JWT_SIGNING_ALG=EdDSA` | New tokens are EdDSA. JWKS and `jwks_uri` go live. HS256 is still accepted. |
+| C0 | mctl-gitops PR: add `OAUTH_JWT_SIGNING_KEYS` to `mctl-api-secrets.yaml` (`remoteRef.key: platform/mctl-api/oauth`, a new property such as `jwt-signing-keys`). Write the Vault property **first** (`vault kv patch`, never `put`), or the ExternalSecret goes `SecretSyncedError`. | The env var is present on both replicas after the refresh and a rollout. `SIGNING_ALG` is still HS256, so behaviour is unchanged. |
+| C | Set `OAUTH_JWT_SIGNING_ALG=EdDSA` in `mctl-api.yaml` (only after C0 is live on both replicas) | New tokens are EdDSA. JWKS and `jwks_uri` go live. HS256 is still accepted. |
 | D | After at least 1 TTL, once the HS256 `ok` count in `oauth_jwt_verifications_total` is zero, set `OAUTH_JWT_ACCEPT_HS256=false` | HS256 is refused before any HMAC. |
 | E | Only after A is everywhere | Any other issuer or path may mint tokens with `aud=https://mcp.mctl.ai` (a separate issue). |
 
-Rotation: add the new key as `active`, and move the old one to retained with `retired_at=now`. It stays in JWKS and verifiable for `OAUTH_JWT_KEY_RETENTION`, then drops out. Deleting the entry earlier removes the `kid` immediately, which is the emergency-revocation path.
+Rotation: add the new key as `active`, and move the old one to retained with `retired_at=now`, in one Vault patch of the same property. The change then needs an ExternalSecret refresh and a rollout of both replicas before it is live. It stays in JWKS and verifiable for `OAUTH_JWT_KEY_RETENTION`, then drops out. Deleting the entry earlier removes the `kid` immediately, which is the emergency-revocation path.
 
 ## Alternatives
 
@@ -110,9 +113,9 @@ Rotation: add the new key as `active`, and move the old one to retained with `re
 ## Platform impact
 
 - **Backward compatibility:** default config changes one observable thing, the new `aud` claim. Old tokens without `aud` keep working under the grace rule. Clients that cache tokens see no difference. The only newly refused token is one with a foreign `aud`, which mctl-api has never minted.
-- **Migrations:** none (no database). The new secret key `OAUTH_JWT_SIGNING_KEYS` must be added to the Vault path before step C. That is a gitops/Vault change outside this repo.
+- **Migrations:** none (no database). Before step C, `OAUTH_JWT_SIGNING_KEYS` needs two things outside this repo, in this order: (1) the Vault property under `platform/mctl-api/oauth`; (2) a new `data[]` entry in mctl-gitops `platform-gitops/bootstrap/templates/mctl-platform/mctl-api-secrets.yaml`. A Vault write alone is not enough, because that ExternalSecret maps keys one by one. This repo's PR must not claim step C is ready until the gitops entry exists.
 - **Refresh tokens:** unaffected. `OAUTH_JWT_SECRET` stays required for `deriveSuccessorRefreshToken`, and that has to be documented so nobody "retires" the secret after step D.
-- **Multi-replica:** every replica must load the same key set. Env-from-secret guarantees that per rollout. During a rotation rollout, replicas briefly hold different active keys. Every replica keeps the other key in its set (new as active, old as retained), so tokens from either verify everywhere, provided the retained entry is added in the same secret update.
+- **Multi-replica:** production runs 2 replicas (`replicaCount: 2`). Every replica must load the same key set. Env-from-secret guarantees that per rollout. During a rotation rollout, replicas briefly hold different active keys. Every replica keeps the other key in its set (new as active, old as retained), so tokens from either verify everywhere, provided the retained entry is added in the same secret update.
 - **Resource impact:** negligible. Ed25519 verification costs microseconds per request. JWKS is a static response.
 - **Risks and mitigations:**
   - Misconfigured key set takes down auth: fail at startup (pod never becomes ready, old ReplicaSet keeps serving) rather than at request time.
