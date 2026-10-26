@@ -238,6 +238,16 @@ spec:
             # more than one token TTL, so the grace ends here.
             # Rollback: delete this line.
             OAUTH_JWT_REQUIRE_AUD: "true"
+            # Access-token signing algorithm, step C of mctlhq/mctl-api#805.
+            # New tokens are signed EdDSA with the active key of
+            # OAUTH_JWT_SIGNING_KEYS (mapped in mctl-api-secrets, kid
+            # 2026-10a, public half at /.well-known/jwks.json). HS256 tokens
+            # minted before this rollout still verify while
+            # OAUTH_JWT_ACCEPT_HS256 keeps its default (true); refusing them
+            # is step D, after HS256 verifications stay flat for one TTL.
+            # Rollback: delete this line (back to HS256); EdDSA tokens already
+            # issued keep verifying because the key stays in the key set.
+            OAUTH_JWT_SIGNING_ALG: "EdDSA"
             # GitHub numeric ids allowed to create a NEW account in the ZITADEL
             # org customers (identity hook, mctlhq/mctl-web#158). Unset creates
             # nobody; exactly "*" opens creation to anyone (the public cutover,
