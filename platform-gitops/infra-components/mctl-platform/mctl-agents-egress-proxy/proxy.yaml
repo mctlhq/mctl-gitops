@@ -1,0 +1,168 @@
+# agent-egress-proxy (mctlhq/mctl-gitops#2159, stage A: observe only).
+# Synced by the `mctl-agents-egress-proxy` Application that
+# bootstrap/templates/mctl-platform/mctl-agents-egress-proxy.yaml renders;
+# see there for why these objects are not root-app's own.
+# Runbook: docs/runbooks/mctl-agents-egress.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-egress-proxy
+  namespace: mctl-agents-egress
+data:
+  squid.conf: |
+    http_port 3128
+    visible_hostname agent-egress-proxy
+
+    # Logs go to stdout/stderr so Promtail ships them to Loki. The default
+    # squid log format already records the CONNECT target host:port. Squid
+    # runs as `proxy` from the start (no root, no privilege drop), so it can
+    # open the container's stdio, which the runtime hands to that uid.
+    access_log stdio:/dev/stdout squid
+    cache_log /dev/stderr
+    logfile_rotate 0
+    cache deny all
+    pid_filename none
+    netdb_filename none
+    coredump_dir none
+    # The ICMP pinger helper needs CAP_NET_RAW, which this pod drops.
+    pinger_enable off
+    # Do not leak the client address chain or proxy identity upstream.
+    forwarded_for delete
+    via off
+
+    # STAGE A: allow-all, log-every-host. Stage B replaces this block with
+    # `acl allowed_hosts dstdomain ...` and a deny-by-default rule.
+    # Only CONNECT to 443 and plain HTTP to 80 are ever proxied.
+    acl SSL_ports port 443
+    acl Safe_ports port 80 443
+    acl CONNECT method CONNECT
+    http_access deny !Safe_ports
+    http_access deny CONNECT !SSL_ports
+    http_access allow all
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-egress-proxy
+  namespace: mctl-agents-egress
+  labels:
+    app.kubernetes.io/name: agent-egress-proxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-egress-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-egress-proxy
+      annotations:
+        # Squid reads its config only at start; a ConfigMap edit (the
+        # stage B allowlist) needs a rollout. Bump this with the edit.
+        mctl.ai/squid-config-revision: "1"
+    spec:
+      automountServiceAccountToken: false
+      # One replica per node: in stage A every agent run depends on this
+      # proxy, so losing a node must not take both replicas.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: agent-egress-proxy
+      # uid/gid 13 is `proxy` in the image's /etc/passwd. Running as it from
+      # the start replaces Squid's own root -> cache_effective_user drop, so
+      # no capability is needed at all.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 13
+        runAsGroup: 13
+        fsGroup: 13
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: squid
+          # ubuntu/squid:6.6-24.04_edge, multi-arch index resolved
+          # 2026-10-26. `_edge` is rebuilt on security updates; bumping is a
+          # digest edit here.
+          image: ubuntu/squid@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
+          # Bypass the image's entrypoint.sh: it regenerates a snakeoil TLS
+          # key and tails log files we do not write, both of which need a
+          # writable root filesystem. No cache_dir, so `squid -z` is moot.
+          command: ["/usr/sbin/squid"]
+          args: ["-f", "/etc/squid/squid.conf", "-NYC"]
+          ports:
+            - name: proxy
+              containerPort: 3128
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/squid/squid.conf
+              subPath: squid.conf
+              readOnly: true
+            # Squid's IPC/run dir and spool dir, writable on a read-only
+            # root filesystem.
+            - name: run
+              mountPath: /run/squid
+            - name: spool
+              mountPath: /var/spool/squid
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: agent-egress-proxy
+        - name: run
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: spool
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-egress-proxy
+  namespace: mctl-agents-egress
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-egress-proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-egress-proxy
+  namespace: mctl-agents-egress
+spec:
+  selector:
+    app.kubernetes.io/name: agent-egress-proxy
+  ports:
+    - name: proxy
+      port: 3128
+      targetPort: proxy

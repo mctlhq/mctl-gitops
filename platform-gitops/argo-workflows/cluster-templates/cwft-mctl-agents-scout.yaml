@@ -81,20 +81,6 @@ spec:
             printf '→'; printf ' %s' "$@"; printf '\n'
             exec "$@"
         env:
-          - name: HTTPS_PROXY
-            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
-          - name: HTTP_PROXY
-            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
-          - name: https_proxy
-            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
-          - name: http_proxy
-            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
-          - name: NO_PROXY
-            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,kubernetes.default,localhost,127.0.0.1"
-          - name: no_proxy
-            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,kubernetes.default,localhost,127.0.0.1"
-          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
-            value: "1"
           - name: WORKFLOW_DRY_RUN
             value: "{{workflow.parameters.dry_run}}"
           # run_scout uses it as the run id in each spike draft.
@@ -150,20 +136,6 @@ spec:
         image: alpine:3.19
         command: [sh]
         env:
-          - name: HTTPS_PROXY
-            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
-          - name: HTTP_PROXY
-            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
-          - name: https_proxy
-            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
-          - name: http_proxy
-            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
-          - name: NO_PROXY
-            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,kubernetes.default,localhost,127.0.0.1"
-          - name: no_proxy
-            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,kubernetes.default,localhost,127.0.0.1"
-          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
-            value: "1"
           - name: TG_BOT_TOKEN
             valueFrom:
               secretKeyRef:
