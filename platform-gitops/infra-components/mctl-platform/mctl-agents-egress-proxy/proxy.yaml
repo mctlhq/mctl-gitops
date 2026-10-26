@@ -40,9 +40,10 @@ data:
     http_access deny CONNECT !SSL_ports
     # Never proxy to link-local (instance metadata at 169.254.169.254) or
     # loopback, whatever stage the allowlist is at.
-    acl to_linklocal dst 169.254.0.0/16
+    acl to_linklocal dst 169.254.0.0/16 fe80::/10
+    acl to_loopback dst 127.0.0.0/8 ::1
     http_access deny to_linklocal
-    http_access deny to_localhost
+    http_access deny to_loopback
     http_access allow all
 ---
 apiVersion: apps/v1
