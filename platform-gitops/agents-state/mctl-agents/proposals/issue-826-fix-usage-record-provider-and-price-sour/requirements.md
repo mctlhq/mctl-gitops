@@ -42,6 +42,11 @@ from, before any experimental lane is allowed to write usage.
 - IF the process or the session environment points `ANTHROPIC_BASE_URL` at a host other than the Anthropic API
   AND no explicit provenance was declared THEN THE SYSTEM SHALL record `provider=unknown` and
   `price_source=unknown` and log one warning. It SHALL NOT fall back to the CLI-reported provider.
+- WHEN a session's own options env (`ClaudeAgentOptions.env`, as passed to `tracing.agent_run`) points
+  `ANTHROPIC_BASE_URL` at a non-Anthropic host AND no provenance was declared THE SYSTEM SHALL treat it
+  exactly like a process-level override (`unknown`/`unknown`, one warning). The session env SHALL take
+  precedence over `os.environ` for detection, because the provider seam of mctlhq/mctl-agents#824 sets the
+  base URL only in the options env.
 - WHILE recording any record THE SYSTEM SHALL NOT include `ModelUsage.costUSD`, `ResultMessage.total_cost_usd`
   or any value derived from them in any field, including `calculated_cost`, `provider_reported_cost`,
   `pricing_version` and `invoice_reconciled_cost`.
@@ -67,18 +72,21 @@ from, before any experimental lane is allowed to write usage.
   rewriting stored rows.
 - Rewriting the committed spike #791 artifacts.
 
+## Decisions (owner review, 2026-10-27)
+
+- Cache-creation tokens (human-input request `hir-95c5323867a3b06b`): **keep ADR-012's separate counters.**
+  `cache_write_tokens` carries cache creation, and the total input is
+  `input_tokens + cache_read_tokens + cache_write_tokens`. `input_tokens` is not made inclusive, because that
+  would double-bill against `cache_write_tokens`.
+- `provider_free` stays in the vocabulary. Which value the Hetzner lane declares (`provider_free` or `unknown`)
+  is decided at adoption. Until mctl-api supports `price_source`, no lane declares third-party provenance.
+- How a #824 `ProviderSpec` turns into a declared `ModelProvenance` is adoption work, not this change. This
+  change only guarantees that an undeclared provider session fails closed to `unknown`/`unknown`.
+
 ## Open questions
 
-- "Its input token count includes cache-creation tokens": this proposal reads it as "the record carries the
-  cache-creation tokens, so the full input count is recoverable". ADR-012's disjoint counters
-  (`input_tokens`, `cache_read_tokens`, `cache_write_tokens`) stay as they are, because mctl-api prices them
-  separately. The alternative is that `input_tokens` itself becomes inclusive for third-party rows, and that
-  would double-count against `cache_write_tokens`. A clarification question was filed
-  (`human-input/draft.json`).
 - Not yet observed: whether the CLI's `model_usage` (not just the raw Messages `usage`) carries
   `cacheCreationInputTokens` for Hetzner models. The spike recorded `ResultMessage.usage.input_tokens` only.
 - Not yet observed: how mctl-api's ingest treats an unknown `price_source` field (rejects the batch or ignores
   the field), and how it prices a `canonical_model` missing from its catalog. Its source is not in this
   clone.
-- Is `provider_free` the right price source for Hetzner in the experimental phase, or should the lane declare
-  `unknown` until a pricing contract exists?
