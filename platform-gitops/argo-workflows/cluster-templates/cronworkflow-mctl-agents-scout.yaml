@@ -16,13 +16,14 @@ spec:
   startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 14
   failedJobsHistoryLimit: 14
-  # Suspended on first apply. Un-suspend only after:
-  #   1. an mctl-agents release that ships orchestrator.run_scout, with
-  #      agent_image in cwft-mctl-agents-scout.yaml bumped to it;
-  #   2. a reviewed one-shot with dry_run=true (prints the digest, sends
-  #      nothing);
-  #   3. one real one-shot that delivered to the owner's chat.
-  suspend: true
+  # Applied suspended (#2153) and enabled once:
+  #   1. mctl-agents 1.101.0 shipped orchestrator.run_scout, and release-deploy
+  #      bumped agent_image in cwft-mctl-agents-scout.yaml to it;
+  #   2. a dry run of 1.101.0 (run locally with --dry-run, same code path,
+  #      nothing sent) produced a scored top-N with valid draft links.
+  # The first scheduled run is the first real delivery: no MCP tool submits
+  # this template ad hoc. To stop the digest, set suspend: true again.
+  suspend: false
   workflowSpec:
     workflowTemplateRef:
       name: mctl-agents-scout
