@@ -175,8 +175,49 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
         - name: clone-gitops
           image: alpine/git:2.43.0
+          env:
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: https_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: http_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: no_proxy
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+              value: "1"
           # Root on purpose: apk add + chown -R 1000:1000 /workdir hand-off
           # (validate-local-workdir.py). Escalation is off and every capability
           # except the file-ownership ones is dropped (mctl-gitops#1717).
@@ -192,11 +233,11 @@ spec:
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates
+              apk add --no-cache openssh-client ca-certificates socat
               mkdir -p ~/.ssh
               cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
               chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
               chmod 600 ~/.ssh/config
               # ConnectTimeout / ServerAlive* above bound every SSH
               # connection in this step. A stalled TCP handshake has no
@@ -340,6 +381,20 @@ spec:
               echo "handing off $f"
             done
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           # Workflow params as env (NOT inline {{...}} in the script body —
           # that is a shell-injection vector).
           - name: WORKFLOW_SERVICE
@@ -382,21 +437,62 @@ spec:
           - name: status-updates
             path: /artifact
       initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
         # Same clone as run-reconcile's init — see the comment above that
         # template for why this is duplicated rather than shared. Note this
         # checkout is taken AFTER the reconcile finished, so the rebase window
         # below is strictly narrower than it was with the old shared PVC.
         - name: clone-gitops
           image: alpine/git:2.43.0
+          env:
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: https_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: http_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: no_proxy
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+              value: "1"
           command: [sh, -c]
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates
+              apk add --no-cache openssh-client ca-certificates socat
               mkdir -p ~/.ssh
               cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
               chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
               chmod 600 ~/.ssh/config
               # GitHub's published SSH host keys, PINNED rather than trusted on
               # first use. Source: https://api.github.com/meta (.ssh_keys),
@@ -429,17 +525,32 @@ spec:
               mountPath: /secrets/deploy-key
       script:
         image: alpine/git:2.43.0
+        env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
         command: [sh]
         resources:
           requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 2Gi }
           limits:   { cpu: 500m, memory: 256Mi, ephemeral-storage: 3Gi }
         source: |
           set -e
-          apk add --no-cache openssh-client ca-certificates
+          apk add --no-cache openssh-client ca-certificates socat
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n  ConnectTimeout 15\n  ServerAliveInterval 5\n  ServerAliveCountMax 3\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
           # ConnectTimeout / ServerAlive* above bound every SSH connection
@@ -595,10 +706,51 @@ spec:
 
     # ── Telegram notification (onExit) ────────────────────────────────────
     - name: notify-telegram
+      initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
       script:
         image: alpine:3.19
         command: [sh]
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           - name: TG_BOT_TOKEN
             valueFrom:
               secretKeyRef:
