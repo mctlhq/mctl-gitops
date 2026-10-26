@@ -33,7 +33,7 @@ Tenant-bearing handlers that matter for a bound tenant
 Deployed state checked:
 - `$MCTL_GITOPS_ROOT/services/`: tenants `admins`, `karabu`, `labs`, `namax66`. mctl-api itself has no `services/*/mctl-api/values.yaml` there, so its deployed env (for example whether the agent registry or the run-token exchange is configured) could not be observed from gitops.
 - `$MCTL_GITOPS_ROOT/tenants/`: `admins`, `commerce-proof`, `erpact`, `karabu`, `labs`, `mctl`, `namax66`. None of these files names a support pilot tenant.
-- `mctl_list_tenants`: refused, "listing all tenants requires admin access". So the tenant list and the pilot tenant could not be confirmed live (recorded under Open questions in requirements.md).
+- `mctl_list_tenants`: refused, "listing all tenants requires admin access". So the tenant list could not be confirmed live. The owner named the pilot tenant afterwards: `namax66` (D9 in mctlhq/.github#243), which is present in both directories above. See Decisions in requirements.md.
 
 ## Proposed solution
 
@@ -143,7 +143,7 @@ It reuses the one mechanism the issue points at: the server-held scope, the `age
 1. **Give the agent user `Groups = [tenant]` and rely on existing handler checks.** It is the smallest change, but every handler that tolerates an empty tenant (`GetWorkflow`, `ListWorkflows` rows) or that does not filter would leak. A list call without a filter would return whatever the handler gives a tenant member, with no route-level refusal. Rejected: it fails the "unfiltered list is refused" criterion and makes the agent indistinguishable from a human member.
 2. **A new token type or principal kind for support (a separate auth path).** The issue explicitly rejects this. It would duplicate resolution, revocation and audit that `agent_run_tokens` already provides.
 3. **Mint support tokens only by the direct service principal (mctl-support's static token), with a `tenant` field.** It keeps the mint rule unchanged, but the service would then be trusted to assert membership. The issue requires that the caller principal be a tenant member, checked by mctl-api. Rejected for this phase. The relayed-human path achieves it through the existing surface relay.
-4. **Set `User.viaPrincipalID` to the human caller.** That would put the human in every audit `via_principal_id` automatically. It inverts the established meaning ("relaying actor", see `actorAndSubject`), and it trips `ViaPrincipalID() != ""` guards in unrelated handlers. Kept out. The caller lives on the token row instead (open question in requirements.md).
+4. **Set `User.viaPrincipalID` to the human caller.** That would put the human in every audit `via_principal_id` automatically. It inverts the established meaning ("relaying actor", see `actorAndSubject`), and it trips `ViaPrincipalID() != ""` guards in unrelated handlers. Kept out. The caller lives on the token row instead (confirmed by the owner; the audit column for admitted reads is decided in S0c, mctlhq/mctl-api#813).
 
 ## Platform impact
 

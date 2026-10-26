@@ -41,7 +41,7 @@ Enforcement (REST and MCP)
 
 Verification
 - Each refusal test (another tenant's read, an unfiltered list, a write tool, a route outside the allowlist, minting for a non-member tenant) SHALL fail when its check is removed. The PR SHALL record this mutation check.
-- A live probe with a `support` token against the pilot tenant SHALL succeed, and the same probe against a different tenant SHALL be refused with 403 `agent_scope_denied`.
+- S0a is done when the unit, gate, handler and MCP tests (T1-T16) pass and the mutation check (T17) is recorded. The live probe is not an S0a criterion: it moves to S1a (mctlhq/.github#245), see Decisions.
 
 ## Out of scope
 
@@ -52,11 +52,15 @@ Verification
 - A tenant binding through the pod ServiceAccount exchange (`ExchangeAgentRunToken`). The k8s binding carries no tenant today. The support scope is minted only by the human-caller mint path in this phase.
 - Shadow-mode (`X-Mctl-Agent-Scope-Shadow`) observation of the `support` scope. A shadowing static token carries no bound tenant, so shadowing `support` is refused.
 
+## Decisions (owner amendment, 2026-10-26)
+
+- Pilot tenant: `namax66` (decision D9 in mctlhq/.github#243). The probe stays parameterised by tenant.
+- Live probe: moved to S1a (mctlhq/.github#245). Minting a `support` token needs the `mctl-support` agent definition in the registry and an existing WorkItemExecution for `execution_id`. Neither exists until S1a, so the probe cannot run after the S0a deploy. S1a runs it against `namax66` (200) and another tenant (403 `agent_scope_denied`), over REST and MCP.
+- Support task model: each support task is a WorkItemExecution (`we_...`). This is a decision, not an assumption. S1a must create one work item execution per support task, so the existing execution check and terminal-phase revocation in `internal/workitems/agent_run_tokens.go` apply. No `WithoutExecution` mint path is added for `support`.
+- `via_principal`: the caller is stored as `via_principal_id` on the `agent_run_tokens` row and exposed as `User.AgentRunRequestedBy()`. `User.viaPrincipalID` is not set, so its "relaying actor" meaning is unchanged. Which audit column carries the human for admitted support reads is decided in S0c (mctlhq/mctl-api#813), not here.
+
 ## Open questions
 
-- `via_principal` semantics: the issue asks that the token carry `via_principal` = the caller. In the existing principal model, `User.ViaPrincipalID()` means "the actor that relayed", and `actorAndSubject` in `internal/api/handlers_identity_self.go` reads it that way. Reusing that field for the human on whose behalf the agent acts would invert the meaning. This proposal stores the caller as `via_principal_id` on the token row and exposes it as `User.AgentRunRequestedBy()`. It does not set `User.viaPrincipalID`. Confirm whether S0c expects the audit `via_principal_id` column itself to carry the human.
-- Agent name: the scope's `Agents` list needs the registered name of the support agent. This proposal assumes `mctl-support`. If the registry has a different definition name at S1, change one string.
-- Support task id: this assumes the support task is a WorkItemExecution (`we_...`), so the existing execution check and terminal-phase revocation in `internal/workitems/agent_run_tokens.go` apply. If S1 task ids are not work-item executions, a `WithoutExecution` mint with a hard TTL cap would be needed instead.
+- Agent name: the scope's `Agents` list needs the registered name of the support agent. This proposal assumes `mctl-support`. If the registry has a different definition name at S1a, change one string.
 - Maximum TTL for `support`: the issue gives only the 10-minute default. This proposal caps it at 1 hour.
-- Pilot tenant for the live probe: not named in the issue. It could not be confirmed from the deployed state (see design.md). The probe is parameterised by tenant.
 - `/api/v1/tenants/{name}` and `/api/v1/previews` are not in the issue's list and are excluded. Add them if S1 needs tenant metadata.
