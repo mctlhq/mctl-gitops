@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-25T23:55:00Z'
+updated_at: '2026-10-26T00:05:08Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-496058446d0974ab
@@ -51,7 +51,7 @@ github:
   state: open
   head_sha: 2ee37c653ca48ee5ebb684ff8e62fca51e018c92
   observed_at: '2026-10-25T23:35:18Z'
-ci_blockers_head: 2ee37c653ca48ee5ebb684ff8e62fca51e018c92
+ci_blockers_head: 62bd2f58c2ec59e74f1f5331ebe48afea9d14a65
 ci_blockers:
-- validate / lint
-review_attempts: 1
+- validate / test
+review_attempts: 2
