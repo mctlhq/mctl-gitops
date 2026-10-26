@@ -37,10 +37,10 @@ Add a `Tenant string` field to `audit.Entry` (`json:"tenant,omitempty"`) and a c
 A support row:
 - `Operation: "support.request"` (const `audit.OperationSupportRequest`); `RiskLevel: low`.
 - `Status`: `succeeded` (HTTP < 400 / tool result not IsError), `failed` (otherwise), `denied` (scope refusal).
-- `UserID: user.ID`, `PrincipalID: user.PrincipalID()`, `ViaPrincipalID: user.AgentRunRequestedBy()`, `ViaExecutionID: user.ExecutionID()`, `Tenant: boundTenant`. These are set explicitly, so `logAuditCtx` does not overwrite them. It only fills fields that are empty.
+- `UserID: user.ID`, `PrincipalID: user.AgentRunRequestedBy()` (the tenant member the run acts for), `ViaPrincipalID: user.PrincipalID()` (the agent's own principal, platform convention: see requirements.md Open questions), `ViaExecutionID: user.ExecutionID()`, `Tenant: boundTenant`. These are set explicitly, so `logAuditCtx` does not overwrite them. It only fills fields that are empty.
 - `Parameters`: `layer` (`rest`|`mcp`), `route` (`METHOD /path`, no query string) or `tool`, `http_status` (REST), `agent`, `scope`, `agent_run_id`, `work_item_id`, and for MCP `loopback` (up to 10 `METHOD /path STATUS` items joined by `; `, plus `loopback_truncated=true` when the list was cut). The row never holds request bodies, response bodies, tool results or argument values.
 
-The existing REST refusal row (`agent_scope.denied`) is extended for audited scopes only: it gains `Tenant`, `ViaPrincipalID` and `ViaExecutionID`, so the admin read finds refusals by tenant and execution. Its operation name and params are unchanged, so existing consumers and tests keep working.
+The existing REST refusal row (`agent_scope.denied`) is extended for audited scopes only: it gains `Tenant`, the same `PrincipalID` / `ViaPrincipalID` assignment as a `support.request` row, and `ViaExecutionID`, so the admin read finds refusals by tenant and execution. Its operation name and params are unchanged, so existing consumers and tests keep working.
 
 ### 3. REST hook (`agentScopeGate`)
 In the `user.IsAgent()` branch, after `allowed` is decided and when `scope.AuditRequests`:
