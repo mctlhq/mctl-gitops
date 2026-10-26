@@ -37,10 +37,14 @@ tenant:
     quotas:
       requests.memory: "256Mi"
   quotas:
+    # Bumped 2026-10-26: steady state with 17 pods was limits.memory
+    # 7424Mi/9Gi (81%), requests.memory 3680Mi/5Gi, limits.cpu 8300m/12;
+    # the next site or a rolling update of gunicorn would not fit.
+    # requests.cpu (550m/1500m) has room and stays.
     requests.cpu: "1500m"
-    requests.memory: "5Gi"
-    limits.cpu: "12"
-    limits.memory: "9Gi"
+    requests.memory: "6Gi"
+    limits.cpu: "14"
+    limits.memory: "11Gi"
     pods: "30"
     persistentvolumeclaims: "5"
     # Added 2026-10-20: a PVC count alone does not bound storage; every
