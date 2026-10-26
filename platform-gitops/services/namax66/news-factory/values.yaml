@@ -4,7 +4,7 @@
 
 image:
   repository: ghcr.io/mctlhq/news-factory
-  tag: "0.1.0"
+  tag: "0.1.2"
 imagePullSecrets:
   - name: ghcr-credentials
 ingress:
@@ -40,6 +40,11 @@ env:
   NEWS_RESEARCH_HOUR: "8"
   NEWS_PUBLISH_HOUR: "10"
   NEWS_BROWSER_ENABLED: "true"
+  NEWS_CHROMIUM_SANDBOX: "false"
+  HOME: /tmp
+  TMPDIR: /tmp
+  XDG_CACHE_HOME: /tmp/.cache
+  XDG_CONFIG_HOME: /tmp/.config
 externalSecret:
   targetSecret: news-factory-secrets
   data:
@@ -60,3 +65,4 @@ containerSecurityContext:
 podSecurityContext:
   seccompProfile:
     type: Unconfined
+extraContainers: []
