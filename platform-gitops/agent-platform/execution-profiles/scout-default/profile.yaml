@@ -1,0 +1,65 @@
+# ExecutionProfile for scout (ADR 007, mctl-agents#797): the daily tech-news
+# digest. Describes what runs and changes none of it: only the release gate
+# (mctl-agents tools/check_binding_hash.py evaluate_promotion) and the two
+# catalog validators read this file.
+#
+# Source of each value:
+#   tools            agents/_manifests/scout/agent.yaml toolPolicy.allow and
+#                    build_scout_options: none. The SDK sessions run with
+#                    tools=[], no MCP and setting_sources=[]; they only
+#                    return schema-validated JSON.
+#   modelPolicyRef   the manifest's modelPolicy.task: scout_scoring. The
+#                    relevance pass uses scout_relevance (cheap); the
+#                    contract has room for one task, and scoring is the
+#                    expensive one.
+#   budgetUsd        cwft-mctl-agents-scout.yaml SCOUT_BUDGET_USD, "1.00",
+#                    equal to the options.py default. A run-level cap
+#                    accumulated across all sessions.
+#   timeoutSeconds   cwft-mctl-agents-scout.yaml spec.activeDeadlineSeconds,
+#                    1200. No SCOUT_TIMEOUT_SECONDS exists.
+#   permissions      read-only GitHub (spike:scout search, spike backlog),
+#                    no repository write, one Telegram sendMessage.
+#
+# network: the enum has no value for "a fixed list of public hosts". Besides
+# the model provider the scout reaches the feeds in agents/_scout/sources.yaml,
+# api.github.com (GET only) and api.telegram.org (sendMessage only). This is
+# stated here rather than hidden behind approved-providers-only.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ExecutionProfile
+metadata:
+  name: scout-default
+  owner: platform
+spec:
+  version: "1.0.0"
+  modelPolicyRef:
+    task: scout_scoring
+    compatibility: ">=1.0.0 <2.0.0"
+  skills: []
+  tools: []
+  policyRef: news-digest
+  permissions:
+    repository:
+      read: true
+      branchCreate: false
+      commit: false
+      pullRequestCreate: false
+      merge: false
+    kubernetes: none
+    network: approved-providers-only
+    mutationScopes:
+      - telegram-send-message
+  budgetUsd: 1.00
+  timeoutSeconds: 1200
+  runtime:
+    entrypoint: orchestrator.run_scout:run_scout
+    optionsBuilder: orchestrator.options:build_scout_options
+    sandbox:
+      backend: argo
+      clusterWorkflowTemplate: mctl-agents-scout
+      budgetEnv: SCOUT_BUDGET_USD
+      approved: true
+  approval:
+    requiredBefore: []
+  evidence:
+    required:
+      - telegram-message
