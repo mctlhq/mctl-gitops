@@ -1,0 +1,30 @@
+{{- if (default dict .Values.securityCodeScanning).externalSecret }}
+# HMAC secret of the GitHub Code Scanning webhook receiver
+# (mctlhq/mctl-gitops#2168, mctl-api >= 4.125.0). Rendered only when
+# securityCodeScanning.externalSecret is true in bootstrap/values.yaml.
+#
+# Its own ExternalSecret and file, like mctl-api-evidence-writer.yaml: a
+# missing Vault property must degrade only this receiver, not fail
+# mctl-api-secrets or mctl-api-events. The value is deliberately distinct from
+# GITHUB_WEBHOOK_SECRET (mctl-api-events); mctl-api refuses a receiver secret
+# that equals it or is shorter than 32 characters. Write it to Vault without a
+# trailing newline (see mctl-api-secrets.yaml).
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-api-security-code-scanning
+  namespace: mctl-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-api-security-code-scanning
+    creationPolicy: Owner
+  data:
+    - secretKey: GITHUB_CODE_SCANNING_WEBHOOK_SECRET
+      remoteRef:
+        key: platform/mctl-api/github-code-scanning-webhook
+        property: secret
+{{- end }}
