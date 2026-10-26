@@ -63,11 +63,9 @@ spec:
             # start, so when a rollout depends on generated configuration
             # (for example zitadel-iac output), bump only after it is applied.
             # The line below records why the current value was set.
-            # This rollout replaces replica mctl-api-6f4bb4b99f-qpnxg, which
-            # started 2026-10-22T22:52Z while Temporal was down (k3s 1.34
-            # upgrade window): its Temporal client failed to dial once and
-            # stayed nil, so every DevLoop call that landed on it answered
-            # 503 "dev-loop Temporal client not configured" (mctl-api#764).
+            # This rollout loads OAUTH_JWT_SIGNING_KEYS, which #2171 mapped
+            # into mctl-api-secrets (step C0 of mctlhq/mctl-api#805); envFrom
+            # is read only at container start.
             ROLLOUT_MARKER: "2026-10-26-jwt-signing-keys"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
