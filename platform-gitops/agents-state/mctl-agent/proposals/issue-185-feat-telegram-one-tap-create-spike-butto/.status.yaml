@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-26T07:28:32Z'
+status: merged
+updated_at: '2026-10-26T07:45:31Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-4653f6d990aa4a90
@@ -47,3 +47,5 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
+merged_at: '2026-10-26T07:45:31Z'
+merge_commit: ca4d3b12d426125add3f7c66f6cdd20ea4d4f982
