@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-10-26T01:54:52Z'
-updated_by: mctl-agents[bot]
+status: rejected
+updated_at: '2026-10-26T15:51:03Z'
+updated_by: mashkovd
 execution:
   context_id: ex-a48809588691f7f2
   trace_id: 7a76d27da8da42a8438a839e0a34be93
@@ -33,7 +33,7 @@ failure:
   code: no-commits
   stage: agent
   message: implementer produced no commits
-notes: 'agent: implementer produced no commits'
+notes: 'superseded by mctlhq/mctl-gitops#2168: the implementer stopped at the #774 dependency gate (no commits) while the code scanning receiver did not exist; a DevLoop past implement cannot restart (mctl-agents#748), so the scope moved to a new issue with the gate satisfied (mctl-api 4.125.0)'
 completion:
   api_version: completion.mctl.ai/v1alpha1
   run_id: mctl-agents-implement-a42b912a
