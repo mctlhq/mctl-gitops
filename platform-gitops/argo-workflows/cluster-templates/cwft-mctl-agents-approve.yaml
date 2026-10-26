@@ -170,15 +170,30 @@ spec:
       initContainers:
         - name: clone-gitops
           image: alpine/git:2.43.0
+          env:
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: https_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: http_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: no_proxy
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+              value: "1"
           command: [sh, -c]
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates
+              apk add --no-cache openssh-client ca-certificates socat
               mkdir -p ~/.ssh
               cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
               chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
               # GitHub's published SSH host keys, PINNED rather than trusted on
               # first use. Source: https://api.github.com/meta (.ssh_keys),
               # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
@@ -213,6 +228,20 @@ spec:
         image: alpine/git:2.43.0
         command: [sh]
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           # Params via env, never inline {{workflow.parameters.*}} in the
           # script body — same shell-injection reasoning as the other
           # mctl-agents templates (this pod shares the workdir a push step
@@ -451,15 +480,30 @@ spec:
       initContainers:
         - name: clone-gitops
           image: alpine/git:2.43.0
+          env:
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: https_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: http_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: no_proxy
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+              value: "1"
           command: [sh, -c]
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates
+              apk add --no-cache openssh-client ca-certificates socat
               mkdir -p ~/.ssh
               cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
               chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
               # GitHub's published SSH host keys, PINNED rather than trusted on
               # first use. Source: https://api.github.com/meta (.ssh_keys),
               # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
@@ -497,6 +541,20 @@ spec:
         image: alpine/git:2.43.0
         command: [sh]
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           - name: WORKFLOW_SERVICE
             value: "{{workflow.parameters.service}}"
           - name: WORKFLOW_SLUG
@@ -516,11 +574,11 @@ spec:
               echo "❌ service/slug must be plain directory names" >&2
               exit 1 ;;
           esac
-          apk add --no-cache openssh-client ca-certificates
+          apk add --no-cache openssh-client ca-certificates socat
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
           # GitHub's published SSH host keys, PINNED rather than trusted on
           # first use. Source: https://api.github.com/meta (.ssh_keys),
           # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
