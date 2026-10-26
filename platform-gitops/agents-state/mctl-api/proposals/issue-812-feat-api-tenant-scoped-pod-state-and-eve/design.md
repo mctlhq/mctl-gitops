@@ -15,7 +15,7 @@ Deployed state checked:
 - `mctl_list_workflows()` with this run's investigate-scope token: 21 rows, all with `team: ""` (`mctl-agents-*`, `dev-loop-*`, `mctl-agents-approve`). This shows that empty-tenant platform rows reach non-admin callers today.
 - `$MCTL_GITOPS_ROOT/tenants/namax66/values.yaml`: quotas `pods: "5"`, `limits.memory: 1Gi`, a LimitRange with max memory 1Gi. These are the limits whose violations surface as `FailedCreate ... exceeded quota` events.
 - `$MCTL_GITOPS_ROOT/services/namax66/news-factory/values.yaml`: memory limit 512Mi (headless Chromium). This is a plausible OOMKilled source, matching the issue's motivation.
-- mctl-api ServiceAccount RBAC: **not observed**. `helm/templates/` has only `serviceaccount.yaml` (no Role/ClusterRole), and the visible gitops checkout contains only `services/` and `tenants/`. Whether `list pods`/`list events` is granted in tenant namespaces is unknown; see Open questions.
+- mctl-api ServiceAccount RBAC (observed after the investigation, mctl-gitops main): the per-tenant Role `mctl-api-workflows` in `platform-gitops/helm-charts/tenant/templates/argo-workflow.yaml` (bound to `mctl-api/mctl-api` in every tenant namespace) grants `workflows` and `get`/`list` on `resourcequotas` only. The `get pods` used by `agent_run_binding.go` comes from the Role `mctl-api-workflow-submitter` in `argo-workflows` (`platform-gitops/bootstrap/templates/mctl-platform/mctl-api-rbac.yaml`), not from tenant namespaces. So `list pods` and `list events` in tenant namespaces are missing today; task 0 adds them.
 
 ## Proposed solution
 
@@ -45,7 +45,7 @@ func (c *WorkloadClient) ListEvents(ctx, namespace string, opts EventQuery) (eve
 
   Both handlers follow `ListPreviews` exactly: 401 without a user, then `!user.IsAdmin() && !user.HasTenantAccess(team)` gives 403 **before** any Kubernetes call, nil reader gives 503, a Kubernetes error is logged with `slog.Warn` and answered 503 with "could not list pods in <ns>". Path params are validated against the DNS-label pattern (`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, 400 otherwise), so a crafted team cannot address another namespace. `since` uses `time.ParseDuration`, bounded 1m..24h (400 outside). Responses are `{"items": [...], "count": n, "team": ..., "namespace": ...}`, plus `"service"` for pods and `"since"`/`"truncated"` for events.
 - **Routes** are added in the authenticated group next to `/logs/{team}/{app}`.
-- **`internal/auth/agent_scope.go`**: add `getRoute("^/api/v1/pods/[^/]+/[^/]+$")` and `getRoute("^/api/v1/events/[^/]+$")` to `AgentScopeInvestigate`. S0a's support scope will list them too.
+- **`internal/auth/agent_scope.go`**: add `getRoute("^/api/v1/pods/[^/]+/[^/]+$")` and `getRoute("^/api/v1/events/[^/]+$")` to `AgentScopeInvestigate`. Add the same two routes to `AgentScopeSupport` (from S0a) with `BindTenant` on the `{team}` segment; the events route has no `team` query parameter, so `RequireTenantQuery` is not needed. Add `mctl_get_service_pods` and `mctl_list_namespace_events` to S0a's `supportTools`; both take the tenant as `team`, which S0a's `AllowsToolCall` already binds.
 
 ### 3. MCP tools (`internal/mcp/server.go`)
 - `mctl_get_service_pods(team, service)` calls `/api/v1/pods/{team}/{service}`.
@@ -66,7 +66,7 @@ func workflowRowVisible(u *auth.User, team string, unreadable bool) bool {
 }
 ```
 - `platformReader(u)` is true only for an agent scope with `ReadAllTenants` (today only `AgentScopeInvestigate`). Ordinary tenant members, service users that are not admins, and CI identities get false.
-- `auth.User.BoundTenant() (string, bool)` is added in `internal/auth` as returning `("", false)` until S0a defines the support scope. S0a then implements it from the support token's binding. If S0a merges first, this task uses S0a's accessor directly. The test for the bound rule constructs a user via the S0a constructor when available. Otherwise it is added in S0a with the accessor (tasks.md 6).
+- `auth.User.BoundTenant() (string, bool)` and the bound-tenant branch come from S0a (mctlhq/mctl-api#811, task 7), which merges first. S0b does not add a stub. It folds S0a's existing bound-tenant check into `workflowRowVisible` unchanged (the second line above) and adds only the non-admin branch below it. S0a's bound-tenant tests must stay green; T6 reruns them through the helper.
 - The unreadable row stays hidden from non-admins even for `platformReader`, preserving the current behaviour and the mctl-api#586 reasoning.
 
 ## Alternatives
@@ -78,7 +78,8 @@ func workflowRowVisible(u *auth.User, team string, unreadable bool) bool {
 ## Platform impact
 - **Migrations**: none. No database or audit schema changes.
 - **Backward compatibility**: new routes and tools are additive. `GET /api/v1/workflows` returns fewer rows to non-admin tenant callers, which is the intended fix. The MCP tool count rises by 2, and the portal read-only allowlist copied from `TestReadOnlyToolsAreTheRecordedSet` must add the two names.
-- **RBAC**: the mctl-api ServiceAccount needs `list` on `pods` and `events` in tenant namespaces. Where that RBAC is managed was not observed (Open questions). Without it the endpoints answer 503, never an empty "healthy" answer.
+- **RBAC**: the mctl-api ServiceAccount needs `list` on `pods` and `events` in tenant namespaces. It is added to the tenant chart's `mctl-api-workflows` Role in mctl-gitops (tasks.md 0), which every tenant namespace renders, so new tenants get it automatically. If the release ever runs before the grant, the endpoints answer 503, never an empty "healthy" answer.
+- **Ordering**: implemented after S0a has merged (see Decisions in requirements.md).
 - **Resource impact**: each call is one namespaced LIST. Tenant namespaces are small (namax66 `pods: 5`). The events list is bounded by Kubernetes' 1h default event TTL, and the response is capped at 200 items.
 - **Risks and mitigations**:
   - Cross-tenant read through a crafted path: DNS-label validation, plus the access check before the Kubernetes call. Tests T1/T2 fail if the check is removed.
