@@ -1,0 +1,20 @@
+status: proposed
+updated_at: '2026-10-26T12:51:11Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-01eddc872ecc6c19
+  trace_id: b8ae9ef20c731aa0885024f9b1d9581a
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 813
+  url: https://github.com/mctlhq/mctl-agents/issues/813
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-f44f042ada4d2a33
+  content_hash: sha256:f44f042ada4d2a337b6dc1d0edc161e7054d54086094463876b02fab2078d4a4
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
