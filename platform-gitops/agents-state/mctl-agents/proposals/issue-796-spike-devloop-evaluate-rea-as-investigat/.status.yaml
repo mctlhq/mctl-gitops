@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-26T01:28:56Z'
+status: merged
+updated_at: '2026-10-26T02:05:15Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-d099c6f8f6c7b95c
@@ -47,11 +47,10 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
-review_attempts: 3
 github:
-  state: open
-  head_sha: 3deff896b2cb30036fa6cf26866dc87e7cdb16af
-  observed_at: '2026-10-26T01:20:06Z'
+  state: merged
+  head_sha: 6b9794510000738dcafa611c125a379819208e23
+  observed_at: '2026-10-26T02:05:15Z'
 notes: 'implementer declined to act: The three failures come from the external gitops
   catalog gaining the scout agent (mctl-agents#797/#803: profile scout-default, shadow
   release scout.yaml pinning agents/_manifests/scout/agent.yaml by sha256 contentHash).
@@ -60,3 +59,5 @@ notes: 'implementer declined to act: The three failures come from the external g
   spike docs/tools. Fixing in-repo would mean implementing the whole scout agent with
   a manifest byte-identical to the pinned hash, which is out of scope and not derivable.
   Resolution: land the scout PR (#803) into main'
+merged_at: '2026-10-26T02:05:15Z'
+merge_commit: c898d659db23c021833b8e5468a86fa65edec734
