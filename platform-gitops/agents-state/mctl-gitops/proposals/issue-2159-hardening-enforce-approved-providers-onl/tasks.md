@@ -1,5 +1,25 @@
 # Tasks: issue-2159-hardening-enforce-approved-providers-onl
 
+## Scope of this implementer run (owner amendment, 2026-10-26)
+
+The egress policy applies to the agent pods that run DevLoop itself, so a wrong allowlist would
+stop the pipeline that has to fix it, and stages B and C need observed traffic from real runs
+between them. This run therefore delivers **stage A only**:
+
+- In scope: tasks 1, 3 and 4. The proxy runs with the allow-all, log-every-host ACL, and the
+  agent CWFTs route through it. For task 4, put the executor `podSpecPatch` behind the outcome
+  of task 2: if its effect cannot be verified in this run, leave the executor containers
+  unproxied (they keep today's direct egress, which stage A does not restrict) and record that
+  in the runbook.
+- Out of scope for this run, each a separate later PR after the owner reviews the stage A proxy
+  log: task 2 (needs a live probe workflow), task 5 (stage B allowlist), task 6 (stage C
+  NetworkPolicy) and tests T1-T6, which need live pods. Do NOT add
+  `networkpolicy-agents-egress.yaml` or a deny ACL in this PR.
+- Stage A must not change what any agent pod can reach. If the proxy is down, a run may fail;
+  that is acceptable only because stage A is reverted by one commit (task-4 revert).
+- Task 1's inventory must include the scout feed hosts from mctl-agents
+  `agents/_scout/sources.yaml` (read via the GitHub API) as candidate allowlist entries.
+
 - [ ] 1. **Finalise the traffic inventory.**
   - Read the scout feed hosts from mctl-agents `agents/_scout/sources.yaml`.
   - Read any non-essential hosts the Claude Code CLI contacts.
