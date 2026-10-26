@@ -1,0 +1,179 @@
+# Egress proxy for mctl-agents step pods (mctlhq/mctl-gitops#2159, G1 of
+# mctlhq/mctl-agents#807). STAGE A: observe only.
+#
+# The cluster CNI (flannel + kube-router) matches NetworkPolicy by IP only, so
+# an "approved providers" allowlist by hostname has to live in a forward proxy.
+# In stage A the proxy forwards every request and logs the destination host;
+# nothing is denied and no agent NetworkPolicy exists yet. Stage B replaces
+# the allow-all ACL with a dstdomain allowlist, stage C adds the egress
+# NetworkPolicy in argo-workflows. See docs/runbooks/mctl-agents-egress.md.
+#
+# Applied as a raw manifest by root-app, same pattern as mctl-api-netpol.yaml.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mctl-agents-egress
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-egress-proxy
+  namespace: mctl-agents-egress
+data:
+  squid.conf: |
+    http_port 3128
+
+    # Logs go to stdout/stderr so Promtail ships them to Loki. The default
+    # squid log format already records the CONNECT target host:port.
+    access_log stdio:/dev/stdout squid
+    cache_log /dev/stderr
+    cache deny all
+    pid_filename none
+    # Do not leak the client address chain or proxy identity upstream.
+    forwarded_for delete
+    via off
+
+    # STAGE A: allow-all, log-every-host. Stage B replaces this block with
+    # `acl allowed_hosts dstdomain ...` and a deny-by-default rule.
+    # Only CONNECT to 443 and plain HTTP to 80 are ever proxied.
+    acl SSL_ports port 443
+    acl Safe_ports port 80 443
+    acl CONNECT method CONNECT
+    http_access deny !Safe_ports
+    http_access deny CONNECT !SSL_ports
+    http_access allow all
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-egress-proxy
+  namespace: mctl-agents-egress
+  labels:
+    app.kubernetes.io/name: agent-egress-proxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-egress-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-egress-proxy
+    spec:
+      containers:
+        - name: squid
+          image: ubuntu/squid:6.6-24.04_edge
+          ports:
+            - name: proxy
+              containerPort: 3128
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/squid/squid.conf
+              subPath: squid.conf
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: agent-egress-proxy
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-egress-proxy
+  namespace: mctl-agents-egress
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-egress-proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-egress-proxy
+  namespace: mctl-agents-egress
+spec:
+  selector:
+    app.kubernetes.io/name: agent-egress-proxy
+  ports:
+    - name: proxy
+      port: 3128
+      targetPort: proxy
+---
+# Ingress: only agent step pods may use the proxy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-ingress
+  namespace: mctl-agents-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argo-workflows
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-agents
+      ports:
+        - port: 3128
+          protocol: TCP
+---
+# Egress: DNS plus public 80/443 only. Node public IPs are excluded so the
+# proxy cannot be used to reach kubelet or the API server from outside the
+# cluster network (same CIDRs as helm-charts/tenant/values.yaml
+# nodePublicCIDRs).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-proxy-egress
+  namespace: mctl-agents-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 78.47.58.237/32
+              - 91.99.127.137/32
+              - 91.99.152.207/32
+              - 91.99.112.66/32
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP

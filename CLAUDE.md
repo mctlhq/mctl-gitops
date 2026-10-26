@@ -99,6 +99,9 @@ signing key (`AGENTS_APP_PRIVATE_KEY`), see
 For which mctl-agents surfaces run under the ADR 014 policy checkpoint and
 which are known gaps, see `docs/runbooks/policy-checkpoint-coverage.md`.
 
+For the agent egress proxy and its staged rollout, see
+`docs/runbooks/mctl-agents-egress.md`.
+
 For approving a proposal by hand now that `mctl-agents-approve` requires the
 reviewed content digest, see `docs/runbooks/proposal-approval-content-digest.md`.
 
