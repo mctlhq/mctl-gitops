@@ -38,6 +38,11 @@ data:
     acl CONNECT method CONNECT
     http_access deny !Safe_ports
     http_access deny CONNECT !SSL_ports
+    # Never proxy to link-local (instance metadata at 169.254.169.254) or
+    # loopback, whatever stage the allowlist is at.
+    acl to_linklocal dst 169.254.0.0/16
+    http_access deny to_linklocal
+    http_access deny to_localhost
     http_access allow all
 ---
 apiVersion: apps/v1
@@ -91,7 +96,9 @@ spec:
           # key and tails log files we do not write, both of which need a
           # writable root filesystem. No cache_dir, so `squid -z` is moot.
           command: ["/usr/sbin/squid"]
-          args: ["-f", "/etc/squid/squid.conf", "-NYC"]
+          # -N foreground, -C do not catch fatal signals. No -Y (still valid in 6.x):
+          # it only matters during a fast reload, which this pod never does.
+          args: ["-f", "/etc/squid/squid.conf", "-N", "-C"]
           ports:
             - name: proxy
               containerPort: 3128
@@ -129,6 +136,11 @@ spec:
               mountPath: /var/spool/squid
             - name: tmp
               mountPath: /tmp
+            # cache_log and access_log go to stderr/stdout, but the default
+            # log dir stays writable in case anything opens it before
+            # squid.conf is parsed.
+            - name: log
+              mountPath: /var/log/squid
       volumes:
         - name: config
           configMap:
@@ -140,6 +152,9 @@ spec:
           emptyDir:
             sizeLimit: 64Mi
         - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: log
           emptyDir:
             sizeLimit: 16Mi
 ---
