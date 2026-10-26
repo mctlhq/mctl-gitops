@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-26T00:50:10Z'
+updated_at: '2026-10-26T00:59:39Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-d099c6f8f6c7b95c
@@ -52,3 +52,16 @@ github:
   state: open
   head_sha: ebafa819eaac90f4b812beaaa82aaa19b51ca8a6
   observed_at: '2026-10-26T00:50:10Z'
+ci_blockers_head: ebafa819eaac90f4b812beaaa82aaa19b51ca8a6
+ci_blockers:
+- PR validation / tests
+refusals: 1
+refusals_head: ebafa819eaac90f4b812beaaa82aaa19b51ca8a6
+notes: 'implementer declined to act: The three failures come from the external gitops
+  catalog gaining the scout agent (mctl-agents#797/#803: profile scout-default, shadow
+  release scout.yaml pinning agents/_manifests/scout/agent.yaml by sha256 contentHash).
+  No scout code exists on this branch or origin/main (no agents/_manifests/scout,
+  run_scout, build_scout_options, scout_scoring task). This PR only adds the 796 REA
+  spike docs/tools. Fixing in-repo would mean implementing the whole scout agent with
+  a manifest byte-identical to the pinned hash, which is out of scope and not derivable.
+  Resolution: land the scout PR (#803) into main'
