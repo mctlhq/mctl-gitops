@@ -68,7 +68,7 @@ spec:
             # upgrade window): its Temporal client failed to dial once and
             # stayed nil, so every DevLoop call that landed on it answered
             # 503 "dev-loop Temporal client not configured" (mctl-api#764).
-            ROLLOUT_MARKER: "2026-10-23-temporal-client-dead-replica"
+            ROLLOUT_MARKER: "2026-10-26-jwt-signing-keys"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
