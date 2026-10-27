@@ -5,6 +5,21 @@
   "default_disabled": true,
   "tools": [
     {
+      "name": "mctl_list_signup_requests",
+      "enabled": false,
+      "reason": "Private direct-human administrator invitation administration; exposes applicant contact details or changes admission authority. Use the authenticated API MCP endpoint."
+    },
+    {
+      "name": "mctl_decide_signup_request",
+      "enabled": false,
+      "reason": "Private direct-human administrator invitation administration; exposes applicant contact details or changes admission authority. Use the authenticated API MCP endpoint."
+    },
+    {
+      "name": "mctl_signup_capacity",
+      "enabled": false,
+      "reason": "Private direct-human administrator invitation administration; exposes applicant contact details or changes admission authority. Use the authenticated API MCP endpoint."
+    },
+    {
       "name": "mctl_abandon_dev_loop",
       "enabled": true,
       "reason": "Signals abandon into a running DevLoopWorkflow, ending that loop for good; the counterpart of mctl_approve_dev_loop and the only MCP way to end a loop parked at approval (mctlhq/mctl-api#392). Enabled on the shared portal by owner decision 2026-09-12 (mctlhq/.github#35): the portal switch is user-blind, so the mctl API's own authentication, team scope and role checks are the access control -- the portal only decides visibility."
@@ -38,6 +53,11 @@
       "name": "mctl_create_preview",
       "enabled": true,
       "reason": "Provisions a preview environment: creates namespaced workloads and consumes cluster quota. Enabled on the shared portal by owner decision 2026-09-12 (mctlhq/.github#35): the portal switch is user-blind, so the mctl API's own authentication, team scope and role checks are the access control -- the portal only decides visibility."
+    },
+    {
+      "name": "mctl_cancel_customer_deletion",
+      "enabled": false,
+      "reason": "Prepared-account deletion recovery changes identity access and is restricted to a direct human platform administrator on the API MCP connection. Keep it off the shared aggregate portal; the authenticated API independently rejects service, delegated and non-admin callers."
     },
     {
       "name": "mctl_create_tenant",
@@ -93,6 +113,11 @@
       "name": "mctl_get_agent",
       "enabled": false,
       "reason": "Admin-only read of one agent's registry entry: owner, every definition version with its lifecycle, and the active binding per environment. Read-only, but it exposes the agent registry's internals; not yet enabled on the shared portal, an owner decision."
+    },
+    {
+      "name": "mctl_get_agent_preflight",
+      "enabled": false,
+      "reason": "Admin-only read-only preflight of an agent and profile against the CI-equivalent platform rules. Exposes agent platform internals; not enabled on the shared portal."
     },
     {
       "name": "mctl_get_epic_status",
@@ -165,6 +190,16 @@
       "reason": "CPU, memory and pod quota usage for a team workspace; capacity figures only, tenant-scoped by the upstream."
     },
     {
+      "name": "mctl_get_service_pods",
+      "enabled": true,
+      "reason": "Allow-listed pod state of one service (phase, container states, termination reason and exit code, restarts, requests and limits); no env, volume or secret values, tenant-scoped by the upstream."
+    },
+    {
+      "name": "mctl_list_namespace_events",
+      "enabled": true,
+      "reason": "Kubernetes events of a tenant namespace over a bounded window, capped at 200 and secret-scanned; tenant-scoped by the upstream."
+    },
+    {
       "name": "mctl_get_service_config",
       "enabled": true,
       "reason": "Service configuration as recorded in GitOps: image tag, host, port, component type, database flag. No secret values; tenant-scoped upstream."
@@ -208,6 +243,11 @@
       "name": "mctl_list_agent_executions",
       "enabled": true,
       "reason": "Durable execution records of DevLoop runs: agent version, workflow id, result. Pipeline metadata; tenant-scoped upstream."
+    },
+    {
+      "name": "mctl_list_agent_assets",
+      "enabled": false,
+      "reason": "Admin-only read-only index of agent registry, gitops profiles, release intents, policy catalogs and skills with reverse references. Exposes agent platform internals; not enabled on the shared portal."
     },
     {
       "name": "mctl_list_agent_versions",
@@ -463,6 +503,11 @@
       "name": "mctl_get_commerce_receipt",
       "enabled": false,
       "reason": "Reads one tenant's commerce receipt: ids, digests, the five facts and the approval/policy reference; no arguments, results or payment proofs. A foreign tenant and a missing id answer the same. Not enabled on the shared portal: that is a separate owner decision (mctl-api#569)."
+    },
+    {
+      "name": "mctl_get_usage_summary",
+      "enabled": false,
+      "reason": "Admin-only aggregate of the model-usage ledger: token and cost sums per stage/agent/model/repo for DevLoop workflows; exposes internal workflow ids, repo/issue/PR numbers and estimated spend, no prompt or completion text. Not enabled on the shared portal pending an owner decision (mctl-api#651)."
     }
   ]
 }
