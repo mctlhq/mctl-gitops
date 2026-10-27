@@ -74,9 +74,11 @@ Deployed state checked:
 ### 2. Plan and builder (`orchestrator/resolver.py`, `orchestrator/options.py`)
 - `ExecutionPlan.effort: str | None = None` is set from `model_selection.effort`. `to_log_dict()` adds
   `"effort": self.effort`, an additive key.
-- `_scrubbed(options, *, provider=None, effort=None)`: when `effort` is not None, set `options.effort`.
-  If `options.effort` is already set to a different value, raise `ValueError`. With the default
-  `effort=None` it is a no-op, so every existing builder output is unchanged.
+- New public `apply_effort(options, effort)`: when `effort` is not None, set `options.effort`. If
+  `options.effort` is already set to a different value, raise `ValueError`. With `effort=None` it is a
+  no-op.
+- `_scrubbed(options, *, provider=None, effort=None)` calls `apply_effort(options, effort)`. With the
+  default `effort=None` every existing builder output is unchanged.
 - `build_issue_investigator_options_from_plan` passes `effort=plan.effort` on both branches.
 - `config/settings.py`: extend the existing fail-closed loop so that a string-only selection with an
   effort also raises `ModelPolicyError`. A string cannot carry the effort, and silently dropping it would
@@ -95,9 +97,10 @@ Deployed state checked:
 - `make_sdk_runner` / `run_bench` take `effort` and `effort_source` (`"flag" | "policy"`).
   - Candidate records get `effort` and `effort_source`; the manifest gets `candidate_effort`,
     `candidate_effort_source`, `model_policy_path` and the policy file's sha256.
-  - With `effort_source == "policy"`, the harness sets the effort by calling
-    `orchestrator.options._scrubbed(built, effort=...)`, the production seam, instead of assigning
-    `options.effort` directly. The bench therefore exercises the code under test.
+  - With `effort_source == "policy"`, the harness sets the effort by calling the public
+    `orchestrator.options.apply_effort(built, effort)`, the same function `_scrubbed` uses, instead of
+    assigning `options.effort` directly. The bench therefore exercises the code under test without
+    importing a private name.
 - The existing guards stay: no non-default effort into `SPIKE_DIR`, and `_refuse_exploratory` for
   `decide()`. `report --exploratory DIR` renders the run and prints the effort source.
 - Add a helper `count_http_400(records)` and print it in the exploratory report, as the acceptance metric.
@@ -109,12 +112,13 @@ Deployed state checked:
   - a profile `experimental_hetzner_qwen38` with `model: Qwen/Qwen3.8-27B`, `effort: medium` and the same
     `provider:` block as the test fixture;
   - task `bench_candidate: experimental_hetzner_qwen38`.
-- Run command, documented in `docs/spikes/825-qwen38-effort-rebench.md`:
+- Run command, documented in `docs/spikes/825-qwen38-effort-rebench.md` (operator step, follow-up PR;
+  the implementer commits only the policy and the doc, with an empty result section):
   - `snapshot --allow-live --out docs/spikes/825/snapshot.json`
   - `bench --allow-live --arm candidate --out-dir docs/spikes/825 --snapshot docs/spikes/825/snapshot.json`
     `--model-policy docs/spikes/825/model-policy-qwen38.yaml --policy-task bench_candidate`
-- Records and manifest are committed. The doc reports the HTTP-400 count, which the acceptance requires
-  to be 0, and links #791/#822.
+- In the operator follow-up PR, records and manifest are committed and the doc reports the HTTP-400
+  count, which the acceptance requires to be 0, and links #791/#822.
 
 ## Alternatives
 - **Effort inside the `provider:` block.** Rejected: it ties effort to third-party endpoints only, though
@@ -144,14 +148,12 @@ Deployed state checked:
   - A string-only task routed to an effort profile: fails at import, which is loud and has no silent
     downgrade. Deployed workers are unaffected because no deployed config changes the policy path
     (see Deployed state).
-  - The harness importing private `_scrubbed`: it already imports `orchestrator.options` builders. If
-    reviewers object, expose a public `apply_policy_effort(options, effort)` that `_scrubbed` calls.
+  - The harness depending on a private seam: avoided by the public `apply_effort` (owner decision).
 
-## Open questions
-- Whether `effort` should be required on provider profiles. This design keeps it optional; see
-  requirements.md.
-- `medium` versus `xhigh` for Qwen3.8-27B. This design pins `medium`, the value with evidence.
-- The live re-bench is an operator step that needs Hetzner credentials. The code PR can land first and
-  the artifacts can follow.
-- MCP tools were not used to inspect running workers. The gitops checkout was the only deployed-state
-  source.
+## Decisions (owner review, 2026-10-27)
+- `effort` stays optional; `Qwen3.8-27B` is pinned to `medium`.
+- The live re-bench is an operator step in a follow-up PR. The implementer makes no live call and reads
+  no Hetzner credential.
+- The harness uses the public `apply_effort`, not `_scrubbed`.
+- MCP tools were not used to inspect running workers; the gitops checkout was the deployed-state source.
+  That is enough here because the committed policy does not change.

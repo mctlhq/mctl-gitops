@@ -10,14 +10,14 @@
 - [ ] 3. (depends on 1) Add `ExecutionPlan.effort` in `orchestrator/resolver.py`, set from
   `model_selection.effort`, and add `effort` to `to_log_dict()`. — DoD: a plan resolved from an effort
   profile carries and logs it; plans from the committed policy have `effort=None`.
-- [ ] 4. (depends on 3) Add the `effort` keyword to `_scrubbed` in `orchestrator/options.py`, with the
-  conflict check, and pass `effort=plan.effort` on both branches of
-  `build_issue_investigator_options_from_plan`. — DoD: options carry the plan's effort; all existing
+- [ ] 4. (depends on 3) Add public `apply_effort(options, effort)` with the conflict check to
+  `orchestrator/options.py`, add the `effort` keyword to `_scrubbed` (which calls `apply_effort`), and
+  pass `effort=plan.effort` on both branches of `build_issue_investigator_options_from_plan`. — DoD: options carry the plan's effort; all existing
   `tests/test_options.py` equivalence tests pass unchanged.
 - [ ] 5. (depends on 4) Add `bench --model-policy/--policy-task` to `tools/hetzner_inference_spike.py`:
   - pre-flight refusals (no provider, provider name or base_url mismatch, model not AVAILABLE, combined
     with `--effort`, arm other than `candidate`);
-  - effort applied through `_scrubbed(..., effort=...)`;
+  - effort applied through the public `apply_effort(...)`, not the private `_scrubbed`;
   - `effort_source` recorded in records and manifest, plus policy path and sha256;
   - `count_http_400` printed in the exploratory report.
   — DoD: offline tests with a fake runner cover each refusal and the recorded fields; `--effort`
@@ -27,10 +27,14 @@
   `docs/spikes/825-qwen38-effort-rebench.md` with the exact snapshot and bench commands. — DoD: the bench
   policy loads with `ModelPolicy.load`, and a test asserts it resolves to provider `hetzner` with effort
   `medium`.
-- [ ] 7. (depends on 6; operator, live credentials) Run the snapshot and the candidate bench from the
+- [ ] 7. **Not part of the implementer PR. Leave unchecked.** (depends on 6; operator, live
+  credentials, follow-up PR referencing #825) Run the snapshot and the candidate bench from the
   bench policy into `docs/spikes/825/`, commit `snapshot.json`, `records-candidate.jsonl` and
   `run-manifest-candidate.json`, and fill in the result section of the doc. — DoD: every candidate
   record has `effort: medium` and `effort_source: policy`, and the HTTP-400 count is 0.
+
+The implementer PR covers tasks 1–6 and T1–T9 only. It makes no live provider call, reads no Hetzner
+credential, and creates no bench artifact under `docs/spikes/825/` other than the policy file.
 
 ## Tests
 - [ ] T1. `tests/test_model_policy.py`: `EFFORT_LEVELS == typing.get_args(claude_agent_sdk.types.EffortLevel)`.
@@ -54,6 +58,8 @@
   - `count_http_400` counts `api_error_status=400` cells.
 - [ ] T8. `tests/test_hetzner_inference_spike.py`: the committed `docs/spikes/825/model-policy-qwen38.yaml`
   loads and resolves to `Qwen/Qwen3.8-27B` / `medium` / `hetzner`.
+- [ ] T9. `tests/test_options.py`: `apply_effort` sets the effort, is a no-op for `None`, raises
+  `ValueError` on a conflicting pre-set value, and `_scrubbed(..., effort=...)` behaves identically.
 
 ## Rollback
 - Code: revert the PR. Effort is optional and absent from the committed policy, so production behaviour
