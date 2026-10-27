@@ -3,7 +3,7 @@ kind: Component
 metadata:
   name: mctl-support
   namespace: admins
-  description: "mctl-support service"
+  description: "Tenant support agent over A2A"
   annotations:
     backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=admins-mctl-support
     backstage.io/kubernetes-id: mctl-support
@@ -25,7 +25,7 @@ metadata:
     - url: https://workflows.mctl.ai
       title: Argo Workflows
       icon: github
-    - url: https://admins-mctl-support.mctl.ai
+    - url: https://support.mctl.ai
       title: Service URL
       icon: web
   labels:
