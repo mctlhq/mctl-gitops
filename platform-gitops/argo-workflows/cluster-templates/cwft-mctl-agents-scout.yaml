@@ -35,7 +35,7 @@ spec:
         # "true" prints the digest to the step log and sends nothing; the
         # Telegram secrets are then not needed.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.106.0
+        value: ghcr.io/mctlhq/mctl-agents:1.107.0
         # 1.100.0 predates the scout. Bump to the first release that ships
         # orchestrator.run_scout before un-suspending the CronWorkflow.
 
