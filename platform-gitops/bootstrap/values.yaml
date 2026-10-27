@@ -401,7 +401,7 @@ evidenceWriter:
 #   3. Owner registers the repository webhook (runbook).
 securityCodeScanning:
   externalSecret: true
-  receiver: false
+  receiver: true
 
 # The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
 # mctlhq/mctl-api#481, mctl-api >= 4.67.0): the mctl-agents release pipeline
