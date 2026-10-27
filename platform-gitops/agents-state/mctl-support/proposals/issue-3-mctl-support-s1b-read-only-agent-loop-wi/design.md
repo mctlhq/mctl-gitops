@@ -136,16 +136,21 @@ class ModelProvider(Protocol):
 
 - Allowlist (closed constant `SUPPORT_READ_TOOLS` in `registry.py`), mctl MCP
   tool names, each with a JSON input schema that has no `team`/`tenant`
-  freedom beyond a string (the token decides authority, not the schema):
-  `mctl_get_tenant`, `mctl_list_services`, `mctl_get_service_status`,
-  `mctl_get_service_config`, `mctl_get_service_pods`,
-  `mctl_get_service_logs`, `mctl_list_namespace_events`,
-  `mctl_get_resource_usage`, `mctl_list_workflows`,
-  `mctl_get_workflow_status`, `mctl_get_workflow_logs`,
-  `mctl_list_incidents`, `mctl_get_incident`, `mctl_list_domains`,
-  `mctl_list_previews`; plus local tools `read_platform_skill` (calls
-  `mctl_read_platform_skill` through the same MCP client and token) and
-  `escalate` (local stub until S1c).
+  freedom beyond a string (the token decides authority, not the schema).
+  It equals mctl-api's `support` scope list (`supportTools` in
+  `internal/auth/agent_scope.go` on main, verified 2026-10-27), with the
+  `mctl_` prefix: `mctl_whoami`, `mctl_list_services`,
+  `mctl_get_service_status`, `mctl_get_service_config`,
+  `mctl_get_service_pods`, `mctl_get_service_logs`,
+  `mctl_list_namespace_events`, `mctl_get_resource_usage`,
+  `mctl_list_workflows`, `mctl_get_workflow_status`,
+  `mctl_get_workflow_logs`, `mctl_list_incidents`, `mctl_get_incident`,
+  `mctl_incident_summary`, `mctl_list_operations`, `mctl_get_operation`,
+  `mctl_list_domains`, `mctl_list_platform_skills`,
+  `mctl_read_platform_skill`; plus the local tool `escalate` (local stub until
+  S1c). `mctl_get_tenant` and `mctl_list_previews` are not in the scope and
+  are not in the allowlist. A test pins the constant to this list, so a scope
+  change on either side is a reviewed edit, not a silent drift.
 - Per task the registry calls MCP `tools/list` with the run token and offers
   the model `allowlist intersect listed` (the token's scope can only narrow the
   set, never widen it). Schemas offered to the model come from the local

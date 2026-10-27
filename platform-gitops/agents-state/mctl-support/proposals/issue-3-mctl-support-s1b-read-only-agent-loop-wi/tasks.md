@@ -31,7 +31,7 @@
   enforces tenant binding per token for tests. — DoD: unit tests for denied,
   error, `isError`, non-JSON and success; nothing returns an empty success.
 - [ ] 5. `agent/registry.py`: `SUPPORT_READ_TOOLS` allowlist with local input
-  schemas, `read_platform_skill`, `escalate` stub, per-task intersection with
+  schemas (the 19 tools of the mctl-api `support` scope, design.md), `escalate` stub, per-task intersection with
   `tools/list`, `dispatch` (unknown name -> local refusal, schema check ->
   local refusal, untrusted-output wrapping, truncation, evidence log). No
   provider-specific code. (depends on 4) — DoD: registry unit tests; the
