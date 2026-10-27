@@ -1,5 +1,6 @@
 # Service: mctl-support
 # Team: admins
+# Tenant support agent over A2A (mctlhq/mctl-support, epic mctlhq/.github#243).
 
 # Chart: base-service
 
@@ -12,6 +13,29 @@ service:
   port: 8080
 backstage:
   kubernetesId: mctl-support
+# Two replicas share one Postgres task store; a task sent to one replica is
+# readable and cancellable through the other. Roll one pod at a time and never
+# drop below two.
+replicaCount: 2
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+# The service holds no Kubernetes identity. It mints its tenant-bound run
+# token from the caller's bearer through mctl-api, never through a projected
+# ServiceAccount token, so none is mounted.
+automountServiceAccountToken: false
+# Non-root on a read-only root filesystem. The image pins uid/gid 10001
+# (Dockerfile); the chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
+containerSecurityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
 resources:
   requests:
     cpu: 200m
@@ -19,6 +43,15 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+# SUPPORT_EXECUTOR=fake is the S1a scripted executor; the model loop arrives
+# in S1b. Production refuses it unless SUPPORT_ALLOW_FAKE_IN_PRODUCTION is set,
+# so this is an explicit, temporary choice. SUPPORT_ALLOWED_TENANTS is the
+# pilot allowlist.
+#
+# Egress: base-service pods in admins match allow-mctl-services-internet-egress,
+# so the network does not limit where this pod connects. Containment comes
+# from the run token (scope support, one tenant, read-only routes) and the
+# agent having no shell, fs, web or kubectl tools, not from a NetworkPolicy.
 env:
   APP_ENV: production
   SUPPORT_ENV: production
@@ -28,16 +61,33 @@ env:
   SUPPORT_PUBLIC_URL: https://support.mctl.ai
   MCTL_API_URL: https://api.mctl.ai
   MCTL_AUTH_ISSUER: https://api.mctl.ai
+# support.mctl.ai is the public host; DNS is the *.mctl.ai wildcard, so no
+# record is needed. It is reserved for this namespace in
+# bootstrap/values.yaml (reservedPlatformHosts). admins-mctl-support.mctl.ai
+# stays as the canonical host.
 ingress:
   enabled: true
   hosts:
+    - support.mctl.ai
     - admins-mctl-support.mctl.ai
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
   tls:
     - secretName: mctl-support-tls
       hosts:
+        - support.mctl.ai
         - admins-mctl-support.mctl.ai
-containerSecurityContext:
-  runAsUser: 10001
-  runAsGroup: 10001
+# /readyz checks the database.
+probes:
+  liveness:
+    path: /healthz
+  readiness:
+    path: /readyz
+# The service migrates its own schema on start (advisory-locked, so two
+# replicas starting together are safe); no db-init job.
+envFrom:
+  - secretRef:
+      name: admins-mctl-support-db-creds
+dbSecret:
+  vaultPath: teams/admins/mctl-support/database
+  secretName: admins-mctl-support-db-creds
