@@ -70,6 +70,38 @@ Deployed state checked:
   live in the mctl-api registry, and execution profiles live in
   `agent-platform/execution-profiles/`. No `mctl-support` profile exists.
 
+## mctl-api contract (amendment, verified 2026-10-27 on mctl-api main)
+
+Reviewer amendment. The investigator could not read mctl-api, so these are
+the endpoints as they exist, checked in code. `HttpMctlApi` uses exactly
+these; every non-2xx is an error, never an empty result.
+
+| Step | Call (caller's bearer unless noted) | Notes |
+|---|---|---|
+| whoami | `GET /api/v1/whoami` -> `{id, groups, isAdmin, namespaces}` | There is no principal id field. The owner key for tasks, contexts and reservations is `id`. `groups` are the tenant memberships; `namespaces` is informational and must not be used for admission. |
+| work item | `POST /api/v1/work-items` `{tenant, title, external_key: "mctl-support:<task_id>", idempotency_key: <task_id>}` | One work item per support task. Needs the `developer` role on the tenant: a viewer gets 403, and the task fails with an explicit reason (S1a limitation, recorded in the README). |
+| execution | `POST /api/v1/work-items/{id}/executions` `{engine: "a2a", engine_ref: <task_id>, phase: "Running", idempotency_key: ...}` | The `a2a` engine is added by mctl-api#824 and must be released before this service is deployed. At most one non-terminal execution per work item. |
+| mint | `POST /api/v1/agent-run-tokens` `{agent: "mctl-support", execution_id: <we_id>, scope: "support", tenant}` | `permissions` must be absent (400 otherwise). The response carries the plaintext token once. The agent must be registered first (task 11). |
+| finish | `POST /api/v1/work-items/{id}/executions` with the same `engine`/`engine_ref` and a terminal phase | Same call as attach; mctl-api updates the phase. Phases are `Pending`, `Running`, `Succeeded`, `Failed`, `Error`. Map A2A `completed` to `Succeeded`, `failed`/`rejected`/`canceled` to `Failed`. A terminal phase makes the run token read as revoked. |
+| revoke | `POST /api/v1/agent-run-tokens/self/revoke` with the run token | Called as well in the `finally`, so the token dies even when the finish call fails. Its TTL is the last backstop. |
+
+Consequences for the design below:
+- The bearer is held in the memory of the task's executor coroutine until
+  the task finishes, not only for the request, because the finish call
+  needs it. It is never persisted or logged. If the replica dies, the
+  self-revoke cannot run and the token's TTL applies.
+- `MCTL_API_URL` is configuration. The deployment decides between the public
+  `https://api.mctl.ai` and the in-cluster Service; the code does not assume
+  either.
+
+## Build and release (amendment)
+
+Source repositories do PR validation only (lint, tests,
+`docker build` without push). The image is built and pushed by mctl-gitops
+(`build-image.yaml` / `release-deploy.yaml`, dispatched with the repo, ref
+and tag), which also bumps `image.tag`. This repo must not add a GHCR push,
+a tag-triggered build or a gitops token.
+
 ## Proposed solution
 
 ### Package layout (`src/mctl_support/`)
