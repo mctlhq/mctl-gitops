@@ -15,7 +15,7 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "main-b34f610"
+  tag: "main-9e83e90"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
