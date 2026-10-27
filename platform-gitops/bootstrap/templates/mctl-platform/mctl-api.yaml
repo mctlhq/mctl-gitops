@@ -42,7 +42,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.125.0"
+            tag: "4.131.0"
 
           ingress:
             enabled: true
@@ -241,13 +241,20 @@ spec:
             # Access-token signing algorithm, step C of mctlhq/mctl-api#805.
             # New tokens are signed EdDSA with the active key of
             # OAUTH_JWT_SIGNING_KEYS (mapped in mctl-api-secrets, kid
-            # 2026-10a, public half at /.well-known/jwks.json). HS256 tokens
-            # minted before this rollout still verify while
-            # OAUTH_JWT_ACCEPT_HS256 keeps its default (true); refusing them
-            # is step D, after HS256 verifications stay flat for one TTL.
-            # Rollback: delete this line (back to HS256); EdDSA tokens already
-            # issued keep verifying because the key stays in the key set.
+            # 2026-10a, public half at /.well-known/jwks.json).
+            # Rollback: first delete OAUTH_JWT_ACCEPT_HS256 below (mctl-api
+            # refuses to boot with HS256 signing while HS256 is refused), then
+            # this line; EdDSA tokens already issued keep verifying because
+            # the key stays in the key set.
             OAUTH_JWT_SIGNING_ALG: "EdDSA"
+            # Step D of mctlhq/mctl-api#805: refuse every HS256 access token
+            # before any HMAC. Taken after HS256 ok verifications stayed flat
+            # from 20:17Z on 2026-10-26 for over one TTL (1h), while EdDSA ok
+            # kept rising. A client still holding an HS256 token gets 401 and
+            # refreshes into an EdDSA one. OAUTH_JWT_SECRET stays required:
+            # refresh-token derivation still uses it.
+            # Rollback: delete this line (back to the default, true).
+            OAUTH_JWT_ACCEPT_HS256: "false"
             # GitHub numeric ids allowed to create a NEW account in the ZITADEL
             # org customers (identity hook, mctlhq/mctl-web#158). Unset creates
             # nobody; exactly "*" opens creation to anyone (the public cutover,

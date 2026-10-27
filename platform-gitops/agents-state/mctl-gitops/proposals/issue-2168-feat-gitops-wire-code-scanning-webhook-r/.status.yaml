@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-10-26T20:16:16Z'
+status: needs-triage
+updated_at: '2026-10-27T09:27:01Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-c24e32811cd70383
-  trace_id: 07fa4a2c70803024db142921c663aa5e
-  agent: issue-investigator
+  context_id: ex-c2ceec4f01cdab0f
+  trace_id: c280ebfe1c9370ba6f980e110802107b
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -19,8 +19,42 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-10-26T20:16:16Z'
-  content_digest: 'sha256:e0190c70b3e51a77a02fdfa53e46fccc70b806ed761e8d2c7b07848cd23d03ba'
-  digest_binding: 'reviewed'
-  approval_ref: 'aar_5d334deb927e4f8c8acec770f077bbed'
+  content_digest: sha256:e0190c70b3e51a77a02fdfa53e46fccc70b806ed761e8d2c7b07848cd23d03ba
+  digest_binding: reviewed
+  approval_ref: aar_5d334deb927e4f8c8acec770f077bbed
+attempt:
+  id: b094d73bff9afde864825d0a7d160f92f5d388a0916286a32455464f7e532f61
+  started_at: '2026-10-26T20:17:43Z'
+  expires_at: '2026-10-26T22:27:43Z'
+  finished_at: '2026-10-26T20:19:20Z'
+pr: https://github.com/mctlhq/mctl-gitops/pull/2174
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-29dfcbe8
+  authoritative:
+    completion_id: ic-fc3c43fc8046874e
+    content_hash: sha256:fc3c43fc8046874e372ddc070d733f92b9de0a5981a2e8cfabdd5a108b5ae8df
+    proposal_digest: sha256:e0190c70b3e51a77a02fdfa53e46fccc70b806ed761e8d2c7b07848cd23d03ba
+    attempt_id: b094d73bff9afde864825d0a7d160f92f5d388a0916286a32455464f7e532f61
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 0de739e670b0ce891f548ebc8f07b6ecb3db28b7
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+merge_owner: human-codeowner
+github:
+  state: open
+  head_sha: 0de739e670b0ce891f548ebc8f07b6ecb3db28b7
+  blocking_reason: conflict
+  observed_at: '2026-10-27T09:27:01Z'
+failure:
+  code: merge-conflict
+  stage: reconcile
+  message: GitHub reports a merge conflict with the base branch.
+notes: 'reconcile: open PR has a merge conflict'

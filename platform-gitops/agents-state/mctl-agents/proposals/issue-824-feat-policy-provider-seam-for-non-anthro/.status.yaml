@@ -1,0 +1,61 @@
+status: merged
+updated_at: '2026-10-27T09:50:18Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-2fd3390ce3b07eb1
+  trace_id: 0063dc49ee4f6f2ea9bf8ab4fdb87ecc
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 824
+  url: https://github.com/mctlhq/mctl-agents/issues/824
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-0205e7599378bfdd
+  content_hash: sha256:0205e7599378bfddb2170868135522181f4713fa4c0a0f086ede023b8c840fd3
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-26T23:33:02Z'
+  content_digest: sha256:43316f25a461fdbaedccfa062c7b41aaa1bf372bf83670b58fd77891be3e88c6
+  digest_binding: reviewed
+  approval_ref: aar_8f4d6d47452f480fb112a877b94ef2f4
+attempt:
+  id: c2f005226a6085bbd9d8401f8c20346b0245803d3dc2ee04656204101cf49323
+  started_at: '2026-10-26T23:34:27Z'
+  expires_at: '2026-10-27T01:44:27Z'
+  finished_at: '2026-10-26T23:44:02Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/828
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-1ca3dbf0
+  authoritative:
+    completion_id: ic-b65584d7b8d44473
+    content_hash: sha256:b65584d7b8d44473ffc35fc8690b59144c2fa9b7d3de11079008296a84efea19
+    proposal_digest: sha256:43316f25a461fdbaedccfa062c7b41aaa1bf372bf83670b58fd77891be3e88c6
+    attempt_id: c2f005226a6085bbd9d8401f8c20346b0245803d3dc2ee04656204101cf49323
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: c5f48e6ecffadd1e12e76a726bfffa42becdd337
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+github:
+  state: merged
+  head_sha: db3068c79861b777db2902c097705b041e2c4e07
+  observed_at: '2026-10-27T09:50:18Z'
+notes: 'implementer declined to act: Reviewer text 1 is an approval verdict on db3068c:
+  0 P1, 0 P2, 2 P3. Its P1 and the false credential-survives errors are listed under
+  Fixed since c5f48e6 (provider=None stand-in at orchestrator/validate_manifest.py:787;
+  credential-only originals at config/model_policy.py:152). The two open P3s (missing
+  regression test, uncleaned CLAUDE_CONFIG_DIR temp dir) are explicitly non-blocking
+  and out of scope for P1/P2 fixes.'
+merged_at: '2026-10-27T09:50:18Z'
+merge_commit: f8dc34c52e80fb3bd448ff5902cb92867ffa6d27
