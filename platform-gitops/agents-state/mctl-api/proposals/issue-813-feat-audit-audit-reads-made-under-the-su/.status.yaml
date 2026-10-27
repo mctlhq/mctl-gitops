@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-27T01:05:21Z'
+status: rejected
+updated_at: '2026-10-27T01:24:33Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-a3112d6984ba86e4
@@ -47,3 +47,4 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
+notes: PR was closed without merging.
