@@ -75,9 +75,12 @@ MUST_DENY = frozenset(
 )
 
 VALUES_PATH_RE = re.compile(r"\.Values((?:\.[A-Za-z_][A-Za-z0-9_]*)+)")
-# Text just before a .Values path that makes the path the dot of a relative
-# scope or a whole-object dump, so its sub-paths are read untracked.
-UNTRACKED_ACCESS_RE = re.compile(r"(?:\bwith|\brange|\btoYaml|:=|\bdict|\binclude|\bdefault)\s*\(?\s*$")
+# The only way a non-leaf path of a non-opaque key may be read: as an operand
+# of a plain `if` / `else if` condition, followed by the end of the action or
+# by another operand. Everything else -- with, range, a pipe, index, a
+# parenthesised `(... | default dict).x` -- can reach sub-paths this script
+# cannot see, so it is flagged.
+CONDITION_ACTION_RE = re.compile(r"^-?\s*(?:else\s+)?if\s")
 # Any .Values occurrence; the ones not followed by .<key> are whole-values
 # access that no classification can cover.
 VALUES_ANY_RE = re.compile(r"\.Values(?![A-Za-z0-9_])(\.[A-Za-z_])?")
@@ -111,7 +114,12 @@ def chart_paths(templates: dict[str, str], errors: list) -> dict[str, list]:
         for match in VALUES_PATH_RE.finditer(text):
             line = text.count("\n", 0, match.start()) + 1
             action_start = text.rfind("{{", 0, match.start())
-            untracked = bool(UNTRACKED_ACCESS_RE.search(text[action_start + 2 : match.start()])) if action_start >= 0 else False
+            action_end = text.find("}}", match.end())
+            before = text[action_start + 2 : match.start()] if action_start >= 0 else ""
+            after = text[match.end() : action_end].strip() if action_end >= 0 else "|"
+            in_condition = bool(CONDITION_ACTION_RE.match(before))
+            plain_operand = after in ("", "-") or after.startswith(".Values")
+            untracked = not (in_condition and plain_operand)
             paths.setdefault(match.group(1)[1:], []).append((f"{name}:{line}", untracked))
         for match in VALUES_ANY_RE.finditer(text):
             if match.group(1) is None:
@@ -144,11 +152,12 @@ def check_subpaths(key: str, entry: dict, paths: dict[str, list], errors: list):
         if path != key and not path.startswith(key + "."):
             continue
         sub = path[len(key) + 1 :]
-        if sub in listed:
+        # A scalar key (empty write and deny) is itself the leaf.
+        if sub in listed or (not listed and path == key):
             continue
         for site, untracked in sites:
             if untracked:
-                errors.append(f"{site}: .Values.{path} is read through with/range/toYaml; its sub-paths cannot be tracked")
+                errors.append(f"{site}: .Values.{path} is read other than as a plain if-condition operand; its sub-paths cannot be tracked")
 
 
 def schema_has_field(schema: dict, dotted: str) -> bool:
@@ -348,6 +357,18 @@ def replay_mutations(schema: dict, classification: dict, templates: dict[str, st
     def untracked_access(c, s, t):
         t["zz-mutation.yaml"] = "{{- with .Values.ingress }}{{ .annotations }}{{- end }}"
 
+    def piped_access(c, s, t):
+        t["zz-mutation.yaml"] = "{{ .Values.ingress | toYaml }}"
+
+    def default_dict_access(c, s, t):
+        t["zz-mutation.yaml"] = "{{ (.Values.ingress | default dict).extraRules }}"
+
+    def piped_in_condition(c, s, t):
+        t["zz-mutation.yaml"] = "{{- if .Values.ingress | toYaml }}x{{- end }}"
+
+    def index_access(c, s, t):
+        t["zz-mutation.yaml"] = '{{ index .Values.ingress "extraRules" }}'
+
     def write_and_deny(c, s, t):
         c["intent"]["ingress"]["deny"].append("host")
 
@@ -372,7 +393,11 @@ def replay_mutations(schema: dict, classification: dict, templates: dict[str, st
         "a key classified twice": (duplicate_key, "env is classified as both"),
         "the chart reads an unclassified sub-path": (unclassified_subpath, "chart reads .Values.ingress.middlewares"),
         "a denied sub-path dropped from the list": (undeny_subpath, "chart reads .Values.externalSecret.store"),
-        "a non-opaque key read through with": (untracked_access, ".Values.ingress is read through with"),
+        "a non-opaque key read through with": (untracked_access, ".Values.ingress is read other than"),
+        "a non-opaque key piped": (piped_access, ".Values.ingress is read other than"),
+        "a non-opaque key via default dict": (default_dict_access, ".Values.ingress is read other than"),
+        "a non-opaque key via index": (index_access, ".Values.ingress is read other than"),
+        "a non-opaque key piped inside an if": (piped_in_condition, ".Values.ingress is read other than"),
         "a sub-path in both write and deny": (write_and_deny, "ingress.host is in both write and deny"),
         "a listed sub-path the chart never reads": (stale_subpath, "service.nodePort is listed but"),
         "an intent key compiled from a missing field": (missing_from, "spec.runtime.listenPort, which the schema"),

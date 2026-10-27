@@ -1,0 +1,25 @@
+# expect: does not match
+apiVersion: deploy.mctl.ai/v1alpha1
+kind: DeployIntent
+metadata:
+  tenant: example
+  service: web
+spec:
+  environment: preview
+  source:
+    repository: example-org/web
+    revision: 0123456789abcdef0123456789abcdef01234567
+  detection:
+    tier: tier0
+  runtime:
+    port: 8080
+    healthPath: /healthz
+  exposure:
+    mode: public
+  resources:
+    requests:
+      cpu: '0'
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
