@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-27T00:50:42Z'
+updated_at: '2026-10-27T01:01:39Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-2fd3390ce3b07eb1
@@ -51,3 +51,12 @@ github:
   state: open
   head_sha: db3068c79861b777db2902c097705b041e2c4e07
   observed_at: '2026-10-27T00:50:42Z'
+refusals: 1
+refusals_head: db3068c79861b777db2902c097705b041e2c4e07
+notes: 'implementer declined to act: Reviewer text 1 is not a defect: it is the claude[bot]
+  job-status comment whose verdict reads ''approved (0 P1, 0 P2, 2 P3)''. It states
+  the earlier P1 (stand-in plan provider=None in orchestrator/validate_manifest.py:787)
+  and the false credential-survives errors (config/model_policy.py:152) were already
+  fixed in db3068c. Only two non-blocking P3s remain (missing regression test, unremoved
+  CLAUDE_CONFIG_DIR temp dir), which are out of scope for P1/P2 fixes. The ''P1''
+  label came from the comment header, not a real finding.'
