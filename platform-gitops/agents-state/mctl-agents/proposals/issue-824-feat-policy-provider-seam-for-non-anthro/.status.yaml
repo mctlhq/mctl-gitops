@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-27T00:31:38Z'
+status: review-stuck
+updated_at: '2026-10-27T00:46:30Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-2fd3390ce3b07eb1
@@ -52,11 +52,12 @@ github:
   head_sha: c5f48e6ecffadd1e12e76a726bfffa42becdd337
   observed_at: '2026-10-26T23:50:15Z'
 review_attempts: 1
-refusals: 2
+refusals: 3
 refusals_head: db3068c79861b777db2902c097705b041e2c4e07
-notes: 'implementer declined to act: Reviewer text 1 is a Claude status comment that
-  approves db3068c with 0 P1 and 0 P2 findings; the P1 and P2 items it lists were
-  already fixed in that commit (validate_manifest.py:787 provider=None; config/model_policy.py:152
-  credential-only originals). Only two non-blocking P3s remain (missing regression
-  test, unremoved CLAUDE_CONFIG_DIR tempdir), which the review says do not block merge
-  and are outside the P1/P2 scope of this task.'
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: Reviewer text 1 is not a defect: the comment
+  is a verdict on db3068c stating approved (0 P1, 0 P2, 2 P3). The P1 label was parsed
+  from the header line, and the P1 it mentions is listed as already fixed since c5f48e6
+  (validate_manifest.py stand-in plan with provider=None). The two open items are
+  P3 and explicitly non-blocking.'
