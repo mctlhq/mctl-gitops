@@ -53,13 +53,17 @@
   - DoD: a rejected task created no execution, minted no token and made no
     provider call.
 - [ ] 6. Ship usage records (depends on 3).
-  - Add `HttpMctlApi.post_usage_record(token, payload, idempotency_key)` and
-    a `FakeMctlApi` counterpart.
-  - Add a `UsageShipper` loop in the app lifespan with backoff.
-  - Payload: non-DevLoop marker (`execution_kind: support`), tenant,
-    execution id, task id, turn id, model and tokens.
-  - DoD: records are delivered exactly once per turn under retries, and a
-    failed delivery leaves the row pending.
+  - Add `HttpMctlApi.post_usage_records(token, records)` for the existing
+    `POST /api/v1/usage/records` and a `FakeMctlApi` counterpart that derives
+    ids from content and answers `accepted`/`deduped` like mctl-api.
+  - Add a `UsageShipper` loop in the app lifespan with backoff; it does not
+    start when `SUPPORT_USAGE_WRITER_TOKEN` is unset.
+  - Record fields as in design.md section 3: `session_id` = task id,
+    `result_uuid` = turn id, `agent` = `mctl-support`, no `devloop_stage`,
+    `execution_id`, `work_item_id`, provider, model, tokens, cost, outcome.
+    No `id`, no tenant, no `Idempotency-Key`.
+  - DoD: a re-delivered turn is `deduped` and marked delivered; a failed
+    delivery leaves the row pending; a 400 parks the named row only.
 - [ ] 7. Implement `escalate` (depends on 2).
   - Add `agent/escalation.py`. The new `ESCALATE` schema is `kind` (enum),
     `summary`, `evidence[]`, optional `signature` and optional `tenant`.
@@ -69,7 +73,10 @@
     per-tenant rate limits, and the `(tenant, fingerprint)` dedupe in the
     `escalations` table.
   - Add `HttpMctlApi.create_support_incident` using only the producer
-    credential, with `Idempotency-Key` set to the escalation id.
+    credential on the existing `POST /api/v1/incidents`, with `id` set to
+    the escalation id; `409` on that id and a dedupe hit both mean the
+    incident exists. Task id, caller principal and evidence references go
+    into `evidence[]` (design.md section 4, step 6).
   - Pass `escalation_id` into `check_evidence` and `SupportResult`.
   - Bump the prompt to `PROMPT_VERSION = "s1c-1"` with the new arguments.
   - Update the `agent/agent.yaml` description.
@@ -92,21 +99,18 @@
   - The tracer is a no-op without `OTEL_EXPORTER_OTLP_ENDPOINT`.
   - DoD: an in-memory exporter test sees the span chain with one trace id
     and the `traceparent` header on the fake mctl-api request.
-- [ ] 10. mctl-api companion issue/PR in mctlhq/mctl-api (outside this repo;
-  required before step 12).
-  - Incidents accept `source=support`, `type`, `tenant` and `fingerprint`,
-    and dedupe on `(tenant, fingerprint)`.
-  - Add the `support-incident-producer` principal, limited to POST.
-  - Add the usage-writer producer for mctl-support (ADR-012).
-  - Add admin-only `GET /api/v1/incidents/support/aggregation`.
-  - DoD: in mctl-api tests, two tenants with the same fingerprint yield two
-    incidents and one aggregation row with count 2, and a non-admin gets
-    403.
+- [ ] 10. mctl-api companion: mctlhq/mctl-api#830 (its own DevLoop; **not
+  part of this repository's implementation**, required before step 12).
+  - The `support-incident-producer` principal, limited to `POST
+    /api/v1/incidents` with `source=support`.
+  - Admin-only `GET /api/v1/incidents/support/aggregation`.
+  - The incident fields, the per-tenant dedupe and the usage writer already
+    exist and are not part of it.
 - [ ] 11. Update the README.
   - Replace "Escalation is a stub until S1c".
   - Document the limits, the metrics port and the credentials.
   - DoD: `ruff check`, `ruff format --check` and `pytest` are green in CI.
-- [ ] 12. Change mctl-gitops `services/admins/mctl-support/values.yaml`
+- [ ] 12. (Not part of this repository's implementation.) Change mctl-gitops `services/admins/mctl-support/values.yaml`
   (follow-up PR, after 10 is released).
   - Add the ExternalSecret for the two producer tokens.
   - Add the metrics port and scrape configuration.
