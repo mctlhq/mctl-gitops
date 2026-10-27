@@ -221,6 +221,18 @@ jobs:
           # real platform-gitops/agent-platform/ catalog itself is fine.
           scripts/validate-agent-platform.py --selftest
 
+      - name: Validate the DeployIntent contract (#2186)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml jsonschema
+          # Keeps deploy-intent.schema.json and the base-service chart-key
+          # classification in step: an unclassified chart key, a must-deny
+          # escape hatch that is not denied, or a schema field named like a
+          # denied key fails here. --selftest replays
+          # scripts/tests/fixtures/deploy-intent/{valid,invalid} and proves
+          # every contract check fires on a deliberate mutation.
+          scripts/validate-deploy-intent.py --selftest
+
       - name: Check every changed ExecutionProfile bumped its version
         run: |
           set -euo pipefail
