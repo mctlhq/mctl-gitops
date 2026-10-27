@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-27T08:17:09Z'
+updated_at: '2026-10-27T08:32:17Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-2fd3390ce3b07eb1
@@ -51,11 +51,13 @@ github:
   state: open
   head_sha: db3068c79861b777db2902c097705b041e2c4e07
   observed_at: '2026-10-27T00:50:42Z'
-refusals: 1
+refusals: 2
 refusals_head: db3068c79861b777db2902c097705b041e2c4e07
-notes: 'implementer declined to act: Reviewer text 1 is an approval of db3068c (0
-  P1, 0 P2, 2 P3); the P1 label came from parsing the comment header. Its P1 item
-  is listed under Fixed since c5f48e6 (stand-in plan provider=None at orchestrator/validate_manifest.py:787).
-  Only open items are two non-blocking P3s (missing regression test for narrowed credential
-  filter, unremoved CLAUDE_CONFIG_DIR tempdir), which the reviewer says do not block
-  merge and are outside P1/P2 scope.'
+notes: 'implementer declined to act: Reviewer text 1 is the review bot''s status comment,
+  not a defect: it reads ''Review of db3068c: approved (0 P1, 0 P2, 2 P3)''. It reports
+  the earlier P1 (stand-in plan with provider=None in orchestrator/validate_manifest.py:787)
+  and the credential-filter false positives (config/model_policy.py:152) as already
+  fixed. The only open items are two P3s (a missing regression test for the narrowed
+  filter, and an unremoved CLAUDE_CONFIG_DIR temp dir at orchestrator/options.py:1276),
+  which the reviewer says do not block merge. No P1/P2 remains to fix, so I made no
+  changes.'
