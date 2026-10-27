@@ -59,6 +59,7 @@ grant admins mctl-agents-worker-exec
 grant admins mctl-agents-worker-implement
 grant admins mctl-design
 grant admins mctl-docs
+grant admins mctl-support
 grant admins mctl-web
 
 # labs: platform-owned products deployed as labs services.
