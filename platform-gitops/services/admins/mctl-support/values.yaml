@@ -6,7 +6,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-support
-  tag: "0.1.0"
+  tag: "0.1.1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -91,3 +91,4 @@ envFrom:
 dbSecret:
   vaultPath: teams/admins/mctl-support/database
   secretName: admins-mctl-support-db-creds
+extraContainers: []
