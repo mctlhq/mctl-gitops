@@ -140,7 +140,24 @@ Provider comparison
 - Publishing new platform skills in the catalog (the policy text ships in the
   service's prompt; catalog skills are read through `read_platform_skill`).
 
-## Open questions
+## Resolved by the owner (2026-10-27)
+
+- Allowlist: aligned with mctl-api `supportTools` (design.md, Tool registry).
+  The per-task intersection with `tools/list` stays as the runtime guard.
+- Messages API per turn inside one provider-neutral loop, not the SDK
+  `tool_runner`: confirmed, because tool execution must stay in our registry.
+- `SUPPORT_TASK_COST_CAP_USD` 2.00 as a provisional default: confirmed; S1c
+  sets the final number.
+- MCP endpoint: `<MCTL_API_URL>/mcp`, JSON-RPC over streamable HTTP, admits a
+  `support` run token (the S1a live probe on 2026-10-27 called `tools/call`
+  there with a run token: an in-tenant read returned data, a foreign-tenant
+  read returned `isError` `agent_scope_denied`).
+- Fixtures: S1b ships synthetic fixtures shaped after the real tool response
+  schemas, with invented tenant and service names and no customer data. The
+  comparison against real namax66 cases is part of S1e, not of this phase.
+- Platform-policy values stay open until the prompt is frozen (S1e).
+
+## Open questions (as investigated)
 
 - The exact tool set of the mctl-api `support` scope (S0a) is not visible from
   this repo. The proposal fixes an allowlist of read tools in code (design.md)
