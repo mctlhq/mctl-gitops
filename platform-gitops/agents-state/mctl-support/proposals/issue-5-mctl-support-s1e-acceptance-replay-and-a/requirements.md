@@ -23,6 +23,14 @@ every case is a merge gate and has a negative control. (4) The pilot release
 plus a live probe whose result, together with the full delivery report, is
 posted on issue #5.
 
+Split of work (owner amendment, 2026-10-28). The implementer delivers (1),
+(2) and (3) in code: the harness, scorer, fixtures, security suite, prompt
+`s1e-1` and the probe tool. It does not record live cassettes, release, run
+the live probe or write the delivery report. These need provider keys and a
+human bearer that the implementer does not hold and must not hold. The
+operator does them in a follow-up after merge (see tasks.md, "Operator
+follow-up").
+
 ## User stories
 
 - AS the platform owner I WANT each of the nine namax66 cases replayed and scored on every PR SO THAT a regression in classification, evidence or escalation shows up before merge.
@@ -39,7 +47,8 @@ Fixtures
 
 Runner and scoring
 - WHEN the runner scores a fixture THE SYSTEM SHALL report, per fixture and turn: classification match, every required fact present, no forbidden fact present, every called tool inside `allowed_tools`, every expected tool called, evidence grounded (at least one evidence entry, `dropped_unsupported_evidence == 0`, at least one evidence source from an expected tool or skill), and escalation as expected (count and kind).
-- WHEN `uv run pytest` runs in CI THE SYSTEM SHALL replay all nine fixtures from recorded model turns (cassettes) through the real `run_loop`, `ToolRegistry` and `check_evidence`, with no network and no provider key, and SHALL fail the build when any fixture scores below pass.
+- WHEN `uv run pytest` runs in CI THE SYSTEM SHALL replay every committed cassette through the real `run_loop`, `ToolRegistry` and `check_evidence`, with no network and no provider key, and SHALL fail the build when any replayed fixture scores below pass. Live-recorded cassettes for the nine cases are added by the operator after merge. Until then, the gate runs on hand-built cassettes.
+- THE SYSTEM SHALL keep hand-built cassettes visibly separate from recorded ones: they live under `cassettes/handbuilt/`, carry `"source": "handbuilt"`, and never name a provider model in `model`. A cassette under a model directory SHALL carry `"source": "recorded"`. The implementer SHALL NOT write a cassette that claims to be a recording of a real model.
 - WHEN the runner is invoked with `--live --providers <list>` THE SYSTEM SHALL run the fixtures against real providers, write `docs/reports/s1e-acceptance.md`, and with `--record` write the cassettes that CI replays.
 - IF a recorded session receives a call naming a team other than the fixture's, an unknown service, a workflow of another or empty tenant, or an unscoped `mctl_list_services` THEN THE SYSTEM SHALL answer as the support run token does (forbidden or denied), never with data.
 
@@ -55,7 +64,7 @@ Security suite (each a merge gate, each with a negative control)
 
 Pilot
 - WHEN the S1e release is deployed THE SYSTEM SHALL keep the admission allowlist at admins plus `namax66`, and the pod SHALL hold no admin mctl token, no Kubernetes ServiceAccount token, and only the NEBIUS key, usage-writer, incident-producer and database credentials.
-- WHEN the live probe runs against the real namax66 tenant THE SYSTEM SHALL return a COMPLETED task whose answer cites at least one evidence entry read in that task, and the probe result SHALL be posted on issue #5.
+- WHEN the operator runs the live probe with a member bearer of a real admitted tenant THE SYSTEM SHALL return a COMPLETED task whose answer cites at least one evidence entry read in that task. WHEN the bearer is not a member of the named tenant (e.g. a platform admin naming `namax66`) THE SYSTEM SHALL refuse with 403 before any model call. Both results SHALL be posted on issue #5. The owner decided on 2026-10-28 that the platform admin is not added to a customer tenant. A question from a real namax66 member therefore moves to S2. The member-tenant probe and the namax66 denial were first recorded on issue #5 on 2026-10-28.
 - WHEN S1e closes THE SYSTEM SHALL have a closing comment on issue #5 that follows the delivery report: repos and PRs merged, deployed versions, A2A protocol and SDK versions, agent card skills, auth flow, run-token scope proof, cross-tenant negative-test proof, tools, budget and retention configuration, escalation behaviour, results for all nine fixtures, live pilot result, known limitations and S2 blockers.
 
 ## Out of scope
@@ -68,9 +77,9 @@ Pilot
 
 ## Open questions
 
-- Classification for cases 7, 8 and 9 is my reading of the worked example: 7 `informational` (out of the tenant's reach, so no root cause asserted), 8 `informational` (transient, with options), 9 `tenant_fix` (the tenant's own upstream). The issue names the expected behaviour but not the label for these three. The owner should confirm them in review.
+- Classification for cases 7, 8 and 9: 7 `informational` (out of the tenant's reach, so no root cause asserted), 8 `informational` (transient, with options), 9 `tenant_fix` (the tenant's own upstream). **Confirmed by the owner on 2026-10-28.**
 - Case 8 conflicts with the current prompt rule "An exhausted quota is tenant_fix" (prompt `s1c-3`, the owner decision of 2026-10-27). The proposal adds a narrower rule for a transient surge overlap (prompt `s1e-1`) and keeps the exhausted-quota rule.
-- The CI gate runs on cassettes recorded from the production model, because CI has no provider key and AGENTS.md keeps secrets out of tests. A live run is manual (`--live`). Should a scheduled live job with a repository secret also exist? This proposal assumes no.
-- The fixtures keep the tenant name `namax66` and the service name `news-factory`, which are already public in mctl-gitops and the README. Everything else is synthetic. If even those two names must be pseudonymised, the fixtures would use an alias.
-- The live probe needs a real namax66 member bearer, or an admin naming `metadata.tenant=namax66`. The issue says "a real namax66 question". The proposal prefers a member-run probe and falls back to an admin-named probe, and the report says which one ran.
+- The CI gate runs on cassettes recorded from the production model, because CI has no provider key and AGENTS.md keeps secrets out of tests. A live run is manual (`--live`). Should a scheduled live job with a repository secret also exist? **No (owner, 2026-10-28)**: live runs stay manual and operator-run.
+- The fixtures keep the tenant name `namax66` and the service name `news-factory`, which are already public in mctl-gitops and the README. Everything else is synthetic. If even those two names must be pseudonymised, the fixtures would use an alias. **Owner, 2026-10-28: keep them.** The repository is private.
+- ~~The live probe falls back to an admin bearer naming `metadata.tenant=namax66`.~~ Resolved: that fallback is refused with 403 by design (verified live on 2026-10-28). See the Pilot criteria above.
 - No platform skill covering `mctl_sync_repos`, `tpl-vault-write` or Chromium/PSS exists in the catalog (checked with `mctl_list_platform_skills`: only archify-diagrams, git-flow, mcp-troubleshooting). That is why the policy goes into the prompt for now.

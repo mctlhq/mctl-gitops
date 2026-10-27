@@ -80,7 +80,7 @@ Adversarial fixtures go in `tests/fixtures/acceptance/adversarial/` (log text "C
 
 ### 3. Cassettes and the CI gate
 
-A cassette (`tests/fixtures/acceptance/cassettes/<model-slug>/<id>.json`) holds the recorded `ModelTurn`s of one live run (text, tool calls, usage), plus `model`, `prompt_version`, `recorded_at`. `tools/replay/run.py --live --providers nebius:zai-org/GLM-5.1 --record` writes them. CI replays them with `ScriptedProvider` through the real `run_loop`, `ToolRegistry`, `check_evidence` and `RecordingEscalator`, so a code change that breaks the registry, the evidence check or the escalation limits turns the gate red without a provider key. A cassette whose `prompt_version` differs from `PROMPT_VERSION` fails CI and has to be re-recorded, so a prompt change cannot pass on stale model answers.
+A cassette (`tests/fixtures/acceptance/cassettes/<model-slug>/<id>.json`) holds the recorded `ModelTurn`s of one live run (text, tool calls, usage), plus `model`, `prompt_version`, `recorded_at` and `"source": "recorded"`. Hand-built cassettes for harness tests live under `cassettes/handbuilt/` with `"source": "handbuilt"`, and the loader rejects a model-directory cassette without `"source": "recorded"`. The live recording run needs provider keys, so the operator does it after merge, not the implementer. `tools/replay/run.py --live --providers nebius:zai-org/GLM-5.1 --record` writes them. CI replays them with `ScriptedProvider` through the real `run_loop`, `ToolRegistry`, `check_evidence` and `RecordingEscalator`, so a code change that breaks the registry, the evidence check or the escalation limits turns the gate red without a provider key. A cassette whose `prompt_version` differs from `PROMPT_VERSION` fails CI and has to be re-recorded, so a prompt change cannot pass on stale model answers.
 
 ### 4. Scorer (`tools/replay/score.py`)
 
@@ -114,8 +114,8 @@ There are four additions to `SYSTEM_PROMPT`, each one needed by a fixture:
 
 ### 7. Pilot release and live probe
 
-- Release 0.3.0 through the usual mctl-gitops `release-deploy.yaml`. `SUPPORT_ALLOWED_TENANTS` stays `namax66` and the env is unchanged except for the image tag.
-- `tools/pilot_probe.py --url https://support.mctl.ai --tenant namax66` (the bearer comes from the `SUPPORT_PROBE_BEARER` env and is never printed) sends one real question ("Is news-factory healthy and within its quota?"), polls `GET /tasks/{id}`, and asserts COMPLETED with at least one evidence entry and `dropped_unsupported_evidence == 0`. It prints a redacted summary.
+- Release 0.3.0 comes from the normal release-please and release-deploy path after merge. It is not an implementer step. `SUPPORT_ALLOWED_TENANTS` stays `namax66`, and the env is unchanged except for the image tag.
+- `tools/pilot_probe.py --url https://support.mctl.ai --tenant <tenant>` (the bearer comes from the `SUPPORT_PROBE_BEARER` env and is never printed) sends one real question, polls `GET /tasks/{id}`, and asserts COMPLETED with at least one evidence entry and `dropped_unsupported_evidence == 0`. With `--expect-denied` it asserts a 403 instead. It prints a redacted summary. The implementer writes and unit-tests the tool against the fake server. The operator runs it live: once against a tenant the operator is a member of, and once with `--expect-denied` against `namax66`.
 - The no-admin-credential proof is a checklist in the report, not something the probe can see:
   - the `values.yaml` `envFrom`/`extraExternalSecrets` keys (above);
   - `automountServiceAccountToken: false`;
