@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-10-27T01:31:38Z'
+status: implemented
+updated_at: '2026-10-27T08:13:35Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-2fd3390ce3b07eb1
@@ -51,15 +51,3 @@ github:
   state: open
   head_sha: db3068c79861b777db2902c097705b041e2c4e07
   observed_at: '2026-10-27T00:50:42Z'
-refusals: 3
-refusals_head: db3068c79861b777db2902c097705b041e2c4e07
-notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
-  was never charged — the proposal is not at fault; a human must reconcile the review
-  with the operator decision. Last reason: Reviewer text 1 is not a defect. It is
-  the bot''s status header (''Claude finished ... task in 33s'') that was mis-parsed
-  as a P1. The body of the same comment says ''approved (0 P1, 0 P2, 2 P3)'' for db3868c,
-  and reports the earlier P1 (validate_manifest.py:787 provider=None) and the false
-  ''credential survives'' errors (config/model_policy.py:152) as already fixed. The
-  only open items are two P3s (a missing regression test for the narrowed credential
-  filter, and the un-removed CLAUDE_CONFIG_DIR tempdir), which the reviewer states
-  do not block merge and are outside the P1/P2 scope of this fix run.'
