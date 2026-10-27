@@ -463,6 +463,16 @@ spec:
           # the principal disabled instead of failing the pod.
           registryPublisherTokenSecret: mctl-api-registry-publisher
           {{- end }}
+          {{- if (default dict .Values.supportIncidentProducer).enabled }}
+
+          # The support-incident-producer token (mctlhq/mctl-api#830), from
+          # the mctl-api-support-incident-producer ExternalSecret. Gated with
+          # it on supportIncidentProducer.enabled in bootstrap/values.yaml;
+          # the chart's reference is optional, so a Secret that has not
+          # synced yet leaves the principal disabled instead of failing the
+          # pod.
+          supportIncidentProducerTokenSecret: mctl-api-support-incident-producer
+          {{- end }}
           {{- if (default dict .Values.surfaceTelegramToken).enabled }}
 
           # The surface:telegram bearer token (mctlhq/mctl-telegram#443), from

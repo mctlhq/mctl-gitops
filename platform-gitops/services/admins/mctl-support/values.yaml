@@ -43,10 +43,16 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-# SUPPORT_EXECUTOR=fake is the S1a scripted executor; the model loop arrives
-# in S1b. Production refuses it unless SUPPORT_ALLOW_FAKE_IN_PRODUCTION is set,
-# so this is an explicit, temporary choice. SUPPORT_ALLOWED_TENANTS is the
-# pilot allowlist.
+# SUPPORT_EXECUTOR=agent runs the model loop (S1b/S1c). Provider and model are
+# the owner's decision of 2026-10-27 (mctlhq/.github#243): Nebius Token Factory,
+# zai-org/GLM-5.1 (eu-north1), 27/27 on the namax66 fixtures in
+# mctlhq/mctl-support#11. NEBIUS_BASE_URL is the service default
+# (https://api.tokenfactory.nebius.com/v1) and is left unset: the deploy
+# tooling's yq rewrite has been seen stripping colon-bearing env values
+# (see services/labs/mctl-telegram/values.yaml). The prices are that model's
+# per-million-token list prices; the spend caps keep their service defaults
+# (task 0.50, tenant 10, workspace 50 USD per UTC month).
+# SUPPORT_ALLOWED_TENANTS is the pilot allowlist.
 #
 # Egress: base-service pods in admins match allow-mctl-services-internet-egress,
 # so the network does not limit where this pod connects. Containment comes
@@ -55,12 +61,27 @@ resources:
 env:
   APP_ENV: production
   SUPPORT_ENV: production
-  SUPPORT_EXECUTOR: fake
-  SUPPORT_ALLOW_FAKE_IN_PRODUCTION: "true"
+  SUPPORT_EXECUTOR: agent
   SUPPORT_ALLOWED_TENANTS: namax66
   SUPPORT_PUBLIC_URL: https://support.mctl.ai
   MCTL_API_URL: https://api.mctl.ai
   MCTL_AUTH_ISSUER: https://api.mctl.ai
+  MODEL_PROVIDER: nebius
+  NEBIUS_MODEL: zai-org/GLM-5.1
+  MODEL_INPUT_USD_PER_MTOK: "1.40"
+  MODEL_OUTPUT_USD_PER_MTOK: "4.40"
+  SUPPORT_METRICS_PORT: "9090"
+# /metrics on its own listener, scraped by
+# bootstrap/templates/mctl-platform/mctl-support-monitor.yaml (a native
+# VMServiceScrape, hence serviceMonitor: false).
+metrics:
+  enabled: true
+  port: 9090
+  serviceMonitor: false
+# Traces to the in-cluster collector (docs/runbooks/otel-collector.md). The
+# service names itself mctl-support.
+otel:
+  enabled: true
 # support.mctl.ai is the public host; DNS is the *.mctl.ai wildcard, so no
 # record is needed. It is reserved for this namespace in
 # bootstrap/values.yaml (reservedPlatformHosts). admins-mctl-support.mctl.ai
@@ -88,7 +109,43 @@ probes:
 envFrom:
   - secretRef:
       name: admins-mctl-support-db-creds
+  - secretRef:
+      name: admins-mctl-support-model
+  - secretRef:
+      name: admins-mctl-support-mctl-api
 dbSecret:
   vaultPath: teams/admins/mctl-support/database
   secretName: admins-mctl-support-db-creds
 extraContainers: []
+# Platform-scoped Vault paths, so the cluster store; a tenant store only
+# resolves its own team's prefix. Each ExternalSecret reads single
+# properties, never a whole path.
+extraExternalSecrets:
+  # The Nebius Token Factory API key (MODEL_PROVIDER=nebius).
+  admins-mctl-support-model:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: admins-mctl-support-model
+    data:
+      - secretKey: NEBIUS_API_KEY
+        remoteKey: secret/data/platform/mctl-support/model
+        property: nebius-api-key
+  # mctl-api credentials of two single-capability principals:
+  # - usage writer (append usage records only): the same value mctl-api and
+  #   the agent runner pods read (bootstrap/values.yaml usageWriter);
+  # - support incident producer (create source=support incidents only): the
+  #   same value mctl-api reads (bootstrap/values.yaml
+  #   supportIncidentProducer).
+  admins-mctl-support-mctl-api:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: admins-mctl-support-mctl-api
+    data:
+      - secretKey: SUPPORT_USAGE_WRITER_TOKEN
+        remoteKey: secret/data/platform/mctl-agents
+        property: usage-writer-token
+      - secretKey: SUPPORT_INCIDENT_PRODUCER_TOKEN
+        remoteKey: secret/data/platform/mctl-support/incident-producer
+        property: token
