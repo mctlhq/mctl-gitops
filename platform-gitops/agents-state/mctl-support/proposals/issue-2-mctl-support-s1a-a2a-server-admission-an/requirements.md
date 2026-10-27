@@ -86,7 +86,20 @@ Live probe
 - Changes to mctl-api itself (the `support` scope, minting and WorkItemExecution endpoints are S0a / mctl-api#811). This phase only consumes them.
 - A platform-wide FQDN egress mechanism (none exists in mctl-gitops today).
 
-## Open questions
+## Reviewer decisions (amendment 2026-10-27)
+- Namespace: deploy into the existing `admins` namespace for S1a. A dedicated
+  namespace with internet egress off is a later gitops change.
+- Egress: the namespace-wide `allow-internet-egress` limitation is accepted
+  for S1a and written down in values.yaml, as the issue allows.
+- mctl-api endpoints: fixed in design.md "mctl-api contract", including the
+  new `a2a` execution engine (mctl-api#824, a prerequisite for deployment).
+- AgentDefinition: canonical file `agent/agent.yaml` in this repo,
+  registered in the mctl-api registry by the operator after merge.
+- A duplicate `messageId` with different content is refused (invalid params).
+- Tenant selection for multi-tenant callers is `metadata.tenant`.
+- The task owner key is whoami's `id`; whoami has no principal id field.
+
+## Open questions (as investigated; resolved above)
 - Namespace. The issue asks for "tenant `admins`, namespace `support`". The tenant chart (`platform-gitops/helm-charts/tenant`) creates either the namespace `admins` or one namespace per `teams[]` entry named `admins-<team>`, and setting `teams` would replace the existing `admins` namespace. Proposed: deploy into the existing `admins` namespace for S1a, and track a dedicated namespace as a gitops chart change. Needs reviewer confirmation.
 - Egress. The `admins` namespace has `allowInternetEgress: true` (tenant values and the live `mctl_get_tenant`). Kubernetes NetworkPolicies are additive, so a pod-level policy cannot narrow it. The limitation is written down in design.md; a real restriction needs the dedicated namespace above.
 - The exact mctl-api endpoints for principal resolution, WorkItemExecution creation, terminal-phase transition and `support` token minting come from the mctl-api#811 contract. That contract is not readable from this clone and must be confirmed during implementation.
