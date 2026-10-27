@@ -103,7 +103,9 @@ spec:
           TELEGRAM_OWNER_USER_ID: "210408407"
           # Repos a scout "Create spike N" press may open an issue in. A draft
           # naming any other repo is refused ("draft target not allowed").
-          SCOUT_SPIKE_REPOS: "mctl-agents,mctl-agent,mctl-api,mctl-gitops,mctl-telegram,mctl-portal,.github"
+          # Operator's choice, a subset of the scout's SERVICES (mctl-agents
+          # config/settings.py); keep .github, the digest routes drafts there.
+          SCOUT_SPIKE_REPOS: "mctl-web,mctl-docs,mctl-api,mctl-portal,mctl-agent,mctl-gitops,mctl-agents,mctl-telegram,mctl-design,mctl-academy,mctl-alice,mctl-support,.github"
         # OTLP trace export through the platform Collector (mctl-agent#38,
         # #97): renders OTEL_EXPORTER_OTLP_ENDPOINT/_PROTOCOL and
         # OTEL_RESOURCE_ATTRIBUTES. The agent sets service.name=mctl-agent
