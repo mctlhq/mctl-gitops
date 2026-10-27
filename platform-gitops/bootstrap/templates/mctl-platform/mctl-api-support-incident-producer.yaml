@@ -6,9 +6,10 @@
 #
 # Its own ExternalSecret and file for the same reasons as
 # mctl-api-usage-writer.yaml. The value lives on its own Vault path, read by
-# exactly two consumers: this Secret and mctl-support's
-# admins-mctl-support-incident-producer (services/admins/mctl-support), so
-# there is one value and nothing to keep in step. It is deliberately not a
+# exactly two consumers: this Secret and the SUPPORT_INCIDENT_PRODUCER_TOKEN
+# key of mctl-support's admins-mctl-support-mctl-api ExternalSecret
+# (services/admins/mctl-support), so there is one value and nothing to keep
+# in step. It is deliberately not a
 # property of secret/platform/mctl-agents, which the agent runner pods
 # extract whole.
 apiVersion: external-secrets.io/v1beta1
