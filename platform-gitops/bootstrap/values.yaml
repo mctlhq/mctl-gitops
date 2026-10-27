@@ -415,6 +415,21 @@ securityCodeScanning:
 registryPublisher:
   enabled: true
 
+# The support-incident-producer principal's bearer token (mctlhq/mctl-api#830,
+# mctl-api >= 4.131.0): mctl-support files source=support incidents with it
+# and nothing else. Vault: secret/platform/mctl-support/incident-producer,
+# property token (>= 32 chars, different from every other principal's token,
+# or mctl-api refuses it and disables both sides). Its own path, read by
+# mctl-api here and by mctl-support (services/admins/mctl-support).
+# Owner steps, in this order:
+#   1. printf '%s' "$(openssl rand -hex 32)" \
+#        | vault kv put secret/platform/mctl-support/incident-producer token=-
+#      (a new path, so put is safe; use kv patch -method=rw once it exists).
+#   2. Set enabled: true below (mctl-api then rolls to pick up the env).
+#   Done 2026-10-27: step 2 below, merged after step 1.
+supportIncidentProducer:
+  enabled: true
+
 # The surface:portal principal's bearer token (mctlhq/mctl-portal#126):
 # mctl-api reads it as MCTL_SURFACE_PORTAL_TOKEN (surfaceTokenEnv maps portal
 # to it, minSurfaceTokenLen = 32) and backstage's work-items-backend sends it.
