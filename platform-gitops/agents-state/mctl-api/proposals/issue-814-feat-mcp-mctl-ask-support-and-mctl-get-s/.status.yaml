@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-27T22:08:38Z'
+status: merged
+updated_at: '2026-10-27T22:35:33Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-f9499699c06cdac6
@@ -33,3 +33,9 @@ pr: https://github.com/mctlhq/mctl-api/pull/841
 ci_blockers_head: f2b8ab499a4d1acb186f07bd09cd54e4513fa55d
 ci_blockers:
 - validate / lint
+github:
+  state: merged
+  head_sha: 1a48bb57e519e9bf0d374bdacaa1bf74c89d2329
+  observed_at: '2026-10-27T22:35:33Z'
+merged_at: '2026-10-27T22:35:33Z'
+merge_commit: 02e2548689c1020085aa6eb9882dc781165a1829
