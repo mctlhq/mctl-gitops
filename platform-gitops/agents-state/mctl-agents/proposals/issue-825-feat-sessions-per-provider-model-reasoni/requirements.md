@@ -47,9 +47,13 @@ is then re-benched with the #791 harness, taking its effort from the policy rath
   in the snapshot THEN THE SYSTEM SHALL refuse the bench with `SpikeError` before making any live call.
 - WHILE a run has a non-default effort (flag or policy) THE SYSTEM SHALL keep refusing to score it with the
   pre-registered #791 `decide()`, and SHALL refuse to write it into `docs/spikes/791/`.
-- WHEN the re-bench of `Qwen/Qwen3.8-27B` is run from the committed bench policy THE SYSTEM SHALL produce
-  committed records with 0 cells whose error is `api_error_status=400`. That covers all HTTP 400s, which
-  is a stricter condition than 0 effort-related 400s.
+- WHILE the implementer builds and verifies this change THE SYSTEM SHALL make no live provider call and
+  SHALL need no Hetzner credential. Every acceptance criterion above is verified offline (fake runner,
+  fixtures).
+- WHEN an operator later runs the re-bench of `Qwen/Qwen3.8-27B` from the committed bench policy THE
+  SYSTEM SHALL produce records with 0 cells whose error is `api_error_status=400`. That covers all HTTP
+  400s, which is a stricter condition than 0 effort-related 400s. This is an operator acceptance step in
+  a follow-up PR (see Decisions), not part of the implementer PR.
 
 ## Out of scope
 - Routing any production task to a provider profile, or adding a provider profile to the committed
@@ -63,15 +67,17 @@ is then re-benched with the #791 harness, taking its effort from the policy rath
 - The usage-ledger follow-up from #791 (fake cost, cache-creation tokens).
 - Changing the #791 verdict or re-running its baseline arm.
 
-## Open questions
-- Should `effort` be required on provider profiles (fail closed when it is absent), given that the CLI
-  default broke one of the two Hetzner models? This proposal keeps it optional: Qwen3.6 accepts the
-  default, and a required key would force a value onto profiles that do not need one. The reviewer may
-  want it to be required.
-- Which effort to pin for `Qwen3.8-27B`: `medium` (proven 24/24 in the exploratory run) or `xhigh` (the
-  provider's default, never benched). This proposal pins `medium` because it is the one with evidence.
-- The re-bench needs live Hetzner credentials (`HETZNER_INFERENCE_BASE_URL`,
-  `HETZNER_INFERENCE_API_KEY`) and `--allow-live`. The implementer can land the code and offline tests,
-  but the acceptance run is an operator step. Its artifacts may arrive in a follow-up commit or PR.
-- The harness records only `api_error_status`, not the provider's error text. So "effort-related" is
-  approximated by "any HTTP 400". If a non-effort 400 appears, the acceptance fails conservatively.
+## Decisions (owner review, 2026-10-27)
+- `effort` stays **optional** on every profile, provider profiles included. Qwen3.6 accepts the CLI
+  default, and a required key would force a value onto profiles that do not need one.
+- `Qwen3.8-27B` is pinned to **`medium`**, the only value with evidence (0 provider errors in the
+  exploratory #791 run). `xhigh` is not benched here.
+- The **live re-bench is an operator step, outside the implementer PR.** The implementer lands the code,
+  the bench policy, the run doc and offline tests only. It must not call the provider, must not ask for
+  or read a Hetzner credential, and must not create `snapshot.json`, `records-candidate.jsonl` or
+  `run-manifest-candidate.json` under `docs/spikes/825/`. An operator runs the bench with credentials
+  from their own keychain and commits the artifacts in a follow-up PR that references #825.
+- The harness applies the policy effort through a **public** `orchestrator.options.apply_effort(options,
+  effort)`, which `_scrubbed` also calls. It does not import the private `_scrubbed`.
+- "Effort-related 400" is approximated by "any HTTP 400", because the harness records only
+  `api_error_status`. A non-effort 400 fails the operator acceptance conservatively.
