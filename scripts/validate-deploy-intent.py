@@ -18,6 +18,10 @@ This script keeps them in step and fails closed:
   - the chart reads a key that is not classified, reads .Values without a
     key (toYaml .Values, index .Values ...), or the classification lists a
     key the chart no longer reads
+  - the chart reads a sub-path of an intent or platform key that is neither
+    in its `write` nor its `deny` list, a listed sub-path is no longer read,
+    or a non-opaque key is read through with/range/toYaml so its sub-paths
+    cannot be tracked
   - a key is classified twice, or an intent key's `from` names a field the
     schema does not have
   - a must-deny escape hatch is not denied
@@ -70,7 +74,10 @@ MUST_DENY = frozenset(
     }
 )
 
-VALUES_KEY_RE = re.compile(r"\.Values\.([A-Za-z_][A-Za-z0-9_]*)")
+VALUES_PATH_RE = re.compile(r"\.Values((?:\.[A-Za-z_][A-Za-z0-9_]*)+)")
+# Text just before a .Values path that makes the path the dot of a relative
+# scope or a whole-object dump, so its sub-paths are read untracked.
+UNTRACKED_ACCESS_RE = re.compile(r"(?:\bwith|\brange|\btoYaml|:=|\bdict|\binclude|\bdefault)\s*\(?\s*$")
 # Any .Values occurrence; the ones not followed by .<key> are whole-values
 # access that no classification can cover.
 VALUES_ANY_RE = re.compile(r"\.Values(?![A-Za-z0-9_])(\.[A-Za-z_])?")
@@ -97,15 +104,51 @@ def read_templates(templates_dir: pathlib.Path) -> dict[str, str]:
     return {p.name: p.read_text(encoding="utf-8") for p in files}
 
 
-def chart_keys(templates: dict[str, str], errors: list) -> set[str]:
-    keys: set[str] = set()
+def chart_paths(templates: dict[str, str], errors: list) -> dict[str, list]:
+    """Every dotted .Values path read, with where and how it is read."""
+    paths: dict[str, list] = {}
     for name, text in templates.items():
-        keys.update(VALUES_KEY_RE.findall(text))
+        for match in VALUES_PATH_RE.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            action_start = text.rfind("{{", 0, match.start())
+            untracked = bool(UNTRACKED_ACCESS_RE.search(text[action_start + 2 : match.start()])) if action_start >= 0 else False
+            paths.setdefault(match.group(1)[1:], []).append((f"{name}:{line}", untracked))
         for match in VALUES_ANY_RE.finditer(text):
             if match.group(1) is None:
                 line = text.count("\n", 0, match.start()) + 1
                 errors.append(f"{name}:{line}: whole-values access to .Values cannot be classified")
-    return keys
+    return paths
+
+
+def check_subpaths(key: str, entry: dict, paths: dict[str, list], errors: list):
+    if entry.get("opaque") is True:
+        if "write" in entry or "deny" in entry:
+            errors.append(f"chart-keys: {key} is opaque and cannot also list write/deny")
+        return
+    write, deny = entry.get("write"), entry.get("deny")
+    if not isinstance(write, list) or not isinstance(deny, list):
+        errors.append(f"chart-keys: {key} needs write and deny lists, or opaque: true")
+        return
+    listed = set(write) | set(deny)
+    for sub in sorted(set(write) & set(deny)):
+        errors.append(f"chart-keys: {key}.{sub} is in both write and deny")
+    read = {path[len(key) + 1 :]: sites for path, sites in paths.items() if path.startswith(key + ".")}
+    for sub, sites in sorted(read.items()):
+        if sub not in listed and not any(item.startswith(sub + ".") for item in listed):
+            errors.append(f"chart reads .Values.{key}.{sub} ({sites[0][0]}), which is not in {key}'s write or deny list")
+    for sub in sorted(listed - set(read)):
+        errors.append(f"chart-keys: {key}.{sub} is listed but the chart no longer reads it")
+    # A leaf is classified as a whole; anything above a leaf read through
+    # with/range/toYaml exposes sub-paths this check cannot see.
+    for path, sites in sorted(paths.items()):
+        if path != key and not path.startswith(key + "."):
+            continue
+        sub = path[len(key) + 1 :]
+        if sub in listed:
+            continue
+        for site, untracked in sites:
+            if untracked:
+                errors.append(f"{site}: .Values.{path} is read through with/range/toYaml; its sub-paths cannot be tracked")
 
 
 def schema_has_field(schema: dict, dotted: str) -> bool:
@@ -149,14 +192,14 @@ def check_contract(schema: dict, classification, templates: dict[str, str]) -> l
         errors.append("chart-keys: top level must be exactly intent, platform and denied")
         return errors
     intent = classification["intent"] or {}
-    platform = classification["platform"] or []
+    platform = classification["platform"] or {}
     denied = classification["denied"] or []
-    if not isinstance(intent, dict) or not isinstance(platform, list) or not isinstance(denied, list):
-        errors.append("chart-keys: intent must be a mapping, platform and denied lists")
+    if not isinstance(intent, dict) or not isinstance(platform, dict) or not isinstance(denied, list):
+        errors.append("chart-keys: intent and platform must be mappings, denied a list")
         return errors
 
     seen: dict[str, str] = {}
-    for cls, keys in (("intent", list(intent)), ("platform", platform), ("denied", denied)):
+    for cls, keys in (("intent", list(intent)), ("platform", list(platform)), ("denied", denied)):
         for key in keys:
             if key in seen:
                 errors.append(f"chart-keys: {key} is classified as both {seen[key]} and {cls}")
@@ -169,11 +212,18 @@ def check_contract(schema: dict, classification, templates: dict[str, str]) -> l
         elif not schema_has_field(schema, source):
             errors.append(f"chart-keys: intent key {key} is compiled from {source}, which the schema does not define")
 
-    read = chart_keys(templates, errors)
+    paths = chart_paths(templates, errors)
+    read = {path.split(".", 1)[0] for path in paths}
     for key in sorted(read - set(seen)):
         errors.append(f"chart reads .Values.{key}, which is not classified in deploy-intent-chart-keys.yaml")
     for key in sorted(set(seen) - read):
         errors.append(f"chart-keys: {key} is classified but the chart no longer reads it")
+
+    for key, entry in sorted({**intent, **platform}.items()):
+        if not isinstance(entry, dict):
+            errors.append(f"chart-keys: {key} must be a mapping")
+        elif key in read:
+            check_subpaths(key, entry, paths, errors)
 
     for key in sorted(MUST_DENY - set(denied)):
         errors.append(f"chart-keys: {key} must be denied (escape hatch named in mctlhq/.github#254)")
@@ -197,8 +247,20 @@ def memory_mi(value: str) -> int:
     return int(m.group(1)) * (1024 if m.group(2) == "Gi" else 1)
 
 
+def _ecma_pattern(validator, pattern, instance, schema):
+    # JSON Schema patterns are ECMA-262, where `$` never matches before a
+    # trailing newline; Python's does, so "<40 hex>\n" would pass here and
+    # fail in mctl-api. \Z restores the ECMA meaning. No pattern in the schema
+    # uses a literal \$.
+    if validator.is_type(instance, "string") and not re.search(pattern.replace("$", r"\Z"), instance):
+        yield jsonschema.ValidationError(f"{instance!r} does not match {pattern!r}")
+
+
+EcmaDraft7Validator = jsonschema.validators.extend(jsonschema.Draft7Validator, {"pattern": _ecma_pattern})
+
+
 def check_intent(doc, schema: dict) -> list:
-    validator = jsonschema.Draft7Validator(schema)
+    validator = EcmaDraft7Validator(schema)
     errors = [
         f"schema: {'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
         for e in sorted(validator.iter_errors(doc), key=lambda e: list(e.absolute_path))
@@ -263,7 +325,7 @@ def replay_mutations(schema: dict, classification: dict, templates: dict[str, st
 
     def drop_must_deny(c, s, t):
         c["denied"].remove("initContainers")
-        c["platform"].append("initContainers")
+        c["platform"]["initContainers"] = {"opaque": True}
 
     def unclassified_key(c, s, t):
         t["zz-mutation.yaml"] = "{{- if .Values.hostNetwork }}hostNetwork: true{{- end }}"
@@ -275,7 +337,22 @@ def replay_mutations(schema: dict, classification: dict, templates: dict[str, st
         c["denied"].append("neverReadByTheChart")
 
     def duplicate_key(c, s, t):
-        c["platform"].append("env")
+        c["platform"]["env"] = {"opaque": True}
+
+    def unclassified_subpath(c, s, t):
+        t["zz-mutation.yaml"] = "{{- with .Values.ingress.middlewares }}{{ toYaml . }}{{- end }}"
+
+    def undeny_subpath(c, s, t):
+        c["intent"]["externalSecret"]["deny"].remove("store")
+
+    def untracked_access(c, s, t):
+        t["zz-mutation.yaml"] = "{{- with .Values.ingress }}{{ .annotations }}{{- end }}"
+
+    def write_and_deny(c, s, t):
+        c["intent"]["ingress"]["deny"].append("host")
+
+    def stale_subpath(c, s, t):
+        c["intent"]["service"]["deny"].append("nodePort")
 
     def missing_from(c, s, t):
         c["intent"]["service"]["from"] = "spec.runtime.listenPort"
@@ -293,6 +370,11 @@ def replay_mutations(schema: dict, classification: dict, templates: dict[str, st
         "the chart reads .Values whole": (whole_values, "whole-values access"),
         "a classified key the chart never reads": (stale_key, "neverReadByTheChart is classified but"),
         "a key classified twice": (duplicate_key, "env is classified as both"),
+        "the chart reads an unclassified sub-path": (unclassified_subpath, "chart reads .Values.ingress.middlewares"),
+        "a denied sub-path dropped from the list": (undeny_subpath, "chart reads .Values.externalSecret.store"),
+        "a non-opaque key read through with": (untracked_access, ".Values.ingress is read through with"),
+        "a sub-path in both write and deny": (write_and_deny, "ingress.host is in both write and deny"),
+        "a listed sub-path the chart never reads": (stale_subpath, "service.nodePort is listed but"),
         "an intent key compiled from a missing field": (missing_from, "spec.runtime.listenPort, which the schema"),
         "a schema property named like a denied key": (denied_property, "property named extraObjects"),
         "an invalid schema": (broken_schema, "schema is invalid"),

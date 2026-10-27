@@ -1,42 +1,99 @@
-# Every top-level `.Values.<key>` the base-service chart reads, classified for
-# the DeployIntent compiler (mctlhq/mctl-gitops#2186, epic mctlhq/.github#254).
+# Every `.Values` path the base-service chart reads, classified for the
+# DeployIntent compiler (mctlhq/mctl-gitops#2186, epic mctlhq/.github#254).
 #
 #   intent    compiled from the schema field named in `from`, and only from it
 #   platform  set by the compiler from platform data; no intent field reaches it
 #   denied    never written by the deploy path
 #
-# scripts/validate-deploy-intent.py fails when the chart reads a key that is
-# not listed here, so a new chart key -- a new escape hatch, potentially --
-# cannot reach agent-driven deploys until someone classifies it in review.
-# When in doubt, classify a new key as denied.
+# An intent or platform key is classified down to its leaves:
+#
+#   write     sub-paths the compiler writes
+#   deny      sub-paths the compiler never writes (chart defaults apply)
+#   opaque    the chart passes the whole value through (toYaml / with), so
+#             there are no chart sub-paths to pin; `writes` documents what the
+#             compiler puts there and the compiler's own tests hold it to that
+#
+# scripts/validate-deploy-intent.py fails when the chart reads a key or a
+# sub-path that is not listed here, or reads a non-opaque key through
+# with/range/toYaml where its sub-paths cannot be tracked. A new chart key --
+# a new escape hatch, potentially -- cannot reach agent-driven deploys until
+# someone classifies it in review. When in doubt, classify it as denied.
 intent:
   service:
     from: spec.runtime.port
+    write: [port, containerPort]
+    deny: [type]
   probes:
     from: spec.runtime.healthPath
+    write:
+      - startup.path
+      - startup.port
+      - readiness.path
+      - readiness.port
+      - liveness.path
+      - liveness.port
+    deny:
+      - startup.initialDelaySeconds
+      - startup.periodSeconds
+      - startup.timeoutSeconds
+      - startup.failureThreshold
+      - readiness.initialDelaySeconds
+      - readiness.periodSeconds
+      - readiness.timeoutSeconds
+      - readiness.failureThreshold
+      - liveness.initialDelaySeconds
+      - liveness.periodSeconds
+      - liveness.timeoutSeconds
+      - liveness.failureThreshold
   replicaCount:
     from: spec.runtime.replicas
+    write: []
+    deny: []
   resources:
     from: spec.resources
+    opaque: true
+    writes: [requests.cpu, requests.memory, limits.cpu, limits.memory]
   env:
     from: spec.env
-  # Remote key is always teams/<tenant>/<service>; only properties come from
-  # the intent.
+    opaque: true
+    writes: [<NAME> from spec.env only]
+  # store/storeKind stay on the chart default (the tenant's own SecretStore);
+  # data[].remoteKey is always teams/<tenant>/<service>, and only
+  # data[].property comes from the intent. targetSecret is <service>-secrets.
   externalSecret:
     from: spec.secretRefs
-  # Only a secretRef to the externalSecret target above.
+    write: [data, targetSecret]
+    deny: [store, storeKind, targetTemplateData, refreshInterval]
   envFrom:
     from: spec.secretRefs
-  # Host is derived as <service>.mctl.ai; annotations and middlewares are not
-  # expressible.
+    opaque: true
+    writes: [secretRef.name = the externalSecret targetSecret, nothing else]
+  # The host is derived as <service>.mctl.ai; annotations, middlewares,
+  # extra hosts and TLS overrides are not expressible.
   ingress:
     from: spec.exposure
+    write: [enabled, host, path]
+    deny:
+      - annotations
+      - className
+      - hosts
+      - pathType
+      - tls
+      - forwardAuth.enabled
+      - forwardAuth.address
+      - forwardAuth.authResponseHeaders
+      - forwardAuth.trustForwardHeader
 platform:
-  # Repository of the platform build plus the digest it recorded (item 5).
-  - image
-  - imagePullSecrets
-  # runAsUser/runAsGroup read from the built image's config, nothing else.
-  - containerSecurityContext
+  # Repository of the platform build; the recorded digest arrives with item 5.
+  image:
+    write: [repository, tag]
+    deny: [pullPolicy]
+  imagePullSecrets:
+    opaque: true
+    writes: [the platform registry pull secret]
+  containerSecurityContext:
+    opaque: true
+    writes: [runAsUser and runAsGroup read from the built image's config, nothing else]
 denied:
   - extraObjects
   - extraContainers

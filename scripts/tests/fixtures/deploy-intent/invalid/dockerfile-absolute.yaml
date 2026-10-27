@@ -1,4 +1,4 @@
-# expect: does not match
+# expect: should not be valid under
 apiVersion: deploy.mctl.ai/v1alpha1
 kind: DeployIntent
 metadata:
