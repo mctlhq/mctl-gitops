@@ -1,0 +1,43 @@
+# Service: mctl-support
+# Team: admins
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-support
+  tag: "0.1.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+backstage:
+  kubernetesId: mctl-support
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+env:
+  APP_ENV: production
+  SUPPORT_ENV: production
+  SUPPORT_EXECUTOR: fake
+  SUPPORT_ALLOW_FAKE_IN_PRODUCTION: "true"
+  SUPPORT_ALLOWED_TENANTS: namax66
+  SUPPORT_PUBLIC_URL: https://support.mctl.ai
+  MCTL_API_URL: https://api.mctl.ai
+  MCTL_AUTH_ISSUER: https://api.mctl.ai
+ingress:
+  enabled: true
+  hosts:
+    - admins-mctl-support.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-support-tls
+      hosts:
+        - admins-mctl-support.mctl.ai
+containerSecurityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
