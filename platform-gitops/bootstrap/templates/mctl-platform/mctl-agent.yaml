@@ -100,8 +100,10 @@ spec:
           # Sole Telegram user allowed to press the scout "Create spike N" button
           # (mctl-agent#186). Unset = the callback refuses every press. Same id as
           # TELEGRAM_CHAT_ID below: in the 1:1 bot chat the chat id is the user id.
-          # The button also needs SCOUT_SPIKE_REPOS, which is not set yet.
           TELEGRAM_OWNER_USER_ID: "210408407"
+          # Repos a scout "Create spike N" press may open an issue in. A draft
+          # naming any other repo is refused ("draft target not allowed").
+          SCOUT_SPIKE_REPOS: "mctl-agents,mctl-agent,mctl-api,mctl-gitops,mctl-telegram,mctl-portal,.github"
         # OTLP trace export through the platform Collector (mctl-agent#38,
         # #97): renders OTEL_EXPORTER_OTLP_ENDPOINT/_PROTOCOL and
         # OTEL_RESOURCE_ATTRIBUTES. The agent sets service.name=mctl-agent
