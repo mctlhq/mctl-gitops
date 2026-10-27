@@ -56,7 +56,7 @@ Rate limits
 - IF the replica holding the lease dies THEN THE SYSTEM SHALL let the lease expire after the task deadline plus a margin.
 
 Usage records
-- WHEN a model turn returns THE SYSTEM SHALL write a usage record to a durable outbox in the same transaction that settles the ledger. The record carries tenant, task id, execution id, provider, model, input/output tokens, calculated cost and a non-DevLoop marker.
+- WHEN a model turn returns THE SYSTEM SHALL write a usage record to a durable outbox in the same transaction that settles the ledger. The record carries task id, turn id, execution id, provider, model, input/output tokens, calculated cost and the non-DevLoop marker (`agent: mctl-support`, no `devloop_stage`); the tenant stays in the local ledger.
 - THE SYSTEM SHALL deliver outbox records to the mctl-api usage ledger (ADR-012 producer contract) with the usage-writer credential, retrying until accepted.
 - IF delivery fails THEN THE SYSTEM SHALL keep the record and SHALL NOT treat the failure as zero usage.
 
@@ -102,11 +102,30 @@ Observability
 - Switching production from `SUPPORT_EXECUTOR=fake` to `agent`. That is a separate mctl-gitops change after this lands.
 - Streaming and push notifications.
 
-## Open questions
+## Resolved by the owner (2026-10-27)
 
-- ADR-012 producer contract: the exact endpoint path, payload field names and non-DevLoop marker for the mctl-api usage ledger, and how the usage-writer credential is issued. None of these is in this repo. The design assumes `POST /api/v1/usage/records` with an `Idempotency-Key`, and the client is isolated behind one adapter.
-- Incident API: whether `POST /api/v1/incidents` already accepts `source=support`, `type`, `fingerprint` and `tenant`, and whether it dedupes on `tenant + fingerprint`. `mctl_list_incidents` returned no items, so the shape could not be observed. The design treats all of this as mctl-api companion work.
-- How the two narrow service credentials (usage writer, support incident producer) are minted, stored in Vault and rotated. The design reads them from env via a Vault-synced secret, like `admins-mctl-support-db-creds`.
-- Whether the `base-service` chart supports a second metrics port and a ServiceMonitor or scrape annotations, and which OTLP endpoint (Tempo) the cluster offers. These could not be checked from this repo.
+- ADR-012: `POST /api/v1/usage/records` exists with server-derived ids (no
+  `Idempotency-Key`) and no tenant field. mctl-support reuses the existing
+  route-restricted usage-writer principal (`SUPPORT_USAGE_WRITER_TOKEN`) and
+  marks its rows with `agent: mctl-support` and no `devloop_stage`. See
+  design.md section 3.
+- Incidents: `POST /api/v1/incidents` already accepts `source`, `type`,
+  `tenant`, `fingerprint` and `evidence[]`, requires a caller-chosen `id`, and
+  dedupes on `(tenant, fingerprint)` among open incidents without merging
+  across tenants. Only the narrow producer principal and the admin
+  aggregation are new, in mctlhq/mctl-api#830.
+- Credentials: both tokens reach the pod through a Vault-synced secret, like
+  `admins-mctl-support-db-creds`, in the step 12 gitops PR. Rotation follows
+  the mctl-api token rules (at least 32 characters, never shared with
+  another principal).
+- `base-service` has `metrics.enabled`/`metrics.port` (a named `metrics`
+  container and service port) and a ServiceMonitor template that
+  `metrics.serviceMonitor: false` turns off in favour of a native
+  VMServiceScrape. Tracing reads the standard `OTEL_EXPORTER_OTLP_*`
+  environment and is off when no endpoint is set; the endpoint value is set
+  in the step 12 gitops PR.
+
+## Open questions (as investigated; the remaining two are accepted as designed)
+
 - "20 tasks per day": the design uses a rolling 24 hours, not a UTC calendar day. "Month" is the UTC calendar month.
 - Whether a follow-up message on an existing task counts as a task for the daily limit. The design says no: only new tasks count. Follow-up turns are still covered by the spend caps and the concurrency lease.

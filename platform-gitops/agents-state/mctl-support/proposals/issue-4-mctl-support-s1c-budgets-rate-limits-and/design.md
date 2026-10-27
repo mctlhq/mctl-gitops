@@ -157,24 +157,42 @@ layer and the reset time and never includes amounts of other tenants.
 
 ### 3. Usage records (ADR-012 producer)
 
+Amended 2026-10-27 to the contract that exists in mctl-api
+(`docs/model-usage-ledger.md`, `internal/usage/types.go` on main).
+
 - `usage_outbox(id PK, turn_id UNIQUE, payload JSON, attempts, next_attempt_at, delivered_at)`.
-- The payload includes:
-  - `producer: "mctl-support"`, `agent: "mctl-support"`;
-  - `execution_kind: "support"` (the non-DevLoop marker, so no
-    `devloop_stage`);
-  - `tenant`, `execution_id` (WorkItemExecution), `run_id` (task id) and
-    `turn_id`;
-  - `provider`, `model`, `input_tokens`, `output_tokens`, `calculated_cost`
-    and `outcome`.
+- The payload is one `usage.Record` of `POST /api/v1/usage/records`
+  (`{"records": [...]}`, at most 500 per batch). There is no `tenant`,
+  `producer` or `execution_kind` field, and the server derives the record
+  `id` from its content, so a producer never sends an `id` and needs no
+  `Idempotency-Key`: a re-delivery collides and is answered as `deduped`.
+  Fields sent:
+  - `schema_version`, `recorded_at`;
+  - `session_id` = the A2A task id, `result_uuid` = `turn_id` (the dedupe
+    identity of one model turn);
+  - `agent: "mctl-support"` and no `devloop_stage`: that absence is the
+    non-DevLoop marker;
+  - `execution_id` (the WorkItemExecution `we_...`), `work_item_id`;
+  - `provider`, `model_key`, `canonical_model`, `input_tokens`,
+    `output_tokens`, `calculated_cost`, `outcome`.
+- The tenant is not in the mctl-api ledger. Per-tenant spend lives in the
+  local ledger (`spend_turns.tenant`), which is the enforcement source. A
+  tenant column on usage records is out of scope for S1c.
+- Credential: the existing least-privilege usage-writer principal of
+  mctl-api (`MCTL_USAGE_WRITER_TOKEN` there, refused on every route except
+  `POST /api/v1/usage/records`), given to mctl-support as
+  `SUPPORT_USAGE_WRITER_TOKEN` through a Vault-synced secret. Rows are told
+  apart by `agent`. No new mctl-api principal is needed for usage.
 - A `UsageShipper` loop, started next to `RetentionLoop` in the app
-  lifespan, posts pending rows with `Authorization: Bearer <usage-writer>`
-  and `Idempotency-Key: <turn_id>`. It backs off exponentially and marks rows
-  delivered on 2xx.
-- Delivery failures are logged and counted. They never change the local
-  ledger, which is the enforcement source.
-- The client lives in `mctl_api.py` as `post_usage_record`. Its path and
-  field names are behind one function, so confirming ADR-012 is a one-place
-  change.
+  lifespan, posts pending rows in batches. It backs off exponentially and
+  marks a row delivered when its id appears in `accepted` or `deduped`. A
+  `400` naming a record index is logged with that index and the row is
+  parked (`attempts` keeps growing, counted), never dropped.
+- With `SUPPORT_USAGE_WRITER_TOKEN` unset the shipper does not start and
+  rows stay pending; this is logged once at startup. Delivery state never
+  changes the local ledger.
+- The client lives in `mctl_api.py` as `post_usage_records`; the credential
+  is used by no other method.
 
 ### 4. `escalate` local tool (`src/mctl_support/agent/escalation.py`, new)
 
@@ -220,12 +238,20 @@ and steps 1-3 are purely local:
      `SUPPORT_ESCALATIONS_PER_TENANT_PER_DAY` (default 5).
    - A dedupe hit with an `incident_id` returns that id.
 6. It calls `MctlApi.create_support_incident(...)` with the producer
-   credential (`SUPPORT_INCIDENT_PRODUCER_TOKEN`, a `Secret`) and
-   `Idempotency-Key: <escalation id>`. The body is:
-   `{source: "support", tenant, type: kind, fingerprint, summary, evidence: [refs], support_task_id, caller_principal, severity: "warning"}`.
-   It stores the returned `incident_id`.
+   credential (`SUPPORT_INCIDENT_PRODUCER_TOKEN`, a `Secret`) on the
+   existing `POST /api/v1/incidents` (amended 2026-10-27: the route, its
+   required fields `id, source, type, tenant, summary, severity` and the
+   `(tenant, fingerprint)` dedupe among open incidents already exist). The
+   body is
+   `{id: <escalation id>, source: "support", tenant, type: kind, fingerprint, summary, severity: "warning", evidence: [...]}`.
+   `id` is the escalation row id (`esc_<uuid>`), so a retry is answered with
+   `409 incident id already in use` or a dedupe hit, both of which mean the
+   incident exists. There is no `support_task_id` or `caller_principal`
+   field: they travel as `evidence` entries of type `support_task`,
+   `caller_principal` and `evidence_ref` (one per reference). On a dedupe
+   hit the response carries the original incident id, which is stored.
    - On failure the row stays `pending`, so a retry in the same task reuses
-     the key, and the tool returns an explicit error.
+     the id, and the tool returns an explicit error.
 
 `ToolRegistry.escalation_id` holds the last created or reused incident id.
 `check_evidence` takes it and sets `SupportResult.escalation_id`. `parse`
@@ -236,22 +262,22 @@ The run token never reaches the escalator. The producer credential is used
 only by `create_support_incident`; no other method of `HttpMctlApi` accepts
 it.
 
-### 5. mctl-api companion change (separate PR in mctlhq/mctl-api)
+### 5. mctl-api companion change (mctlhq/mctl-api#830)
 
-- The incidents API accepts `source=support` with `type` in the four kinds.
-  It requires `tenant`, and dedupes on `(tenant, fingerprint)` without ever
-  merging across tenants. It stores `support_task_id`, `caller_principal`
-  and the evidence references.
-- A narrow `support-incident-producer` service principal is allowed only
-  `POST` of `source=support` incidents. Editing, resolving or listing is 403.
-- A `usage-writer` principal for mctl-support exists per ADR-012.
-- `GET /api/v1/incidents/support/aggregation` is admin-only (non-admin gets
-  403). It returns
-  `[{normalized_fingerprint, kind, affected_tenants: [..], count}]` grouped
-  over active `source=support` incidents.
+Narrowed 2026-10-27 to what does not exist yet:
+- A `support-incident-producer` principal (`MCTL_SUPPORT_INCIDENT_PRODUCER_TOKEN`
+  in mctl-api), modelled on the usage writer: not an admin, no tenant
+  membership, allowed only `POST /api/v1/incidents` with `source=support`
+  and `type` in the four kinds. Every other route, source, edit, resolve,
+  list and `/mcp` is 403.
+- `GET /api/v1/incidents/support/aggregation`, admin-only, returning
+  `[{fingerprint, type, affected_tenants: [..], count}]` over open
+  `source=support` incidents.
+- Already present, not part of the companion: the incident fields and the
+  per-tenant dedupe, and the usage writer (section 3).
 - mctl-support tests run against `FakeMctlApi` extensions that mirror this
-  contract. The mctl-api tests own the two-tenant aggregation and the
-  non-admin criteria.
+  contract (required fields, `409` on a reused id, the dedupe answer). The
+  mctl-api tests own the two-tenant aggregation and the non-admin criteria.
 
 ### 6. Metrics (`src/mctl_support/observability/metrics.py`, new)
 
