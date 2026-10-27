@@ -400,7 +400,7 @@ evidenceWriter:
 #   2. Set receiver: true (the env change rolls the pods, which then read it).
 #   3. Owner registers the repository webhook (runbook).
 securityCodeScanning:
-  externalSecret: false
+  externalSecret: true
   receiver: false
 
 # The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
