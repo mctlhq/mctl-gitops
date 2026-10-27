@@ -391,6 +391,18 @@ usageWriter:
 evidenceWriter:
   enabled: true
 
+# GitHub Code Scanning -> SecurityFinding receiver (mctlhq/mctl-gitops#2168,
+# mctl-api >= 4.125.0, docs/runbooks/security-finding-ingestion.md).
+# Vault: secret/platform/mctl-api/github-code-scanning-webhook, property
+# secret: >= 32 chars, different from platform/mctl-api/github-webhook, no
+# trailing newline. Steps, in order and in separate merges:
+#   1. Owner writes Vault; set externalSecret: true; confirm the Secret synced.
+#   2. Set receiver: true (the env change rolls the pods, which then read it).
+#   3. Owner registers the repository webhook (runbook).
+securityCodeScanning:
+  externalSecret: false
+  receiver: false
+
 # The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
 # mctlhq/mctl-api#481, mctl-api >= 4.67.0): the mctl-agents release pipeline
 # publishes and promotes agent versions with it instead of the admin service

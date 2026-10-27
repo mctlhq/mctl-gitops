@@ -372,6 +372,9 @@ spec:
           # 4.89.0 as released against a local ZITADEL v4.19.2.
           envFromOptionalSecrets:
             - mctl-api-zitadel-hook
+            {{- if (default dict .Values.securityCodeScanning).receiver }}
+            - mctl-api-security-code-scanning
+            {{- end }}
 
           # The GitHub App installation token, mounted as a FILE. mctl-api
           # reads GITHUB_APP_TOKEN_FILE per use (internal/ghtoken), which is
@@ -489,6 +492,44 @@ spec:
           # optional repoBindingTokenSecret; until it lands the chart ignores the
           # unknown key.
           repoBindingTokenSecret: mctl-api-repo-binding
+          {{- end }}
+          {{- if (default dict .Values.securityCodeScanning).receiver }}
+
+          # GitHub Code Scanning -> SecurityFinding receiver
+          # (mctlhq/mctl-gitops#2168, mctl-api >= 4.125.0,
+          # docs/runbooks/security-finding-ingestion.md). Gated on
+          # securityCodeScanning.receiver in bootstrap/values.yaml, which
+          # must only be set after the mctl-api-security-code-scanning Secret
+          # has synced: envFrom is read at container start, and a pod that
+          # starts first keeps the receiver disabled until the next restart.
+          #
+          # max_strength provider_claim: a webhook only claims. A `fixed`
+          # alert must never resolve an occurrence; verification stays with
+          # the #809 consumer.
+          # The tenant comes from this config (repository -> tenant), never
+          # from payload text.
+          # securityProviderTokensSecret is deliberately unset: the receiver
+          # writes in-process, and a token would open
+          # POST /api/v1/security/observations to a second credential.
+          # No SECURITY_FINDINGS_DB_URL: the store falls back to AUDIT_DB_URL
+          # (database mctl-api).
+          # Rollback: set securityCodeScanning.receiver to false (the route
+          # then answers 503), or deactivate the repository webhook.
+          securityProviders:
+            - ref: github-code-scanning
+              max_strength: provider_claim
+              tenants: [admins]
+          securityCodeScanning:
+            repositories:
+              mctlhq/mctl-api: admins
+            tools: [Trivy]
+            actions:
+              - created
+              - appeared_in_branch
+              - reopened
+              - reopened_by_user
+              - fixed
+              - closed_by_user
           {{- end }}
 
           resources:

@@ -169,3 +169,22 @@ spec:
               missing from the audit trail. The pod log line
               `audit postgres: insert failed` names the operation, request id
               and error; check shared-pg (platform-db) health.
+
+    - name: mctl.api.security
+      rules:
+        - alert: MctlApiSecurityWebhookFailures
+          # The receiver answers 2xx only after the store recorded the
+          # delivery, so these results are deliveries GitHub marks failed and
+          # that an operator must redeliver. The "not configured" 503 is not
+          # counted (runbook).
+          expr: sum by (result) (increase(mctl_security_webhook_deliveries_total{provider="github-code-scanning",result=~"signature_invalid|rejected|store_unavailable"}[15m])) > 0
+          labels:
+            severity: warning
+            service: mctl-api
+          annotations:
+            summary: "mctl-api rejected GitHub Code Scanning deliveries: {{ $labels.result }}"
+            description: >-
+              The github-code-scanning receiver answered {{ $labels.result }}
+              to at least one delivery in the last 15 minutes. See
+              docs/runbooks/security-finding-ingestion.md for the meaning of
+              each result and how to redeliver.
