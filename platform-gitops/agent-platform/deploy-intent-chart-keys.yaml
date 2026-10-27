@@ -1,0 +1,77 @@
+# Every top-level `.Values.<key>` the base-service chart reads, classified for
+# the DeployIntent compiler (mctlhq/mctl-gitops#2186, epic mctlhq/.github#254).
+#
+#   intent    compiled from the schema field named in `from`, and only from it
+#   platform  set by the compiler from platform data; no intent field reaches it
+#   denied    never written by the deploy path
+#
+# scripts/validate-deploy-intent.py fails when the chart reads a key that is
+# not listed here, so a new chart key -- a new escape hatch, potentially --
+# cannot reach agent-driven deploys until someone classifies it in review.
+# When in doubt, classify a new key as denied.
+intent:
+  service:
+    from: spec.runtime.port
+  probes:
+    from: spec.runtime.healthPath
+  replicaCount:
+    from: spec.runtime.replicas
+  resources:
+    from: spec.resources
+  env:
+    from: spec.env
+  # Remote key is always teams/<tenant>/<service>; only properties come from
+  # the intent.
+  externalSecret:
+    from: spec.secretRefs
+  # Only a secretRef to the externalSecret target above.
+  envFrom:
+    from: spec.secretRefs
+  # Host is derived as <service>.mctl.ai; annotations and middlewares are not
+  # expressible.
+  ingress:
+    from: spec.exposure
+platform:
+  # Repository of the platform build plus the digest it recorded (item 5).
+  - image
+  - imagePullSecrets
+  # runAsUser/runAsGroup read from the built image's config, nothing else.
+  - containerSecurityContext
+denied:
+  - extraObjects
+  - extraContainers
+  - initContainers
+  - extraIngresses
+  - extraVolumes
+  - extraVolumeMounts
+  - extraExternalSecrets
+  - extraContainerSecurityContext
+  - podSecurityContext
+  - serviceAccount
+  - automountServiceAccountToken
+  - command
+  - args
+  - envValueFrom
+  - configMaps
+  - persistence
+  - dbSecret
+  - dbInitJob
+  - registryCredentials
+  - workContext
+  - metrics
+  - otel
+  - blueGreen
+  - strategy
+  - autoscaling
+  - nodeSelector
+  - tolerations
+  - affinity
+  - podAnnotations
+  - podLabels
+  - writablePaths
+  - backstage
+  - nameOverride
+  - fullnameOverride
+  - revisionHistoryLimit
+  - terminationGracePeriodSeconds
+  - preStopSleepSeconds

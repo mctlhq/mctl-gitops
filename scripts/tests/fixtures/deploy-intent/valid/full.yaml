@@ -1,0 +1,36 @@
+# Every field set, including secret references and resources.
+apiVersion: deploy.mctl.ai/v1alpha1
+kind: DeployIntent
+metadata:
+  tenant: example
+  service: api
+spec:
+  environment: production
+  source:
+    repository: example-org/monorepo
+    revision: 0123456789abcdef0123456789abcdef01234567
+    dockerfile: services/api/Dockerfile
+    context: services/api
+  detection:
+    tier: tier0
+  runtime:
+    port: 3000
+    healthPath: /api/health
+    replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  exposure:
+    mode: internal
+  env:
+    LOG_LEVEL: info
+    PUBLIC_BASE_URL: https://api.mctl.ai
+  secretRefs:
+    - env: DATABASE_URL
+      property: DATABASE_URL
+    - env: STRIPE_KEY
+      property: stripe.key
