@@ -82,13 +82,8 @@ probes:
 # as a permanent "fix" — an earlier version of this comment instructed exactly
 # that, and following it breaks the soak.
 #
-# TEMPORARY EXCEPTION (2026-10-27, mctl-agents#760 coalescing soak): the
-# token is currently bound to 8745115872 (@mctlhq), expiring 2026-11-06. The
-# operator's preview session is revoked, so 210408407 produces no jobs here
-# and nothing goes unclaimed; the soak runs as bursts from the operator to
-# @mctlhq, whose agent profile is observe-only with autopilot paused. Revert
-# to the previous Vault version (vault kv rollback) once the soak ends, and
-# no later than 2026-11-05, before the operator logs in on preview again.
+# Exception history: rebound to 8745115872 on 2026-10-27 for the
+# mctl-agents#760 coalescing soak (gitops#2201) and rolled back the same day.
 #
 # Tried on 2026-08-27 and reverted the same evening. Job claiming is scoped to
 # the token's user (agentapi.handleClaimJobs -> Queue.Claim(ctx, id.UserID,
