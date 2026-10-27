@@ -1,0 +1,20 @@
+status: proposed
+updated_at: '2026-10-27T18:32:15Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-3860f312ac002972
+  trace_id: 41b77ba4705167a68178f80077efd1d6
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-telegram
+  issue: 881
+  url: https://github.com/mctlhq/mctl-telegram/issues/881
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-b3b63617a0ce7dcb
+  content_hash: sha256:b3b63617a0ce7dcb273a49e92514611c2f42d04f5e44f20d6c7f6faccd4eff79
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
