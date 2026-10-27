@@ -150,7 +150,8 @@ spec:
     # Audit trail integrity (mctl-api#813). Every request a support agent run
     # makes is audited; a failed audit write is served anyway and only
     # counted, so this alert is what keeps a broken trail from passing
-    # silently. The series exists only once a write has failed.
+    # silently. From mctl-api 4.128.0 (mctl-api#818) the support.request and
+    # other series start at 0, so increase() sees the first failure.
     - name: mctl.api.audit
       interval: 60s
       rules:
