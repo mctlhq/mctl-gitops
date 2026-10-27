@@ -119,6 +119,14 @@ spec:
             # off. Human sign-in is ZITADEL; Dex is gone (mctlhq/mctl-gitops#1500
             # phase 4).
             SELF_URL: https://api.mctl.ai
+            # Tenant support agent tools mctl_ask_support / mctl_get_support_task
+            # (mctlhq/mctl-api#814, mctlhq/.github#243). mctl-api forwards the
+            # caller's own bearer to the support agent's A2A endpoint; it holds
+            # no credential of its own for it. Unset = both tools answer "not
+            # configured". The ask wait defaults to 60s (SUPPORT_ASK_WAIT,
+            # 5s-90s) and POST /mcp gets that wait + 15s as its request and
+            # write deadline. Rollback: delete this line.
+            SUPPORT_A2A_URL: https://support.mctl.ai
             # GitHub Actions OIDC for CI deploys (mctlhq/mctl-api#530): a CI
             # job's own OIDC token may deploy a new tag of the component whose
             # catalog-info.yaml github.com/source-repo is that job's
