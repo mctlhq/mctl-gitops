@@ -92,6 +92,13 @@ env:
   # The matching TELEGRAM_OIDC_CLIENT_SECRET is sourced from
   # secret/data/platform/mctl-telegram-preview/oauth via the oauth ExternalSecret.
   TELEGRAM_OIDC_CLIENT_ID: "8923492300"
+  # mctl-telegram#922: ask Telegram for telegram:bot_access at sign-in so the
+  # bot may message the user. Preview only, for the task-8 check (consent
+  # screen, accept and decline signals). The server requests the scope only
+  # when the login bot token's id equals TELEGRAM_OIDC_CLIENT_ID; otherwise it
+  # logs a Warn with the reason and keeps the old scopes. Prod stays off until
+  # a separate owner decision.
+  TELEGRAM_OIDC_BOT_ACCESS_ENABLED: "true"
   TG_LOGIN_ADMINS: "210408407,8745115872,924671154"
   AUTO_APPROVE_CLIENTS: "false"
   # Reviewer demo mode not needed on preview.
