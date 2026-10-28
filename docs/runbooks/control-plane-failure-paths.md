@@ -11,19 +11,19 @@ verified live when written.
 | id | class | failure | detection | status | tracked by |
 |---|---|---|---|---|---|
 | cp-node-loss | cp-node | The single control-plane node or its k3s server process is lost. | KubeAPIDown | unverified | residual: F11 |
-| alerting-path-loss | alerting-path | Whole cluster (and the in-cluster alerting stack) is lost. | none | unmonitored | follow-up-needed: off-cluster dead-man's switch fed by Watchdog |
-| etcd-disk-full-quota | etcd | etcd database grows to its quota or the node disk fills. | NodeDiskSpaceHigh, NodeDiskSpaceCritical | partial | follow-up-needed: etcd metrics (etcd-expose-metrics) plus etcd rules |
-| etcd-slow-fsync-leader-loss | etcd | etcd fsync latency or leader churn degrades the apiserver. | none | unmonitored | follow-up-needed: etcd metrics (etcd-expose-metrics) plus etcd rules |
-| etcd-snapshot-stale | etcd | Scheduled etcd snapshot upload to R2 stops. | none | unmonitored | follow-up-needed: etcd snapshot freshness alert |
-| etcd-restore-untested | etcd | Restore procedure has never been drilled and may not work. | none | unmonitored | residual: F11 |
-| apiserver-overload-5xx | apiserver | Apiserver overloaded, erroring or terminating requests. | KubeAPIErrorBudgetBurn, KubeAPITerminatedRequests | unverified | follow-up-needed: confirm routing of apiserver chart-default alerts |
-| apiserver-cert-expiry | apiserver | Client or serving certificates expire. | KubeClientCertificateExpiration | partial | follow-up-needed: cover k3s serving certificate rotation |
-| apiserver-args-drift | apiserver | A config.yaml.d drop-in silently replaces kube-apiserver args (audit, OIDC). | none | unmonitored | follow-up-needed: detect apiserver arg drift |
+| alerting-path-loss | alerting-path | Whole cluster (and the in-cluster alerting stack) is lost. | none | unmonitored | [#2220](https://github.com/mctlhq/mctl-gitops/issues/2220) |
+| etcd-disk-full-quota | etcd | etcd database grows to its quota or the node disk fills. | NodeDiskSpaceHigh, NodeDiskSpaceCritical | partial | [#2221](https://github.com/mctlhq/mctl-gitops/issues/2221) |
+| etcd-slow-fsync-leader-loss | etcd | etcd fsync latency or leader churn degrades the apiserver. | none | unmonitored | [#2221](https://github.com/mctlhq/mctl-gitops/issues/2221) |
+| etcd-snapshot-stale | etcd | Scheduled etcd snapshot upload to R2 stops. | none | unmonitored | [#2222](https://github.com/mctlhq/mctl-gitops/issues/2222) |
+| etcd-restore-untested | etcd | Restore procedure has never been drilled and may not work. | none | unmonitored | [#2224](https://github.com/mctlhq/mctl-gitops/issues/2224) |
+| apiserver-overload-5xx | apiserver | Apiserver overloaded, erroring or terminating requests. | KubeAPIErrorBudgetBurn, KubeAPITerminatedRequests | unverified | [#2225](https://github.com/mctlhq/mctl-gitops/issues/2225) |
+| apiserver-cert-expiry | apiserver | Client or serving certificates expire. | KubeClientCertificateExpiration | partial | [#2225](https://github.com/mctlhq/mctl-gitops/issues/2225) |
+| apiserver-args-drift | apiserver | A config.yaml.d drop-in silently replaces kube-apiserver args (audit, OIDC). | none | unmonitored | [#2225](https://github.com/mctlhq/mctl-gitops/issues/2225) |
 | oidc-issuer-unreachable | apiserver | auth.mctl.ai (in-cluster ZITADEL) unreachable. | none | partial | residual: F11 |
 | cp-resource-starvation | cp-node | Untainted control-plane node starved by ordinary workloads. | NodeHighCPU, NodeHighMemory, NodeMemoryHeadroomLow | partial | residual: F11 |
-| controller-manager-scheduler-stuck | apiserver | Controller-manager or scheduler stops working inside the k3s process. | none | unmonitored | follow-up-needed: signal for controller-manager and scheduler health |
-| webhook-backend-down | admission | A failurePolicy Fail webhook backend (external-secrets, cert-manager, CloudNativePG) is down. | KubePodNotReady | unverified | follow-up-needed: live webhook inventory and admission error-rate alerts |
-| vap-misfire | admission | A ValidatingAdmissionPolicy CEL error or too-broad match denies writes cluster-wide. | none | unmonitored | follow-up-needed: admission error-rate alerts on kept counters |
+| controller-manager-scheduler-stuck | apiserver | Controller-manager or scheduler stops working inside the k3s process. | none | unmonitored | [#2225](https://github.com/mctlhq/mctl-gitops/issues/2225) |
+| webhook-backend-down | admission | A failurePolicy Fail webhook backend (external-secrets, cert-manager, CloudNativePG) is down. | KubePodNotReady | unverified | [#2223](https://github.com/mctlhq/mctl-gitops/issues/2223) |
+| vap-misfire | admission | A ValidatingAdmissionPolicy CEL error or too-broad match denies writes cluster-wide. | none | unmonitored | [#2223](https://github.com/mctlhq/mctl-gitops/issues/2223) |
 
 `tracked_by: follow-up-needed: ...` means the GitHub issue is not yet opened;
 replace it with the issue URL when it is.
