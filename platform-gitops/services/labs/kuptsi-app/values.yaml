@@ -23,10 +23,10 @@ resources:
   # keeps ~15x headroom over steady-state p95.
   requests:
     cpu: 75m
-    memory: 256Mi
+    memory: 384Mi
   limits:
     cpu: 300m
-    memory: 512Mi
+    memory: 768Mi
 # NOTE: do NOT let mctl_deploy_service stomp this block on tag bump — the
 # uvicorn entrypoint in kuptsi-app needs HOST/PORT/WEB_CONCURRENCY or it
 # silently exits 0 on startup (regression seen 2026-05-07 when 0.1.17 → 0.2.0
@@ -142,10 +142,10 @@ extraContainers:
     resources:
       requests:
         cpu: 100m
-        memory: 256Mi
+        memory: 384Mi
       limits:
         cpu: 500m
-        memory: 512Mi
+        memory: 768Mi
     livenessProbe:
       exec:
         command: ["sh", "-c", "kill -0 1"]
