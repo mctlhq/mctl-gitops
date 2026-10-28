@@ -92,7 +92,6 @@ Verification and route confinement
   SHALL allow only these requests:
   - `GET /api/v1/whoami`
   - `POST /api/v1/work-items`
-  - `PATCH /api/v1/work-items/{id}`
   - `POST /api/v1/work-items/{id}/executions`
   - `POST /api/v1/agent-run-tokens`
 - IF a support-audience token is presented on any other route, `POST`,
@@ -105,9 +104,13 @@ Verification and route confinement
 whoami
 
 - WHEN `GET /api/v1/whoami` is called with an access token minted by this
-  server THE SYSTEM SHALL include `"audience": "<resource>"`. For a
-  default-audience token that value is `accessAudience()`. For a support
-  token it is the support resource.
+  server THE SYSTEM SHALL include `"audience"` as a JSON array of strings:
+  the token's verified `aud` values, in claim order. For a default-audience
+  token that is `[accessAudience()]` (also for the aud-less HS256 grace
+  token). For a support token it is `["https://support.mctl.ai"]` (the
+  configured support resource). It is always an array, never a bare string,
+  even with one value. This is the contract recorded on mctlhq/mctl-api#849,
+  which mctl-support (mctlhq/mctl-support#22) implements against.
 - WHEN `GET /api/v1/whoami` is called with any other credential (GitHub PAT,
   Dex/OIDC token, static service token, agent run token) THE SYSTEM SHALL
   omit `audience`. Absent means "not a support-audience token".
@@ -136,16 +139,14 @@ Tests
 
 ## Open questions
 
-- Which exact routes mctl-support calls with the caller's bearer. The issue
-  names "whoami, the support work-item execution create/update, the support
-  run-token mint". `internal/api/router.go` has no route literally named
-  "execution update". This proposal allowlists `POST /work-items`,
-  `PATCH /work-items/{id}` and `POST /work-items/{id}/executions` plus the
-  mint `POST /agent-run-tokens`. A reviewer who knows mctl-support's client
-  should trim this list, for example if it uses
-  `POST /work-items/{id}/execution-requests` instead or never calls
-  `PATCH /work-items/{id}`. The list is one table in one file, so changing it
-  is cheap.
+- Resolved by owner amendment (2026-10-28): which routes mctl-support calls
+  with the caller's bearer. Checked against mctl-support's client
+  (`src/mctl_support/mctl_api.py`, `executors/lifecycle.py`): `GET /whoami`,
+  `POST /work-items`, `POST /work-items/{id}/executions` (used both to start
+  and to finish an execution) and `POST /agent-run-tokens`. It never calls
+  `PATCH /work-items/{id}`, so that route is not on the allowlist. Revoke,
+  incidents and usage records are sent with the minted run token, not the
+  caller's bearer.
 - Whether a support token should also be allowed on
   `POST /api/v1/agent-run-tokens/self/revoke`. Today that route is called
   with a run token, not the caller's bearer, so it is left out.
