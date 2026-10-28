@@ -60,7 +60,7 @@ env:
   APP_ENV: production
   SUPPORT_ENV: production
   SUPPORT_EXECUTOR: agent
-  SUPPORT_ALLOWED_TENANTS: namax66
+  SUPPORT_ALLOWED_TENANTS: namax66,karabu
   SUPPORT_PUBLIC_URL: https://support.mctl.ai
   MCTL_API_URL: https://api.mctl.ai
   MCTL_AUTH_ISSUER: https://api.mctl.ai
