@@ -69,12 +69,13 @@
   - Register it in `internal/api/router.go` as the first `r.Use` after
     `opts.AuthMiddleware` in the authenticated group, which also mounts
     `/mcp`.
-  - DoD: a support token is refused on every route except the five on the
-    allowlist.
+  - DoD: a support token is refused on every route except the four on the
+    allowlist; `PATCH /api/v1/work-items/{id}` is refused.
 - [ ] 8. whoami reports the audience (depends on 5). In `Handlers.Whoami`
-  (`handlers_read.go`), add `"audience"` when `user.TokenAudience()` is ok.
-  - DoD: an API token reports `accessAudience()`, a support token reports
-    the support resource, and a GitHub PAT or run token omits the field.
+  (`handlers_read.go`), add `"audience"` (a JSON array of strings) when `user.TokenAudience()` is
+  ok.
+  - DoD: an API token reports `[accessAudience()]`, a support token reports
+    `["https://support.mctl.ai"]`, and a GitHub PAT or run token omits the field.
 - [ ] 9. Docs. Describe the `resource` parameter, `invalid_target`, the
   support allowlist and the whoami `audience` field in the repo's OAuth/auth
   docs, and note `OAUTH_SUPPORT_RESOURCE` in the env reference.
@@ -101,15 +102,16 @@ description lists, for each test, the line whose deletion turns it red.
   Run against both the in-memory store and `PostgresStore`.
 - [ ] T5. The gate, positive direction. Through the real router
   (`NewRouter` with stub handlers or the e2e harness), a support token gets
-  past auth on each of the five allowlisted method+path pairs: the response
+  past auth on each of the four allowlisted method+path pairs: the response
   is not 401.
 - [ ] T6. The gate, negative direction. A support token gets 401
   `invalid_token` on `GET /api/v1/services`,
-  `POST /api/v1/operations/{name}/execute`, `POST /mcp` and `GET /mcp`. An
+  `POST /api/v1/operations/{name}/execute`, `PATCH /api/v1/work-items/{id}`,
+  `POST /mcp` and `GET /mcp`. An
   API token on the same routes is not refused by the gate.
 - [ ] T7. whoami: an API-audience token reports
-  `audience == accessAudience()`, a support token reports
-  `https://support.mctl.ai`, and a GitHub PAT or static service user has no
+  `audience == [accessAudience()]` (a JSON array), a support token reports
+  `["https://support.mctl.ai"]`, the field never decodes as a bare string, and a GitHub PAT or static service user has no
   `audience` key.
 - [ ] T8. Verification: a token with `aud=["https://other.example"]` is still
   refused (`aud_mismatch`). With `SupportResource=""`, a support-`aud` token

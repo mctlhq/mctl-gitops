@@ -71,7 +71,6 @@ Routing (`internal/api/router.go`)
 - The routes mctl-support relays are all in this group:
   - `GET /api/v1/whoami` (line 564);
   - `POST /work-items` (719);
-  - `PATCH /work-items/{id}` (729);
   - `POST /work-items/{id}/executions` (731);
   - `POST /agent-run-tokens` (839, `MintAgentRunToken`, which allows a
     tenant-member mint for scopes with `MintByTenantMember`, the support
@@ -216,7 +215,6 @@ Deployed state checked:
 var supportAudienceRoutes = []struct{ method string; path *regexp.Regexp }{
     {GET,   ^/api/v1/whoami$},
     {POST,  ^/api/v1/work-items$},
-    {PATCH, ^/api/v1/work-items/[^/]+$},
     {POST,  ^/api/v1/work-items/[^/]+/executions$},
     {POST,  ^/api/v1/agent-run-tokens$},
 }
@@ -254,7 +252,9 @@ func (h *Handlers) supportAudienceGate(next http.Handler) http.Handler
 - `handleOAuthMeta`: no change to the shape. Optionally list the support
   resource in a comment, but do not invent a non-standard field.
 - `Whoami`: when `user.TokenAudience()` is ok, add `"audience"` to the
-  response map. It is informational, like `boundTenant`.
+  response map as a JSON array of strings (`[]string`), the token's verified
+  `aud` values; never a bare string. Keep the verified `aud` list on the
+  `User` next to the classification so whoami reports what was verified.
 
 ### 7. Audit
 
