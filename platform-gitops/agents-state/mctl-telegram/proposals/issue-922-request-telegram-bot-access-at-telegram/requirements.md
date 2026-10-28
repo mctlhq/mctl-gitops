@@ -118,11 +118,11 @@ The flag is enabled per environment by separate gitops PRs:
 4. Single stop rule, the same in design.md and tasks.md: if a separate decline is not possible, or
    the check result is `unknown`, prod stays off until a separate owner decision. "Not possible"
    covers a consent screen that makes the permission a condition of signing in, and one that does
-   not show it as a separate choice at all. An `unknown` result is not enabled either. Asking users for a
-   permission whose grant we cannot observe brings no measurable benefit. Turning it on anyway
-   would only add a consent prompt. The owner then decides on #922 whether it is worth enabling
-   anyway (the bot may be able to reach users even though we cannot record it), or whether
-   another trustworthy grant signal exists. Nothing is promoted automatically.
+   not show it as a separate choice at all. For `unknown`: asking users for a permission whose
+   grant we cannot observe brings no measurable benefit, and would only add a consent prompt. In
+   either case the owner decides on #922 whether to enable anyway (the bot may be able to reach
+   users even though we cannot record it), or whether another trustworthy grant signal exists.
+   Nothing is promoted automatically.
 
 ## Open questions
 
