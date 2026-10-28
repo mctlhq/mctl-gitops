@@ -96,6 +96,12 @@ env:
   AUTO_APPROVE_CLIENTS: "false"
   # Reviewer demo mode not needed on preview.
   DEMO_REVIEWER_ENABLED: "false"
+  # Web QR login on the enable_access phone step (mctl-telegram#901, #916):
+  # desktop browsers get "Use a QR code instead". Off by default in the
+  # image; on here to prove it out before stable. Images without #916
+  # ignore the key. TELEGRAM_APP_NAME is left unset until the preview app's
+  # exact title is confirmed; the page then omits the app name.
+  ENABLE_ACCESS_QR_ENABLED: "true"
   # C1 (communication agent staging, observe-only) — see
   # docs/plans/communication-agent.md. AGENT_ENABLED mounts /api/agent/v1 and
   # lets POST /api/agent/token mint a worker credential and PUT
