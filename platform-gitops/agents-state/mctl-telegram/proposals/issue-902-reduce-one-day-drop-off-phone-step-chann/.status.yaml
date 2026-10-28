@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-28T09:04:51Z'
+status: merged
+updated_at: '2026-10-28T09:43:20Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-21e71ce3dddf0495
@@ -47,4 +47,9 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
-merge_owner: pr-steward
+github:
+  state: merged
+  head_sha: 850d920b5517ed85e5cb04245631a958ffb379a5
+  observed_at: '2026-10-28T09:43:20Z'
+merged_at: '2026-10-28T09:43:20Z'
+merge_commit: 33c8588c253ec623523805e14afa88d55d441b44
