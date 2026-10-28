@@ -100,14 +100,20 @@ A doc-first spike with one guard test. No runtime change.
      *name* is fine but no attribute may use that suffix.
    - *Follow-up issues*: one block per gap with title, repo (mctl-agents, mctl-docs for catalog
      reservations, mctl-gitops for scope/dashboards), priority, dependencies and scope, ready to file.
-   - *Coverage table*: a fenced block listing the `run_*.py` modules that call `tracing.agent_run`,
-     consumed by the test below.
+   - *Coverage registry*: a fenced block listing every `orchestrator/run_*.py` module with
+     `runner`, `agent_call` (yes/no) and `traced` (yes/no), consumed by the test below. Listing only
+     the traced modules is not enough: a new untraced runner would then be absent from both sides
+     and the guard would stay green.
 2. **Live confirmation (read-only, best-effort).** The implementer reads the CWFT env and, if
    reachable, one recent DevLoop trace. The report records what was observed, or states "not
    observed". A gap is never inferred from an unread source.
-3. **`tests/test_tracing_coverage.py`.** It parses `orchestrator/run_*.py` with `ast`, collects modules
-   that call `tracing.agent_run`, parses the coverage block from the report, and asserts the two
-   sets are equal. Stdlib only, no network.
+3. **`tests/test_tracing_coverage.py`.** It globs `orchestrator/run_*.py` and parses the registry
+   block from the report. It asserts that (i) the set of registry rows equals the set of runner
+   modules on disk, so an unregistered runner fails CI; (ii) each row's `traced` value matches an
+   `ast` check for a `tracing.agent_run` call in that module; (iii) each row with `agent_call: yes`
+   and `traced: no` is referenced by a gap ID in the matrix. `agent_call` is reviewed by hand, and
+   the test records the symbols it treats as an agent invocation so the implementer can tighten it
+   later. Stdlib only, no network.
 
 ## Alternatives
 - **Implement the P1 signals directly in this issue.** Dropped: the issue is a spike, and the eval

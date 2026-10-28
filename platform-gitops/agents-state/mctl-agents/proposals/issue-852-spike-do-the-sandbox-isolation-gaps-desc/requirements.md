@@ -44,6 +44,14 @@ boundary, where no Kubernetes primitive applies:
   and SHALL NOT mark it `absent` or `new`.
 - WHEN the report is merged THE SYSTEM SHALL carry exactly one decision token on its `STATUS:` line, from
   `NO_NEW_GAPS`, `NEW_GAPS_FOLLOW_UP`, `FOLD_INTO_807`, or SHALL carry `STATUS: DRAFT`.
+- THE SYSTEM SHALL establish the actual execution boundary of both `WebSearch` and `WebFetch` (executed by
+  the model provider, or locally inside the pod's network path) from the pinned SDK/CLI and give each its own
+  row verdict. An unverified boundary SHALL be marked `not-observed`, never assumed.
+- THE SYSTEM SHALL record in the report the PR #810 head SHA its coverage map was built against
+  (`7b1c9267f5cf80d738e3b2f3134415740402d764` at amendment time) and, IF #810's head has moved before the spike PR merges, THEN THE
+  SYSTEM SHALL re-check the mapping against the new head and update the recorded SHA.
+- WHEN a follow-up for `Bash` (D2) is drafted THE SYSTEM SHALL frame it as policy-mediated or
+  credential-separated execution. A command deny-list SHALL appear only as defence in depth.
 - WHILE the spike PR is open THE SYSTEM SHALL NOT change any file under `orchestrator/`, `config/` or
   `agents/_manifests/`, nor `Dockerfile` or `entrypoint.sh`. A guard test enforces this.
 - IF the source article body cannot be retrieved THEN THE SYSTEM SHALL say so in the report and derive

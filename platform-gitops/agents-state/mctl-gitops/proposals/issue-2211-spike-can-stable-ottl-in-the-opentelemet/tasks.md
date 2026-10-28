@@ -15,8 +15,10 @@
 - [ ] 3. In `platform-gitops/bootstrap/templates/observability/otel-collector.yaml`,
   render `transform/scrub` (`error_mode: ignore`, `truncate_all` plus the two
   `replace_all_patterns` statements) and one `filter/tenant-<team>` per
-  `ottl.tenants[]` entry, with the template-added
-  `resource.attributes["mctl.team"] == "<team>"` guard. Insert them into
+  `ottl.tenants[]` entry, compiling each typed `dropSpans[]` rule
+  (`attribute`/`operator`/`value`, see design.md) into OTTL behind the
+  template-added `resource.attributes["mctl.team"] == "<team>"` guard. An
+  unknown attribute or operator makes the template `fail`. Insert them into
   `service.pipelines.traces.processors` in the order from design.md
   (depends on 1, 2). — DoD: `helm template` of `platform-gitops/bootstrap`
   with an overlay that enables both renders valid YAML, and
@@ -24,8 +26,10 @@
 - [ ] 4. Render `debug.verbosity: basic` when `otelCollector.backendEndpoint`
   is set, and `normal` otherwise. — DoD: the default render shows `basic`,
   and a render with `backendEndpoint: ""` shows `normal`.
-- [ ] 5. Add tenant-rule validation: team is DNS-safe, exists under
-  `platform-gitops/tenants/`, and has no `"` in conditions. Wire it into
+- [ ] 5. Add tenant-rule validation: team is DNS-safe and exists under
+  `platform-gitops/tenants/`; each rule has exactly `attribute`, `operator`,
+  `value`; attribute and operator are in the allowlists; value matches
+  `^[A-Za-z0-9._/:-]{1,128}$` via `re.fullmatch`, not `re.match` with `$`. Wire it into
   `.github/workflows/validate-manifests.yml` next to the existing
   otel-collector steps (depends on 2). — DoD: CI fails on a bad team name and
   passes on an empty list.
@@ -34,8 +38,11 @@
   `otelcol_processor_filter_spans_filtered`), describe the debug verbosity
   behaviour, and fix the `summary: info` drift (depends on 3, 4). — DoD:
   every key the runbook documents exists in the template.
-- [ ] 7. Separate follow-up PR: set `otelCollector.ottl.scrub.enabled: true`.
-  Leave it 7 days, then write before/after numbers and per-signal verdicts
+- [ ] 7. Delivery is three PRs. PR A is tasks 1-6 (scrub off, no tenant
+  rules, debug cost cut). PR B, after an explicit owner approval, sets
+  `otelCollector.ottl.scrub.enabled: true`. PR A and PR B say
+  `Refs mctlhq/mctl-gitops#2211`, never a closing keyword. PR C, after 7
+  days, writes before/after numbers and per-signal verdicts
   (traces go, logs follow-up, metrics no change) into
   `docs/spikes/ottl-telemetry-pipeline.md` (depends on 3-6). — DoD: the
   spike document is merged with measured numbers and filed follow-up issue
@@ -68,8 +75,17 @@
 - [ ] T5. Existing `tests/test_otel_collector_redaction.py`,
   `tests/test_otel_collector_redaction_e2e.py` and
   `tests/test_otel_collector_backends_render.py` still pass unchanged.
-- [ ] T6. Validation script (task 5) rejects `team: "Admins"`,
-  `team: "nosuchtenant"` and a condition that contains `"`.
+- [ ] T6. Validation script (task 5) and the template both reject, each
+  failing CI: `team: "Admins"`, `team: "nosuchtenant"`, a value containing
+  `) or true`, a value with a single quote, a value with a double quote, a
+  value with an embedded newline, a value with only a trailing newline, a template-looking value (`{{ .x }}`), an unknown
+  operator, an unknown attribute, an extra key such as `condition`. Mutation
+  proof: with the value regex removed from the validator, the `) or true`
+  case must make T4's cross-tenant check fail.
+- [ ] T7. `debug` exporter at `basic`: run the real `0.160.0` binary with the
+  rendered exporter config, send a span carrying a sentinel attribute value,
+  and assert the sentinel does not appear in stdout. Mutation proof: at
+  `normal` (or `detailed`) the sentinel does appear.
 
 ## Rollback
 
