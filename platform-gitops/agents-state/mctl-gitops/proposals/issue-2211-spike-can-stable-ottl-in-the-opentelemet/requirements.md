@@ -60,11 +60,17 @@ the permanent backend.
   addresses and credential shapes embedded inside longer attribute values,
   and SHALL cap span attribute values at `otelCollector.ottl.scrub.maxValueLength`
   characters with `truncate_all`.
-- WHEN an entry `{team, dropSpanConditions[]}` is listed under
-  `otelCollector.ottl.tenants` THE SYSTEM SHALL render a `filter/tenant-<team>`
-  processor. Each condition SHALL be ANDed with
+- WHEN an entry `{team, dropSpans: [{attribute, operator, value}]}` is listed
+  under `otelCollector.ottl.tenants` THE SYSTEM SHALL render a
+  `filter/tenant-<team>` processor. Tenant values SHALL NOT contain free-form
+  OTTL: `attribute` and `operator` come from closed allowlists, and the
+  template compiles each rule into OTTL itself, ANDed with
   `resource.attributes["mctl.team"] == "<team>"`, so a rule for one tenant
   can never drop another tenant's spans.
+- IF a tenant rule has an unknown key, an `attribute` or `operator` outside
+  the allowlist, or a `value` outside `^[A-Za-z0-9._/:-]{1,128}$` (which
+  excludes quotes, parentheses, whitespace, newlines and template
+  delimiters), THEN THE SYSTEM SHALL fail CI before merge.
 - IF a tenant rule names a team that has no directory under
   `platform-gitops/tenants/`, or its name is not DNS-safe, THEN THE SYSTEM
   SHALL fail CI (`validate-manifests.yml`) before merge.
@@ -74,13 +80,19 @@ the permanent backend.
   drops a whole batch or crashes the pod.
 - WHILE `otelCollector.backendEndpoint` is set THE SYSTEM SHALL configure the
   `debug` exporter with `verbosity: basic` (one summary line per batch, no
-  span bodies). It SHALL return to `normal` only when the backend is unset,
+  span bodies). That `basic` prints no span attributes or body at `0.160.0`
+  SHALL be proven by running the real binary, not inferred from the name. It SHALL return to `normal` only when the backend is unset,
   which is the documented rollback state.
 - WHEN the pilot is merged THE SYSTEM SHALL keep every existing guarantee:
   `memory_limiter` first, `k8sattributes` before any tenant-keyed rule,
   `redaction` before `transform/scrub`, `batch` last.
   `tests/test_otel_collector_redaction.py` and
   `tests/test_otel_collector_redaction_e2e.py` SHALL keep passing unchanged.
+- THE SYSTEM SHALL deliver the work in three steps: PR A (mechanism, scrub
+  off, no tenant rules, debug cost cut), PR B (owner-approved
+  `scrub.enabled: true`), and after 7 days PR C (report with numbers and a
+  GO/NO-GO verdict). PR A and PR B SHALL reference the issue without a
+  closing keyword; only PR C may close it.
 - WHEN the pilot has run for 7 days THE SYSTEM SHALL have a recorded
   before/after comparison in the spike document: collector accepted vs.
   exported spans, Loki ingestion bytes for `{namespace="monitoring",

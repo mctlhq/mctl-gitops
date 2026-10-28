@@ -5,12 +5,15 @@
   when the report's "Source and limits" section states which source was used.
 - [ ] 2. Verify D1-D5 against the code (depends on 1): `orchestrator/options.py` (`_policy_hooks`,
   `_command_audit_hooks`, the builders at about lines 1304 and 1377, every `setting_sources` use) and
-  `orchestrator/run_implementer.py` (`_TYPECHECK_ENV_KEEP`). For D3, check the pinned `claude_agent_sdk`
+  `orchestrator/run_implementer.py` (`_TYPECHECK_ENV_KEEP`). For D1, establish separately for `WebSearch` and
+  for `WebFetch` whether the pinned SDK/CLI executes the tool on the provider side or locally in the pod. For D3, check the pinned `claude_agent_sdk`
   version in `uv.lock` and its documented meaning of the `"project"` setting source: does it load
   `.claude/settings.json` hooks or permissions? Done when each candidate row is confirmed `new` or demoted
   to `covered-by-*`, `not-observed` or `not-a-gap`, with a file:symbol citation.
 - [ ] 3. Map every taxonomy category to #807 G1-G6 (PR #810's `docs/spikes/807-agent-isolation-k8s.md`)
-  or to #830 (depends on 1). Done when the coverage map has no unmapped category.
+  or to #830 (depends on 1). Record the #810 head SHA used (`7b1c9267f5cf80d738e3b2f3134415740402d764` at amendment time); before
+  merge, compare it with #810's current head and re-check the mapping if it moved. Done when the coverage
+  map has no unmapped category and names the #810 SHA it was built against.
 - [ ] 4. Write `docs/spikes/852-sandbox-isolation-delta.md` (depends on 2 and 3). It has the sections
   Source and limits, Coverage map, Delta gap list, Decision (`STATUS: DRAFT` unless the owner records
   `NO_NEW_GAPS`, `NEW_GAPS_FOLLOW_UP` or `FOLD_INTO_807`), and Follow-ups (draft issue bodies, not filed).
@@ -27,6 +30,8 @@
   agents/_manifests` is empty. The test skips without `origin/main`.
 - [ ] T4. The report matches no token-shaped regex (`ghp_`, `gho_`, `github_pat_`, `sk-ant-`,
   `-----BEGIN`).
+- [ ] T6. The report contains a line naming PR #810 with a 40-hex head SHA, and D1 has separate verdicts
+  for `WebSearch` and `WebFetch`.
 - [ ] T5. The existing suite still passes, including `tests/test_worker_isolation.py` and
   `tests/test_portable_runtime_isolation.py`.
 

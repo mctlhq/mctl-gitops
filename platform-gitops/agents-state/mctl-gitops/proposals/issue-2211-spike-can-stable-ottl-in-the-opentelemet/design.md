@@ -118,7 +118,10 @@ otelCollector:
     scrub:
       enabled: false
       maxValueLength: 4096
-    # Each entry: {team, dropSpanConditions: [<OTTL bool expr over span>]}
+    # Each entry: {team, dropSpans: [{attribute, operator, value}]}
+    # attribute: span.name | service.name | mctl.component | http.route | url.path
+    # operator:  eq | ne | has_prefix
+    # value:     ^[A-Za-z0-9._/:-]{1,128}$
     tenants: []
 ```
 
@@ -150,11 +153,25 @@ filter/tenant-{{ .team }}:
   error_mode: ignore
   traces:
     span:
-      - 'resource.attributes["mctl.team"] == "{{ .team }}" and ({{ cond }})'
+      # one line per dropSpans[] entry, compiled by the template
+      - 'resource.attributes["mctl.team"] == "{{ .team }}" and <compiled rule>'
 ```
 
-The team guard is added by the template, not by the author. That is what
-makes per-tenant isolation structural rather than a review convention.
+The template maps each `attribute` to a fixed OTTL path (`span.name` ->
+`name`, `service.name` -> `resource.attributes["service.name"]`,
+`mctl.component` -> `resource.attributes["mctl.component"]`, `http.route` ->
+`attributes["http.route"]`, `url.path` -> `attributes["url.path"]`) and each
+`operator` to a fixed form (`eq` -> `<path> == "<value>"`, `ne` ->
+`<path> != "<value>"`, `has_prefix` -> `HasPrefix(<path>, "<value>")`). An
+unknown attribute or operator makes the template `fail`, in addition to the CI
+validator. `value` is restricted to `^[A-Za-z0-9._/:-]{1,128}$`, so it can
+never close the quoted string or the boolean expression.
+
+No author-supplied OTTL reaches the config. An earlier draft of this proposal
+ANDed a free-form condition inside `(...)` and only rejected `"`. That did not
+isolate tenants, because an input such as `true) or (true` rewrites the
+boolean expression without a quote. The typed schema closes that class rather
+than filtering characters.
 
 Pipeline order:
 `memory_limiter, k8sattributes, resource, redaction, [transform/scrub],
@@ -169,17 +186,22 @@ the documented "set backendEndpoint to empty" rollback fully observable
 through stdout, while removing per-span bodies from Loki in steady state. A
 single change in this direction also avoids adding a new values key.
 
-**Validation.** Add a new `scripts/validate-otel-ottl-tenants.py`, or extend
-the render test, to assert that each `ottl.tenants[].team` matches
-`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` and exists as
-`platform-gitops/tenants/<team>/`, and that `dropSpanConditions` contains no
-`"` that could break out of the guard's quoting.
+**Validation.** Add a new `scripts/validate-otel-ottl-tenants.py` to assert
+that each `ottl.tenants[].team` matches `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` and
+exists as `platform-gitops/tenants/<team>/`, that each rule has exactly the
+keys `attribute`, `operator`, `value`, that `attribute` and `operator` are in
+the allowlists, and that `value` matches `^[A-Za-z0-9._/:-]{1,128}$`.
 
 **Pilot enablement** is a separate, later values-only PR: `ottl.scrub.enabled:
 true`. No tenant rules are enabled by default (see Open questions). The
-runbook gets a worked example for `admins`, for instance dropping
-`span.kind == SPAN_KIND_INTERNAL` spans with duration under 1ms from one
-noisy component, but it stays commented.
+runbook gets a worked example for `admins`, for instance
+`{attribute: mctl.component, operator: eq, value: noisy-worker}`, but it
+stays commented.
+
+**Delivery steps.** PR A: mechanism, `scrub.enabled: false`, `tenants: []`,
+debug cost cut. PR B: owner-approved `scrub.enabled: true`. Then 7 days of
+measurement. PR C: the spike report with before/after numbers and a final
+GO/NO-GO. PR A and PR B use `Refs #2211`; the issue stays open until PR C.
 
 ### 3. Runbook
 
@@ -236,8 +258,9 @@ Update `docs/runbooks/otel-collector.md` with:
   - *Over-broad scrub regex destroying useful attributes such as span names
     and IDs.* `replace_all_patterns` is applied to attribute values only, and
     T3 asserts that a non-matching attribute survives byte-identical.
-  - *Cross-tenant drops.* The guard is template-enforced, quoting is
-    validated, and the `mctl.team` guard is checked by T4.
+  - *Cross-tenant drops.* Tenant values carry no OTTL: the template compiles
+    a typed rule behind the `mctl.team` guard, the validator rejects anything
+    outside the allowlists (T6), and T4 checks the guard end to end.
   - *Losing debug visibility.* `basic` still logs batch counts. Setting
     `backendEndpoint: ""` restores `normal`.
 - **Open questions:** see requirements.md. In particular, OTTL v1 syntax at
