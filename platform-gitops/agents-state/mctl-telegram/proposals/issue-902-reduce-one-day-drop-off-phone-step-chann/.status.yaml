@@ -1,10 +1,10 @@
-status: accepted
-updated_at: '2026-10-28T08:36:56Z'
+status: implemented
+updated_at: '2026-10-28T08:47:46Z'
 updated_by: mctl-agents[bot]
 execution:
-  context_id: ex-0700ef2d98859303
-  trace_id: d8bab5dca2cc0a6d15ebcbbc21f5744d
-  agent: issue-investigator
+  context_id: ex-21e71ce3dddf0495
+  trace_id: 0494fb88cb6030c9756f30152445edb7
+  agent: implementer
   version: ''
 source:
   type: github_issue
@@ -19,8 +19,31 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-10-28T08:36:56Z'
-  content_digest: 'sha256:9de0863139b5a7bbeb5b7add8ae2562498bcb2b182d2edef5c697f33162cc508'
-  digest_binding: 'reviewed'
-  approval_ref: 'aar_e9f9bc4fe6784d609bc863f3990a34f1'
+  content_digest: sha256:9de0863139b5a7bbeb5b7add8ae2562498bcb2b182d2edef5c697f33162cc508
+  digest_binding: reviewed
+  approval_ref: aar_e9f9bc4fe6784d609bc863f3990a34f1
+attempt:
+  id: 5ef7c7b4ef7d9443a8d99feb57bfb65d46b9410c877f655d49b89f0b41960d82
+  started_at: '2026-10-28T08:38:36Z'
+  expires_at: '2026-10-28T10:48:36Z'
+  finished_at: '2026-10-28T08:47:46Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/917
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-3ce125f3
+  authoritative:
+    completion_id: ic-842f22e27a0c0042
+    content_hash: sha256:842f22e27a0c004287935e7aabe48b004996e8b8b2f2aee7a65f5d7ce70e1831
+    proposal_digest: sha256:9de0863139b5a7bbeb5b7add8ae2562498bcb2b182d2edef5c697f33162cc508
+    attempt_id: 5ef7c7b4ef7d9443a8d99feb57bfb65d46b9410c877f655d49b89f0b41960d82
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 850d920b5517ed85e5cb04245631a958ffb379a5
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
