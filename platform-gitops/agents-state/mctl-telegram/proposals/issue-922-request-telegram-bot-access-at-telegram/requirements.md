@@ -10,8 +10,11 @@ broadcasts. The Telegram OIDC sign-in (`internal/auth/telegramoidc/oidc.go`, `va
 only `openid profile`. Telegram's OpenID Provider also offers `telegram:bot_access` ("Allows your bot
 to send direct messages to the user after login"), and we never request it.
 
-This proposal requests that scope on every OIDC sign-in, but only when the OIDC client is the same
-bot that sends notifications. It records a `reachable` observation only when Telegram positively
+This proposal requests that scope on OIDC sign-in only when two conditions both hold: an explicit
+rollout flag, `TELEGRAM_OIDC_BOT_ACCESS_ENABLED`, is on (default off), and the OIDC client is the
+same bot that sends notifications. Shipping the code changes nothing on any environment. Preview is
+enabled by its own gitops PR. Prod is enabled by a separate gitops PR, and only after the preview
+check below gives a result that passes the rollout rule. It records a `reachable` observation only when Telegram positively
 reports the grant. It also limits the manage page's existing login-bot deep link to users who are
 not already reachable. Telegram documents no claim for this scope and shows no `scope` field in its
 token response example. So the design treats "Telegram did not tell us" as unknown and writes
@@ -26,17 +29,29 @@ nothing in that case.
 - AS an operator I WANT reachability to be recorded only from positive evidence SO THAT digest,
   broadcast and onboarding targeting never assumes a reachability that was not observed.
 - AS a user who declines the extra permission I WANT sign-in to still succeed SO THAT the bot
-  permission is never a condition of using the service.
+  permission is never a condition of using the service. Whether Telegram's consent screen allows
+  declining the permission separately from sign-in is unverified. It is checked on preview (task 8)
+  before any copy promises it, and before prod is enabled.
+- AS the owner I WANT the scope request to stay off until I enable it per environment SO THAT
+  merging and releasing the code never changes the production sign-in flow by itself.
 
 ## Acceptance criteria (EARS)
 
 - WHEN the server builds a Telegram authorization URL AND the bot-access gate is enabled THE SYSTEM
   SHALL request the scope `openid profile telegram:bot_access` (space-separated, in that order).
-- WHEN the server starts AND `TELEGRAM_LOGIN_BOT_TOKEN` is set AND the numeric bot id before its
-  colon equals `TELEGRAM_OIDC_CLIENT_ID` THE SYSTEM SHALL enable the bot-access gate.
-- IF `TELEGRAM_LOGIN_BOT_TOKEN` is unset or malformed, or its bot id differs from
-  `TELEGRAM_OIDC_CLIENT_ID`, THEN THE SYSTEM SHALL request only `openid profile` and log one
-  warning at boot. The warning SHALL name the reason and SHALL NOT contain the token.
+- THE SYSTEM SHALL read a boolean `TELEGRAM_OIDC_BOT_ACCESS_ENABLED`, default `false`. An unset,
+  empty or unparseable value SHALL mean `false`.
+- WHEN the server starts AND `TELEGRAM_OIDC_BOT_ACCESS_ENABLED` is true AND
+  `TELEGRAM_LOGIN_BOT_TOKEN` is set AND the numeric bot id before its colon equals
+  `TELEGRAM_OIDC_CLIENT_ID` THE SYSTEM SHALL enable the bot-access gate. In every other case the
+  gate SHALL be disabled.
+- WHILE `TELEGRAM_OIDC_BOT_ACCESS_ENABLED` is false THE SYSTEM SHALL request exactly
+  `openid profile`, byte-for-byte the same authorization URL scope as before this change, and SHALL
+  log no bot-access warning.
+- IF `TELEGRAM_OIDC_BOT_ACCESS_ENABLED` is true AND `TELEGRAM_LOGIN_BOT_TOKEN` is unset or
+  malformed, or its bot id differs from `TELEGRAM_OIDC_CLIENT_ID`, THEN THE SYSTEM SHALL request
+  only `openid profile` and log one warning at boot. The warning SHALL name the reason and SHALL
+  NOT contain the token.
 - WHEN the token response carries a `scope` value whose space-separated entries include
   `telegram:bot_access` THE SYSTEM SHALL report the grant as `granted` to the callback.
 - IF the token response carries a `scope` value that does not include `telegram:bot_access` THEN
@@ -57,7 +72,9 @@ nothing in that case.
 - IF recording the grant fails THEN THE SYSTEM SHALL log the error (without Telegram ids) and
   complete the sign-in normally.
 - WHEN a user declines the permission on Telegram's consent screen, or Telegram returns the user
-  with fewer scopes, THE SYSTEM SHALL complete sign-in exactly as it does today.
+  with fewer scopes, THE SYSTEM SHALL complete sign-in exactly as it does today. This is a
+  requirement on our callback only. Whether Telegram offers a separate decline at all is an open
+  question, verified in task 8.
 - WHILE the user's reachability state is `reachable` THE SYSTEM SHALL NOT render the
   "Let the bot message you" link on the manage page.
 - WHILE the user's reachability state is anything other than `reachable` (no row, `blocked`,
@@ -66,9 +83,14 @@ nothing in that case.
 - WHEN a sign-in completes THE SYSTEM SHALL log one structured event with the observed
   bot-access signal (`granted`, `not_granted` or `unknown`). The event SHALL NOT include a user id,
   Telegram id or username.
-- THE SYSTEM SHALL keep the pre-login copy on `/telegram/connect` and the privacy page consistent
-  with the new permission. The copy SHALL state neutrally that Telegram may ask whether the login
-  bot can message the user, and that the user may decline.
+- WHILE the bot-access gate is enabled THE SYSTEM SHALL show on the pre-login `/telegram/connect`
+  page one neutral sentence: Telegram may ask whether the MCTL login bot can message the user. The
+  sentence SHALL NOT claim that the permission is optional or can be declined. That claim is added
+  only in a follow-up change, after task 8 has shown on the real Telegram consent screen that
+  declining is possible and sign-in still succeeds.
+- WHILE the bot-access gate is disabled THE SYSTEM SHALL NOT show that sentence.
+- THE SYSTEM SHALL describe in the privacy page that `client_bot_reachability` may also be learned
+  from a sign-in permission.
 
 ## Out of scope
 
@@ -81,6 +103,25 @@ nothing in that case.
   notification category, the same rule `RecordBotStartTx` follows for /start.
 - The #912 onboarding reminder itself.
 - A schema migration. `client_bot_reachability.source` and `reason_code` are free TEXT.
+
+## Rollout rule
+
+The flag is enabled per environment by separate gitops PRs:
+
+1. Merging and releasing this change enables nothing. The flag is absent everywhere.
+2. Preview (`labs/mctl-telegram-preview`): one gitops PR sets the flag. Then task 8 runs.
+3. Prod: a separate gitops PR, opened only if task 8 recorded all of the following:
+   - sign-in succeeds with the permission accepted;
+   - the consent screen either lets the user decline the permission and still sign in, or does not
+     ask about it separately. If the screen makes the permission a condition of signing in, prod
+     stays off;
+   - `bot_access_signal` was `granted` when accepted, and `not_granted` when declined (if declining
+     is possible).
+4. If the signal is `unknown` in every preview sign-in, prod is NOT enabled. Asking users for a
+   permission whose grant we cannot observe brings no measurable benefit. Turning it on anyway
+   would only add a consent prompt. The owner then decides on #922 whether it is worth enabling
+   anyway (the bot may be able to reach users even though we cannot record it), or whether
+   another trustworthy grant signal exists. Nothing is promoted automatically.
 
 ## Open questions
 

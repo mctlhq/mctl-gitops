@@ -71,7 +71,7 @@ Deployed state checked:
 
 ## Proposed solution
 
-### 1. Scope request with a same-bot gate (`internal/auth/telegramoidc`, `internal/config`, `cmd/server`)
+### 1. Scope request behind a rollout flag and a same-bot gate (`internal/auth/telegramoidc`, `internal/config`, `cmd/server`)
 
 - In `oidc.go`, add `const ScopeBotAccess = "telegram:bot_access"`. Replace the package-level
   `scopes` with a function `requestedScopes(botAccess bool) []string` that returns
@@ -81,16 +81,28 @@ Deployed state checked:
   the digits before the first colon, or false if they are missing or not decimal.
 - Add `LoginBotMatchesOIDCClient() (ok bool, reason string)` on `*Config`, with reasons
   `bot_token_unset`, `bot_token_malformed` and `bot_id_mismatch`.
-- `cmd/server/main.go` computes the gate and passes it into the oauth server `Config` as a new
-  `TelegramOIDCRequestBotAccess bool`. `internal/oauth/server.go` forwards it to
-  `telegramoidc.Config.RequestBotAccess`.
-- When the gate is off, main logs one `slog.Warn("telegram:bot_access not requested", "reason", reason)`.
-  The token never appears in the log. `bot_token`-like keys are already covered by
-  `internal/audit/redact.go`, and the warning carries only the reason enum.
+- Add `TelegramOIDCBotAccessEnabled bool`, read with `envBool("TELEGRAM_OIDC_BOT_ACCESS_ENABLED",
+  false)`, the same helper as `BOT_RECEIVER_ENABLED`. It defaults to off.
+- `cmd/server/main.go` computes the gate as
+  `cfg.TelegramOIDCBotAccessEnabled && LoginBotMatchesOIDCClient()`. It passes the gate into the
+  oauth server `Config` as a new `TelegramOIDCRequestBotAccess bool`. `internal/oauth/server.go`
+  forwards it to `telegramoidc.Config.RequestBotAccess`.
+- With the flag off, nothing is logged about bot access, and the scope set is exactly today's.
+- With the flag on and the same-bot check failing, main logs one
+  `slog.Warn("telegram:bot_access not requested", "reason", reason)`. The token never appears in
+  the log. `bot_token`-like keys are already covered by `internal/audit/redact.go`, and the warning
+  carries only the reason enum.
+- When the gate is on, main logs one `slog.Info("telegram:bot_access requested")` at boot. That way
+  the preview check can confirm which state the running pod is in.
 
-Why gate it: if the OIDC client and the sending bot differ, the grant goes to a bot that never
-sends. Recording `reachable` would then be wrong for the bot that does send. Comparing two values we
-already hold proves this offline at boot.
+Why two gates:
+- The flag separates shipping from enabling. Without it, the first prod deploy with matching ids
+  would change the sign-in consent screen for every user before the preview check ran. The flag
+  makes "preview first" a technical guarantee rather than a task-list promise. Each environment is
+  enabled by its own gitops PR, under the rollout rule in requirements.md.
+- The same-bot check stays as a safety net under the flag. If the OIDC client and the sending bot
+  differ, the grant goes to a bot that never sends, so recording `reachable` would be wrong for the
+  bot that does send. Comparing two values we already hold proves this offline at boot.
 
 ### 2. Report the grant signal (`telegramoidc.Exchange`)
 
@@ -170,9 +182,15 @@ already hold proves this offline at boot.
 
 ### 5. Copy (`internal/web/connect.go`, `internal/web/privacy.html`)
 
-- Add one short neutral sentence to the pre-login page at `connect.go:436`, for example: "Telegram
-  may also ask whether the MCTL login bot can message you. This is optional; you can sign in
-  without it."
+- Add one short neutral sentence to the pre-login page at `connect.go:436`, rendered only while the
+  gate is on: "Telegram may also ask whether the MCTL login bot can message you."
+  - Do NOT add "This is optional" or "you can sign in without it" in this change. Whether
+    Telegram's consent screen allows declining the permission separately is unverified (Open
+    questions).
+  - If task 8 shows that it does, a follow-up copy change adds that sentence.
+  - If it does not, prod stays off under the rollout rule, so no user is asked for a permission
+    they cannot refuse.
+  - The connect page view model gains a `BotAccessRequested bool` from the same gate value.
 - Update the `client_bot_reachability` row in `privacy.html` to say "from which delivery, /start,
   or sign-in permission".
 - Adjust any test that pins exact copy (`internal/web/connect_test.go`, `landing_privacy_test.go`,
@@ -204,14 +222,22 @@ already hold proves this offline at boot.
     `unknown` (only `granted` writes).
   - Existing reachability rows are untouched. Users who signed in before the change opt in through
     the manage link or a new sign-in.
-- **Config:** no new env var. The gate is derived from `TELEGRAM_LOGIN_BOT_TOKEN` and
-  `TELEGRAM_OIDC_CLIENT_ID`, both already deployed. Previews without a bot token get the old scope
-  set and a boot warning.
+- **Config:** one new env var, `TELEGRAM_OIDC_BOT_ACCESS_ENABLED`, a boolean that defaults to
+  `false`. Neither this change nor its release adds it to any values file.
+  - Preview is enabled by a separate gitops PR to `services/labs/mctl-telegram-preview`.
+  - Prod is enabled by another gitops PR, only under the rollout rule.
+  - The gate also needs `TELEGRAM_LOGIN_BOT_TOKEN` and `TELEGRAM_OIDC_CLIENT_ID` to match, and both
+    are already deployed.
+  - With the flag on, an environment without a bot token gets the old scope set and a boot
+    warning.
 - **Resources:** one extra upsert on granted sign-ins only. Negligible.
 - **Risks and mitigations:**
   - Telegram rejects the unknown or extra scope, or changes the consent flow in a way that blocks
-    sign-in. Mitigation: test sign-in on the preview service (`labs/mctl-telegram-preview`) before
-    prod. Rollback is a revert of the scope change (see tasks.md Rollback).
+    sign-in. Mitigation: the flag is off by default, so only preview sees the change until task 8
+    passes. Rollback on any environment is setting the flag to false (see tasks.md Rollback), with
+    no code revert.
+  - The consent screen makes the permission a condition of signing in. Mitigation: under the
+    rollout rule, prod stays off, and the copy never claims the permission is optional.
   - The grant is reported but delivery still fails. Mitigation: the first real delivery records
     `cannot_initiate`/`blocked` through the existing conclusive path and overrides the row.
   - The signal is always `unknown`. Then nothing changes versus today except the consent prompt.
