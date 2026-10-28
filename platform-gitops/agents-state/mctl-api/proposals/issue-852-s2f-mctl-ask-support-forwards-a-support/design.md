@@ -100,7 +100,7 @@ Deployed state checked:
 ```go
 var ErrSupportResourceDisabled = errors.New("support_audience_not_configured")
 var ErrSupportTokenRefused     = errors.New("support_token_refused")
-const MaxSupportTokenTTL = 5 * time.Minute
+const MaxSupportTokenTTL = 15 * time.Minute
 
 type SupportToken struct { Token, JTI, Audience string; ExpiresAt time.Time }
 
@@ -190,14 +190,20 @@ func (s *Server) mintSupportBearer(ctx context.Context, tool, tenant string, ttl
 - `toolAskSupport` removes the `effectiveToken(ctx) == ""` precheck.
 - After `supportTenantAllowed`, it calls `mintSupportBearer(ctx,
   "mctl_ask_support", tenant, supportTokenTTL(cfg.Wait))`. Here
-  `supportTokenTTL(d) = min(d+60s, auth.MaxSupportTokenTTL)`. With the 90s
-  maximum wait that is at most 150s.
+  `cfg.TokenTTL`, a new support config field read from `SUPPORT_TOKEN_TTL`
+  (default 11m = mctl-support's 600s task-deadline ceiling + 60s, bounded
+  2m..15m, refused at boot outside that range). The token must outlive the
+  whole support task, because mctl-support closes the WorkItemExecution with
+  the same bearer when the task ends (`finish_task_execution`,
+  `src/mctl_support/executors/lifecycle.py`), and the task keeps running after
+  the tool returns non-terminal.
 - The minter check is first in the handler, right after the config check. In
   stdio mode, the `apiGet("/api/v1/whoami")` fallback in `supportTenantAllowed`
   is therefore never reached with the stdio token. The function stays as-is,
   because the HTTP path always has a user in context.
 - `toolGetSupportTask` mints after argument validation, with
-  `ttl = min(cfg.RequestTimeout+60s, MaxSupportTokenTTL)` and an empty tenant.
+  `ttl = min(cfg.RequestTimeout+60s, 5m)` and an empty tenant: a read keeps
+  no bearer past the request.
 
 **Unchanged.** Redirects stay unfollowed (`supportHTTPClient`). Errors from
 mctl-support are reported as today. The 401 body of mctl-support never echoes
@@ -284,8 +290,10 @@ support agent".
   This is negligible.
 - **Risks and mitigations:**
   - *The TTL is too short for mctl-support's downstream use of the bearer.* The
-    5m cap is a constant that is easy to raise. Confirm with mctl-support
-    before the enforce flip (open question).
+    lifetime now covers mctl-support's whole task (`SUPPORT_TOKEN_TTL`, 11m
+    default), checked against mctl-support's lifecycle code. If mctl-support
+    ever raises its task-deadline ceiling above 14m, raise `SUPPORT_TOKEN_TTL`
+    with it.
   - *Replicas with different signing keys.* Both replicas share
     `OAUTH_JWT_SIGNING_KEYS`. mctl-support verifies by calling
     `GET /api/v1/whoami` on api.mctl.ai, and either replica verifies the token.
