@@ -112,16 +112,17 @@ The flag is enabled per environment by separate gitops PRs:
 2. Preview (`labs/mctl-telegram-preview`): one gitops PR sets the flag. Then task 8 runs.
 3. Prod: a separate gitops PR, opened only if task 8 recorded all of the following:
    - sign-in succeeds with the permission accepted;
-   - the consent screen either lets the user decline the permission and still sign in, or does not
-     ask about it separately. If the screen makes the permission a condition of signing in, prod
-     stays off;
-   - `bot_access_signal` was `granted` when accepted, and `not_granted` when declined (if declining
-     is possible).
-4. If the signal is `unknown` in every preview sign-in, prod is NOT enabled. Asking users for a
-   permission whose grant we cannot observe brings no measurable benefit. Turning it on anyway
-   would only add a consent prompt. The owner then decides on #922 whether it is worth enabling
-   anyway (the bot may be able to reach users even though we cannot record it), or whether
-   another trustworthy grant signal exists. Nothing is promoted automatically.
+   - the consent screen lets the user decline the permission separately, and sign-in still
+     succeeds after declining;
+   - `bot_access_signal` was `granted` when accepted, and `not_granted` when declined.
+4. Single stop rule, the same in design.md and tasks.md: if a separate decline is not possible, or
+   the check result is `unknown`, prod stays off until a separate owner decision. "Not possible"
+   covers a consent screen that makes the permission a condition of signing in, and one that does
+   not show it as a separate choice at all. For `unknown`: asking users for a permission whose
+   grant we cannot observe brings no measurable benefit, and would only add a consent prompt. In
+   either case the owner decides on #922 whether to enable anyway (the bot may be able to reach
+   users even though we cannot record it), or whether another trustworthy grant signal exists.
+   Nothing is promoted automatically.
 
 ## Open questions
 
