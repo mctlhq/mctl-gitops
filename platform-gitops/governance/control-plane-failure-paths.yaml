@@ -1,0 +1,154 @@
+# Control-plane failure-path inventory (etcd, kube-apiserver, admission,
+# control-plane node, alerting path). Issue: mctlhq/mctl-gitops#2210.
+# Enforced by tests/test_control_plane_failure_paths.py in validate-manifests.yml.
+# Runbook: docs/runbooks/control-plane-failure-paths.md
+#
+# status (closed set):
+#   monitored    a detection alert exists and is routed to a human
+#   partial      some signal exists but does not cover the whole failure
+#   unmonitored  no signal
+#   unverified   not observed against the live cluster; never "monitored"
+# Every non-monitored entry needs tracked_by: an issue URL, `residual: F11`,
+# or `follow-up-needed: <title>` (issue not yet opened; replace with the URL).
+# detection[].source: vm-rules (must exist under infra-components/observability/
+# vm-rules/) or chart-default (victoria-metrics-k8s-stack, allowlist pinned in
+# the test). An alert muted to receiver "null" cannot back `monitored`.
+schema: mctl-control-plane-failure-paths/v1
+chart_version: "0.72.5"
+paths:
+  - id: cp-node-loss
+    class: cp-node
+    failure: The single control-plane node or its k3s server process is lost.
+    blast_radius: apiserver, controller-manager, scheduler and etcd all down; ArgoCD, Vault, ZITADEL, mctl-api unmanageable.
+    detection:
+      - {alert: KubeAPIDown, source: chart-default, route: "severity=critical -> telegram"}
+    status: unverified
+    evidence: [docs/runbooks/control-plane.md, infrastructure/k3s-preview/kube.tf]
+    recovery: docs/runbooks/restore.md
+    tracked_by: "residual: F11"
+  - id: alerting-path-loss
+    class: alerting-path
+    failure: Whole cluster (and the in-cluster alerting stack) is lost.
+    blast_radius: No alert can fire; Watchdog is routed to null and there is no off-cluster heartbeat.
+    detection: []
+    status: unmonitored
+    evidence: [platform-gitops/bootstrap/templates/observability/monitoring.yaml]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "follow-up-needed: off-cluster dead-man's switch fed by Watchdog"
+  - id: etcd-disk-full-quota
+    class: etcd
+    failure: etcd database grows to its quota or the node disk fills.
+    blast_radius: Writes rejected cluster-wide; apiserver effectively read-only.
+    detection:
+      - {alert: NodeDiskSpaceHigh, source: vm-rules, route: "node level only"}
+      - {alert: NodeDiskSpaceCritical, source: vm-rules, route: "node level only"}
+    status: partial
+    evidence: [platform-gitops/infra-components/observability/vm-rules/mctl-alerts.yaml]
+    recovery: docs/runbooks/restore.md
+    tracked_by: "follow-up-needed: etcd metrics (etcd-expose-metrics) plus etcd rules"
+  - id: etcd-slow-fsync-leader-loss
+    class: etcd
+    failure: etcd fsync latency or leader churn degrades the apiserver.
+    blast_radius: Slow or failing API requests cluster-wide.
+    detection: []
+    status: unmonitored
+    evidence: [platform-gitops/bootstrap/templates/observability/monitoring.yaml]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "follow-up-needed: etcd metrics (etcd-expose-metrics) plus etcd rules"
+  - id: etcd-snapshot-stale
+    class: etcd
+    failure: Scheduled etcd snapshot upload to R2 stops.
+    blast_radius: Restore after CP loss would use old data or be impossible.
+    detection: []
+    status: unmonitored
+    evidence: [infrastructure/k3s-preview/kube.tf, platform-gitops/infra-components/observability/vm-rules/backup-alerts.yaml]
+    recovery: docs/runbooks/restore.md
+    tracked_by: "follow-up-needed: etcd snapshot freshness alert"
+  - id: etcd-restore-untested
+    class: etcd
+    failure: Restore procedure has never been drilled and may not work.
+    blast_radius: Extended outage after CP loss.
+    detection: []
+    status: unmonitored
+    evidence: [docs/runbooks/control-plane.md]
+    recovery: docs/runbooks/restore.md
+    tracked_by: "residual: F11"
+  - id: apiserver-overload-5xx
+    class: apiserver
+    failure: Apiserver overloaded, erroring or terminating requests.
+    blast_radius: Controllers, ArgoCD and workflows fail or stall.
+    detection:
+      - {alert: KubeAPIErrorBudgetBurn, source: chart-default, route: "to confirm"}
+      - {alert: KubeAPITerminatedRequests, source: chart-default, route: "to confirm"}
+    status: unverified
+    evidence: [platform-gitops/bootstrap/templates/observability/monitoring.yaml]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "follow-up-needed: confirm routing of apiserver chart-default alerts"
+  - id: apiserver-cert-expiry
+    class: apiserver
+    failure: Client or serving certificates expire.
+    blast_radius: Components lose API access.
+    detection:
+      - {alert: KubeClientCertificateExpiration, source: chart-default, route: "to confirm"}
+    status: partial
+    evidence: [platform-gitops/bootstrap/templates/observability/monitoring.yaml]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "follow-up-needed: cover k3s serving certificate rotation"
+  - id: apiserver-args-drift
+    class: apiserver
+    failure: A config.yaml.d drop-in silently replaces kube-apiserver args (audit, OIDC).
+    blast_radius: Audit policy and OIDC login lost without notice.
+    detection: []
+    status: unmonitored
+    evidence: [docs/runbooks/control-plane.md, infrastructure/k3s-preview/kube.tf]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "follow-up-needed: detect apiserver arg drift"
+  - id: oidc-issuer-unreachable
+    class: apiserver
+    failure: auth.mctl.ai (in-cluster ZITADEL) unreachable.
+    blast_radius: OIDC kubectl login unavailable; break-glass kubeconfig needed.
+    detection: []
+    status: partial
+    evidence: [platform-gitops/infra-components/observability/blackbox/vmprobes.yaml]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "residual: F11"
+  - id: cp-resource-starvation
+    class: cp-node
+    failure: Untainted control-plane node starved by ordinary workloads.
+    blast_radius: apiserver and etcd slow or OOM-killed.
+    detection:
+      - {alert: NodeHighCPU, source: vm-rules, route: "node level"}
+      - {alert: NodeHighMemory, source: vm-rules, route: "node level"}
+      - {alert: NodeMemoryHeadroomLow, source: vm-rules, route: "node level"}
+    status: partial
+    evidence: [infrastructure/k3s-preview/kube.tf, platform-gitops/infra-components/observability/vm-rules/mctl-alerts.yaml]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "residual: F11"
+  - id: controller-manager-scheduler-stuck
+    class: apiserver
+    failure: Controller-manager or scheduler stops working inside the k3s process.
+    blast_radius: No new pods scheduled or reconciled.
+    detection: []
+    status: unmonitored
+    evidence: [platform-gitops/bootstrap/templates/observability/monitoring.yaml]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "follow-up-needed: signal for controller-manager and scheduler health"
+  - id: webhook-backend-down
+    class: admission
+    failure: A failurePolicy Fail webhook backend (external-secrets, cert-manager, CloudNativePG) is down.
+    blast_radius: Writes to the covered resources are rejected.
+    detection:
+      - {alert: KubePodNotReady, source: chart-default, route: "pod level only"}
+    status: unverified
+    evidence: [platform-gitops/bootstrap/templates/core-infra/external-secrets.yaml, platform-gitops/bootstrap/templates/data/cloudnative-pg.yaml]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "follow-up-needed: live webhook inventory and admission error-rate alerts"
+  - id: vap-misfire
+    class: admission
+    failure: A ValidatingAdmissionPolicy CEL error or too-broad match denies writes cluster-wide.
+    blast_radius: Pod or namespace writes denied.
+    detection: []
+    status: unmonitored
+    evidence: [platform-gitops/bootstrap/templates/system/admission-policies.yaml]
+    recovery: docs/runbooks/control-plane.md
+    tracked_by: "follow-up-needed: admission error-rate alerts on kept counters"

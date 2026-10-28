@@ -446,6 +446,11 @@ jobs:
         # (bypass-open) stay visible and tracked.
         run: python3 tests/test_policy_checkpoint_coverage.py
 
+      - name: Unit-test the control-plane failure-path inventory
+        # mctlhq/mctl-gitops#2210: every etcd/apiserver/admission failure path
+        # has a status, unmonitored paths are tracked, and claimed alerts exist.
+        run: python3 tests/test_control_plane_failure_paths.py
+
       - name: Unit-test the k3s-preview apply guard
         # terraform.yml refuses a cluster plan that destroys infrastructure or
         # re-runs node provisioners (#1534). It only meets a real plan during
