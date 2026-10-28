@@ -112,40 +112,79 @@ attribute names are introduced anywhere, add them to the redaction list in
 `internal/audit/redact.go`.
 
 ### 3. New step and routes (`server.go`, `enable_access.go`)
-Add `stepQR` to `enableStep`, and a per-session `qrView string` token.
+
+Amended 2026-10-28: the first version gave the status page a `qrView` token it called
+read-only, but then rendered the password and Continue forms with `es` in a hidden field, so
+anyone holding the status URL could read `es` from the HTML and drive the flow. The QR pages
+below never render `es`, and every QR page and action is bound to the browser that started
+the flow.
+
+**Browser binding.** `handleEnableQRStart` mints two independent 128-bit random values:
+- `qrView`, carried in the status URL (`?v=`), which identifies the flow;
+- `qrBind`, set as a cookie `__Host-tg_qr` (`Secure`, `HttpOnly`, `SameSite=Strict`,
+  `Path=/`, no `Domain`, `Max-Age` = `qrDisplayTTL` plus the password window). Only its
+  SHA-256 is kept on the enable session.
+
+Every QR route (status GET and all QR POSTs) resolves `qrView` and then requires the cookie
+to match the stored hash with a constant-time compare. On a missing or wrong cookie it renders
+the same generic "this sign-in link has expired" page as for an unknown `qrView`, with no
+account name, no QR and no form, and changes nothing. A stolen status URL alone therefore gives
+neither the QR, nor `es`, nor any way to finish the flow. `qrView` and `qrBind` are dropped when
+the flow ends, is cancelled or is superseded, and when the enable session expires. If
+`SameSite=Strict` breaks the same-site meta refresh or the form POSTs in a supported browser,
+`Lax` is acceptable (all actions are POSTs); the PR says which was used and why.
+
 - `POST /oauth/telegram/enable_access/qr` (`handleEnableQRStart`): flag and `TGAPIID` checks,
-  `lookupEnable`, step lock, same duplicate guard and pre-flight mode gate as
-  `handleEnableStart` (factored into a shared helper rather than copied), supersede `es.flow`,
-  `es.flow = s.startLoginFlow(..., methodQR, s.qrLogin(), ...)`, `es.step = stepQR`, mint a fresh
-  128-bit `qrView` token, then wait (up to `enableSendCodeWait`) on `needQR` / `done`. On
-  `needQR`, 303-redirect to the status page; on `done`/timeout, show the phone step with the
-  `friendlyErr` message, exactly as the phone path does.
+  `lookupEnable` (this is the last request that carries `es`), step lock, the same duplicate
+  guard and pre-flight mode gate as `handleEnableStart` (factored into a shared helper rather
+  than copied), supersede `es.flow`,
+  `es.flow = s.startLoginFlow(..., methodQR, s.qrLogin(), ...)`, `es.step = stepQR`, mint
+  `qrView` and `qrBind`, set the cookie, then wait (up to `enableSendCodeWait`) on `needQR` /
+  `done`. On `needQR`, 303-redirect to the status page; on `done`/timeout, show the phone step
+  with the `friendlyErr` message, exactly as the phone path does.
 - `GET /oauth/telegram/enable_access/qr/status?v=<qrView>` (`handleEnableQRStatus`): resolves
-  `qrView` to an enable session through a separate map (or scan of `s.enables` under `s.mu`). It
-  takes **no** step lock and mutates nothing. `qrView` is a read-only capability distinct from
-  `es`, so the token in the URL (history, proxy logs) cannot advance or finish the flow. It
-  returns 204/no body for `isPrefetch` requests. It renders by `lf.phase`:
+  `qrView` through a dedicated map guarded by `s.mu` (not a scan of `s.enables`), checks the
+  binding cookie, takes **no** step lock and mutates nothing. It returns 204/no body for
+  `isPrefetch` requests. It renders by `lf.phase`, and **no state renders `es`**:
   - `qr_shown`: the SVG of `*lf.qrURL`, the account to scan with (`es.oc.Username` /
     display name), the phishing warning (host taken from `s.cfg.Issuer`), a "Use phone number
-    instead" POST form (to the existing permissions/phone screen), and
-    `<meta http-equiv="refresh" content="5">`.
-  - `password_requested`: no refresh; the existing password form (`renderEnablePassword` with
-    the `es` hidden field, posting to `/password`). `es` is rendered into the form body, never
-    into a URL.
-  - done with `lf.err == nil`: no refresh; "Connected - Continue" form POSTing `es` to
-    `/oauth/telegram/enable_access/qr/finish`.
+    instead" form POSTing `v` to `/qr/cancel`, and `<meta http-equiv="refresh" content="5">`.
+  - `password_requested`: no refresh; a password form (same markup and copy as the existing
+    password step) POSTing `v` and the password to `/qr/password`.
+  - done with `lf.err == nil`: no refresh; "Connected - Continue" form POSTing `v` to
+    `/qr/finish`.
   - done with an error: no refresh; the error (`friendlyErr`, or the expired page for a
-    `qr_shown` deadline) with "Try QR again" and "Use phone number" buttons.
+    `qr_shown` deadline) with "Try QR again" and "Use phone number" forms, both POSTing `v` to
+    `/qr/cancel` with a `next=qr|phone` field.
   Headers: the `renderEnable` CSP unchanged, `Cache-Control: no-store`, plus
   `Referrer-Policy: no-referrer`.
-- `POST /oauth/telegram/enable_access/qr/finish` (`handleEnableQRFinish`): `lookupEnable`, step
-  lock, requires `es.step == stepQR` and a closed `lf.done` with `lf.err == nil`, then
-  `finishEnable`. Side effects stay on a POST with the step lock, never on the refreshing GET.
-- `handleEnablePassword` accepts `es.step == stepQR` when `lf.phase == password_requested`: under
-  its step lock it drains the one pending `needPw` signal (non-blocking; it was not consumed by the
-  lock-free status page), sets `es.step = stepPassword`, and continues with the existing code.
-  Every later reprompt, `bad_password` and done branch is shared with the phone path. A
-  `needCode` signal cannot occur on the QR path; if it does, treat it as an internal error.
+- `POST /oauth/telegram/enable_access/qr/password` (`handleEnableQRPassword`): resolve `v`,
+  check the binding cookie, take the enable session's step lock, require `es.step == stepQR` and
+  `lf.phase == password_requested`, drain the one pending `needPw` signal (non-blocking; the
+  lock-free status page never consumes it), then run the existing password logic, factored out of
+  `handleEnablePassword` into a helper that both handlers call, so reprompts, attempt limits and
+  `bad_password` stay shared with the phone path. A reprompt re-renders the QR password form
+  (with `v`, never `es`). A `needCode` signal cannot occur on the QR path; if it does, treat it as
+  an internal error.
+- `POST /oauth/telegram/enable_access/qr/finish` (`handleEnableQRFinish`): resolve `v`, check
+  the binding cookie, take the step lock, require `es.step == stepQR` and a closed `lf.done` with
+  `lf.err == nil`, then `finishEnable`. Side effects stay on a POST with the step lock, never on
+  the refreshing GET.
+- `POST /oauth/telegram/enable_access/qr/cancel` (`handleEnableQRCancel`): resolve `v`, check
+  the binding cookie, take the step lock, mark the flow cancelled and call its `cancel()`, drop
+  `qrView` and `qrBind` (so the status URL immediately renders the expired page), clear the
+  cookie, set `es.step = stepPhone`, then render the phone step (or start a fresh QR flow for
+  `next=qr`). The phone page it renders carries `es` in its form as today; that is the same
+  browser, proven by the cookie.
+- **Cancel vs. a concurrent scan.** Cancelling the context is not enough: Telegram may accept
+  the scan in the instant before the cancel lands, so `LoginQR` can return a fresh authorization.
+  In the `startLoginFlow` goroutine, after the login function returns and **under
+  `uidLoginMutex(uid)`**, check the flow's cancelled/superseded state (set by cancel and by
+  supersession before they call `cancel()`) **before** `SaveSessionForSignIn` and before any
+  identity-binding revoke. If the flow was cancelled or superseded, do not save, do not revoke
+  the existing session, log the new authorization out (`auth.logOut` on the just-created client,
+  best effort, as `logOutIfMismatch` does), and end with a context error. A cancelled flow can
+  therefore never store a session or touch an existing one.
 - The phone page template gets an optional "Sign in with a QR code instead" form
   (`enablePhonePage.QRAvailable bool`), set when the flag is on and the request is not mobile
   (`isMobileUA(r)`: `Sec-CH-UA-Mobile: ?1` or "Mobi" in the User-Agent).
@@ -164,10 +203,14 @@ placed in the markup.
   (outcome: `ok`, `error`, `abandoned`, `superseded`, `identity_mismatch`) and
   `mctl_login_users_total{method}`, incremented on the first success of a uid for a method in this
   process (bounded `sync.Map` dedup). Extend `metricsIface` with
-  `ObserveLoginCompleted(method, outcome string, firstForUser bool)`. Audit rows gain the method:
-  `connect:qr_started`, `connect:qr_scanned`, and `connect:success` with method in `ErrMsg`/a
-  method suffix (`connect:success:qr`, keep `connect:success` for code, so existing queries do not
-  change). The distinct-user truth is a `tool_calls` query; the per-process counter is a trend.
+  `ObserveLoginCompleted(method, outcome string, firstForUser bool)`. Audit rows gain the method
+  without changing the success row: both methods write the same `connect:success` row, as today,
+  so every existing funnel query (the daily digest's `LastConnectStepFor`, the #902 runbook
+  funnel) counts QR logins with no change. The method is recorded separately: QR flows write
+  `connect:qr_started` when the QR is first shown and `connect:qr_scanned` when Telegram accepts
+  the scan, and `connect:success` carries `method=qr|code` in its existing `ErrMsg`/detail field
+  (whichever field `LogToolCall` already stores; no new column). Never `connect:success:qr`. The
+  distinct-user truth is an `audit_logs` query; the per-process counter is a trend.
 - `docs/runbook.md`: a short QR section (flag, metrics, the expected WARN line).
 
 ### 6. Rollout
@@ -182,15 +225,19 @@ Merge with the flag off (production unchanged). Set `ENABLE_ACCESS_QR_ENABLED: "
   but a refreshing GET would then perform the authorization-code issuance (a side effect on GET,
   exposed to prefetch), and it would contend with the start handler that holds the same lock. The
   issue requires the status page never take the step lock. Dropped in favour of the Continue POST.
-- **Putting `es` in the status URL.** Simplest, but `es` is the full mutating capability and the
-  CSRF token; a URL leaks into history and logs. A separate read-only `qrView` token costs little.
-  Dropped.
+- **Putting `es` in the status URL, or in hidden fields on the status page.** `es` is the full
+  mutating capability and the CSRF token. A URL leaks into history and logs, and anything the
+  status page renders is available to whoever can load it. Dropped: the status page never renders
+  `es`, and QR actions use `qrView` plus the browser-bound `__Host-tg_qr` cookie.
+- **`qrView` alone as a read-only capability.** The first version of this proposal. It is not
+  read-only once the page it unlocks contains forms that can advance the flow, and a URL token is
+  exactly what leaks. Dropped in favour of the cookie binding.
 - **A parallel `startQRLoginFlow`.** Duplicates the uid mutex, supersession, local re-check,
   identity binding and repair defers, which carry several hard-won fixes (#821, #859, #899).
   Dropped in favour of one `startLoginFlow` with a login-function parameter, as the issue asks.
 
 ## Platform impact
-- **Migrations:** none. No schema change; audit uses existing `tool_calls`.
+- **Migrations:** none. No schema change; audit uses the existing `audit_logs` table.
 - **Backward compatibility:** flag off by default; with it off the phone path is unchanged except
   for the `startLoginFlow` refactor and method-neutral mismatch wording (tests that assert the old
   string must be updated). `LoginFunc` and `s.loginFn` keep their signature, so existing stubs work.
@@ -204,7 +251,8 @@ Merge with the flag off (production unchanged). Set `ENABLE_ACCESS_QR_ENABLED: "
     host, tells the user to check the app name in Telegram's confirmation, and the identity check
     plus `logOutIfMismatch` reject any account other than the OIDC-proven one.
   - Token leakage: the token URL is never logged or put in markup as text; pages are `no-store`
-    with `no-referrer`; the status URL carries only the read-only `qrView` token.
+    with `no-referrer`; the status URL carries only `qrView`, which is useless without the
+    browser-bound cookie, and no page in the QR flow renders `es`.
   - Superseded flow revoking a valid session: fixed by task 1, with a regression test.
   - Telegram new-device approval limits: surfaced as a normal error with the code path one click
     away.

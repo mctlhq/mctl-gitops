@@ -61,13 +61,27 @@ so the page has to state clearly which account to scan with and carry a phishing
   as the phone path does, and show a method-neutral identity-mismatch error.
 - WHEN the QR login completes for the right account THE SYSTEM SHALL show a "Continue" button
   whose POST (under the step lock) runs the existing `finishEnable`.
+- WHEN a QR flow starts THE SYSTEM SHALL bind it to the starting browser with a `__Host-`
+  prefixed `Secure`, `HttpOnly`, `SameSite` cookie holding a random value, kept server-side only
+  as a hash. THE status page and every QR action SHALL require both the `qrView` URL token and a
+  matching cookie; without the cookie they SHALL render a generic expired page and change nothing.
+- THE QR status page and QR forms SHALL NEVER render the enable-session token `es`; QR actions
+  (password, continue, cancel) SHALL be addressed by `qrView` plus the binding cookie.
+- WHEN the user chooses "Use phone number instead" (or "Try QR again") THE SYSTEM SHALL, in a POST
+  under the step lock, cancel the QR flow and invalidate its `qrView` and binding before rendering
+  the next step.
+- IF Telegram accepts a scan for a flow that has already been cancelled or superseded THEN THE
+  SYSTEM SHALL NOT save the session, SHALL NOT revoke or modify an existing session, and SHALL log
+  the new authorization out (best effort).
 - IF the QR flow is superseded or cancelled THEN THE SYSTEM SHALL report a context error, never
   a successful login with an empty Telegram id, and SHALL NOT revoke an existing valid session.
 - IF a QR flow is abandoned at `qr_shown` (deadline or cancellation with no supersession) THEN
   THE SYSTEM SHALL log "enable: onboarding abandoned" at WARN with `step=qr_shown`, not ERROR.
 - WHEN any enable_access login completes THE SYSTEM SHALL record the method (`code` or `qr`) in
-  metrics, counting a success once per distinct user per method, and SHALL write the method into
-  the `connect:*` audit rows.
+  metrics, counting a success once per distinct user per method, and SHALL write the same
+  `connect:success` audit row for both methods, with the method recorded separately (a detail
+  field on that row and the `connect:qr_started` / `connect:qr_scanned` rows), so that existing
+  funnel queries count QR logins unchanged.
 - THE QR token URL SHALL never be logged, and the status page SHALL be served with
   `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
 
@@ -80,18 +94,19 @@ so the page has to state clearly which account to scan with and carry a phishing
 - Changes to the CLI `--qr` flow beyond the shared `LoginQR` cancellation fix.
 
 ## Open questions
-- The issue says the work "depends on the code-path and logOut issues". The logOut work (#899)
-  has shipped (`logOutIfMismatch` in `internal/telegram/login_mismatch.go`, called from
-  `LoginQR`). The "code-path issue" was not identified from the clone; this proposal assumes the
-  current phone/code path in `enable_access.go` is the base, and the implementer should rebase if
-  that issue changes `startLoginFlow`.
+- The issue says the work "depends on the code-path and logOut issues". Both have shipped: the
+  code-path issue is #900 (forgiving code and 2FA entry, `retryAuthRestartOnce`), released in
+  0.98.1 via #908, and the logOut issue is #899 (`logOutIfMismatch` in
+  `internal/telegram/login_mismatch.go`, called from `LoginQR`), released in 0.97.1. The
+  implementer works from current main. #902's implementation also edits `enablePhoneTemplate`;
+  this work starts after that PR merges and rebases onto it.
 - Same-phone `tg://login?token=` behaviour on iOS/Android is undocumented (from the issue); it
   needs a manual test before mobile gets the option. Slice 1 hides QR on mobile.
 - Telegram's new-device approval limits on accounts with only one recent device may block the
   scan; slice 1 surfaces Telegram's error through `friendlyErr` and leaves the code path one click
   away.
 - "Success counted per distinct user": this proposal dedups per process in memory (resets on
-  restart, per pod) and treats the audit table (`tool_calls`, `connect:success` with method) as
+  restart, per pod) and treats the audit table (`audit_logs`, `connect:success` with the method detail) as
   the source of truth for distinct-user analysis. If an exact global distinct count is needed in
   Prometheus, that needs a DB-backed counter.
 - Mobile detection is a heuristic (`Sec-CH-UA-Mobile: ?1` or "Mobi" in the User-Agent); a
