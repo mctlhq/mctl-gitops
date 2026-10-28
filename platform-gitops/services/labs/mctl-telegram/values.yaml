@@ -236,6 +236,16 @@ env:
   # also needs ALLOW_SEND=true (set above) and send_enabled=true on the demo
   # account. Empty or unset means the reviewer can write nowhere.
   DEMO_REVIEWER_WRITE_PEERS: "user:8745115872"
+  # Web QR login on the enable_access phone step (mctl-telegram#901): desktop
+  # browsers get "Sign in with a QR code" as the primary action (#929) and a
+  # "Confirmed in Telegram" connecting page after the scan (#934). Needs
+  # mctl-telegram 0.103.0+; older images ignore both keys. Verified on
+  # tg-preview on 2026-10-28. Remove ENABLE_ACCESS_QR_ENABLED to turn it off:
+  # the QR routes then answer 404 and the phone step is phone-only again.
+  # TELEGRAM_APP_NAME is the app name the QR page tells the user to expect on
+  # Telegram's login confirmation; it must match the prod api_id's app title.
+  ENABLE_ACCESS_QR_ENABLED: "true"
+  TELEGRAM_APP_NAME: "MCTL Assistant"
 # Downward-API identity for the mctl_telegram_replica_id info gauge. The
 # service resolves replica_id as REPLICA_ID > POD_NAME > "unknown"
 # (internal/config/config.go), so without this the gauge is published with
