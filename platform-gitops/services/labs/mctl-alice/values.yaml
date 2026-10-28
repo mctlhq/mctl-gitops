@@ -45,10 +45,10 @@ containerSecurityContext:
 resources:
   requests:
     cpu: 50m
-    memory: 128Mi
+    memory: 192Mi
   limits:
     cpu: 250m
-    memory: 256Mi
+    memory: 384Mi
 env:
   PORT: "8080"
   NODE_ENV: production
