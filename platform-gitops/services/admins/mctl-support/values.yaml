@@ -69,6 +69,11 @@ env:
   MODEL_INPUT_USD_PER_MTOK: "2.00"
   MODEL_OUTPUT_USD_PER_MTOK: "10.00"
   SUPPORT_METRICS_PORT: "9090"
+  # Refuse (401) any bearer not minted for https://support.mctl.ai. MCP
+  # callers reach it through mctl_ask_support, which mints a support-audience
+  # token since mctl-api 4.138.0 (mctl-api#852). Rollback: set back to audit
+  # BEFORE rolling mctl-api back, or both support tools break.
+  SUPPORT_AUDIENCE_ENFORCEMENT: enforce
 # /metrics on its own listener, scraped by
 # bootstrap/templates/mctl-platform/mctl-support-monitor.yaml (a native
 # VMServiceScrape, hence serviceMonitor: false).
