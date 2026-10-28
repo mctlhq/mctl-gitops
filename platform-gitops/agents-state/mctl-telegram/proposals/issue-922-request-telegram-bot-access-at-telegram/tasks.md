@@ -55,8 +55,8 @@
   - whether sign-in succeeded each way;
   - the `bot_access_signal` value each way.
   DoD: the result is written on #922 before any prod enablement. The prod flag PR is opened only
-  under the rollout rule in requirements.md. If the signal was `unknown`, or the permission is not
-  separately declinable, prod is not enabled, and the decision goes back to the owner.
+  under the rollout rule in requirements.md. Single stop rule: if a separate decline is not
+  possible, or the check result is `unknown`, prod stays off until a separate owner decision.
 
 ## Tests
 

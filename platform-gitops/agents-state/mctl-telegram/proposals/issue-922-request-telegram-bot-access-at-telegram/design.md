@@ -236,8 +236,10 @@ Why two gates:
     sign-in. Mitigation: the flag is off by default, so only preview sees the change until task 8
     passes. Rollback on any environment is setting the flag to false (see tasks.md Rollback), with
     no code revert.
-  - The consent screen makes the permission a condition of signing in. Mitigation: under the
-    rollout rule, prod stays off, and the copy never claims the permission is optional.
+  - The permission cannot be declined separately: either it is a condition of signing in, or it is
+    not shown as a separate choice. Mitigation: the single stop rule in requirements.md (Rollout
+    rule, item 4) keeps prod off until a separate owner decision. The same rule applies when the
+    check result is `unknown`. The copy never claims the permission is optional.
   - The grant is reported but delivery still fails. Mitigation: the first real delivery records
     `cannot_initiate`/`blocked` through the existing conclusive path and overrides the row.
   - The signal is always `unknown`. Then nothing changes versus today except the consent prompt.
