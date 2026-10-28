@@ -23,13 +23,14 @@
       "recorded": "2026-09-25"
     },
     "api": {
-      "tools_total": 92,
-      "tools_enabled": 73,
+      "tools_total": 105,
+      "tools_enabled": 77,
       "enabled_tools": [
         "mctl_abandon_dev_loop",
         "mctl_acknowledge_incident",
         "mctl_add_custom_domain",
         "mctl_approve_dev_loop",
+        "mctl_ask_support",
         "mctl_create_agent",
         "mctl_create_preview",
         "mctl_create_tenant",
@@ -49,7 +50,9 @@
         "mctl_get_resource_usage",
         "mctl_get_service_config",
         "mctl_get_service_logs",
+        "mctl_get_service_pods",
         "mctl_get_service_status",
+        "mctl_get_support_task",
         "mctl_get_tenant",
         "mctl_get_work_item",
         "mctl_get_workflow_logs",
@@ -61,6 +64,7 @@
         "mctl_list_agent_versions",
         "mctl_list_domains",
         "mctl_list_incidents",
+        "mctl_list_namespace_events",
         "mctl_list_operations",
         "mctl_list_platform_skills",
         "mctl_list_previews",
@@ -108,7 +112,7 @@
         "platform-skill",
         "troubleshoot_incident"
       ],
-      "recorded": "2026-10-16"
+      "recorded": "2026-10-28"
     },
     "coolify": {
       "tools_total": 45,
