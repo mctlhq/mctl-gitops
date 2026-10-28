@@ -10,6 +10,8 @@ accepted, and the controls that *are* in git.
 A second control-plane node is deferred until the first paying customer
 (ROADMAP Horizon 2). Losing the CP node takes down the API server until
 Terraform rebuild + restore (`docs/runbooks/restore.md`).
+Failure-path checklist and monitoring status:
+`docs/runbooks/control-plane-failure-paths.md`.
 
 Compensating controls in place:
 
