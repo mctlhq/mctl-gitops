@@ -175,6 +175,12 @@ env:
   # TELEGRAM_OIDC_CLIENT_SECRET is sourced from Vault via the oauth
   # ExternalSecret below.
   TELEGRAM_OIDC_CLIENT_ID: "8568443430"
+  # mctl-telegram#922: ask Telegram for telegram:bot_access at sign-in (the
+  # user's "Allow messages" toggle, off by default in Telegram's UI), and
+  # after sign-in observe reach with a Bot API getChat (#930). Verified on
+  # preview (gitops#2230); login bot id matches TELEGRAM_OIDC_CLIENT_ID.
+  # Rollback: remove this line.
+  TELEGRAM_OIDC_BOT_ACCESS_ENABLED: "true"
   # Public @username of the same bot, used for the t.me/<bot>?start= deep link
   # that starts the /start onboarding flow (mctl-telegram#679). Not a secret.
   TELEGRAM_LOGIN_BOT_USERNAME: "MCTL_AI_bot"
