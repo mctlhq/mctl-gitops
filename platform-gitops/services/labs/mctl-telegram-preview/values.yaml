@@ -110,11 +110,6 @@ env:
   # the user to expect on Telegram's "new login" confirmation.
   ENABLE_ACCESS_QR_ENABLED: "true"
   TELEGRAM_APP_NAME: "MCTL Assistant preview"
-  # Experiment (mctl-telegram#941): phone browsers get the QR login as
-  # "Sign in with the Telegram app" with an "Open in Telegram" link to the
-  # login token, to learn whether Telegram confirms a token on the same
-  # device. Preview only; images without #941 ignore the key.
-  ENABLE_ACCESS_QR_APP_LINK_ENABLED: "true"
   # C1 (communication agent staging, observe-only) — see
   # docs/plans/communication-agent.md. AGENT_ENABLED mounts /api/agent/v1 and
   # lets POST /api/agent/token mint a worker credential and PUT
