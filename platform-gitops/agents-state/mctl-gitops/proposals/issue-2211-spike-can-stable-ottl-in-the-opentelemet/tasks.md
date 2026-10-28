@@ -29,7 +29,7 @@
 - [ ] 5. Add tenant-rule validation: team is DNS-safe and exists under
   `platform-gitops/tenants/`; each rule has exactly `attribute`, `operator`,
   `value`; attribute and operator are in the allowlists; value matches
-  `^[A-Za-z0-9._/:-]{1,128}$`. Wire it into
+  `^[A-Za-z0-9._/:-]{1,128}$` via `re.fullmatch`, not `re.match` with `$`. Wire it into
   `.github/workflows/validate-manifests.yml` next to the existing
   otel-collector steps (depends on 2). — DoD: CI fails on a bad team name and
   passes on an empty list.
@@ -78,7 +78,7 @@
 - [ ] T6. Validation script (task 5) and the template both reject, each
   failing CI: `team: "Admins"`, `team: "nosuchtenant"`, a value containing
   `) or true`, a value with a single quote, a value with a double quote, a
-  value with a newline, a template-looking value (`{{ .x }}`), an unknown
+  value with an embedded newline, a value with only a trailing newline, a template-looking value (`{{ .x }}`), an unknown
   operator, an unknown attribute, an extra key such as `condition`. Mutation
   proof: with the value regex removed from the validator, the `) or true`
   case must make T4's cross-tenant check fail.

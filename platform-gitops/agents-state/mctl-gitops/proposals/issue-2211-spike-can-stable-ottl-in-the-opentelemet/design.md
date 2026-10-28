@@ -190,7 +190,9 @@ single change in this direction also avoids adding a new values key.
 that each `ottl.tenants[].team` matches `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` and
 exists as `platform-gitops/tenants/<team>/`, that each rule has exactly the
 keys `attribute`, `operator`, `value`, that `attribute` and `operator` are in
-the allowlists, and that `value` matches `^[A-Za-z0-9._/:-]{1,128}$`.
+the allowlists, and that `value` matches `^[A-Za-z0-9._/:-]{1,128}$` as a
+whole string (`re.fullmatch` / `\A...\Z`; Python's `$` also matches before a
+trailing newline). The template-side check is equally strict.
 
 **Pilot enablement** is a separate, later values-only PR: `ottl.scrub.enabled:
 true`. No tenant rules are enabled by default (see Open questions). The
