@@ -42,6 +42,15 @@ resource "cloudflare_ai_gateway" "mctl_support" {
   collect_logs   = false
   authentication = true
 
+  # "Require provider credentials" (Cloudflare changelog 2026-09-14). With it
+  # off, a request that carries no provider key falls through to Unified
+  # Billing and is charged to this account's Cloudflare credits (the 402 the
+  # #2262 spike saw on the compat endpoint). mctl-support is BYOK: the Nebius
+  # or Hetzner key travels on every request and nothing is stored here, so a
+  # missing or rotated key must be a visible 400, not a Cloudflare charge.
+  # Condition 3 of the spike's GO. Workers AI requests are not affected.
+  byok_only = true
+
   cache_ttl                  = 0
   cache_invalidate_on_update = true
 
