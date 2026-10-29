@@ -17,6 +17,14 @@ app-scoped, so none has a standalone resource; each is either written inline
 or referenced by id from its application. Everything else in `#1088` is still
 to be imported.
 
+`ai-gateway.tf` (#2262, Phase A of the spike) declares the `mctl-support` AI
+Gateway: logs off, authenticated, cache off, rate limiting off. Nothing in
+production points at it until the spike report is accepted; the gateway's
+bearer token is `mctl-support-ai-gateway-run` in `../tokens/manifest.tf`, its
+value only in Vault. Creating it needs `AI Gateway: Edit` on
+`CF_APPLY_TOKEN_ACCOUNT` and refreshing it `AI Gateway: Read` on the plan
+token.
+
 `email-routing.tf` holds the Email Routing destination addresses, which are
 account objects even though only `zones/mctl-ai` forwards to them: the shared
 mailbox (imported), `obukhov@mctl.ai`'s own and `moonqua@mctl.ai`'s own
