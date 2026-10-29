@@ -2,7 +2,7 @@
 
 ## Current state
 
-### mctl-support model path (source: mctlhq/mctl-support `main`, read via `gh api`)
+### mctl-support model path (source: mctlhq/mctl-support, read via `gh api`; the header line re-checked at tag `0.3.6`)
 
 - `src/mctl_support/config.py`: `PROVIDERS = ("anthropic", "hetzner", "nebius")`.
   `DEFAULT_NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1"`, read from
@@ -57,8 +57,16 @@ Deployed state checked:
   `support.mctl.ai`, port 8080, base-service, hasDatabase true.
 - `mctl_get_service_status(admins, mctl-support)`: Argo CD `admins-mctl-support`
   Healthy / Synced, updated 2026-10-29T17:32:12Z.
-- `$MCTL_GITOPS_ROOT/services/admins/mctl-support/values.yaml`: as described above.
-  `NEBIUS_BASE_URL` is not set, so the service default (direct Nebius) is in effect.
+- `$MCTL_GITOPS_ROOT/services/admins/mctl-support/values.yaml`: identical to the clone
+  (`diff` clean). `NEBIUS_BASE_URL` is not set, so the service default (direct Nebius)
+  is in effect.
+- `gh api repos/mctlhq/mctl-support/contents/src/mctl_support/agent/providers/openai_compatible.py?ref=0.3.6`:
+  line 40 builds `base_url.rstrip("/") + "/chat/completions"`, and line 62 sends only
+  `headers={"Authorization": f"Bearer {self._key}"}`. This confirms the auth-header gap
+  at the deployed tag.
+- `grep -rn "ai_gateway\|AI Gateway" infrastructure/`: no matches. In
+  `infrastructure/cloudflare/tokens/manifest.tf`, `local.pg` (line 34) has no AI
+  Gateway entry.
 - The Cloudflare account's AI Gateway list, the `test` gateway's settings, and the
   provider schema for `cloudflare_ai_gateway` were not observed. This run has no
   Cloudflare credentials, and they are recorded as open questions.
@@ -109,7 +117,9 @@ Phase B is conditional and is the go PR.
 5. **Logging verification.** After the test traffic, confirm in the gateway logs view
    (and via the logs API) that no request or response bodies exist. The report
    records what was observed, not what was configured.
-6. **Comparison window.** Run a fixed, bounded harness: N synthetic support-style
+6. **Comparison window (off-production only, per the author's answer to
+   hir-5e1b638e9eca1efa).** No production request passes through the gateway in this
+   phase. Run a fixed, bounded harness: N synthetic support-style
    prompts with tool definitions, using the same adapter as mctl-support
    (`OpenAICompatibleProvider` from mctl-support `0.3.6`, with the extra header
    injected in the harness only). Run it through the gateway in one UTC window and
@@ -135,6 +145,9 @@ Phase B is conditional and is the go PR.
   `NEBIUS_BASE_URL` to the gateway route proven in step 4. Rewrite the comment that
   says it is left unset. Verify the rendered Deployment with `helm template` and verify
   the live env after sync, because of the colon-stripping caveat.
+- The first direct gateway-versus-ledger comparison on production traffic is taken
+  over the first full UTC day after this PR syncs, and posted on #2262. This is the
+  comparison the author deferred to after the go PR.
 
 ## Alternatives
 
@@ -148,8 +161,9 @@ Phase B is conditional and is the go PR.
 - **Run the comparison directly in production by switching `NEBIUS_BASE_URL` for a
   window.** This gives the cleanest gateway-versus-ledger comparison, but it violates
   "nothing changes in production values until the report is accepted" and currently
-  needs the code change anyway. Kept only as the post-acceptance validation in
-  Phase B. A clarification question asks whether the owner prefers it.
+  needs the code change anyway. The author ruled it out for the spike (answer to
+  hir-5e1b638e9eca1efa). It is kept only as the post-acceptance validation in
+  Phase B.
 - **Create or configure the gateway in the dashboard (or reuse `test`).** This is
   faster, but the issue and `infrastructure/cloudflare/README.md` both require Git as
   the desired state. Dropped.

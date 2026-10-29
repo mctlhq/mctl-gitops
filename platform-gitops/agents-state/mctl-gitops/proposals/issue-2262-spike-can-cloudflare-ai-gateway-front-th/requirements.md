@@ -40,14 +40,17 @@ source already surfaced one likely blocker. The OpenAI-compatible adapter sends 
 - IF Nebius cannot be routed through AI Gateway (no native, compat or custom-provider route works) THEN THE SYSTEM SHALL record the attempted routes with their response bodies. It SHALL then run the comparison against Anthropic with a labs key, stating this substitution in the report. IF no working Anthropic key exists either, THEN it SHALL record that as the blocker.
 - IF logging cannot be verified as off (or metadata-only) by reading the gateway configuration back AND by confirming that the gateway's log view contains no request/response bodies after test traffic THEN THE SYSTEM SHALL conclude no-go with blocker "logging cannot be disabled".
 - IF the authenticated gateway requires a header that mctl-support at the deployed tag cannot send THEN THE SYSTEM SHALL record this as a blocker for the base-URL-only switch and link a follow-up issue in mctlhq/mctl-support. It SHALL NOT fall back to an unauthenticated gateway in production.
+- WHILE the spike runs THE SYSTEM SHALL send only synthetic harness traffic through the gateway; no production mctl-support request SHALL pass through it before the go PR is merged.
+- WHEN the comparison window closes THE SYSTEM SHALL compare gateway analytics against the Nebius console and the harness-side ledger computation for the harness key, and SHALL separately compare the production spend ledger (`spend_turns`) against the Nebius console for the production key over the same window.
 - WHILE the report is not accepted THE SYSTEM SHALL leave `platform-gitops/services/admins/mctl-support/values.yaml` unchanged.
 - WHEN the report is accepted with outcome "go" THE SYSTEM SHALL open one PR that adds the gateway-token ExternalSecret and sets `NEBIUS_BASE_URL` (or the provider in use) to the gateway URL for mctl-support only. The PR SHALL keep the Vault-backed provider key path unchanged.
+- WHEN the go PR has been live for its first full UTC day THE SYSTEM SHALL post the direct gateway-versus-ledger comparison for production traffic on mctlhq/mctl-gitops#2262.
 - WHEN the outcome is "no-go" THE SYSTEM SHALL post the concrete blocker (provider unsupported, logging cannot be disabled, latency, auth) as a comment on mctlhq/mctl-gitops#2262. It SHALL also open a PR that removes the spike gateway resource, unless the report says to keep it.
 
 ## Out of scope
 
 - Any change to mctl-support source code. If a gateway-auth header is needed, it is filed as a follow-up in mctlhq/mctl-support.
-- Routing any service other than mctl-support, and any production values change before the report is accepted.
+- Routing any service other than mctl-support, any production values change before the report is accepted, and any production traffic through the gateway during the spike (author decision: off-production harness only).
 - Response caching. It stays off for the spike, because a cached tool-calling reply would also skew the comparison.
 - Enforcing caps at the gateway (gateway rate limits or spend limits replacing the ledger). The ledger stays the enforcement point.
 - BYOK / storing provider keys in Cloudflare Secrets Store.
@@ -56,7 +59,7 @@ source already surfaced one likely blocker. The OpenAI-compatible adapter sends 
 
 ## Open questions
 
-- Comparison window and the "agent's own counters". The issue keeps production values unchanged until the report is accepted, yet asks to compare gateway analytics against the agent's own spend counters for the same window. Those counters only see production mctl-support traffic, and that traffic only passes through the gateway if the base URL changes. Interpretation taken here: the spike runs gateway traffic from a bounded harness, using a dedicated Nebius key and mctl-support's own adapter and price formula. It then calibrates gateway versus Nebius console (harness key) and ledger versus Nebius console (production key) over the same window. A direct gateway-versus-ledger comparison happens only in the first window after the go PR. A clarification question has been filed.
+- Resolved (author answer, request hir-5e1b638e9eca1efa): the comparison window is off-production only. A bounded harness sends traffic through the gateway, and the production ledger is calibrated against the Nebius console separately for the same window. The direct gateway-versus-ledger comparison on production traffic happens after the go PR. This is not an open question any more and is kept here only for the record.
 - Whether the Anthropic fallback is possible at all. The values comment says every Anthropic key, including the dedicated one, answers 401 "organization has been disabled". Whether a separate labs Anthropic key exists that is not in that organization is unknown.
 - Whether Nebius Token Factory is reachable through a native provider route, the OpenAI-compatible `compat` endpoint, or only a custom provider. This is determined in task 3, not assumed.
 - Whether provider `cloudflare/cloudflare ~> 5` (pinned in `account/versions.tf`) exposes a `cloudflare_ai_gateway` resource with the fields needed: log collection off, authentication on, rate limit settings. If it does not, declaring the gateway in IaC is a blocker, and the dashboard is not an acceptable fallback.
