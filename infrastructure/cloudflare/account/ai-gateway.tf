@@ -48,6 +48,18 @@ resource "cloudflare_ai_gateway" "mctl_support" {
   rate_limiting_interval  = 0
   rate_limiting_limit     = 0
   rate_limiting_technique = "fixed"
+
+  # Server-side defaults the API returns and the provider (5.24.0) does not
+  # treat as computed: left undeclared, every plan proposed an in-place
+  # update setting them to null (seen on the #2268 plan, predicted by the
+  # #2262 read-back), which would have made the nightly drift run red on this
+  # root for good. Declared at their live values; none of them is a choice.
+  # log_management only applies while collect_logs is true.
+  log_classification      = false
+  log_management          = 100000
+  log_management_strategy = "DELETE_OLDEST"
+  logpush                 = false
+  zdr                     = false
 }
 
 # The gateway base URL is an identifier, not a secret. The route under it
