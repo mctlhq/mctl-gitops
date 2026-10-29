@@ -98,9 +98,22 @@ Caveats:
   usage ("could not observe" is not "observed absent").
 - **Cost is 0 for a custom provider.** Cloudflare has no price table for Nebius models, so
   `sum.cost` is always 0 on `custom-nebius`. The gateway answers "how many tokens" but not
-  "how many dollars"; USD stays a multiplication done in mctl. At the list price found only on
-  third-party aggregators (USD 1.40 per million input, 4.40 per million output; no official
-  Nebius page was found) the harness cost about USD 0.011, far under the USD 0.50 task cap.
+  "how many dollars"; USD stays a multiplication done in mctl. At Nebius' list price (USD 1.40
+  per million input, 4.40 per million output, 0.26 per million cached input; official
+  machine-readable catalog https://tokenfactory.nebius.com/model-catalog.md, checked 2026-10-29)
+  the harness cost about USD 0.011, far under the USD 0.50 task cap. mctl-support already owns
+  that price: `MODEL_INPUT_USD_PER_MTOK` / `MODEL_OUTPUT_USD_PER_MTOK` in its gitops values are
+  1.40 / 4.40, so condition 2 below holds for the Nebius route as deployed.
+- **Hetzner Inference is free while experimental, and limited by requests, not dollars.** Its
+  terms (https://docs.hetzner.com/general/company-and-policy/experiments/inference/, checked
+  2026-10-29): free of charge as long as the API is experimental, advance notice by email if that
+  changes, "as is" with no availability guarantee, and explicitly not for production. Per API key:
+  4M input tokens, 100k output tokens and 10 requests per 60 seconds, 429 beyond. All four model
+  ids on `/v1/models` (`Qwen/Qwen3.6-35B-A3B`, `Qwen/Qwen3.6-35B-A3B-FP8`, `Qwen/Qwen3.8-27B`,
+  `Qwen3.8-27B`, 262k context each) answered 200 through `custom-hetzner` on 2026-10-29. A USD
+  price of 0 would make every mctl-support spend cap vacuous, so a Hetzner deployment needs a
+  request-rate guard rather than a price table, and stays a non-production fallback under
+  Hetzner's own terms.
 - **Nebius console**: not compared. No read-only usage API for the Nebius console was found
   during the spike, and the console itself was not opened. The owner can compare the window
   above against the console by hand; the agent-side `usage` values come from Nebius' own
