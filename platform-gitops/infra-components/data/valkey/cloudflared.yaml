@@ -40,11 +40,9 @@ metadata:
   labels:
     app.kubernetes.io/name: events-tunnel
 spec:
-  # 0 until the tunnel exists and its token is in Vault: the tunnel is created
-  # by a manual cloudflare-apply of the account root after this merges, so a
-  # replica now would only sit in ContainerCreating on a missing Secret. The
-  # follow-up that adds the events-valkey CNAME flips this to 1.
-  replicas: 0
+  # Tunnel created by the account-root apply (#2254); its connector token is in
+  # Vault secret/platform/events-tunnel, property tunnel-token.
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: events-tunnel
