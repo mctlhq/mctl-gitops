@@ -15,7 +15,8 @@ reduces a real MCTL threat that #807 follow-ups (egress, short-lived credentials
 follow-ups (#868, #869, #870) do not already cover. It then checks which candidates the current substrate
 can run at all: Kata and Firecracker need `/dev/kvm`. It measures the candidates that can actually be
 exercised on a disposable environment and records exactly one outcome:
-`KEEP_HARDENED_RUNC | ADOPT_GVISOR | ADOPT_KATA | ADOPT_FIRECRACKER | DEFER_NEEDS_KVM_NODEPOOL`.
+`KEEP_HARDENED_RUNC | ADOPT_GVISOR` (narrowed by the owner amendment below: no KVM host, VM runtimes out
+of scope).
 
 ## User stories
 

@@ -65,8 +65,8 @@ The owner amendments in `requirements.md` are authoritative. In particular, the 
     was skipped;
   - if task 3 passed, leave `STATUS: DRAFT`, state that Phase B measurement is required before the final
     outcome, and link the one Phase B follow-up from task 6.
-  — DoD: the report never claims `ADOPT_GVISOR`, `ADOPT_KATA` or `ADOPT_FIRECRACKER` without the required
-  measurements; runc remains the default/rollback path.
+  — DoD: the report never claims `ADOPT_GVISOR` without the required measurements, and never
+  proposes Kata or Firecracker (owner amendment: no KVM host); runc remains the default/rollback path.
 
 - [ ] 8. Add `tests/test_spike_881_report.py`. — DoD: `uv run pytest tests/test_spike_881_report.py`
   passes. The guard must permit the explicit early-exit form and the Phase-A `DRAFT` form without requiring
@@ -86,8 +86,8 @@ The owner amendments in `requirements.md` are authoritative. In particular, the 
 
 ## Tests
 
-- [ ] T1. `STATUS:` appears once and its value is in {`DRAFT`, `KEEP_HARDENED_RUNC`, `ADOPT_GVISOR`,
-  `ADOPT_KATA`, `ADOPT_FIRECRACKER`, `DEFER_NEEDS_KVM_NODEPOOL`}.
+- [ ] T1. `STATUS:` appears once and its value is in {`DRAFT`, `KEEP_HARDENED_RUNC`, `ADOPT_GVISOR`}
+  (VM runtimes are out of scope per the owner amendment).
 - [ ] T2. Feasibility matrix rows have 8 cells, non-empty evidence, and a `status` in {`measured`,
   `infeasible-no-kvm`, `not-exercised`}. Rows K2 and F1 are both present.
 - [ ] T3. No row with `needs_kvm=yes` and `kvm_observed` not equal to `yes` has `status=measured`.
@@ -102,8 +102,8 @@ The owner amendments in `requirements.md` are authoritative. In particular, the 
 
 ## Rollback
 
-Phase A changes only `mctl-agents`: a docs report, `experiments/sandbox-runtime-881/`, one manually
--dispatched workflow and one guard test. Revert that PR to roll back. It does not touch production,
+Phase A changes only `mctl-agents`: a docs report, `experiments/sandbox-runtime-881/`, one
+manually-dispatched workflow and one guard test. Revert that PR to roll back. It does not touch production,
 mctl-gitops runtime manifests, nodes or containerd. Phase B is a separate measurement/results PR and is
 independently revertible. Any later runtime adoption remains a separate opt-in `runtimeClassName` change
 with runc kept as the default rollback path.
