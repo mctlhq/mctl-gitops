@@ -439,6 +439,13 @@ jobs:
         # "Producer amendment: DevLoop traces").
         run: python3 tests/test_cwft_execution_trace_env.py
 
+      - name: Unit-test that the ADR 0002 log-backend rubric stays frozen
+        # #2245 / #2250: the bake-off rubric (docs/adr/0002-rubric.yaml) must
+        # carry no scores or citations until the ADR records a verdict, and
+        # its weights must match the ADR table. Without this step the guard
+        # only ran by hand (claude-review P3 on #2250).
+        run: python3 tests/test_adr0002_rubric_frozen.py
+
       - name: Unit-test the mctl-agents policy checkpoint coverage
         # mctlhq/.github#181: every mctl-agents surface is classified in
         # platform-gitops/governance/policy-checkpoint-coverage.yaml, governed

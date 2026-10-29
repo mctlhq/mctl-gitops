@@ -595,3 +595,32 @@ reservedPlatformHosts:
 reservedDomains:
   # ERPact's site domain (<label>.erpact.online, erpact/mctl-apps#16).
   erpact.online: [erpact]
+
+# Log-backend comparison sandbox (issue #2245, docs/adr/0002-log-backend.md).
+# Closed by default: nothing renders while enabled is false. The candidate
+# pins (repoURL, chart, targetRevision) are filled by the live round, which
+# follows docs/runbooks/log-backend-bake-off.md. While enabled, teardownAfter
+# must be a YYYY-MM-DD date at most 14 days out
+# (scripts/validate-eval-teardown-date.py).
+logsEval:
+  enabled: false
+  teardownAfter: ""
+  quota:
+    requests.cpu: "500m"
+    requests.memory: "1Gi"
+    limits.cpu: "1"
+    limits.memory: "2Gi"
+    persistentvolumeclaims: "1"
+    requests.storage: "20Gi"
+  candidate:
+    enabled: false
+    repoURL: ""
+    chart: ""
+    targetRevision: ""
+    values:
+      server:
+        retentionPeriod: 14d
+        # The sandbox scrapes via infra-components/observability/logs-eval/;
+        # the chart's own ServiceMonitor would double-scrape.
+        serviceMonitor:
+          enabled: false
