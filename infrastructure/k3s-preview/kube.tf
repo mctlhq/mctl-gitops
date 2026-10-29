@@ -290,6 +290,27 @@ module "kube-hetzner" {
       source_ips      = []
       destination_ips = ["0.0.0.0/0", "::/0"]
     },
+    # Cloudflare Tunnel connector events-tunnel in platform-events
+    # (platform-gitops/infra-components/data/valkey/cloudflared.yaml). cloudflared
+    # dials the edge on 7844 only, QUIC over UDP or HTTP/2 over TCP, with no
+    # fallback to 443; without these the connector retries forever. The ranges
+    # are the ones region1/region2.v2.argotunnel.com resolve into.
+    {
+      description     = "Allow Outbound Cloudflare Tunnel (QUIC) to the Cloudflare edge"
+      direction       = "out"
+      protocol        = "udp"
+      port            = "7844"
+      source_ips      = []
+      destination_ips = ["198.41.192.0/24", "198.41.200.0/24", "2606:4700:a0::/48", "2606:4700:a8::/48"]
+    },
+    {
+      description     = "Allow Outbound Cloudflare Tunnel (HTTP/2) to the Cloudflare edge"
+      direction       = "out"
+      protocol        = "tcp"
+      port            = "7844"
+      source_ips      = []
+      destination_ips = ["198.41.192.0/24", "198.41.200.0/24", "2606:4700:a0::/48", "2606:4700:a8::/48"]
+    },
   ]
 
   # Network
