@@ -44,12 +44,18 @@ resources:
     cpu: 500m
     memory: 512Mi
 # SUPPORT_EXECUTOR=agent runs the model loop (S1b/S1c). Provider and model are
-# the owner's decision of 2026-10-28 (mctlhq/mctl-support#5): Anthropic,
-# claude-sonnet-5-5, the reference production model; GLM-5.1 on Nebius was
-# evaluated and rejected for the S1e gate. Sonnet needs mctl-support 0.3.0 or
-# later, which passes thinking blocks back within a task. The prices are that
-# model's per-million-token list prices; the spend caps keep their service
-# defaults (task 0.50, tenant 10, workspace 50 USD per UTC month).
+# INTERIM since 2026-10-29: Nebius Token Factory, zai-org/GLM-5.1, by the
+# owner's decision while the Anthropic organization is disabled (every key,
+# including the dedicated one, answers 401 "organization has been disabled").
+# The reference model stays Anthropic claude-sonnet-5-5 (mctlhq/mctl-support#5,
+# where GLM-5.1 was rejected for the S1e gate); revert this block and the
+# model secret below once the appeal succeeds. S2e pilot answers given on
+# GLM-5.1 are marked as such in the pilot review (mctlhq/.github#270).
+# NEBIUS_BASE_URL is the service default and is left unset: the deploy
+# tooling's yq rewrite has been seen stripping colon-bearing env values.
+# The prices are that model's per-million-token list prices; the spend caps
+# keep their service defaults (task 0.50, tenant 10, workspace 50 USD per
+# UTC month).
 # SUPPORT_ALLOWED_TENANTS is the pilot allowlist.
 #
 # Egress: base-service pods in admins match allow-mctl-services-internet-egress,
@@ -64,10 +70,10 @@ env:
   SUPPORT_PUBLIC_URL: https://support.mctl.ai
   MCTL_API_URL: https://api.mctl.ai
   MCTL_AUTH_ISSUER: https://api.mctl.ai
-  MODEL_PROVIDER: anthropic
-  ANTHROPIC_MODEL: claude-sonnet-5-5
-  MODEL_INPUT_USD_PER_MTOK: "2.00"
-  MODEL_OUTPUT_USD_PER_MTOK: "10.00"
+  MODEL_PROVIDER: nebius
+  NEBIUS_MODEL: zai-org/GLM-5.1
+  MODEL_INPUT_USD_PER_MTOK: "1.40"
+  MODEL_OUTPUT_USD_PER_MTOK: "4.40"
   SUPPORT_METRICS_PORT: "9090"
   # Refuse (401) any bearer not minted for https://support.mctl.ai. MCP
   # callers reach it through mctl_ask_support, which mints a support-audience
@@ -124,16 +130,16 @@ extraContainers: []
 # resolves its own team's prefix. Each ExternalSecret reads single
 # properties, never a whole path.
 extraExternalSecrets:
-  # The model provider API key (MODEL_PROVIDER=anthropic).
+  # The model provider API key (MODEL_PROVIDER=nebius, interim; see above).
   admins-mctl-support-model:
     store: vault-backend
     storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: admins-mctl-support-model
     data:
-      - secretKey: ANTHROPIC_API_KEY
+      - secretKey: NEBIUS_API_KEY
         remoteKey: secret/data/platform/mctl-support/model
-        property: anthropic-api-key
+        property: nebius-api-key
   # mctl-api credentials of two single-capability principals:
   # - usage writer (append usage records only): the same value mctl-api and
   #   the agent runner pods read (bootstrap/values.yaml usageWriter);
