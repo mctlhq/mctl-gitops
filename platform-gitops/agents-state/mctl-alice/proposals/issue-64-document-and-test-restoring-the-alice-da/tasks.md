@@ -20,33 +20,46 @@
   1 on failure. — DoD: `npm run build` emits `dist/restore-check.js`, and the
   image built from the unchanged `Dockerfile` contains it.
 - [ ] 4. Write `docs/runbooks/restore-database.md` (depends on 3). It covers
-  target selection, the scratch recovery `Cluster` manifest template (with no
-  `spec.backup` and a warning box), dumping only `labs-mctl-alice`, restoring
-  into `labs-mctl-alice-restore` with `--no-owner --role=labs-mctl-alice` and
-  `statement_timeout=0`, the verification with `restore-check`, the rename
-  switch-over, live verification, cleanup, rollback of the switch-over, the
-  "What to check after a restore" section, and an empty "Exercise log" table.
-  — DoD: a grep shows no internal hostnames, object-store names, endpoint
-  URLs, Vault paths or credentials. The reviewer confirms that only public
-  resource names appear.
+  target selection; a mandatory recovery-point encryption-key preflight; the
+  scratch recovery `Cluster` manifest template (with no `spec.backup` and a
+  warning box); dumping only `labs-mctl-alice`; restoring into
+  `labs-mctl-alice-restore` with `--no-owner --role=labs-mctl-alice` and
+  `statement_timeout=0`; verification with `restore-check`; a hard switch-over
+  gate requiring `ok: true`, zero decryption failures, no missing tables,
+  correct ownership/privileges and no clear-text bearer secrets; the rename
+  switch-over; live verification; cleanup; rollback; the "What to check after a
+  restore" section; and an empty "Exercise log" table. The key preflight maps
+  the selected target time to the historical/current key material required to
+  decrypt that point and stops recovery if that material cannot be identified
+  or obtained; it never assumes the current production key is sufficient for an
+  older target. — DoD: a grep shows no internal hostnames, object-store names,
+  endpoint URLs, Vault paths or credentials. The reviewer confirms that only
+  public resource names appear.
 - [ ] 5. Link the runbook from `README.md` (the security/operations section
   near "Rotating the encryption key"), and add a note to key-rotation step 4
-  that old keys are needed for a restore within the 14-day retention
-  (depends on 4). — DoD: the README renders and the link resolves.
+  that old keys are needed for a restore for as long as any retained backup can
+  contain ciphertext encrypted by them (currently a 14-day backup retention
+  window). — DoD: the README renders and the link resolves.
 - [ ] 6. Perform the exercise against a scratch namespace (depends on 3, 4).
-  Recover to a target time at least one hour old, dump `labs-mctl-alice`,
-  restore it into a fresh database on the scratch cluster, run the
-  rename switch-over there, run `restore-check` from a one-off pod that has
-  the production key, optionally start a non-ingress app pod and probe
-  `/readyz`, then tear everything down. Production traffic is not switched.
-  — DoD: the check exits 0 (or each failure is explained), and the scratch
-  namespace, PVCs and dump are deleted.
+  Recover to a target time at least one hour old using the actual CNPG PITR
+  mechanism; confirm the key material required by that recovery point is
+  available; run an actual `pg_dump -Fc` of `labs-mctl-alice` and an actual
+  `pg_restore` into a fresh database on the scratch cluster; run
+  `restore-check` with the recovery-point key material; require the hard
+  switch-over gate to pass; run the rename switch-over there; optionally start
+  a non-ingress app pod and probe `/readyz`; then tear everything down.
+  Production traffic is not switched. `CREATE TABLE ... AS` or another logical
+  copy is NOT an acceptable substitute for PITR + pg_dump/pg_restore in this
+  end-to-end exercise. — DoD: `restore-check` exits 0 with zero unexplained
+  failures, the gate passes before rename, and the scratch namespace, PVCs and
+  dump are deleted.
 - [ ] 7. Record the exercise in the runbook's Exercise log. Include the date,
-  target time, phase durations, the check counts, deviations from the
-  runbook (and fix the runbook for each), and teardown confirmation. Update
+  target time, confirmation of the required encryption-key epoch/material
+  without recording key values, phase durations, check counts, deviations from
+  the runbook (and fix the runbook for each), and teardown confirmation. Update
   section 5 "restore a backup" in `docs/plans/public-launch-readiness.md`
-  (depends on 6). — DoD: the entry contains counts only, and the plan links
-  the runbook and the exercise date.
+  (depends on 6). — DoD: the entry contains counts/metadata only, and the plan
+  links the runbook and the exercise date.
 
 ## Tests
 
@@ -57,10 +70,12 @@
   cookie or ciphertext strings.
 - [ ] T2. Real-Postgres test (in `tests/hosted-postgres.test.ts` style, skipped
   without `TEST_POSTGRES_URL`): seed two users with credentials through
-  `PostgresStorage`, `pg_dump`/`pg_restore` the schema into a second schema
-  (or use `CREATE TABLE ... AS` copies when the binaries are absent), run
-  `checkRestoredDatabase`, and expect `ok: true` with matching counts. Then
-  switch `ENCRYPTION_KEY` and expect `failed > 0` and `ok: false`.
+  `PostgresStorage`, `pg_dump`/`pg_restore` the schema into a second schema when
+  the client binaries are available, run `checkRestoredDatabase`, and expect
+  `ok: true` with matching counts. Then switch `ENCRYPTION_KEY` and expect
+  `failed > 0` and `ok: false`. `CREATE TABLE ... AS` copies MAY be used as a
+  fallback only for this automated integration test when the binaries are
+  absent; they do not satisfy T6 or the launch-readiness restore gate.
 - [ ] T3. Read-only guarantee: after `checkRestoredDatabase` on the real
   database, row data and `xmin` of seeded rows are unchanged, and no
   `UPDATE`/`DELETE` was issued (asserted on the mocked pool in T1).
@@ -68,8 +83,10 @@
   `restore-check` exits non-zero before connecting.
 - [ ] T5. Refactor guard: a snapshot of the SQL text `initTables()` sends to
   the mocked client is identical before and after task 1.
-- [ ] T6. Manual: the recorded exercise (task 6) is the end-to-end test of the
-  runbook.
+- [ ] T6. Manual end-to-end: the recorded exercise (task 6) MUST exercise real
+  CNPG PITR plus real `pg_dump -Fc`/`pg_restore`, MUST verify the key material
+  required by the selected recovery point, and MUST demonstrate that the
+  switch-over hard gate fails closed on any restore-check failure.
 
 ## Rollback
 
