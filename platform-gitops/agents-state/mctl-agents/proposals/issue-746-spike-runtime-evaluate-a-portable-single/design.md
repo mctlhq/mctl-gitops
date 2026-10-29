@@ -145,8 +145,11 @@ tests/test_portable_runtime_isolation.py  # boundary guard (pure Python, no carg
    - The rendered config contains `command` (absolute path of the binary), `args: ["proxy"]`,
      and either `env: {"MCTL_RUNTIME_TOKEN_FILE": "<path>"}` or a note telling the user to
      export `MCTL_TOKEN`. It never contains a token value.
-   - `--dry-run` is the default. `--write` additionally requires `--config-dir`, and is used
-     only by tests on `fixtures/host-fixture/` copied to a tempdir.
+   - `--dry-run` is the default. `--write` additionally requires `--config-dir` inside a test-created temporary
+     root containing a fixture marker. Canonicalize the root and target, require
+     containment and reject symlink escapes. An arbitrary explicit directory is
+     refused even if it is not a known real host path. Tests use a copy of
+     `fixtures/host-fixture/` under that root.
 3. **`doctor`.** Checks, in order: binary version; which credential source would be used
    (name only, never the value); token file mode (`0600` required); upstream reachability
    through an `initialize` and `tools/list` round trip; allowlist parse and count; and
@@ -172,9 +175,12 @@ tests/test_portable_runtime_isolation.py  # boundary guard (pure Python, no carg
    byte-identical with `isError: true`.
 6. **Correlation (J5).** Each call emits one stderr JSON line with these fields:
    `ts`, `invocation_id` (UUIDv4), `host_request_id`, `tool`, `args_sha256` (over
-   canonical JSON, the same idea as `policy_checkpoint.args_digest_of`), `upstream_session_id`,
+   canonical JSON, the same idea as `policy_checkpoint.args_digest_of`), `upstream_session_id_sha256`,
    `upstream_request_id` (if the upstream sends `X-Request-Id`), `outcome`, `is_error`,
-   `latency_ms`. Nothing is written to disk. Canonical evidence stays in MCTL (ADR 018).
+   `latency_ms`. Hash the raw `Mcp-Session-Id` before logging; never emit it to stdout/stderr,
+   including diagnostics and HTTP error logs. Request ids must also pass the
+   diagnostic redaction rules. Nothing is written to disk. Canonical evidence
+   stays in MCTL (ADR 018).
 7. **Commerce (J6).** Design note only, in the report. It gives a sequence diagram:
    host → runtime → upstream answers with a 402-style challenge → runtime surfaces it as a
    structured `isError` and does not pay → the client or provider settles under
