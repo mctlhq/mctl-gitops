@@ -165,9 +165,27 @@ production values stay as they are.
    or keep using its own counters and use the gateway only as an independent token check.
 3. **Require provider credentials** must be on before any production traffic (section 6), through
    gitops. If the Terraform resource cannot express it, that is a second instance of item 1.
+   Resolved 2026-10-29: the setting is `byok_only` on the gateway (Cloudflare changelog
+   2026-09-14, "Require provider credentials"), present in provider 5.28.1, which the account
+   root pins since #2268; declared `true` in `ai-gateway.tf`. A request without a provider key
+   then gets a 400 instead of a Unified Billing charge. mctl-support can add the per-request
+   `cf-aig-no-wholesale` header as a second lock; it cannot loosen the gateway setting.
 4. **Per-tenant attribution stays in mctl.** With logging off, request metadata is not
    queryable (section 3). The gateway gives per-gateway/per-model totals, which is enough for
    the workspace cap (USD 50 per month) but not for the tenant cap (USD 10) on its own.
+   This holds by construction as long as the Postgres ledger in mctl-support (`budget/ledger.py`)
+   stays the enforcement point of every cap, which Phase B does not change: the gateway is
+   observational, a monthly cross-check of its per-model totals against the workspace ledger.
+
+Fair prices for the Hetzner models (owner decision 2026-10-29: price them as a paid host would,
+so a free provider never makes the caps vacuous). Nebius lists one of them; the other is not on
+Nebius and takes its OpenRouter list price. Both go into `MODEL_INPUT_USD_PER_MTOK` /
+`MODEL_OUTPUT_USD_PER_MTOK` next to the model id whenever Hetzner is the configured provider:
+
+| Hetzner model id | priced as | USD / 1M in | USD / 1M out | source |
+|---|---|---|---|---|
+| `Qwen/Qwen3.8-27B`, `Qwen3.8-27B` | Nebius `Qwen/Qwen3.8-27B` | 0.45 | 3.00 | tokenfactory.nebius.com/model-catalog.md |
+| `Qwen/Qwen3.6-35B-A3B`, `-FP8` | OpenRouter Qwen3.6-35B-A3B | 0.15 | 1.00 | openrouter.ai model listing (aggregator) |
 
 What the gateway does give today, at zero cost on Workers Paid: an independent, eventually
 consistent token count per gateway and model, error-code breakdown, optional rate limiting and
