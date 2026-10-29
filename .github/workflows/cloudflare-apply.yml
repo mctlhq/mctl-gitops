@@ -559,13 +559,18 @@ jobs:
         run: tofu apply -input=false -no-color tfplan
 
       # After the OpenTofu apply, so the gateway the providers serve exists
-      # first on a fresh account. The script re-reads the account and refuses
-      # to finish while it still differs from the declaration.
+      # first on a fresh account. The script lists the account again here, so
+      # the approved digest goes in with it: a change set that is not the one
+      # approved is refused before the first write, which closes the window
+      # between the assert above and this step (the length of a tofu apply).
+      # Afterwards the script re-reads the account and refuses to finish while
+      # it still differs from the declaration.
       - name: Apply AI Gateway custom providers
         if: inputs.root == 'infrastructure/cloudflare/account'
         working-directory: ${{ github.workspace }}
         env:
           ALLOW_DESTROY: ${{ inputs.allow_destroy == true && '1' || '0' }}
+          EXPECTED_DIGEST: ${{ needs.plan.outputs.providers_digest }}
         run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh apply infrastructure/cloudflare/account/ai-gateway-custom-providers.json
 
       # Keeps the plan files off the runner once they have served their

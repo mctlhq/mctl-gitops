@@ -34,7 +34,8 @@
 #
 # Outputs (when GITHUB_OUTPUT is set): digest (sha256 of the canonical change
 # set), changes, destroy. The digest is what crosses the plan/apply job
-# boundary in cloudflare-apply.yml. With DETAILED_EXITCODE=1 a plan exits 2
+# boundary in cloudflare-apply.yml, and apply refuses to write when
+# EXPECTED_DIGEST is set and differs. With DETAILED_EXITCODE=1 a plan exits 2
 # when the change set is not empty, so cloudflare-drift.yml can fail on it the
 # way `tofu plan -detailed-exitcode` does. Deletes in apply need ALLOW_DESTROY=1.
 #
@@ -166,7 +167,10 @@ PY
   expect_out "changes=2" "mutation counts one update and one delete"; expect_out "destroy=1" "the undeclared provider is a destroy"
   : > "$tmp/out"; run apply "$tmp/d.json"; expect_rc 1 "apply with a pending destroy and no ALLOW_DESTROY"
   [ "$(jq 'map(select(.slug=="foreign")) | length' "$tmp/state.json")" = 1 ] || { echo "self-test FAILED: refused apply still deleted the undeclared provider"; fail=1; }
-  : > "$tmp/out"; ALLOW_DESTROY=1 run apply "$tmp/d.json"; expect_rc 0 "apply with ALLOW_DESTROY converges"
+  : > "$tmp/out"; EXPECTED_DIGEST=0000000000000000 ALLOW_DESTROY=1 run apply "$tmp/d.json"; expect_rc 1 "apply against a digest that is not this change set"
+  [ "$(jq 'map(select(.slug=="foreign")) | length' "$tmp/state.json")" = 1 ] || { echo "self-test FAILED: a refused digest still wrote to the account"; fail=1; }
+  : > "$tmp/out"; run plan "$tmp/d.json"; approved=$(sed -n 's/^digest=//p' "$tmp/out")
+  : > "$tmp/out"; EXPECTED_DIGEST="$approved" ALLOW_DESTROY=1 run apply "$tmp/d.json"; expect_rc 0 "apply with the approved digest and ALLOW_DESTROY converges"
   : > "$tmp/out"; run plan "$tmp/d.json"; expect_out "changes=0" "converged again after the destroy"
   [ "$(jq -r 'map(select(.slug=="nebius")) | .[0].base_url' "$tmp/state.json")" = "https://api.nebius.example" ] || { echo "self-test FAILED: update did not restore base_url"; fail=1; }
 
@@ -292,6 +296,13 @@ fi
 
 # ---- apply
 summarize "$cs" "AI Gateway custom providers: apply (account $ACCOUNT)"
+# The OpenTofu half applies a saved plan file, so what was approved is what is
+# written. This half re-lists the account, so the equivalent is a digest the
+# caller approved: when EXPECTED_DIGEST is set, a change set that differs from
+# it is refused before the first write. cloudflare-apply.yml always sets it.
+if [ -n "${EXPECTED_DIGEST:-}" ] && [ "$digest" != "$EXPECTED_DIGEST" ]; then
+  die "the change set (${digest:0:16}) is not the approved one (${EXPECTED_DIGEST:0:16}); the account changed since the plan; nothing was changed"
+fi
 if [ "$destroy" != "0" ] && [ "${ALLOW_DESTROY:-}" != "1" ]; then
   die "this change set destroys $destroy custom provider(s) and ALLOW_DESTROY is not set; nothing was changed"
 fi
