@@ -13,7 +13,11 @@
 # subscription OAuth token, with the operator events session on that host
 # handling the routed exceptions (EVENTS_OPERATOR_ROUTING stays "true" in
 # mctl-telegram-preview: a job nobody claims within 5m is still routed).
-# Set back to 1 to roll back; the deployment and its secrets are kept.
+# Set back to 1 to roll back; the deployment and its API token are kept.
+# The worker's Claude OAuth token was revoked and removed from Vault the same
+# day, so a rollback first needs a new token: write it to
+# secret/platform/labs/agent-worker-preview/anthropic (CLAUDE_CODE_OAUTH_TOKEN)
+# and restore that ExternalSecret and envFrom entry from git history.
 replicaCount: 0
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
@@ -158,8 +162,6 @@ env:
 envFrom:
   - secretRef:
       name: labs-agent-worker-preview-api
-  - secretRef:
-      name: labs-agent-worker-preview-anthropic
 extraVolumes:
   # Claude Code needs a writable HOME for transient client state, and the
   # worker writes a per-job MCP config under /tmp. Both stay ephemeral.
@@ -185,22 +187,4 @@ extraExternalSecrets:
       - secretKey: AGENT_API_TOKEN
         remoteKey: secret/data/platform/labs/agent-worker-preview/api
         property: AGENT_API_TOKEN
-  # Dedicated Claude Code OAuth token for this worker's `claude -p` invocations
-  # — deliberately NOT the CLAUDE_CODE_OAUTH_TOKEN/_2 secrets shared by
-  # claude-review.yml across the org, which this same session watched exhaust
-  # its monthly quota and stall the interactive session + every repo's PR
-  # review gate simultaneously (see project_communication_agent memory's
-  # "production quota domain" note). internal/agentworker/claudeinvoker.go's
-  # minimalEnv() passes any CLAUDE_*-prefixed env var through to the spawned
-  # `claude` process unmodified, so this is picked up with no other wiring.
-  labs-agent-worker-preview-anthropic:
-    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
-    store: vault-backend
-    storeKind: ClusterSecretStore
-    refreshInterval: 1h
-    targetSecret: labs-agent-worker-preview-anthropic
-    data:
-      - secretKey: CLAUDE_CODE_OAUTH_TOKEN
-        remoteKey: secret/data/platform/labs/agent-worker-preview/anthropic
-        property: CLAUDE_CODE_OAUTH_TOKEN
 extraContainers: []
