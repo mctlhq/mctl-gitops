@@ -30,6 +30,9 @@
 # every claude.ai connector on mcp.mctl.ai within minutes of the apply. The
 # scanner also rotated through ~25 other names that stay listed, and its
 # /.env and /.git probes do not depend on the User-Agent at all.
+# Spoofing these three names is therefore allowed again on purpose; the
+# damage that scanner did came through the *.mctl.me wildcard, which
+# block_unknown_subdomains still closes. Do not re-add them here.
 
 locals {
   fragments = [
