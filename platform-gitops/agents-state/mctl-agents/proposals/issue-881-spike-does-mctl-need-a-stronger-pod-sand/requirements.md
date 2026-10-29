@@ -98,6 +98,12 @@ These amendments override any conflicting dependency or decision wording in `des
   If these adoption gates are not met, the result SHALL NOT be `ADOPT_GVISOR`.
 - The existing `activeDeadlineSeconds: 7200` is a safety ceiling only and SHALL NOT be used as the
   performance/adoption threshold.
+- **VM runtimes are out of scope (owner decision, 2026-10-29).** MCTL has no KVM-capable host and none will
+  be provisioned for this spike. Kata Containers (any VMM) and Firecracker (Kata VMM or
+  firecracker-containerd) SHALL NOT be investigated, benchmarked or costed. Their rows MAY appear in the
+  matrix only as `infeasible-no-kvm` with a one-line reason, and no KVM node-pool cost analysis is
+  required. The admissible outcomes are reduced to `KEEP_HARDENED_RUNC | ADOPT_GVISOR`;
+  `ADOPT_KATA`, `ADOPT_FIRECRACKER` and `DEFER_NEEDS_KVM_NODEPOOL` SHALL NOT be proposed.
 
 ## Out of scope
 

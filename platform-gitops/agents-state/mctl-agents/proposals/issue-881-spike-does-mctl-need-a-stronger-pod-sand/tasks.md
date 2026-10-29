@@ -48,9 +48,9 @@ The owner amendments in `requirements.md` are authoritative. In particular, the 
   - startup p50/p95, CPU, RSS and I/O deltas are reported but are not substitutes for the wall-clock gate;
   - `activeDeadlineSeconds: 7200` is only a safety ceiling, not an adoption criterion.
 
-  Also cover the containerd-template upgrade/rollback burden and the dedicated KVM-capable pool cost if a
-  VM-grade boundary remains justified. Any unknown price is written as "unknown". — DoD: no blank cost
-  cells and no zero cost without a source.
+  Also cover the containerd-template upgrade/rollback burden for gVisor. VM runtimes are out of scope (owner
+  amendment): no KVM-capable pool cost is analysed. Any unknown price is written as "unknown". — DoD: no
+  blank cost cells and no zero cost without a source.
 
 - [ ] 6. **Create exactly one Phase B measurement follow-up only if the threat gate passed.** The follow-up
   must state that it starts after the Phase A PR is merged to `main`, then dispatches
@@ -80,8 +80,8 @@ The owner amendments in `requirements.md` are authoritative. In particular, the 
   the syscall/filesystem/network behaviour when identifiable.
 - [ ] B4. `ADOPT_GVISOR` is allowed only if every critical operation passes, runtime-caused failures are 0/10
   and median fixture wall-clock overhead is <=25% versus runc.
-- [ ] B5. `ADOPT_KATA` or `ADOPT_FIRECRACKER` is allowed only after KVM was observed on an MCTL host or an
-  owner-approved disposable KVM host and the candidate was actually measured there.
+- [ ] B5. Phase B measures runc and gVisor only. Kata and Firecracker are out of scope (no KVM host; owner
+  amendment), so the final outcome is `KEEP_HARDENED_RUNC` or `ADOPT_GVISOR`.
 - [ ] B6. Open a separate results PR that changes the report from `DRAFT` to exactly one final outcome token.
 
 ## Tests
