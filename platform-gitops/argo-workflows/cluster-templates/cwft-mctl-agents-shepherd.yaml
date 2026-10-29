@@ -897,8 +897,19 @@ spec:
           # Both lists are comma/space-separated and read at import. A service
           # named in both resolves to fix-only, so the two edits below are
           # order-independent.
+          #
+          # 2026-10-29: mctl-design, mctl-telegram and mctl-pairdesk moved from
+          # fix-only to full. Their merge path belonged to pr-steward in
+          # labs/claude-remote, which is paused (replicaCount 0, #2247), so
+          # their feat/agents-* PRs would otherwise sit green with no actor
+          # able to merge them. The shepherd merges with --merge, which
+          # mctl-telegram requires (it forbids squash). mctl-gitops stays
+          # fix-only: it is also in NEVER_MERGE_SERVICES, so no value here
+          # could resolve it to full. Move these three back to fix-only
+          # before claude-remote's steward is re-enabled, or the two
+          # lifecycles race on the merge again (mctl-telegram#730).
           - name: SHEPHERD_FIX_ONLY_SERVICES
-            value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
+            value: "mctl-gitops"
           - name: SHEPHERD_SKIP_SERVICES
             value: "mctl-academy"
           # How long run_implementer --review-feedback waits for an
