@@ -57,6 +57,9 @@ resources:
 # keep their service defaults (task 0.50, tenant 10, workspace 50 USD per
 # UTC month).
 # SUPPORT_ALLOWED_TENANTS is the pilot allowlist.
+# SUPPORT_TASKS_PER_DAY raises the per-principal rolling 24h task cap from
+# the service default of 20: one owner session plus pilot checks used all 20
+# on 2026-10-29. The spend caps above still bound cost.
 #
 # Egress: base-service pods in admins match allow-mctl-services-internet-egress,
 # so the network does not limit where this pod connects. Containment comes
@@ -67,6 +70,7 @@ env:
   SUPPORT_ENV: production
   SUPPORT_EXECUTOR: agent
   SUPPORT_ALLOWED_TENANTS: namax66,karabu
+  SUPPORT_TASKS_PER_DAY: "200"
   SUPPORT_PUBLIC_URL: https://support.mctl.ai
   MCTL_API_URL: https://api.mctl.ai
   MCTL_AUTH_ISSUER: https://api.mctl.ai
