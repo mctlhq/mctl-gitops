@@ -72,6 +72,10 @@ jobs:
 
     outputs:
       digest: ${{ steps.summary.outputs.digest }}
+      # Empty for every root but account/, where the custom-provider plan
+      # below sets it. The apply job treats an empty digest on that root as a
+      # failed plan, not as "nothing to do".
+      providers_digest: ${{ steps.providers.outputs.digest }}
 
     env:
       # The unprivileged read credential for the plan half. Per root for the
@@ -242,9 +246,35 @@ jobs:
           echo "destroy=$destroy" >> "$GITHUB_OUTPUT"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+      # The AI Gateway custom providers of the account root have no Terraform
+      # resource (cloudflare/cloudflare 5.28.1 still lacks one; spike #2262), so
+      # account/ai-gateway-custom-providers.json is reconciled by a script under
+      # the same discipline as the plan above: read with the plan credential
+      # here, approve, re-plan under the write credential, refuse if it moved,
+      # apply, read back. Its digest crosses the job boundary next to the
+      # OpenTofu one. The script is tested by cloudflare-plan.yml's
+      # assert-scripts job, which runs its self-test on every pull request.
+      - name: Plan AI Gateway custom providers
+        id: providers
+        if: inputs.root == 'infrastructure/cloudflare/account'
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh plan infrastructure/cloudflare/account/ai-gateway-custom-providers.json
+
       # Refused before approval, so an unintended destroy costs nobody a
       # review. The apply job checks again against its own plan, which is the
-      # one that decides.
+      # one that decides. The custom-provider change set is held to the same
+      # rule: a provider that exists in the account and not in the declaration
+      # is a destroy, and needs allow_destroy like any other.
+      - name: Refuse an unrequested custom-provider destroy
+        if: steps.providers.outputs.destroy != '' && steps.providers.outputs.destroy != '0' && inputs.allow_destroy != true
+        env:
+          DESTROY: ${{ steps.providers.outputs.destroy }}
+        run: |
+          set -euo pipefail
+          echo "::error::the custom-provider plan destroys $DESTROY provider(s) and the run was dispatched without allow_destroy"
+          echo "Re-dispatch with allow_destroy if every provider listed in the summary is meant to go."
+          exit 1
+
       - name: Refuse an unrequested destroy
         if: steps.summary.outputs.destroy != '0' && inputs.allow_destroy != true
         env:
@@ -492,11 +522,56 @@ jobs:
           echo "Re-dispatch with allow_destroy if every address above is meant to go."
           exit 1
 
+      # Same proof for the custom providers, under the write credential this
+      # time: the change set about to be applied is the one the plan job
+      # summarized. A moved digest is most likely a dashboard edit between the
+      # two jobs; either way a human looks at the new plan. Runs before the
+      # OpenTofu apply so that a drifted provider set stops the whole run
+      # rather than leaving the root half applied.
+      - name: Re-plan AI Gateway custom providers
+        id: providers
+        if: inputs.root == 'infrastructure/cloudflare/account'
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh plan infrastructure/cloudflare/account/ai-gateway-custom-providers.json
+
+      - name: Assert the approved custom-provider plan is still the plan
+        if: inputs.root == 'infrastructure/cloudflare/account'
+        env:
+          EXPECTED: ${{ needs.plan.outputs.providers_digest }}
+          ACTUAL: ${{ steps.providers.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXPECTED" ] || [ -z "$ACTUAL" ]; then
+            echo "::error::a custom-provider plan digest is missing (approved '${EXPECTED:0:16}', now '${ACTUAL:0:16}') — refusing to apply"
+            exit 1
+          fi
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::the custom-provider plan changed after approval (approved ${EXPECTED:0:16}, now ${ACTUAL:0:16}) — refusing to apply"
+            echo "The account's custom providers most likely changed out of band between the plan job and this one."
+            exit 1
+          fi
+          echo "custom-provider plan digest matches the approved one (${ACTUAL:0:16})"
+
       # The saved plan file, not a fresh one: apply what the summary above
       # described. Re-planning here would apply something nobody looked at, and
       # OpenTofu would not complain.
       - name: Apply
         run: tofu apply -input=false -no-color tfplan
+
+      # After the OpenTofu apply, so the gateway the providers serve exists
+      # first on a fresh account. The script lists the account again here, so
+      # the approved digest goes in with it: a change set that is not the one
+      # approved is refused before the first write, which closes the window
+      # between the assert above and this step (the length of a tofu apply).
+      # Afterwards the script re-reads the account and refuses to finish while
+      # it still differs from the declaration.
+      - name: Apply AI Gateway custom providers
+        if: inputs.root == 'infrastructure/cloudflare/account'
+        working-directory: ${{ github.workspace }}
+        env:
+          ALLOW_DESTROY: ${{ inputs.allow_destroy == true && '1' || '0' }}
+          EXPECTED_DIGEST: ${{ needs.plan.outputs.providers_digest }}
+        run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh apply infrastructure/cloudflare/account/ai-gateway-custom-providers.json
 
       # Keeps the plan files off the runner once they have served their
       # purpose; nothing is uploaded as an artifact either. Note what this does

@@ -82,7 +82,7 @@ jobs:
           # any root any more — the Access policy admits any Google account and
           # the server alone decides what each address sees — so watching that
           # path would now only wake the gate for a file it does not read.
-          if grep -qE '^(infrastructure/cloudflare/|\.github/scripts/cloudflare-local-state-roots\.sh$|\.github/workflows/cloudflare-(plan|drift)\.yml$)' <<< "$files"; then
+          if grep -qE '^(infrastructure/cloudflare/|\.github/scripts/cloudflare-local-state-roots\.sh$|\.github/scripts/cloudflare-ai-gateway-custom-providers\.sh$|\.github/workflows/cloudflare-(plan|drift)\.yml$)' <<< "$files"; then
             changed=true
           else
             changed=false
@@ -572,6 +572,16 @@ jobs:
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # account/ai-gateway-custom-providers.json has no Terraform resource
+      # behind it (cloudflare/cloudflare 5.28.1; spike #2262), so its plan is a
+      # script's, published into the same summary. Read-only with the plan
+      # credential, which holds AI Gateway Read. A destroy here is surfaced
+      # the same way as above: visible, not fatal, for a reviewer to see.
+      - name: Plan AI Gateway custom providers
+        if: matrix.root == 'infrastructure/cloudflare/account'
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh plan infrastructure/cloudflare/account/ai-gateway-custom-providers.json
+
       # The plan file can contain resource attribute values. Nothing here is
       # uploaded as an artifact for that reason.
       - name: Scrub
@@ -605,6 +615,13 @@ jobs:
         env:
           CLOUDFLARE_GUARD_SELF_TEST: '1'
         run: .github/scripts/cloudflare-assert-backend.sh
+      # Proven both ways against a fake of the endpoint: no changes on a
+      # converged account, the right changes on a mutated one, and an error
+      # rather than "no providers" when the listing fails.
+      - name: Custom-provider reconciler
+        env:
+          CLOUDFLARE_GUARD_SELF_TEST: '1'
+        run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh
 
   # The single stable context to mark required in the branch ruleset. It runs on
   # every pull request, including ones that touch nothing here, so it always has

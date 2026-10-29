@@ -1,0 +1,17 @@
+{
+  "account_id": "6a09f637d20e1f66a8e9d45ebe778058",
+  "providers": [
+    {
+      "slug": "nebius",
+      "name": "Nebius Token Factory",
+      "base_url": "https://api.tokenfactory.nebius.com",
+      "enable": true
+    },
+    {
+      "slug": "hetzner",
+      "name": "Hetzner Inference",
+      "base_url": "https://inference.hetzner.com/api",
+      "enable": true
+    }
+  ]
+}

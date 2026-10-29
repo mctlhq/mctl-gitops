@@ -48,6 +48,21 @@ resource "cloudflare_ai_gateway" "mctl_support" {
   rate_limiting_interval  = 0
   rate_limiting_limit     = 0
   rate_limiting_technique = "fixed"
+
+  # Server-side defaults the API returns. Provider 5.24.0 modelled them as
+  # optional and not computed, so undeclared they planned as an in-place
+  # update to null on every run (seen on the #2268 plan; upstream issue
+  # cloudflare/terraform-provider-cloudflare#7336, fixed in 5.26.0). Declared
+  # at their live values; none of them is a choice. log_management only
+  # applies while collect_logs is true. The same bug left the computed
+  # otel and spend_limits "known after apply" on every plan, which no
+  # declaration can silence: that is why this root's lock pins 5.28.1 while
+  # the other Cloudflare roots stay on 5.24.0.
+  log_classification      = false
+  log_management          = 100000
+  log_management_strategy = "DELETE_OLDEST"
+  logpush                 = false
+  zdr                     = false
 }
 
 # The gateway base URL is an identifier, not a secret. The route under it
