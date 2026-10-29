@@ -7,11 +7,13 @@
   is unchanged, and the existing `tests/postgres-storage.test.ts` and
   `tests/hosted-postgres.test.ts` pass.
 - [ ] 2. Add `src/storage/restore-check.ts` with
-  `checkRestoredDatabase(pool, { asRole? })` (depends on 1). It checks tables,
-  owners and privileges, row counts, decryption of every envelope in
+  `checkRestoredDatabase(pool)` (depends on 1). It checks tables,
+  owners and every required privilege separately (all of SELECT/INSERT/UPDATE/DELETE,
+  schema USAGE and required sequence rights), row counts, decryption of every envelope in
   `ENCRYPTED_COLUMNS` (ok/stale/failed via `decryptToken`/`rotateRow` with
   `rewrite=false`) and clear-text secret counts, all inside a
-  `BEGIN READ ONLY` transaction that is rolled back. — DoD: it returns a typed
+  `BEGIN READ ONLY` transaction on one checked-out pool client that is rolled
+  back before the client is released. — DoD: it returns a typed
   report with `ok: boolean` and per-check results, and no secret values,
   ciphertexts or row keys appear in the report.
 - [ ] 3. Add the CLI `src/restore-check.ts` and the `package.json` script
@@ -24,17 +26,22 @@
   scratch recovery `Cluster` manifest template (with no `spec.backup` and a
   warning box); dumping only `labs-mctl-alice`; restoring into
   `labs-mctl-alice-restore` with `--no-owner --role=labs-mctl-alice` and
-  `statement_timeout=0`; verification with `restore-check`; a hard switch-over
-  gate requiring `ok: true`, zero decryption failures, no missing tables,
-  correct ownership/privileges and no clear-text bearer secrets; the rename
-  switch-over; live verification; cleanup; rollback; the "What to check after a
-  restore" section; and an empty "Exercise log" table. The key preflight maps
-  the selected target time to the historical/current key material required to
-  decrypt that point and stops recovery if that material cannot be identified
-  or obtained; it never assumes the current production key is sufficient for an
-  older target. — DoD: a grep shows no internal hostnames, object-store names,
-  endpoint URLs, Vault paths or credentials. The reviewer confirms that only
-  public resource names appear.
+  `statement_timeout=0`; verification with `restore-check` from a one-off Node
+  Pod using `envFrom.secretRef` and authenticated TCP/TLS as the app role, with
+  narrow temporary pg_hba/NetworkPolicy access via the owning GitOps path and
+  cleanup (no local-postgres/`--as-role` shortcut); a hard switch-over gate
+  requiring `ok: true`, zero decryption failures, no missing tables, correct
+  ownership/privileges and no clear-text bearer secrets; the rename switch-over
+  only after ArgoCD and parent reconciliation are suspended and all app pods are
+  stopped; live verification; cleanup; rollback of the switch-over; the "What to
+  check after a restore" section; and an empty "Exercise log" table. Record and
+  restore prior reconciliation settings after verification or rollback. The key
+  preflight maps the selected target time to the historical/current key
+  material required to decrypt that point and stops recovery if that material
+  cannot be identified or obtained; it never assumes the current production key
+  is sufficient for an older target. — DoD: a grep shows no internal hostnames,
+  object-store names, endpoint URLs, Vault paths or credentials. The reviewer
+  confirms that only public resource names appear.
 - [ ] 5. Link the runbook from `README.md` (the security/operations section
   near "Rotating the encryption key"), and add a note to key-rotation step 4
   that old keys are needed for a restore for as long as any retained backup can
@@ -45,9 +52,12 @@
   mechanism; confirm the key material required by that recovery point is
   available; run an actual `pg_dump -Fc` of `labs-mctl-alice` and an actual
   `pg_restore` into a fresh database on the scratch cluster; run
-  `restore-check` with the recovery-point key material; require the hard
-  switch-over gate to pass; run the rename switch-over there; optionally start
-  a non-ingress app pod and probe `/readyz`; then tear everything down.
+  `restore-check` with the recovery-point key material from a one-off pod that
+  has the key through a Secret reference and connects as the app role over
+  authenticated TCP/TLS using scratch-only access rules and working scratch
+  credentials; require the hard switch-over gate to pass; run the rename
+  switch-over there; remove the access rules afterwards; optionally start a
+  non-ingress app pod and probe `/readyz`; then tear everything down.
   Production traffic is not switched. `CREATE TABLE ... AS` or another logical
   copy is NOT an acceptable substitute for PITR + pg_dump/pg_restore in this
   end-to-end exercise. — DoD: `restore-check` exits 0 with zero unexplained
@@ -66,7 +76,8 @@
 - [ ] T1. Unit test (`tests/restore-check.test.ts`, mocked pool): the report
   flags a missing table, a table not owned by or usable by the role, a
   clear-text `oauth_tokens.access_token`, and an envelope encrypted under a
-  different key. The serialized report contains none of the seeded token,
+  different key. Seed SELECT-only access and assert failure for the missing
+  INSERT/UPDATE/DELETE rights; missing schema or sequence rights must also fail. The serialized report contains none of the seeded token,
   cookie or ciphertext strings.
 - [ ] T2. Real-Postgres test (in `tests/hosted-postgres.test.ts` style, skipped
   without `TEST_POSTGRES_URL`): seed two users with credentials through
@@ -95,8 +106,10 @@
   refactor is behaviour-neutral.
 - Exercise: delete the scratch namespace (Cluster, PVCs, secrets, dump). It
   never touches `shared-pg` or the live database.
-- A real switch-over that goes wrong: scale `labs-mctl-alice` to 0, rename
+- A real switch-over that goes wrong: record and suspend ArgoCD and parent
+  reconciliation, verify it remains suspended, then scale `labs-mctl-alice` to 0, rename
   `labs-mctl-alice` back to `labs-mctl-alice-restore` and
   `labs-mctl-alice-pre-restore-<yyyymmdd>` back to `labs-mctl-alice`, then
-  scale up again. The runbook keeps the pre-restore database for 7 days so
+  scale up again. Restore the recorded reconciliation settings after verification
+  and confirm sync/health. The runbook keeps the pre-restore database for 7 days so
   this stays possible.
