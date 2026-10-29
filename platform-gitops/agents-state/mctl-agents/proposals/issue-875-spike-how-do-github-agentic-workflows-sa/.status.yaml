@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-29T10:22:33Z'
+updated_at: '2026-10-29T10:36:08Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-cf1cc3e51ef8dc1d
@@ -47,9 +47,6 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
-ci_blockers_head: 6fb856a46f40d25e029a3b9ae3a74f2eddc0061b
-ci_blockers:
-- PR validation / tests
 refusals: 1
 refusals_head: 6fb856a46f40d25e029a3b9ae3a74f2eddc0061b
 notes: 'implementer declined to act: tests/test_execution_request_replay.py passes
