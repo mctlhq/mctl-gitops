@@ -42,6 +42,11 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: mctl-api
+        # Cloudflare Tunnel connector for the Mac mini consumer
+        # (cloudflared.yaml). Same namespace, so a bare podSelector.
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: events-tunnel
       ports:
         - protocol: TCP
           port: 6379
