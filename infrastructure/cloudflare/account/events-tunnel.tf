@@ -32,7 +32,7 @@
 # Ids are literal for the reason given in portal-mcp-apps-adopted.tf. The
 # token id is not a secret; it names an object in this account.
 locals {
-  events_tunnel_service_token_id = "TODO-service-token-id"
+  events_tunnel_service_token_id = "adb42a29-cdb4-412d-92dc-39cb4792b8b1" # mac-mini-events, expires 2027-10-29
 }
 
 resource "cloudflare_zero_trust_tunnel_cloudflared" "platform_events" {
