@@ -21,13 +21,25 @@
 # `cf.bot_management.verified_bot`, which the field reference marks as
 # requiring an Enterprise plan with Bot Management, while `cf.client.bot` is
 # the form Cloudflare's own "stop malicious bots" guide uses on every plan.
+#
+# User-initiated agents (Claude-User, ChatGPT-User, Perplexity-User) are left
+# out on purpose. They are not crawlers: they are the requests an assistant
+# makes for one user, including every MCP connector call from claude.ai and
+# ChatGPT, and they are not in Cloudflare's verified-bot list, so this rule
+# blocked them all. On 2026-10-29 it returned 403 `mcp_request_blocked` to
+# every claude.ai connector on mcp.mctl.ai within minutes of the apply. The
+# scanner also rotated through ~25 other names that stay listed, and its
+# /.env and /.git probes do not depend on the User-Agent at all.
+# Spoofing these three names is therefore allowed again on purpose; the
+# damage that scanner did came through the *.mctl.me wildcard, which
+# block_unknown_subdomains still closes. Do not re-add them here.
 
 locals {
   fragments = [
     "googlebot", "bingbot", "applebot", "yandexbot", "duckduckbot", "duckassistbot",
-    "claudebot", "claude-user", "claude-searchbot", "anthropic-ai",
-    "gptbot", "chatgpt-user", "oai-searchbot",
-    "perplexitybot", "perplexity-user", "kimibot", "kimi-searchbot", "grokbot",
+    "claudebot", "claude-searchbot", "anthropic-ai",
+    "gptbot", "oai-searchbot",
+    "perplexitybot", "kimibot", "kimi-searchbot", "grokbot",
     "bravebot", "meta-webindexer", "meta-externalagent", "facebookexternalhit",
     "qwenbot", "hunyuan", "chatglm-spider", "bytespider", "amazonbot", "petalbot",
   ]
