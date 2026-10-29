@@ -185,7 +185,7 @@ def main(argv: list[str]) -> int:
         print(f"::error::{err}", file=sys.stderr)
         return 1
 
-    print("OK: eval sandbox teardown dates is within policy (or the sandbox is closed)")
+    print("OK: eval sandbox teardown dates are within policy (or the sandbox is closed)")
     return 0
 
 
