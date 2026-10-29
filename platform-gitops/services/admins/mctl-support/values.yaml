@@ -51,8 +51,15 @@ resources:
 # where GLM-5.1 was rejected for the S1e gate); revert this block and the
 # model secret below once the appeal succeeds. S2e pilot answers given on
 # GLM-5.1 are marked as such in the pilot review (mctlhq/.github#270).
-# NEBIUS_BASE_URL is the service default and is left unset: the deploy
-# tooling's yq rewrite has been seen stripping colon-bearing env values.
+# NEBIUS_BASE_URL points at the Cloudflare AI Gateway's custom provider for
+# Nebius (mctlhq/mctl-gitops#2262 Phase B, 2026-10-29): same Nebius key on
+# every request (BYOK, the gateway stores nothing), plus the gateway's own
+# bearer in MODEL_GATEWAY_TOKEN (sent as cf-aig-authorization, mctl-support
+# 0.4.0). The gateway keeps no logs and is observational only: the spend
+# caps stay on this service's ledger. Rollback = remove NEBIUS_BASE_URL (the
+# service default is Nebius direct) and MODEL_GATEWAY_TOKEN. The value is
+# quoted because the deploy tooling's yq rewrite has been seen stripping
+# colon-bearing env values; check it survives the next image bump.
 # The prices are that model's per-million-token list prices; the spend caps
 # keep their service defaults (task 0.50, tenant 10, workspace 50 USD per
 # UTC month).
@@ -76,6 +83,7 @@ env:
   MCTL_AUTH_ISSUER: https://api.mctl.ai
   MODEL_PROVIDER: nebius
   NEBIUS_MODEL: zai-org/GLM-5.1
+  NEBIUS_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-support/custom-nebius/v1"
   MODEL_INPUT_USD_PER_MTOK: "1.40"
   MODEL_OUTPUT_USD_PER_MTOK: "4.40"
   SUPPORT_METRICS_PORT: "9090"
@@ -144,6 +152,11 @@ extraExternalSecrets:
       - secretKey: NEBIUS_API_KEY
         remoteKey: secret/data/platform/mctl-support/model
         property: nebius-api-key
+      # AI Gateway bearer (cf-aig-authorization); the run token
+      # mctl-support-ai-gateway-run of infrastructure/cloudflare/tokens.
+      - secretKey: MODEL_GATEWAY_TOKEN
+        remoteKey: secret/data/platform/mctl-support/ai-gateway
+        property: token
   # mctl-api credentials of two single-capability principals:
   # - usage writer (append usage records only): the same value mctl-api and
   #   the agent runner pods read (bootstrap/values.yaml usageWriter);
