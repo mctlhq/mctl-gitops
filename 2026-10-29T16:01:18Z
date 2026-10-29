@@ -1,0 +1,62 @@
+[2026-10-29T16:01:19Z] watcher start repo=mctlhq/mctl-gitops pr=/Users/dmitriimashkov/.claude/tmp/review-watch-mctl-gitops-.result pid=77672
+gh: Not Found (HTTP 404)
+gh: Not Found (HTTP 404)
+[2026-10-29T16:01:19Z] baseline trigger_ts={
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+} trigger_id={
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}
+[2026-10-29T16:01:22Z] tick 1: reviews={
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0 comments={
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0 issue_comments={
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0 (real={
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0) agy_comments={
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0 quota_notices={
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0 reaction=
+/Users/dmitriimashkov/.claude/tmp/review-watch.sh: line 132: [: {
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0: integer expression expected
+/Users/dmitriimashkov/.claude/tmp/review-watch.sh: line 138: [: {
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0: integer expression expected
+/Users/dmitriimashkov/.claude/tmp/review-watch.sh: line 138: [: {
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0: integer expression expected
+/Users/dmitriimashkov/.claude/tmp/review-watch.sh: line 138: [: {
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0: integer expression expected
+/Users/dmitriimashkov/.claude/tmp/review-watch.sh: line 138: [: {
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest",
+  "status": "404"
+}0: integer expression expected

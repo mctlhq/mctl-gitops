@@ -179,9 +179,17 @@ spec:
     # (the real client; ClientAddr is the Cloudflare edge) and Cf-Ray (joins a
     # line to the Cloudflare request log).
     #
+    # Query strings are dropped too (raised in review on #2260): RequestLine
+    # and RequestPath both carry the full URI, and the OAuth callbacks behind
+    # this ingress (api.mctl.ai, tg.mctl.ai, ZITADEL) receive `?code=` and
+    # `?state=` on exactly the error paths this log keeps. RequestLine is
+    # dropped outright; queryParameters.defaultMode (Traefik >= 3.7.3, the
+    # cluster runs 3.7.14) strips the query from RequestPath so the path
+    # itself stays.
+    #
     # The chart key is accessLog, camel case; `logs.access` is rejected by
     # values.schema.json ("Additional property logs is not allowed"). Rendered
-    # against chart 42.0.0: the nine --accesslog.* arguments appear and the
+    # against chart 42.0.0: the eleven --accesslog.* arguments appear and the
     # entrypoint invariants above survive. The render job in
     # .github/workflows/cloudflare-origin-allowlist.yml asserts the filter
     # argument so a silent drop of the key cannot pass review. Promtail already
@@ -195,9 +203,13 @@ spec:
         retryAttempts: true
       fields:
         defaultMode: keep
+        names:
+          RequestLine: drop
         headers:
           defaultMode: drop
           names:
             User-Agent: keep
             Cf-Connecting-Ip: keep
             Cf-Ray: keep
+        queryParameters:
+          defaultMode: drop
