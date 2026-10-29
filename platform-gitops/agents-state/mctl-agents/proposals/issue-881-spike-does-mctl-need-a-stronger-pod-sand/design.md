@@ -177,11 +177,9 @@ mctl-gitops or on any production node.
 4. **Decision.**
    - `ADOPT_GVISOR` if every fixture op that the implement and investigate steps need passes and the
      overhead is within the run's deadline headroom (`activeDeadlineSeconds: 7200`).
-   - `DEFER_NEEDS_KVM_NODEPOOL` if a VM-grade boundary is judged necessary but KVM is unavailable. This
-     comes with the cost and operations delta, and any VM benchmark is left to a separate owner gate.
    - Otherwise `KEEP_HARDENED_RUNC`.
-   - `ADOPT_KATA` or `ADOPT_FIRECRACKER` only if KVM was observed on an MCTL host or on an owner-approved
-     disposable KVM host, and was measured there.
+   - Owner amendment: there is no KVM host, so `DEFER_NEEDS_KVM_NODEPOOL`, `ADOPT_KATA` and
+     `ADOPT_FIRECRACKER` are not outcomes of this spike (see requirements.md, "Owner amendments").
 
 ## Alternatives
 
