@@ -1,5 +1,5 @@
-status: proposed
-updated_at: '2026-10-29T09:40:22Z'
+status: accepted
+updated_at: '2026-10-29T09:53:40Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-a839143a51dfac8f
@@ -18,3 +18,9 @@ context:
   content_hash: sha256:05835f294bb209ee3c3b3cd90b812abccc211fe837d3d86a9d11912488d763cd
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
+approval:
+  approved_by: 'mashkovd'
+  approved_at: '2026-10-29T09:53:40Z'
+  content_digest: 'sha256:24db80cf24db407cf73cd0ae70fd3ec52d85306e5f7955021fdbb07796918ec2'
+  digest_binding: 'reviewed'
+  approval_ref: 'aar_55b385defc4144e49cc814d0dffba793'
