@@ -7,7 +7,9 @@ zone exists so the old domain keeps working. Imported by #1103.
 
 The four objects both redirect zones share come from
 `../../modules/zone-baseline`: the apex and wildcard `A` records, the apex
-redirect ruleset, and the `.php` scanner block. What is left in this root is
+redirect ruleset, and the custom firewall ruleset (the `.php` scanner block,
+the block on subdomains outside `redirect_subdomains` in `main.tf`, and the
+spoofed-crawler block). What is left in this root is
 what `mctl.ru` has no equivalent of — `www` and `platform` hosts, and the
 SES/Resend mail records.
 
