@@ -25,6 +25,12 @@ value only in Vault. Creating it needs `AI Gateway: Edit` on
 `CF_APPLY_TOKEN_ACCOUNT` and refreshing it `AI Gateway: Read` on the plan
 token.
 
+This root pins `cloudflare/cloudflare` 5.28.1 in its lock file (#2268) while
+the other Cloudflare roots stay on 5.24.0: that version plans an in-place
+update of every `cloudflare_ai_gateway` on every run (upstream issue 7336,
+fixed in 5.26.0), which would have kept the nightly drift run red here for
+good. Bumping the other roots is a separate decision with its own plan.
+
 `ai-gateway-custom-providers.json` declares the gateway's custom providers
 (Nebius, Hetzner), which are not native AI Gateway providers and have no
 Terraform resource (cloudflare/cloudflare 5.28.1). They are reconciled by
