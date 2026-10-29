@@ -1,0 +1,66 @@
+# Frozen scoring rubric for ADR 0002 (log backend: Loki vs VictoriaLogs).
+# Scores stay null until the live round records a verdict in the ADR.
+# tests/test_adr0002_rubric_frozen.py keeps weights in agreement with the ADR.
+
+candidates:
+  - loki-current
+  - victorialogs
+
+verdict: null
+
+decision_rule:
+  min_weighted_margin: 0.5
+  allow_unmeasured: false
+  min_cell_score:
+    retention: 3
+    consumer_compat: 3
+
+dimensions:
+  - key: ingest_resources
+    name: Ingest resources
+    weight: 15
+    candidates:
+      loki-current: {score: null, citation: ""}
+      victorialogs: {score: null, citation: ""}
+  - key: storage_cost
+    name: Storage cost
+    weight: 15
+    candidates:
+      loki-current: {score: null, citation: ""}
+      victorialogs: {score: null, citation: ""}
+  - key: query_latency
+    name: Query latency
+    weight: 15
+    candidates:
+      loki-current: {score: null, citation: ""}
+      victorialogs: {score: null, citation: ""}
+  - key: retention
+    name: Retention
+    weight: 10
+    candidates:
+      loki-current: {score: null, citation: ""}
+      victorialogs: {score: null, citation: ""}
+  - key: tenant_isolation
+    name: Tenant isolation
+    weight: 10
+    candidates:
+      loki-current: {score: null, citation: ""}
+      victorialogs: {score: null, citation: ""}
+  - key: ha_recovery
+    name: HA and recovery
+    weight: 15
+    candidates:
+      loki-current: {score: null, citation: ""}
+      victorialogs: {score: null, citation: ""}
+  - key: consumer_compat
+    name: Consumer compatibility
+    weight: 10
+    candidates:
+      loki-current: {score: null, citation: ""}
+      victorialogs: {score: null, citation: ""}
+  - key: migration_cost
+    name: Migration cost
+    weight: 10
+    candidates:
+      loki-current: {score: null, citation: ""}
+      victorialogs: {score: null, citation: ""}
