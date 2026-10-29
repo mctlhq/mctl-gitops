@@ -81,11 +81,20 @@ env:
   SUPPORT_PUBLIC_URL: https://support.mctl.ai
   MCTL_API_URL: https://api.mctl.ai
   MCTL_AUTH_ISSUER: https://api.mctl.ai
-  MODEL_PROVIDER: nebius
+  # Verification step 2 of mctlhq/mctl-gitops#2262 (2026-10-29): Hetzner
+  # Qwen3.8-27B through the gateway's custom-hetzner provider, priced at the
+  # Nebius list price for the same model (Hetzner inference is free while
+  # experimental, so the ledger carries a fair price instead of zero; see
+  # docs/spikes/2262-cloudflare-ai-gateway-mctl-support.md section 7).
+  # Revert = MODEL_PROVIDER nebius, drop HETZNER_* and the prices back to
+  # 1.40 / 4.40. The NEBIUS_* lines stay so the revert is a one-line flip.
+  MODEL_PROVIDER: hetzner
+  HETZNER_MODEL: Qwen/Qwen3.8-27B
+  HETZNER_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-support/custom-hetzner/v1"
   NEBIUS_MODEL: zai-org/GLM-5.1
   NEBIUS_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-support/custom-nebius/v1"
-  MODEL_INPUT_USD_PER_MTOK: "1.40"
-  MODEL_OUTPUT_USD_PER_MTOK: "4.40"
+  MODEL_INPUT_USD_PER_MTOK: "0.45"
+  MODEL_OUTPUT_USD_PER_MTOK: "3.00"
   SUPPORT_METRICS_PORT: "9090"
   # Refuse (401) any bearer not minted for https://support.mctl.ai. MCP
   # callers reach it through mctl_ask_support, which mints a support-audience
@@ -152,6 +161,9 @@ extraExternalSecrets:
       - secretKey: NEBIUS_API_KEY
         remoteKey: secret/data/platform/mctl-support/model
         property: nebius-api-key
+      - secretKey: HETZNER_API_KEY
+        remoteKey: secret/data/platform/mctl-support/model
+        property: hetzner-api-key
       # AI Gateway bearer (cf-aig-authorization); the run token
       # mctl-support-ai-gateway-run of infrastructure/cloudflare/tokens.
       - secretKey: MODEL_GATEWAY_TOKEN
