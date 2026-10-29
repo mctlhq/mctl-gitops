@@ -109,8 +109,10 @@ locals {
   # v0.13.3-build20260727 in v1.34.12+k3s1). Pinned to the charts running on
   # 2026-10-22 so the k3s upgrade does not also upgrade ingress and ACME.
   # Bump them here, deliberately, in their own change.
+  # v1.20.5 (#2246): drops trust in the compromised eMudhra CA and carries
+  # HTTP/2 dependency security fixes. Live version was not observed.
   traefik_version      = "42.0.0"
-  cert_manager_version = "v1.20.3"
+  cert_manager_version = "v1.20.5"
 
   # Equal to the module default; pinned here so a module upgrade cannot move
   # it without a matching change to extra-manifests/system-upgrade-controller.yaml.tpl.
