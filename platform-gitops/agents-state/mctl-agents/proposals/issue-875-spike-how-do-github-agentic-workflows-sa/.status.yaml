@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-10-29T10:51:10Z'
+updated_at: '2026-10-29T11:06:13Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-cf1cc3e51ef8dc1d
@@ -54,5 +54,3 @@ notes: 'implementer declined to act: tests/test_execution_request_replay.py pass
   PR diff only adds docs/spikes/875-gh-aw-guardrail-comparison.md and tests/test_spike_875_report.py,
   touching no workflow or activity code, so it cannot cause the lifecycle_ownership/ensure_issue_execution
   nondeterminism. Failure is not reproducible and not caused by this PR.'
-merge_unknown_ticks: 1
-merge_unknown_head: 6fb856a46f40d25e029a3b9ae3a74f2eddc0061b
