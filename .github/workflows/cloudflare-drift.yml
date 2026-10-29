@@ -341,6 +341,19 @@ jobs:
           rm -f plan.txt plan.err
           exit "$code"
 
+      # The custom providers behind account/ai-gateway-custom-providers.json
+      # are outside OpenTofu's state (no resource for them; spike #2262), so
+      # the plan above cannot see them drift. DETAILED_EXITCODE makes the
+      # script exit 2 on any difference, like `tofu plan -detailed-exitcode`,
+      # and a listing it cannot read is exit 1, never "in sync". Only after a
+      # clean plan: a drifted root is already red.
+      - name: Check AI Gateway custom providers
+        if: matrix.root == 'infrastructure/cloudflare/account' && steps.plan.conclusion == 'success' && !cancelled()
+        working-directory: ${{ github.workspace }}
+        env:
+          DETAILED_EXITCODE: '1'
+        run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh plan infrastructure/cloudflare/account/ai-gateway-custom-providers.json
+
       # The one field OpenTofu cannot watch. `auth_credentials` is write-only:
       # the API accepts it and never returns it, so the provider keeps what was
       # last applied in state and a refresh cannot correct it. Measured against
