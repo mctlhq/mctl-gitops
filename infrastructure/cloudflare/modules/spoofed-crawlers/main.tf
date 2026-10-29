@@ -16,8 +16,11 @@
 #
 # A module with no resources and no provider: it exists so the three zone
 # rulesets cannot drift apart on the list. Regex (`matches`) is not available
-# on these plans, hence one `contains` clause per fragment; `lower()` and
-# `cf.bot_management.verified_bot` are available on every plan.
+# on these plans, hence one `contains` clause per fragment. The verified-bot
+# field is `cf.client.bot`: it carries the same information as
+# `cf.bot_management.verified_bot`, which the field reference marks as
+# requiring an Enterprise plan with Bot Management, while `cf.client.bot` is
+# the form Cloudflare's own "stop malicious bots" guide uses on every plan.
 
 locals {
   fragments = [
@@ -33,7 +36,7 @@ locals {
 output "expression" {
   description = "Rules-language expression matching a spoofed crawler: a listed User-Agent fragment on a request that is not a verified bot."
   value = format(
-    "(not cf.bot_management.verified_bot and (%s))",
+    "(not cf.client.bot and (%s))",
     join(" or ", [for f in local.fragments : format("lower(http.user_agent) contains \"%s\"", f)]),
   )
 }
