@@ -71,6 +71,34 @@ exercised on a disposable environment and records exactly one outcome:
   the status token, the matrix and scorecard row shape, non-empty evidence cells, the rule that VM rows are
   not marked measured without observed KVM, and the absence of token-shaped strings.
 
+## Owner amendments (authoritative)
+
+These amendments override any conflicting dependency or decision wording in `design.md` or `tasks.md`.
+
+- The spike SHALL be split into two phases because a newly-added `workflow_dispatch` workflow cannot be
+  dispatched until that workflow exists on the repository default branch. **Phase A** is the scope of the
+  current DevLoop: threat/feasibility analysis plus the disposable harness, manual workflow, DRAFT report
+  and guard tests. Phase A SHALL NOT attempt to dispatch `.github/workflows/spike-881-sandbox.yml` from
+  the implementation branch. If the threat gate passes, Phase A SHALL leave one explicit Phase B
+  measurement follow-up that starts only after the Phase A PR is merged to `main`.
+- **Phase B** SHALL dispatch the workflow from `main`, run the N=10 alternating runc/gVisor comparison,
+  commit the measurements and finalize the recommendation in a separate PR. This separation is a workflow
+  lifecycle constraint, not permission to broaden production scope.
+- The early exit is real: if the threat gate fails, benchmark/harness execution is skipped and the spike
+  MAY conclude `KEEP_HARDENED_RUNC`; no task may require measurements on that branch of the decision tree.
+- For MCTL, T1 is material when model-driven untrusted code can be co-located on a worker with other tenant
+  or platform workloads and still shares that worker kernel. T8 alone is not sufficient to force adoption.
+  If current topology or scheduling evidence proves that such co-location cannot occur, record that evidence
+  and evaluate T1 accordingly.
+- `ADOPT_GVISOR` requires all critical DevLoop operations to pass under gVisor: git/gh, uv/pytest/mypy/ruff,
+  npm, `go test` and `go test -race`, C compilation, DNS/HTTPS/proxy, Argo executor behaviour,
+  artifact/log collection and cancellation. Across N=10 there SHALL be zero runtime-caused failures.
+  The median representative fixture wall-clock overhead versus runc SHALL be no more than **25%**. The
+  startup p50/p95, CPU, RSS and I/O deltas are still reported even when they are not separate hard gates.
+  If these adoption gates are not met, the result SHALL NOT be `ADOPT_GVISOR`.
+- The existing `activeDeadlineSeconds: 7200` is a safety ceiling only and SHALL NOT be used as the
+  performance/adoption threshold.
+
 ## Out of scope
 
 - Any production rollout, default RuntimeClass switch, worker rescale or new node purchase.
