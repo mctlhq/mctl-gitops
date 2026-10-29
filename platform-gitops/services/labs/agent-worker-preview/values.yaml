@@ -7,7 +7,14 @@
 # not the previous bounded-test-window pattern. Draft-only — every propose
 # still requires the owner's manual /mctl approve. AGENT_MAX_BUDGET_USD below
 # caps spend per job on this worker's own dedicated OAuth credential.
-replicaCount: 1
+#
+# 2026-10-29: scaled to 0. The same agent-worker binary now runs off-cluster
+# on the owner's always-on host, billed to a Console API key instead of a
+# subscription OAuth token, with the operator events session on that host
+# handling the routed exceptions (EVENTS_OPERATOR_ROUTING stays "true" in
+# mctl-telegram-preview: a job nobody claims within 5m is still routed).
+# Set back to 1 to roll back; the deployment and its secrets are kept.
+replicaCount: 0
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
   tag: "main-6722698"
