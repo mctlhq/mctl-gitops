@@ -10,14 +10,28 @@ tenant:
   contactEmail: ""
   members:
     - userId: EmiliiaMashkova
+      principalId: prn_01M3H4H0M0140YFDSCXSV9QVM2
       role: owner
+    # Added 2026-10-28 so the platform owner can ask mctl-support about this
+    # tenant during the support pilot (mctlhq/.github#243); support answers
+    # members only.
+    - userId: mashkovd
+      principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
+      role: developer
+  # Keep an initial preview budget without reserving the full production profile.
+  preview:
+    quotas:
+      requests.memory: "256Mi"
   quotas:
     requests.cpu: "1"
-    requests.memory: "2Gi"
+    requests.memory: "512Mi"
     limits.cpu: "2"
     limits.memory: "3Gi"
     pods: "10"
     persistentvolumeclaims: "5"
+    # Added 2026-10-20: a PVC count alone does not bound storage; every
+    # PVC on the default class is a billed Hetzner volume.
+    requests.storage: "20Gi"
     services: "10"
   limitRange:
     enabled: true
@@ -34,3 +48,7 @@ tenant:
     allowIntraNamespace: true
     allowClusterEgress: true
     allowInternetEgress: false
+  # draw-with-friends runs on the base-service non-root default; a
+  # server-side dry-run found no violating pods here or in karabu-preview
+  # (ROADMAP 3.2, step 2).
+  podSecurityLevel: "restricted"

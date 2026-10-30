@@ -106,6 +106,31 @@ import {
 }
 
 import {
+  to = cloudflare_email_routing_rule.obukhov
+  id = "${local.zone_id}/433d3fb6ba74408f9a27dfc74e575924"
+}
+
+import {
+  to = cloudflare_email_routing_rule.moonqua
+  id = "${local.zone_id}/7f64595b1ca849379f15c631d79b92ec"
+}
+
+import {
+  to = cloudflare_email_routing_rule.dmarc
+  id = "${local.zone_id}/653a2dac00e347598e0a52acd840af78"
+}
+
+import {
+  to = cloudflare_email_routing_rule.postmaster
+  id = "${local.zone_id}/9d6f56505f2a429ebb647883413a656c"
+}
+
+import {
+  to = cloudflare_email_routing_rule.abuse
+  id = "${local.zone_id}/c91c0041ec4a4a7b8af9757aa8ce9858"
+}
+
+import {
   to = cloudflare_email_routing_catch_all.default
   id = local.zone_id
 }
@@ -138,4 +163,9 @@ import {
 import {
   to = cloudflare_workers_route.landing_form_api
   id = "${local.zone_id}/762bd90950394fdc963c12028a8caca0"
+}
+
+import {
+  to = cloudflare_dns_record.anthropic_domain_verify
+  id = "${local.zone_id}/98ade15758bb2ecaa791b0d5dc900529"
 }

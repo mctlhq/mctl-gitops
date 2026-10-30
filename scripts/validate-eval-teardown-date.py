@@ -45,22 +45,34 @@ def _today(today_override: str | None) -> datetime.date:
     return datetime.date.today()
 
 
-def check_values(doc: dict, today: datetime.date) -> str | None:
-    """Return an error message, or None if the sandbox's teardown state is OK."""
-    otel = doc.get("otelCollector") if isinstance(doc, dict) else None
-    eval_block = otel.get("eval") if isinstance(otel, dict) else None
-    if not isinstance(eval_block, dict):
-        # No eval block at all -- nothing to enforce.
-        return None
+# (enabled-path, teardownAfter-path) pairs, each a tuple of keys into the
+# bootstrap values. The first is the issue-903 trace sandbox, the second the
+# issue-2245 log-backend sandbox.
+SANDBOXES = [
+    (("otelCollector", "eval", "enabled"), ("otelCollector", "eval", "teardownAfter")),
+    (("logsEval", "enabled"), ("logsEval", "teardownAfter")),
+]
 
-    if eval_block.get("enabled") is not True:
+
+def _get(doc, path):
+    for key in path:
+        if not isinstance(doc, dict):
+            return None
+        doc = doc.get(key)
+    return doc
+
+
+def _check_one(doc: dict, enabled_path: tuple, teardown_path: tuple, today: datetime.date) -> str | None:
+    name = ".".join(enabled_path)
+    key = ".".join(teardown_path)
+    if _get(doc, enabled_path) is not True:
         # Sandbox closed: teardownAfter is free to be anything, including "".
         return None
 
-    teardown_after = eval_block.get("teardownAfter")
+    teardown_after = _get(doc, teardown_path)
     if not teardown_after:
         return (
-            "otelCollector.eval.enabled is true but teardownAfter is empty -- "
+            f"{name} is true but teardownAfter is empty -- "
             "set it to a YYYY-MM-DD date at most 14 days out in the same commit "
             "that opens the sandbox"
         )
@@ -68,23 +80,20 @@ def check_values(doc: dict, today: datetime.date) -> str | None:
     try:
         teardown_date = datetime.date.fromisoformat(str(teardown_after))
     except ValueError:
-        return (
-            f"otelCollector.eval.teardownAfter={teardown_after!r} is not a "
-            "YYYY-MM-DD date"
-        )
+        return f"{key}={teardown_after!r} is not a YYYY-MM-DD date"
 
     if teardown_date < today:
         return (
-            f"otelCollector.eval.teardownAfter={teardown_after} has passed "
-            f"(today is {today.isoformat()}) while otelCollector.eval.enabled "
-            "is still true -- run the one-commit teardown documented in "
-            "docs/runbooks/tracing-bake-off.md"
+            f"{key}={teardown_after} has passed "
+            f"(today is {today.isoformat()}) while {name} is still true -- "
+            "run the one-commit teardown documented in the sandbox's runbook "
+            "(docs/runbooks/tracing-bake-off.md or docs/runbooks/log-backend-bake-off.md)"
         )
 
     max_date = today + datetime.timedelta(days=MAX_WINDOW_DAYS)
     if teardown_date > max_date:
         return (
-            f"otelCollector.eval.teardownAfter={teardown_after} is more than "
+            f"{key}={teardown_after} is more than "
             f"{MAX_WINDOW_DAYS} days out from today ({today.isoformat()}) -- "
             "the sandbox window is capped at 14 days"
         )
@@ -92,8 +101,23 @@ def check_values(doc: dict, today: datetime.date) -> str | None:
     return None
 
 
+def check_values(doc: dict, today: datetime.date) -> str | None:
+    """Return an error message, or None if every sandbox's teardown state is OK."""
+    if not isinstance(doc, dict):
+        return None
+    for enabled_path, teardown_path in SANDBOXES:
+        err = _check_one(doc, enabled_path, teardown_path, today)
+        if err:
+            return err
+    return None
+
+
 def _values(enabled: bool, teardown_after: str) -> dict:
     return {"otelCollector": {"eval": {"enabled": enabled, "teardownAfter": teardown_after}}}
+
+
+def _logs_values(enabled: bool, teardown_after: str) -> dict:
+    return {"logsEval": {"enabled": enabled, "teardownAfter": teardown_after}}
 
 
 def selftest() -> int:
@@ -106,6 +130,11 @@ def selftest() -> int:
         ("enabled + empty teardownAfter fails", _values(True, ""), False),
         ("enabled + yesterday fails", _values(True, (today - datetime.timedelta(days=1)).isoformat()), False),
         ("enabled + 30 days out fails (>14d bound)", _values(True, (today + datetime.timedelta(days=30)).isoformat()), False),
+        ("logsEval disabled + empty teardownAfter passes", _logs_values(False, ""), True),
+        ("logsEval enabled + 7 days out passes", _logs_values(True, (today + datetime.timedelta(days=7)).isoformat()), True),
+        ("logsEval enabled + empty teardownAfter fails", _logs_values(True, ""), False),
+        ("logsEval enabled + yesterday fails", _logs_values(True, (today - datetime.timedelta(days=1)).isoformat()), False),
+        ("logsEval enabled + 30 days out fails (>14d bound)", _logs_values(True, (today + datetime.timedelta(days=30)).isoformat()), False),
     ]
 
     ok = True
@@ -156,7 +185,7 @@ def main(argv: list[str]) -> int:
         print(f"::error::{err}", file=sys.stderr)
         return 1
 
-    print("OK: observability-eval sandbox teardown date is within policy (or the sandbox is closed)")
+    print("OK: eval sandbox teardown dates are within policy (or the sandbox is closed)")
     return 0
 
 

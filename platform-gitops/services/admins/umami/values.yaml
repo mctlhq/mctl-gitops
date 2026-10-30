@@ -1,0 +1,238 @@
+# Service: umami
+# Team: admins
+
+# Chart: base-service
+
+# Self-hosted, cookieless web analytics for mctl.ai, tg.mctl.ai and
+# docs.mctl.ai. The upstream image, not a build of ours, so nothing bumps it
+# automatically: the tag is moved here by hand, and the digest pins exactly
+# the image that was tested.
+image:
+  repository: ghcr.io/umami-software/umami
+  tag: "3.4.0@sha256:85909afc45bdcda1917394594a087421fdbb05610fded0fa9f6fb861abb2f367"
+service:
+  port: 3000
+backstage:
+  kubernetesId: umami
+# The image runs as nextjs (uid 1001) in group nogroup (gid 65533). Pinned
+# here so kubelet and the deploy-time image-user check can verify
+# runAsNonRoot without reading the image; the rest comes from the chart's
+# defaults (non-root, read-only root, drop ALL). Umami writes nothing to disk
+# at run time, so /tmp from the chart's writablePaths is enough.
+# See https://docs.mctl.ai/guides/scaffolding#container-requirements
+containerSecurityContext:
+  runAsUser: 1001
+  runAsGroup: 65533
+resources:
+  # Measured locally: ~305Mi steady state. The request sits above that so the
+  # pod is not first in line for eviction under node memory pressure.
+  requests:
+    cpu: 50m
+    memory: 384Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+probes:
+  # Every start runs `prisma migrate deploy` before the server listens, and
+  # the first one applies the whole schema. The startup probe gives that up to
+  # five minutes (30 x 10s) before liveness takes over.
+  startup:
+    path: /api/heartbeat
+    port: http
+    periodSeconds: 10
+    failureThreshold: 30
+  liveness:
+    path: /api/heartbeat
+    port: http
+    initialDelaySeconds: 0
+    periodSeconds: 15
+  readiness:
+    path: /api/heartbeat
+    port: http
+    initialDelaySeconds: 0
+    periodSeconds: 10
+env:
+  # Next.js standalone binds to $HOSTNAME, which Kubernetes sets to the pod
+  # name; pin the wildcard address the image itself defaults to.
+  HOSTNAME: "0.0.0.0"
+  PORT: "3000"
+  # The tracker is served as /insights.js instead of /script.js, which
+  # content blockers match by name.
+  TRACKER_SCRIPT_NAME: insights.js
+  # Every request arrives through Cloudflare (origin mTLS), which sets this
+  # header to the real client address; X-Forwarded-For would be Traefik's.
+  CLIENT_IP_HEADER: cf-connecting-ip
+  DISABLE_UPDATES: "1"
+  DISABLE_TELEMETRY: "1"
+  # COLLECT_API_ENDPOINT must stay unset: applying it makes Umami write to its
+  # own files at start, which crashes with EROFS on the read-only root.
+  # /api/send is the default and is what the public ingress below routes.
+ingress:
+  enabled: true
+  # stats.mctl.ai is the public host. admins-umami.mctl.ai is the canonical
+  # <tenant>-<service> host that Backstage's forward-auth accepts without
+  # registration (resolveForwardAuthHost in mctl-portal's oidc-provider
+  # router). stats.mctl.ai is an alias, so it is listed in
+  # bootstrap/templates/mctl-platform/mctl-portal.yaml
+  # (oidcProvider.forwardAuth.hosts); an unlisted alias gets 403.
+  hosts:
+    - stats.mctl.ai
+    - admins-umami.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: umami-tls
+      hosts:
+        - stats.mctl.ai
+        - admins-umami.mctl.ai
+  # The dashboard, its API and the login page sit behind the platform's
+  # Backstage forward-auth, for members of the admins tenant only. Umami's
+  # own login stays on behind it.
+  forwardAuth:
+    enabled: true
+    address: "http://backstage.backstage.svc.cluster.local:7007/api/oidc-provider/forward-auth?tenant=admins&service=umami"
+    trustForwardHeader: false
+# The only two paths the tracked sites need from the internet: the tracker
+# script and the collection endpoint it posts to. Exact paths, no
+# forward-auth, on stats.mctl.ai only; every other path still goes through
+# forward-auth. Which router wins is a security boundary here, so it is
+# pinned with router.priority instead of left to Traefik's default
+# rule-length ordering, under which a longer rule added later on this host
+# could silently take these paths (or the reverse).
+# No cert-manager annotation here: the certificate is issued once, for the
+# ingress above, and these reuse its secret.
+extraIngresses:
+  - name: admins-umami-tracker
+    annotations:
+      traefik.ingress.kubernetes.io/router.priority: "1000"
+    hosts:
+      - stats.mctl.ai
+    path: /insights.js
+    pathType: Exact
+    tls:
+      - secretName: umami-tls
+        hosts:
+          - stats.mctl.ai
+  - name: admins-umami-collect
+    annotations:
+      traefik.ingress.kubernetes.io/router.priority: "1000"
+    hosts:
+      - stats.mctl.ai
+    path: /api/send
+    pathType: Exact
+    tls:
+      - secretName: umami-tls
+        hosts:
+          - stats.mctl.ai
+# APP_SECRET signs Umami's login tokens; rotating it signs everyone out.
+externalSecret:
+  targetSecret: umami-secrets
+  data:
+    - secretKey: APP_SECRET
+      remoteKey: teams/admins/umami
+      property: APP_SECRET
+envFrom:
+  # One list: a second `envFrom:` key would replace this one (gitops#1102).
+  - secretRef:
+      name: umami-secrets
+  # DATABASE_URL, assembled by the chart from teams/admins/umami/database
+  # (shared-pg role and database admins-umami, gitops#1986).
+  - secretRef:
+      name: admins-umami-db-creds
+extraContainers: []
+# Retention: the privacy pages of mctl.ai and tg.mctl.ai promise that visitor
+# records are deleted after 2 years. Umami has no TTL of its own, so this Job
+# deletes them daily. The schema uses Prisma relationMode "prisma" (no foreign
+# keys), so the order of the DELETEs does not matter; a session goes only once
+# no event still points at it. The final check fails the Job when anything past
+# the cut-off survived, NULL created_at included, so a schema change that adds
+# rows the DELETEs miss shows up as a failed Job instead of silent retention.
+# Saved reports, segments, boards, links, pixels and saved replays are
+# configuration, not visitor records, and are left alone.
+extraObjects:
+  - apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: admins-umami-retention
+      labels:
+        app.kubernetes.io/name: umami
+        mctl.me/component: retention
+    spec:
+      schedule: "23 4 * * *"
+      concurrencyPolicy: Forbid
+      startingDeadlineSeconds: 3600
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      jobTemplate:
+        spec:
+          backoffLimit: 2
+          # Generous: the first runs after a backlog may delete many rows in
+          # one transaction; a daily run normally takes seconds.
+          activeDeadlineSeconds: 3600
+          ttlSecondsAfterFinished: 86400
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: umami
+                mctl.me/component: retention
+            spec:
+              restartPolicy: OnFailure
+              # Restricted-compliant: the image's own postgres user (uid 70),
+              # read-only root; psql needs no writable path.
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 70
+                runAsGroup: 70
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: retention
+                  image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+                  resources:
+                    requests: {cpu: 10m, memory: 32Mi}
+                    limits: {cpu: 200m, memory: 128Mi}
+                  command: ["sh", "-c"]
+                  # Kubernetes rewrites "$$" to "$" in args (its $(VAR) escape), so a
+                  # bare $$ dollar quote reaches psql as "$" and the DO block fails.
+                  # Use a named tag instead.
+                  args:
+                    - |
+                      set -e
+                      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+                      BEGIN;
+                      DELETE FROM website_event  WHERE created_at < now() - interval '2 years';
+                      DELETE FROM event_data     WHERE created_at < now() - interval '2 years';
+                      DELETE FROM session_data   WHERE created_at < now() - interval '2 years';
+                      DELETE FROM revenue        WHERE created_at < now() - interval '2 years';
+                      DELETE FROM session_replay WHERE created_at < now() - interval '2 years';
+                      DELETE FROM heatmap_event  WHERE created_at < now() - interval '2 years';
+                      DELETE FROM session_link   WHERE created_at < now() - interval '2 years';
+                      DELETE FROM session s
+                       WHERE s.created_at < now() - interval '2 years'
+                         AND NOT EXISTS (SELECT 1 FROM website_event e WHERE e.session_id = s.session_id);
+                      DO $check$
+                      DECLARE t text; n bigint;
+                      BEGIN
+                        FOREACH t IN ARRAY ARRAY['website_event','event_data','session_data','revenue',
+                                                 'session_replay','heatmap_event','session_link']
+                        LOOP
+                          EXECUTE format('SELECT count(*) FROM %I WHERE created_at IS NULL OR created_at < now() - interval ''2 years''', t) INTO n;
+                          IF n > 0 THEN RAISE EXCEPTION '% rows in % are past retention or have no created_at', n, t; END IF;
+                        END LOOP;
+                      END $check$;
+                      COMMIT;
+                      SQL
+                  env:
+                    - name: DATABASE_URL
+                      valueFrom:
+                        secretKeyRef:
+                          name: admins-umami-db-creds
+                          key: DATABASE_URL
+dbSecret:
+  vaultPath: "teams/admins/umami/database"
+  secretName: "admins-umami-db-creds"

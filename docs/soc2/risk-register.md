@@ -21,6 +21,7 @@ Scale: High / Medium / Low for inherent and residual.
 | R11 | Incident pipeline suspended | CC7 | High | Unsuspend; last tick 2026-08-17T06:15Z `suspend=false` | Low | Closed as designed |
 | R12 | PSS still baseline | CC6 | Low | audit/warn restricted; step 2 after 29.08 not done (F18) | Low | Accepted Horizon 3 — re-checked 2026-09-04, still `enforce=baseline` |
 | R13 | Fraud / payment abuse | CC3 | Low | No platform payments; see fraud-memo.md | Low | Accepted |
+| R14 | Data-layer components on unsupported releases (CNPG, PostgreSQL, Vault, Loki/Promtail) | CC7/A1 | High | Upgrade plan in gitops#2014: PostgreSQL 17.11 first (gitops#2015), then CNPG one minor at a time with the Barman Cloud Plugin before 1.31, Vault, Loki 3 / Alloy; restore drill before each step | Medium | Open 2026-10-19 — owner: founder; review 2027-01-19 |
 
 Do not add DCR-token, docs CSP, or a second CP as "Type I blockers". They are
 product or Horizon 2/3.

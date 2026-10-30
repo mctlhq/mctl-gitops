@@ -5,13 +5,24 @@
 
 image:
   repository: ghcr.io/mctlhq/portfolio
-  tag: "0.1.44"
+  tag: "0.1.52"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 80
+  # nginx-unprivileged listens on 8080. The Service and Ingress stay on 80
+  # and reach it through the named targetPort; changing port itself on a
+  # live Service fails to apply (gitops#1933).
+  containerPort: 8080
 backstage:
   kubernetesId: portfolio
+# nginx-unprivileged runs as uid/gid 101. Pinned here so kubelet and the
+# deploy-time image-user check can verify runAsNonRoot without reading the
+# image; the rest comes from the chart's step-2 defaults, including the /tmp
+# emptyDir that nginx writes its pid file and temp directories into.
+containerSecurityContext:
+  runAsUser: 101
+  runAsGroup: 101
 resources:
   requests:
     cpu: 200m

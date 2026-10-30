@@ -42,7 +42,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.80.1"
+            tag: "4.141.0"
 
           ingress:
             enabled: true
@@ -59,22 +59,74 @@ spec:
             # stores once at startup and keeps a failed one nil (503) until
             # the pod restarts (mctlhq/mctl-api#387); the chart has no pod
             # annotation hook, so changing this value is how gitops restarts
-            # the pod. Last bumped 2026-09-30: load the usage price card
-            # with the claude-opus-5-5 and claude-sonnet-5-5 entries (the
-            # catalog is read once at startup, see
-            # bootstrap/files/usage-pricing/README.md).
-            ROLLOUT_MARKER: "2026-09-30-pricing-5-5-models"
+            # the pod. envFrom and startup-only files are read at container
+            # start, so when a rollout depends on generated configuration
+            # (for example zitadel-iac output), bump only after it is applied.
+            # The line below records why the current value was set.
+            # This rollout loads OAUTH_JWT_SIGNING_KEYS, which #2171 mapped
+            # into mctl-api-secrets (step C0 of mctlhq/mctl-api#805); envFrom
+            # is read only at container start.
+            ROLLOUT_MARKER: "2026-10-26-jwt-signing-keys"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
             ADMIN_USERS: mashkovd
+            # Tenant authorization by canonical principal (mctlhq/mctl-api#377).
+            # `principal`: every tenant and admin decision is made from
+            # members[].principalId and ADMIN_PRINCIPALS; a GitHub login
+            # grants nothing on its own. The owner approved an early switch
+            # on 2026-10-17; evidence and remaining live checks: PR #1873.
+            # Rollback: set back to "shadow" (login decides again, the
+            # principal path is still compared and counted).
+            TENANT_AUTHZ_MODE: "principal"
+            # Platform admins by principal (mctlhq/mctl-api#377). Decides
+            # admin in `principal` mode; ADMIN_USERS above only matters on
+            # a rollback to shadow/legacy. A malformed id refuses startup.
+            ADMIN_PRINCIPALS: prn_01M39HRB7JRXZ2PHW5VVB695YZ
+            # DevLoop approval relay (mctlhq/mctl-api#571, mctl-agents#636).
+            # `false` closes the free-text approver relay: a service call to
+            # mctl-agents-approve naming a different approver gets 400
+            # legacy_approver_disabled instead of approver.legacy_relay, and
+            # a DevLoop approve with no aar_ grant gets 409
+            # approval_grant_missing. Safe since mctl-agents 1.76.0, whose
+            # DevLoops request a grant first; the pre-1.76.0 loops parked at
+            # approval were abandoned on 2026-10-16. "true"/"false" only;
+            # anything else refuses startup. Rollback: remove this line
+            # (empty = on).
+            MCTL_AGENTS_APPROVE_LEGACY_APPROVER: "false"
+            # Agent receipt gate (mctlhq/mctl-api#723), enforce stage
+            # (mctlhq/mctl-gitops#1980). A governed MCP call from the direct
+            # service:mctl-agent principal must carry a valid action approval
+            # receipt; without one it is refused, and a valid receipt is spent
+            # (one receipt, one call). Observe ran from 2026-10-20 20:57Z to
+            # 2026-10-23 and saw zero governed calls from that principal: its
+            # MCP traffic is reads, so enforce refuses only calls that bypass
+            # the policy checkpoint (the Bash / MCTL_TOKEN path). v1 binds an
+            # approval to principal + tool + one use, not to the exact
+            # arguments. Agent principals (run tokens, mctlhq/mctl-agents#737)
+            # are not gated here; their token scope limits them instead.
+            # Rollback: set "observe" (audit only), or remove the line (off).
+            MCTL_AGENT_RECEIPT_GATE: "enforce"
             AUTH_REQUIRED: "true"
             BACKSTAGE_URL: https://app.mctl.ai
+            # Explicit full-account deletion remains direct-human-admin only.
+            # Requires the API/portal cleanup endpoints, Worker revocation pins
+            # and the staged delete-tenant-safe workflow. Disable this flag to
+            # stop new requests; durable existing tombstones remain effective.
+            CUSTOMER_DELETION_ENABLED: "true"
             # No DEX_ISSUER_URL: since mctl-api 4.72.0 (mctlhq/mctl-api#521)
             # an unset issuer turns the Dex verifier and its /readyz check
             # off. Human sign-in is ZITADEL; Dex is gone (mctlhq/mctl-gitops#1500
             # phase 4).
             SELF_URL: https://api.mctl.ai
+            # Tenant support agent tools mctl_ask_support / mctl_get_support_task
+            # (mctlhq/mctl-api#814, mctlhq/.github#243). mctl-api forwards the
+            # caller's own bearer to the support agent's A2A endpoint; it holds
+            # no credential of its own for it. Unset = both tools answer "not
+            # configured". The ask wait defaults to 60s (SUPPORT_ASK_WAIT,
+            # 5s-90s) and POST /mcp gets that wait + 15s as its request and
+            # write deadline. Rollback: delete this line.
+            SUPPORT_A2A_URL: https://support.mctl.ai
             # GitHub Actions OIDC for CI deploys (mctlhq/mctl-api#530): a CI
             # job's own OIDC token may deploy a new tag of the component whose
             # catalog-info.yaml github.com/source-repo is that job's
@@ -169,6 +221,57 @@ spec:
             # ZITADEL identity maps to the linked GitHub login.
             # Rollback: set this back to `both`.
             OAUTH_UPSTREAM: "zitadel"
+            # Client ID Metadata Documents (mctlhq/mctl-api#375, rollout plan
+            # mctlhq/mctl-api#693). ACCEPT resolves an https:// client_id from
+            # the document at that URL and shows a consent page; ADVERTISE
+            # announces client_id_metadata_document_supported in discovery, and
+            # clients that prefer CIMD (ChatGPT, Codex, Claude, VS Code) switch
+            # to it with no DCR fallback. So the allowlist names every
+            # CIMD-capable client in use, exact hosts only: chatgpt.com covers
+            # ChatGPT and Codex. A client off the list gets 400 on its next
+            # authorization; existing sessions keep refreshing either way.
+            # Proven end to end with ChatGPT (private_key_jwt, refresh) on
+            # 2026-10-18 against a local 4.105.0. When enabled, no live session
+            # used a URL-shaped client_id.
+            # Rollback: set ADVERTISE to "false" (clients go back to DCR on
+            # their next sign-in), or remove all three lines.
+            OAUTH_CIMD_ACCEPT: "true"
+            OAUTH_CIMD_ADVERTISE: "true"
+            OAUTH_CIMD_ALLOWED_HOSTS: "chatgpt.com,claude.ai,vscode.dev"
+            # Access-token audience, step B of mctlhq/mctl-api#805 (runbook
+            # docs/access-token-signing.md). Since 4.125.0 every minted token
+            # carries `aud` and a foreign `aud` is refused; aud-less HS256
+            # tokens were still accepted and counted in
+            # oauth_jwt_audless_accepted_total. That counter stayed flat for
+            # more than one token TTL, so the grace ends here.
+            # Rollback: delete this line.
+            OAUTH_JWT_REQUIRE_AUD: "true"
+            # Access-token signing algorithm, step C of mctlhq/mctl-api#805.
+            # New tokens are signed EdDSA with the active key of
+            # OAUTH_JWT_SIGNING_KEYS (mapped in mctl-api-secrets, kid
+            # 2026-10a, public half at /.well-known/jwks.json).
+            # Rollback: first delete OAUTH_JWT_ACCEPT_HS256 below (mctl-api
+            # refuses to boot with HS256 signing while HS256 is refused), then
+            # this line; EdDSA tokens already issued keep verifying because
+            # the key stays in the key set.
+            OAUTH_JWT_SIGNING_ALG: "EdDSA"
+            # Step D of mctlhq/mctl-api#805: refuse every HS256 access token
+            # before any HMAC. Taken after HS256 ok verifications stayed flat
+            # from 20:17Z on 2026-10-26 for over one TTL (1h), while EdDSA ok
+            # kept rising. A client still holding an HS256 token gets 401 and
+            # refreshes into an EdDSA one. OAUTH_JWT_SECRET stays required:
+            # refresh-token derivation still uses it.
+            # Rollback: delete this line (back to the default, true).
+            OAUTH_JWT_ACCEPT_HS256: "false"
+            # GitHub numeric ids allowed to create a NEW account in the ZITADEL
+            # org customers (identity hook, mctlhq/mctl-web#158). Unset creates
+            # nobody; exactly "*" opens creation to anyone (the public cutover,
+            # not decided). Existing customers accounts sign in regardless.
+            # Ids only, never names: this repository is public. Must be live
+            # BEFORE the mctl-api release with the gate; older releases ignore
+            # it. A malformed value refuses startup. Read at start: adding an
+            # id restarts the pod through this env change.
+            ZITADEL_HOOK_CUSTOMER_CREATE_GITHUB_IDS: "268260640,334465501,47027422"
             # Browser origins permitted by CORS. Distinct from the redirect URIs
             # above: those govern where the OAuth dance may hand a code back,
             # this governs which page may read an authenticated API response.
@@ -189,6 +292,13 @@ spec:
             GIT_CONFIG_KEY_0: "safe.directory"
             GIT_CONFIG_VALUE_0: "*"
             LOKI_URL: "http://loki-stack.monitoring.svc.cluster.local:3100"
+            # Agent run token exchange (mctlhq/mctl-agents#737): the audience
+            # an agent pod's projected ServiceAccount token must carry for
+            # POST /api/v1/agent-run-tokens/exchange. Unset disables the route
+            # (503). Must match the projected volume in
+            # cwft-mctl-agents-investigate.yaml. Needs the pods/get and
+            # tokenreviews/create grants in mctl-api-rbac.yaml.
+            AGENT_RUN_EXCHANGE_AUDIENCE: "mctl-api-agent-run"
             # Argo Workflows step-log archive, backing mctl_get_workflow_logs.
             # Distinct from LOKI_URL above: promtail feeds Loki from long-lived
             # service pods under the ArgoCD naming convention, so Loki can never
@@ -257,6 +367,22 @@ spec:
           # missing key cannot take DB_PASSWORD down with it
           # (mctl-api-secrets.yaml).
           envFromExtraSecret: mctl-api-events
+          # Identity hook config for mctl-web onboarding (mctlhq/mctl-api#633,
+          # docs/zitadel-identity-hook.md): ZITADEL_HOOK_* and the three
+          # target signing keys, written by zitadel-iac once it creates the
+          # targets (helm-charts/zitadel-iac/iac/customers.tf). Optional: the
+          # pod starts without it and the hook routes answer 503. envFrom is
+          # read at container start, so bump ROLLOUT_MARKER after zitadel-iac
+          # first writes the Secret, and after each key rotation
+          # (docs/runbooks/zitadel.md). Needs the chart slot from
+          # mctlhq/mctl-api#635; an older chart ignores the value.
+          # The hook needs mctl-api 4.89.0 or later; phase 0 validated
+          # 4.89.0 as released against a local ZITADEL v4.19.2.
+          envFromOptionalSecrets:
+            - mctl-api-zitadel-hook
+            {{- if (default dict .Values.securityCodeScanning).receiver }}
+            - mctl-api-security-code-scanning
+            {{- end }}
 
           # The GitHub App installation token, mounted as a FILE. mctl-api
           # reads GITHUB_APP_TOKEN_FILE per use (internal/ghtoken), which is
@@ -348,6 +474,16 @@ spec:
           # the principal disabled instead of failing the pod.
           registryPublisherTokenSecret: mctl-api-registry-publisher
           {{- end }}
+          {{- if (default dict .Values.supportIncidentProducer).enabled }}
+
+          # The support-incident-producer token (mctlhq/mctl-api#830), from
+          # the mctl-api-support-incident-producer ExternalSecret. Gated with
+          # it on supportIncidentProducer.enabled in bootstrap/values.yaml;
+          # the chart's reference is optional, so a Secret that has not
+          # synced yet leaves the principal disabled instead of failing the
+          # pod.
+          supportIncidentProducerTokenSecret: mctl-api-support-incident-producer
+          {{- end }}
           {{- if (default dict .Values.surfaceTelegramToken).enabled }}
 
           # The surface:telegram bearer token (mctlhq/mctl-telegram#443), from
@@ -374,6 +510,44 @@ spec:
           # optional repoBindingTokenSecret; until it lands the chart ignores the
           # unknown key.
           repoBindingTokenSecret: mctl-api-repo-binding
+          {{- end }}
+          {{- if (default dict .Values.securityCodeScanning).receiver }}
+
+          # GitHub Code Scanning -> SecurityFinding receiver
+          # (mctlhq/mctl-gitops#2168, mctl-api >= 4.125.0,
+          # docs/runbooks/security-finding-ingestion.md). Gated on
+          # securityCodeScanning.receiver in bootstrap/values.yaml, which
+          # must only be set after the mctl-api-security-code-scanning Secret
+          # has synced: envFrom is read at container start, and a pod that
+          # starts first keeps the receiver disabled until the next restart.
+          #
+          # max_strength provider_claim: a webhook only claims. A `fixed`
+          # alert must never resolve an occurrence; verification stays with
+          # the #809 consumer.
+          # The tenant comes from this config (repository -> tenant), never
+          # from payload text.
+          # securityProviderTokensSecret is deliberately unset: the receiver
+          # writes in-process, and a token would open
+          # POST /api/v1/security/observations to a second credential.
+          # No SECURITY_FINDINGS_DB_URL: the store falls back to AUDIT_DB_URL
+          # (database mctl-api).
+          # Rollback: set securityCodeScanning.receiver to false (the route
+          # then answers 503), or deactivate the repository webhook.
+          securityProviders:
+            - ref: github-code-scanning
+              max_strength: provider_claim
+              tenants: [admins]
+          securityCodeScanning:
+            repositories:
+              mctlhq/mctl-api: admins
+            tools: [Trivy]
+            actions:
+              - created
+              - appeared_in_branch
+              - reopened
+              - reopened_by_user
+              - fixed
+              - closed_by_user
           {{- end }}
 
           resources:
@@ -402,6 +576,12 @@ spec:
     # (infra-components/mctl-platform/mctl-api/oidc-zitadel.yaml).
     - kind: Secret
       name: mctl-api-oidc-zitadel
+      jsonPointers:
+        - /data
+    # Written by the zitadel-iac Job (customers.tf): the identity hook's
+    # configuration (infra-components/mctl-platform/mctl-api/zitadel-hook.yaml).
+    - kind: Secret
+      name: mctl-api-zitadel-hook
       jsonPointers:
         - /data
     # ESO admission webhook injects defaults absent in git, plus legacy

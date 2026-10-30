@@ -5,26 +5,63 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-alice
-  tag: "2.2.0"
+  tag: "2.2.14"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 8080
+# /metrics on its own port (mctlhq/mctl-alice#93): the Service gets a
+# `metrics` port that no Ingress routes to, so it is reachable only inside
+# the cluster; the app port answers 404 for /metrics. Scraped by the native
+# VMServiceScrape in bootstrap/templates/mctl-platform/mctl-alice-monitor.yaml,
+# hence serviceMonitor: false.
+metrics:
+  enabled: true
+  port: 9464
+  serviceMonitor: false
 backstage:
   kubernetesId: mctl-alice
 replicaCount: 1
+# Explicit on purpose. The live Deployment still had `Recreate`, left by a
+# manual `kubectl patch` on 2026-09-20 and owned by that field manager, so
+# an empty `strategy` here never reached it under server-side apply. Recreate
+# was needed only while the pod held a ReadWriteOnce PVC; storage moved to
+# shared Postgres (CNPG), so a rolling update is safe and avoids the gap.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+# Non-root on a read-only root filesystem (base-service hardening, step 2).
+# runAsNonRoot is checked by kubelet against a numeric user only, so the
+# ids this image already runs as are pinned (observed 2026-10-16); the
+# chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
 resources:
   requests:
     cpu: 50m
-    memory: 128Mi
+    memory: 192Mi
   limits:
     cpu: 250m
-    memory: 256Mi
+    memory: 384Mi
 env:
   PORT: "8080"
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai
   AUTH_REQUIRED: "true"
+  # Starts the separate /metrics listener (mctlhq/mctl-alice#93); keep in
+  # sync with metrics.port above. Ignored by images without it.
+  METRICS_PORT: "9464"
+  # Rate-limit key for anonymous clients (mctl-alice >= 2.2.9). Traefik
+  # rewrites X-Forwarded-For to the Cloudflare edge address, so the client is
+  # only visible in CF-Connecting-IP, which Cloudflare overwrites on every
+  # request; the websecure allowlist admits only Cloudflare addresses.
+  CLIENT_IP_HEADER: cf-connecting-ip
 probes:
   startup:
     path: /healthz
@@ -33,7 +70,7 @@ probes:
     periodSeconds: 5
     failureThreshold: 24
   readiness:
-    path: /healthz
+    path: /readyz
     port: http
     initialDelaySeconds: 5
     periodSeconds: 5

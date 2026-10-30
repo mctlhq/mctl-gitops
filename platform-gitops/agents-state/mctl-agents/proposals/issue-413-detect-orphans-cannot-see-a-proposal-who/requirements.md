@@ -1,122 +1,68 @@
-# Report proposals whose execution never started, not only orphans that have a PR
+# Report approved proposals whose execution never started, alongside PR orphans
 
 ## Context
 
-`orchestrator/temporal/activities/orphans.py` defines an orphan as "an actionable
-proposal with a valid GitHub PR that has no matching DevLoopWorkflow running in
-Temporal", and both detection paths enforce the PR requirement with the same
-early `continue` (`_sync_detect_orphans`, orphans.py:57-60, and
-`_detect_from_github`, orphans.py:108-110). `accepted` is in `ACTIONABLE_STATUSES`
-(orphans.py:25), so an approved proposal that no implementer ever claimed does
-reach the loop — and is then dropped, because `find_pr_for_proposal` /
-`fetch_pr_snapshots` return nothing for a proposal that has no `pr:` and no
-implementer branch. The sweep therefore covers "execution started and then died"
-and is structurally unable to report "execution never started".
+`detect_orphans` (`orchestrator/temporal/activities/orphans.py`) only reports a
+proposal when it has a PR that is still open and no live DevLoopWorkflow. Both
+of its code paths (`_sync_detect_orphans` and `_detect_from_github`) `continue`
+on `pr is None`. So an `accepted` / `in-progress` proposal that was approved
+and never claimed by an implementer, which therefore has no PR, no `attempt:`
+block and no live loop, never becomes an `OrphanSignal`. On 2026-09-19 three
+approved proposals (`mctl-api#335`, `mctl-gitops#1278`, `mctlhq/.github#99`)
+sat in exactly that state for over two hours. Reconcile reported clean the
+whole time. Someone found it only by reading `.status.yaml` by hand.
 
-On 2026-09-19 `mctl-api#335`, `mctl-gitops#1278` and `mctlhq/.github#99` sat at
-`accepted` with no `attempt:` block for over two hours (#412). Every reconcile
-tick reported clean, no signal fired, and the condition was found only by reading
-`.status.yaml` by hand. Orphan detection is the only thing in the platform that
-looks for work that is not progressing, and today it can only see the half of
-that problem that already opened a pull request. This proposal adds the missing
-half as a second, separately named signal so a consumer can tell "died" from
-"never started".
+mctl-agents#412 has since added `ImplementSweepWorkflow` and
+`find_stranded_accepted` (`orchestrator/temporal/activities/stranded.py`),
+which re-submit such proposals. That fixes the recovery half. If the sweep
+itself regresses, is paused (its documented rollback), or keeps failing for
+one proposal, the condition is silent again, because the reconcile result
+still has no field for it. This proposal adds a second, separately named
+signal to the orphan detection result: "approved, never started". It reports
+proposals that are stuck past an age threshold, so the window between a
+normal approval and its claim never trips the check. The existing PR-based
+orphan signal stays as it is.
 
 ## User stories
 
-- AS a platform operator I WANT the reconcile sweep to report proposals that were
-  approved but never picked up SO THAT a regression in the approve-to-implement
-  path is visible within one tick instead of being found by hand hours later.
-- AS an on-call engineer I WANT "execution never started" and "execution died
-  mid-flight" to carry distinct, stable reason slugs SO THAT an alert or a
-  log-derived metric can route and count them separately.
-- AS a maintainer of `ReconcileWorkflow` I WANT the new signal delivered without
-  scheduling a new activity command SO THAT in-flight executions replay cleanly
-  and no `*.prepatch.json` history has to be re-recorded.
-- AS an operator of a freshly approved proposal I WANT a grace window before a
-  proposal is called stalled SO THAT the normal gap between approval and claim
-  does not produce a signal on every tick.
+- AS a platform operator I WANT the reconcile tick to report approved proposals that no implementer ever picked up SO THAT a broken promotion or sweep path shows up in the durable result and in the logs instead of being found by hand.
+- AS an alert or dashboard author I WANT "never started" and "died mid-flight" to have different reason strings and different result fields SO THAT I can route and phrase them differently.
+- AS an operator triaging legacy records I WANT the 69+ unapproved legacy `incident-*` proposals kept out of the new signal SO THAT it is not drowned in records that already have their own quarantine report.
 
 ## Acceptance criteria (EARS)
 
-- WHEN `detect_orphans` runs with a known active DevLoopWorkflow set and finds a
-  proposal whose status is in `{accepted, in-progress}`, that has no open,
-  merged or closed PR, that has no matching active DevLoopWorkflow ID, that has
-  no unexpired `attempt:` lease, and whose last forward-progress timestamp is
-  older than the configured threshold, THE SYSTEM SHALL emit a `StalledSignal`
-  for it carrying `service`, `slug`, `status`, the timestamp used, the computed
-  age in minutes, and the reason slug `execution-never-started`.
-- WHEN `detect_orphans` emits any `StalledSignal`, THE SYSTEM SHALL log one line
-  per signal at INFO in the same loop that logs `ORPHAN` today
-  (orphans.py:154-162), prefixed `STALLED` and carrying
-  `service`, `slug`, `status`, `age_minutes` and `reason`.
-- WHEN a proposal in `{accepted, in-progress}` has no PR and no active
-  DevLoopWorkflow but carries no parseable progress timestamp at all, THE SYSTEM
-  SHALL still report it, with the reason slug
-  `execution-never-started-unknown-age` and a null age, rather than dropping it.
-- IF a proposal's last forward-progress timestamp is newer than the threshold,
-  THEN THE SYSTEM SHALL NOT emit a `StalledSignal` for it.
-- IF a proposal carries an `attempt:` block whose `expires_at` is in the future
-  and which has no `finished_at`, THEN THE SYSTEM SHALL NOT emit a
-  `StalledSignal` for it, because an implementer holds a live claim and has not
-  yet had the chance to open a PR.
-- IF `detect_orphans` is called without an active DevLoopWorkflow set (the
-  `active_workflow_ids is None` case reached by `ReconcileWorkflow`'s unpatched
-  replay branch, reconcile.py:170-175), THEN THE SYSTEM SHALL emit no
-  `StalledSignal`s, because an unknown active set cannot distinguish a stalled
-  proposal from a running one.
-- WHILE a proposal has an open PR THE SYSTEM SHALL continue to evaluate it under
-  the existing PR-based orphan predicate only, and SHALL NOT emit a
-  `StalledSignal` for it.
-- WHILE the active-DevLoop visibility query is failing and the tick sets
-  `skipped_reason` (reconcile.py:110-122) THE SYSTEM SHALL report an empty
-  stalled list, exactly as it already reports an empty orphan list.
-- WHEN `ReconcileWorkflow` completes, THE SYSTEM SHALL surface the stalled
-  signals on its result alongside the orphans, reachable from
-  `ReconcileWorkflowResult` without a new workflow-level field.
-- WHEN an `OrphanDetectionResult` recorded before this change is deserialized,
-  THE SYSTEM SHALL accept it and treat its stalled list as empty.
-- WHEN the change ships, THE SYSTEM SHALL have its new behaviour reflected in
-  `docs/adr/005-temporal-reconcile.md` (the orphan definition at lines 127-136),
-  `docs/adr/010-lifecycle-ownership-contract.md:48` (the "logged only" row), and
-  `docs/temporal-flow.md` plus `docs/diagrams/temporal-flow-schedules.mmd`.
+- WHEN `detect_orphans` runs with a known active DevLoop set THE SYSTEM SHALL return, in a new `OrphanDetectionResult.never_started` list, one `NeverStartedSignal` for every proposal that meets all of the following:
+  - its status is `accepted` or `in-progress`;
+  - it records no `pr:`;
+  - it has no unexpired `attempt.expires_at`;
+  - it is not `unrunnable` and carries no `blocked` marker;
+  - it carries an explicit execution authorization (`proposal_state.execution_authorization`);
+  - its derived `dev-loop-*` id is not in the active set;
+  - its age is at or above the never-started threshold.
+- THE SYSTEM SHALL measure a proposal's age from `approval.approved_at`, and fall back to `updated_at` only when `approved_at` is absent or unparseable.
+- IF a proposal's age is below the never-started threshold THEN THE SYSTEM SHALL NOT report it as never started.
+- IF a candidate proposal has neither a parseable `approved_at` nor a parseable `updated_at` THEN THE SYSTEM SHALL report it as never started, with `age_minutes` set to `None`. A record with no timestamp cannot prove it is fresh, so it is not suppressed.
+- THE SYSTEM SHALL read the never-started threshold from the `NEVER_STARTED_THRESHOLD_MINUTES` environment variable, defaulting to 45 minutes. The default must be larger than the implement-sweep grace period (20 minutes) plus one sweep interval (15 minutes), so a healthy sweep always gets a chance to claim a proposal before it is reported.
+- Each `NeverStartedSignal` SHALL carry service, slug, status, `approved_at` (or `None`), `age_minutes`, and the reason string `"approved, no PR, no live DevLoopWorkflow: execution never started"`. This string must differ from the existing orphan reason, `"No active DevLoopWorkflow found for open PR proposal"`.
+- WHILE the PR-based orphan predicate runs THE SYSTEM SHALL keep its current inputs, outputs and reason string unchanged.
+- THE SYSTEM SHALL count accepted/in-progress candidates that are excluded only because they lack execution authorization, and expose that count as `OrphanDetectionResult.never_started_unauthorized`, rather than listing each one.
+- IF `detect_orphans` is called without an explicit active-workflow list (`active_workflow_ids is None`, the unpatched replay branch of `ReconcileWorkflow`) THEN THE SYSTEM SHALL return an empty `never_started` list. An unknown active set must not turn every approved proposal into a false "never started" (#151).
+- IF the active-DevLoop visibility query fails THEN THE SYSTEM SHALL produce no never-started signals for that tick, and the existing `skipped_reason` SHALL cover both signals.
+- WHEN a never-started signal is produced THE SYSTEM SHALL log one WARNING line per signal, prefixed `NEVER_STARTED`, with service, slug, status, approved_at and age_minutes.
+- WHEN `ReconcileWorkflow` completes THE SYSTEM SHALL expose the never-started signals on `ReconcileWorkflowResult.orphans.never_started`.
+- WHILE results recorded before this change are deserialized THE SYSTEM SHALL accept them: every new field is defaulted.
+- THE SYSTEM SHALL produce the same never-started classification from the local-checkout path (`state_dir_path` set) as from the GitHub path, for the same inputs.
 
 ## Out of scope
 
-- Fixing the promotion gap itself. That is #412; this proposal only makes a
-  future regression in that path visible.
-- Any write, takeover, retry or recovery action. The new signal is reported and
-  logged only, the same contract the existing `OrphanSignal` has
-  (docs/adr/010-lifecycle-ownership-contract.md:48). Recovery out of
-  `needs-triage` is #300.
-- Wiring an alert, a Telegram notification or a Prometheus metric. No such
-  consumer exists for orphans today; this proposal produces the distinguishable
-  signal an alert would need, not the alert.
-- Widening the status set beyond `accepted` and `in-progress`. A proposal at
-  `implemented` or `review-fixing` with no PR is a different corruption and is
-  not addressed here.
-- Changing the existing PR-based orphan predicate, its reason string, or its log
-  line in any way.
-- Changing the lifecycle ownership sweep (`activities/lifecycle_reconcile.py`) or
-  the ADR-010 ownership records.
+- Acting on never-started proposals (re-submitting the implementer). `ImplementSweepWorkflow` already does that (#412). This proposal only reports.
+- Wiring the new signal into an Alertmanager rule, a Telegram notification or a metric. The log line and result field are the integration point. See Open questions.
+- Changing which statuses are actionable for the PR-based orphan, or changing `ADR-005`'s orphan definition beyond documenting the second signal.
+- Proposals whose `pr:` points at a PR that is foreign or returns 404. They record a PR, so they are not "never started", and their handling stays as it is today.
+- Recovery out of `needs-triage` (#300).
 
 ## Open questions
 
-- The threshold value. `MIN_AGE_MINUTES` in `run_incident_responder.py:52` is the
-  closest precedent (30 minutes, env-overridable); ADR-010 lines 208-240 require
-  a bound to exceed twice the cadence of the thing it measures. The
-  approve-to-claim cadence is the `mctl-agents-implement` cron, which lives in
-  mctl-gitops and is not readable from this repo. Proceeding with a default of
-  60 minutes, overridable via `STALLED_NEVER_STARTED_MINUTES`, which is four
-  ticks of the 15-minute reconcile schedule and well under the two hours that
-  went unnoticed in #412. An operator can tune it without a code change.
-- Which timestamp is authoritative for "last forward progress". `approval.approved_at`
-  is present on only 122 of 371 live status files and is written solely by
-  `cwft-mctl-agents-approve.yaml`, never by this repo. Proceeding with the first
-  parseable of `attempt.finished_at`, `attempt.started_at`,
-  `approval.approved_at`, `updated_at` — `updated_at` is written on every status
-  write (`orchestrator/proposal_state.py:167-168`) and is currently read by
-  nothing, so this becomes its first reader.
-- Whether the signal should eventually carry the entity identity used by ADR-010
-  ownership records so the two can be correlated. Not required by the issue;
-  recorded and deferred.
+- Alert routing: the issue says "so an alert can tell". Nothing in this repo turns a reconcile result or a worker log line into an alert today. This proposal emits a distinct WARNING log prefix and result field. A follow-up has to decide whether to build a Loki-based alert rule in mctl-gitops, a Prometheus counter, or an incident POST to mctl-api.
+- Threshold default: 45 minutes is derived from the sweep's 20-minute grace plus its 15-minute interval, plus margin. The issue gives no number, and an operator may want something tighter or looser.
+- Whether `in-progress` is still a status anything writes: no `.status.yaml` in gitops carries it today. It is included because the issue names it and `ACTIONABLE_STATUSES` contains it.

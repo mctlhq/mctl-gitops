@@ -1,0 +1,34 @@
+status: merged
+updated_at: '2026-10-18T09:55:13Z'
+updated_by: mctl-agents[bot]
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 375
+  url: https://github.com/mctlhq/mctl-api/issues/375
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-13T13:59:54Z'
+attempt:
+  id: 39cfb01ec1fd734bdcffde5a9cfbe67cba99c0c90558391fa6ebe9ec3d3dd74b
+  started_at: '2026-10-13T14:42:24Z'
+  expires_at: '2026-10-13T16:52:24Z'
+  finished_at: '2026-10-13T14:56:54Z'
+pr: https://github.com/mctlhq/mctl-api/pull/624
+execution:
+  context_id: ex-5567ba27ca8c9f02
+  trace_id: d8d0d4a5db82dd0fde1b62763c1a7189
+  agent: implementer
+  version: ''
+ci_blockers_head: b32bc188315ce12e705e753641c4fc1d40c127b1
+ci_blockers:
+- validate / lint
+notes: 'reconcile: open PR has a merge conflict'
+github:
+  state: merged
+  head_sha: 184bb35fcbc6e742ade697edbb9e52045fcb5ed2
+  observed_at: '2026-10-18T09:55:13Z'
+merged_at: '2026-10-18T09:55:13Z'
+merge_commit: abc14bbda1cfaf41b484276596afb41af18fe648

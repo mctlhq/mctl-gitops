@@ -6,6 +6,7 @@ tenant:
   displayName: "Admins"
   members:
     - userId: mashkovd
+      principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
       role: owner
   # admins already owns ghcr-credentials via the platform-level
   # mctl-agent-ghcr ExternalSecret (bootstrap/templates/mctl-platform/
@@ -26,6 +27,14 @@ tenant:
   externalSecretPatchTargets:
     - admins-mctl-agent-base-service
     - admins-mctl-agents-worker-base-service
+  # cwft-rotate-github-token runs as the central argo-workflow-sa, so the
+  # patch grant above reaches it only through this binding.
+  centralWorkflowSA:
+    smokeVerify: true
+  # Keep an initial preview budget without reserving the full production profile.
+  preview:
+    quotas:
+      requests.memory: "256Mi"
   quotas:
     # Bumped 2026-05-30: requests.cpu "1" left only ~60m headroom at
     # steady-state (940m used), so a deploy/rollback workflow pod (100m
@@ -33,7 +42,7 @@ tenant:
     # during an outage. Raised 1 -> 2 to keep ~1000m+ headroom for
     # deploy-pipeline / rollback workflow pods and rollout surges.
     requests.cpu: "2"
-    requests.memory: "3Gi"
+    requests.memory: "2Gi"
     # Bumped 2026-05-13: openclaw sidecar limit increase (s3-sync 2000m +
     # skills-fanout 300m) brings pod limits to 6300m; bumped from 7 to 8
     # to preserve 1000m+ headroom for deploy workflow pods.
@@ -50,6 +59,9 @@ tenant:
     limits.memory: "5Gi"
     pods: "12"
     persistentvolumeclaims: "2"
+    # Added 2026-10-20: a PVC count alone does not bound storage; every
+    # PVC on the default class is a billed Hetzner volume.
+    requests.storage: "20Gi"
     services: "10"
   limitRange:
     enabled: true
@@ -66,3 +78,8 @@ tenant:
     allowIntraNamespace: true
     allowClusterEgress: true
     allowInternetEgress: true
+  # Every workload here runs on the base-service non-root default; a
+  # server-side dry-run found no violating pods in admins or admins-preview,
+  # and each Deployment's pod template passes restricted (ROADMAP 3.2,
+  # step 2).
+  podSecurityLevel: "restricted"

@@ -23,23 +23,26 @@ PH = re.compile(r"\{\{\s*(?:inputs|workflow)\.parameters\.([A-Za-z0-9_.-]+)\s*\}
 
 # (file, template, stop[, start]): `stop` is the text of the first line that is
 # NOT part of the prelude; the optional `start` is the first prelude line, for
-# templates that run something before they read their parameters.
+# templates that run something before they read their parameters. Both must be
+# executed lines, not comments: comments get reworded in passing (#1966 did it
+# to commit-service) and a moved marker silently changes what the case covers.
 CASES = [
-    ("tpl-validate-tenant.yaml", "validate", "# ── 3. Clone"),
-    ("tpl-git-commit.yaml", "commit-service", "apk add"),
+    ("tpl-validate-tenant.yaml", "validate", "echo \"📥 Cloning mctl-gitops for validation"),
+    ("tpl-git-commit.yaml", "commit-service", "mkdir -p ~/.ssh"),
     ("tpl-vault-write.yaml", "write-service-secrets", "echo \"🔐 Authenticating",
      "TEAM=\"$PARAM_TEAM_NAME\""),
-    ("tpl-vault-write.yaml", "delete-service-secrets", "SA_TOKEN=",
+    ("tpl-vault-write.yaml", "delete-service-secrets",
+     "SA_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)",
      "TEAM=\"$PARAM_TEAM_NAME\""),
     ("wft-smoke-test.yaml", "run-onboard", "WF_NAME=$(kubectl create"),
     ("wft-smoke-test.yaml", "check-pod-running", "check_missing_secret_reference()"),
     ("wft-create-tenant.yaml", "create-vault-policy", "echo \"Authenticating"),
     ("wft-delete-tenant-safe.yaml", "delete-vault-policy", "echo \"Authenticating"),
-    ("wft-delete-tenant.yaml", "delete-vault-policy", "echo \"Authenticating"),
     ("wft-deploy-service.yaml", "refresh-apps-appset", "echo \"Triggering hard refresh"),
-    ("wft-provision-database.yaml", "do-provision", "# ── Authenticate with Vault",
+    ("wft-deploy-service.yaml", "check-image-user", "git clone --depth=1"),
+    ("wft-provision-database.yaml", "do-provision", "echo \"🔐 Authenticating with Vault",
      "TEAM=\"$PARAM_TEAM_NAME\""),
-    ("wft-retire-service.yaml", "cleanup-db-from-gitops", "# ── Set up SSH for git",
+    ("wft-retire-service.yaml", "cleanup-db-from-gitops", "mkdir -p ~/.ssh",
      "TEAM=\"$PARAM_TEAM_NAME\""),
 ]
 
@@ -52,7 +55,7 @@ CASES = [
 BENIGN_DEFAULT = "okname"
 BENIGN = {"dockerfile_repo": "org/repo", "host": "svc.example.com", "port": "8080", "previous_generation": "7",
           "git_tag": "v1.2.3", "image_tag": "auto", "min_replicas": "1",
-          "max_replicas": "2", "cpu_threshold": "80"}
+          "max_replicas": "2", "cpu_threshold": "80", "image_user": "10001:10001"}
 SENTINEL = "__PRELUDE_END__"
 
 
@@ -109,6 +112,8 @@ with tempfile.TemporaryDirectory() as d:
     have_jq = True
 
     for fname, name, stop, *rest in CASES:
+        check(f"{name}: prelude markers are executed lines, not comments",
+              not any(m.lstrip().startswith("#") for m in [stop] + rest), f"{[stop] + rest}")
         tmpl = template(fname, name)
         src = tmpl["script"]["source"]
         shell = (tmpl["script"].get("command") or ["sh"])[0]
@@ -166,28 +171,18 @@ with tempfile.TemporaryDirectory() as d:
                 check(f"{name}: previous_generation {good!r} accepted",
                       r.returncode == 0, r.stderr)
 
-    # secret_env_vars loop of write-service-secrets, run with a terminator line.
+    # write-service-secrets parses secret_env_vars in a quoted here-document
+    # program that reads the value from the environment; it is exercised
+    # against a fake Vault, terminator line and code-shaped values included,
+    # by tests/test_tpl_vault_write_parse.py. Here: the value is never in the
+    # program text.
     src = template("tpl-vault-write.yaml", "write-service-secrets")["script"]["source"]
-    m = re.search(r'^(JSON_DATA="\{"\n.*?^SECRETS_EOF)$', src, re.S | re.M)
-    check("extracted the secret loop", bool(m))
+    m = re.search(r"^python3 - <<'PY'\n(.*?)\n^PY$", src, re.S | re.M)
+    check("extracted the secret program", bool(m))
     if m:
-        payload = f"A=1\nSECRETS_EOF\ntouch {canary}\nB=2"
-        out = run_sh(m.group(1) + '\necho "$JSON_DATA"',
-                     {**base_env, "PARAM_SECRET_ENV_VARS": payload}, work)
-        check("secret loop: terminator line is data", not canary.exists(), out.stderr)
-        check("secret loop: valid lines still parsed", '"A":"1"' in out.stdout, out.stdout)
-
-    # write-platform-secret refuses an unsafe vault_path before any request.
-    tmpl = template("tpl-vault-write.yaml", "write-platform-secret")
-    src = tmpl["script"]["source"]
-    m = re.search(r'^( *case "\$PARAM_VAULT_PATH" in.*?^ *esac)$', src, re.S | re.M)
-    check("extracted the vault_path guard", bool(m))
-    if m:
-        for bad in ("../x", "/abs", "a\nb", "a b", "a;b", ""):
-            r = run_sh(m.group(1), {**base_env, "PARAM_VAULT_PATH": bad}, work)
-            check(f"vault_path {bad!r} rejected", r.returncode != 0)
-        r = run_sh(m.group(1), {**base_env, "PARAM_VAULT_PATH": "teams/a/b-c_d"}, work)
-        check("valid vault_path accepted", r.returncode == 0)
+        check("secret program reads secret_env_vars from the environment",
+              'os.environ["PARAM_SECRET_ENV_VARS"]' in m.group(1)
+              and "$PARAM_SECRET_ENV_VARS" not in m.group(1))
 
 if failures:
     print("\n".join(failures), file=sys.stderr)

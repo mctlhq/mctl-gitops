@@ -17,6 +17,44 @@ app-scoped, so none has a standalone resource; each is either written inline
 or referenced by id from its application. Everything else in `#1088` is still
 to be imported.
 
+`ai-gateway.tf` (#2262, Phase A of the spike) declares the `mctl-support` AI
+Gateway: logs off, authenticated, cache off, rate limiting off. Nothing in
+production points at it until the spike report is accepted; the gateway's
+bearer token is `mctl-support-ai-gateway-run` in `../tokens/manifest.tf`, its
+value only in Vault. Creating it needs `AI Gateway: Edit` on
+`CF_APPLY_TOKEN_ACCOUNT` and refreshing it `AI Gateway: Read` on the plan
+token.
+
+This root pins `cloudflare/cloudflare` 5.28.1 in its lock file (#2268) while
+the other Cloudflare roots stay on 5.24.0: that version plans an in-place
+update of every `cloudflare_ai_gateway` on every run (upstream issue 7336,
+fixed in 5.26.0), which would have kept the nightly drift run red here for
+good. Bumping the other roots is a separate decision with its own plan.
+
+`ai-gateway-custom-providers.json` declares the gateway's custom providers
+(Nebius, Hetzner), which are not native AI Gateway providers and have no
+Terraform resource (cloudflare/cloudflare 5.28.1). They are reconciled by
+`.github/scripts/cloudflare-ai-gateway-custom-providers.sh` from the same
+three workflows that handle the OpenTofu roots: `cloudflare-plan.yml` plans
+them on a pull request, `cloudflare-drift.yml` fails on a difference nightly,
+and `cloudflare-apply.yml` re-plans them under the write credential, refuses
+if the plan moved since approval, applies, and reads the account back. A
+provider in the account and not in the file is a destroy and needs
+`allow_destroy`. The route from a service is
+`<gateway url>/custom-<slug>/<provider path>`, so `NEBIUS_BASE_URL` becomes
+`<gateway url>/custom-nebius/v1` and `HETZNER_BASE_URL`
+`<gateway url>/custom-hetzner/v1` (its base URL carries `/api`). Not the
+dashboard: a provider created there is drift the next nightly run reports.
+
+`email-routing.tf` holds the Email Routing destination addresses, which are
+account objects even though only `zones/mctl-ai` forwards to them: the shared
+mailbox (imported), `obukhov@mctl.ai`'s own and `moonqua@mctl.ai`'s own
+(imported). All arrive from repository secrets. A new address must be
+verified by its owner before the zone rule that forwards to it is applied,
+so this root is applied first. Reading and writing them needs
+`Account -> Email Routing Addresses` on the account read token and on
+`CF_APPLY_TOKEN_ACCOUNT`.
+
 A second application bypassing Access for the bare `/` path existed
 2026-09-19 – 2026-09-20, so a public HTML landing page there (explaining how
 to connect) was readable with no identity at all. Removed: unnecessary — a

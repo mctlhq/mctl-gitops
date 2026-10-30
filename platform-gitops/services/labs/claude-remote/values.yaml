@@ -1,11 +1,14 @@
 image:
   repository: ghcr.io/mctlhq/mctl-claude-remote
-  tag: "0.13.5"
+  tag: "0.14.1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 8080
-replicaCount: 1
+# Paused 2026-10-29: the Claude account this pod signs in with is on hold
+# pending review, and every mctl-events delivery was hitting it with a
+# rejected request. Restore to 1 once the account question is settled.
+replicaCount: 0
 # Single replica — Recreate avoids quota deadlocks
 strategy:
   type: Recreate
@@ -37,10 +40,18 @@ podSecurityContext:
   fsGroup: 1000
   runAsNonRoot: true
   runAsUser: 1000
-securityContext:
+# Was `securityContext:`, a key base-service never reads, so these settings
+# were silently not applied to the main container.
+containerSecurityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
+  # Writable root on purpose, permanently (owner decision 2026-10-18): this is
+  # an interactive agent box whose job is to run arbitrary tooling, and a
+  # read-only root would break any tool that writes outside HOME (/workspace)
+  # and /tmp, while protecting little on a pod that executes code by design.
+  # PSA restricted does not require readOnlyRootFilesystem; it stays non-root.
+  readOnlyRootFilesystem: false
 # Dedicated ServiceAccount (instead of the namespace's "default") so the
 # read-only cluster RBAC bound to it (see
 # platform-gitops/bootstrap/templates/system/labs-claude-remote-rbac.yaml)
@@ -155,10 +166,16 @@ env:
   MCTL_EVENTS_VALKEY_PASSWORD_FILE: "/etc/mctl-events/secrets/valkey-password"
   MCTL_EVENTS_POLICY: "/etc/mctl-events/policy.json"
   # Hydration of telegram.message.* refs through the preview mctl-telegram MCP
-  # (the account's live traffic is on preview). The worker token is read-only;
-  # its expiry is tracked in Vault platform/mctl-claude-remote/telegram-mcp.
+  # (the account's live traffic is on preview). The worker token is read-only.
+  # The file below is the seed (Vault platform/mctl-claude-remote/telegram-mcp):
+  # since image 0.14.0 the device renews the token itself and keeps renewals
+  # in /workspace/.claude, so the seed is only rewritten for a human mint
+  # (yearly, or after an expiry). Renewal metrics go to the Pushgateway and
+  # alert through vm-rules/claude-remote-telegram-token.yaml
+  # (mctlhq/mctl-claude-remote#82).
   MCTL_EVENTS_TELEGRAM_MCP_URL: "https://tg-preview.mctl.ai/mcp"
   MCTL_EVENTS_TELEGRAM_MCP_TOKEN_FILE: "/etc/mctl-events/secrets/telegram-mcp-token"
+  MCTL_EVENTS_PUSHGATEWAY_URL: "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
 # Intentionally NO envFrom / no CLAUDE_CODE_OAUTH_TOKEN in env:
 #
 # `claude --remote-control` needs a full-scope claude.ai login (from

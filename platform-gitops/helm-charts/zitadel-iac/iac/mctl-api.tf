@@ -165,6 +165,42 @@ resource "zitadel_application_oidc" "mctl_api_oauth" {
   id_token_userinfo_assertion = true
 }
 
+# A development twin of mctl-api-oauth for local end-to-end runs of
+# /oauth/authorize (mctl-api#693): a local mctl-api behind a cloudflared quick
+# tunnel, whose host changes on every start, sets
+# OAUTH_ZITADEL_REDIRECT_BASE_URL=http://localhost:8080 so the browser comes
+# back to the one fixed callback below. dev_mode is what lets ZITADEL accept
+# an http redirect at all.
+#
+# A project of its own, like mctl-web-dev (customers.tf): ZITADEL puts the
+# client ids of every app of a project into `aud`, so in the MCTL API project
+# this client's tokens would carry mctl-api's audience and pass production's
+# bearer check. Here they carry only this client's id, which no production
+# allowlist accepts. has_project_check with no grant keeps sign-in to MCTL's
+# own users. Otherwise the same shape as mctl-api-oauth, since the same code
+# runs against it: client secret (HTTP Basic) plus PKCE, opaque access token,
+# preferred_username in the ID token.
+resource "zitadel_project" "mctl_api_dev" {
+  org_id            = local.mctl_org_id
+  name              = "mctl-api-dev"
+  has_project_check = true
+}
+
+resource "zitadel_application_oidc" "mctl_api_dev" {
+  org_id     = local.mctl_org_id
+  project_id = zitadel_project.mctl_api_dev.id
+  name       = "mctl-api-dev"
+
+  app_type                    = "OIDC_APP_TYPE_WEB"
+  auth_method_type            = "OIDC_AUTH_METHOD_TYPE_BASIC"
+  grant_types                 = ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]
+  response_types              = ["OIDC_RESPONSE_TYPE_CODE"]
+  redirect_uris               = ["http://localhost:8080/oauth/zitadel/callback"]
+  access_token_type           = "OIDC_TOKEN_TYPE_BEARER"
+  dev_mode                    = true
+  id_token_userinfo_assertion = true
+}
+
 resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   metadata {
     name      = "mctl-api-oidc-zitadel"
@@ -175,12 +211,23 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   # `name` and `issuer` are permanent: they key external_identities, so
   # changing either orphans every linked identity. audience_enforcement and
   # grant_groups stay unset: enforce, and no groups (docs/federation.md).
+  #
+  # customers_org_id (mctl-api 4.90.0, stage C0 of mctl-web
+  # docs/plans/site-onboarding-review.md): a token of the customers
+  # organization resolves to the principal of its proven GitHub id, and every
+  # token of this entry must name its user's organization, so each client
+  # sending ZITADEL tokens to mctl-api requests the scope
+  # urn:zitadel:iam:user:resourceowner (the `mctl` CLI does). mctl-api refuses
+  # to boot unless it equals ZITADEL_HOOK_CUSTOMERS_ORG_ID (customers.tf),
+  # which is the same org. Read at container start: bump ROLLOUT_MARKER in
+  # bootstrap/templates/mctl-platform/mctl-api.yaml after the Job writes it.
   data = {
     MCTL_OIDC_PROVIDERS = jsonencode([
       {
-        name      = "zitadel"
-        issuer    = "https://auth.mctl.ai"
-        audiences = [zitadel_application_api.mctl_api.client_id]
+        name             = "zitadel"
+        issuer           = "https://auth.mctl.ai"
+        audiences        = [zitadel_application_api.mctl_api.client_id]
+        customers_org_id = zitadel_org.customers.id
       },
     ])
     # Not read by mctl-api (the chart references MCTL_OIDC_PROVIDERS only).
@@ -197,6 +244,11 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
     # OAUTH_UPSTREAM is github, the default.
     OAUTH_ZITADEL_CLIENT_ID     = zitadel_application_oidc.mctl_api_oauth.client_id
     OAUTH_ZITADEL_CLIENT_SECRET = zitadel_application_oidc.mctl_api_oauth.client_secret
+    # The development client above, for an operator to copy into a local
+    # run. Not read by mctl-api: the chart references keys by name, and these
+    # names are none of them.
+    MCTL_API_DEV_ZITADEL_CLIENT_ID     = zitadel_application_oidc.mctl_api_dev.client_id
+    MCTL_API_DEV_ZITADEL_CLIENT_SECRET = zitadel_application_oidc.mctl_api_dev.client_secret
   }
 
   field_manager = "zitadel-iac"

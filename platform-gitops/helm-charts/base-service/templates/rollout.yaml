@@ -3,6 +3,15 @@ apiVersion: argoproj.io/v1alpha1
 kind: Rollout
 metadata:
   name: {{ include "base-service.fullname" . }}
+  annotations:
+    # Switching blueGreen off removes this object from the rendered chart
+    # while the Deployment that replaces it is added. Without PruneLast,
+    # ArgoCD prunes in the same wave it creates, so the Rollout's pod and
+    # this Service's endpoints go away before the Deployment's pod is
+    # Ready. PruneLast defers the prune until the rest of the sync is
+    # healthy. ArgoCD reads it from the live object, so it must be here
+    # before the switch, not added with it.
+    argocd.argoproj.io/sync-options: PruneLast=true
   labels:
     {{- include "base-service.labels" . | nindent 4 }}
     {{- include "base-service.extraLabels" . | nindent 4 }}
@@ -48,9 +57,10 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- $writable := include "base-service.writablePaths" . | fromJsonArray }}
       {{- with .Values.initContainers }}
       initContainers:
-        {{- toYaml . | nindent 8 }}
+        {{- include "base-service.hardenedContainers" (dict "containers" . "defaults" $.Values.extraContainerSecurityContext) | nindent 8 }}
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
@@ -68,9 +78,23 @@ spec:
           args:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.preStopSleepSeconds }}
+          {{- /* Nil-check, not `default`: an explicit 0 is a real grace period. */}}
+          {{- $grace := 30 }}
+          {{- if ne ($.Values.terminationGracePeriodSeconds | toString) "<nil>" }}
+          {{- $grace = $.Values.terminationGracePeriodSeconds }}
+          {{- end }}
+          {{- if ge (int .) (int $grace) }}
+          {{- fail (printf "preStopSleepSeconds (%v) must be below terminationGracePeriodSeconds (%v)" . $grace) }}
+          {{- end }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ . }}
+          {{- end }}
           ports:
             - name: http
-              containerPort: {{ .Values.service.port }}
+              containerPort: {{ .Values.service.containerPort | default .Values.service.port }}
               protocol: TCP
             {{- if .Values.metrics.enabled }}
             - name: metrics
@@ -112,12 +136,18 @@ spec:
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.extraVolumeMounts }}
+          {{- if or .Values.extraVolumeMounts $writable }}
           volumeMounts:
+            {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- range $writable }}
+            - name: {{ include "base-service.writableVolumeName" . }}
+              mountPath: {{ . }}
+            {{- end }}
           {{- end }}
         {{- with .Values.extraContainers }}
-        {{- toYaml . | nindent 8 }}
+        {{- include "base-service.hardenedContainers" (dict "containers" . "defaults" $.Values.extraContainerSecurityContext) | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -131,10 +161,18 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or .Values.extraVolumes .Values.persistence }}
+      {{- if ne (.Values.terminationGracePeriodSeconds | toString) "<nil>" }}
+      # Same as deployment.yaml: nil-check so 0 still applies.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- end }}
+      {{- if or .Values.extraVolumes .Values.persistence $writable }}
       volumes:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- range $writable }}
+        - name: {{ include "base-service.writableVolumeName" . }}
+          emptyDir: {}
         {{- end }}
         {{- range $name, $spec := .Values.persistence }}
         {{- if (ne $spec.enabled false) }}
@@ -149,6 +187,8 @@ spec:
       activeService: {{ include "base-service.fullname" . }}
       previewService: {{ include "base-service.fullname" . }}-preview
       autoPromotionEnabled: {{ .Values.blueGreen.autoPromotionEnabled }}
-      # Abort rollout automatically if preview pod fails to become ready
+      # Keep the old ReplicaSet for 30s after promotion so endpoints can
+      # drain. There is no pre-promotion analysis: a preview pod that never
+      # becomes Ready just stalls the rollout, nothing aborts it.
       scaleDownDelaySeconds: 30
 {{- end }}

@@ -9,6 +9,44 @@ metadata:
 spec:
   entrypoint: rollback-pipeline
   serviceAccountName: argo-workflow-sa
+  # Pod Security "restricted": this workflow runs in the tenant namespace
+  # (mctl-api operations.WorkflowNamespace), which is moving from
+  # enforce=baseline to restricted (handoff audit, block B step 3). The pod
+  # securityContext covers every container; container-level fields are not
+  # inherited from it, so podSpecPatch adds them to Argo's own init and wait
+  # containers (argoexec runs as root by default) and to main. HOME=/tmp
+  # because python, alpine/k8s and alpine/git have no passwd entry for uid
+  # 1000; steps that use ssh run mctl-workflow-tools, which has one.
+  # Templates reached through templateRef (tpl-*, the completion hook) run
+  # under this spec too.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  podSpecPatch: |
+    initContainers:
+      - name: init
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+    containers:
+      - name: wait
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      - name: main
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+          - name: HOME
+            value: /tmp
 
   arguments:
     parameters:
@@ -33,7 +71,7 @@ spec:
           - name: target_tag
             value: "{{workflow.parameters.target_tag}}"
       script:
-        image: alpine/git:2.45.2
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         envFrom:
           - configMapRef:

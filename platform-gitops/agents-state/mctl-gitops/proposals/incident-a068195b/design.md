@@ -1,0 +1,12 @@
+# Design: incident-a068195b
+
+## Confidence: LOW
+
+## Diagnosis
+The CPUThrottlingHigh alert fired for erpact/erpact-control-scheduler. mctl-agent's advisory analysis says the CPU limit is too low, but it escalated because this alert is on the human-review-only list. No service logs were available, and I could not find the service's values file under platform-gitops/services, so the current limit is unknown. The cause is plausible but unverified. The sibling erpact-shared-scheduler alerted at the same minute, so a shared chart default may be the cause.
+
+## Proposed Fix
+Locate the values file that defines resources.limits.cpu for erpact-control-scheduler (tenant erpact). Raise the CPU limit modestly, for example by 50 to 100 percent, or remove the CPU limit if platform policy allows. Keep the CPU request unchanged. If both erpact schedulers share one chart default, change it once.
+
+## Scope
+Minimal. Only touch the single CPU limit field that causes this alert.

@@ -85,12 +85,12 @@ spec:
         allowInternetEgress:
           title: Allow Internet Egress
           type: boolean
-          default: false
+          default: true
           description: |
             Allow pods in this namespace to make outbound requests to the internet.
-            Disabled by default (least privilege). Workflow/CI pods are unaffected —
-            they always get internet egress via a dedicated NetworkPolicy. Enable
-            only if the tenant's services call external APIs directly.
+            Enabled by default. Workflow/CI pods are unaffected — they always get
+            internet egress via a dedicated NetworkPolicy. Disable for workspaces
+            whose services must not reach external hosts.
 
   steps:
     - id: create-tenant

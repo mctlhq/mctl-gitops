@@ -1,0 +1,114 @@
+# Unit tests for preview-reaper-alerts.yaml.
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec` so
+# promtool can evaluate the very rules the cluster runs.
+rule_files:
+  - generated/preview-reaper-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: hourly failures with no success fire, namespace from exported_namespace
+    input_series:
+      - series: 'argo_workflows_workflowtemplate_triggered_total{namespace="argo-workflows",exported_namespace="labs",cluster_scope="true",name="preview-reaper",phase="Failed"}'
+        values: '0+0x59 1+0x59 2+0x59 3+0x59'
+    alert_rule_test:
+      - eval_time: 200m
+        alertname: PreviewReaperFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: labs
+              exported_namespace: labs
+            exp_annotations:
+              summary: preview-reaper in labs has failed with no success in 3h
+              description: >-
+                Expired previews in labs-preview are not being deleted. The
+                run log names the release: either it has no or a malformed
+                mctl.ai/expires-at label (created outside preview-deploy, or
+                before the label existed), or helm uninstall / the TLS Secret
+                delete failed. Fix or label the release, or delete it with
+                mctl_delete_preview.
+
+  - interval: 1m
+    name: a failure followed by successes stays quiet
+    input_series:
+      - series: 'argo_workflows_workflowtemplate_triggered_total{namespace="argo-workflows",exported_namespace="labs",cluster_scope="true",name="preview-reaper",phase="Failed"}'
+        values: '0+0x59 1+0x179'
+      - series: 'argo_workflows_workflowtemplate_triggered_total{namespace="argo-workflows",exported_namespace="labs",cluster_scope="true",name="preview-reaper",phase="Succeeded"}'
+        values: '0+0x119 1+0x59 2+0x59'
+    alert_rule_test:
+      - eval_time: 230m
+        alertname: PreviewReaperFailing
+        exp_alerts: []
+
+  - interval: 1m
+    name: another tenant's success does not mask a failing one
+    input_series:
+      - series: 'argo_workflows_workflowtemplate_triggered_total{namespace="argo-workflows",exported_namespace="labs",cluster_scope="true",name="preview-reaper",phase="Failed"}'
+        values: '0+0x59 1+0x59 2+0x59 3+0x59'
+      - series: 'argo_workflows_workflowtemplate_triggered_total{namespace="argo-workflows",exported_namespace="mctl",cluster_scope="true",name="preview-reaper",phase="Succeeded"}'
+        values: '0+0x59 1+0x59 2+0x59 3+0x59'
+    alert_rule_test:
+      - eval_time: 200m
+        alertname: PreviewReaperFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: labs
+              exported_namespace: labs
+            exp_annotations:
+              summary: preview-reaper in labs has failed with no success in 3h
+              description: >-
+                Expired previews in labs-preview are not being deleted. The
+                run log names the release: either it has no or a malformed
+                mctl.ai/expires-at label (created outside preview-deploy, or
+                before the label existed), or helm uninstall / the TLS Secret
+                delete failed. Fix or label the release, or delete it with
+                mctl_delete_preview.
+
+  - interval: 1m
+    name: another template's failures are ignored
+    input_series:
+      - series: 'argo_workflows_workflowtemplate_triggered_total{namespace="argo-workflows",exported_namespace="labs",cluster_scope="true",name="preview-deploy",phase="Failed"}'
+        values: '0+0x59 1+0x59 2+0x59 3+0x59'
+    alert_rule_test:
+      - eval_time: 200m
+        alertname: PreviewReaperFailing
+        exp_alerts: []
+
+  - interval: 1m
+    name: a reaper that stops firing alerts
+    input_series:
+      - series: 'argo_workflows_cronworkflows_triggered_total{namespace="argo-workflows",exported_namespace="labs",name="preview-reaper"}'
+        values: '0+0x59 1+0x59 2+0x299'
+    alert_rule_test:
+      - eval_time: 300m
+        alertname: PreviewReaperNotTriggered
+        exp_alerts: []
+      - eval_time: 420m
+        alertname: PreviewReaperNotTriggered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: labs
+              exported_namespace: labs
+            exp_annotations:
+              summary: preview-reaper in labs has not been triggered for 3h
+              description: >-
+                The hourly CronWorkflow preview-reaper in labs stopped firing,
+                so preview ttl_hours is not enforced there. Check that the
+                CronWorkflow exists, is not suspended, and that the Argo
+                workflow controller is running.
+
+  - interval: 1m
+    name: an hourly reaper stays quiet
+    input_series:
+      - series: 'argo_workflows_cronworkflows_triggered_total{namespace="argo-workflows",exported_namespace="labs",name="preview-reaper"}'
+        values: '0+0x59 1+0x59 2+0x59 3+0x59 4+0x59 5+0x59 6+0x59 7+0x59'
+    alert_rule_test:
+      - eval_time: 470m
+        alertname: PreviewReaperNotTriggered
+        exp_alerts: []

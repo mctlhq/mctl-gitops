@@ -24,7 +24,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.74.1"
+  tag: "1.112.1"
 imagePullSecrets:
   - name: ghcr-credentials
 # --role control since the queue split (ADR-008): this process runs every
@@ -85,7 +85,19 @@ containerSecurityContext:
   capabilities:
     drop:
       - ALL
+# Read-only root (the chart default). Run-time writes, measured on the live pod
+# 2026-10-18: tempfiles under /tmp, and `gh` (called through run_shepherd)
+# keeping its state in ~/.local/state/gh. The other ~950 files were Python
+# bytecode under /app; PYTHONDONTWRITEBYTECODE below stops those attempts.
+writablePaths:
+  - /tmp
+  - /home/app/.local
 env:
+  MCTL_TRACE_WORKFLOW_TYPES: DevLoopWorkflow
+  # The image ships no precompiled bytecode for the app, so on a read-only
+  # root Python would try and fail to write a .pyc for every module it imports.
+  PYTHONDONTWRITEBYTECODE: "1"
+  MCTL_TRACE_ARGO_PARAM: "true"
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents
   LOG_LEVEL: info
@@ -125,6 +137,16 @@ env:
   # Live proof: mctl-agents#490. Set to "false" to turn it off again; a
   # request left claimed is re-claimable once its lease lapses.
   EXECUTION_REQUEST_DISPATCHER: "true"
+  # Policy checkpoint approvals backend (ADR 014; mctlhq/.github#181,
+  # mctl-gitops#1980), as on investigate. In this worker it backs the
+  # DevLoop's gated activities (a REQUIRE_APPROVAL action answers
+  # approval_pending and starts an ActionApprovalWaitWorkflow instead of being
+  # refused) and the in-process agent runs' mcp__mctl__* checkpoint.
+  # Authenticates with MCTL_TOKEN; needs mctl-agents >= 1.86.1. Must stay a
+  # literal (platform-gitops/governance/policy-checkpoint-coverage.yaml).
+  # Rollback: remove it (REQUIRE_APPROVAL then blocks) and mark the manifest
+  # entry governed: false with a tracked_by.
+  MCTL_POLICY_APPROVALS: mctl-api
 envFrom:
   - secretRef:
       name: mctl-agents-worker-secrets
@@ -186,3 +208,10 @@ externalSecret:
     # would shadow the GITHUB_TOKEN that github_token.py keeps refreshing and
     # defeat the whole mechanism above. Nothing in orchestrator/ reads GH_TOKEN
     # by name — gh picks up GITHUB_TOKEN on its own.
+
+# Bounded DevLoop rollout; other workflow types remain unsampled.
+# On: spans go to the permanent Tempo in `tracing` through the Collector
+# (#1280 verdict, docs/plans/tempo-adoption.md). One of the two producers
+# the soak covered and the owner re-enabled; set false to stop exporting.
+otel:
+  enabled: true

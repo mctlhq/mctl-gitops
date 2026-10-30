@@ -111,10 +111,19 @@ jobs:
           # in needs_reauth makes Telegram's default Markdown reject the whole
           # message, see cloudflare-drift.yml), and an empty field cannot shift
           # the others the way consecutive tabs do under `read`.
+          #
+          # The headline counts days since the oldest last successful sync.
+          # The same text once a day read as one old message: `api` sat
+          # needs_reauth for nine days (2026-10-17..25) with this alert posted
+          # every morning, unnoticed. "broken for 8 day(s)" makes the repeat read as
+          # a problem getting older. A sync time that does not parse gives no
+          # count, never a 0.
           jq -r --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" '
-            "⚠️ <b>MCP portal: \(length) server(s) not ready</b>",
+            def days: (.last_successful_sync // "") | try (((now - (sub("\\.[0-9]+$"; "") | strptime("%Y-%m-%d %H:%M:%S") | mktime)) / 86400) | floor) catch null;
+            ([.[] | days | select(. != null)] | max) as $oldest
+            | "⚠️ <b>MCP portal: \(length) server(s) not ready\(if $oldest != null and $oldest >= 1 then ", broken for \($oldest) day(s)" else "" end)</b>",
             (.[] | "",
-              "• <b>\(.name | @html)</b> (<code>\(.id | @html)</code>): \(.status | @html)",
+              "• <b>\(.name | @html)</b> (<code>\(.id | @html)</code>): \(.status | @html)\(days as $d | if $d != null and $d >= 1 then " for \($d) day(s)" else "" end)",
               (if (.error // "") != "" then "  error: <code>\(.error | @html)</code>" else empty end),
               "  last successful sync: \(.last_successful_sync // "never" | @html)",
               "  fix: Cloudflare Zero Trust → Access controls → MCP Portals → MCP servers → \(.name | @html) → ⋯ → Re-authenticate server"),

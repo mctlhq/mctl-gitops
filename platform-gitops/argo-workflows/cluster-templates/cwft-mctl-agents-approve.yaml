@@ -14,7 +14,15 @@ metadata:
 
         1. clone-gitops — SSH-clone mctl-gitops via the shared deploy key.
         2. flip-status — proposed → accepted for the {service, slug} pair,
-           recording approver identity. Idempotent: already-accepted exits 0
+           recording approver identity and the content digest of
+           requirements.md, design.md, tasks.md and proposed-content.md
+           (mctl-agents#658). Requires expected_content_digest and refuses
+           unless the files still hash to it: the digest the human approved
+           (mctl-agents#681). An empty digest is refused with
+           approval_content_unbound; refusals print an `approve_refusal:`
+           line on stderr and set the refusal_code output. With approval_ref set, also records which
+           mctl-api approval grant (`aar_`) the flip exercised.
+           Idempotent: already-accepted exits 0
            so Temporal retries and rebase races never fail the loop; any
            other status (implemented, needs-triage, ...) fails loudly.
         3. commit-and-push — commits ONLY that proposal's .status.yaml under
@@ -63,6 +71,27 @@ spec:
         # the .status.yaml approval block and the commit message for the
         # audit trail (#150); "unknown" when the caller predates the field.
         value: "unknown"
+      - name: expected_content_digest
+        # Required. The proposal content digest the approval was decided for
+        # (mctl-agents#681). mctl-api sets it from the exercised grant's
+        # artifact_hash; a direct approver computes it with
+        # scripts/proposal-content-digest.py over the bytes they reviewed
+        # (docs/runbooks/proposal-approval-content-digest.md).
+        # The flip refuses unless the files hash to exactly this value, and
+        # an already accepted record must carry it. Empty is refused with
+        # approval_content_unbound: there is no mode that hashes whatever is
+        # present at flip time. The default stays "" only so an omitted
+        # argument reaches the typed refusal instead of failing submission.
+        value: ""
+      - name: approval_ref
+        # Optional. The mctl-api approval grant (`aar_...`) this flip
+        # exercises. mctl-api sets it from the grant it has just verified and
+        # spent, never from the caller, and refuses it in a request body.
+        # Recorded as `approval.approval_ref`, so an accepted record names
+        # the decision behind it and anything acting on the record can look
+        # that decision up in mctl-api instead of trusting the file. Empty
+        # (a manual approve with no grant) records no reference.
+        value: ""
 
   # ── No PVC ──────────────────────────────────────────────────────────────
   # Was a 1Gi `volumeClaimTemplates` entry, which Argo provisions as a Hetzner
@@ -129,18 +158,68 @@ spec:
           - name: status-update
             path: /tmp/status-out
             optional: true
+        parameters:
+          # Typed refusal code (approval_content_unbound,
+          # approval_content_mismatch, approval_content_digest_malformed).
+          # Whether Argo collects this from a failed step is not guaranteed;
+          # the stderr `approve_refusal:` line is the primary evidence.
+          - name: refusal_code
+            valueFrom:
+              path: /tmp/refusal_code
+              default: ""
       initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
         - name: clone-gitops
           image: alpine/git:2.43.0
+          env:
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: https_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: http_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: no_proxy
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+              value: "1"
           command: [sh, -c]
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates
+              apk add --no-cache openssh-client ca-certificates socat
               mkdir -p ~/.ssh
               cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
               chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
               # GitHub's published SSH host keys, PINNED rather than trusted on
               # first use. Source: https://api.github.com/meta (.ssh_keys),
               # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
@@ -175,6 +254,20 @@ spec:
         image: alpine/git:2.43.0
         command: [sh]
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           # Params via env, never inline {{workflow.parameters.*}} in the
           # script body — same shell-injection reasoning as the other
           # mctl-agents templates (this pod shares the workdir a push step
@@ -185,11 +278,33 @@ spec:
             value: "{{workflow.parameters.slug}}"
           - name: WORKFLOW_APPROVER
             value: "{{workflow.parameters.approver}}"
+          - name: WORKFLOW_EXPECTED_DIGEST
+            value: "{{workflow.parameters.expected_content_digest}}"
+          - name: WORKFLOW_APPROVAL_REF
+            value: "{{workflow.parameters.approval_ref}}"
         source: |
           set -e
           if [ -z "$WORKFLOW_SERVICE" ] || [ -z "$WORKFLOW_SLUG" ]; then
             echo "❌ service and slug are both required" >&2
             exit 1
+          fi
+          # A set grant reference must be an mctl-api `aar_` id. It is written
+          # into YAML below, so a malformed value is a broken caller: refuse
+          # rather than sanitize it into some other id.
+          if [ -n "$WORKFLOW_APPROVAL_REF" ]; then
+            if [ "${#WORKFLOW_APPROVAL_REF}" -gt 128 ]; then
+              echo "❌ approval_ref is longer than 128 characters" >&2
+              exit 1
+            fi
+            case "$WORKFLOW_APPROVAL_REF" in
+              aar_*[!A-Za-z0-9_-]*|aar_)
+                echo "❌ approval_ref is not an aar_ id" >&2
+                exit 1 ;;
+              aar_*) ;;
+              *)
+                echo "❌ approval_ref is not an aar_ id" >&2
+                exit 1 ;;
+            esac
           fi
           # service/slug become path components below — refuse separators
           # and dot-dot so a crafted value cannot escape agents-state/.
@@ -197,6 +312,26 @@ spec:
             */*|*..*|*' '*)
               echo "❌ service/slug must be plain directory names" >&2
               exit 1 ;;
+          esac
+          # Typed refusal: message, one machine-readable stderr line, and the
+          # code in /tmp/refusal_code for the refusal_code output parameter.
+          refuse() {
+            echo "❌ $2" >&2
+            echo "approve_refusal: code=$1 service=${WORKFLOW_SERVICE} slug=${WORKFLOW_SLUG} expected=${WORKFLOW_EXPECTED_DIGEST:--} current=${3:--}" >&2
+            printf '%s' "$1" > /tmp/refusal_code
+            exit 1
+          }
+          # The digest must come from the caller, from before the decision.
+          # Never hash whatever is present at flip time and call it approved.
+          if [ -z "$WORKFLOW_EXPECTED_DIGEST" ]; then
+            refuse approval_content_unbound "expected_content_digest is required: an approval must bind to the content that was reviewed (compute it with scripts/proposal-content-digest.py)"
+          fi
+          case "$WORKFLOW_EXPECTED_DIGEST" in
+            sha256:*[!0-9a-f]*|sha256:)
+              refuse approval_content_digest_malformed "expected_content_digest is not sha256:<64 hex>" ;;
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *)
+              refuse approval_content_digest_malformed "expected_content_digest is not sha256:<64 hex>" ;;
           esac
           STATUS_FILE="/workdir/mctl-gitops/platform-gitops/agents-state/${WORKFLOW_SERVICE}/proposals/${WORKFLOW_SLUG}/.status.yaml"
           if [ ! -f "$STATUS_FILE" ]; then
@@ -215,6 +350,13 @@ spec:
             # Idempotent path: a Temporal retry of submit_and_wait, or a
             # manual approve racing the automated one. Exit 0 so the loop
             # proceeds to implement instead of failing on a double-approve.
+            # Not when this approval was decided for other content: an
+            # accepted record carrying another digest was approved by someone
+            # else for something else, and this decision does not cover it.
+            RECORDED=$(sed -n "s/^  content_digest:[[:space:]]*'\{0,1\}\([^']*\)'\{0,1\}[[:space:]]*$/\1/p" "$STATUS_FILE" | head -1)
+            if [ "$RECORDED" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
+              refuse approval_content_mismatch "${WORKFLOW_SLUG} is already accepted with content digest '${RECORDED:-<none>}', not the approved ${WORKFLOW_EXPECTED_DIGEST}" "${RECORDED:--}"
+            fi
             echo "ℹ️  ${WORKFLOW_SLUG} is already accepted — no-op." >&2
             echo -n "noop"
             exit 0
@@ -228,6 +370,55 @@ spec:
           APPROVER_SAFE=$(printf '%s' "$WORKFLOW_APPROVER" | tr -cd 'A-Za-z0-9._@-' | cut -c1-64)
           [ -n "$APPROVER_SAFE" ] || APPROVER_SAFE="unknown"
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Bind the approval to the content it approves (mctl-agents#658):
+          # the implementer recomputes this digest before it starts and
+          # refuses on a mismatch or on an approval without one. The framing
+          # must match mctl-agents `proposal_state.proposal_content_digest`
+          # byte for byte (pinned by tests/test_proposal_digest.py there):
+          # per file, in this order, "<name>\n<byte length>\n<bytes>" for a
+          # regular file and "<name>\n-\n" otherwise; then SHA-256. Built in
+          # a temp file, never a pipe, so a failed read stops the flip under
+          # `set -e` instead of hashing a short stream -- and before any edit
+          # below, so a failure leaves the status file untouched.
+          PROPOSAL_DIR=$(dirname "$STATUS_FILE")
+          DIGEST_INPUT=$(mktemp)
+          for NAME in requirements.md design.md tasks.md proposed-content.md; do
+            if [ -f "$PROPOSAL_DIR/$NAME" ]; then
+              LEN=$(wc -c < "$PROPOSAL_DIR/$NAME")
+              LEN=$(echo $LEN)
+              case "$LEN" in
+                ''|*[!0-9]*)
+                  echo "❌ could not read the length of ${NAME}" >&2
+                  exit 1 ;;
+              esac
+              printf '%s\n%s\n' "$NAME" "$LEN" >> "$DIGEST_INPUT"
+              cat "$PROPOSAL_DIR/$NAME" >> "$DIGEST_INPUT"
+            else
+              printf '%s\n-\n' "$NAME" >> "$DIGEST_INPUT"
+            fi
+          done
+          CONTENT_DIGEST="sha256:$(sha256sum "$DIGEST_INPUT" | cut -d' ' -f1)"
+          rm -f "$DIGEST_INPUT"
+          case "$CONTENT_DIGEST" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *)
+              echo "❌ could not compute the proposal content digest" >&2
+              exit 1 ;;
+          esac
+          # The human decided the content behind the expected digest
+          # (mctl-agents#681). Content changed since is not what was approved:
+          # refuse before any edit, never record the new digest as approved.
+          if [ "$CONTENT_DIGEST" != "$WORKFLOW_EXPECTED_DIGEST" ]; then
+            refuse approval_content_mismatch "${WORKFLOW_SLUG} changed after it was approved: the files hash to ${CONTENT_DIGEST}, the approval was for ${WORKFLOW_EXPECTED_DIGEST}" "$CONTENT_DIGEST"
+          fi
+          # A proposed record that already carries an approval block would be
+          # flipped without a digest of this content, and once accepted it can
+          # never be re-approved. Refuse before any edit; the recovery is to
+          # drop the stale block in a PR and approve again.
+          if grep -q '^approval:' "$STATUS_FILE"; then
+            echo "❌ ${STATUS_FILE} is proposed but already has an approval block; refusing to flip without recording content_digest" >&2
+            exit 1
+          fi
           # A hand-written file may lack a trailing newline; the appends
           # below would then glue their first key onto the last scalar
           # (`...: trueapproval:`), producing invalid YAML. Normalize once.
@@ -251,12 +442,15 @@ spec:
               printf '%s: %s\n' "$FIELD" "$VALUE" >> "$STATUS_FILE"
             fi
           done
-          if ! grep -q '^approval:' "$STATUS_FILE"; then
-            # Single-quote approved_by: the sanitized charset still allows
-            # YAML indicators in first position (`@alice`, a bare `-`),
-            # which are invalid unquoted. The charset excludes ' itself, so
-            # plain quoting is always safe.
-            printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n" "$APPROVER_SAFE" "$NOW" >> "$STATUS_FILE"
+          # Single-quote approved_by: the sanitized charset still allows YAML
+          # indicators in first position (`@alice`, a bare `-`), which are
+          # invalid unquoted. The charset excludes ' itself, so plain quoting
+          # is always safe. No approval block exists here (refused above).
+          printf "approval:\n  approved_by: '%s'\n  approved_at: '%s'\n  content_digest: '%s'\n  digest_binding: 'reviewed'\n" "$APPROVER_SAFE" "$NOW" "$WORKFLOW_EXPECTED_DIGEST" >> "$STATUS_FILE"
+          # The grant reference, validated above to the aar_ charset, which
+          # excludes the quote, so plain single quoting is safe.
+          if [ -n "$WORKFLOW_APPROVAL_REF" ]; then
+            printf "  approval_ref: '%s'\n" "$WORKFLOW_APPROVAL_REF" >> "$STATUS_FILE"
           fi
           # Post-edit verification: the flip this workflow exists to make
           # must actually be on disk before the commit step runs, otherwise
@@ -310,17 +504,58 @@ spec:
             path: /artifact
             optional: true
       initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
         - name: clone-gitops
           image: alpine/git:2.43.0
+          env:
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: https_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: http_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: no_proxy
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+              value: "1"
           command: [sh, -c]
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates
+              apk add --no-cache openssh-client ca-certificates socat
               mkdir -p ~/.ssh
               cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
               chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
               # GitHub's published SSH host keys, PINNED rather than trusted on
               # first use. Source: https://api.github.com/meta (.ssh_keys),
               # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
@@ -358,6 +593,20 @@ spec:
         image: alpine/git:2.43.0
         command: [sh]
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           - name: WORKFLOW_SERVICE
             value: "{{workflow.parameters.service}}"
           - name: WORKFLOW_SLUG
@@ -377,11 +626,11 @@ spec:
               echo "❌ service/slug must be plain directory names" >&2
               exit 1 ;;
           esac
-          apk add --no-cache openssh-client ca-certificates
+          apk add --no-cache openssh-client ca-certificates socat
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
           # GitHub's published SSH host keys, PINNED rather than trusted on
           # first use. Source: https://api.github.com/meta (.ssh_keys),
           # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,

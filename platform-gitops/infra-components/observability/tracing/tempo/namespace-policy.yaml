@@ -1,0 +1,181 @@
+# Namespace-wide policy for `tracing`, the permanent Tempo's namespace
+# (#1280 verdict). Synced by the tracing-tempo Application at wave -2, before
+# the ExternalSecret (-1) and the chart's StatefulSet (0), rather than by
+# root-app -- see bootstrap/templates/observability/tracing.yaml for why.
+# Same policy shape the bake-off sandbox ran under (eval-namespace.yaml).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Default deny: block all ingress and all egress by default.
+#
+# `podSelector: {}` is correct HERE: `tracing` holds nothing but Tempo, and
+# root-app creates the Namespace empty (bootstrap/templates/observability/
+# tracing.yaml), so this wave -2 policy lands before any pod can. Contrast
+# infra-components/observability/otel-collector/networkpolicy.yaml, which
+# scopes its podSelector to the collector's own pods because `monitoring`
+# predates any NetworkPolicy and has no namespace-wide default; a `{}`
+# selector there would silently turn the whole namespace into an allowlist
+# and cut off Grafana, VMSingle, vmagent and Loki.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: tracing
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Allow intra-namespace traffic (Tempo's own components and probes).
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: tracing
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. DNS and cluster-internal egress only. The one public destination,
+#    R2, is opened for the Tempo pod alone in networkpolicy.yaml.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cluster-egress
+  namespace: tracing
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Pod and Service CIDRs, minus the node subnets, so a pod here cannot
+    # reach kubelet on 10250 directly. Mirrors
+    # helm-charts/tenant/templates/networkpolicy.yaml's allow-cluster-egress.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+            except:
+              # workers
+              - 10.0.0.0/24
+              # control plane
+              - 10.255.0.0/24
+    # kubernetes.default needs its own rule: Service DNAT resolves it to the
+    # control-plane endpoint before the exception above applies, so without
+    # this carve-out in-namespace API clients would be stranded.
+    - to:
+        - ipBlock:
+            cidr: 10.255.0.0/24
+      ports:
+        - protocol: TCP
+          port: 6443
+    - to:
+        - ipBlock:
+            cidr: 172.16.0.0/12
+    - to:
+        - ipBlock:
+            cidr: 192.168.0.0/16
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Ingress from `monitoring` only, on the OTLP ports: otel-collector's
+#    otlp/backend exporter is the one producer path into Tempo. Grafana and
+#    vmagent reach 3200 through networkpolicy.yaml.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-monitoring
+  namespace: tracing
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Resource quota and container limit defaults. One Tempo pod (requests
+#    200m/768Mi, limits 2 CPU/2Gi, bootstrap/values.yaml tracing.tempo) with
+#    room for one rolling replacement. persistentvolumeclaims and
+#    requests.storage are "0": the WAL is an emptyDir and the blocks live in
+#    R2, so a PVC here is refused at admission rather than becoming a billed
+#    Hetzner volume nobody asked for.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tracing-quota
+  namespace: tracing
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  hard:
+    limits.cpu: "4"
+    limits.memory: "4Gi"
+    persistentvolumeclaims: "0"
+    pods: "4"
+    requests.cpu: "1"
+    requests.memory: "2Gi"
+    requests.storage: "0"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tracing-limits
+  namespace: tracing
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "50m"
+        memory: "128Mi"
+      max:
+        cpu: "2"
+        memory: "2Gi"

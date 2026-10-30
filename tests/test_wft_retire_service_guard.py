@@ -394,7 +394,7 @@ for team, svc in (("labs", "../../infra-components"), ("..", "x"), ("labs\nx", "
           r.stdout + log)
 r, log = run_delete_service("labs", "portfolio")
 check("delete-service lets a valid name through to the clone",
-      "Invalid" not in r.stdout and log.startswith("apk "), r.stdout + log)
+      "Invalid" not in r.stdout and log.startswith("mkdir "), r.stdout + log)
 
 if failures:
     print("\n".join(failures), file=sys.stderr)

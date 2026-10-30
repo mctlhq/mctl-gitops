@@ -1,0 +1,55 @@
+status: merged
+updated_at: '2026-10-29T21:18:51Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-5f8ba21ca265350f
+  trace_id: 640cb2e7fa76cb13e7d5525a4191e7e8
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/.github
+  issue: 272
+  url: https://github.com/mctlhq/.github/issues/272
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-05835f294bb209ee
+  content_hash: sha256:05835f294bb209ee3c3b3cd90b812abccc211fe837d3d86a9d11912488d763cd
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-29T09:53:40Z'
+  content_digest: sha256:24db80cf24db407cf73cd0ae70fd3ec52d85306e5f7955021fdbb07796918ec2
+  digest_binding: reviewed
+  approval_ref: aar_55b385defc4144e49cc814d0dffba793
+attempt:
+  id: f031c4f369859eed274e7baaeae8e73e3064b3af9aa5c56607fcfc709b566910
+  started_at: '2026-10-29T09:55:25Z'
+  expires_at: '2026-10-29T12:05:25Z'
+  finished_at: '2026-10-29T10:00:10Z'
+pr: https://github.com/mctlhq/.github/pull/273
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-bc9bcb72
+  authoritative:
+    completion_id: ic-2c89482af24b9240
+    content_hash: sha256:2c89482af24b92406ce23481b9bf5d857adfb868808aae9c11f28d2add05e540
+    proposal_digest: sha256:24db80cf24db407cf73cd0ae70fd3ec52d85306e5f7955021fdbb07796918ec2
+    attempt_id: f031c4f369859eed274e7baaeae8e73e3064b3af9aa5c56607fcfc709b566910
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 7c6f97227a0c55412b722332b46d1f22fbe04e0e
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+github:
+  state: merged
+  head_sha: 2f38b2b8f725804a25119ca7370621b449ab72ff
+  observed_at: '2026-10-29T21:18:51Z'
+merged_at: '2026-10-29T21:18:51Z'
+merge_commit: bbb59d1137883cf4323e41c481865d902ed39219

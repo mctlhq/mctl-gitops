@@ -93,8 +93,24 @@ OIDC JWT (`id-token: write` + `auth/jwt` role `github-actions`), not a
 long-lived `VAULT_TOKEN`.
 
 For which repos/workflows can read the `mctl-agents` GitHub App's raw
-signing key (`AGENTS_APP_ID` / `AGENTS_APP_PRIVATE_KEY`), see
+signing key (`AGENTS_APP_PRIVATE_KEY`), see
 `docs/runbooks/agents-app-secret-exposure.md`.
+
+For which mctl-agents surfaces run under the ADR 014 policy checkpoint and
+which are known gaps, see `docs/runbooks/policy-checkpoint-coverage.md`.
+
+For the agent egress proxy and its staged rollout, see
+`docs/runbooks/mctl-agents-egress.md`.
+
+For the GitHub Code Scanning webhook receiver (SecurityFinding ingestion),
+its secret, rotation and rollback, see
+`docs/runbooks/security-finding-ingestion.md`.
+
+For approving a proposal by hand now that `mctl-agents-approve` requires the
+reviewed content digest, see `docs/runbooks/proposal-approval-content-digest.md`.
+
+For which control-plane failure paths (etcd, apiserver, admission) are
+monitored and which are gaps, see `docs/runbooks/control-plane-failure-paths.md`.
 
 ## Terraform (k3s-preview cluster)
 

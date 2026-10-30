@@ -65,7 +65,8 @@ mctl-portal, mctl-telegram).** `release-please` accumulates conventional
 commits into a version-bump PR; merging it cuts a real tag + GitHub release
 (`release_created == true`). A step in that same `release-please.yml`
 job then mints a short-lived GitHub App token scoped to `mctl-gitops`
-(`actions/create-github-app-token`, org secrets `APP_ID`/`APP_PRIVATE_KEY`)
+(`actions/create-github-app-token` as the `mctl-agents` App: org variable
+`AGENTS_APP_CLIENT_ID`, org secret `AGENTS_APP_PRIVATE_KEY`)
 and dispatches `mctl-gitops`'s `release-deploy.yaml` (`workflow_dispatch`)
 with the new tag, image name, team, and component — that reusable workflow
 builds the image and bumps `image.tag` in

@@ -13,65 +13,32 @@ Source of truth for the mctl.ai Kubernetes platform.
 
 ## Service Deletion
 
-### ⚠️ Unregister vs Delete
+### Unregister vs retire
 
-**"Unregister Entity" in Backstage:**
-- Only removes from Backstage catalog (soft delete)
-- GitOps files remain
-- Service continues running in Kubernetes
+**"Unregister Entity" in Backstage** only removes the catalog entry. The
+GitOps files stay and the service keeps running.
 
-**Full Deletion (deprovision):**
-- Delete service folder from Git
-- Automatic cleanup triggers:
-  - ✅ Vault secrets deleted (PreDelete hook)
-  - ✅ ArgoCD Application removed
-  - ✅ Kubernetes resources deleted
-  - ✅ Backstage entity removed (after 5min)
+**Retiring** removes the service everywhere. Use the platform, not a manual
+directory delete:
 
-### How to Delete Service
+- `mctl_retire_service` (MCP) or the **"Retire Service"** template in
+  Backstage. Both submit the `retire-service` workflow in the tenant
+  namespace.
 
-#### Option 1: GitHub UI (Easiest)
+The workflow (`wft-retire-service.yaml`):
 
-1. Navigate to service folder:
-   - **Services:** [`platform-gitops/services/{team}/{service}/`](https://github.com/mctlhq/mctl-gitops/tree/main/platform-gitops/services)
+1. `preflight` checks that the ArgoCD Application belongs to the service.
+2. In parallel:
+   - `delete-vault-secrets` deletes everything under
+     `secret/teams/{team}/{service}`, nested paths included, and fails
+     unless the path is gone afterwards (skipped only with
+     `delete_vault_secrets=false`);
+   - `delete-from-git` removes `services/{team}/{service}/` from `main`,
+     then `cleanup-db-resources` removes the service's database resources,
+     if any.
+3. `delete-argocd-app` deletes the Application and waits for it, and its
+   Kubernetes resources, to be gone.
 
-2. Click **"..."** → **"Delete directory"**
-
-3. Commit message: `delete: {team}/{service}`
-
-4. Commit directly to main → Automated cleanup starts
-
-#### Option 2: Git CLI
-
-```bash
-# Delete service directory
-git rm -r platform-gitops/services/{team}/{service}
-
-# Commit
-git commit -m "delete: {team}/{service}"
-
-# Push
-git push origin main
-```
-
-#### Option 3: Delete Workflow
-
-Use the **"Retire Service"** template in Backstage or trigger manually via GitHub Actions.
-
-### What Happens Automatically
-
-```
-1. Git: Files deleted from main branch
-   ↓
-2. ArgoCD: Detects deletion (within 60s)
-   ↓
-3. PreDelete Hook: vault-cleanup Job runs
-   ↓
-4. Vault: Secrets deleted from teams/{team}/{service}
-   ↓
-5. ArgoCD: Deletes Application
-   ↓
-6. Kubernetes: All resources removed
-   ↓
-7. Backstage: Entity removed (after refresh)
-```
+Deleting `services/{team}/{service}/` by hand removes the Application and
+its resources, but nothing cleans Vault or the database: those are left
+behind. There is no ArgoCD hook that does it.

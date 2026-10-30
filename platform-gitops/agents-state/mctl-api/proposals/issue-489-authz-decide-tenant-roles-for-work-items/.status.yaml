@@ -1,0 +1,36 @@
+status: merged
+updated_at: '2026-10-17T23:19:52Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-e67fa63a189e5485
+  trace_id: 92fcb3aa15afdf5b2811270689d431c9
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 489
+  url: https://github.com/mctlhq/mctl-api/issues/489
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-314d0e2cb5b1c0e5
+  content_hash: sha256:314d0e2cb5b1c0e56e52003ff563e8c390984a57e0a5604e5ae9c3ef78b38a56
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-17T20:37:52Z'
+  content_digest: sha256:94d56ac0f78476af4372ac732f60fcc43213a20f4deff1a29e86e8e67af048e4
+attempt:
+  id: 3353d1c44b99c08a28f30d37445b8af9ff6ad212678a8c0e76e57cafed0329ac
+  started_at: '2026-10-17T20:39:14Z'
+  expires_at: '2026-10-17T22:49:14Z'
+  finished_at: '2026-10-17T20:49:03Z'
+pr: https://github.com/mctlhq/mctl-api/pull/665
+github:
+  state: merged
+  head_sha: 36a82d2c589fd93b76125749642d31c7b4efffa5
+  observed_at: '2026-10-17T23:19:52Z'
+merged_at: '2026-10-17T23:19:52Z'
+merge_commit: 2e226e133bcd4c747cd4f9d52bfe4921f1725279

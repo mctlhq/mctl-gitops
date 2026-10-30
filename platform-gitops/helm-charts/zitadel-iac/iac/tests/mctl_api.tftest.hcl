@@ -14,7 +14,8 @@ mock_provider "zitadel" {
 mock_provider "kubernetes" {}
 
 variables {
-  smtp_password = "test"
+  smtp_password        = "test"
+  customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
   # A valid value, as in the other test files: targeted plans prune the
   # validation of platform_admins today, which nothing here should rely on.
   platform_admins = jsonencode({
@@ -159,6 +160,14 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
     target = zitadel_application_oidc.mctl_api_oauth
     values = { client_id = "oauth-client-id", client_secret = "oauth-client-secret" }
   }
+  override_resource {
+    target = zitadel_application_oidc.mctl_api_dev
+    values = { client_id = "dev-client-id", client_secret = "dev-client-secret" }
+  }
+  override_resource {
+    target = zitadel_org.customers
+    values = { id = "customers-org-id" }
+  }
 
   assert {
     condition     = kubernetes_secret_v1_data.mctl_api_oidc.metadata[0].name == "mctl-api-oidc-zitadel" && kubernetes_secret_v1_data.mctl_api_oidc.metadata[0].namespace == "mctl-api"
@@ -172,8 +181,14 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
       "ZITADEL_LINK_CLIENT_SECRET",
       "OAUTH_ZITADEL_CLIENT_ID",
       "OAUTH_ZITADEL_CLIENT_SECRET",
+      "MCTL_API_DEV_ZITADEL_CLIENT_ID",
+      "MCTL_API_DEV_ZITADEL_CLIENT_SECRET",
     ])
-    error_message = "mctl-api/mctl-api-oidc-zitadel must carry exactly the six keys its consumers read."
+    error_message = "mctl-api/mctl-api-oidc-zitadel must carry exactly the eight keys its consumers read."
+  }
+  assert {
+    condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_API_DEV_ZITADEL_CLIENT_ID"]) == "dev-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_API_DEV_ZITADEL_CLIENT_SECRET"]) == "dev-client-secret"
+    error_message = "The development keys must carry the mctl-api-dev client's credentials, never a production client's."
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["OAUTH_ZITADEL_CLIENT_ID"]) == "oauth-client-id"
@@ -193,10 +208,63 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
   }
   # `name` and `issuer` key external_identities, and OAUTH_ZITADEL_PROVIDER
   # and ZITADEL_LINK_PROVIDER both default to this entry's name.
+  # customers_org_id is the customers org itself: mctl-api refuses to boot
+  # unless it equals ZITADEL_HOOK_CUSTOMERS_ORG_ID (customers.tf).
   assert {
     condition = nonsensitive(jsondecode(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_OIDC_PROVIDERS"])) == [
-      { name = "zitadel", issuer = "https://auth.mctl.ai", audiences = ["api-client-id"] },
+      { name = "zitadel", issuer = "https://auth.mctl.ai", audiences = ["api-client-id"], customers_org_id = "customers-org-id" },
     ]
-    error_message = "MCTL_OIDC_PROVIDERS must stay the single `zitadel` entry with the API application's audience."
+    error_message = "MCTL_OIDC_PROVIDERS must stay the single `zitadel` entry with the API application's audience and the customers org id."
+  }
+}
+
+# The development client for local runs (mctl-api#693). dev_mode is on by
+# design here, so what keeps it harmless is checked instead: its own project
+# (no production audience), the one localhost callback, and the same client
+# shape as mctl-api-oauth.
+run "dev_client_is_isolated_and_localhost_only" {
+  command = plan
+  plan_options {
+    target = [zitadel_application_oidc.mctl_api_dev, zitadel_application_oidc.mctl_api_oauth]
+  }
+
+  # Mocked ids are otherwise identical; distinct ids make the comparison
+  # below about the references, not about the mock.
+  override_resource {
+    target = zitadel_project.mctl_api
+    values = { id = "mctl-api-project" }
+  }
+  override_resource {
+    target = zitadel_project.mctl_api_dev
+    values = { id = "mctl-api-dev-project" }
+  }
+
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_dev.project_id == "mctl-api-dev-project" && zitadel_application_oidc.mctl_api_dev.project_id != zitadel_application_oidc.mctl_api_oauth.project_id
+    error_message = "mctl-api-dev needs a project of its own, or its tokens would carry mctl-api's audience."
+  }
+  assert {
+    condition     = zitadel_project.mctl_api_dev.has_project_check == true && zitadel_application_oidc.mctl_api_dev.org_id == "100000000000000001"
+    error_message = "The development project belongs to MCTL with has_project_check on, so only MCTL's users can sign in."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_dev.redirect_uris == tolist(["http://localhost:8080/oauth/zitadel/callback"])
+    error_message = "The only redirect URI must be http://localhost:8080/oauth/zitadel/callback: dev_mode would accept any other http one."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_dev.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.mctl_api_dev.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"
+    error_message = "The client must be a confidential web client: mctl-api's ZITADEL upstream sends a client secret."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_dev.grant_types == tolist(["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]) && zitadel_application_oidc.mctl_api_dev.response_types == tolist(["OIDC_RESPONSE_TYPE_CODE"])
+    error_message = "Authorization code only: no implicit, refresh token or device grant."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_dev.access_token_type == "OIDC_TOKEN_TYPE_BEARER" && zitadel_application_oidc.mctl_api_dev.id_token_userinfo_assertion == true
+    error_message = "Opaque access token and preferred_username in the ID token, as mctl-api-oauth."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_oauth.dev_mode == false && zitadel_application_oidc.mctl_api_oauth.redirect_uris == tolist(["https://api.mctl.ai/oauth/zitadel/callback"])
+    error_message = "The production client must not pick up the development settings."
   }
 }

@@ -121,7 +121,7 @@ spec:
         # subprocess and does NOT call `gh pr merge`. Useful for
         # operator dry runs and local smoke tests.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.74.1
+        value: ghcr.io/mctlhq/mctl-agents:1.112.1
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -372,8 +372,49 @@ spec:
             s3:
               key: "{{workflow.name}}/onexit-shepherd-status.tgz"
       initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
         - name: clone-gitops
           image: alpine/git:2.43.0
+          env:
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: https_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: http_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: no_proxy
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+              value: "1"
           # Root on purpose: apk add + chown -R 1000:1000 /workdir hand-off
           # (validate-local-workdir.py). Escalation is off and every capability
           # except the file-ownership ones is dropped (mctl-gitops#1717).
@@ -389,11 +430,11 @@ spec:
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates
+              apk add --no-cache openssh-client ca-certificates socat
               mkdir -p ~/.ssh
               cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
               chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
               # GitHub's published SSH host keys, PINNED rather than trusted on
               # first use. Source: https://api.github.com/meta (.ssh_keys),
               # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
@@ -668,6 +709,20 @@ spec:
             sys.exit(rc)
             COLLECT
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           # Workflow params injected as env vars so the shell layer
           # can quote them safely. Direct `workflow.parameters.*`
           # (Argo template syntax) interpolation in the script body
@@ -732,6 +787,21 @@ spec:
                 name: mctl-agents-secrets
                 key: mctl-token
                 optional: true
+          # Policy checkpoint approvals backend (ADR 014; mctlhq/.github#181,
+          # mctl-gitops#1980), as on investigate: a non-read mcp__mctl__* call
+          # creates or redeems a durable approval request in mctl-api instead
+          # of being blocked outright. Authenticates with MCTL_TOKEN; needs
+          # mctl-agents >= 1.86.1. Must stay a literal (see
+          # platform-gitops/governance/policy-checkpoint-coverage.yaml).
+          # Today this changes no decision here: the shepherd's model session
+          # has no MCP server, its own merges are ALLOW, and an agent-definition
+          # merge decides with NO_APPROVALS whatever this says (run_shepherd.py,
+          # per-tick execution ids). It makes the approval store the default
+          # for any future REQUIRE_APPROVAL checkpoint in this pod.
+          # Rollback: remove it (REQUIRE_APPROVAL then blocks) and mark the
+          # manifest entry governed: false with a tracked_by.
+          - name: MCTL_POLICY_APPROVALS
+            value: mctl-api
           # Usage-writer token (mctlhq/.github#50): the only credential the
           # usage producer may use to append this run's model-usage records
           # to mctl-api. It may do nothing else there. Optional: absent (the
@@ -827,8 +897,19 @@ spec:
           # Both lists are comma/space-separated and read at import. A service
           # named in both resolves to fix-only, so the two edits below are
           # order-independent.
+          #
+          # 2026-10-29: mctl-design, mctl-telegram and mctl-pairdesk moved from
+          # fix-only to full. Their merge path belonged to pr-steward in
+          # labs/claude-remote, which is paused (replicaCount 0, #2247), so
+          # their feat/agents-* PRs would otherwise sit green with no actor
+          # able to merge them. The shepherd merges with --merge, which
+          # mctl-telegram requires (it forbids squash). mctl-gitops stays
+          # fix-only: it is also in NEVER_MERGE_SERVICES, so no value here
+          # could resolve it to full. Move these three back to fix-only
+          # before claude-remote's steward is re-enabled, or the two
+          # lifecycles race on the merge again (mctl-telegram#730).
           - name: SHEPHERD_FIX_ONLY_SERVICES
-            value: "mctl-design,mctl-telegram,mctl-gitops,mctl-pairdesk"
+            value: "mctl-gitops"
           - name: SHEPHERD_SKIP_SERVICES
             value: "mctl-academy"
           # How long run_implementer --review-feedback waits for an
@@ -891,17 +972,58 @@ spec:
             s3:
               key: "{{workflow.name}}/onexit-activity.tgz"
       initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
         - name: clone-gitops
           image: alpine/git:2.43.0
+          env:
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: https_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: http_proxy
+              value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: no_proxy
+              value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+            - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+              value: "1"
           command: [sh, -c]
           args:
             - |
               set -e
-              apk add --no-cache openssh-client ca-certificates
+              apk add --no-cache openssh-client ca-certificates socat
               mkdir -p ~/.ssh
               cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
               chmod 600 ~/.ssh/id_ed25519
-              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+              printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
               # GitHub's published SSH host keys, PINNED rather than trusted on
               # first use. Source: https://api.github.com/meta (.ssh_keys),
               # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
@@ -950,6 +1072,20 @@ spec:
         image: alpine/git:2.43.0
         command: [sh]
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           # Workflow params injected as env vars so the shell layer
           # can quote them safely. Direct `workflow.parameters.*`
           # (Argo template syntax) interpolation in the script body
@@ -963,11 +1099,11 @@ spec:
             value: "{{workflow.parameters.slug}}"
         source: |
           set -e
-          apk add --no-cache openssh-client ca-certificates
+          apk add --no-cache openssh-client ca-certificates socat
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
+          printf 'Host github.com\n  Hostname ssh.github.com\n  Port 443\n  ProxyCommand socat - PROXY:agent-egress-proxy.mctl-agents-egress.svc.cluster.local:%%h:%%p,proxyport=3128\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
           # GitHub's published SSH host keys, PINNED rather than trusted on
           # first use. Source: https://api.github.com/meta (.ssh_keys),
           # fetched 2026-09-02. This replaces StrictHostKeyChecking=no,
@@ -1019,13 +1155,28 @@ spec:
           ALLOWED_RE='^platform-gitops/agents-state/(.+/\.status\.yaml|[^/]+/adopted-prs/pr-[0-9]+/\.prref\.yaml)$'
 
           # /tmp/onexit is the onExit channel, collected as an optional artifact.
+          #
+          # Besides `activity` it carries two files post-deploy-verify and
+          # notify-telegram read:
+          #   merged          — "yes" when a .status.yaml in this commit flips
+          #                     to merged, "no" when it provably does not, and
+          #                     "unknown" (the seed) on any path that exits
+          #                     before deciding. Only "no" lets post-deploy-verify
+          #                     skip; a refused handoff stays "unknown" and is
+          #                     verified as before.
+          #   transitions.txt — one "<status> <path>" line per terminal flip
+          #                     (merged / rejected / review-stuck), the only
+          #                     outcomes a succeeded tick reports to Telegram.
           mkdir -p /tmp/onexit
+          printf %s unknown > /tmp/onexit/merged
+          : > /tmp/onexit/transitions.txt
 
           if [ ! -d /artifact ] \
              || { [ -z "$(find /artifact/tree -type f -print -quit 2>/dev/null)" ] \
                   && [ ! -s /artifact/deleted.lst ]; }; then
             echo "ℹ️  No agents-state updates handed off — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
+            printf %s no > /tmp/onexit/merged
             exit 0
           fi
 
@@ -1085,6 +1236,7 @@ spec:
           if [ -z "$AGENT_STATE_CHANGES" ]; then
             echo "ℹ️  No agents-state updates — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
+            printf %s no > /tmp/onexit/merged
             exit 0
           fi
 
@@ -1122,8 +1274,25 @@ spec:
             # change git ignores).
             echo "ℹ️  No status updates after staging — nothing to commit."
             echo -n "none" > /tmp/onexit/activity
+            printf %s no > /tmp/onexit/merged
             exit 0
           fi
+
+          # Written before the commit and push, not after: the merge already
+          # happened on GitHub inside run-shepherd, so a push that fails below
+          # must not make this tick look merge-free to post-deploy-verify.
+          record_transitions() {
+            git diff --cached -U0 -- "$SPEC_STATUS" \
+              | awk '/^\+\+\+ b\//{p=substr($0,7)} /^\+status:/{print $2, p}' \
+              | tr -d "\"'" \
+              | grep -E '^(merged|rejected|review-stuck) ' > /tmp/onexit/transitions.txt || true
+            if grep -q '^merged ' /tmp/onexit/transitions.txt; then
+              printf %s yes > /tmp/onexit/merged
+            else
+              printf %s no > /tmp/onexit/merged
+            fi
+          }
+          record_transitions
 
           DATE=$(date -u +%Y-%m-%d)
           if [ -n "$WORKFLOW_SLUG" ]; then
@@ -1190,9 +1359,50 @@ spec:
     # degraded-app list, and the unfiltered snapshot. See the artifact
     # block below for why none of it is a workflow output parameter.
     - name: post-deploy-verify
+      initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
       inputs:
         parameters:
           - name: started_at
+        artifacts:
+          # Whether this tick merged anything, and whether the shepherd attempt
+          # itself finished. Same literal keys notify-telegram reads; both
+          # optional, and an absent file reads as "unknown", which verifies.
+          - name: activity
+            path: /onexit/commit
+            optional: true
+            s3:
+              key: "{{workflow.name}}/onexit-activity.tgz"
+          - name: shepherd-status
+            path: /onexit/shepherd
+            optional: true
+            s3:
+              key: "{{workflow.name}}/onexit-shepherd-status.tgz"
       outputs:
         artifacts:
           # The onExit channel for every signal this step produces. Same
@@ -1222,6 +1432,20 @@ spec:
         image: alpine/k8s:1.33.12
         command: [bash]
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           - name: STARTED_AT
             value: "{{inputs.parameters.started_at}}"
         source: |
@@ -1245,11 +1469,40 @@ spec:
           : > /tmp/onexit/degraded.txt
           : > /tmp/onexit/degraded_unfiltered.txt
 
-          # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
-          # plus a buffer for the per-resource health re-evaluation pass
-          # that runs on the next tick after a sync.
-          echo "Sleeping 300s for ArgoCD to reconcile post-merge…"
-          sleep 300
+          # Verify only a tick that may have merged something. Before this,
+          # every tick slept 300s and then failed on ANY app that went Degraded
+          # after the workflow started, merge or not: on 2026-10-23 about 60
+          # ticks failed in nine hours, each blaming a flapping
+          # argocd/labs-mctl-telegram on a run that had only addressed review
+          # comments. Skipping needs both facts positively: commit-and-push
+          # recorded merged=no AND the shepherd attempt reported succeeded. A
+          # missing file, "unknown", or a crashed attempt (which may have
+          # merged before it died) all verify exactly as before.
+          MERGED=$(cat /onexit/commit/merged 2>/dev/null || echo "unknown")
+          SHEPHERD_STATUS=$(cat /onexit/shepherd/shepherd_status 2>/dev/null || echo "unknown")
+          SKIP_VERIFY=""
+          if [ "$MERGED" = "no" ] && [ "$SHEPHERD_STATUS" = "succeeded" ]; then
+            SKIP_VERIFY=1
+            echo "No merge this tick (merged=no, shepherd=succeeded) — skipping the post-merge wait and Degraded check."
+          else
+            echo "merged=${MERGED} shepherd=${SHEPHERD_STATUS} — verifying."
+            # 5-min sleep ≈ ArgoCD's default app reconcile interval (180s)
+            # plus a buffer for the per-resource health re-evaluation pass
+            # that runs on the next tick after a sync.
+            echo "Sleeping 300s for ArgoCD to reconcile post-merge…"
+            sleep 300
+          fi
+
+          # The unfiltered snapshot gates incident resolution in onExit, so a
+          # skipped verification still has to produce it. See the note at the
+          # end of this script.
+          write_unfiltered() {
+            printf '%s' "$1" | jq -r '
+              .items[]
+              | select(.status.health.status == "Degraded")
+              | "\(.metadata.namespace)/\(.metadata.name)"
+            ' | tr '\n' ' ' > /tmp/onexit/degraded_unfiltered.txt
+          }
 
           THRESHOLD="${STARTED_AT}"
           echo "Listing applications that became Degraded after ${THRESHOLD}…"
@@ -1282,6 +1535,12 @@ spec:
             printf 'kubectl-failed' > /tmp/onexit/verify_status
             echo "kubectl-failed (rc=$RC)" > /tmp/onexit/degraded.txt
             exit 1
+          fi
+
+          if [ -n "$SKIP_VERIFY" ]; then
+            write_unfiltered "$RAW"
+            printf 'skipped' > /tmp/onexit/verify_status
+            exit 0
           fi
 
           # Compare timestamps as epoch seconds, not strings.
@@ -1334,11 +1593,7 @@ spec:
           # uses this unfiltered list, not the filtered degraded.txt, to
           # decide whether it's safe to resolve the shepherd fingerprint.
           FRESH="${RAW2:-$RAW}"
-          printf '%s' "$FRESH" | jq -r '
-            .items[]
-            | select(.status.health.status == "Degraded")
-            | "\(.metadata.namespace)/\(.metadata.name)"
-          ' | tr '\n' ' ' > /tmp/onexit/degraded_unfiltered.txt
+          write_unfiltered "$FRESH"
 
           # Last line of the script, deliberately: everything above this
           # point can fail, and until it is reached the verdict stays
@@ -1380,6 +1635,33 @@ spec:
     # ── 5. Telegram notification (onExit) ──────────────────────────────────
     # Same pattern as cwft-mctl-agents-run / cwft-mctl-agents-implement.
     - name: notify-telegram
+      initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
       inputs:
         artifacts:
           # Everything this onExit handler needs, each addressed by its own
@@ -1418,6 +1700,20 @@ spec:
         image: alpine:3.19
         command: [sh]
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           - name: TG_BOT_TOKEN
             valueFrom:
               secretKeyRef:
@@ -1481,6 +1777,9 @@ spec:
           #                    the grace period
           #   degraded       — ran, apps still Degraded; list in degraded.txt
           #   kubectl-failed — ran, could not read Applications 3× in a row
+          #   skipped        — the tick merged nothing, so there was nothing
+          #                    to verify; degraded_unfiltered.txt is still
+          #                    written
           #   incomplete     — the step was killed or errored out before its
           #                    last line, or the file is absent entirely
           #
@@ -1513,6 +1812,15 @@ spec:
           # itself never completed. See run-shepherd for where this is
           # written.
           SHEPHERD_STATUS=$(cat /onexit/shepherd/shepherd_status 2>/dev/null || echo "unknown")
+
+          # Terminal proposal flips this tick committed, "<status> <path>" per
+          # line (see commit-and-push). Rendered as "<status>: <service>/<slug>".
+          TRANSITIONS=$(sed -E \
+            -e 's#platform-gitops/agents-state/##' \
+            -e 's#/proposals/#/#' \
+            -e 's#/\.status\.yaml$##' \
+            -e 's#^([a-z-]+) #\1: #' \
+            /onexit/commit/transitions.txt 2>/dev/null)
 
           # Stable dedup key for this recurring job. Two failures of the same
           # {service, slug} scope collapse into one open incident instead of
@@ -1573,14 +1881,20 @@ spec:
           if [ -n "$VERIFY_NOTE" ]; then
             TEXT=$(printf '%s\n⚠️ %s' "$TEXT" "$VERIFY_NOTE")
           fi
+          if [ -n "$TRANSITIONS" ]; then
+            TEXT=$(printf '%s\n%s' "$TEXT" "$TRANSITIONS")
+          fi
 
-          # Telegram leg. Skip a Succeeded run that transitioned nothing —
-          # at the hourly cadence that's the steady-state outcome, and an
-          # unconditional ✅ every hour drowned out real merges/rejections.
-          # Failed/Error/Unknown (incl. a post-deploy-verify degraded-apps
-          # failure) always notify regardless of activity.
-          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ "$WORKFLOW_ACTIVITY" = "none" ]; then
-            echo "ℹ️  Succeeded with no activity (no proposal transitions) — skipping Telegram leg."
+          # Telegram leg. A Succeeded run reports only a terminal outcome —
+          # merged, rejected or review-stuck — so each PR produces one message
+          # when it is done instead of one per tick. Skipping on
+          # activity=none alone was not enough: a proposal in review-fixing
+          # commits a .status.yaml update on every tick, and 2026-10-19..24
+          # carried four ✅ per PR (issue-64, -74, -781, -1979) that said
+          # nothing but "still working". Failed/Error/Unknown (incl. a
+          # post-deploy-verify degraded-apps failure) always notify.
+          if [ "$WORKFLOW_STATUS" = "Succeeded" ] && [ -z "$TRANSITIONS" ]; then
+            echo "ℹ️  Succeeded with no terminal transition (activity=${WORKFLOW_ACTIVITY}) — skipping Telegram leg."
           elif [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
             # JSON-encoded with jq, not shell interpolation. $TEXT carries the
             # slug, the service name and the degraded-app list, so a double

@@ -43,8 +43,10 @@ spec:
             default: "default"
           - name: config_patch
             default: ""
+          - name: image_user      # `uid` or `uid:gid` from check-image-user
+            default: ""
       script:
-        image: alpine:3.19
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         env:
           - name: HEALTH_CHECK_PATH
@@ -81,6 +83,8 @@ spec:
             value: "{{inputs.parameters.config_patch}}"
           - name: PARAM_SKIP_HEALTH_CHECK
             value: "{{inputs.parameters.skip_health_check}}"
+          - name: PARAM_IMAGE_USER
+            value: "{{inputs.parameters.image_user}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
@@ -102,6 +106,7 @@ spec:
           CLEAR_SECRETS="$PARAM_CLEAR_SECRETS"
           SERVICE_TEMPLATE="$PARAM_SERVICE_TEMPLATE"
           CONFIG_PATCH="$PARAM_CONFIG_PATCH"
+          IMAGE_USER="$PARAM_IMAGE_USER"
 
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
@@ -118,6 +123,28 @@ spec:
             echo "Auto-generated domain: ${HOST}"
           fi
           SKIP_HEALTH="$PARAM_SKIP_HEALTH_CHECK"
+
+          # KEY=value lines, parsed the way write-service-secrets(-from-secret)
+          # in tpl-vault-write parse them: split on the first '=', trim blanks
+          # around key and value, drop one pair of matching surrounding quotes
+          # from the value. This was `echo "$x" | xargs`, which fails outright
+          # on an unbalanced quote (a value like a"b could not be onboarded at
+          # all) and silently strips inner quotes and backslashes and squeezes
+          # runs of spaces in every other value. printf, not echo: dash and
+          # busybox echo expand backslash escapes.
+          trim() {
+            _t="$1"
+            while :; do case "$_t" in [[:space:]]*) _t="${_t#?}" ;; *) break ;; esac; done
+            while :; do case "$_t" in *[[:space:]]) _t="${_t%?}" ;; *) break ;; esac; done
+            printf '%s' "$_t"
+          }
+          unquote() {
+            _t="$1"
+            case "$_t" in
+              \"*\"|\'*\') _t="${_t#?}"; _t="${_t%?}" ;;
+            esac
+            printf '%s' "$_t"
+          }
 
           # ── 0a. Validate everything that reaches a yq or sed program ──────────
           # Second layer, not the only one: every yq call below now passes its
@@ -258,15 +285,19 @@ spec:
           echo "$PORT" | grep -qE '^[0-9]{1,5}$' || {
             echo "❌ Invalid port: ${PORT}"; exit 1; }
 
-          # ── 0. Install dependencies ───────────────────────────────────────────
-          apk add --no-cache openssl curl git ca-certificates openssh-client
-          curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
-            -o /usr/local/bin/yq \
-            "https://github.com/mikefarah/yq/releases/download/v4.52.4/yq_linux_amd64"
-          # Same unverified download as wft-provision-database had; see the
-          # note there. This pod carries the gitops deploy key.
-          echo "0c4d965ea944b64b8fddaf7f27779ee3034e5693263786506ccd1c120f184e8c  /usr/local/bin/yq" | sha256sum -c - >/dev/null
-          chmod +x /usr/local/bin/yq
+          # check-image-user writes a non-zero uid with an optional numeric gid,
+          # nothing else; anything other than that or empty is refused rather
+          # than committed as a security context.
+          if [ -n "$IMAGE_USER" ]; then
+            reject_multiline "image_user" "$IMAGE_USER"
+            echo "$IMAGE_USER" | grep -qE '^[1-9][0-9]{0,9}(:[0-9]{1,10})?$' || {
+              echo "❌ Invalid image_user: ${IMAGE_USER}"; exit 1; }
+          fi
+
+          # git, ssh, yq and helm come from mctl-workflow-tools 1.0.0: yq v4.52.4,
+          # helm v3.16.4, sha256-pinned at build time. The yq calls below rely
+          # on v4 (strenv, no startswith), so a tools bump must stay on yq v4.
+          # This step runs non-root, so it installs nothing.
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -394,12 +425,12 @@ spec:
 
             # env_vars
             if [ -n "$ENV_VARS" ]; then
-              while IFS='=' read -r key rest; do
+              while IFS= read -r line; do
+                key=$(trim "${line%%=*}")
+                case "$line" in *=*) rest="${line#*=}" ;; *) rest="" ;; esac
                 [ -z "$key" ] && continue
-                echo "$key" | grep -q '^#' && continue
-                key=$(echo "$key" | xargs)
-                value=$(echo "$rest" | xargs)
-                [ -z "$key" ] && continue
+                case "$key" in \#*) continue ;; esac
+                value=$(unquote "$(trim "$rest")")
                 # The key lands in an expression PATH, where strenv() does not
                 # substitute - `.env.${key}` with a key of `x = 1 | .image.tag =
                 # "pwned" #` rewrites the image a service runs. So the key is
@@ -420,11 +451,10 @@ spec:
               export SECRET_NAME="${SERVICE}-secrets"
               yq eval -i '.externalSecret.targetSecret = strenv(SECRET_NAME)' "${DIR}/values.yaml"
               yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
-              while IFS='=' read -r key rest; do
+              while IFS= read -r line; do
+                key=$(trim "${line%%=*}")
                 [ -z "$key" ] && continue
-                echo "$key" | grep -q '^#' && continue
-                key=$(echo "$key" | xargs)
-                [ -z "$key" ] && continue
+                case "$key" in \#*) continue ;; esac
                 reject_multiline "secret env var name" "$key"
                 echo "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || {
                   echo "❌ Invalid secret env var name: ${key}"; exit 1; }
@@ -434,6 +464,24 @@ spec:
           $PARAM_SECRET_ENV_VARS
           SECRETEOF
               yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
+            fi
+
+            # Pin the image's numeric USER (gitops#2149). Under the chart's
+            # runAsNonRoot default the repo-wide sweep in
+            # tests/test_check_image_user.py requires runAsUser in values, so
+            # an onboard without it turned validate red for every later PR.
+            # `//` keeps a pin a service template already carries. Only
+            # onboard writes it: deploy never touches a pin set by hand.
+            if [ -n "$IMAGE_USER" ]; then
+              export PIN_UID="${IMAGE_USER%%:*}"
+              yq eval -i '.containerSecurityContext.runAsUser = (.containerSecurityContext.runAsUser // (strenv(PIN_UID) | to_number))' "${DIR}/values.yaml"
+              case "$IMAGE_USER" in
+                *:*)
+                  export PIN_GID="${IMAGE_USER#*:}"
+                  yq eval -i '.containerSecurityContext.runAsGroup = (.containerSecurityContext.runAsGroup // (strenv(PIN_GID) | to_number))' "${DIR}/values.yaml"
+                  ;;
+              esac
+              echo "Pinned runAsUser/runAsGroup from the image USER ${IMAGE_USER}"
             fi
 
             # catalog-info.yaml
@@ -455,19 +503,8 @@ spec:
               yq eval -i '.metadata.links += [{"url": "https://" + strenv(HOST), "title": "Service URL", "icon": "web"}]' "${DIR}/catalog-info.yaml"
             fi
 
-            # vault-cleanup.yaml
-            sed \
-              -e "s|__TEAM_NAME__|${TEAM}|g" \
-              -e "s|__SERVICE_NAME__|${SERVICE}|g" \
-              "platform-gitops/argo-workflows/file-templates/vault-cleanup.yaml.tpl" > "${DIR}/vault-cleanup.yaml"
-
             # Validate Helm template before committing
             echo "🔍 Validating Helm template..."
-            curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
-              -o /tmp/helm.tar.gz \
-              "https://get.helm.sh/helm-v3.14.0-linux-amd64.tar.gz" && \
-              tar -xzf /tmp/helm.tar.gz -C /tmp && \
-              mv /tmp/linux-amd64/helm /usr/local/bin/helm
 
             if ! helm template test "platform-gitops/helm-charts/base-service" \
               -f "${DIR}/values.yaml" > /dev/null 2>&1; then
@@ -507,12 +544,12 @@ spec:
               yq eval -i '.env = {}' "${DIR}/values.yaml"
               echo "Cleared all env vars"
             elif [ -n "$ENV_VARS" ]; then
-              while IFS='=' read -r key rest; do
+              while IFS= read -r line; do
+                key=$(trim "${line%%=*}")
+                case "$line" in *=*) rest="${line#*=}" ;; *) rest="" ;; esac
                 [ -z "$key" ] && continue
-                echo "$key" | grep -q '^#' && continue
-                key=$(echo "$key" | xargs)
-                value=$(echo "$rest" | xargs)
-                [ -z "$key" ] && continue
+                case "$key" in \#*) continue ;; esac
+                value=$(unquote "$(trim "$rest")")
                 # The key lands in an expression PATH, where strenv() does not
                 # substitute - `.env.${key}` with a key of `x = 1 | .image.tag =
                 # "pwned" #` rewrites the image a service runs. So the key is
@@ -542,11 +579,10 @@ spec:
               if [ "$(yq eval '.externalSecret.data | type' "${DIR}/values.yaml")" != "!!seq" ]; then
                 yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
               fi
-              while IFS='=' read -r key rest; do
+              while IFS= read -r line; do
+                key=$(trim "${line%%=*}")
                 [ -z "$key" ] && continue
-                echo "$key" | grep -q '^#' && continue
-                key=$(echo "$key" | xargs)
-                [ -z "$key" ] && continue
+                case "$key" in \#*) continue ;; esac
                 reject_multiline "secret env var name" "$key"
                 echo "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || {
                   echo "❌ Invalid secret env var name: ${key}"; exit 1; }
@@ -576,12 +612,12 @@ spec:
               echo "Cleared all env vars"
               CHANGED=true
             elif [ -n "$ENV_VARS" ]; then
-              while IFS='=' read -r key rest; do
+              while IFS= read -r line; do
+                key=$(trim "${line%%=*}")
+                case "$line" in *=*) rest="${line#*=}" ;; *) rest="" ;; esac
                 [ -z "$key" ] && continue
-                echo "$key" | grep -q '^#' && continue
-                key=$(echo "$key" | xargs)
-                value=$(echo "$rest" | xargs)
-                [ -z "$key" ] && continue
+                case "$key" in \#*) continue ;; esac
+                value=$(unquote "$(trim "$rest")")
                 # The key lands in an expression PATH, where strenv() does not
                 # substitute - `.env.${key}` with a key of `x = 1 | .image.tag =
                 # "pwned" #` rewrites the image a service runs. So the key is
@@ -612,11 +648,10 @@ spec:
               if [ "$(yq eval '.externalSecret.data | type' "${DIR}/values.yaml")" != "!!seq" ]; then
                 yq eval -i '.externalSecret.data = []' "${DIR}/values.yaml"
               fi
-              while IFS='=' read -r key rest; do
+              while IFS= read -r line; do
+                key=$(trim "${line%%=*}")
                 [ -z "$key" ] && continue
-                echo "$key" | grep -q '^#' && continue
-                key=$(echo "$key" | xargs)
-                [ -z "$key" ] && continue
+                case "$key" in \#*) continue ;; esac
                 reject_multiline "secret env var name" "$key"
                 echo "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || {
                   echo "❌ Invalid secret env var name: ${key}"; exit 1; }
@@ -699,7 +734,7 @@ spec:
           - name: component_name
           - name: component_type
       script:
-        image: alpine:3.19
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         envFrom:
           - configMapRef:
@@ -729,7 +764,6 @@ spec:
           done
 
           # Setup SSH
-          apk add --no-cache openssl curl git openssh-client ca-certificates
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519

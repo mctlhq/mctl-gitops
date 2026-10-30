@@ -11,7 +11,7 @@
 
 image:
   repository: ghcr.io/mctlhq/projects-mcp
-  tag: "0.1.12"
+  tag: "0.1.14"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -173,3 +173,11 @@ extraVolumeMounts:
     mountPath: /etc/projects-mcp
     readOnly: true
 extraContainers: []
+# Non-root, read-only root (the chart default). The image runs as USER 1000:1000
+# since 0.1.13; the uid is pinned here too, so kubelet and the deploy-time image
+# check do not depend on reading the image config. The server writes nothing to
+# disk at run time, so /tmp from the chart's writablePaths is enough.
+# See https://docs.mctl.ai/guides/scaffolding#container-requirements
+containerSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000

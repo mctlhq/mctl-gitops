@@ -80,6 +80,11 @@ spec:
                 secretName: argo-workflows-tls
 
         controller:
+          # The chart default ([default]) adds a workflow Role and RoleBinding
+          # in namespace default, bound to a default/argo-workflow-sa that does
+          # not exist; no workflow runs there. Workflow RBAC is still created
+          # in argo-workflows, and tenants get theirs from the tenant chart.
+          workflowNamespaces: []
           resources:
             requests:
               cpu: 250m

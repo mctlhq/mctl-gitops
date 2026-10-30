@@ -16,9 +16,10 @@ record content and cannot leave the configuration. Why that is acceptable, and
 what closes the origin to traffic that did not come through Cloudflare, is in
 `../../README.md` (#1119). Repeating it here as prose bought nothing.
 
-Both rulesets — the apex redirect and the `.php` block — moved into
-`../../modules/zone-baseline` with #1103 and are managed now, together with the
-apex and wildcard records. This zone and `mctl.me` describe the same four
+Both rulesets — the apex redirect and the custom firewall ruleset (`.php`
+block, the block on subdomains outside `redirect_subdomains` in `dns.tf`, the
+spoofed-crawler block) — moved into `../../modules/zone-baseline` with #1103
+and are managed now, together with the apex and wildcard records. This zone and `mctl.me` describe the same four
 baseline objects through the same module.
 
 Deliberately **not** managed here:

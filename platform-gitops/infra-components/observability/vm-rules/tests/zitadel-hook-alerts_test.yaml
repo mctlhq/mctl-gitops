@@ -1,0 +1,89 @@
+# Unit tests for zitadel-hook-alerts.yaml (group mctl.zitadel.hook).
+# rule_files is resolved relative to this file; generated/ is produced by
+# scripts/check-vm-rules.sh.
+rule_files:
+  - generated/zitadel-hook-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # Normal traffic: accounts created and updated, other-org intents passed.
+  - interval: 1m
+    name: passes and replaces stay quiet
+    input_series:
+      - series: 'mctl_api_zitadel_hook_decisions_total{namespace="mctl-api",target="intent",kind="replace",reason="intent_create"}'
+        values: '0+1x30'
+      - series: 'mctl_api_zitadel_hook_decisions_total{namespace="mctl-api",target="intent",kind="pass",reason="intent_other_idp"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ZitadelHookSignInRefused
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ZitadelHookFailing
+        exp_alerts: []
+
+  # One refused sign-in pages with the reason as a label.
+  - interval: 1m
+    name: a refused invitee pages with the reason
+    input_series:
+      - series: 'mctl_api_zitadel_hook_decisions_total{namespace="mctl-api",target="intent",kind="refuse",reason="intent_no_verified_email"}'
+        values: '0x5 1x25'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ZitadelHookSignInRefused
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ZitadelHookSignInRefused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: zitadel
+              reason: intent_no_verified_email
+            exp_annotations:
+              summary: "GitHub sign-in refused by the identity hook: intent_no_verified_email"
+              description: >-
+                A customer sign-in was refused in the last 15 minutes and the
+                person only saw the generic invitation page.
+                intent_customer_create_not_allowed: the GitHub id is not on an
+                unexpired approval (check mctl_list_signup_requests; the id is in
+                the mctl-api log line) or an uninvited visitor tried.
+                intent_no_verified_email: the GitHub account has no verified
+                primary email; ask the person to verify it and retry.
+                Other reasons: mctl-api docs/zitadel-identity-hook.md.
+                Logs: {app="mctl-api"} |= "zitadel hook" |= "refuse"
+
+  # A refusal on the create-user gate is API misuse, not a person: quiet.
+  - interval: 1m
+    name: create-gate refusals do not page as sign-ins
+    input_series:
+      - series: 'mctl_api_zitadel_hook_decisions_total{namespace="mctl-api",target="create-user",kind="refuse",reason="gate_path_closed"}'
+        values: '0x5 1x25'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ZitadelHookSignInRefused
+        exp_alerts: []
+
+  # A 503 from the hook pages with target and reason.
+  - interval: 1m
+    name: a hook failure pages
+    input_series:
+      - series: 'mctl_api_zitadel_hook_decisions_total{namespace="mctl-api",target="intent",kind="failure",reason="intent_invitation_unreadable"}'
+        values: '0x5 1x25'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ZitadelHookFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: zitadel
+              target: intent
+              reason: intent_invitation_unreadable
+            exp_annotations:
+              summary: "Identity hook answered 503 on intent: intent_invitation_unreadable"
+              description: >-
+                ZITADEL got Errors.Execution.Failed from mctl-api, which blocks
+                the sign-in it was handling. intent_invitation_unreadable and
+                intent_deletion_unreadable point at the principal store
+                (shared-pg); intent_github_emails_unavailable at GitHub's API.
+                Logs: {app="mctl-api"} |= "zitadel hook" |= "failure"

@@ -1,0 +1,101 @@
+# Tasks: issue-866-feat-deploy-deploy-plan-with-a-server-co
+
+- [ ] 1. Create `internal/deployplan` types, intent parsing and canonicalization.
+  - Add `types.go` and `intent.go` (`ParseIntent`): duplicate-key refusal, `deployanalyze.Validate`, typed decode with `DisallowUnknownFields`, canonical JSON with schema defaults made explicit.
+  - DoD: a schema-invalid intent (including `extraObjects` at the top level and under `spec`) returns a schema error, and canonical JSON is byte-stable.
+- [ ] 2. Port the preview rewrite to Go (depends on 1).
+  - Add `compile.go` with a port of `rewrite_preview_values.py` (`rewriteRemoteKey`, `classifyKeys`, `forceTenantStore`, `dbSecret`), with `ErrPreviewValuesRefused` for mixed keys and foreign paths.
+  - DoD: behaviour matches the snapshot script `internal/deployplan/testdata/upstream/rewrite_preview_values.py` on the golden fixtures (T5).
+- [ ] 3. Implement `CompilePreview` (depends on 2).
+  - Apply the intent the way `tpl-git-commit` does (`service.port`, `probes.*.path`, `replicaCount`, `resources`, `env`, `externalSecret`), then the rewrite, then the `wft-preview-deploy` `--set` overrides with preview id and host.
+  - Add `ErrValuesUnparseable` for a non-mapping document or a YAML error.
+  - DoD: before and after maps are deterministic, and golden test T5 is green.
+- [ ] 4. Add `previewid.go`, `redact.go`, `render.go` (canonical YAML, unified diff), `digest.go` (`mctl-deploy-plan/v1`, length-prefixed fields in the documented order) and `approval.go` (risk matrix) (depends on 3).
+  - DoD: T3, T4, T6 and T7 are green.
+- [ ] 5. Add the `deploy_plans` store (`store.go`) (depends on 1).
+  - Include the DDL with CHECKs, the unique partial idempotency index and the `BEFORE UPDATE` immutability trigger.
+  - `Insert` handles replay and conflict. Add `Get`. There is no update method.
+  - DoD: the store tests in T9 pass against the test Postgres used by `internal/workitems` tests.
+- [ ] 6. Add `gitops.Reader.ServiceValuesAt` (data, source repo, exists, rev under one RLock; fails closed) and the `DeployPlanGitops` interface in `internal/api`.
+  - DoD: T8 is green (absent vs. stale, symlink, unreadable).
+- [ ] 7. Extract the repository-binding check from `DeployAnalyze` into `h.deployRepoBound`. No behaviour change.
+  - DoD: the existing `handlers_deploy_analyze_test.go` passes unchanged.
+- [ ] 8. Add `internal/api/handlers_deploy_plan.go` with `DeployPlan` (POST) and `GetDeployPlan` (GET), using the check order in design section 3, every refusal code, and audit through `deployAudit` (`deploy.plan`, `deploy.plan.read`). Register the routes in `router.go`, add `DeployPlanStore`, `DeployPlanGitops` and `PlatformDomain` to the options, and wire the store in `cmd/api/main.go` from the work-items DB source (depends on 4, 5, 6, 7).
+  - DoD: T1, T2, T10 and T11 are green, and the plan path writes only the `deploy_plans` row (asserted with fakes: no Argo submit, no gitops write).
+- [ ] 9. Add MCP tools `mctl_deploy_plan` and `mctl_get_deploy_plan` in `internal/mcp/deploy_plan.go` as REST clients, with descriptions. Bump the tool count in `server_test.go` (depends on 8).
+  - DoD: T12 is green.
+- [ ] 10. Carry the caller audit into the mctl-api PR. The cross-repo audit was done by the owner's session on 2026-10-30 against the default branches of all mctlhq workspace repositories; the implementer does NOT repeat it outside the mctl-api clone. It only re-checks the in-repo callers (MCP tools in `internal/mcp`, `handlers_signup.go`) and copies this matrix into the PR description.
+  - This stays a hard merge gate: server-side 428 enforcement is in this item, and every affected caller must already be compatible or have its fix merged and deployed before (or atomically with) the enforcement. An open companion PR is not sufficient.
+  - Caller matrix for `create-tenant`, `provision-database`, `retire-service`, `delete-tenant`:
+
+    | Caller | Repository / file | Operations | Status |
+    |---|---|---|---|
+    | `mctl delete` (CLI) | mctl-gitops `cli/mctl/cmd/delete.go` | retire-service | fixed in mctlhq/mctl-gitops#2279, merged 7cdfb65; the CLI is built from source (`make install`), so merged is deployed |
+    | Other CLI commands | mctl-gitops `cli/mctl/cmd/{deploy,config}.go` | deploy-service only | not affected (`RequiresConfirm: false`) |
+    | Portal tenant/workflow backends, Backstage templates | mctl-portal, mctl-gitops `backstage-templates` | create-tenant, delete-tenant-safe, retire-service, provision-database | not affected: submit Argo workflows directly, never the mctl-api execute route |
+    | Website signup | mctl-web `cloudflare-worker/index.js` | create-tenant | not affected: calls the portal tenant API |
+    | mctl-agents | `orchestrator/**` | `mctl-agents-*`, `dev-loop-start` only | not affected |
+    | Tenant CI pipelines | mctl-instruments, mctl-rules, pelican-libertex-social | deploy-service, preview-deploy, rollback-service | not affected |
+    | MCP tools | mctl-api `internal/mcp` | all four | same change (task 11) |
+    | Signup handler | mctl-api `handlers_signup.go` | create-tenant | same change; re-check it does not reach the gated path |
+
+  - Not covered: scripts outside the mctlhq workspace checkouts (for example tenant-owned automation). They get the documented 428 with a clear code; the narrow rollback is reverting only the `ExecuteOperation` gate commit.
+  - DoD: the matrix above, with the in-repo rows re-verified, is in the mctl-api PR description with the rollout order (client compatibility -> clients merged and deployed -> mctl-api 428 enforcement). Every row is already compatible or deployed, so the PR does not need to wait on another repository.
+- [ ] 11. Make `RequiresConfirm` load-bearing (depends on 10; the `ExecuteOperation` 428 gate may merge only after every task 10 caller row is compatible or deployed).
+  - In `ExecuteOperation`, check the confirm gate before `StripUndeclared`, answer 428 `operation_confirmation_required` with a refusal audit row, and remove `confirm` from the input.
+  - Add `requireConfirm` gates and a `confirm` parameter to `mctl_create_tenant` and `mctl_provision_database`. Forward `confirm: "yes"` from all four gated tools.
+  - Add the `operationTools` map in `internal/mcp/operation_tools.go`.
+  - Add a registry comment on `deploy-service` documenting why it stays `RequiresConfirm: false`.
+  - DoD: T13 and T14 are green, and T13 is shown red when the gate is removed from `mctl_retire_service` (reverting that one line), with the red run noted in the PR.
+- [ ] 12. Update `internal/openapi/openapi.yaml`: both deploy-plan paths with their schemas and error codes, and the generic execute `confirm` field with the 428 response (depends on 8, 11).
+  - DoD: `internal/openapi/embed_test.go` passes, and the new codes are listed.
+- [ ] 13. Run `go fmt`, `go vet`, `golangci-lint` and `go test ./...`. Bump the version per the repo's release convention.
+
+## Tests
+
+- [ ] T1. Round trip. A Tier 0 `draft_intent` from a `deployanalyze.Analyze` fixture, with `environment: preview` and a bound existing service, plans to 201 with digest, diff, preview host, `action: update` and `requires_approval: true`. Planning it again with no idempotency key gives a new id with the same digest. With the same idempotency key it returns the stored plan with `replayed: true`.
+- [ ] T2. Refusals, one test each, with an audit row asserted:
+  - schema-invalid intent with `extraObjects` gives 422 `deploy_intent_invalid`
+  - unbound repository gives 403 `deploy_repository_not_bound`
+  - non-member and viewer-only member give 403
+  - `revision: main` gives 422 `deploy_revision_not_a_sha`
+  - nonexistent SHA (GitHub 404) gives 422 `deploy_revision_unreadable`
+  - `environment: production` gives 422 `prod_requires_promote`
+  - service directory absent at the pinned SHA gives 422 `onboard_requires_preview_onboard`
+  - service annotated with another repository gives 403 `deploy_service_not_bound`
+  - same idempotency key with a different intent gives 409 `deploy_plan_idempotency_conflict`
+- [ ] T3. Digest stability and sensitivity. A table test: the same input gives the same digest. Mutating each bound field (tenant, service, environment, canonical intent, revision, gitops_base_sha, action, preview_id, values_after, host) changes it. Changing id, created_at, expires_at, created_by or idempotency_key does not. The encoding version prefix is asserted.
+- [ ] T4. Canonical intent. Omitted defaults and explicit defaults give an identical canonical intent and digest. Key order in the input does not matter.
+- [ ] T5. Golden compile against the preview workflow.
+  - Fixtures under `internal/deployplan/testdata/golden/` hold base values, an intent and the expected effective values. They are captured by running the snapshot `internal/deployplan/testdata/upstream/rewrite_preview_values.py` and applying the `--set` list of the snapshot `wft-preview-deploy.yaml` (the capture script is committed next to them and records the `source_commit` from `provenance.json`). Everything needed is inside the mctl-api clone; do not read mctl-gitops.
+  - `CompilePreview` output equals the expected values.
+  - A second test parses the snapshot templates in `testdata/upstream/` (pinned by `provenance.json`) and fails when the set of `--set` keys in `wft-preview-deploy.yaml`, or the yq assignment paths for the intent keys in `tpl-git-commit.yaml`, differ from the compiler's declared key list.
+- [ ] T6. Requires-approval detector. The converged fixture (preview update) gives required/owner. A mutated matrix (preview update mapped to false) turns the test red.
+- [ ] T7. Preview id and host are deterministic, match `[a-z0-9]{6}`, and the host is `{service}-{id}.{domain}`.
+- [ ] T8. Onboard/update detector, fail-closed:
+  - an existing directory gives `exists=true`
+  - a missing service directory gives `exists=false`
+  - a missing `services/` root gives an error
+  - a symlinked values.yaml gives an error
+  - a stale or unsynced checkout gives an error
+  - unparseable values give 500 `deploy_values_unparseable`, never onboard
+  - a GitHub 5xx on the commit gives 502, never `revision_unreadable`
+- [ ] T9. Store:
+  - insert then get
+  - the UPDATE statement fails with the trigger error
+  - `expires_at` over 24 h fails the CHECK
+  - `ttl_seconds` outside 60..86400 gives 400
+  - the `expired` flag is lazy (clock injected past expiry: `expired: true`, row unchanged)
+  - the id carries the `dpl_` prefix
+- [ ] T10. Read visibility. A tenant member and an admin get 200. A member of another tenant and an unknown id both get 404 `deploy_plan_not_found`. No store gives 503.
+- [ ] T11. Secret scan. Base values contain `externalSecret.data[].remoteKey: teams/t/s`, `dbSecret.vaultPath` and secret-looking env values in `secretRefs` fixtures. Every response body (POST, GET, every refusal) and every audit row is scanned for `teams/`, `secret/data/`, `vault`, `ghp_`, `ghs_`, `gho_` and the fixture secret values, with no match. `remoteKey` appears only as `redacted:sha256:`.
+- [ ] T12. MCP. `mctl_deploy_plan` and `mctl_get_deploy_plan` forward to the REST routes and surface error codes. Tool count is updated.
+- [ ] T13. RequiresConfirm parity (in `internal/mcp`). For every registry operation with `RequiresConfirm: true`, `operationTools` must name a tool. Calling that tool without `confirm` must return a tool error and make no HTTP request to the fake API. With `confirm: "yes"` it posts with `confirm` set. A source-scan subtest asserts that every `/api/v1/operations/<op>/execute` literal in the package is in `operationTools`.
+- [ ] T14. Generic route parity (in `internal/api`). For every `RequiresConfirm: true` operation that is not `HandlerOnly`, executing without `confirm` gives 428 `operation_confirmation_required`, with no workflow submitted and an audit row written. With `confirm: "yes"` it proceeds to the normal checks, and `confirm` is not passed to the workflow parameters.
+
+## Rollback
+
+- Revert the PR and redeploy the previous mctl-api version.
+- The `deploy_plans` table is additive, so it can stay (no reader once the routes are gone) or be dropped with `DROP TABLE deploy_plans; DROP FUNCTION deploy_plans_immutable();`. No other table is touched.
+- For a narrower rollback, `WORK_ITEMS_DISABLED=true` makes the deploy-plan routes answer 503 (along with work items). There is no separate kill switch.
+- If the 428 confirm gate breaks an external caller that task 10 missed, revert only the `ExecuteOperation` gate commit (the MCP gates can stay, since they only add a check on the tool side).

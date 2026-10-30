@@ -213,7 +213,7 @@ roleRef:
 # in namespace argocd, traced through cluster-templates/:
 #   create-tenant       list Applications (collision check), get tenant-<T>,
 #                       refresh annotation on ApplicationSet tenants
-#   delete-tenant(-safe) list Applications team=<T>, delete them and
+#   delete-tenant-safe  list Applications team=<T>, delete them and
 #                       tenant-<T>, refresh annotation on ApplicationSets apps
 #                       and tenants, list and delete the Roles/RoleBindings
 #                       labelled mctl.me/tenant=<T> (argo-workflow-argocd-<ns>)
@@ -260,7 +260,7 @@ roleRef:
   name: argo-workflow-argocd-sync
   apiGroup: rbac.authorization.k8s.io
 ---
-# create-tenant, delete-tenant-safe and delete-tenant check that a namespace
+# create-tenant and delete-tenant-safe check that a namespace
 # named after the tenant is absent or carries mctl.me/tenant=<tenant> before
 # adopting or deleting it (gitops#1768). That is a cluster-wide read of
 # Namespace objects (labels and annotations, no secret material): get and

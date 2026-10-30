@@ -64,9 +64,28 @@ spec:
           # reschedule onto and sat Pending until the node returned — which
           # deadlocked k3s rolling upgrades (xgf + control-plane stuck cordoned,
           # vault-2 Pending for >8m, upgrade job cycling). PREFERRED lets the pod
-          # co-locate during a drain so the drain/upgrade completes; the
-          # scheduler still spreads the 3 replicas across distinct nodes in
-          # steady state. The maxUnavailable:1 PDB above still protects quorum.
+          # co-locate during a drain so the drain/upgrade completes. The
+          # maxUnavailable:1 PDB above still protects quorum.
+          #
+          # PREFERRED is only consulted at scheduling time: nothing moves a pod
+          # back once the drained node returns. After the k3s 1.34 upgrade
+          # (2026-10-22) vault-1 and vault-2 both stayed on ftx for two days,
+          # so losing that one node would have lost Raft quorum. The soft
+          # topologySpreadConstraint below is what the descheduler
+          # (core-infra/descheduler.yaml, RemovePodsViolatingTopologySpreadConstraint)
+          # acts on to restore one replica per worker after a drain.
+          topologySpreadConstraints: |
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              # The tainted control-plane node can never run vault; without
+              # Honor it counts as an empty domain and skews the calculation.
+              nodeTaintsPolicy: Honor
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vault
+                  app.kubernetes.io/instance: vault
+                  component: server
           affinity: |
             podAntiAffinity:
               preferredDuringSchedulingIgnoredDuringExecution:
@@ -90,7 +109,9 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              # Raised 256Mi->384Mi on 2026-10-20: 7d peak working set
+              # 415Mi, steady ~320-345Mi on all three replicas.
+              memory: 384Mi
             limits:
               # Restored 200m→500m on 2026-05-13: steady-state usage reached
               # 101m (50% of 200m limit), triggering CPUThrottlingHigh alerts.

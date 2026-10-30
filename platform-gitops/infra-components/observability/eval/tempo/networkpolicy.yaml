@@ -44,7 +44,7 @@ spec:
 #    infrastructure/k3s-preview/extra-manifests/cloudflare-origin-allowlist.yaml.tpl.
 #    If Cloudflare ever moves R2 outside these ranges, the symptom is
 #    TempoEvalObjectStorageErrors / TempoEvalFlushFailures
-#    (vm-rules/tempo-eval-alerts.yaml), not silent loss.
+#    (vm-rules/tempo-eval-alerts.yaml, since renamed to tempo-alerts.yaml), not silent loss.
 # ─────────────────────────────────────────────────────────────────────────────
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

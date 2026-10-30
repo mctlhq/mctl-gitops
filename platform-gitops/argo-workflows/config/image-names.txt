@@ -49,6 +49,7 @@ reserved zitadel-iac
 grant platform grafana-iac
 grant platform mc
 grant platform mctl-agent
+grant platform mctl-workflow-tools
 grant platform vault-iac
 grant platform zitadel-iac
 
@@ -58,6 +59,7 @@ grant admins mctl-agents-worker-exec
 grant admins mctl-agents-worker-implement
 grant admins mctl-design
 grant admins mctl-docs
+grant admins mctl-support
 grant admins mctl-web
 
 # labs: platform-owned products deployed as labs services.
@@ -65,6 +67,7 @@ grant labs mctl-academy
 grant labs mctl-alice
 grant labs mctl-loyalty
 grant labs mctl-pairdesk
+grant labs mctl-rules
 grant labs mctl-telegram
 grant labs mctl-telegram-preview
 grant labs pfeifenpatenschaft-backend

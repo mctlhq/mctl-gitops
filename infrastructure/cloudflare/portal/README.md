@@ -318,6 +318,11 @@ builds each server's `updated_tools` from three committed files
   rules. `api` used that until mctlhq/mctl-api#396.
 - `allowlists/mapping.json`, the per-server settings that are not the owning
   repo's call: `default_disabled`, `on_behalf` and `updated_prompts`.
+  `default_disabled: true` is the portal's allowlist mode: a synced tool or
+  prompt with no `enabled: true` entry stays hidden, so a tool the upstream
+  ships before `catalogue.json` catches up is not exposed. `api` runs in that
+  mode since 2026-10-16 (it had exposed three new tools for five days under
+  `false`), and lists its prompts in `updated_prompts` for that reason.
 - `allowlists/catalogue.json`, each server's synced tool names in the order
   the portal stores them.
 

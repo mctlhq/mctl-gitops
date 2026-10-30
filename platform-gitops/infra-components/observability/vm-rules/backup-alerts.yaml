@@ -251,13 +251,21 @@ spec:
               The CronJob was removed or is not scraped, and the other drill
               alerts are blind while this lasts.
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/forgejo.md
-        # shared-pg backups (#1811 / #1830). max by (namespace) across the
-        # instances: backups run on the standby (prefer-standby) or primary, but
-        # the replica reports 0 for these metrics, and a backup is a property of
-        # the cluster, not of a pod. Per-pod rules would fire permanently.
+        # shared-pg backups (#1811 / #1830), through the Barman Cloud Plugin
+        # since #2084 (#2014). The plugin sidecar exports
+        # barman_cloud_cloudnative_pg_io_* on every instance, read from the
+        # object-store catalog, so primary and standby report the same value;
+        # max by (namespace) still takes the cluster view, so one pod
+        # mid-restart does not decide. The in-tree cnpg_collector_*_backup_*
+        # series survive the switch but read 0 or a frozen value, so they are
+        # no longer a backup signal (the dashboard reads both names).
+        #
+        # 0 means "nothing in the catalog, or the catalog could not be read",
+        # not "a backup at epoch 0". The > 0 filter keeps it out of Stale, and
+        # MetricAbsent reports it as blind instead of as an old backup.
         - alert: SharedPgBackupStale
           expr: |
-            time() - max by (namespace) (cnpg_collector_last_available_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"}) > 93600
+            time() - max by (namespace) (barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"} > 0) > 93600
           for: 15m
           labels:
             severity: warning
@@ -265,12 +273,16 @@ spec:
           annotations:
             summary: "shared-pg has no successful backup for over 26 hours"
             description: >-
-              The newest shared-pg backup is older than 26h (daily at 02:00 UTC). If every instance reports 0, this also fires.
+              The newest shared-pg backup in the R2 catalog is older than 26h (daily at 02:00 UTC).
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgbackupstale
+        # The right-hand side is deliberately unfiltered: a failure with no
+        # success at all (every instance reports 0 available) still fires.
+        # The plugin emits last_failed = 0 (not absence) when nothing has
+        # failed (verified live 2026-10-23), which is what `> 0` filters out.
         - alert: SharedPgBackupFailed
           expr: |
-            max by (namespace) (cnpg_collector_last_failed_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
-              > max by (namespace) (cnpg_collector_last_available_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
+            max by (namespace) (barman_cloud_cloudnative_pg_io_last_failed_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"} > 0)
+              > max by (namespace) (barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
           for: 15m
           labels:
             severity: warning
@@ -280,15 +292,19 @@ spec:
             description: >-
               The last failed shared-pg backup is newer than the last successful one.
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgbackupfailed
+        # Fires both when the series is gone and when every instance reads 0,
+        # i.e. whenever the two rules above cannot see a backup. absent() over
+        # a filtered expression carries no labels, so namespace is set here.
         - alert: SharedPgBackupMetricAbsent
           expr: |
-            absent(cnpg_collector_last_available_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"})
+            absent(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="platform-db", pod=~"shared-pg-[0-9]+"} > 0)
           for: 1h
           labels:
             severity: warning
             service: shared-pg
+            namespace: platform-db
           annotations:
             summary: "no shared-pg backup metrics"
             description: >-
-              No cnpg_collector_last_available_backup_timestamp series. Backup alerts are blind; the in-tree backup metrics may have been removed by an operator upgrade.
+              No instance reports a non-zero barman_cloud_cloudnative_pg_io_last_available_backup_timestamp: the series is missing, or the plugin sees no backup in the R2 catalog. The other backup alerts are blind while this lasts.
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgbackupmetricabsent

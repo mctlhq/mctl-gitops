@@ -1,0 +1,41 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: mctl-rules
+  namespace: labs
+  description: "MCTL Rules — business rules platform (JDM editor, Zen Engine, versioned publication)"
+  annotations:
+    platform.mctl.me/database: "true"
+    platform.mctl.me/database-team: "labs"
+    platform.mctl.me/database-app: "mctl-rules"
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=labs-mctl-rules
+    backstage.io/kubernetes-id: mctl-rules
+    backstage.io/kubernetes-namespace: labs
+    argocd/app-name: labs-mctl-rules
+    github.com/source-repo: mctlhq/mctl-rules
+    # mctl.me/auto-deploy — triggered by GitHub App webhook on tag push
+    #   "true" or "auto" — deploy immediately via scaffolder
+    #   "confirm"         — notify only, user deploys manually from UI
+    #   "false" or absent — skip
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/labs-mctl-rules
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/mctlhq/mctl-rules
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://labs-mctl-rules.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: labs
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/labs
+  system: system:default/team-labs

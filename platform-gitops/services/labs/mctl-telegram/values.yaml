@@ -12,13 +12,23 @@ strategy:
   rollingUpdate: null
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "0.79.3"
+  tag: "0.109.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 8080
 backstage:
   kubernetesId: mctl-telegram
+# Non-root on a read-only root filesystem (base-service hardening, step 2).
+# runAsNonRoot is checked by kubelet against a numeric user only, so the
+# ids this image already runs as are pinned (observed 2026-10-16); the
+# chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
 resources:
   # Right-sized 2026-08-03: p95 2.7m/42MB over 24h. requests.cpu trimmed to
   # platform default — no burst rationale was ever applied to the request,
@@ -89,9 +99,43 @@ env:
   # rejected with invalid_redirect_uri (464 attempts in 48h from one client
   # on 2026-09-21..23, zero accepted). The cursor:// scheme stays unsupported
   # (custom schemes are never accepted); this only admits the hosted host.
+  # Town (www.town.com), an AI assistant with hosted MCP connectors, registers
+  # with https://www.town.com/api/mcp/oauth/callback (its client metadata
+  # document at https://www.town.com/.well-known/oauth-client-id lists only
+  # that one); town.com is listed too for the apex form of the same callback.
   # Loopback hosts are accepted regardless of this list. Same yq caveat as
   # ALLOWED_ORIGINS above: no colons here, but verify after any rewrite.
-  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,www.cursor.com,cursor.com,localhost,127.0.0.1
+  OAUTH_ALLOWED_IMPLICIT_HOSTS: claude.ai,claude.com,chatgpt.com,antigravity.google,www.cursor.com,cursor.com,www.town.com,town.com,localhost,127.0.0.1
+  # Client ID Metadata Documents (CIMD, mctlhq/mctl-telegram#773, 0.81.0): a
+  # client whose client_id is an https URL on a listed host gets its redirect
+  # URIs from the document at that URL instead of registering. ADVERTISE
+  # announces client_id_metadata_document_supported in discovery, and clients
+  # that prefer CIMD (ChatGPT, Codex, Claude, VS Code) switch to it on their
+  # next new connection with no DCR fallback, so the allowlist names every
+  # CIMD-capable client in use, exact hosts only: chatgpt.com covers ChatGPT
+  # and Codex. The same set has run on mctl-api since 2026-10-18
+  # (mctlhq/mctl-gitops#1991, mctlhq/mctl-api#693). Existing connectors keep
+  # their stored DCR client_id; a client off the list gets 400 on its next
+  # new authorization. Removing a host here cuts off that client's refreshes,
+  # turning OAUTH_CIMD_ACCEPT off does not (mctl-telegram SECURITY.md). Town
+  # publishes https://www.town.com/.well-known/oauth-client-id (none auth, one
+  # callback). Its hosts stay in OAUTH_ALLOWED_IMPLICIT_HOSTS until Town is
+  # confirmed on CIMD and its connections have re-authorized.
+  # Rollback: set OAUTH_CIMD_ADVERTISE to "false"; clients return to DCR on
+  # their next sign-in.
+  OAUTH_CIMD_ACCEPT: "true"
+  OAUTH_CIMD_ADVERTISE: "true"
+  OAUTH_CIMD_ALLOWED_HOSTS: chatgpt.com,claude.ai,vscode.dev,www.town.com
+  # Client tool profiles (mctl-telegram 0.87.0, docs/design/core-profiles.md,
+  # runbook "Client tool profiles"): a token minted for a listed client sees
+  # only that profile's tools, re-resolved at every refresh. Town is bound by
+  # its CIMD client_id, matched byte for byte, to core-reply (owner,
+  # 2026-10-22). No redirect_uri record yet: while any exists, refresh
+  # families issued before 0.87.0 (2026-10-22) with no client_id record are
+  # refused once and must authorize again; they age out by 2026-11-21.
+  # Rollback: drop the record; the client returns to its scope surface at its
+  # next refresh.
+  MCP_CLIENT_PROFILES: '[{"client_id":"https://www.town.com/.well-known/oauth-client-id","profile":"core-reply"}]'
   # No OAUTH_PREREGISTERED_CLIENTS: the portal's static client
   # `cloudflare-portal-mcp` (0.63.0) was retired on 2026-09-26 after the `tg`
   # upstream moved to automatic (DCR) mode; the portal now holds a pinned DCR
@@ -109,6 +153,16 @@ env:
   # -> 2FA) is bounded by this same TTL (lookupEnable), and 10m is too tight for
   # a human to receive and enter the SMS code -> "sign-in session has expired".
   OAUTH_CODE_TTL: "30m"
+  # ROLLOUT_MARKER restarts the pod when its value changes; the line below
+  # records why the current value was set.
+  # This rollout clears a chain of enable_access login goroutines parked on
+  # the per-user login mutex: an abandoned phone->code flow holds the mutex
+  # for the whole OAUTH_CODE_TTL (30m), every later attempt for the same
+  # account times out at the phone step (90s) and queues behind it, and each
+  # queued goroutine sends a fresh login code the moment it gets the mutex.
+  # Observed 2026-10-23 16:44Z-17:18Z on the canary account after the D2
+  # revoke probe; the fix belongs in mctl-telegram (supersede, not queue).
+  ROLLOUT_MARKER: "2026-10-23-clear-parked-login-flows"
   # Production security policy: short-lived access tokens (1h) enforced for OAuth 2.1 refresh token rotation
   OAUTH_ACCESS_TOKEN_TTL: "1h"
   # Walkthrough video embedded on /demo (ChatGPT App Directory review).
@@ -121,6 +175,12 @@ env:
   # TELEGRAM_OIDC_CLIENT_SECRET is sourced from Vault via the oauth
   # ExternalSecret below.
   TELEGRAM_OIDC_CLIENT_ID: "8568443430"
+  # mctl-telegram#922: ask Telegram for telegram:bot_access at sign-in (the
+  # user's "Allow messages" toggle, off by default in Telegram's UI), and
+  # after sign-in observe reach with a Bot API getChat (#930). Verified on
+  # preview (gitops#2230); login bot id matches TELEGRAM_OIDC_CLIENT_ID.
+  # Rollback: remove this line.
+  TELEGRAM_OIDC_BOT_ACCESS_ENABLED: "true"
   # Public @username of the same bot, used for the t.me/<bot>?start= deep link
   # that starts the /start onboarding flow (mctl-telegram#679). Not a secret.
   TELEGRAM_LOGIN_BOT_USERNAME: "MCTL_AI_bot"
@@ -147,7 +207,8 @@ env:
   #     (connected_at + 90d exactly) and the sweeper revoked it 79s later,
   #     which is what opened incident 2f3d550f. Recovery is phone+SMS+2FA,
   #     so a human is on the hook every 90 days for a session in daily use.
-  #   924671154 — the canary's identity (below). A monitoring probe must never
+  #   924671154 — the canary's identity from 2026-08-23 to 2026-10-30 (the
+  #     canary now runs as 8745115872, below). A monitoring probe must never
   #     need an interactive reconnect to keep running.
   #   8745115872 — the App-Directory demo/reviewer identity. Recovering it is
   #     an in-pod mctl-telegram-login re-seed, which nobody is going to do
@@ -156,21 +217,49 @@ env:
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
-  # Reviewer/demo password-bypass login (ChatGPT App Directory review). OFF
-  # after the review: /oauth/authorize must not expose the password form.
+  # Reviewer/demo password-bypass login. OFF since 2026-10-23: the Claude
+  # Directory submission is on hold until Telegram answers the API Terms
+  # question in mctl-telegram#852, so there is no review window, and
+  # /oauth/authorize must not expose the password form outside one. Turn it
+  # back on (and rotate the password first) when a review is scheduled. The
+  # flag also enables the reviewer write guard.
   # DEMO_REVIEWER_USERNAME/PASSWORD still sync from Vault via
   # labs-mctl-telegram-demo; rotate DEMO_REVIEWER_PASSWORD at
   # secret/data/platform/mctl-telegram/demo after this flag is false (do not
   # put the password in git). extraObjects CronJobs below are renderIf-gated
   # on this flag and prune when it is false. 8745115872 (@mctlhq) is the demo
-  # identity only — it is NO LONGER the canary account. The production canary
-  # moved to 924671154 (@dmitriimashkov) on 2026-08-23; see the canary CronJob
-  # comment below for why. Whatever identity the canary runs as must be a real
+  # identity, and since 2026-10-30 it is also the canary account again (it was
+  # 924671154 from 2026-08-23); see the canary CronJob comment below. Whatever
+  # identity the canary runs as must be a real
   # Telegram OIDC/session login rather than this password bypass, and must
   # carry per-account send_enabled=false so probes stay read-only even though
   # ALLOW_SEND is true globally.
   DEMO_REVIEWER_ENABLED: "false"
+  # The monitoring canary's account (mctl-telegram#961, 0.108.0+; older images
+  # ignore it). Disconnect, delete, revoke_telegram_session and tier "none" on
+  # it need an explicit confirm_canary, and the manage page asks twice, so a
+  # manual test cannot silently leave the canary red (2026-10-28: ~38 h).
+  # Keep it equal to tg_user_id in the out-of-band Secret mctl-telegram-canary;
+  # when the canary moves to another account, change both together.
+  CANARY_TELEGRAM_IDS: "8745115872"
   DEMO_REVIEWER_TG_ID: "8745115872"
+  # Claude Directory review (2026-10-22): the only peer the reviewer identity
+  # may really write to (send_message / send_reply, mctl-telegram 0.88.0+;
+  # every other write is refused). user:8745115872 is the demo account's own
+  # Saved Messages, so a reviewer's test send reaches no third party. Delivery
+  # also needs ALLOW_SEND=true (set above) and send_enabled=true on the demo
+  # account. Empty or unset means the reviewer can write nowhere.
+  DEMO_REVIEWER_WRITE_PEERS: "user:8745115872"
+  # Web QR login on the enable_access phone step (mctl-telegram#901): desktop
+  # browsers get "Sign in with a QR code" as the primary action (#929) and a
+  # "Confirmed in Telegram" connecting page after the scan (#934). Needs
+  # mctl-telegram 0.103.0+; older images ignore both keys. Verified on
+  # tg-preview on 2026-10-28. Remove ENABLE_ACCESS_QR_ENABLED to turn it off:
+  # the QR routes then answer 404 and the phone step is phone-only again.
+  # TELEGRAM_APP_NAME is the app name the QR page tells the user to expect on
+  # Telegram's login confirmation; it must match the prod api_id's app title.
+  ENABLE_ACCESS_QR_ENABLED: "true"
+  TELEGRAM_APP_NAME: "MCTL Assistant"
 # Downward-API identity for the mctl_telegram_replica_id info gauge. The
 # service resolves replica_id as REPLICA_ID > POD_NAME > "unknown"
 # (internal/config/config.go), so without this the gauge is published with
@@ -423,9 +512,22 @@ extraObjects:
               restartPolicy: OnFailure
               # No imagePullSecrets: postgres:17-alpine is a public Docker Hub
               # image (unlike the chart's dbInitJob, which can run GHCR app images).
+              # Restricted-compliant: psql only reads, so the image's own
+              # postgres user (uid 70) on a read-only root is enough.
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 70
+                runAsGroup: 70
+                seccompProfile:
+                  type: RuntimeDefault
               containers:
                 - name: refresh
                   image: postgres:17-alpine
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
                   command: ["sh", "-c"]
                   args:
                     # The UPDATE only un-revokes/extends an EXISTING session row; it
@@ -489,10 +591,34 @@ extraObjects:
                 app.kubernetes.io/name: mctl-telegram
                 mctl.me/component: demo-reviewer-watch
             spec:
+              # mctl-workflow-tools is a private GHCR image; postgres is public.
+              imagePullSecrets:
+                - name: ghcr-credentials
               restartPolicy: OnFailure
-              containers:
-                - name: watch
+              # Restricted-compliant, like demo-session-refresh: the old single
+              # container ran `apk add curl` as root, which the labs restricted
+              # PodSecurity admission rejects. postgres:17-alpine has psql but no
+              # curl and mctl-workflow-tools has curl but no psql, so the
+              # read-only queries run first as uid 70 and hand the alert text to
+              # the sender through an emptyDir; an empty file means stay quiet.
+              securityContext:
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              volumes:
+                - name: work
+                  emptyDir:
+                    sizeLimit: 1Mi
+              initContainers:
+                - name: query
                   image: postgres:17-alpine
+                  securityContext:
+                    runAsUser: 70
+                    runAsGroup: 70
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
                   resources:
                     requests:
                       cpu: 25m
@@ -500,15 +626,43 @@ extraObjects:
                     limits:
                       cpu: 200m
                       memory: 128Mi
+                  volumeMounts:
+                    - name: work
+                      mountPath: /work
                   command: ["sh", "-c"]
                   args:
-                    - "set -eu\napk add --no-cache curl >/dev/null 2>&1 || true\ncommand -v curl >/dev/null || { echo \"ERROR: curl unavailable, cannot send alerts\" >&2; exit 1; }\nq() { psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -tA -c \"$1\"; }\nsend() {\n  curl -fsS -X POST \"https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage\" \\\n    --data-urlencode \"chat_id=${TELEGRAM_CHAT_ID}\" \\\n    --data-urlencode \"disable_web_page_preview=true\" \\\n    --data-urlencode \"text=$1\" >/dev/null 2>&1 || echo \"WARN: telegram send failed\" >&2\n}\nDEMO_UID=$(q \"SELECT id FROM users WHERE telegram_login_id='8745115872';\") || { echo \"ERROR: DB unreachable\" >&2; exit 1; }\nif [ -z \"$DEMO_UID\" ]; then\n  send \"\U0001F534 mctl-telegram demo reviewer @mashkovd — demo user (telegram_login_id 8745115872) is MISSING from the DB. Reviewer login is broken.\"\n  echo \"ALERT: demo user missing\"; exit 0\nfi\nACTIVE=$(q \"SELECT count(*) FROM telegram_accounts WHERE user_id=$DEMO_UID AND revoked_at IS NULL;\") || { echo \"ERROR: query failed (active)\" >&2; exit 1; }\nCALLS=$(q \"SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND created_at > now() - interval '12 hours';\") || { echo \"ERROR: query failed (calls)\" >&2; exit 1; }\nERRORS=$(q \"SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND status='error' AND created_at > now() - interval '12 hours';\") || { echo \"ERROR: query failed (errors)\" >&2; exit 1; }\nLATEST=$(q \"SELECT tool_name||' '||status||' @ '||to_char(created_at,'MM-DD HH24:MI') FROM audit_logs WHERE user_id=$DEMO_UID ORDER BY id DESC LIMIT 1;\") || { echo \"ERROR: query failed (latest)\" >&2; exit 1; }\necho \"active=$ACTIVE calls_12h=$CALLS errors_12h=$ERRORS latest=${LATEST:-none}\"\nif [ \"${ACTIVE:-0}\" -eq 0 ]; then\n  send \"\U0001F534 mctl-telegram demo reviewer session DOWN @mashkovd — 0 active sessions for reviewer 8745115872; the ChatGPT reviewer will hit Sign-in interrupted. Recover: in-pod mctl-telegram-login on @mctlhq (OPERATOR_GITHUB_LOGIN=tg:8745115872, --qr).\"\n  echo \"ALERT: session down\"\nelif [ \"${CALLS:-0}\" -gt 0 ]; then\n  send \"\U0001F440 mctl-telegram reviewer activity (12h): ${CALLS} calls, ${ERRORS} errors. Latest: ${LATEST}. Session healthy (${ACTIVE} active).\"\n  echo \"INFO: reviewer activity\"\nelse\n  echo \"quiet: session healthy, no reviewer activity in 12h — no Telegram sent\"\nfi\n"
+                    - "set -eu\n: > /work/message\nq() { psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -tA -c \"$1\"; }\nalert() { printf '%s' \"$1\" > /work/message; }\nDEMO_UID=$(q \"SELECT id FROM users WHERE telegram_login_id='8745115872';\") || { echo \"ERROR: DB unreachable\" >&2; exit 1; }\nif [ -z \"$DEMO_UID\" ]; then\n  alert \"\U0001F534 mctl-telegram demo reviewer @mashkovd — demo user (telegram_login_id 8745115872) is MISSING from the DB. Reviewer login is broken.\"\n  echo \"ALERT: demo user missing\"; exit 0\nfi\nACTIVE=$(q \"SELECT count(*) FROM telegram_accounts WHERE user_id=$DEMO_UID AND revoked_at IS NULL;\") || { echo \"ERROR: query failed (active)\" >&2; exit 1; }\nCALLS=$(q \"SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND created_at > now() - interval '12 hours';\") || { echo \"ERROR: query failed (calls)\" >&2; exit 1; }\nERRORS=$(q \"SELECT count(*) FROM audit_logs WHERE user_id=$DEMO_UID AND status='error' AND created_at > now() - interval '12 hours';\") || { echo \"ERROR: query failed (errors)\" >&2; exit 1; }\nLATEST=$(q \"SELECT tool_name||' '||status||' @ '||to_char(created_at,'MM-DD HH24:MI') FROM audit_logs WHERE user_id=$DEMO_UID ORDER BY id DESC LIMIT 1;\") || { echo \"ERROR: query failed (latest)\" >&2; exit 1; }\necho \"active=$ACTIVE calls_12h=$CALLS errors_12h=$ERRORS latest=${LATEST:-none}\"\nif [ \"${ACTIVE:-0}\" -eq 0 ]; then\n  alert \"\U0001F534 mctl-telegram demo reviewer session DOWN @mashkovd — 0 active sessions for reviewer 8745115872; the ChatGPT reviewer will hit Sign-in interrupted. Recover: in-pod mctl-telegram-login on @mctlhq (OPERATOR_GITHUB_LOGIN=tg:8745115872, --qr).\"\n  echo \"ALERT: session down\"\nelif [ \"${CALLS:-0}\" -gt 0 ]; then\n  alert \"\U0001F440 mctl-telegram reviewer activity (12h): ${CALLS} calls, ${ERRORS} errors. Latest: ${LATEST}. Session healthy (${ACTIVE} active).\"\n  echo \"INFO: reviewer activity\"\nelse\n  echo \"quiet: session healthy, no reviewer activity in 12h — no Telegram sent\"\nfi\n"
                   env:
                     - name: DATABASE_URL
                       valueFrom:
                         secretKeyRef:
                           name: labs-mctl-telegram-db-creds
                           key: DATABASE_URL
+              containers:
+                - name: send
+                  image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities:
+                      drop: ["ALL"]
+                  resources:
+                    requests:
+                      cpu: 25m
+                      memory: 32Mi
+                    limits:
+                      cpu: 200m
+                      memory: 128Mi
+                  volumeMounts:
+                    - name: work
+                      mountPath: /work
+                      readOnly: true
+                  command: ["sh", "-c"]
+                  args:
+                    - "set -eu\n[ -s /work/message ] || exit 0\ncurl -fsS -X POST \"https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage\" \\\n  --data-urlencode \"chat_id=${TELEGRAM_CHAT_ID}\" \\\n  --data-urlencode \"disable_web_page_preview=true\" \\\n  --data-urlencode \"text@/work/message\" >/dev/null 2>&1 || echo \"WARN: telegram send failed\" >&2\n"
+                  env:
                     - name: TELEGRAM_BOT_TOKEN
                       valueFrom:
                         secretKeyRef:
@@ -529,8 +683,9 @@ extraObjects:
   # contributed to new-login SendCode throttling. That hang was fixed in
   # 0.38.1/0.38.2 (PR #217), but */10 keeps egress load light. Identity lives
   # in the out-of-band Secret mctl-telegram-canary (tg_user_id + bearer_token)
-  # — not in git. Target identity is 924671154 (@dmitriimashkov) as of
-  # 2026-08-23, read-only scopes (telegram:dialogs:read + messages:read),
+  # — not in git. Target identity is 8745115872 (@mctlhq) since 2026-10-30
+  # (924671154 @dmitriimashkov from 2026-08-23), guarded by
+  # CANARY_TELEGRAM_IDS above; read-only scopes (telegram:dialogs:read + messages:read),
   # send_enabled=false on its row. Do not point this probe at operator
   # 210408407: that personal account is also logged into preview MCP, and
   # sharing one MTProto user across prod+preview causes AUTH_KEY_DUPLICATED.
@@ -589,9 +744,13 @@ extraObjects:
               imagePullSecrets:
                 - name: ghcr-credentials
               restartPolicy: Never
+              # Pod Security "restricted" also requires a seccomp profile;
+              # without it every run trips the namespace's warn/audit label.
               securityContext:
                 runAsNonRoot: true
                 runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
               containers:
                 - name: canary
                   # Same image as the deployed service so the probe always
@@ -619,6 +778,13 @@ extraObjects:
                           key: bearer_token
                     - name: CANARY_PROBE_UNREAD
                       value: "true"
+                    # Connector login-path probes (mctl-telegram#959): every
+                    # hop a new connector takes up to Telegram's OIDC, with no
+                    # Telegram API call. Reported on their own metric and never
+                    # through the exit code; alerts in
+                    # vm-rules/mctl-telegram-canary.yaml.
+                    - name: CANARY_LOGIN_PATH
+                      value: "true"
                     # Naming the Secret is what switches renewal on; the
                     # binary leaves it off entirely when this is unset, so
                     # this line and the RBAC above must travel together.
@@ -635,7 +801,6 @@ extraObjects:
                     limits:
                       cpu: "100m"
                       memory: "64Mi"
-
   # Deny /metrics at the edge — mctlhq/mctl-telegram#588. Same two objects as
   # labs/mctl-telegram-preview, verified there first: after that PR synced,
   # https://tg-preview.mctl.ai/metrics answered 403 while

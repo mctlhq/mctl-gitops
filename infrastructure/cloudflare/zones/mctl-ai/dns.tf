@@ -40,8 +40,11 @@ resource "cloudflare_dns_record" "mx_route1" {
   zone_id  = local.zone_id
 }
 
+# Aggregate reports go to dmarc@mctl.ai, which has its own forward rule
+# (email.tf). Both were changed in the dashboard on 2026-10-09 and adopted
+# here as they are.
 resource "cloudflare_dns_record" "dmarc" {
-  content = "\"v=DMARC1; p=none; rua=mailto:support@mctl.ai\""
+  content = "\"v=DMARC1; p=none; rua=mailto:dmarc@mctl.ai\""
   name    = "_dmarc.mctl.ai"
   proxied = false
   ttl     = 1
@@ -144,5 +147,33 @@ resource "cloudflare_dns_record" "mcp_portal" {
   proxied = true
   ttl     = 1
   type    = "CNAME"
+  zone_id = local.zone_id
+}
+
+# Platform event bus, reached by the operator's Mac mini Channel host through
+# the tunnel mctl-platform-events and the service-token-only Access app in
+# ../../account/events-tunnel.tf. Proxied, so the name resolves to Cloudflare
+# and only Access-admitted connections reach the tunnel; it overrides the
+# wildcard A for this one name. Tunnel id = output events_tunnel_id.
+resource "cloudflare_dns_record" "events_valkey" {
+  comment = "events-valkey tunnel (mctl-platform-events), Access service token only"
+  content = "df64dbb8-cc03-4879-8d95-914cf254dd62.cfargotunnel.com"
+  name    = "events-valkey.mctl.ai"
+  proxied = true
+  ttl     = 1
+  type    = "CNAME"
+  zone_id = local.zone_id
+}
+
+# Anthropic organization domain verification (WorkOS-hosted flow). A static
+# proof of ownership, so it is kept in Git like the Search Console token.
+# Created through the API (this root cannot apply, #1111) and pinned by import.
+resource "cloudflare_dns_record" "anthropic_domain_verify" {
+  comment = "Anthropic (WorkOS) organization domain verification"
+  content = "anthropic-domain-verification-kwd8sr=ThZHrDOx9NHkn3y6HJbvFkKPG"
+  name    = "mctl.ai"
+  proxied = false
+  ttl     = 1
+  type    = "TXT"
   zone_id = local.zone_id
 }

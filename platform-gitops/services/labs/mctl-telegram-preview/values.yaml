@@ -15,13 +15,23 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "main-9c35416"
+  tag: "main-7fe8f31"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 8080
 backstage:
   kubernetesId: mctl-telegram-preview
+# Non-root on a read-only root filesystem (base-service hardening, step 2).
+# runAsNonRoot is checked by kubelet against a numeric user only, so the
+# ids this image already runs as are pinned (observed 2026-10-16); the
+# chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
 resources:
   # Right-sized 2026-08-03 (CPU request only): p95 28m/max 53m over 24h —
   # no burst rationale was ever applied to the request, only the cpu limit
@@ -82,10 +92,24 @@ env:
   # The matching TELEGRAM_OIDC_CLIENT_SECRET is sourced from
   # secret/data/platform/mctl-telegram-preview/oauth via the oauth ExternalSecret.
   TELEGRAM_OIDC_CLIENT_ID: "8923492300"
+  # mctl-telegram#922: ask Telegram for telegram:bot_access at sign-in so the
+  # bot may message the user. Preview only, for the task-8 check (consent
+  # screen, accept and decline signals). The server requests the scope only
+  # when the login bot token's id equals TELEGRAM_OIDC_CLIENT_ID; otherwise it
+  # logs a Warn with the reason and keeps the old scopes. Prod stays off until
+  # a separate owner decision.
+  TELEGRAM_OIDC_BOT_ACCESS_ENABLED: "true"
   TG_LOGIN_ADMINS: "210408407,8745115872,924671154"
   AUTO_APPROVE_CLIENTS: "false"
   # Reviewer demo mode not needed on preview.
   DEMO_REVIEWER_ENABLED: "false"
+  # Web QR login on the enable_access phone step (mctl-telegram#901, #916):
+  # desktop browsers get "Use a QR code instead". Off by default in the
+  # image; on here to prove it out before stable. Images without #916
+  # ignore both keys. TELEGRAM_APP_NAME is the app name the QR page tells
+  # the user to expect on Telegram's "new login" confirmation.
+  ENABLE_ACCESS_QR_ENABLED: "true"
+  TELEGRAM_APP_NAME: "MCTL Assistant preview"
   # C1 (communication agent staging, observe-only) — see
   # docs/plans/communication-agent.md. AGENT_ENABLED mounts /api/agent/v1 and
   # lets POST /api/agent/token mint a worker credential and PUT
@@ -228,6 +252,25 @@ env:
   # transaction commits, the outbox relay XADDs a reference-only envelope to
   # mctl:events:telegram. The password comes from the -events secret below.
   EVENTS_VALKEY_URL: "redis://telegram-producer@valkey.platform-events.svc.cluster.local:6379/0"
+  # Operator routing (mctlhq/mctl-telegram#858 task 4, decision 1 on
+  # mctlhq/mctl-agents#760): publish telegram.message.* to the operator stream
+  # only when the conversation worker did not handle the event (deny,
+  # require_approval, worker failure). Safe here because agent-worker-preview
+  # claims this instance's jobs. Since mctl-telegram 0.93.0 (#872) a job no
+  # worker claims within AGENT_UNCLAIMED_ROUTE_AFTER is routed too, so a
+  # stopped worker no longer hides events from the operator. Revert to
+  # "false" if the worker is retired.
+  EVENTS_OPERATOR_ROUTING: "true"
+  # Live turn coalescing (mctlhq/mctl-telegram#872, owner OK 2026-10-24): a
+  # burst of messages in one conversation becomes one agent turn once the
+  # conversation is quiet for AGENT_TURN_QUIET, capped at AGENT_TURN_MAX_WAIT.
+  # "0s" turns coalescing off. Requires agent-worker-preview on the same
+  # release first: an older worker would see only the turn's head event.
+  AGENT_TURN_QUIET: "3s"
+  AGENT_TURN_MAX_WAIT: "15s"
+  # A job nobody claimed for this long is routed to the operator
+  # (worker_unclaimed). Must exceed AGENT_TURN_MAX_WAIT while coalescing is on.
+  AGENT_UNCLAIMED_ROUTE_AFTER: "5m"
 ingress:
   enabled: true
   hosts:
@@ -395,16 +438,18 @@ extraExternalSecrets:
   # TG_API_ID / TG_API_HASH are MTProto app-level credentials — shared with stable.
   labs-mctl-telegram-preview-tg-api:
     # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
+    # Own Telegram API ID, separate from production: preview experiments and
+    # failures must not count against the API ID real users log in through.
     store: vault-backend
     storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: labs-mctl-telegram-preview-tg-api
     data:
       - secretKey: TG_API_ID
-        remoteKey: secret/data/platform/mctl-telegram/api
+        remoteKey: secret/data/platform/mctl-telegram-preview/api
         property: TG_API_ID
       - secretKey: TG_API_HASH
-        remoteKey: secret/data/platform/mctl-telegram/api
+        remoteKey: secret/data/platform/mctl-telegram-preview/api
         property: TG_API_HASH
   # Separate ENCRYPTION_KEY: preview DB sessions must not share the stable key.
   labs-mctl-telegram-preview-encryption:

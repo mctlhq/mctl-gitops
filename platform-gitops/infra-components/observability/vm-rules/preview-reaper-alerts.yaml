@@ -1,0 +1,88 @@
+# Alerts on the hourly preview-reaper (ClusterWorkflowTemplate
+# wft-preview-reaper.yaml, started by the tenant chart's CronWorkflow in
+# every tenant namespace with preview enabled).
+#
+# The reaper fails its run instead of deleting when it cannot tell a
+# release's lifetime (no or malformed mctl.ai/expires-at) and when a cleanup
+# fails. That is only safe if someone hears about it, so a tenant whose
+# reaper has failed with no success in 3h alerts here, and so does a reaper
+# that stops being triggered at all.
+#
+# The controller is scraped from argo-workflows, so `namespace` on these
+# series is the controller's; the workflow's own namespace is
+# `exported_namespace`. label_replace turns it back into `namespace`, which
+# is what the mctl-agent route groups and tenants by.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: preview-reaper-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+spec:
+  groups:
+    - name: preview-reaper
+      rules:
+        # `unless`, not `and ... == 0`: a tenant whose reaper has never
+        # succeeded has no Succeeded series at all, and `and` against an
+        # empty right side would keep this silent exactly then.
+        - alert: PreviewReaperFailing
+          expr: |
+            label_replace(
+              sum by (exported_namespace) (
+                increase(argo_workflows_workflowtemplate_triggered_total{
+                  cluster_scope="true",
+                  name="preview-reaper",
+                  phase=~"Failed|Error"
+                }[3h])
+              ) > 0
+              unless on (exported_namespace)
+              sum by (exported_namespace) (
+                increase(argo_workflows_workflowtemplate_triggered_total{
+                  cluster_scope="true",
+                  name="preview-reaper",
+                  phase="Succeeded"
+                }[3h])
+              ) > 0,
+              "namespace", "$1", "exported_namespace", "(.*)"
+            )
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              preview-reaper in {{ $labels.namespace }} has failed with no
+              success in 3h
+            description: >-
+              Expired previews in {{ $labels.namespace }}-preview are not
+              being deleted. The run log names the release: either it has no
+              or a malformed mctl.ai/expires-at label (created outside
+              preview-deploy, or before the label existed), or helm
+              uninstall / the TLS Secret delete failed. Fix or label the
+              release, or delete it with mctl_delete_preview.
+
+        # Catches a CronWorkflow that stops firing (suspended, schedule
+        # dropped by a controller upgrade). It needs the counter to have
+        # existed, so it does not cover a reaper that never fired once.
+        - alert: PreviewReaperNotTriggered
+          expr: |
+            label_replace(
+              sum by (exported_namespace) (
+                increase(argo_workflows_cronworkflows_triggered_total{
+                  name="preview-reaper"
+                }[3h])
+              ) == 0,
+              "namespace", "$1", "exported_namespace", "(.*)"
+            )
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              preview-reaper in {{ $labels.namespace }} has not been
+              triggered for 3h
+            description: >-
+              The hourly CronWorkflow preview-reaper in
+              {{ $labels.namespace }} stopped firing, so preview ttl_hours is
+              not enforced there. Check that the CronWorkflow exists, is not
+              suspended, and that the Argo workflow controller is running.

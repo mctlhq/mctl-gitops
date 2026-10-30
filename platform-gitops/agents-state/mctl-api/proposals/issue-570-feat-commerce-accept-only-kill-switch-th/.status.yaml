@@ -1,6 +1,6 @@
-status: needs-triage
-updated_at: '2026-10-11T19:44:26Z'
-updated_by: mctl-agents[bot]
+status: rejected
+updated_at: '2026-10-12T06:45:00Z'
+updated_by: mashkovd
 execution:
   context_id: ex-170ec94c24316e2d
   trace_id: e68c4233f012b9e37dd804faceb498de
@@ -30,4 +30,18 @@ failure:
   code: no-commits
   stage: agent
   message: implementer produced no commits
-notes: 'agent: implementer produced no commits'
+notes: >-
+  Retired by the operator: resolved outside the loop. #570 was implemented by
+  hand in mctlhq/mctl-api#580 (merged fefeef1, Claude APPROVED with 0
+  findings, agy PASS), following this proposal's requirements, design and
+  tasks, released in mctl-api 4.81.0 and deployed on 2026-10-12 (gitops
+  e11c67c); the issue is closed as completed. requirements.md, design.md and
+  tasks.md are kept as the record of the design #580 implements. Only the
+  status changes.
+
+  The failure block above is kept as history, but `no-commits` understates
+  what happened: the primary attempt did write the change and died from an
+  orphaned sub-agent (mctlhq/mctl-agents#381, #245), and the account-2
+  fallback was refused with 403 `oauth_org_not_allowed`
+  (mctlhq/mctl-agents#641). The DevLoop dev-loop-mctlhq-mctl-api-570 ended
+  Failed, so no parked execution can act on this proposal.

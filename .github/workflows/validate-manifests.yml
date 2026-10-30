@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Full history: validate-profile-version-bumps.py diffs the changed
           # ExecutionProfiles against the PR's base, and a depth-1 clone has
@@ -221,6 +221,18 @@ jobs:
           # real platform-gitops/agent-platform/ catalog itself is fine.
           scripts/validate-agent-platform.py --selftest
 
+      - name: Validate the DeployIntent contract (#2186)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml jsonschema
+          # Keeps deploy-intent.schema.json and the base-service chart-key
+          # classification in step: an unclassified chart key, a must-deny
+          # escape hatch that is not denied, or a schema field named like a
+          # denied key fails here. --selftest replays
+          # scripts/tests/fixtures/deploy-intent/{valid,invalid} and proves
+          # every contract check fires on a deliberate mutation.
+          scripts/validate-deploy-intent.py --selftest
+
       - name: Check every changed ExecutionProfile bumped its version
         run: |
           set -euo pipefail
@@ -266,6 +278,18 @@ jobs:
           scripts/validate-agents-state-approval.py --selftest
           scripts/validate-agents-state-approval.py
 
+      # Principal-mode tenant authorization (mctl-api#377) grants by
+      # members[].principalId alone, so an entry without one works today and
+      # silently locks its member out after the switch. Runs on main too:
+      # wft-create-tenant pushes new tenants straight to main, and a creator
+      # submitted without a principal id must turn it red. --selftest first,
+      # same reason as the other detectors.
+      - name: Every tenant member carries a principalId
+        run: |
+          set -euo pipefail
+          scripts/validate-tenant-member-keys.py --selftest
+          scripts/validate-tenant-member-keys.py
+
       - name: Check for shell interpolation of workflow parameters
         run: |
           set -euo pipefail
@@ -304,6 +328,16 @@ jobs:
           # --selftest first, same reason as the detectors above.
           scripts/validate-tenant-workflow-shared-writes.py --selftest
           scripts/validate-tenant-workflow-shared-writes.py
+
+      - name: Tenant workflow pods pass Pod Security "restricted"
+        run: |
+          set -euo pipefail
+          # The workflows mctl-api runs in a tenant namespace must stay
+          # admissible once that namespace enforces "restricted" (handoff
+          # audit block B step 3): non-root, seccomp, no privilege escalation
+          # on init/wait/main, no runtime apk. --selftest first, same reason.
+          scripts/validate-tenant-workflow-pod-security.py --selftest
+          scripts/validate-tenant-workflow-pod-security.py
 
       - name: ArgoCD tenant RBAC fragments match the canonical policy
         run: |
@@ -405,12 +439,39 @@ jobs:
         # "Producer amendment: DevLoop traces").
         run: python3 tests/test_cwft_execution_trace_env.py
 
+      - name: Unit-test that the ADR 0002 log-backend rubric stays frozen
+        # #2245 / #2250: the bake-off rubric (docs/adr/0002-rubric.yaml) must
+        # carry no scores or citations until the ADR records a verdict, and
+        # its weights must match the ADR table. Without this step the guard
+        # only ran by hand (claude-review P3 on #2250).
+        run: python3 tests/test_adr0002_rubric_frozen.py
+
+      - name: Unit-test the mctl-agents policy checkpoint coverage
+        # mctlhq/.github#181: every mctl-agents surface is classified in
+        # platform-gitops/governance/policy-checkpoint-coverage.yaml, governed
+        # surfaces declare MCTL_POLICY_APPROVALS=mctl-api, and known gaps
+        # (bypass-open) stay visible and tracked.
+        run: python3 tests/test_policy_checkpoint_coverage.py
+
+      - name: Unit-test the control-plane failure-path inventory
+        # mctlhq/mctl-gitops#2210: every etcd/apiserver/admission failure path
+        # has a status, unmonitored paths are tracked, and claimed alerts exist.
+        run: python3 tests/test_control_plane_failure_paths.py
+
       - name: Unit-test the k3s-preview apply guard
         # terraform.yml refuses a cluster plan that destroys infrastructure or
         # re-runs node provisioners (#1534). It only meets a real plan during
         # an apply of the preprod cluster, where a miss is a restarted control
         # plane, so it is exercised here against synthetic plans.
         run: python3 tests/test_k3s_plan_guard.py
+
+      - name: Check the k3s-preview kured and SUC manifests follow the module inputs
+        # kube-hetzner re-applies its own kured DaemonSet and
+        # system-upgrade-controller Deployment, without resources, whenever
+        # its kustomization is replaced; ours re-apply only when their
+        # rendered content changes. The hash annotation and the templated tags
+        # keep ours winning and on the same versions (#2036).
+        run: python3 tests/test_k3s_kured_single_owner.py
 
       - name: Check the in-cluster Access login probe against its sources
         # The CronJob in infra-components/observability/blackbox carries two
@@ -460,6 +521,13 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 tests/test_check_image_name.py
 
+      - name: Unit-test build-image's source repository check
+        # A private repository with no PAT builds only when mctl-api answers
+        # 200 with bound: true for the same team/repo (gitops#2146). This runs
+        # the step's own script against a fake curl: every other answer, an
+        # unreachable mctl-api or a missing OIDC token must refuse.
+        run: python3 tests/test_build_image_source_repo_check.py
+
       - name: Unit-test tpl-git-commit's yq handling
         # The static check above proves no yq expression interpolates a shell
         # variable. This proves the shape that replaced it actually resists
@@ -471,12 +539,49 @@ jobs:
       - name: Test workflow parameters cannot inject shell
         run: python3 tests/test_shell_param_injection.py
 
+      - name: Unit-test write-service-secrets against a fake Vault
+        # Values reach Vault byte for byte (quotes, backslashes, code-shaped
+        # text), existing keys survive the merge, and an unreadable current
+        # version stops the step instead of overwriting the whole secret.
+        run: python3 tests/test_tpl_vault_write_parse.py
+
+      - name: Unit-test retire's Vault delete against a fake KV v2 tree
+        # Every secret below teams/<t>/<s> goes (KV v2 deletes per path, so
+        # database/ and preview/ used to survive a retire), nothing outside
+        # it does, and a failed LIST or DELETE fails the step.
+        run: python3 tests/test_tpl_vault_delete_service_tree.py
+
+      - name: Unit-test delete-tenant's Vault cleanup against a fake Vault
+        # Roles, policies and the whole teams/<t> tree go and read back as
+        # absent; a denied or unreachable Vault fails the step instead of
+        # being reported as "not found, skipping".
+        run: python3 tests/test_wft_delete_tenant_vault.py
+
+      - name: Tenant workflows log in to Vault with their own tenant role
+        # A template reachable from a tenant namespace picks its Vault role
+        # from the pod's namespace and never asks for the platform role
+        # argo-workflow; create/delete-tenant manage the per-tenant role.
+        run: python3 tests/test_vault_login_role.py
+
       - name: Unit-test create-tenant's existing-tenant checks
         # create-tenant creates a tenant: an existing one fails validate unless
         # reprovision=true, and the commit step refuses one that appeared
         # after validate. Runs the template's own extracted blocks against a
         # fixture checkout, with git clone stubbed.
         run: python3 tests/test_wft_create_tenant_existing.py
+
+      - name: Unit-test create-tenant's creator_catalog_key
+        # creator_catalog_key=principal writes catalogKey: principal on the
+        # owner entry (site onboarding stage C2); principal without a
+        # principal id, or any value but login/principal, fails the step
+        # instead of falling back to a login-keyed owner. Runs the template's
+        # own extracted case and members blocks.
+        run: |
+          python3 tests/test_wft_create_tenant_catalog_key.py
+          python3 tests/test_wft_create_tenant_starter.py
+
+      - name: Unit-test customer deletion callbacks and completion gates
+        run: python3 tests/test_wft_customer_deletion.py
 
       - name: Unit-test retire-service's Argo CD Application guard
         # retire-service deletes the Application <team>-<component>. The
@@ -496,6 +601,21 @@ jobs:
         # gitops#1295), and both reproduce against real git in a scratch repo,
         # so the block's own text is replayed here.
         run: python3 tests/test_cwft_shepherd_commit_pathspecs.py
+
+      - name: Unit-test the shepherd's verify and Telegram gates
+        # post-deploy-verify runs only after a tick that may have merged, and
+        # a Succeeded tick reaches Telegram only with a terminal transition.
+        # Both read markers commit-and-push derives from the staged diff; the
+        # three scripts are run from the template against real git and jq,
+        # with kubectl, curl and sleep stubbed.
+        run: python3 tests/test_cwft_shepherd_verify_gate.py
+
+      - name: Unit-test the mctl-agents-approve reviewed-digest binding
+        # The approval flip must refuse an empty or mismatched digest and
+        # never self-bind to bytes first seen at flip time (gitops#1979).
+        run: |
+          python3 tests/test_cwft_mctl_agents_approve_digest_binding.py
+          python3 scripts/proposal-content-digest.py --selftest
 
       - name: Unit-test the portal OAuth registration drift detector
         # The MCP server's `auth_credentials` is write-only: the API accepts it
@@ -561,6 +681,114 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_base_service_work_context_env.py
+
+      - name: Unit-test base-service's securityContext defaults on both workload kinds
+        # base-service.hardenedContainers merges extraContainerSecurityContext
+        # under each init/extra container's own securityContext. A swapped
+        # `merge` argument order would let the default overwrite a
+        # container's explicit setting, and an edit to only deployment.yaml or
+        # rollout.yaml would drift silently; this renders both and checks the
+        # merged result, plus the db-init Job and the pod-level seccomp.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_security_context.py
+
+      - name: Service Jobs and CronJobs pass restricted PodSecurity, gated ones too
+        # Tenant namespaces enforce restricted PSA, so a non-compliant Job is
+        # never admitted. Renders every service once as committed and once
+        # with each renderIf env flag forced on, so a gated CronJob (e.g.
+        # mctl-telegram's demo-reviewer-watch) is checked before the flag flips.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_service_extra_jobs_restricted.py
+
+      - name: Unit-test base-service's containerPort on both workload kinds
+        # service.containerPort moves only the container; the Service and
+        # Ingress stay on service.port (gitops#1933 broke docs.mctl.ai by
+        # changing service.port on a live Service).
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_container_port.py
+
+      - name: Unit-test PruneLast on base-service's blueGreen objects
+        # Switching blueGreen off must not prune the Rollout before the
+        # Deployment that replaces it is Ready; ArgoCD reads PruneLast from
+        # the live object, so it has to be rendered while blueGreen is on.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_bluegreen_prune_last.py
+
+      - name: Unit-test base-service's preStop sleep on both workload kinds
+        # Without a pause before SIGTERM the process can exit while Traefik
+        # still routes to the pod (one 502 on admins/mctl-web, gitops#1946).
+        # Also checks the sleep stays below terminationGracePeriodSeconds.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_base_service_prestop_sleep.py
+
+      - name: Tenant preview namespaces bind Helm rights only inside the tenant
+        # preview-deploy/delete run as {tenant}/argo-workflow-sa; a binding
+        # for the central SA gave it write access to every tenant's preview
+        # secrets while previews themselves failed (gitops#1969).
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_preview_rbac.py
+
+      - name: preview-delete removes the preview's TLS Secret
+        # cert-manager keeps ${RELEASE}-tls after its Certificate is gone, so
+        # helm uninstall alone left one orphan Secret per preview. Runs the
+        # template's script with stub helm/kubectl.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_delete_tls_secret.py
+
+      - name: Preview ttl_hours is stamped and enforced
+        # Nothing deleted expired previews before preview-reaper; a May
+        # preview release was still on record in October. Runs the reaper's
+        # own script with stub kubectl/helm/date and renders the tenant
+        # chart's CronWorkflow for every tenant. The second run repeats the
+        # script cases under busybox sh, the shell of the tools image the
+        # pod runs (the runner's /bin/sh is dash, so the first uses bash).
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_preview_reaper.py
+          docker run --rm -e PREVIEW_TEST_SHELL=sh -v "$PWD":/w -w /w \
+            python:3.12-alpine sh -c 'apk add -q jq && pip install -q pyyaml &&
+              python3 tests/test_preview_reaper.py Reaper Deploy'
+
+      - name: Only workflow SAs read every Secret in a tenant namespace
+        # The namespace holds the gitops deploy key and github-actions-pat.
+        # The team's Argo UI SSO account reads only the artifact credentials
+        # its log view needs, and mctl-api reads none.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_secret_readers.py
+
+      - name: Tenant Pod Security labels follow tenant.podSecurityLevel
+        # The templates read these keys from the top level while the chart
+        # documented them under tenant:, so a per-tenant flip to restricted
+        # rendered baseline without a word.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_pod_security_level.py
+
+      - name: The central workflow SA holds only opted-in grants in tenant namespaces
+        # It used to hold argo-workflow-helm-deploy and smoke-verify in every
+        # tenant; only labs (smoke-test, claude-remote restart) and admins
+        # (rotate-github-token) are targeted from argo-workflows.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_tenant_central_sa_bindings.py
+
+      - name: Unit-test the image-user check in deploy-service
+        # runAsNonRoot with a named or root image USER only fails after the
+        # deploy is committed (CreateContainerConfigError). check-image-user.sh
+        # judges the image against the rendered chart first; this runs it on
+        # fixtures and every existing service, and checks deploy-service runs
+        # it between the build and the commit.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_check_image_user.py
 
       - name: Check the otel-collector alert lookbacks against their holds
         # `increase(...[W]) > 0` with W longer than `for: H` pages for a spike
@@ -751,6 +979,19 @@ jobs:
       - name: tofu test (mocked providers)
         working-directory: platform-gitops/helm-charts/zitadel-iac/iac
         run: tofu test -no-color
+
+      # Customers rollout phase 3: every Actions v2 execution is
+      # instance-wide and lives behind a toggle in customers_executions.tf
+      # (its tests prove the toggles). One declared anywhere else would apply
+      # on the next hourly run with no toggle in front of it.
+      - name: zitadel-iac declares Actions v2 executions only behind the rollout toggles
+        working-directory: platform-gitops/helm-charts/zitadel-iac/iac
+        run: |
+          set -euo pipefail
+          if grep -nE '^resource "zitadel_action_execution_' $(ls *.tf | grep -vx customers_executions.tf); then
+            echo "::error::Actions v2 executions belong in customers_executions.tf, behind a rollout toggle (docs/runbooks/zitadel.md)."
+            exit 1
+          fi
 
       # login_texts.json must override every Login V2 text that names
       # Zitadel in the release the zitadel chart pin deploys; a ZITADEL bump

@@ -36,18 +36,31 @@ spec:
               resources:
                 requests:
                   cpu: 100m
-                  memory: 1400Mi
+                  # Raised 1400Mi->1600Mi on 2026-10-20: steady working set
+                  # ~1.5-1.7Gi on 2026-10-19.
+                  memory: 1600Mi
                 limits:
                   cpu: 750m
                   # Raised 1536Mi→2Gi on 2026-06-26: working set sat at ~1409Mi
                   # (~92% of the 1536Mi cap), firing recurring ">80% memory used"
                   # warnings and risking OOM. Request stays 1400Mi (no scheduling
                   # change); the bump is pure headroom.
-                  memory: 2Gi
+                  # Raised 2Gi->2560Mi on 2026-10-20: one broad 7-day
+                  # history query from the 2026-10-19 resource audit pushed
+                  # the working set to 2046Mi and OOMKilled vmsingle
+                  # (21:27:40Z). The per-query caps below are the real fix;
+                  # this is headroom so the TSDB itself is not the victim.
+                  memory: 2560Mi
               extraArgs:
                 search.maxConcurrentRequests: "16"
                 search.maxQueueDuration: "30s"
                 search.cacheTimestampOffset: "12h"
+                # Per-query memory guard (2026-10-20; default 0 = unlimited):
+                # a query whose rollup state needs more than this fails with
+                # an error instead of OOM-killing the whole process. Sample
+                # and duration caps keep their defaults (1e9 / 30s) so the
+                # 28d SLO rules are unaffected.
+                search.maxMemoryPerQuery: "300MB"
               storage:
                 accessModes: ["ReadWriteOnce"]
                 resources:
@@ -257,13 +270,37 @@ spec:
 
           kube-state-metrics:
             enabled: true
+            # Pin `instance` to a constant. It is the only label tied to the
+            # kube-state-metrics pod, so a reschedule (10.42.6.188 ->
+            # 10.42.5.158 on 2026-10-24) re-created every object series, and
+            # VictoriaMetrics' increase() counted each new series' first
+            # sample as growth: alerts and panels showed whole restart
+            # histories as fresh restarts. Collapsing `instance` in queries
+            # fixes it one query at a time and costs a subquery; a 24h:1m
+            # subquery over a 7d panel OOM-killed vmsingle (mctl-gitops#2137).
+            # Safe only while replicas == 1: a second replica would write to
+            # the same series. endpoints is a list, so the chart default is
+            # restated in full (chart 0.72.5 values.yaml).
+            vmScrape:
+              spec:
+                endpoints:
+                  - port: http
+                    honorLabels: true
+                    relabelConfigs:
+                      - action: replace
+                        targetLabel: instance
+                        replacement: kube-state-metrics
+                    metricRelabelConfigs:
+                      - action: labeldrop
+                        regex: (uid|container_id|image_id)
             resources:
+              # 2026-10-20: 7d peak working set 173Mi (90% of 192Mi).
               requests:
                 cpu: 50m
-                memory: 64Mi
+                memory: 128Mi
               limits:
                 cpu: 250m
-                memory: 192Mi
+                memory: 256Mi
 
           victoria-metrics-operator:
             resources:
@@ -296,6 +333,15 @@ spec:
                   # scrape/remote-write bursts. 500m restores burst headroom.
                   cpu: 500m
                   memory: 512Mi
+              # Operator-injected config-reloader sidecar had a request but
+              # no limit (2026-10-20 audit); 7d peak ~22Mi.
+              configReloaderResources:
+                requests:
+                  cpu: 10m
+                  memory: 25Mi
+                limits:
+                  cpu: 50m
+                  memory: 64Mi
 
           # VMAlert replaces Prometheus's alerting engine
           vmalert:
@@ -310,6 +356,15 @@ spec:
                 limits:
                   cpu: 250m
                   memory: 256Mi
+              # Operator-injected config-reloader sidecar had a request but
+              # no limit (2026-10-20 audit); 7d peak ~22Mi.
+              configReloaderResources:
+                requests:
+                  cpu: 10m
+                  memory: 25Mi
+                limits:
+                  cpu: 50m
+                  memory: 64Mi
 
           grafana:
             enabled: true
@@ -487,6 +542,16 @@ spec:
                   # default folder regardless of folderAnnotation, silently
                   # defeating the Internal-folder ACL plan.
                   foldersFromFilesStructure: true
+              # Applies to both k8s-sidecar containers (grafana-sc-dashboard,
+              # grafana-sc-datasources), which ran with no requests or
+              # limits. 7d peaks 85Mi / 75Mi (2026-10-20).
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 96Mi
+                limits:
+                  cpu: 100m
+                  memory: 192Mi
             plugins:
               - victoriametrics-metrics-datasource
             resources:
@@ -500,6 +565,24 @@ spec:
           alertmanager:
             enabled: true
             spec:
+              # Declared 2026-10-20 instead of relying on operator defaults
+              # (same values the operator applied; 7d peak 60Mi).
+              resources:
+                requests:
+                  cpu: 30m
+                  memory: 64Mi
+                limits:
+                  cpu: 100m
+                  memory: 256Mi
+              # Operator-injected config-reloader sidecar had a request but
+              # no limit (2026-10-20 audit); 7d peak ~22Mi.
+              configReloaderResources:
+                requests:
+                  cpu: 10m
+                  memory: 25Mi
+                limits:
+                  cpu: 50m
+                  memory: 64Mi
               secrets:
                 - alertmanager-telegram-secret
                 - alertmanager-mctl-agent-webhook
@@ -548,6 +631,14 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "VaultAudit.*"
+                  # Identity-hook refusals and failures
+                  # (vm-rules/zitadel-hook-alerts.yaml): an invitee stuck on
+                  # Login V2's generic page, or the hook answering 503, needs
+                  # an operator (re-approve, ask for a verified email, fix a
+                  # dependency) — there is nothing for mctl-agent to patch.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ZitadelHook.*"
                   # A stale agents pipeline usually means its own model/auth
                   # path is unavailable, so route directly to an operator.
                   - receiver: telegram
@@ -586,6 +677,16 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlTelegramCanary.*"
+                  # Its twin: the same matchers, to the agent with ?paged=1, and no
+                  # continue, so the walk stops where it used to end at mctl-agent.
+                  # The agent then posts only what it adds (a matched skill), not
+                  # "no skill matched" for an alert the chat already has
+                  # (mctl-agent#183). Every continue: true telegram route has one;
+                  # scripts/check-alertmanager-routes.py fails on an alert that
+                  # reaches both telegram and the unmarked mctl-agent receiver.
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - alertname =~ "MctlTelegramCanary.*"
                   # The Cloudflare Access login probe (#1329,
                   # vm-rules/access-login-probe.yaml). A broken or unverifiable
                   # sign-in locks people out of every Access application, and
@@ -597,6 +698,10 @@ spec:
                   # probe alert does not default to agent-only.
                   - receiver: telegram
                     continue: true
+                    matchers:
+                      - alertname =~ "AccessLogin.*"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
                     matchers:
                       - alertname =~ "AccessLogin.*"
                   # seerrsense's ChatGPT plugin-directory review: a reviewer
@@ -641,6 +746,15 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "ErpactSite.*"
+                  # claude-remote's Telegram hydration token
+                  # (vm-rules/claude-remote-telegram-token.yaml,
+                  # mctlhq/mctl-claude-remote#82). Telegram only, no ticket:
+                  # the remedy is an admin:users login minting a new worker
+                  # token into Vault, which mctl-agent cannot do. Prefix match
+                  # so the next alert in that file is covered too.
+                  - receiver: telegram
+                    matchers:
+                      - alertname =~ "ClaudeRemoteTelegramToken.*"
                   # The lifecycle ownership rollout (ADR-010 §12,
                   # mctlhq/.github#57). Telegram only, no ticket, and the
                   # routing is load-bearing rather than a preference:
@@ -683,17 +797,15 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "MctlAgentsScheduledDispatch.*"
-                  # The Tempo tracing bake-off (#1280,
-                  # vm-rules/tempo-eval-alerts.yaml). Telegram only, no
-                  # ticket: every remedy is an operator's (resize Tempo,
-                  # restore R2 access, end the bake-off), and the runbook's
-                  # producer-isolation step scales Tempo to zero on purpose.
-                  # Prefix match so the next TempoEval alert does not default
-                  # to agent-only. Remove with that file once the bake-off is
-                  # decided.
+                  # The permanent Tempo in `tracing` (#1280 verdict,
+                  # vm-rules/tempo-alerts.yaml, renamed from the bake-off's
+                  # TempoEval* rules). Telegram only, no ticket: every remedy
+                  # is an operator's (resize Tempo, restore R2 access), not
+                  # something mctl-agent can act on. Prefix match so the next
+                  # Tempo alert does not default to agent-only.
                   - receiver: telegram
                     matchers:
-                      - alertname =~ "TempoEval.*"
+                      - alertname =~ "Tempo.*"
                   # Platform/infra Applications (projects default + platform)
                   # also page a human, in ADDITION to mctl-agent — hence
                   # continue: true, which lets the catch-all route below still
@@ -709,6 +821,11 @@ spec:
                   # so no human ever heard about a missing backup.
                   - receiver: telegram
                     continue: true
+                    matchers:
+                      - alertname =~ "ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong"
+                      - project =~ "default|platform"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
                     matchers:
                       - alertname =~ "ArgoCDApplicationDegraded|ArgoCDApplicationOutOfSyncLong"
                       - project =~ "default|platform"
@@ -758,6 +875,10 @@ spec:
                   # in working hours, not to wake anyone.
                   - receiver: telegram
                     continue: true
+                    matchers:
+                      - alertname =~ "MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
                     matchers:
                       - alertname =~ "MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn"
                   # The two communication-agent alerts are the one case in
@@ -819,6 +940,10 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
                   # mctl-api availability (vm-rules/mctl-api-alerts.yaml): the
                   # same circularity as the three above, one layer down.
                   # mctl-agent files its incidents through mctl-api, so an
@@ -833,6 +958,10 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "MctlApi.*"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - alertname =~ "MctlApi.*"
                   # The platform's web entry points (vm-rules/platform-web-alerts.yaml,
                   # #1773): portal, docs, Argo CD, Grafana and mctl-agent, probed
                   # from outside. agent.mctl.ai is mctl-agent itself, so an
@@ -845,20 +974,46 @@ spec:
                     continue: true
                     matchers:
                       - alertname =~ "PlatformWebEndpoint.*"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - alertname =~ "PlatformWebEndpoint.*"
                   # shared-pg (vm-rules/shared-pg-alerts.yaml + SharedPgBackup*
                   # in backup-alerts.yaml, #1811/#1830): the same circularity as
                   # MctlApi.* one layer further down - mctl-api, through which
                   # mctl-agent files its incidents, keeps its state in shared-pg,
                   # so an agent-only route reports a database outage to a
                   # component that needs that database. Two-part shape:
-                  # continue: true here, AND SharedPg.* in the mctl-agent
-                  # catch-all below, AND SharedPg.* in the critical route's
+                  # continue: true here plus the paged twin that keeps the
+                  # ticket, AND SharedPg.* in the critical route's
                   # exclusion (NoPrimary, WALArchivingFailing, VolumeAlmostFull
                   # are critical and would otherwise page twice).
                   - receiver: telegram
                     continue: true
                     matchers:
                       - alertname =~ "SharedPg.*"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - alertname =~ "SharedPg.*"
+                  # mctl-alice (vm-rules/mctl-alice-alerts.yaml): a public
+                  # service whose failures (Yandex upstream outages, sign-in
+                  # failing, auth spikes) mostly need an operator, not a
+                  # remediation. continue: true so mctl-agent still gets its
+                  # ticket through the matcher-less route at the end; NOT
+                  # listed in the mctl-agent catch-all, which carries no
+                  # routing of its own. All rules there are warning, so the
+                  # critical route below cannot page them a second time; a
+                  # critical MctlAlice* rule needs MctlAlice.* in that route's
+                  # exclusion too. Prefix match so a new rule is covered.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlAlice.*"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - alertname =~ "MctlAlice.*"
                   # Local Argo workdirs are node-affine. These need an operator
                   # to restore the worker or terminate and rerun the workflow.
                   - receiver: telegram
@@ -911,6 +1066,11 @@ spec:
                     matchers:
                       - severity = "critical"
                       - alertname !~ "MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|SharedPg.*"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - severity = "critical"
+                      - alertname !~ "MctlTelegramCanary.*|AccessLogin.*|MctlTelegramToolAvailabilityFastBurn|MctlTelegramOAuthAvailabilityFastBurn|MctlTelegramSessionBorrowFastBurn|MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit|MctlApi.*|SharedPg.*"
                   # The alerting path itself pages regardless of severity:
                   # when Alertmanager, vmalert or mctl-agent is what broke, the
                   # alert about it must not depend on it. Critical ones are
@@ -924,6 +1084,11 @@ spec:
                   # future rule named after the component is paged too.
                   - receiver: telegram
                     continue: true
+                    matchers:
+                      - alertname =~ "Alertmanager.*|VMAlert.*|vmalert.*|MctlAgentMetricsAbsent"
+                      - severity != "critical"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
                     matchers:
                       - alertname =~ "Alertmanager.*|VMAlert.*|vmalert.*|MctlAgentMetricsAbsent"
                       - severity != "critical"
@@ -945,8 +1110,20 @@ spec:
                       - alertgroup = "vmalert"
                       - alertname =~ "ConfigurationReloadFailure|AlertingRulesError|TooManyMissedIterations"
                       - severity != "critical"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - alertgroup = "vmalert"
+                      - alertname =~ "ConfigurationReloadFailure|AlertingRulesError|TooManyMissedIterations"
+                      - severity != "critical"
                   - receiver: telegram
                     continue: true
+                    matchers:
+                      - alertname = "ServiceDown"
+                      - job =~ ".*(vmalert|alertmanager).*"
+                      - severity != "critical"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
                     matchers:
                       - alertname = "ServiceDown"
                       - job =~ ".*(vmalert|alertmanager).*"
@@ -961,10 +1138,10 @@ spec:
                   # Restores the root default for everything that got this far.
                   # The root receiver fires only when NO child route matched,
                   # and the continue: true direct-paging routes above count as
-                  # a match — without this route KubeAPIDown or
-                  # AlertmanagerFailedToSendAlerts would reach Telegram and stop
-                  # reaching mctl-agent. An alert that matched no route at all
-                  # lands here too, which is what the root default did for it.
+                  # a match. Each of those now has a paged twin that delivers
+                  # its ticket, so in practice this catches the alerts that
+                  # matched no route at all, which is what the root default
+                  # did for them.
                   # Every alert reaching this point used to reach mctl-agent
                   # (via the root default or the catch-alls above), so this
                   # adds no agent traffic.
@@ -974,6 +1151,17 @@ spec:
                 - name: mctl-agent
                   webhook_configs:
                     - url: "http://admins-mctl-agent-base-service.admins.svc.cluster.local:8080/api/v1/alerts"
+                      send_resolved: true
+                      http_config:
+                        authorization:
+                          type: Bearer
+                          credentials_file: /etc/vm/secrets/alertmanager-mctl-agent-webhook/token
+                # The same webhook for alerts a telegram route already paged: the
+                # agent keeps its ticket but does not repeat an alert it has
+                # nothing to add to (mctl-agent#183).
+                - name: mctl-agent-paged
+                  webhook_configs:
+                    - url: "http://admins-mctl-agent-base-service.admins.svc.cluster.local:8080/api/v1/alerts?paged=1"
                       send_resolved: true
                       http_config:
                         authorization:
@@ -1111,6 +1299,13 @@ spec:
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main
       path: platform-gitops/infra-components/observability/vmsingle-access
+
+    # VMAlertmanager's NetworkPolicy: only the inventoried clients reach it,
+    # so a tenant pod cannot inject an alert that Alertmanager would forward
+    # to mctl-agent with the real webhook token (mctl-handoff block C).
+    - repoURL: https://github.com/mctlhq/mctl-gitops.git
+      targetRevision: main
+      path: platform-gitops/infra-components/observability/alertmanager-access
 
     - repoURL: https://github.com/mctlhq/mctl-gitops.git
       targetRevision: main

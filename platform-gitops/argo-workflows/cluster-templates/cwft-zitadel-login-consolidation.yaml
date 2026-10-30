@@ -1,0 +1,79 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: zitadel-login-consolidation
+  annotations:
+    workflows.argoproj.io/description: Owner-approved consolidation of erpact/mashkovd into existing dmitrii.mashkov.
+      Grant first; retire only after live grant verification.
+spec:
+  serviceAccountName: argo-workflow-sa
+  imagePullSecrets:
+    - name: ghcr-credentials
+  activeDeadlineSeconds: 180
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  entrypoint: transfer
+  arguments:
+    parameters:
+    - name: phase
+      value: grant
+      enum:
+      - grant
+      - retire
+  templates:
+  - name: transfer
+    script:
+      image: ghcr.io/mctlhq/mctl-agents:1.76.0
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      command:
+      - python
+      env:
+      - name: TRANSFER_PHASE
+        value: '{{workflow.parameters.phase}}'
+      source: |
+        import json
+        from pathlib import Path
+        import urllib.request
+
+        BASE = 'http://vault.vault.svc:8200/v1/'
+        def request(method, path, body=None, token=None):
+            headers = {'Content-Type': 'application/json'}
+            if token:
+                headers['X-Vault-Token'] = token
+            req = urllib.request.Request(BASE + path, method=method, headers=headers,
+                data=None if body is None else json.dumps(body).encode())
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return json.load(response)
+        jwt = Path('/var/run/secrets/kubernetes.io/serviceaccount/token').read_text()
+        token = request('POST', 'auth/kubernetes/login', {'role':'argo-workflow','jwt':jwt})['auth']['client_token']
+        import os
+        phase = os.environ['TRANSFER_PHASE']
+        if phase == 'grant':
+            path = 'secret/data/platform/zitadel/admins'
+            snapshot = request('GET', path, token=token)['data']
+            fields = snapshot['data']
+            admin = json.loads(fields['dmitrii'])
+            assert admin.get('username') == 'dmitrii.mashkov'
+            assert admin.get('kubectl') is True
+            admin['frappe_access'] = True
+            admin['kubectl_tenants'] = sorted(set(admin.get('kubectl_tenants', []) + ['erpact']))
+            fields['dmitrii'] = json.dumps(admin)
+        elif phase == 'retire':
+            path = 'secret/data/platform/zitadel/users/erpact'
+            snapshot = request('GET', path, token=token)['data']
+            fields = snapshot['data']
+            assert 'mashkovd' in fields
+            source = json.loads(fields['mashkovd'])
+            del fields['mashkovd']
+            assert fields, 'Do not remove the tenant or its last user'
+        else:
+            raise RuntimeError('Unknown phase')
+        result = request('POST', path, {'options':{'cas':snapshot['metadata']['version']},'data':fields}, token)
+        print(json.dumps({'phase':phase,'version':result['data']['version']}))

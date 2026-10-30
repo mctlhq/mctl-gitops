@@ -139,6 +139,30 @@ spec:
             description: >-
               {{ $labels.pod }} uses more than 80% of max_connections (200).
               Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgconnectionshigh
+        - alert: SharedPgRoleConnectionsHigh
+          # Per-role budget, the limit SharedPgConnectionsHigh cannot see: a
+          # role at its connectionLimit gets "too many connections for role"
+          # while shared-pg as a whole still has room. Thresholds are 80% of
+          # each role's connectionLimit in
+          # infra-components/data/cnpg/shared/cluster.yaml (mctl-api 64,
+          # temporal 140, backstage 100); change both together. rolconnlimit
+          # is not exported, so the limits are mirrored here. Summed across
+          # pods because only the primary serves these roles.
+          expr: |
+            (sum by (usename) (cnpg_backends_total{namespace="platform-db", pod=~"shared-pg-[0-9]+", usename="mctl-api"}) > 51)
+              or
+            (sum by (usename) (cnpg_backends_total{namespace="platform-db", pod=~"shared-pg-[0-9]+", usename="temporal"}) > 112)
+              or
+            (sum by (usename) (cnpg_backends_total{namespace="platform-db", pod=~"shared-pg-[0-9]+", usename="backstage"}) > 80)
+          for: 10m
+          labels:
+            severity: warning
+            service: shared-pg
+          annotations:
+            summary: "shared-pg role {{ $labels.usename }} is above 80% of its connectionLimit"
+            description: >-
+              Role {{ $labels.usename }} holds {{ $value }} connections, over 80% of its connectionLimit. New connections for this role start failing at the limit even though shared-pg has free slots.
+              Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgroleconnectionshigh
         - alert: SharedPgVolumeFillingUp
           expr: |
             kubelet_volume_stats_used_bytes{namespace="platform-db", persistentvolumeclaim=~"shared-pg-[0-9]+"} / kubelet_volume_stats_capacity_bytes{namespace="platform-db", persistentvolumeclaim=~"shared-pg-[0-9]+"} > 0.8

@@ -1,0 +1,37 @@
+# ReleaseBindingIntent for scout (mctl-agents#797). It pins the exact
+# agent.yaml bytes so the production promotion gate (mctl-agents
+# tools/check_binding_hash.py evaluate_promotion) reports `match` instead of
+# `missing`.
+#
+# bindingSource and promotable are the same as the other bindings: mctl-agents
+# accepts only compatibility-fixture with promotable: false. Nothing reads this
+# file at run time; the scout is a v1alpha1 agent run by mctl-agents-scout.
+apiVersion: agents.mctl.ai/v1alpha2
+kind: ReleaseBindingIntent
+metadata:
+  agent: scout
+  environment: shadow
+spec:
+  sourceManifest:
+    repo: mctlhq/mctl-agents
+    path: agents/_manifests/scout/agent.yaml
+    # mctlhq/mctl-agents#803 head when contentHash was computed. Nothing
+    # verifies gitSha; contentHash is the pin.
+    gitSha: "422aab4531a16c416fce3a4152c79f7b6643daee"
+    # sha256 of the exact bytes of `path` at gitSha. Editing that agent.yaml
+    # requires re-pinning this value first (mctl-agents
+    # docs/runbooks/agent-yaml-binding-repin.md).
+    contentHash: "sha256:59562c69a35bc43b3bb8614d64b8444f4c5d4234a2a6709427795de1ade58c36"
+  bindingSource: compatibility-fixture
+  promotable: false
+  registryLifecycle:
+    definition: published
+    profile: published
+  definition:
+    name: scout
+    version: "1"
+    profileCompatibility: ">=1.0.0 <2.0.0"
+  profile:
+    name: scout-default
+    version: "1.0.0"
+  bindingRevision: 1

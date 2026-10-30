@@ -196,9 +196,16 @@ argo-cd:
 
   # Server ingress configuration
   server:
-    # SOC F11: singleton server. minAvailable 1 allows 0 voluntary evictions
-    # (drain/kured). Replica count stays 1. Rolling updates still work because
-    # Deployments do not use the Eviction API.
+    # SOC F11: two replicas behind minAvailable 1. With one replica this PDB
+    # allows 0 voluntary evictions, so a node drain (kured, the SUC agent
+    # plan, which has no drain timeout) retries for hours with the node
+    # cordoned: the 2026-06-27 NodeCordoned storm. Two replicas let a drain
+    # evict one while the other keeps serving the UI and the GitHub webhook.
+    # Added for the k3s 1.34 upgrade (#2068) and kept: the 2026-10-22 drains
+    # of all three workers went through without a stall. Cost: one more
+    # 128Mi request; peak CPU over 14 days was 0.1 core, so this is for
+    # availability, not load.
+    replicas: 2
     pdb:
       enabled: true
       minAvailable: 1
@@ -214,12 +221,13 @@ argo-cd:
             - ops.mctl.ai
           secretName: argocd-tls
     resources:
+      # 2026-10-20: 7d peak working set 190Mi sat at the 192Mi limit.
       requests:
         cpu: 50m
-        memory: 64Mi
+        memory: 128Mi
       limits:
         cpu: 250m
-        memory: 192Mi
+        memory: 256Mi
     metrics:
       enabled: true
       serviceMonitor:
@@ -245,7 +253,10 @@ argo-cd:
         # the 100m request badly underrepresented real usage for scheduler
         # bin-packing. 500m covers steady-state with headroom.
         cpu: 500m
-        memory: 768Mi
+        # Raised 768Mi->1280Mi on 2026-10-20: 7d peak working set 1580Mi,
+        # live ~1.2Gi. A request at half of real usage hides ~800Mi from
+        # the scheduler. Limit and GOMEMLIMIT are unchanged.
+        memory: 1280Mi
     env:
       - name: GOMEMLIMIT
         value: "1800MiB"
@@ -269,7 +280,12 @@ argo-cd:
     enabled: false
 
   repoServer:
-    # SOC F11: singleton repo-server. Same drain protection as server.pdb.
+    # SOC F11: two replicas, same drain reasoning as server.replicas above.
+    # Load also justifies it here: before #2068 the single repo-server was
+    # CPU-throttled in up to 72% of periods at its 1-CPU limit (5m windows,
+    # 14 days to 2026-10-22), and argocd_repo_pending_request_total was >= 1
+    # for 612 minutes in that window and peaked at 7.
+    replicas: 2
     pdb:
       enabled: true
       minAvailable: 1
@@ -314,27 +330,32 @@ argo-cd:
 
   applicationSet:
     resources:
+      # 2026-10-20: 7d peak working set 190Mi sat at the 192Mi limit.
       requests:
         cpu: 50m
-        memory: 64Mi
+        memory: 128Mi
       limits:
         cpu: 300m
-        memory: 192Mi
+        memory: 256Mi
 
   notifications:
     resources:
+      # 2026-10-20: 7d peak working set 82Mi; request raised to match.
       requests:
         cpu: 25m
-        memory: 32Mi
+        memory: 64Mi
       limits:
         cpu: 100m
         memory: 128Mi
 
   redis:
     resources:
+      # Raised 2026-10-20: OOMKilled 2026-10-18 at the 128Mi limit, 7d peak
+      # working set 127Mi. Redis is ArgoCD's cache; an OOM drops it and
+      # forces a full re-render of every Application.
       requests:
         cpu: 25m
-        memory: 32Mi
+        memory: 64Mi
       limits:
         cpu: 100m
-        memory: 128Mi
+        memory: 256Mi

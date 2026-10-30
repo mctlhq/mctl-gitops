@@ -1,0 +1,611 @@
+# Owner-only Grafana dashboard for mctl-support, the tenant support agent
+# (mctlhq/.github#243; S2 pilot mctlhq/.github#270, issue mctlhq/mctl-gitops#2228).
+#
+# Reads only the metrics mctl-support already exports, scraped by
+# bootstrap/templates/mctl-platform/mctl-support-monitor.yaml. Tenant labels
+# are bounded by the service to SUPPORT_ALLOWED_TENANTS; every other tenant,
+# admin probes included, shows as "other". The default range is this
+# calendar month, the period of the $50 workspace and $10 per-tenant caps.
+#
+# grafana_folder "Internal", as mctl-academy-usage: the folder's view
+# permission is restricted to admins by hand in the Grafana UI (the sidecar
+# cannot set folder ACLs), so this dashboard inherits that restriction.
+#
+# Sidecar in the monitoring/grafana deployment auto-discovers ConfigMaps
+# labelled grafana_dashboard: "1".
+#
+# Counters use MetricsQL increase_pure, not increase. A labelled series of
+# prometheus_client appears at its first event, already above zero, and
+# increase drops that first step: on 2026-10-28 it reported 0 cache reads for
+# a day with 67906. increase_pure counts from zero, which is right here
+# because every series starts at zero when a pod starts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mctl-support-owner-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Internal"
+data:
+  mctl-support-owner.json: |
+    {
+      "title": "mctl-support — pilot owner view",
+      "description": "Tenant support agent (mctlhq/.github#243, S2 #270): spend against the pilot caps, cache effectiveness, task outcomes, tool calls and guard rails.",
+      "uid": "mctl-support-owner",
+      "tags": [
+        "mctl-support",
+        "support-agent"
+      ],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "graphTooltip": 1,
+      "timezone": "browser",
+      "time": {
+        "from": "now/M",
+        "to": "now"
+      },
+      "refresh": "5m",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {
+              "text": "VictoriaMetrics",
+              "value": "VictoriaMetrics"
+            }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "id": 100,
+          "title": "Spend against the pilot caps",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "collapsed": false
+        },
+        {
+          "type": "stat",
+          "id": 1,
+          "title": "Workspace spend in range",
+          "description": "Model cost of every task in the selected range, from the service's own pricing (uncached input, cache reads at 0.1x and writes at 1.25x of the input price, output). The workspace cap is $50 a month: keep the range on this month (the default) to compare.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 6,
+            "x": 0,
+            "y": 1
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "currencyUSD",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 40
+                  },
+                  {
+                    "color": "red",
+                    "value": 50
+                  }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase_pure(support_model_cost_usd_total[$__range]))",
+              "legendFormat": "spend",
+              "instant": true
+            }
+          ]
+        },
+        {
+          "type": "bargauge",
+          "id": 2,
+          "title": "Spend by tenant in range",
+          "description": "Per-tenant cap is $10 a month. Tenants outside SUPPORT_ALLOWED_TENANTS, admin probes of other tenants included, show as 'other'.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 10,
+            "x": 6,
+            "y": 1
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "currencyUSD",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 8
+                  },
+                  {
+                    "color": "red",
+                    "value": 10
+                  }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (tenant) (increase_pure(support_model_cost_usd_total[$__range]))",
+              "legendFormat": "{{tenant}}",
+              "instant": true
+            }
+          ],
+          "options": {
+            "orientation": "horizontal",
+            "displayMode": "basic",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "id": 3,
+          "title": "Cache read share of input",
+          "description": "Input tokens served from the prompt cache, out of all input (uncached + cache reads + cache writes). Near zero means caching stopped hitting: a prompt-assembly change broke the prefix.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 8,
+            "x": 16,
+            "y": 1
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.3
+                  },
+                  {
+                    "color": "green",
+                    "value": 0.5
+                  }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase_pure(support_model_tokens_total{direction=\"cache_read\"}[$__range])) / sum(increase_pure(support_model_tokens_total{direction=~\"input|cache_read|cache_write\"}[$__range]))",
+              "legendFormat": "cache read share",
+              "instant": true
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 4,
+          "title": "Model tokens per hour by kind",
+          "description": "Uncached input, output, cache reads and cache writes.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 7
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (direction) (increase_pure(support_model_tokens_total[1h]))",
+              "legendFormat": "{{direction}}",
+              "instant": false
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 105,
+          "title": "Tasks",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 15
+          },
+          "collapsed": false
+        },
+        {
+          "type": "timeseries",
+          "id": 5,
+          "title": "Tasks per hour by final state",
+          "description": "Completed, failed, canceled and rejected tasks.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 16
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (state) (increase_pure(support_tasks_total[1h]))",
+              "legendFormat": "{{state}}",
+              "instant": false
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 6,
+          "title": "Task duration",
+          "description": "p50 and p95 wall-clock time of a task. The deadline is 600 s.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 16
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 600
+                  }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "histogram_quantile(0.5, sum by (le) (rate(support_task_duration_seconds_bucket[1h])))",
+              "legendFormat": "p50",
+              "instant": false
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(support_task_duration_seconds_bucket[1h])))",
+              "legendFormat": "p95",
+              "instant": false
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "id": 7,
+          "title": "Tasks by tenant and state in range",
+          "description": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 24
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (tenant, state) (increase_pure(support_tasks_total[$__range]))",
+              "legendFormat": "",
+              "instant": true
+            }
+          ],
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {
+                "mode": "columns"
+              }
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "id": 8,
+          "title": "Tool calls by tool and status in range",
+          "description": "Status is ok, error, denied or truncated. A denied call is mctl-api refusing the tenant-bound run token.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 24
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (tool, status) (increase_pure(support_tool_calls_total[$__range]))",
+              "legendFormat": "",
+              "instant": true
+            }
+          ],
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {
+                "mode": "columns"
+              }
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "id": 110,
+          "title": "Guards",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 31
+          },
+          "collapsed": false
+        },
+        {
+          "type": "stat",
+          "id": 9,
+          "title": "Scope denials in range",
+          "description": "Tool calls mctl-api refused for the support scope. Any value is worth reading: the model asked for something outside its tenant.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 6,
+            "x": 0,
+            "y": 32
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase_pure(support_agent_scope_denials_total[$__range])) or vector(0)",
+              "legendFormat": "denials",
+              "instant": true
+            }
+          ]
+        },
+        {
+          "type": "bargauge",
+          "id": 10,
+          "title": "Budget rejections by reason in range",
+          "description": "Tasks or turns refused by a limit (rate, concurrency, task, tenant or workspace cap). No series until the first rejection.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 9,
+            "x": 6,
+            "y": 32
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (reason) (increase_pure(support_budget_rejections_total[$__range]))",
+              "legendFormat": "{{reason}}",
+              "instant": true
+            }
+          ],
+          "options": {
+            "orientation": "horizontal",
+            "displayMode": "basic",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            }
+          }
+        },
+        {
+          "type": "bargauge",
+          "id": 11,
+          "title": "Escalations by kind in range",
+          "description": "Tenant-local support incidents created or reused. No series until the first escalation.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 9,
+            "x": 15,
+            "y": 32
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (kind) (increase_pure(support_escalations_total[$__range]))",
+              "legendFormat": "{{kind}}",
+              "instant": true
+            }
+          ],
+          "options": {
+            "orientation": "horizontal",
+            "displayMode": "basic",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            }
+          }
+        }
+      ]
+    }
