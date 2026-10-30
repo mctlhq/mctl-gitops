@@ -13,6 +13,7 @@
 # Keychain items (service/account), created with `security add-generic-password`:
 #
 #   mctl-hcloud-token/api-token              -> TF_VAR_hcloud_token
+#   mctl-hcloud-csi-token/api-token          -> TF_VAR_hcloud_csi_token
 #   mctl-r2-etcd-snapshots/access-key-id     -> TF_VAR_etcd_s3_access_key
 #   mctl-r2-etcd-snapshots/secret-access-key -> TF_VAR_etcd_s3_secret_key
 #
@@ -20,7 +21,10 @@
 # lived in the Keychain before this script existed, and terraform.tfvars was
 # a second copy of it.
 #
-# All three are REQUIRED, including the etcd pair. kube.tf reads it as
+# The two hcloud tokens are deliberately different (gitops#1140): the CSI one
+# lands in kube-system secrets, the other one never leaves this machine and CI.
+#
+# All of them are REQUIRED, including the etcd pair. kube.tf reads it as
 # optional -- `etcd_s3_backup = var.etcd_s3_access_key == "" ? {} : {...}` --
 # which is true for a cluster that never had snapshots. This one has them, so
 # an empty value is not "snapshots stay off", it is "turn snapshots off":
@@ -92,22 +96,28 @@ _mctl_kc() {
 }
 
 # Collect every failure before giving up, so a fresh machine is told about all
-# three missing items at once rather than one per run. The cleanup below then
+# missing items at once rather than one per run. The cleanup below then
 # runs on the failure path too -- an early `return` would leave _mctl_kc defined
 # in the caller's shell.
 _mctl_rc=0
 TF_VAR_hcloud_token=$(_mctl_kc mctl-hcloud-token api-token) || _mctl_rc=1
+TF_VAR_hcloud_csi_token=$(_mctl_kc mctl-hcloud-csi-token api-token) || _mctl_rc=1
 TF_VAR_etcd_s3_access_key=$(_mctl_kc mctl-r2-etcd-snapshots access-key-id) || _mctl_rc=1
 TF_VAR_etcd_s3_secret_key=$(_mctl_kc mctl-r2-etcd-snapshots secret-access-key) || _mctl_rc=1
 unset -f _mctl_kc
 
+if [ "$_mctl_rc" -eq 0 ] && [ "$TF_VAR_hcloud_token" = "$TF_VAR_hcloud_csi_token" ]; then
+  echo "tfenv.sh: mctl-hcloud-csi-token must be a different token from mctl-hcloud-token (gitops#1140)" >&2
+  _mctl_rc=1
+fi
+
 if [ "$_mctl_rc" -ne 0 ]; then
-  unset _mctl_rc TF_VAR_hcloud_token TF_VAR_etcd_s3_access_key TF_VAR_etcd_s3_secret_key
+  unset _mctl_rc TF_VAR_hcloud_token TF_VAR_hcloud_csi_token TF_VAR_etcd_s3_access_key TF_VAR_etcd_s3_secret_key
   # `return` when sourced, `exit` when run directly.
   return 1 2>/dev/null || exit 1
 fi
 unset _mctl_rc
 
-export TF_VAR_hcloud_token TF_VAR_etcd_s3_access_key TF_VAR_etcd_s3_secret_key
+export TF_VAR_hcloud_token TF_VAR_hcloud_csi_token TF_VAR_etcd_s3_access_key TF_VAR_etcd_s3_secret_key
 
-echo "tfenv.sh: exported TF_VAR_hcloud_token, TF_VAR_etcd_s3_access_key, TF_VAR_etcd_s3_secret_key"
+echo "tfenv.sh: exported TF_VAR_hcloud_token, TF_VAR_hcloud_csi_token, TF_VAR_etcd_s3_access_key, TF_VAR_etcd_s3_secret_key"

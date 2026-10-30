@@ -243,3 +243,85 @@ spec:
               The 95th-percentile connect + SendCode latency is approaching the
               90s enableSendCodeWait ceiling. Logins are degrading and will
               start timing out if this rises further.
+
+        # Connector login funnel (mctl-telegram 0.109.0+, mctl-telegram#960,
+        # epic mctlhq/.github#279). Every series these rules read is primed at
+        # 0 when the server starts, so increase() sees the first occurrence
+        # and no absent() companion is needed (an absent rule shipped next to
+        # its producer is what fired falsely in mctl-gitops#2277).
+        #
+        # `sum by (job, ...)` drops pod and instance, which change on every
+        # rollout, and keeps job, so the preview deployment stays a separate
+        # series from production. Volume is low (a handful of grants a day),
+        # so the thresholds are absolute counts rather than rates alone.
+        - alert: MctlTelegramConnectorNoFirstCall
+          # The 2026-10-30 "action discovery failed" shape: a connector
+          # completes OAuth and then never makes a successful MCP call, e.g.
+          # because it is configured with the wrong URL. At least two such
+          # grants for one client in 6h, and at least half of that client's
+          # decided grants, so a single user who connects and walks away
+          # does not page. `unknown` outcomes are left out of both sides:
+          # they are the funnel being blind, covered by
+          # MctlTelegramConnectFunnelStoreErrors below.
+          expr: |
+            (
+              sum by (job, client) (increase(mctl_connect_first_call_total{outcome="none_within_window"}[6h]))
+              /
+              sum by (job, client) (increase(mctl_connect_first_call_total{outcome=~"ok|none_within_window"}[6h]))
+            ) >= 0.5
+            and
+            sum by (job, client) (increase(mctl_connect_first_call_total{outcome="none_within_window"}[6h])) > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: {{ $labels.client }} connectors get tokens but never make a call"
+            description: >-
+              At least half of the {{ $labels.client }} authorization_code
+              grants in the last 6h were followed by no successful MCP call
+              within 5 minutes. The connector is authenticating and then
+              failing on its first request: check the connector URL (it must
+              end in /mcp), mctl_root_mcp_requests_total, and the
+              connect_first_call table.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#connectfirstcall"
+
+        - alert: MctlTelegramConnectFunnelStoreErrors
+          # The funnel records `unknown` instead of guessing when its store
+          # fails; a sustained error rate means the alert above is blind.
+          expr: sum by (job, op) (increase(mctl_connect_first_call_errors_total[1h])) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: connect funnel store errors ({{ $labels.op }})"
+            description: >-
+              The connect first-call funnel hit more than two store errors
+              on op {{ $labels.op }} in the last hour. Grant outcomes are
+              being recorded as unknown, so MctlTelegramConnectorNoFirstCall
+              cannot see a broken connector. Check the server logs for
+              "connect funnel:" warnings and the database.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#connectfirstcall"
+
+        - alert: MctlTelegramLoginExchangeFailing
+          # Of the callback rejection reasons only exchange_failed is ours:
+          # the server-side code-for-token exchange with Telegram (or the
+          # id_token verification) failed after the user did everything
+          # right. The others are user or client behaviour (cancel, reused
+          # link, prefetch) and the canary adds one unknown_state per run,
+          # so they are left to the runbook queries
+          # (mctl-telegram docs/runbook.md#loginpathsignals), not paged on.
+          expr: sum by (job) (increase(mctl_login_callback_rejected_total{reason="exchange_failed"}[30m])) > 1
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: Telegram sign-in token exchange is failing"
+            description: >-
+              Two or more Telegram OIDC returns in the last 30 minutes failed
+              at the server-side token exchange (route label on
+              mctl_login_callback_rejected_total says which flow). Users
+              finish the Telegram step and still cannot sign in. Check the
+              "telegram OIDC token exchange failed" and "connect: request
+              rejected" log lines for the error, and Telegram's token
+              endpoint and JWKS reachability.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#loginpathsignals"

@@ -33,7 +33,18 @@ terraform {
 variable "hcloud_token" {
   type        = string
   sensitive   = true
-  description = "Hetzner Cloud API Token"
+  description = "Hetzner Cloud API token for OpenTofu itself (the hcloud provider)"
+}
+
+# A separate token for the in-cluster CCM and CSI driver (gitops#1140). The
+# module writes it into kube-system secrets `hcloud` and `hcloud-csi`; before
+# this both they and OpenTofu ran on one token, so a token leaked from the
+# cluster (any reader of kube-system secrets) was also the infrastructure
+# credential, and rotating either meant rotating both.
+variable "hcloud_csi_token" {
+  type        = string
+  sensitive   = true
+  description = "Hetzner Cloud API token for hcloud-cloud-controller-manager and hcloud-csi"
 }
 
 variable "cf_token" {
@@ -216,7 +227,11 @@ module "kube-hetzner" {
   providers = {
     hcloud = hcloud
   }
-  hcloud_token = var.hcloud_token
+  # Not var.hcloud_token: inside the module this is used ONLY for the
+  # kube-system secrets (locals.tf, kube-hetzner 2.19.1); its resources are
+  # created through the provider passed above. Changing the value replaces
+  # terraform_data.kube_system_secrets, so dispatch with allow_reprovision.
+  hcloud_token = var.hcloud_csi_token
 
   source  = "kube-hetzner/kube-hetzner/hcloud"
   version = "2.19.1"
