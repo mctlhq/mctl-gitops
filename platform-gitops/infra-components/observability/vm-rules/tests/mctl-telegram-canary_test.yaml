@@ -1,0 +1,172 @@
+# Unit tests for the login-path rules in mctl-telegram-canary.yaml
+# (mctl-telegram#959, mctl-gitops#2276).
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec`.
+#
+# The canary runs every 10 minutes and the Pushgateway holds the last push, so
+# a scraped value stays constant for 10 samples at a 1m interval. A step that
+# passed is published as 0, not omitted (mctl-telegram#964).
+rule_files:
+  - generated/mctl-telegram-canary.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: a converged login path raises nothing
+    input_series:
+      - series: 'mctl_telegram_canary_success{job="mctl_telegram_canary"}'
+        values: '1x60'
+      - series: 'mctl_telegram_canary_login_path_success{job="mctl_telegram_canary"}'
+        values: '1x60'
+      - series: 'mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step="edge_connector_ua"}'
+        values: '0x60'
+      - series: 'mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step="mcp_root"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: MctlTelegramConnectorEdgeBlocked
+        exp_alerts: []
+      - eval_time: 55m
+        alertname: MctlTelegramLoginPathStepFailing
+        exp_alerts: []
+      - eval_time: 55m
+        alertname: MctlTelegramLoginPathAbsent
+        exp_alerts: []
+
+  - interval: 1m
+    name: an edge block on connector User-Agents fires the critical alert only
+    # Green until the run at 30m, red from then on.
+    input_series:
+      - series: 'mctl_telegram_canary_success{job="mctl_telegram_canary"}'
+        values: '1x100'
+      - series: 'mctl_telegram_canary_login_path_success{job="mctl_telegram_canary"}'
+        values: '1x29 0x70'
+      - series: 'mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step="edge_connector_ua"}'
+        values: '0x29 1x70'
+      - series: 'mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step="mcp_root"}'
+        values: '0x100'
+    alert_rule_test:
+      # The window holds a pass until 55m, then `for: 5m`: quiet at 50m,
+      # firing by 62m.
+      - eval_time: 50m
+        alertname: MctlTelegramConnectorEdgeBlocked
+        exp_alerts: []
+      - eval_time: 62m
+        alertname: MctlTelegramConnectorEdgeBlocked
+        exp_alerts:
+          - exp_labels:
+              job: mctl_telegram_canary
+              step: edge_connector_ua
+              severity: critical
+              service: mctl-telegram
+            exp_annotations:
+              summary: "AI connector User-Agents are not reaching mctl-telegram"
+              description: "An unauthenticated POST /mcp sent as Claude-User, ChatGPT-User or Perplexity-User has not received the app's own 401 on any canary run for ~25 minutes. Something in front of the app, usually a Cloudflare WAF or bot rule, is answering instead. The canary log names the User-Agent and the response. Every connector call is affected, not only new sign-ins. Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md#login-path-probes"
+      - eval_time: 62m
+        alertname: MctlTelegramLoginPathStepFailing
+        exp_alerts: []
+
+  - interval: 1m
+    name: MCP refused on the bare origin fires the step alert with its step
+    input_series:
+      - series: 'mctl_telegram_canary_success{job="mctl_telegram_canary"}'
+        values: '1x100'
+      - series: 'mctl_telegram_canary_login_path_success{job="mctl_telegram_canary"}'
+        values: '1x29 0x70'
+      - series: 'mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step="edge_connector_ua"}'
+        values: '0x100'
+      - series: 'mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step="mcp_root"}'
+        values: '0x29 1x70'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MctlTelegramLoginPathStepFailing
+        exp_alerts: []
+      - eval_time: 62m
+        alertname: MctlTelegramLoginPathStepFailing
+        exp_alerts:
+          - exp_labels:
+              job: mctl_telegram_canary
+              step: mcp_root
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: "mctl-telegram connector login path is failing at mcp_root"
+              description: >-
+                The canary's mcp_root login-path step has failed on every run
+                for ~25 minutes. New connectors cannot finish connecting, while
+                connected accounts are not affected. mcp_root failing means a
+                connector configured with the bare origin gets "action
+                discovery failed" after OAuth (2026-10-30). The canary pod log
+                in labs carries the response that failed the check.
+                Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md#login-path-probes
+      - eval_time: 62m
+        alertname: MctlTelegramConnectorEdgeBlocked
+        exp_alerts: []
+
+  - interval: 1m
+    name: one failed run between passes does not fire
+    input_series:
+      - series: 'mctl_telegram_canary_success{job="mctl_telegram_canary"}'
+        values: '1x60'
+      - series: 'mctl_telegram_canary_login_path_success{job="mctl_telegram_canary"}'
+        values: '1x19 0x9 1x30'
+      # Fails on the run at 20m, passes again at 30m.
+      - series: 'mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step="edge_connector_ua"}'
+        values: '0x19 1x9 0x30'
+      - series: 'mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step="mcp_root"}'
+        values: '0x19 1x9 0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlTelegramConnectorEdgeBlocked
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: MctlTelegramLoginPathStepFailing
+        exp_alerts: []
+      - eval_time: 55m
+        alertname: MctlTelegramConnectorEdgeBlocked
+        exp_alerts: []
+      - eval_time: 55m
+        alertname: MctlTelegramLoginPathStepFailing
+        exp_alerts: []
+
+  - interval: 1m
+    name: a canary running without its login-path probes fires Absent
+    input_series:
+      - series: 'mctl_telegram_canary_success{job="mctl_telegram_canary"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MctlTelegramLoginPathAbsent
+        exp_alerts:
+          - exp_labels:
+              job: mctl_telegram_canary
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: "mctl-telegram canary is running without its login-path probes"
+              description: "The canary has pushed tool-path results in the last 30 minutes but no mctl_telegram_canary_login_path_success. Without it, an edge block on connector User-Agents or a broken sign-in path goes unreported. Check that CANARY_LOGIN_PATH=true is still set on labs-mctl-telegram-canary and that the image includes mctl-telegram#959. Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md#login-path-probes"
+
+  - interval: 1m
+    name: a canary that stopped reporting altogether is not a login-path absence
+    input_series:
+      - series: 'mctl_telegram_canary_success{job="mctl_telegram_canary"}'
+        values: '1x5'
+      - series: 'mctl_telegram_canary_login_path_success{job="mctl_telegram_canary"}'
+        values: '1x5'
+    alert_rule_test:
+      # Both series stop at 5m; by 50m the tool-path series has been gone for
+      # well over 30m, so MctlTelegramCanaryAbsent owns this.
+      - eval_time: 50m
+        alertname: MctlTelegramLoginPathAbsent
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: MctlTelegramCanaryAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: "mctl-telegram canary metrics absent for 30 minutes"
+              description: "No mctl_telegram_canary_success samples have arrived in 30 minutes. Pushgateway may be down or the metric group was deleted. Check Pushgateway health and the canary CronJob pod logs in labs. Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md"

@@ -769,6 +769,13 @@ extraObjects:
                           key: bearer_token
                     - name: CANARY_PROBE_UNREAD
                       value: "true"
+                    # Connector login-path probes (mctl-telegram#959): every
+                    # hop a new connector takes up to Telegram's OIDC, with no
+                    # Telegram API call. Reported on their own metric and never
+                    # through the exit code; alerts in
+                    # vm-rules/mctl-telegram-canary.yaml.
+                    - name: CANARY_LOGIN_PATH
+                      value: "true"
                     # Naming the Secret is what switches renewal on; the
                     # binary leaves it off entirely when this is unset, so
                     # this line and the RBAC above must travel together.
