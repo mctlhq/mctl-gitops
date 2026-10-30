@@ -5,7 +5,7 @@
   - DoD: a schema-invalid intent (including `extraObjects` at the top level and under `spec`) returns a schema error, and canonical JSON is byte-stable.
 - [ ] 2. Port the preview rewrite to Go (depends on 1).
   - Add `compile.go` with a port of `rewrite_preview_values.py` (`rewriteRemoteKey`, `classifyKeys`, `forceTenantStore`, `dbSecret`), with `ErrPreviewValuesRefused` for mixed keys and foreign paths.
-  - DoD: behaviour matches the script on the vendored fixtures (T5).
+  - DoD: behaviour matches the snapshot script `internal/deployplan/testdata/upstream/rewrite_preview_values.py` on the golden fixtures (T5).
 - [ ] 3. Implement `CompilePreview` (depends on 2).
   - Apply the intent the way `tpl-git-commit` does (`service.port`, `probes.*.path`, `replicaCount`, `resources`, `env`, `externalSecret`), then the rewrite, then the `wft-preview-deploy` `--set` overrides with preview id and host.
   - Add `ErrValuesUnparseable` for a non-mapping document or a YAML error.
@@ -24,10 +24,23 @@
   - DoD: T1, T2, T10 and T11 are green, and the plan path writes only the `deploy_plans` row (asserted with fakes: no Argo submit, no gitops write).
 - [ ] 9. Add MCP tools `mctl_deploy_plan` and `mctl_get_deploy_plan` in `internal/mcp/deploy_plan.go` as REST clients, with descriptions. Bump the tool count in `server_test.go` (depends on 8).
   - DoD: T12 is green.
-- [ ] 10. Audit every known caller of `POST /api/v1/operations/{create-tenant,provision-database,retire-service,delete-tenant}/execute` before merge: the mctl CLI (`cli/mctl`), mctl-portal, mctl-web, Backstage scaffolder templates, `handlers_signup.go`, mctl-agents, Argo templates, automation and scripts across mctlhq (search the org, not only this repo).
-  - This is a hard merge gate for the mctl-api PR, not a checklist item. Server-side 428 enforcement stays in this item.
-  - Every affected caller must either already be compatible (sends `"confirm": "yes"`, or does not reach the generic execute route) or have its compatibility change **merged and released/deployed before** the mctl-api enforcement ships, or ship atomically with it (same repository, same release). A merely open companion PR is NOT sufficient.
-  - DoD: the mctl-api PR description carries a caller matrix (caller, repository, file, operation, status: compatible / fixed in <merged PR + released version + deployed> / same change) and the rollout order: client compatibility -> clients merged and deployed -> mctl-api 428 enforcement. The PR stays draft until every row is compatible or deployed.
+- [ ] 10. Carry the caller audit into the mctl-api PR. The cross-repo audit was done by the owner's session on 2026-10-30 against the default branches of all mctlhq workspace repositories; the implementer does NOT repeat it outside the mctl-api clone. It only re-checks the in-repo callers (MCP tools in `internal/mcp`, `handlers_signup.go`) and copies this matrix into the PR description.
+  - This stays a hard merge gate: server-side 428 enforcement is in this item, and every affected caller must already be compatible or have its fix merged and deployed before (or atomically with) the enforcement. An open companion PR is not sufficient.
+  - Caller matrix for `create-tenant`, `provision-database`, `retire-service`, `delete-tenant`:
+
+    | Caller | Repository / file | Operations | Status |
+    |---|---|---|---|
+    | `mctl delete` (CLI) | mctl-gitops `cli/mctl/cmd/delete.go` | retire-service | fixed in mctlhq/mctl-gitops#2279, merged 7cdfb65; the CLI is built from source (`make install`), so merged is deployed |
+    | Other CLI commands | mctl-gitops `cli/mctl/cmd/{deploy,config}.go` | deploy-service only | not affected (`RequiresConfirm: false`) |
+    | Portal tenant/workflow backends, Backstage templates | mctl-portal, mctl-gitops `backstage-templates` | create-tenant, delete-tenant-safe, retire-service, provision-database | not affected: submit Argo workflows directly, never the mctl-api execute route |
+    | Website signup | mctl-web `cloudflare-worker/index.js` | create-tenant | not affected: calls the portal tenant API |
+    | mctl-agents | `orchestrator/**` | `mctl-agents-*`, `dev-loop-start` only | not affected |
+    | Tenant CI pipelines | mctl-instruments, mctl-rules, pelican-libertex-social | deploy-service, preview-deploy, rollback-service | not affected |
+    | MCP tools | mctl-api `internal/mcp` | all four | same change (task 11) |
+    | Signup handler | mctl-api `handlers_signup.go` | create-tenant | same change; re-check it does not reach the gated path |
+
+  - Not covered: scripts outside the mctlhq workspace checkouts (for example tenant-owned automation). They get the documented 428 with a clear code; the narrow rollback is reverting only the `ExecuteOperation` gate commit.
+  - DoD: the matrix above, with the in-repo rows re-verified, is in the mctl-api PR description with the rollout order (client compatibility -> clients merged and deployed -> mctl-api 428 enforcement). Every row is already compatible or deployed, so the PR does not need to wait on another repository.
 - [ ] 11. Make `RequiresConfirm` load-bearing (depends on 10; the `ExecuteOperation` 428 gate may merge only after every task 10 caller row is compatible or deployed).
   - In `ExecuteOperation`, check the confirm gate before `StripUndeclared`, answer 428 `operation_confirmation_required` with a refusal audit row, and remove `confirm` from the input.
   - Add `requireConfirm` gates and a `confirm` parameter to `mctl_create_tenant` and `mctl_provision_database`. Forward `confirm: "yes"` from all four gated tools.
@@ -54,9 +67,9 @@
 - [ ] T3. Digest stability and sensitivity. A table test: the same input gives the same digest. Mutating each bound field (tenant, service, environment, canonical intent, revision, gitops_base_sha, action, preview_id, values_after, host) changes it. Changing id, created_at, expires_at, created_by or idempotency_key does not. The encoding version prefix is asserted.
 - [ ] T4. Canonical intent. Omitted defaults and explicit defaults give an identical canonical intent and digest. Key order in the input does not matter.
 - [ ] T5. Golden compile against the preview workflow.
-  - Fixtures under `internal/deployplan/testdata/golden/` hold base values, an intent and the expected effective values. They were captured by running the vendored `rewrite_preview_values.py` and applying the vendored `wft-preview-deploy` `--set` list (the capture script is committed next to them).
+  - Fixtures under `internal/deployplan/testdata/golden/` hold base values, an intent and the expected effective values. They are captured by running the snapshot `internal/deployplan/testdata/upstream/rewrite_preview_values.py` and applying the `--set` list of the snapshot `wft-preview-deploy.yaml` (the capture script is committed next to them and records the `source_commit` from `provenance.json`). Everything needed is inside the mctl-api clone; do not read mctl-gitops.
   - `CompilePreview` output equals the expected values.
-  - A second test parses the vendored templates (pinned by SHA-256 and source path) and fails when the set of `--set` keys in `wft-preview-deploy.yaml`, or the yq assignment paths for the intent keys in `tpl-git-commit.yaml`, differ from the compiler's declared key list.
+  - A second test parses the snapshot templates in `testdata/upstream/` (pinned by `provenance.json`) and fails when the set of `--set` keys in `wft-preview-deploy.yaml`, or the yq assignment paths for the intent keys in `tpl-git-commit.yaml`, differ from the compiler's declared key list.
 - [ ] T6. Requires-approval detector. The converged fixture (preview update) gives required/owner. A mutated matrix (preview update mapped to false) turns the test red.
 - [ ] T7. Preview id and host are deterministic, match `[a-z0-9]{6}`, and the host is `{service}-{id}.{domain}`.
 - [ ] T8. Onboard/update detector, fail-closed:
