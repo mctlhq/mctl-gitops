@@ -67,12 +67,7 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		deleteVault = "false"
 	}
 
-	inputs := map[string]string{
-		"team_name":            deleteTeam,
-		"component_name":         deleteName,
-		"component_type":         deleteType,
-		"delete_vault_secrets": deleteVault,
-	}
+	inputs := retireServiceInputs(deleteTeam, deleteName, deleteType, deleteVault)
 
 	client := api.NewClient(token)
 
@@ -97,4 +92,20 @@ func runDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// retireServiceInputs builds the retire-service request body. retire-service
+// is RequiresConfirm in the mctl-api registry, and the generic execute route
+// will refuse it with 428 operation_confirmation_required unless the body
+// carries confirm=yes (mctl-api#866). The CLI only reaches this point after
+// the operator typed DELETE or passed -y, so that is the confirmation being
+// forwarded. Servers that predate the gate drop the undeclared field.
+func retireServiceInputs(team, name, componentType, deleteVault string) map[string]string {
+	return map[string]string{
+		"team_name":            team,
+		"component_name":       name,
+		"component_type":       componentType,
+		"delete_vault_secrets": deleteVault,
+		"confirm":              "yes",
+	}
 }
