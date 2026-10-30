@@ -24,9 +24,11 @@
   - DoD: T1, T2, T10 and T11 are green, and the plan path writes only the `deploy_plans` row (asserted with fakes: no Argo submit, no gitops write).
 - [ ] 9. Add MCP tools `mctl_deploy_plan` and `mctl_get_deploy_plan` in `internal/mcp/deploy_plan.go` as REST clients, with descriptions. Bump the tool count in `server_test.go` (depends on 8).
   - DoD: T12 is green.
-- [ ] 10. Audit external callers of `POST /api/v1/operations/{create-tenant,provision-database,retire-service,delete-tenant}/execute` before merge (mctl-portal, mctl-web, Backstage templates, `handlers_signup.go`).
-  - DoD: callers are listed in the PR description, and each either already sends `confirm` or has a companion PR.
-- [ ] 11. Make `RequiresConfirm` load-bearing (depends on 10).
+- [ ] 10. Audit every known caller of `POST /api/v1/operations/{create-tenant,provision-database,retire-service,delete-tenant}/execute` before merge: the mctl CLI (`cli/mctl`), mctl-portal, mctl-web, Backstage scaffolder templates, `handlers_signup.go`, mctl-agents, Argo templates, automation and scripts across mctlhq (search the org, not only this repo).
+  - This is a hard merge gate for the mctl-api PR, not a checklist item. Server-side 428 enforcement stays in this item.
+  - Every affected caller must either already be compatible (sends `"confirm": "yes"`, or does not reach the generic execute route) or have its compatibility change **merged and released/deployed before** the mctl-api enforcement ships, or ship atomically with it (same repository, same release). A merely open companion PR is NOT sufficient.
+  - DoD: the mctl-api PR description carries a caller matrix (caller, repository, file, operation, status: compatible / fixed in <merged PR + released version + deployed> / same change) and the rollout order: client compatibility -> clients merged and deployed -> mctl-api 428 enforcement. The PR stays draft until every row is compatible or deployed.
+- [ ] 11. Make `RequiresConfirm` load-bearing (depends on 10; the `ExecuteOperation` 428 gate may merge only after every task 10 caller row is compatible or deployed).
   - In `ExecuteOperation`, check the confirm gate before `StripUndeclared`, answer 428 `operation_confirmation_required` with a refusal audit row, and remove `confirm` from the input.
   - Add `requireConfirm` gates and a `confirm` parameter to `mctl_create_tenant` and `mctl_provision_database`. Forward `confirm: "yes"` from all four gated tools.
   - Add the `operationTools` map in `internal/mcp/operation_tools.go`.
