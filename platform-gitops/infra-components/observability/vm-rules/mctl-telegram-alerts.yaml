@@ -62,7 +62,7 @@ spec:
           # "resolved" 07:19, and the canary was still failing at 20:30.
           # [15m] always covers at least one full canary period.
           #
-          # sum without(tool, status) on BOTH sides is what makes this a
+          # sum without(tool, status, traffic) on BOTH sides is what makes this a
           # ratio at all. Without it the division matches series on every
           # shared label — including `status` — so each error series was
           # divided by itself and the expression evaluated to exactly 1
@@ -77,6 +77,12 @@ spec:
           # caller_error calls are requests refused as the caller's mistake,
           # which say nothing about the service's health either way.
           #
+          # `traffic` (mctl-telegram#974: "canary" or "user") is aggregated
+          # away too, so this alert keeps reading all traffic as one ratio as
+          # it did before the label existed. Without it the ratio would split
+          # per traffic class once the label ships, and a canary outage alone
+          # would read as 100%.
+          #
           # Aggregating away `tool` (not by tool) is deliberate: the
           # threshold is about the service's overall health, and a single
           # rarely-used tool failing twice should not read as "10% of tool
@@ -84,11 +90,11 @@ spec:
           # deployment's soak traffic stays a separate series and cannot
           # drag production over the threshold.
           expr: |
-            sum without(tool, status) (
+            sum without(tool, status, traffic) (
               rate(mctl_tool_invocations_total{status="error"}[15m])
             )
             /
-            sum without(tool, status) (
+            sum without(tool, status, traffic) (
               rate(mctl_tool_invocations_total{status=~"ok|error"}[15m])
             ) > 0.1
           for: 5m

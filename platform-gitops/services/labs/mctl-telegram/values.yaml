@@ -725,7 +725,16 @@ extraObjects:
       failedJobsHistoryLimit: 5
       jobTemplate:
         spec:
-          backoffLimit: 1
+          # 0, not 1 (mctl-telegram#974): the probe exits 1 on a failed check,
+          # and a retry pod re-ran the same MCP calls ~13s later. During an
+          # outage every 10-minute slot then failed twice, which doubled the
+          # canary's footprint on the tool and borrow counters. The next
+          # scheduled run, 10 minutes later, is the retry; the canary alerts
+          # (vm-rules/mctl-telegram-canary.yaml) already tolerate one failed
+          # run. A lone transient failure now leaves a failed Job instead of
+          # being masked by the retry, but KubeJobFailed in labs routes to the
+          # null receiver (bootstrap/templates/observability/monitoring.yaml).
+          backoffLimit: 0
           activeDeadlineSeconds: 120
           # GC finished Jobs after 1h so a single failed probe doesn't linger
           # until failedJobsHistoryLimit evicts it — a lone failure otherwise
