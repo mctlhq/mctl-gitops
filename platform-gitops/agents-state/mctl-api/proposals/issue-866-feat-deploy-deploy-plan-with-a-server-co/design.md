@@ -2,151 +2,242 @@
 
 ## Current state
 
-### Deploy analyze (item `analyze`, shipped)
+**Analyze (the dependency).** `internal/api/handlers_deploy_analyze.go` serves `GET /api/v1/deploy/analyze` and `GET /api/v1/deploy/bindings` (routes in `internal/api/router.go:594-595`).
+- `DeployAnalyze` validates input with `deployTenantRe`, `validDeployRepo`, `deployRevRe` (`^[0-9a-f]{40}$`) and `validDeployPath`.
+- It checks `user.HasTenantAccess(tenant)` only. It does not check the operation's `MinRole`.
+- It resolves the binding through `SourceRepoBindingReader.ServicesBySourceRepo` (gitops `github.com/source-repo` annotation), with `h.repoBoundToTeam` (portal) as fallback.
+- It calls `deployanalyze.Analyze` with `h.opts.DeployContentReader` and maps `ErrRevisionUnreadable` to 422, and `ErrGitHubMalformed` and `ErrGitHubUnavailable` to 502.
+- It writes one audit row through the `deployAudit` helper (`refuse`, `set`, `write`).
 
-- `internal/deployanalyze/schema.go` embeds `schema/deploy-intent.schema.json` (`SchemaSHA256 = cd2e6f1d...386c4`, source `mctlhq/mctl-gitops:platform-gitops/agent-platform/schemas/deploy-intent.schema.json`) and exposes `Validate(map[string]any) error` over a compiled `santhosh-tekuri/jsonschema/v6` schema. The schema is closed everywhere (`additionalProperties: false`), has `spec.environment` enum `preview | production`, `source.revision` pattern `^[0-9a-f]{40}$`, `runtime.port` 1024-65535, `runtime.healthPath`, `runtime.replicas` 1-3, optional `resources`, `exposure.mode` `internal | public`, `env` (plain values), and `secretRefs[] {env, property}` with no Vault path.
-- `internal/deployanalyze/github.go` defines `ContentReader` with `Commit(ctx, repo, sha) error` and `File(...)`, implemented by `HTTPReader`; errors map to `ErrRevisionUnreadable`, `ErrGitHubUnavailable`, `ErrGitHubMalformed`.
-- `internal/api/handlers_deploy_analyze.go`: `DeployAnalyze` validates input, checks `user.HasTenantAccess(tenant)` (membership only, no role), resolves the binding through `SourceRepoBindingReader.ServicesBySourceRepo` and falls back to `repoBoundToTeam` (`internal/api/build_repo_gate.go`), then calls `deployanalyze.Analyze`. Every outcome is audited through the `deployAudit` helper (`refuse`, `set`, `write`) with coded errors via `writeErrorCode`. Routes: `r.Get("/deploy/analyze", ...)`, `r.Get("/deploy/bindings", ...)` in `internal/api/router.go`.
-- MCP: `toolDeployAnalyze` in `internal/mcp/server.go`; `mctl_deploy_analyze` is listed in `governedAgentTools` in `internal/mcp/agent_receipt_gate.go` (every non-read-verb tool must be there, a test fails otherwise).
+**DeployIntent schema.** `internal/deployanalyze/schema.go` embeds `schema/deploy-intent.schema.json`, pinned by `SchemaSHA256`, and exposes `Validate(map[string]any)`.
+- The schema is closed (`additionalProperties: false` at every level).
+- `spec.environment` is `preview | production`. `source.revision` must match `^[0-9a-f]{40}$`.
+- `runtime` has `port` (1024-65535), `healthPath` and `replicas` (1-3). `resources.{requests,limits}` and `exposure.mode` (`internal | public`) follow.
+- `env` is a map of plain values. `secretRefs[]` is `{env, property}`, and the Vault path is derived, never supplied.
 
-### Gitops reads
+**GitHub reader.** `internal/deployanalyze/github.go`: `ContentReader.Commit(ctx, repo, sha)` returns `ErrRevisionUnreadable` on 404/422, `ErrGitHubUnavailable` on other statuses, and `ErrGitHubMalformed` when the SHA does not echo back.
 
-- `internal/gitops/reader.go`: one local checkout behind `r.mu`; `r.head` is the checkout HEAD (`Revision()`); `checkFreshLocked()` refuses an unsynced or stale checkout; `statServiceFileLocked(team, component, file)` walks `platform-gitops/services/<team>/<component>/<file>` with `Lstat`, returns `""` only for a documented absence and errors on symlinks, non-regular entries or a missing `services` directory; `ReadFiles` shows the pattern of reading files and the revision under one `RLock`. `ComponentSourceRepo` reads the `github.com/source-repo` annotation from `catalog-info.yaml`.
+**Gitops reader.** `internal/gitops/reader.go` keeps a local checkout.
+- `Revision()` returns `r.head`.
+- `ReadFiles` reads files and the revision under one `RLock`, so they are one checkout.
+- `ServiceExists` and `statServiceFileLocked` walk `platform-gitops/services/<team>/<component>/<file>` with `Lstat`: a missing element below `services/` means absent, while a symlink, a non-plain entry or a missing `services/` directory is an error.
+- `checkFreshLocked` refuses a stale checkout.
+- `ComponentSourceRepo` reads the source-repo annotation and fails closed (`ErrSourceRepoNotRegistered` only for a read checkout without it).
 
-### What `deploy-service` writes (mctl-gitops)
+**Preview apply (what a preview plan must describe).** `platform-gitops/argo-workflows/cluster-templates/wft-preview-deploy.yaml` (read in `$MCTL_GITOPS_ROOT`), lines 400-478:
+- `PREVIEW_ID` is the last 6 `[a-z0-9]` characters of the Argo workflow name. `HOST` is `${COMPONENT}-${PREVIEW_ID}.${PLATFORM_DOMAIN}`.
+- The template clones gitops HEAD and runs `scripts/rewrite_preview_values.py` over the service `values.yaml`. This moves `teams/<t>/<s>/...` Vault paths to `teams/<t>/<s>/preview/...`, forces team ExternalSecrets and `dbSecret` onto `tenant-store`/`SecretStore`, and refuses mixed platform/team keys and paths outside `teams/<t>/`.
+- It then runs `helm upgrade --install` with fixed `--set` overrides:
+  - `image.tag`
+  - `ingress.enabled=true`, `ingress.className=traefik`, the cert-manager issuer annotation, `ingress.hosts={HOST}`, `ingress.tls[0]`
+  - `blueGreen.enabled=false`, `dbInitJob.enabled=false`
+  - optional `service.port`
+  - `podLabels.mctl.ai/preview=true`, `podLabels.mctl.ai/preview-id`
 
-- `argo-workflows/cluster-templates/tpl-git-commit.yaml` does the write. Onboard: picks `service-templates/default/values.yaml.tpl` (or `worker`, or an explicit template), `sed`-substitutes `__TEAM_NAME__`, `__SERVICE_NAME__`, `__IMAGE_TAG__`, `__PORT__`, `__HOST__`; host defaults to `${TEAM}-${SERVICE}.${PLATFORM_DOMAIN}` for `base-service`; adds a mirror host when `PLATFORM_DOMAIN_ALT` is set (it is `""` in `argo-workflows/config/mctl-platform-config.yaml`), the `cert-manager.io/cluster-issuer: letsencrypt-prod` annotation and `ingress.tls = [{secretName: <service>-tls, hosts: .ingress.hosts}]`; sets `.probes.liveness.path` / `.probes.readiness.path` from `health_check_path`; sets `.env[KEY]` per env line; for secrets sets `.externalSecret.targetSecret = <service>-secrets`, appends `{secretKey: KEY, remoteKey: teams/<team>/<service>, property: KEY}` and an `envFrom` secretRef; pins `containerSecurityContext.runAsUser/runAsGroup` from the built image's USER.
-- Deploy (update): sets `.image.tag`, syncs `extraContainers` on the same image repository, merges `env` (or clears it), merges `externalSecret.data`/`envFrom` (or clears them). It never changes port, probes or ingress.
-- `tpl-validate-tenant.yaml` derives `image_tag` from `image_tag`, else `git_tag` without a leading `v`, else `latest`.
-- `wft-preview-deploy.yaml` reads `services/${TEAM}/${COMPONENT}/values.yaml` and installs a Helm release `preview-{app}-{id}` in `{team}-preview` with `--set image.tag`, preview host `{app}-{id}.{PLATFORM_DOMAIN}`; nothing in gitops is written.
+  Nothing is written to gitops.
 
-### Operations registry and confirmation
+**Production write path (for the intent-to-values mapping).** `argo-workflows/cluster-templates/tpl-git-commit.yaml` (lines 405-640) applies the deploy-service parameters to `values.yaml` with yq:
+- `.probes.liveness.path` and `.probes.readiness.path` from `HEALTH_CHECK_PATH`
+- `.env[KEY] = VALUE`
+- `.externalSecret.targetSecret` and `.externalSecret.data += {secretKey, remoteKey: teams/<t>/<s>, property}`
 
-- `internal/operations/registry.go`: `Operation.RequiresConfirm` is declared and set `true` on `create-tenant`, `provision-database`, `retire-service`, `delete-tenant`; `deploy-service` is `false` with `MinRole: RoleDeveloper`. No Go code reads `RequiresConfirm` (`grep -rn RequiresConfirm internal` finds only the struct field and registry literals).
-- `internal/mcp/server.go`: `requireConfirm(args, subject)` checks `args["confirm"] == "yes"`. It is called by `mctl_retire_service`, `mctl_delete_tenant`, rollback, preview delete, domain removal and agent-registry tools, but **not** by `mctl_create_tenant` (posts to `/api/v1/operations/create-tenant/execute`) or `mctl_provision_database` (posts to `/api/v1/operations/provision-database/execute`). Gated tools `delete(params, "confirm")` before posting.
-- `internal/api/handlers_write.go` `ExecuteOperation`: refuses `HandlerOnly` ops with 405, decodes `map[string]string`, authorizes CI principals (`authorizeCIDeploy`), drops undeclared keys with `Registry.StripUndeclared`, enforces `requireTenantRole(... op.MinRole ...)`. There is no confirmation check.
+The base chart keys are in `helm-charts/base-service/values.yaml` (`replicaCount`, `resources`, `service.port`, `probes`, `env`, `externalSecret`, `ingress`, ...).
 
-### Stores and digests
+**Operations registry.** `internal/operations/registry.go:45` declares `RequiresConfirm`. The `true` operations are `create-tenant`, `provision-database`, `retire-service` and `delete-tenant`. `deploy-service` is `RequiresConfirm: false`, `RiskMedium`, `MinRole: RoleDeveloper`.
+- `ExecuteOperation` (`internal/api/handlers_write.go:51`) never reads `RequiresConfirm`. It decodes the body as `map[string]string` and calls `Registry.StripUndeclared`, so a `confirm` key would be dropped today.
+- In `internal/mcp/server.go`, `requireConfirm` (line 2732) gates `mctl_retire_service` (1285) and `mctl_delete_tenant` (1334). It does **not** gate `mctl_create_tenant` (836, posts at 898) or `mctl_provision_database` (1069, posts at 1097). All four post to `/api/v1/operations/<op>/execute`.
+- No operation with `RequiresConfirm: true` is `HandlerOnly`.
 
-- `internal/workitems/store.go`: `NewStore` runs `CREATE TABLE IF NOT EXISTS` schema strings on connect (`pgshared.Open`); tests skip without `TEST_DATABASE_URL`. IDs carry prefixes (`types.go`: `wi_`, `we_`); `internal/principals/ulid.go` has `newPrefixedID(prefix, now)`.
-- `internal/workitems/action_approvals.go`: `intentEncodingVersion = "mctl-action-intent/v1"`; `IntentHash` writes the version line then `<field>:<len>:<value>\n` per field and returns `sha256:<hex>`.
-- `work_item_execution_requests.work_item_id` is `NOT NULL` (issue's reason for a separate record).
+**Stores.** `internal/workitems/store.go` keeps its DDL in a `const schema` of `CREATE TABLE IF NOT EXISTS` statements, applied by `NewStore` over `pgshared.Open`. `cmd/api/main.go:611-640` wires it from `WORK_ITEMS_DB_URL` or `AUDIT_DB_URL` (kill switch `WORK_ITEMS_DISABLED`). A nil store makes routes answer 503. `internal/workitems/action_approvals.go:63` has `intentEncodingVersion = "mctl-action-intent/v1"`, a versioned, length-prefixed canonical encoding that this design copies.
 
-### Deployed state checked
+**Authorization helpers.** `requireTenantRole` and `operationMinRole` are in `internal/api/tenant_role.go:235,251`. The roles are `viewer`, `developer`, `owner` and `admin` (`internal/operations/roles.go`). `auth.User.PrincipalID()` returns the canonical principal (`internal/auth/principal.go:115`).
 
-- `mcp__mctl__mctl_get_service_config(team=mctl, service=mctl-api)`: error "service not found: mctl/mctl-api". mctl-api is not a catalogue service under that tenant; its deployed config was not observed through this tool.
-- `$MCTL_GITOPS_ROOT/services/`: contains tenants `admins`, `karabu`, `labs`, `namax66`; no `mctl-api` service directory, so mctl-api's env (e.g. `PLATFORM_DOMAIN`, the work-items DB URL) was not observed in gitops. `cmd/api/main.go` defaults `PLATFORM_DOMAIN` to `mctl.ai`.
-- `$MCTL_GITOPS_ROOT/argo-workflows/cluster-templates/tpl-git-commit.yaml`, `wft-deploy-service.yaml`, `wft-preview-deploy.yaml`, `tpl-validate-tenant.yaml`, `argo-workflows/service-templates/default/values.yaml.tpl`: read; summarized above.
-- `$MCTL_GITOPS_ROOT/argo-workflows/config/mctl-platform-config.yaml`: `PLATFORM_DOMAIN_ALT: ""` (no mirror host today).
-- Callers of the generic execute route outside this repository (mctl-portal, mctl-web, Backstage) could not be observed from this run; recorded under Open questions in requirements.md.
+Deployed state checked:
+- `mctl_list_services(team=admins)`: complete, 8 catalogue services (mctl-agents-worker*, mctl-design, mctl-docs, mctl-support, mctl-web, umami). mctl-api itself is not a catalogue tenant service, so its runtime config (DB URL, `PlatformDomain`) was not observable through this tool. The design relies on the code defaults in `cmd/api/main.go` (`cfg.PlatformDomain`, `workItemsStoreSource()`).
+- `$MCTL_GITOPS_ROOT/services/karabu/draw-with-friends/values.yaml`: a representative tenant service values file with `env`, `externalSecret.data[].remoteKey: teams/karabu/draw-with-friends`, `dbSecret.vaultPath`, `ingress.hosts`, `resources`. This confirms the base values carry Vault paths, so `values_after` must redact them.
+- `$MCTL_GITOPS_ROOT/argo-workflows/cluster-templates/wft-preview-deploy.yaml`, `tpl-git-commit.yaml`, `scripts/rewrite_preview_values.py`, `helm-charts/base-service/values.yaml`: read as described above.
+- Not checked: the live `deploy_plans` table (it does not exist yet), and which external clients call the generic execute route for the four confirm operations (see Open questions).
 
 ## Proposed solution
 
 ### 1. New package `internal/deployplan`
 
-Pure, I/O-free core plus a Postgres store. Files:
+The package is pure and deterministic. It does no I/O except through interfaces.
 
-- `intent.go`: `type Intent struct` mirroring the schema (typed fields), `ParseIntent(raw json.RawMessage) (*Intent, map[string]any, error)`. Order: decode into `map[string]any` with `UseNumber`, call `deployanalyze.Validate` (schema errors -> `ErrIntentInvalid` wrapping the `jsonschema.ValidationError` text), then decode again into `Intent` with `DisallowUnknownFields` as a belt-and-braces check. `Canonical(in *Intent) []byte` applies schema defaults (`dockerfile: Dockerfile`, `context: .`, `replicas: 1`) and emits JSON with sorted keys and no insignificant whitespace (marshal via `map[string]any` -> `encoding/json`, which sorts map keys). The canonical form is what is stored in `intent` and hashed.
-- `compile.go`: `Compile(in *Intent, cur Current, cfg Config) (*Compiled, error)` where `Current{Exists bool; Values []byte}` and `Config{PlatformDomain, PlatformDomainAlt string; Template []byte}`. Returns `Compiled{Action, ValuesAfter []byte, Diff string, Host string}`.
-  - **Compilable subset** (anything else is `ErrNotCompilable{Pointer}` -> 422 `deploy_intent_not_compilable`): `exposure.mode` must be `public`; `resources` absent or equal to the template's `resources`; `runtime.replicas` 1; every `secretRefs[i].env == secretRefs[i].property` (the workflow writes `secretKey` and `property` from the same key); on update, `runtime.port` must equal current `service.port` and `runtime.healthPath` must equal current probe paths (or the chart default when absent), because `deploy` never rewrites them.
-  - **Onboard**: substitute the template exactly like the `sed` program (`__TEAM_NAME__`, `__SERVICE_NAME__`, `__IMAGE_TAG__` = `source.revision`, `__PORT__` = `runtime.port`, `__HOST__` = `{tenant}-{service}.{PlatformDomain}`), parse into a `yaml.v3` `Node` (key order preserved), then apply in the workflow's order: mirror host (only if `PlatformDomainAlt` is set), cert-manager annotation, `ingress.tls`, probe paths, `env` keys in sorted order, `externalSecret` + `envFrom` for `secretRefs` in input order. The image-USER pin is skipped (needs a built image; item `digest`).
-  - **Update**: parse current values with `yaml.v3`; parse error or non-mapping root -> `ErrCurrentValuesInvalid`. Set `image.tag`, sync `extraContainers[].image` with the same repository prefix, merge `env`, merge `externalSecret.data` (dedupe by `secretKey`, the workflow's `+=` after resetting when type is not a sequence) and `envFrom`.
-  - **Redaction**: after compiling, replace `externalSecret.data[].remoteKey` and `dbSecret.vaultPath` in both current and after documents with `<derived:vault>`; `diff` is computed over the redacted documents. Since the real path is a pure function of `(tenant, service)`, both bound in the digest, nothing determining the effect is lost.
-  - `Diff`: unified diff (3 lines context) of `yaml.v3`-encoded current (empty on onboard) vs after, with a small in-package Myers/LCS line diff (no new dependency).
-  - `Host`: first `ingress.hosts` entry of the after document.
-- `digest.go`: `const EncodingVersion = "mctl-deploy-plan/v1"`; `Digest(f Fields) string` in exactly the `IntentHash` framing, fields in order `tenant, service, environment, intent, revision, gitops_base_sha, action, values_after, host`.
-- `approval.go`: `Requirement(action, environment) Approval` - the risk matrix: onboard -> `{Required: true, Risk: high, RequiredRole: owner, Reason: "first_onboard"}`; update+preview -> `{true, medium, developer, "build_sandbox_pending"}`. Production never reaches it (refused earlier).
-- `store.go`: `NewStore(ctx, connStr)` with schema:
+- `types.go`
+  - `Plan` struct holding every stored column.
+  - `Action` constants: `ActionUpdate`, plus `ActionOnboard` reserved and never produced in this item.
+  - `Approval{Required bool, Role string, Reason string}`.
+- `intent.go`: `ParseIntent(raw json.RawMessage) (Intent, map[string]any, error)`.
+  - It decodes with `UseNumber`, refuses duplicate keys and validates with `deployanalyze.Validate`.
+  - It decodes into a typed `Intent` with `DisallowUnknownFields`, as a second guard.
+  - It returns the canonical intent JSON: sorted keys, no insignificant whitespace, with the schema defaults `dockerfile: Dockerfile`, `context: .` and `replicas: 1` made explicit. A caller that omits a default and one that spells it out therefore get the same digest.
+- `compile.go`: `CompilePreview(base []byte, in Intent, previewID, host string) (before, after map[string]any, err error)`.
+  1. Parse `base` with `yaml.v3` into `map[string]any`. A non-mapping document or a parse error returns `ErrValuesUnparseable`.
+  2. `effective(base, nil)` gives the "before" values: the preview rewrite plus the fixed overrides applied to base, with no intent changes.
+  3. `effective(base, in)` gives the "after" values. First apply the intent the way `tpl-git-commit` does:
+     - `.service.port = runtime.port`
+     - `.probes.liveness.path` and `.probes.readiness.path` = `runtime.healthPath`
+     - `.replicaCount = runtime.replicas`
+     - `.resources` = `spec.resources`, when present
+     - `.env[k] = v` for each `spec.env` entry (merge, as `tpl-git-commit` does without `clear_env`)
+     - `.externalSecret.targetSecret = {service}-secrets`
+     - `.externalSecret.data` upserted by `secretKey` with `{secretKey: env, remoteKey: teams/{tenant}/{service}, property}`
+
+     Then apply the Go port of `rewrite_values` (`rewriteRemoteKey`, `classifyKeys`, `forceTenantStore`, `dbSecret`). Mixed keys or foreign paths return `ErrPreviewValuesRefused`.
+
+     Then apply the `helm --set` overrides of `wft-preview-deploy`:
+     - `image.tag = "rev-" + revision`
+     - `ingress.enabled: true`, `className: traefik`, `annotations["cert-manager.io/cluster-issuer"] = letsencrypt-prod`, `hosts = [host]`
+     - `tls = [{secretName: preview-{service}-{id}-tls, hosts: [host]}]`
+     - `blueGreen.enabled: false`, `dbInitJob.enabled: false`
+     - `podLabels["mctl.ai/preview"] = "true"`, `podLabels["mctl.ai/preview-id"] = id`
+
+     `exposure.mode: internal` still gets the preview ingress, because the preview template always enables it. This is recorded as an open question.
+- `redact.go`: `Redact(values) map[string]any`.
+  - It replaces every `externalSecret.data[].remoteKey`, `extraExternalSecrets.*.data[].remoteKey` and `dbSecret.vaultPath` with `redacted:sha256:<hex(path)>`.
+  - Kubernetes secret names (`imagePullSecrets[].name`, `envFrom[].secretRef.name`, `externalSecret.targetSecret`) are kept, because a name is not a credential. Only the path-bearing keys are redacted.
+  - `values_after`, `diff` and `values_before_sha256` are computed from redacted maps only. The digest is computed over the redacted `values_after`, which still binds the real paths through their hashes.
+- `render.go`: canonical YAML rendering (sorted keys, `yaml.v3` with a fixed indent) and `UnifiedDiff(before, after string)`. The diff uses a small deterministic LCS-based line diff, or `github.com/pmezard/go-difflib` if it is already in `go.sum`. The implementer checks `go.mod` and adds no new dependency when an equivalent is vendored.
+- `previewid.go`: `PreviewID(tenant, service, revision, gitopsBase string) string`. It takes the first 6 characters of base32-lower(sha256(`mctl-preview-id/v1\x00` + fields)) and maps them to `[a-z0-9]`. `Host(service, id, platformDomain)` builds the host.
+- `digest.go`: `const encodingVersion = "mctl-deploy-plan/v1"`. `Digest(p DigestInput) string` writes the version, then each field as `len:value\n` in the fixed order tenant, service, environment, canonical_intent, revision, gitops_base_sha, action, preview_id, values_after (canonical YAML of the redacted map), host. It returns `"sha256:" + hex`. This mirrors `intentEncodingVersion` in `action_approvals.go`.
+- `approval.go`: `RequiredApproval(env string, action Action) Approval` holds the risk matrix:
+  - preview update gives `{true, "owner", "preview_update_requires_approval_until_build_sandbox"}`
+  - onboard (unreachable here) gives `{true, "owner", "onboard_high_risk"}`
+- `store.go`: a `Store` using `pgshared.Open`, with the DDL as a `const schema` in the workitems style:
 
 ```sql
 CREATE TABLE IF NOT EXISTS deploy_plans (
-    id                    TEXT PRIMARY KEY,           -- dpl_<ULID>
-    digest                TEXT NOT NULL,
-    schema_version        TEXT NOT NULL,              -- 'deployplan/v1'
-    tenant                TEXT NOT NULL,
-    service               TEXT NOT NULL,
-    environment           TEXT NOT NULL,
-    intent                JSONB NOT NULL,             -- canonical form; JSONB for querying,
-    intent_canonical      TEXT NOT NULL,              -- exact hashed bytes
-    revision              TEXT NOT NULL CHECK (revision ~ '^[0-9a-f]{40}$'),
-    gitops_base_sha       TEXT NOT NULL CHECK (gitops_base_sha ~ '^[0-9a-f]{40}$'),
-    action                TEXT NOT NULL CHECK (action IN ('onboard','update')),
-    values_before_sha256  TEXT NOT NULL DEFAULT '',   -- sha256 of the raw current file; '' on onboard
-    values_after          TEXT NOT NULL,              -- redacted rendered YAML
-    diff                  TEXT NOT NULL,
-    host                  TEXT NOT NULL,
-    requires_approval     BOOLEAN NOT NULL,
-    required_role         TEXT NOT NULL,
-    risk                  TEXT NOT NULL,
-    created_by            TEXT NOT NULL,              -- canonical principal (prn_...)
-    surface               TEXT NOT NULL,              -- 'rest' | 'mcp'
-    idempotency_key       TEXT NOT NULL DEFAULT '',
-    created_at            TIMESTAMPTZ NOT NULL,
-    expires_at            TIMESTAMPTZ NOT NULL
+  id                   TEXT PRIMARY KEY CHECK (id LIKE 'dpl\_%'),
+  digest               TEXT NOT NULL CHECK (digest ~ '^sha256:[0-9a-f]{64}$'),
+  schema_version       TEXT NOT NULL,          -- 'mctl-deploy-plan/v1'
+  tenant               TEXT NOT NULL,
+  service              TEXT NOT NULL,
+  environment          TEXT NOT NULL CHECK (environment = 'preview'),
+  intent               JSONB NOT NULL,          -- canonical intent
+  intent_canonical     TEXT NOT NULL,           -- exact bytes digested
+  revision             TEXT NOT NULL CHECK (revision ~ '^[0-9a-f]{40}$'),
+  gitops_base_sha      TEXT NOT NULL CHECK (gitops_base_sha ~ '^[0-9a-f]{40}$'),
+  action               TEXT NOT NULL CHECK (action IN ('onboard','update')),
+  preview_id           TEXT NOT NULL,
+  values_before_sha256 TEXT NOT NULL,
+  values_after         TEXT NOT NULL,           -- redacted canonical YAML
+  diff                 TEXT NOT NULL,
+  host                 TEXT NOT NULL,
+  requires_approval    BOOLEAN NOT NULL,
+  required_role        TEXT NOT NULL,
+  approval_reason      TEXT NOT NULL,
+  created_by           TEXT NOT NULL,           -- canonical principal
+  surface              TEXT NOT NULL,           -- 'rest' | 'mcp'
+  idempotency_key      TEXT,
+  created_at           TIMESTAMPTZ NOT NULL,
+  expires_at           TIMESTAMPTZ NOT NULL CHECK (expires_at > created_at
+                         AND expires_at <= created_at + interval '24 hours')
 );
 CREATE UNIQUE INDEX IF NOT EXISTS deploy_plans_idem
-    ON deploy_plans (created_by, idempotency_key) WHERE idempotency_key <> '';
+  ON deploy_plans (created_by, idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS deploy_plans_tenant ON deploy_plans (tenant, created_at DESC);
+CREATE OR REPLACE FUNCTION deploy_plans_immutable() RETURNS trigger
+  LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'deploy_plans rows are immutable'; END $$;
+DROP TRIGGER IF EXISTS deploy_plans_no_update ON deploy_plans;
+CREATE TRIGGER deploy_plans_no_update BEFORE UPDATE ON deploy_plans
+  FOR EACH ROW EXECUTE FUNCTION deploy_plans_immutable();
 ```
 
-  Methods: `Insert(ctx, Plan) (Plan, replayed bool, error)` uses `INSERT ... ON CONFLICT (created_by, idempotency_key) WHERE idempotency_key <> '' DO NOTHING RETURNING ...`; on no row it selects the existing row and returns it if digests match, else `ErrIdempotencyConflict{ExistingID}`. `Get(ctx, id)`. No update or delete method exists (a test reflects over the `Store` method set). `intent` is stored twice on purpose: `intent_canonical` is the hashed text (JSONB normalizes and would not round-trip bytes).
-  The store opens its own pool on the work-items database URL (the same `workItemsDBURL` `cmd/api/main.go` passes to `workitems.NewStore`); `pgshared.Open` shares the pool.
+  - Methods: `Insert(ctx, *Plan) (stored *Plan, replayed bool, err error)` and `Get(ctx, id) (*Plan, error)`.
+  - There is no Update method.
+  - `Insert` runs `INSERT ... ON CONFLICT (created_by, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING *`. When nothing is returned it reads the existing row: the same digest is a replay, and a different digest is `ErrIdempotencyConflict`.
+  - Ids are `dpl_` + ULID, in the style of the existing work-item ids.
+  - The `surface` value is reused from `internal/surfaceid` if it has a constant set; otherwise it is `rest` or `mcp`, taken from the auth context the way work items record it.
 
-### 2. Gitops reader addition
+### 2. Gitops reader: one consistent read
 
-`func (r *Reader) ReadServicePlanInputs(team, component string, templates ...string) (ServicePlanInputs, error)` in `internal/gitops/reader.go`: under one `RLock`, `checkFreshLocked`, `revisionLocked` (must be 40-hex), `statServiceFileLocked` for the directory and `values.yaml` (directory present + file absent -> `ErrServiceDirIncomplete`), read `values.yaml` and `catalog-info.yaml` annotation, and read the named template files under `platform-gitops/argo-workflows/` with the same `Lstat` regular-file discipline. Returns `{BaseSHA, Exists, Values, SourceRepo, Templates map[string][]byte}`. Every non-absence failure is an error.
+`internal/gitops/reader.go` gets `ServiceValuesAt(team, component string) (data []byte, sourceRepo string, exists bool, rev string, err error)`.
+- It holds `RLock` once and calls `checkFreshLocked`, `revisionLocked` and `statServiceFileLocked(team, component, "values.yaml")`.
+- `""` from the stat means `exists=false` (documented absence). Otherwise it reads the file and `sourceRepoLocked` and returns all of them with the same `rev`.
+- Every other failure is an error.
+- `api.Options` gets an interface `DeployPlanGitops` holding this method, so tests inject fakes.
 
-### 3. Compiler freshness pin
+### 3. REST handler `internal/api/handlers_deploy_plan.go`
 
-`internal/deployplan/templates.go` pins `sha256` of `argo-workflows/service-templates/default/values.yaml.tpl` and `argo-workflows/cluster-templates/tpl-git-commit.yaml` as vendored under `internal/deployplan/testdata/gitops/`. The handler hashes the live checkout copies from `ReadServicePlanInputs`; a mismatch is 503 `deploy_plan_compiler_stale`. This makes "the Go compiler and the workflow agree" a runtime fail-closed property, not only a test property: when gitops changes the template, plans stop until the vendored copy, the golden fixture and the compiler are updated together.
+`POST /api/v1/deploy/plan` and `GET /api/v1/deploy/plans/{id}` are registered next to the analyze routes in `router.go`. The handler reuses `deployAudit`, with params taken from the decoded intent instead of the query.
 
-### 4. REST handlers `internal/api/handlers_deploy_plan.go`
+Order of checks (each refusal is audited):
+1. Authenticate.
+2. Decode the body (`http.MaxBytesReader` 256 KiB, `DisallowUnknownFields` on the envelope), giving 400.
+3. Check the revision shape (`deployRevRe`) before schema validation, so a ref gets the specific code `deploy_revision_not_a_sha` (422). Then `deployplan.ParseIntent` (422 `deploy_intent_invalid`).
+4. `environment == production` gives 422 `prod_requires_promote`.
+5. `requireTenantRole(..., operationMinRole("deploy-service", RoleDeveloper), "deploy.plan", RiskLow)`.
+6. Repository binding: a factored helper `h.deployRepoBound(ctx, tenant, repo)` extracted from `DeployAnalyze`, which then calls the same helper. Unbound gives 403 and unreadable gives 503.
+7. `DeployContentReader.Commit`, mapped exactly like analyze.
+8. `ServiceValuesAt`:
+   - error gives 503 `deploy_gitops_unavailable`
+   - `!exists` gives 422 `onboard_requires_preview_onboard`
+   - an annotation that is not the intent's repository gives 403 `deploy_service_not_bound`
+9. `PreviewID`, `Host(PlatformDomain)`, then `CompilePreview`:
+   - unparseable values give 500 `deploy_values_unparseable`
+   - a refused rewrite gives 422 `deploy_preview_values_refused`
+10. Redact, render, diff, `Digest`, `RequiredApproval`.
+11. `Store.Insert`:
+    - no store gives 503 `deploy_plan_store_unavailable`
+    - an idempotency conflict gives 409
+12. Respond 201, or 200 with `replayed: true`.
 
-- `DeployPlan` (`POST /api/v1/deploy/plan`, under the same authenticated group as `/deploy/analyze`, with the write rate limiter): body `MaxBytesReader` 256 KiB; strict decode of `{intent, idempotency_key, ttl_seconds}`; `deployplan.ParseIntent`; `production` -> 422 `prod_requires_promote`; `checkTenantRole(user, tenant, operationMinRole("deploy-service", RoleDeveloper), ...)` -> 403; binding check factored out of `DeployAnalyze` into `h.deployRepoBound(ctx, tenant, repo) (services []string, err)` and reused by both handlers; if `SourceRepo` of an existing service differs from `spec.source.repository` -> 403 `deploy_service_repository_mismatch`; `DeployContentReader.Commit` -> 422/502 mapping identical to analyze; `ReadServicePlanInputs`; template pin check; `Compile`; `Digest`; `Requirement`; `Insert`. Response 201 (200 on replay):
+The response shape is the plan plus `expired` and `approval`.
 
-```json
-{"id":"dpl_...","digest":"sha256:...","schema_version":"deployplan/v1",
- "tenant":"...","service":"...","environment":"preview",
- "revision":"<40hex>","gitops_base_sha":"<40hex>","action":"onboard",
- "host":"t-s.mctl.ai","values_after":"...","diff":"...",
- "approval":{"required":true,"risk":"high","required_role":"owner","reason":"first_onboard"},
- "created_at":"...","expires_at":"...","expired":false,"replayed":false}
-```
+`GET` loads the plan and returns 404 unless `user.IsAdmin() || user.HasTenantAccess(plan.Tenant)`. A non-member gets 404, not 403, so ids do not leak existence.
 
-- `GetDeployPlan` (`GET /api/v1/deploy/plans/{id}`): id must match `^dpl_[0-9A-HJKMNP-TV-Z]{26}$`; not found, or caller neither `HasTenantAccess(plan.tenant)` nor admin -> 404; `expired` computed lazily from the handler's clock.
-- Audit via the existing `deployAudit` helper extended with `digest`, `service`, `action` params; operations `deploy.plan` and `deploy.plan.read`.
-- `Options` gains `DeployPlans DeployPlanStore` (interface in `internal/api/interfaces.go`) and `PlanGitops DeployPlanGitopsReader`; nil -> 503.
+### 4. MCP tools `internal/mcp/deploy_plan.go`
 
-### 5. MCP tools
+- `mctl_deploy_plan(intent object, idempotency_key?, ttl_seconds?)` posts to the REST route.
+- `mctl_get_deploy_plan(id)` gets from the REST route.
+- Both descriptions say that planning changes nothing, that production and onboard are refused, and that approval is a later step.
+- Both are registered in `server.go`, and the tool-count expectation in `server_test.go` goes up by 2.
 
-- `mctl_deploy_plan` (`toolDeployPlan` in `internal/mcp/server.go`): arguments `intent` (object), `idempotency_key`, `ttl_seconds`; posts to `/api/v1/deploy/plan`; added to `governedAgentTools`. Description states that planning writes only the plan record, that `production` is refused, and that the result must be shown to the user before any apply.
-- `mctl_get_deploy_plan`: argument `id`; GET; ungoverned (read verb).
-- Tool count in `server_test.go` (`TestNewMCPServer_ToolCount`) +2.
+### 5. RequiresConfirm made load-bearing
 
-### 6. RequiresConfirm becomes load-bearing
+- **Generic route.** In `ExecuteOperation`, after decoding the body and before `StripUndeclared`:
 
-- Registry: add `ConfirmWhen map[string][]string` to `Operation` and `func (o Operation) NeedsConfirm(input map[string]string) bool` = `RequiresConfirm || any ConfirmWhen[k] contains input[k]`. Set `deploy-service.ConfirmWhen = {"action": {"onboard"}}`. **Decision: yes, a first onboard is confirm-gated**: it creates a new public host, a new namespace workload and a catalog entry; the spike rates it high. `action=deploy` and `update-config` (and therefore CI deploys through `authorizeCIDeploy`, which deploy onboarded components) stay ungated. Documented in the registry comment and `docs/` operations section of OpenAPI.
-- `ExecuteOperation`: after decode and authentication, before `StripUndeclared`, `confirm := input["confirm"]; delete(input, "confirm")`; if `op.NeedsConfirm(input)` (evaluated after defaults so a missing `action` cannot dodge it; `action` is required for deploy-service) and `!strings.EqualFold(strings.TrimSpace(confirm), "yes")` -> audit `denied` and 428 `operation_confirmation_required`. Mode switch `OPERATIONS_CONFIRM_MODE` (`enforce` default, `warn` logs and proceeds) is the rollback lever only.
-- MCP: `mctl_create_tenant`, `mctl_provision_database` gain a `confirm` argument and `requireConfirm`; `mctl_deploy_service` gates only when `action == "onboard"`. All confirm-gated tools forward `"confirm": "yes"` instead of deleting it (`retire_service`, `delete_tenant` change from `delete(params, "confirm")` to setting it).
-- Parity test `internal/mcp/confirm_parity_test.go`: build the server with a fake API (`httptest.Server`) that records requests; for every registry op where `RequiresConfirm || ConfirmWhen != nil`, look up its tool in an explicit `opTool` map (`create-tenant -> mctl_create_tenant`, ...; the test fails if a confirm-gated op is in neither `opTool` nor an explicit `noMCPTool` list), call it with minimal valid args and no `confirm`, and assert (a) an error result and (b) zero requests reached the fake API; then call with `confirm: "yes"` and assert the forwarded body carries `confirm: "yes"`. For `HandlerOnly` ops the test requires an entry in `handlerConfirmGates` naming the handler test that proves its gate. A companion test in `internal/api/handlers_write_confirm_test.go` iterates the registry and asserts 428 without `confirm` and no `Executor.Submit` call. Mutation proof: the PR description records running the test with the `requireConfirm` line removed from `mctl_retire_service` (red) and restored (green).
+  ```go
+  if op.RequiresConfirm && !confirmed(input["confirm"]) {
+      h.auditConfirmRefusal(...)
+      writeErrorCode(w, 428, "operation_confirmation_required", ...)
+      return
+  }
+  delete(input, "confirm")
+  ```
 
-### 7. OpenAPI
+  This means `confirm` never reaches Argo or the undeclared-parameter warning. `confirmed` uses the same rule as the MCP `requireConfirm`: trimmed, case-insensitive `yes`.
+- **MCP.** `mctl_create_tenant` and `mctl_provision_database` gain a `confirm` parameter and a `requireConfirm` gate before `apiPost`. All four tools set `params["confirm"] = "yes"` after the gate.
+- **Map.** `internal/mcp/operation_tools.go` holds `var operationTools = map[string]string{"create-tenant": "mctl_create_tenant", ...}`, the declared mapping from registry operation to MCP tool. The parity test (task 11) uses it, and a source-scan test asserts that every `apiPost(ctx, "/api/v1/operations/<op>/execute"` literal in the package names an operation present in the map, so a new tool cannot escape the parity test.
+- **deploy-service onboard decision.** It stays `RequiresConfirm: false`. A comment on the registry entry records the reasons:
+  - The flag is per operation, and `action=deploy` is the unattended CI OIDC auto-deploy path (`authorizeCIDeploy`), which has no human to confirm.
+  - First onboard is high risk. It is now refused at plan time (`onboard_requires_preview_onboard`), and its gate is the server-held grant of item `grants`, not `confirm="yes"`.
+  - A per-action confirm would need a registry schema extension that `grants` supersedes.
 
-`internal/openapi/openapi.yaml`: add `/api/v1/deploy/plan` (POST) and `/api/v1/deploy/plans/{id}` (GET) with `DeployPlanRequest`, `DeployPlan`, error codes; document `confirm` and 428 on `/api/v1/operations/{name}/execute`. `embed_test.go` keeps it parseable.
+### 6. OpenAPI
+
+`internal/openapi/openapi.yaml` gets:
+- the two paths, the `DeployPlanRequest`, `DeployPlan` and `DeployPlanApproval` schemas, and every error code above
+- `confirm` on the generic execute body, with the 428 response
 
 ## Alternatives
 
-1. **Store the plan as an `ExecutionRequest` (the manifest's wording).** Dropped: `work_item_execution_requests.work_item_id` is `NOT NULL`, and the type is a claim/lease/fulfil object for the execution platform, which is the shape of an apply. An MCP deploy has no work item. A later item can link the apply's request to `dpl_` ids.
-2. **Plan by dry-running `wft-deploy-service` in Argo (a `dry_run` parameter that stops before `git push`).** Exact agreement with the workflow for free, but it needs a cluster round trip of minutes, a pod per plan, a gitops clone with write credentials in reach, and it cannot run in unit tests. The digest would depend on an external process's output. Dropped in favour of a deterministic Go compiler plus a pinned-template fail-closed check and a golden test.
-3. **Digest over the whole stored row (or JSON of the response).** Simpler, but binds ids and timestamps, so the same inputs never repeat, and JSON escaping differs between clients. Dropped for the `IntentHash` framing that any client can reproduce.
-4. **Make `requires_confirm` a per-operation flag only and add a new `deploy-service-onboard` operation.** Splitting the operation would break the existing `mctl_deploy_service` contract and CI callers. `ConfirmWhen` keeps one operation with a parameter-scoped gate.
+1. **Store the plan as a work-item ExecutionRequest (the epic manifest's wording).** Rejected, as the issue explains. `work_item_execution_requests.work_item_id` is `NOT NULL`, an MCP deploy has no work item, and an ExecutionRequest is a claim/lease/fulfil object, which is the shape of apply.
+2. **Compile the production base values file and leave the preview overlay to apply.** Rejected by the owner decision of 2026-10-30. A preview plan would digest an effect it never has, and a grant bound to it would approve the wrong thing.
+3. **Shell out to `rewrite_preview_values.py` and `helm template` at plan time.** Rejected. It needs Python and helm in the mctl-api image, a gitops chart checkout and process execution on the request path, and it is harder to make deterministic and fail closed. A Go port plus a golden test against fixtures captured from the real script and template gives the same guarantee without runtime dependencies.
+4. **Use the Argo-derived preview id at apply time and leave host out of the digest.** Rejected. `host` is a bound field in the issue, and an unbound host would let apply expose a different hostname than the one approved.
 
 ## Platform impact
 
-- **Migration**: one new table and two indexes, created idempotently on start (`CREATE TABLE IF NOT EXISTS`), in the work-items database. No change to existing tables. Rows are small (values YAML + diff, typically < 20 KiB); growth bounded by plan creation rate (write rate limiter). Retention sweep is not part of this item; expired rows stay readable as `expired: true`.
-- **Backward compatibility**: new routes and tools are additive. The confirmation gate is a **breaking change** for any client that calls the execute route for `create-tenant`, `provision-database`, `retire-service`, `delete-tenant` or `deploy-service action=onboard` without `confirm`. MCP tools in this repo are updated together. External clients (portal, web, Backstage templates) must send `confirm: "yes"`; mitigation: the server accepts and strips `confirm` for every operation from this release, enforcement can be set to `warn` via `OPERATIONS_CONFIRM_MODE` while external callers catch up, and the 428 message names the field.
-- **Signup flow**: `handlers_signup.go` uses `guardCustomerTenantCreation`, not the execute route, for its own checks; any portal path that ends in the execute route for `create-tenant` needs `confirm`. To verify in rollout.
-- **Security**: the intent schema stays the boundary; compile refuses rather than drops; Vault paths are redacted before storage; a response-scanning test runs `internal/secretscan` style patterns plus `teams/` and `ghp_`/`ghs_`/`github_pat_` over every plan and read response.
-- **Risk: Go compiler drifts from the workflow** -> pinned template hashes make plans fail closed (503) instead of silently diverging; the golden test fails on vendored-template change.
-- **Risk: gitops HEAD moves between plan and apply** -> `gitops_base_sha` is bound in the digest; the apply item must refuse when HEAD's values differ (`values_before_sha256` is stored for that).
-- **Resources**: one GitHub commit read and local file reads per plan; no Argo, no cluster calls.
+- **Migration.** There is one new table, `deploy_plans`, plus an index, a unique partial index and an immutability trigger. All are `IF NOT EXISTS` / `CREATE OR REPLACE` and idempotent on restart. The table lives in the work-items database (same `WORK_ITEMS_DB_URL`/`AUDIT_DB_URL` source and `WORK_ITEMS_DISABLED` kill switch, wired in `cmd/api/main.go`). With no DB, both deploy-plan routes answer 503. Nothing else changes.
+- **Backward compatibility.**
+  - The new routes and tools are additive.
+  - `DeployAnalyze` behaviour is unchanged by the binding-helper extraction (its existing tests stay green).
+  - **Breaking:** the generic execute route now answers 428 for `create-tenant`, `provision-database`, `retire-service` and `delete-tenant` without `"confirm": "yes"`. MCP tools are updated in the same change. External REST callers must be audited (task 10). The signup path (`handlers_signup.go`) submits through its own guard and is checked by the same task.
+- **Resources.** A plan costs one GitHub commit read, one local file read and an in-memory compile of a values file of at most a few KiB. Bodies are capped at 256 KiB. Rows are small (two YAML texts). There is no cleanup job in this item. Rows are immutable and small, and retention can be added later.
+- **Risks and mitigations.**
+  - **Go compiler drift from the workflow template or script.** The golden test uses vendored copies of `wft-preview-deploy.yaml`, `tpl-git-commit.yaml` and `rewrite_preview_values.py` under `internal/deployplan/testdata/upstream/`, pinned by SHA-256 with their source paths (the `SchemaSHA256` pattern). It extracts the `--set` keys and yq assignment paths and compares them with the Go compiler's declared key set. A re-vendored template with changed keys turns the test red.
+  - **Secret leakage.** Redaction is applied before render. A response-scanning test asserts no `teams/`, `secret/data/`, `vault`, `ghp_`, `gho_`, `ghs_` or env-secret value appears.
+  - **Fail-open on read errors.** Each of the onboard/update, revision-exists and requires_approval decisions has a converged-fixture test and a mutated-fixture test.
+  - **Plan/apply preview id mismatch until apply exists.** This is documented. Apply is a later item.
