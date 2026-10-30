@@ -203,3 +203,175 @@ tests:
                 a bad request, or a server-side regression makes Telegram refuse
                 every call and the SLI cannot see it.
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramcallererrorsharehigh"
+
+  # Connector login funnel (mctl-telegram#960). Series carry the labels the
+  # real scrape adds: job is the service, pod changes on every rollout.
+  - interval: 1m
+    name: MctlTelegramConnectorNoFirstCall stays quiet on a healthy funnel
+    input_series:
+      # 6 ok and 2 none for chatgpt over 6h: two users walked away, a
+      # quarter of the grants. The count clause alone would fire; the share
+      # keeps it quiet.
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="chatgpt",outcome="ok",reason=""}'
+        values: '0x60 1x60 2x60 3x60 4x60 5x60 6x60'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="chatgpt",outcome="none_within_window",reason=""}'
+        values: '0x200 1x100 2x120'
+    alert_rule_test:
+      - eval_time: 400m
+        alertname: MctlTelegramConnectorNoFirstCall
+        exp_alerts: []
+
+  - interval: 1m
+    name: MctlTelegramConnectorNoFirstCall ignores a single walk-away
+    # 1 of 1 decided grants is none: share 100%, but count is 1.
+    input_series:
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="claude",outcome="ok",reason=""}'
+        values: '0x120'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="claude",outcome="none_within_window",reason=""}'
+        values: '0x30 1x90'
+    alert_rule_test:
+      - eval_time: 110m
+        alertname: MctlTelegramConnectorNoFirstCall
+        exp_alerts: []
+
+  - interval: 1m
+    name: MctlTelegramConnectorNoFirstCall fires on the 2026-10-30 shape, across a rollout
+    # A chatgpt user retries three times; every grant ends with no call.
+    # The third lands on a new pod after a rollout, so the counter is a
+    # fresh series primed at 0. One unrelated claude grant succeeds.
+    input_series:
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="chatgpt",outcome="none_within_window",reason=""}'
+        values: '0x20 1x20 2x20 _x60'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="b",client="chatgpt",outcome="none_within_window",reason=""}'
+        values: '_x60 0x20 1x40'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="chatgpt",outcome="ok",reason=""}'
+        values: '0x60 _x60'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="b",client="chatgpt",outcome="ok",reason=""}'
+        values: '_x60 0x60'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="b",client="claude",outcome="ok",reason=""}'
+        values: '_x60 0x10 1x50'
+    alert_rule_test:
+      # Two none by 40m; `for: 5m` fires from 45m.
+      - eval_time: 38m
+        alertname: MctlTelegramConnectorNoFirstCall
+        exp_alerts: []
+      - eval_time: 110m
+        alertname: MctlTelegramConnectorNoFirstCall
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: labs-mctl-telegram-base-service
+              client: chatgpt
+            exp_annotations:
+              summary: "mctl-telegram: chatgpt connectors get tokens but never make a call"
+              description: >-
+                At least half of the chatgpt authorization_code
+                grants in the last 6h were followed by no successful MCP call
+                within 5 minutes. The connector is authenticating and then
+                failing on its first request: check the connector URL (it must
+                end in /mcp), mctl_root_mcp_requests_total, and the
+                connect_first_call table.
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#connectfirstcall"
+
+  - interval: 1m
+    name: MctlTelegramConnectorNoFirstCall keeps preview apart from production
+    # Preview fails twice; production succeeds. Only preview fires.
+    input_series:
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-preview-base-service",pod="p",client="other",outcome="none_within_window",reason=""}'
+        values: '0x10 1x10 2x40'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-preview-base-service",pod="p",client="other",outcome="ok",reason=""}'
+        values: '0x60'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="other",outcome="ok",reason=""}'
+        values: '0x10 5x50'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="other",outcome="none_within_window",reason=""}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: MctlTelegramConnectorNoFirstCall
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: labs-mctl-telegram-preview-base-service
+              client: other
+            exp_annotations:
+              summary: "mctl-telegram: other connectors get tokens but never make a call"
+              description: >-
+                At least half of the other authorization_code
+                grants in the last 6h were followed by no successful MCP call
+                within 5 minutes. The connector is authenticating and then
+                failing on its first request: check the connector URL (it must
+                end in /mcp), mctl_root_mcp_requests_total, and the
+                connect_first_call table.
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#connectfirstcall"
+
+  - interval: 1m
+    name: MctlTelegramConnectFunnelStoreErrors fires on repeated store errors only
+    input_series:
+      - series: 'mctl_connect_first_call_errors_total{job="labs-mctl-telegram-base-service",pod="a",op="close"}'
+        values: '0x10 1x10 2x10 3x60'
+      - series: 'mctl_connect_first_call_errors_total{job="labs-mctl-telegram-base-service",pod="a",op="insert"}'
+        values: '0x10 1x80'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MctlTelegramConnectFunnelStoreErrors
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: MctlTelegramConnectFunnelStoreErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: labs-mctl-telegram-base-service
+              op: close
+            exp_annotations:
+              summary: "mctl-telegram: connect funnel store errors (close)"
+              description: >-
+                The connect first-call funnel hit more than two store errors
+                on op close in the last hour. Grant outcomes are
+                being recorded as unknown, so MctlTelegramConnectorNoFirstCall
+                cannot see a broken connector. Check the server logs for
+                "connect funnel:" warnings and the database.
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#connectfirstcall"
+
+  - interval: 1m
+    name: MctlTelegramLoginExchangeFailing ignores the canary floor and user rejections
+    # One canary unknown_state every 10 minutes, users cancelling and
+    # reusing links, prefetches, and a single exchange failure.
+    input_series:
+      - series: 'mctl_login_callback_rejected_total{job="labs-mctl-telegram-base-service",pod="a",route="oauth_callback",reason="unknown_state"}'
+        values: '0+0.1x90'
+      - series: 'mctl_login_callback_rejected_total{job="labs-mctl-telegram-base-service",pod="a",route="oauth_callback",reason="oidc_error"}'
+        values: '0+0.2x90'
+      - series: 'mctl_login_callback_rejected_total{job="labs-mctl-telegram-base-service",pod="a",route="connect_done",reason="prefetch_refused"}'
+        values: '0+1x90'
+      - series: 'mctl_login_callback_rejected_total{job="labs-mctl-telegram-base-service",pod="a",route="oauth_callback",reason="exchange_failed"}'
+        values: '0x30 1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: MctlTelegramLoginExchangeFailing
+        exp_alerts: []
+
+  - interval: 1m
+    name: MctlTelegramLoginExchangeFailing fires on repeated exchange failures on either route
+    input_series:
+      - series: 'mctl_login_callback_rejected_total{job="labs-mctl-telegram-base-service",pod="a",route="oauth_callback",reason="exchange_failed"}'
+        values: '0x20 1x40'
+      - series: 'mctl_login_callback_rejected_total{job="labs-mctl-telegram-base-service",pod="a",route="connect_done",reason="exchange_failed"}'
+        values: '0x25 1x35'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MctlTelegramLoginExchangeFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: labs-mctl-telegram-base-service
+            exp_annotations:
+              summary: "mctl-telegram: Telegram sign-in token exchange is failing"
+              description: >-
+                Two or more Telegram OIDC returns in the last 30 minutes failed
+                at the server-side token exchange (route label on
+                mctl_login_callback_rejected_total says which flow). Users
+                finish the Telegram step and still cannot sign in. Check the
+                "telegram OIDC token exchange failed" and "connect: request
+                rejected" log lines for the error, and Telegram's token
+                endpoint and JWKS reachability.
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#loginpathsignals"
