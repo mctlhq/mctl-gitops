@@ -1,0 +1,118 @@
+# Unit tests for cloudflare-portal-health.yaml.
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh. A success timestamp written as '0+60xN' equals
+# time() at every step, i.e. a check that reads successfully every time.
+rule_files:
+  - generated/cloudflare-portal-health.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: every server ready raises nothing
+    input_series:
+      - series: 'cloudflare_portal_server_ready{job="cloudflare_portal_health",server="tg"}'
+        values: '1x200'
+      - series: 'cloudflare_portal_health_read_ok{job="cloudflare_portal_health"}'
+        values: '1x200'
+      - series: 'cloudflare_portal_health_last_read_success_timestamp_seconds{job="cloudflare_portal_health"}'
+        values: '0+60x200'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: CloudflarePortalServerNotReady
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: CloudflarePortalHealthReadFailing
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: CloudflarePortalHealthStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: one not-ready check that the next contradicts stays quiet
+    input_series:
+      - series: 'cloudflare_portal_server_ready{job="cloudflare_portal_health",server="projects"}'
+        values: '1x15 0x14 1x30'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: CloudflarePortalServerNotReady
+        exp_alerts: []
+
+  - interval: 1m
+    name: a server not ready on two checks fires, named
+    input_series:
+      - series: 'cloudflare_portal_server_ready{job="cloudflare_portal_health",server="projects"}'
+        values: '0x40'
+      - series: 'cloudflare_portal_server_ready{job="cloudflare_portal_health",server="tg"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: CloudflarePortalServerNotReady
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: CloudflarePortalServerNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: mcp-portal
+              job: cloudflare_portal_health
+              server: projects
+            exp_annotations:
+              summary: "MCP portal server projects is not ready"
+              description: "The Cloudflare MCP portal reports server projects as not ready, or ready with an error, on two consecutive checks. Its tools are served from a stale snapshot, or not at all. Usually the admin credential expired (needs_reauth). Fix: Cloudflare Zero Trust -> Access controls -> MCP Portals -> MCP servers -> projects -> Re-authenticate server; for a DCR server, then dispatch cloudflare-portal-health.yml with sync=projects."
+
+  - interval: 1m
+    name: a failing read fires its own alert and goes stale
+    input_series:
+      - series: 'cloudflare_portal_health_read_ok{job="cloudflare_portal_health"}'
+        values: '0x200'
+      - series: 'cloudflare_portal_health_last_read_success_timestamp_seconds{job="cloudflare_portal_health"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 44m
+        alertname: CloudflarePortalHealthReadFailing
+        exp_alerts: []
+      - eval_time: 46m
+        alertname: CloudflarePortalHealthReadFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: mcp-portal
+              job: cloudflare_portal_health
+            exp_annotations:
+              summary: "The MCP portal health check cannot read the servers"
+              description: "For 45 minutes the check could not read the portal's servers: the token, the Cloudflare API, or the answer's shape. This says nothing about the servers themselves. The cloudflare-portal-health Job's log in monitoring has the reason."
+      - eval_time: 2h29m
+        alertname: CloudflarePortalHealthStale
+        exp_alerts: []
+      - eval_time: 2h32m
+        alertname: CloudflarePortalHealthStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: mcp-portal
+              job: cloudflare_portal_health
+            exp_annotations:
+              summary: "No successful MCP portal health check for over 2 hours"
+              description: "Nothing has confirmed the state of the MCP portal's servers for more than two hours. Check the cloudflare-portal-health CronJob in monitoring (failed Jobs, CreateContainerConfigError for a missing token Secret, pod logs) and the cloudflare-portal-health ExternalSecret."
+
+  - interval: 1m
+    name: a check that never pushed (no token Secret) is stale, not fine
+    input_series:
+      - series: 'unrelated_metric{job="other"}'
+        values: '1x120'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: CloudflarePortalHealthStale
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: CloudflarePortalHealthStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: mcp-portal
+              job: cloudflare_portal_health
+            exp_annotations:
+              summary: "No successful MCP portal health check for over 2 hours"
+              description: "Nothing has confirmed the state of the MCP portal's servers for more than two hours. Check the cloudflare-portal-health CronJob in monitoring (failed Jobs, CreateContainerConfigError for a missing token Secret, pod logs) and the cloudflare-portal-health ExternalSecret."
