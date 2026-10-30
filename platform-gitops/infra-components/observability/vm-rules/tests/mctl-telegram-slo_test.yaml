@@ -415,3 +415,238 @@ tests:
       - eval_time: 90m
         alertname: MctlTelegramToolAvailabilityFastBurn
         exp_alerts: []
+
+  # --- mctl-telegram#974: no_session and canary traffic -----------------
+  #
+  # no_session is a call by a user with no connected Telegram account
+  # (Telegram never called). Like caller_error and the TTL expirations it is
+  # outside both SLIs, which the ok|error denominators already guarantee:
+  # each case below fails if a denominator goes back to the bare counter.
+  - interval: 1m
+    name: no_session calls leave the three tool ratios unchanged
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="ok",traffic="user"}'
+        values: "0+1x420"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="error",traffic="user"}'
+        values: "0+1x420"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="no_session",traffic="user"}'
+        values: "0+6x420"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_errors:ratio_rate1h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate1h{job="mctl-telegram",namespace="labs"}'
+            value: 0.5
+      - expr: mctl_telegram:tool_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
+            value: 0.5
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0.5
+
+  # 1 error in 5 real borrows must still page; 95 borrows by users with no
+  # connected account must not dilute it to 1%.
+  - interval: 1m
+    name: no_session borrows do not dilute the session-borrow SLI
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="error",traffic="user"}'
+        values: "0+1x90"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="ok",traffic="user"}'
+        values: "0+4x90"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="no_session",traffic="user"}'
+        values: "0+95x90"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramSessionBorrowFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: session borrow fast burn (14.4x, 1h)"
+              description: >-
+                The Pool.Borrow() error rate over the last 1h, excluding
+                expected TTL expirations, is 20% — above the 14.4% fast-burn
+                threshold (14.4x the 99% objective's budget). Tool calls are
+                failing before they reach Telegram. Page the on-call engineer.
+                SLO and error-budget policy:
+                https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+  # A canary outage is MctlTelegramCanaryFailing's job, not the user SLI's.
+  # Real users at 25% errors plus a canary failing every call: the ratio is
+  # the users' 0.25. Without traffic!="canary" it reads (1+4)/8 = 0.625.
+  - interval: 1m
+    name: canary failures do not burn the tool SLI
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="ok",traffic="user"}'
+        values: "0+3x420"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="error",traffic="user"}'
+        values: "0+1x420"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="error",traffic="canary"}'
+        values: "0+4x420"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_errors:ratio_rate1h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate1h{job="mctl-telegram",namespace="labs"}'
+            value: 0.25
+      - expr: mctl_telegram:tool_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
+            value: 0.25
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0.75
+
+  # The other direction: a real user error rate still pages while the
+  # canary is healthy and busy. 20% user errors; with the canary's 10 ok
+  # calls per minute counted the ratio would be 0.2/11 = 1.8% and the fast
+  # burn would stay quiet.
+  - interval: 1m
+    name: canary successes do not hide a real tool outage
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="error",traffic="user"}'
+        values: "0+0.2x90"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="send_message",status="ok",traffic="user"}'
+        values: "0+0.8x90"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="ok",traffic="canary"}'
+        values: "0+10x90"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramToolAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: mctl-telegram
+              job: mctl-telegram
+              namespace: labs
+            exp_annotations:
+              summary: "mctl-telegram: MCP tool availability fast burn (14.4x, 1h)"
+              description: >-
+                The MCP tool error rate over the last 1h is 20%, above the 7.2%
+                fast-burn threshold — 14.4x the 99.5% availability objective's
+                budget. At this rate the 30-day error budget is gone in about
+                two days. Page the on-call engineer. SLO and error-budget
+                policy:
+                https://github.com/mctlhq/mctl-telegram/blob/main/docs/slo.md
+
+  - interval: 1m
+    name: canary borrows are outside the session-borrow SLI, both ways
+    input_series:
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="ok",traffic="user"}'
+        values: "0+3x420"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="error",traffic="user"}'
+        values: "0+1x420"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="error",traffic="canary"}'
+        values: "0+4x420"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="ok",traffic="canary"}'
+        values: "0+8x420"
+    promql_expr_test:
+      - expr: mctl_telegram:session_borrow_errors:ratio_rate1h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_errors:ratio_rate1h{job="mctl-telegram",namespace="labs"}'
+            value: 0.25
+      - expr: mctl_telegram:session_borrow_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_errors:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
+            value: 0.25
+      - expr: mctl_telegram:session_borrow_success:ratio_rate28d
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_success:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0.75
+
+  # Rollout safety. Until the release that adds the label is deployed, and
+  # for 28 days after it in the compliance window, the series carry no
+  # traffic label at all. They are user traffic and must keep counting:
+  # a `traffic="user"` selector would drop them and leave the ratios absent
+  # (or, mixed with the first labelled samples, computed from a sliver).
+  - interval: 1m
+    name: series without a traffic label count as user traffic
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="ok"}'
+        values: "0+3x420"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="error"}'
+        values: "0+1x420"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="ok"}'
+        values: "0+3x420"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="error"}'
+        values: "0+1x420"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_errors:ratio_rate1h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate1h{job="mctl-telegram",namespace="labs"}'
+            value: 0.25
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0.75
+      - expr: mctl_telegram:session_borrow_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_errors:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
+            value: 0.25
+      - expr: mctl_telegram:session_borrow_success:ratio_rate28d
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:session_borrow_success:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0.75
+
+  # The rollout itself: the old unlabelled series stops and a labelled one
+  # starts on the new pod, inside one window. Both halves count. Old pod:
+  # 3 ok + 1 error per minute for 200m, then gone; new pod: the same rate,
+  # labelled, from 200m on.
+  - interval: 1m
+    name: a rollout from unlabelled to labelled series keeps the whole window
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="old",tool="get_messages",status="ok"}'
+        values: "0+3x200"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="old",tool="get_messages",status="error"}'
+        values: "0+1x200"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="new",tool="get_messages",status="ok",traffic="user"}'
+        values: "_x200 0+3x220"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="new",tool="get_messages",status="error",traffic="user"}'
+        values: "_x200 0+1x220"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0.75
+
+  # "Could not observe" is not "observed perfect". With only canary traffic
+  # in the window there is no user call to measure: every user ratio stays
+  # absent, never a recorded 1 (or 0) borrowed from the probe.
+  - interval: 1m
+    name: user ratios stay absent when only the canary was served
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="list_dialogs",status="ok",traffic="canary"}'
+        values: "0+1x420"
+      - series: 'mctl_sessions_borrow_total{job="mctl-telegram",namespace="labs",pod="a",result="ok",traffic="canary"}'
+        values: "0+1x420"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_errors:ratio_rate1h
+        eval_time: 420m
+        exp_samples: []
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 420m
+        exp_samples: []
+      - expr: mctl_telegram:session_borrow_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples: []
+      - expr: mctl_telegram:session_borrow_success:ratio_rate28d
+        eval_time: 420m
+        exp_samples: []

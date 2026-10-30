@@ -204,6 +204,23 @@ tests:
                 every call and the SLI cannot see it.
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramcallererrorsharehigh"
 
+  # mctl-telegram#974 adds a `traffic` label ("user" | "canary"). This alert
+  # must keep reading all traffic as one ratio. Here a canary failing every
+  # call (0.2/min) sits next to 10 healthy user calls per minute: about 2%
+  # overall, quiet. With `traffic` left out of the without() the canary's
+  # series becomes its own ratio of 1 and fires.
+  - interval: 1m
+    name: HighToolErrorRate does not split by traffic class
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="list_dialogs",status="error",traffic="canary"}'
+        values: '0+0.2x30'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="ok",traffic="user"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HighToolErrorRate
+        exp_alerts: []
+
   # Connector login funnel (mctl-telegram#960). Series carry the labels the
   # real scrape adds: job is the service, pod changes on every rollout.
   - interval: 1m
