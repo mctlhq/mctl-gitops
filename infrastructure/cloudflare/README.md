@@ -178,6 +178,18 @@ So a change to worker routes moves the subdomain redirect. Whatever PR touches
 them has to re-check subdomain redirects; no zone-level configuration here will
 catch that regression.
 
+Since the 2026-10-22 scanner the subdomain redirect is also **gated at the
+edge**: `firewall_custom` in the module blocks every `*.mctl.me` / `*.mctl.ru`
+host that is not in that zone's `redirect_subdomains` list, before the worker
+runs. The wildcard record and the `*.zone/*` route are unchanged, so the list
+is what decides which old links still answer `301`; a label missing from it
+answers `403`. The same ruleset, and `mctl.ai`'s, block crawler User-Agents on
+requests that are not Cloudflare-verified bots — the expression is one module,
+`modules/spoofed-crawlers`, so the three zones cannot drift apart on it. The
+evidence (189k requests in a day from one Google Cloud scanner rotating ~30
+crawler names over a subdomain wordlist, 2.9 GB of Workers Logs in two weeks)
+is in that module's header.
+
 ## Zone settings
 
 Zone settings were outside the #1089 import programme entirely — not considered

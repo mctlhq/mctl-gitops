@@ -279,3 +279,14 @@ spec:
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: admins-mctl-support-db
+spec:
+  name: "admins-mctl-support"
+  owner: "admins-mctl-support"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain

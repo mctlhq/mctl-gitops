@@ -1,0 +1,53 @@
+status: rejected
+updated_at: '2026-10-26T15:51:03Z'
+updated_by: mashkovd
+execution:
+  context_id: ex-a48809588691f7f2
+  trace_id: 7a76d27da8da42a8438a839e0a34be93
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-gitops
+  issue: 2103
+  url: https://github.com/mctlhq/mctl-gitops/issues/2103
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-e034a013a5357c88
+  content_hash: sha256:e034a013a5357c88865a88f735c58e917c607f3137ef967fc28b2034b96a6b52
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-26T01:53:09Z'
+  content_digest: sha256:172588c2e492214ef775d0038a8ef7f8c6d1e9b20a0dd574f79db52c39d0ddb0
+  digest_binding: reviewed
+  approval_ref: aar_5de65d64ac964dcfb111976686a2fe6f
+attempt:
+  id: f181fbc0b71c271f998f101ae7ff6776a492a39c7e4e8adb980e6edb7c06abd2
+  started_at: '2026-10-26T01:54:33Z'
+  expires_at: '2026-10-26T04:04:33Z'
+  finished_at: '2026-10-26T01:54:52Z'
+failure:
+  code: no-commits
+  stage: agent
+  message: implementer produced no commits
+notes: 'superseded by mctlhq/mctl-gitops#2168: the implementer stopped at the #774 dependency gate (no commits) while the code scanning receiver did not exist; a DevLoop past implement cannot restart (mctl-agents#748), so the scope moved to a new issue with the gate satisfied (mctl-api 4.125.0)'
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-a42b912a
+  authoritative:
+    completion_id: ic-d453e3d3b71f647f
+    content_hash: sha256:d453e3d3b71f647f3a6c7e9b3c6796d03b08fee75c457cc049cb404d5e087dad
+    proposal_digest: sha256:172588c2e492214ef775d0038a8ef7f8c6d1e9b20a0dd574f79db52c39d0ddb0
+    attempt_id: f181fbc0b71c271f998f101ae7ff6776a492a39c7e4e8adb980e6edb7c06abd2
+    step: primary
+    outcome: deterministic_failure
+    stop_reason: no_commits
+    head_sha: null
+    verification:
+      required_passed: 0
+      required_total: 4
+      optional_total: 1
+  primary_observed: true

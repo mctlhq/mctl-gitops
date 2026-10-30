@@ -190,6 +190,12 @@ jobs:
           # allowlist refuses every request.
           check '--entryPoints.websecure.proxyProtocol.trustedIPs=127.0.0.1/32,10.0.0.0/8'
           check '--entryPoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,10.0.0.0/8'
+          # Error-only access log. Without the filter argument the log is
+          # either absent (key silently dropped by a chart rename) or logging
+          # every 2xx; both are the wrong state and neither announces itself.
+          check '--accesslog.filters.statuscodes=400-599'
+          check '--accesslog.fields.headers.defaultmode=drop'
+          check '--accesslog.fields.queryparameters.defaultmode=drop'
           # web deliberately carries no middleware; if one appears, someone
           # added it without reading why it is absent.
           if grep -qF -- '--entryPoints.web.http.middlewares' /tmp/rendered.yaml; then

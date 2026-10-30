@@ -5,7 +5,10 @@ imagePullSecrets:
   - name: ghcr-credentials
 service:
   port: 8080
-replicaCount: 1
+# Paused 2026-10-29: the Claude account this pod signs in with is on hold
+# pending review, and every mctl-events delivery was hitting it with a
+# rejected request. Restore to 1 once the account question is settled.
+replicaCount: 0
 # Single replica — Recreate avoids quota deadlocks
 strategy:
   type: Recreate

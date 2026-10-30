@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: yamllint (relaxed)
         run: |
@@ -45,7 +45,8 @@ jobs:
           # comment, so a render with no Tempo emits no document), the
           # permanent Tempo's tracing.yaml (template comment, then its
           # `{{- if .Values.tracing.enabled }}` gate), the
-          # .github#50 usage-writer ExternalSecret, whose
+          # .github#50 usage-writer ExternalSecret and the other flag-gated
+          # mctl-api ExternalSecrets (e.g. gitops#2168 code scanning), whose
           # entire body sits inside an `{{- if }}` gate, and the argocd chart's
           # argocd-rbac-cm template (gitops#1431), which leads with a template
           # comment and the `$rbac` binding, and AppProject `default`
@@ -71,9 +72,11 @@ jobs:
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-evidence-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-registry-publisher.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-api-support-incident-producer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-surface-telegram.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-surface-portal.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-repo-binding.yaml
+            platform-gitops/bootstrap/templates/mctl-platform/mctl-api-security-code-scanning.yaml
             platform-gitops/argocd/templates/argocd-rbac-cm.yaml
           rules:
             # Helm templates routinely exceed 80 cols and carry Go-template

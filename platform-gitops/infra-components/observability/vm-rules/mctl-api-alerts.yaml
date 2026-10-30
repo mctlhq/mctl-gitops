@@ -146,3 +146,45 @@ spec:
               15 minutes, so MctlApiDown is blind. Check that the VMProbe
               exists, that vmagent picked it up, and that blackbox-exporter is
               running.
+
+    # Audit trail integrity (mctl-api#813). Every request a support agent run
+    # makes is audited; a failed audit write is served anyway and only
+    # counted, so this alert is what keeps a broken trail from passing
+    # silently. From mctl-api 4.128.0 (mctl-api#818) the support.request and
+    # other series start at 0, so increase() sees the first failure.
+    - name: mctl.api.audit
+      interval: 60s
+      rules:
+        - alert: MctlApiAuditWriteFailures
+          expr: sum by (operation) (increase(mctl_audit_write_failures_total{namespace="mctl-api"}[10m])) > 0
+          labels:
+            severity: warning
+            service: mctl-api
+          annotations:
+            summary: "mctl-api failed to write {{ $labels.operation }} audit rows"
+            description: >-
+              mctl-api could not persist {{ $value | humanize }} audit rows
+              with operation {{ $labels.operation }} in the last 10 minutes.
+              For support.request rows this means support-agent reads are
+              missing from the audit trail. The pod log line
+              `audit postgres: insert failed` names the operation, request id
+              and error; check shared-pg (platform-db) health.
+
+    - name: mctl.api.security
+      rules:
+        - alert: MctlApiSecurityWebhookFailures
+          # The receiver answers 2xx only after the store recorded the
+          # delivery, so these results are deliveries GitHub marks failed and
+          # that an operator must redeliver. The "not configured" 503 is not
+          # counted (runbook).
+          expr: sum by (result) (increase(mctl_security_webhook_deliveries_total{provider="github-code-scanning",result=~"signature_invalid|rejected|store_unavailable"}[15m])) > 0
+          labels:
+            severity: warning
+            service: mctl-api
+          annotations:
+            summary: "mctl-api rejected GitHub Code Scanning deliveries: {{ $labels.result }}"
+            description: >-
+              The github-code-scanning receiver answered {{ $labels.result }}
+              to at least one delivery in the last 15 minutes. See
+              docs/runbooks/security-finding-ingestion.md for the meaning of
+              each result and how to redeliver.

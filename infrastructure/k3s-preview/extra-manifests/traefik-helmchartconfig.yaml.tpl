@@ -156,3 +156,60 @@ spec:
       limits:
         cpu: "1000m"
         memory: "512Mi"
+
+    # Access log, errors only. Until 2026-10-29 Traefik ran with --log.level=INFO
+    # and nothing else, so a scan against the origin left no request lines
+    # anywhere: Loki held the Traefik streams but the 22.10 *.mctl.me sweep
+    # (mctl-gitops#2259) could only be reconstructed from the Cloudflare edge,
+    # where Free-plan analytics carry no ASN and a short history. The entrypoint
+    # counters in VictoriaMetrics say how many 404s arrived, not which host,
+    # path or client they came from.
+    #
+    # statusCodes 400-599 keeps the volume small on purpose. The origin sees
+    # about 75k requests a day, of which 15-20k are 4xx/5xx; logging only
+    # those is a few MB a day of JSON, well under Loki's 4 MB/s ingestion limit
+    # and a few hundred MB over the 14-day retention. A successful request is
+    # already visible in the service's own logs and in Tempo; a refused or
+    # failed one is what an incident review needs and what nothing else
+    # records. retryAttempts adds requests that failed over between backends.
+    #
+    # headers.defaultMode drop: Authorization, Cookie and the bearer tokens
+    # every MCP client sends must never reach Loki. Only the three named
+    # headers are kept: User-Agent (crawler spoofing, #2259), Cf-Connecting-Ip
+    # (the real client; ClientAddr is the Cloudflare edge) and Cf-Ray (joins a
+    # line to the Cloudflare request log).
+    #
+    # Query strings are dropped too (raised in review on #2260): RequestLine
+    # and RequestPath both carry the full URI, and the OAuth callbacks behind
+    # this ingress (api.mctl.ai, tg.mctl.ai, ZITADEL) receive `?code=` and
+    # `?state=` on exactly the error paths this log keeps. RequestLine is
+    # dropped outright; queryParameters.defaultMode (Traefik >= 3.7.3, the
+    # cluster runs 3.7.14) strips the query from RequestPath so the path
+    # itself stays.
+    #
+    # The chart key is accessLog, camel case; `logs.access` is rejected by
+    # values.schema.json ("Additional property logs is not allowed"). Rendered
+    # against chart 42.0.0: the eleven --accesslog.* arguments appear and the
+    # entrypoint invariants above survive. The render job in
+    # .github/workflows/cloudflare-origin-allowlist.yml asserts the filter
+    # argument so a silent drop of the key cannot pass review. Promtail already
+    # scrapes the traefik namespace; the lines land in Loki under
+    # {namespace="traefik"} as JSON with no further configuration.
+    accessLog:
+      enabled: true
+      format: json
+      filters:
+        statusCodes: "400-599"
+        retryAttempts: true
+      fields:
+        defaultMode: keep
+        names:
+          RequestLine: drop
+        headers:
+          defaultMode: drop
+          names:
+            User-Agent: keep
+            Cf-Connecting-Ip: keep
+            Cf-Ray: keep
+        queryParameters:
+          defaultMode: drop

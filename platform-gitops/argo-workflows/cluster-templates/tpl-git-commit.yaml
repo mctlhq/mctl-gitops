@@ -43,6 +43,8 @@ spec:
             default: "default"
           - name: config_patch
             default: ""
+          - name: image_user      # `uid` or `uid:gid` from check-image-user
+            default: ""
       script:
         image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
@@ -81,6 +83,8 @@ spec:
             value: "{{inputs.parameters.config_patch}}"
           - name: PARAM_SKIP_HEALTH_CHECK
             value: "{{inputs.parameters.skip_health_check}}"
+          - name: PARAM_IMAGE_USER
+            value: "{{inputs.parameters.image_user}}"
         envFrom:
           - configMapRef:
               name: mctl-platform-config
@@ -102,6 +106,7 @@ spec:
           CLEAR_SECRETS="$PARAM_CLEAR_SECRETS"
           SERVICE_TEMPLATE="$PARAM_SERVICE_TEMPLATE"
           CONFIG_PATCH="$PARAM_CONFIG_PATCH"
+          IMAGE_USER="$PARAM_IMAGE_USER"
 
           # Normalize sentinels (Backstage strips bare empty strings from YAML)
           [ "$HOST" = "none" ] && HOST=""
@@ -280,6 +285,15 @@ spec:
           echo "$PORT" | grep -qE '^[0-9]{1,5}$' || {
             echo "❌ Invalid port: ${PORT}"; exit 1; }
 
+          # check-image-user writes a non-zero uid with an optional numeric gid,
+          # nothing else; anything other than that or empty is refused rather
+          # than committed as a security context.
+          if [ -n "$IMAGE_USER" ]; then
+            reject_multiline "image_user" "$IMAGE_USER"
+            echo "$IMAGE_USER" | grep -qE '^[1-9][0-9]{0,9}(:[0-9]{1,10})?$' || {
+              echo "❌ Invalid image_user: ${IMAGE_USER}"; exit 1; }
+          fi
+
           # git, ssh, yq and helm come from mctl-workflow-tools 1.0.0: yq v4.52.4,
           # helm v3.16.4, sha256-pinned at build time. The yq calls below rely
           # on v4 (strenv, no startswith), so a tools bump must stay on yq v4.
@@ -450,6 +464,24 @@ spec:
           $PARAM_SECRET_ENV_VARS
           SECRETEOF
               yq eval -i '.envFrom = ((.envFrom // []) | map(select(.secretRef.name != strenv(SECRET_NAME))) + [{"secretRef": {"name": strenv(SECRET_NAME)}}])' "${DIR}/values.yaml"
+            fi
+
+            # Pin the image's numeric USER (gitops#2149). Under the chart's
+            # runAsNonRoot default the repo-wide sweep in
+            # tests/test_check_image_user.py requires runAsUser in values, so
+            # an onboard without it turned validate red for every later PR.
+            # `//` keeps a pin a service template already carries. Only
+            # onboard writes it: deploy never touches a pin set by hand.
+            if [ -n "$IMAGE_USER" ]; then
+              export PIN_UID="${IMAGE_USER%%:*}"
+              yq eval -i '.containerSecurityContext.runAsUser = (.containerSecurityContext.runAsUser // (strenv(PIN_UID) | to_number))' "${DIR}/values.yaml"
+              case "$IMAGE_USER" in
+                *:*)
+                  export PIN_GID="${IMAGE_USER#*:}"
+                  yq eval -i '.containerSecurityContext.runAsGroup = (.containerSecurityContext.runAsGroup // (strenv(PIN_GID) | to_number))' "${DIR}/values.yaml"
+                  ;;
+              esac
+              echo "Pinned runAsUser/runAsGroup from the image USER ${IMAGE_USER}"
             fi
 
             # catalog-info.yaml

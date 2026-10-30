@@ -180,6 +180,37 @@ tests:
                 cluster (10 s deadline); mostly 5xx means Yandex is failing.
 
   - interval: 1m
+    name: a lull between bursts keeps a failing upstream firing, then it resolves
+    input_series:
+      # Half of Quasar calls fail for 40 minutes, then the traffic stops: the
+      # count floor goes false at about 55m.
+      - series: 'mctl_alice_upstream_requests_total{namespace="labs",upstream="quasar",outcome="ok"}'
+        values: '0+2x40 80x60'
+      - series: 'mctl_alice_upstream_requests_total{namespace="labs",upstream="quasar",outcome="error"}'
+        values: '0+2x40 80x60'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: MctlAliceUpstreamErrorRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-alice
+              upstream: quasar
+            exp_annotations:
+              summary: 'mctl-alice: 50% of Yandex quasar calls are failing'
+              description: >-
+                More than 20% of calls to the Yandex quasar upstream (and
+                at least five) timed out, failed at the network level or answered
+                5xx over 15 minutes, sustained for 10. For quasar this is
+                the speaker-control path users see as broken tools. Split
+                by outcome: sum by (outcome) (rate(mctl_alice_upstream_requests_total{upstream="quasar"}[15m])).
+                Mostly timeout means Yandex is slow or unreachable from the
+                cluster (10 s deadline); mostly 5xx means Yandex is failing.
+      - eval_time: 90m
+        alertname: MctlAliceUpstreamErrorRatioHigh
+        exp_alerts: []
+
+  - interval: 1m
     name: upstream 4xx (a user's expired cookie) is not upstream failure
     input_series:
       - series: 'mctl_alice_upstream_requests_total{namespace="labs",upstream="quasar",outcome="ok"}'
@@ -318,6 +349,56 @@ tests:
                 minutes. The readiness probe is /healthz; `kubectl -n labs
                 describe pod` shows why it fails, and /readyz in the pod says
                 whether credential storage (shared-pg) is reachable.
+
+  # kube-state-metrics rescheduled: its pod IP is the instance label, so every
+  # restart counter continues as a new series. The pod did not restart.
+  # promtool cannot show the false positive this guards against: Prometheus'
+  # increase() reads a new series' first sample as a baseline, while
+  # VictoriaMetrics reads it as growth from zero, which is what fired this
+  # with "6 restarts" on 2026-10-24. The next case is the one promtool can
+  # check both ways.
+  - interval: 1m
+    name: kube-state-metrics moving to a new instance is not a restart
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",instance="10.42.6.188:8080"}'
+        values: '6x4 _x6'
+      - series: 'kube_pod_container_status_restarts_total{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",instance="10.42.5.158:8080"}'
+        values: '_x5 6x5'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlAliceRestarting
+        exp_alerts: []
+
+  # A restart in the gap while kube-state-metrics moves: the old instance last
+  # saw 1, the new one first sees 2, then a third restart follows. Counting
+  # per instance splits that into 1 + 1 and misses it; collapsing instance
+  # first sees one counter go 0 -> 3.
+  - interval: 1m
+    name: restarts that straddle a kube-state-metrics move still count
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",instance="10.42.6.188:8080"}'
+        values: '0 0 0 1 1 _x6'
+      - series: 'kube_pod_container_status_restarts_total{namespace="labs",pod="labs-mctl-alice-base-service-abc",container="base-service",instance="10.42.5.158:8080"}'
+        values: '_x5 2 2 2 3 3 3'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlAliceRestarting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-alice
+              namespace: labs
+              pod: labs-mctl-alice-base-service-abc
+            exp_annotations:
+              summary: mctl-alice pod labs-mctl-alice-base-service-abc restarted
+                3 times in 30 minutes
+              description: >-
+                The container has restarted at least twice in 30 minutes.
+                The generic KubePodCrashLooping and ContainerOOMKilled alerts
+                reach only mctl-agent; this one reaches a human. `kubectl
+                -n labs logs --previous labs-mctl-alice-base-service-abc`
+                has the last crash, and the pod's lastState says whether it
+                was OOMKilled (limit 256Mi).
 
   - interval: 1m
     name: two restarts in 30 minutes fire; one does not

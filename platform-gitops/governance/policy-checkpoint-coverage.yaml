@@ -85,6 +85,13 @@ surfaces:
     governed: false
     boundary: no-model-session
     reason: run_usage_collector reads the usage ledger; no model and no MCTL_TOKEN
+  - id: scout
+    kind: cwft
+    path: argo-workflows/cluster-templates/cwft-mctl-agents-scout.yaml
+    template: scout
+    governed: false
+    boundary: no-mctl-token
+    reason: run_scout model sessions have tools=[] and no MCP, and the template maps no MCTL_TOKEN; its only write is one Telegram sendMessage (mctlhq/mctl-agents#797)
   # Bash transport: the PreToolUse checkpoint gates mcp__* tools only, so a
   # model with Bash and MCTL_TOKEN in the same env can call mctl-api directly.
   # Acceptance criterion 2 is NOT closed by this manifest.

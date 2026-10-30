@@ -339,3 +339,38 @@ tests:
       - eval_time: 20m
         alertname: MctlApiDependencyDown
         exp_alerts: []
+
+  - interval: 1m
+    name: security webhook failures fire on a bad signature
+    input_series:
+      - series: 'mctl_security_webhook_deliveries_total{provider="github-code-scanning",result="signature_invalid"}'
+        values: '0x5 1x10'
+      - series: 'mctl_security_webhook_deliveries_total{provider="github-code-scanning",result="accepted"}'
+        values: '0x5 3x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MctlApiSecurityWebhookFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-api
+              result: signature_invalid
+            exp_annotations:
+              summary: "mctl-api rejected GitHub Code Scanning deliveries: signature_invalid"
+              description: >-
+                The github-code-scanning receiver answered signature_invalid
+                to at least one delivery in the last 15 minutes. See
+                docs/runbooks/security-finding-ingestion.md for the meaning of
+                each result and how to redeliver.
+
+  - interval: 1m
+    name: accepted security webhook deliveries are quiet
+    input_series:
+      - series: 'mctl_security_webhook_deliveries_total{provider="github-code-scanning",result="signature_invalid"}'
+        values: '0x20'
+      - series: 'mctl_security_webhook_deliveries_total{provider="github-code-scanning",result="accepted"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: MctlApiSecurityWebhookFailures
+        exp_alerts: []

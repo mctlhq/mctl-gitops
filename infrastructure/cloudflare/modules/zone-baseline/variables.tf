@@ -27,3 +27,15 @@ variable "firewall_rule_ref" {
   description = "Existing rule ref of the PHP-scanner block rule, for the same reason as redirect_rule_ref."
   type        = string
 }
+
+variable "redirect_subdomains" {
+  description = <<-EOT
+    Subdomain labels of this zone that are still worth redirecting to the same
+    label on the target zone (e.g. ["www", "platform"] for mctl.me). Every other
+    subdomain is blocked at the edge by the unknown-subdomain rule in
+    firewall_custom, before the mctl-landing-form worker runs. The wildcard A
+    record and the *.zone/* worker route stay, so the list is what decides which
+    old links keep working; a label missing from it answers 403 instead of 301.
+  EOT
+  type        = list(string)
+}

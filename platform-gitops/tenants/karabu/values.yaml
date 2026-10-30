@@ -12,6 +12,12 @@ tenant:
     - userId: EmiliiaMashkova
       principalId: prn_01M3H4H0M0140YFDSCXSV9QVM2
       role: owner
+    # Added 2026-10-28 so the platform owner can ask mctl-support about this
+    # tenant during the support pilot (mctlhq/.github#243); support answers
+    # members only.
+    - userId: mashkovd
+      principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
+      role: developer
   # Keep an initial preview budget without reserving the full production profile.
   preview:
     quotas:

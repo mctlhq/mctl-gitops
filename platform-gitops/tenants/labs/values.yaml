@@ -69,16 +69,23 @@ tenant:
     #
     # Earlier history (2026-05-06): bumped to fit kuptsi-app FastAPI +
     # Temporal worker alongside labs-openclaw (2600m / 1104Mi req).
-    requests.cpu: "3"
-    requests.memory: "6Gi"
+    #
+    # Bumped 2026-10-26: steady state reached requests.cpu 2485m/3,
+    # limits.cpu 14250m/16, limits.memory 11808Mi/14Gi, requests.memory
+    # 4880Mi/6Gi with 20 pods, leaving room for about one workflow pod.
+    # Cluster had ~13 cores and ~15Gi of unrequested capacity across the
+    # three workers; actual node CPU use was ~13%, memory ~73%, so CPU gets
+    # the bigger bump and memory a modest one.
+    requests.cpu: "4"
+    requests.memory: "7Gi"
     # Bumped 2026-09-25: pelican-proxy limits.cpu bumped 300m -> 1000m,
     # raising steady-state usage to 13050m. Deploy workflow refresh pod (needs 1 core)
     # exceeded 14 quota. Bump limits.cpu 14 -> 16 to provide ~3 cores headroom.
-    limits.cpu: "16"
+    limits.cpu: "20"
     # Bumped 2026-09-25: pelican-proxy-staging deployment brought steady-state
     # memory limit usage to 10528Mi. Workflow refresh pod (needs 512Mi) exceeded
     # 10.5Gi (10752Mi). Bump limits.memory 10.5Gi -> 14Gi and requests.memory 5Gi -> 6Gi.
-    limits.memory: "14Gi"
+    limits.memory: "16Gi"
     # Bumped 2026-09-25: 19/20 services deployed. Raised pods 25 → 30 and services 20 → 25
     # for pelican-proxy-staging and future expansion.
     pods: "30"

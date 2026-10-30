@@ -391,6 +391,18 @@ usageWriter:
 evidenceWriter:
   enabled: true
 
+# GitHub Code Scanning -> SecurityFinding receiver (mctlhq/mctl-gitops#2168,
+# mctl-api >= 4.125.0, docs/runbooks/security-finding-ingestion.md).
+# Vault: secret/platform/mctl-api/github-code-scanning-webhook, property
+# secret: >= 32 chars, different from platform/mctl-api/github-webhook, no
+# trailing newline. Steps, in order and in separate merges:
+#   1. Owner writes Vault; set externalSecret: true; confirm the Secret synced.
+#   2. Set receiver: true (the env change rolls the pods, which then read it).
+#   3. Owner registers the repository webhook (runbook).
+securityCodeScanning:
+  externalSecret: true
+  receiver: true
+
 # The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
 # mctlhq/mctl-api#481, mctl-api >= 4.67.0): the mctl-agents release pipeline
 # publishes and promotes agent versions with it instead of the admin service
@@ -401,6 +413,21 @@ evidenceWriter:
 #   1. Write the value to Vault (owner).
 #   2. Set enabled: true below (mctl-api then rolls to pick up the env).
 registryPublisher:
+  enabled: true
+
+# The support-incident-producer principal's bearer token (mctlhq/mctl-api#830,
+# mctl-api >= 4.131.0): mctl-support files source=support incidents with it
+# and nothing else. Vault: secret/platform/mctl-support/incident-producer,
+# property token (>= 32 chars, different from every other principal's token,
+# or mctl-api refuses it and disables both sides). Its own path, read by
+# mctl-api here and by mctl-support (services/admins/mctl-support).
+# Owner steps, in this order:
+#   1. printf '%s' "$(openssl rand -hex 32)" \
+#        | vault kv put secret/platform/mctl-support/incident-producer token=-
+#      (a new path, so put is safe; use kv patch -method=rw once it exists).
+#   2. Set enabled: true below (mctl-api then rolls to pick up the env).
+#   Done 2026-10-27: step 2 below, merged after step 1.
+supportIncidentProducer:
   enabled: true
 
 # The surface:portal principal's bearer token (mctlhq/mctl-portal#126):
@@ -533,6 +560,10 @@ reservedPlatformHosts:
   ui.mctl.ai: [admins]
   # Umami analytics (services/admins/umami).
   stats.mctl.ai: [admins]
+  # mctl-rules public host (services/labs/mctl-rules).
+  rules.mctl.ai: [labs]
+  # mctl-support public host (services/admins/mctl-support).
+  support.mctl.ai: [admins]
   # ZITADEL, plus the usual identity-provider aliases so none of them can be
   # stood up by a tenant to imitate the sign-in page.
   auth.mctl.ai: [zitadel]
@@ -564,3 +595,32 @@ reservedPlatformHosts:
 reservedDomains:
   # ERPact's site domain (<label>.erpact.online, erpact/mctl-apps#16).
   erpact.online: [erpact]
+
+# Log-backend comparison sandbox (issue #2245, docs/adr/0002-log-backend.md).
+# Closed by default: nothing renders while enabled is false. The candidate
+# pins (repoURL, chart, targetRevision) are filled by the live round, which
+# follows docs/runbooks/log-backend-bake-off.md. While enabled, teardownAfter
+# must be a YYYY-MM-DD date at most 14 days out
+# (scripts/validate-eval-teardown-date.py).
+logsEval:
+  enabled: false
+  teardownAfter: ""
+  quota:
+    requests.cpu: "500m"
+    requests.memory: "1Gi"
+    limits.cpu: "1"
+    limits.memory: "2Gi"
+    persistentvolumeclaims: "1"
+    requests.storage: "20Gi"
+  candidate:
+    enabled: false
+    repoURL: ""
+    chart: ""
+    targetRevision: ""
+    values:
+      server:
+        retentionPeriod: 14d
+        # The sandbox scrapes via infra-components/observability/logs-eval/;
+        # the chart's own ServiceMonitor would double-scrape.
+        serviceMonitor:
+          enabled: false

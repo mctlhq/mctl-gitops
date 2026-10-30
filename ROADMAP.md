@@ -1,8 +1,9 @@
 # План развития MCTL
 
-> **Статус на 2026-10-23.** Один кластер `mctl-preprod` (Hetzner, k3s v1.34.12,
+> **Статус на 2026-10-27.** Один кластер `mctl-preprod` (Hetzner, k3s v1.34.12,
 > 1 control-plane + 3 workers), который де-факто уже прод: на нём первый тенант
-> с внешними людьми (`erpact`, 4 участника), 27 сервисов, 6 тенантов. Путь
+> с внешними людьми (`erpact`, 4 участника), 27 сервисов, 7 тенантов. С 25.10 на
+> нём первый self-service клиент: `namax66` (starter-квота, сервис `news-factory`). Путь
 > самообслуживания (заявка → ZITADEL → workspace → MCP) построен и прошёл
 > приёмку в проде 2026-10-17, но публичная регистрация закрыта
 > (`AUTH_FLOW_PUBLIC=false`): работает waitlist с ручным одобрением, а
@@ -76,14 +77,23 @@
   (ссылка на `#request-access` + «Already invited? Sign in» + напоминание про
   verified email в GitHub, [mctl-web#197](https://github.com/mctlhq/mctl-web/pull/197));
   нашёл первый внешний приглашённый 20.10.
-- [ ] Первый внешний приглашённый (@NaMax66) так и не вошёл: Login V2 показывает
-  общую страницу «access is by invitation», причина отказа hook'а видна только в
-  логах mctl-api (`intent_*`). Разобрать по логам; одобрение истекает через 7 дней
-  после решения — при необходимости переодобрить.
-- [x] Причина отказа hook'а теперь доходит до оператора: счётчик
+- [x] Первый внешний приглашённый (@NaMax66) вошёл и онбордился 25.10: тенант
+  `namax66` на starter-квоте, `news-factory` задеплоен. По пути найдены и
+  исправлены ещё два бага онбординга: `mctl_sync_repos` отправлял в портал не
+  GitHub-логин клиента («Invalid user parameter»), а repo-инструменты не видели
+  GitHub-идентичность аккаунтов, созданных через ZITADEL («a linked GitHub
+  identity is required»); плюс 404 на доке шаблонов в портале сразу после рестарта.
+- [ ] `news-factory`: временное исключение из стандартного профиля пода для
+  sandboxed Chromium — **снять 01.11**. Клиент выкатил 0.1.2 с
+  `chromiumSandbox: false` 26.10; после снятия проверить запуск.
+- [x] Read-only агент поддержки `https://support.mctl.ai` (A2A 1.0, только свой
+  тенант, 20 вопросов в день) — по идее клиента; отдан на пробу 27.10.
+- [~] Причина отказа hook'а теперь доходит до оператора: счётчик
   `mctl_api_zitadel_hook_decisions_total{target,kind,reason}` в mctl-api и алерты
   `ZitadelHookSignInRefused` / `ZitadelHookFailing` → Telegram
-  (`vm-rules/zitadel-hook-alerts.yaml`, маршрут в monitoring.yaml).
+  (`vm-rules/zitadel-hook-alerts.yaml`, маршрут в monitoring.yaml). Алерты в main
+  (#2123); метрика — [mctl-api#780](https://github.com/mctlhq/mctl-api/pull/780),
+  одобрен, ждёт merge. До выката метрики алерты молчат.
 
 ### 2.3 Хвосты, которые уже стреляли
 - [ ] **Добить `GHCR_PAT`/`GH_PACKAGES_TOKEN`**: допереключить mctl-web, mctl-docs,

@@ -42,7 +42,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.119.0"
+            tag: "4.140.0"
 
           ingress:
             enabled: true
@@ -63,12 +63,10 @@ spec:
             # start, so when a rollout depends on generated configuration
             # (for example zitadel-iac output), bump only after it is applied.
             # The line below records why the current value was set.
-            # This rollout replaces replica mctl-api-6f4bb4b99f-qpnxg, which
-            # started 2026-10-22T22:52Z while Temporal was down (k3s 1.34
-            # upgrade window): its Temporal client failed to dial once and
-            # stayed nil, so every DevLoop call that landed on it answered
-            # 503 "dev-loop Temporal client not configured" (mctl-api#764).
-            ROLLOUT_MARKER: "2026-10-23-temporal-client-dead-replica"
+            # This rollout loads OAUTH_JWT_SIGNING_KEYS, which #2171 mapped
+            # into mctl-api-secrets (step C0 of mctlhq/mctl-api#805); envFrom
+            # is read only at container start.
+            ROLLOUT_MARKER: "2026-10-26-jwt-signing-keys"
             ARGOCD_URL: https://ops.mctl.ai
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
@@ -121,6 +119,14 @@ spec:
             # off. Human sign-in is ZITADEL; Dex is gone (mctlhq/mctl-gitops#1500
             # phase 4).
             SELF_URL: https://api.mctl.ai
+            # Tenant support agent tools mctl_ask_support / mctl_get_support_task
+            # (mctlhq/mctl-api#814, mctlhq/.github#243). mctl-api forwards the
+            # caller's own bearer to the support agent's A2A endpoint; it holds
+            # no credential of its own for it. Unset = both tools answer "not
+            # configured". The ask wait defaults to 60s (SUPPORT_ASK_WAIT,
+            # 5s-90s) and POST /mcp gets that wait + 15s as its request and
+            # write deadline. Rollback: delete this line.
+            SUPPORT_A2A_URL: https://support.mctl.ai
             # GitHub Actions OIDC for CI deploys (mctlhq/mctl-api#530): a CI
             # job's own OIDC token may deploy a new tag of the component whose
             # catalog-info.yaml github.com/source-repo is that job's
@@ -232,6 +238,31 @@ spec:
             OAUTH_CIMD_ACCEPT: "true"
             OAUTH_CIMD_ADVERTISE: "true"
             OAUTH_CIMD_ALLOWED_HOSTS: "chatgpt.com,claude.ai,vscode.dev"
+            # Access-token audience, step B of mctlhq/mctl-api#805 (runbook
+            # docs/access-token-signing.md). Since 4.125.0 every minted token
+            # carries `aud` and a foreign `aud` is refused; aud-less HS256
+            # tokens were still accepted and counted in
+            # oauth_jwt_audless_accepted_total. That counter stayed flat for
+            # more than one token TTL, so the grace ends here.
+            # Rollback: delete this line.
+            OAUTH_JWT_REQUIRE_AUD: "true"
+            # Access-token signing algorithm, step C of mctlhq/mctl-api#805.
+            # New tokens are signed EdDSA with the active key of
+            # OAUTH_JWT_SIGNING_KEYS (mapped in mctl-api-secrets, kid
+            # 2026-10a, public half at /.well-known/jwks.json).
+            # Rollback: first delete OAUTH_JWT_ACCEPT_HS256 below (mctl-api
+            # refuses to boot with HS256 signing while HS256 is refused), then
+            # this line; EdDSA tokens already issued keep verifying because
+            # the key stays in the key set.
+            OAUTH_JWT_SIGNING_ALG: "EdDSA"
+            # Step D of mctlhq/mctl-api#805: refuse every HS256 access token
+            # before any HMAC. Taken after HS256 ok verifications stayed flat
+            # from 20:17Z on 2026-10-26 for over one TTL (1h), while EdDSA ok
+            # kept rising. A client still holding an HS256 token gets 401 and
+            # refreshes into an EdDSA one. OAUTH_JWT_SECRET stays required:
+            # refresh-token derivation still uses it.
+            # Rollback: delete this line (back to the default, true).
+            OAUTH_JWT_ACCEPT_HS256: "false"
             # GitHub numeric ids allowed to create a NEW account in the ZITADEL
             # org customers (identity hook, mctlhq/mctl-web#158). Unset creates
             # nobody; exactly "*" opens creation to anyone (the public cutover,
@@ -349,6 +380,9 @@ spec:
           # 4.89.0 as released against a local ZITADEL v4.19.2.
           envFromOptionalSecrets:
             - mctl-api-zitadel-hook
+            {{- if (default dict .Values.securityCodeScanning).receiver }}
+            - mctl-api-security-code-scanning
+            {{- end }}
 
           # The GitHub App installation token, mounted as a FILE. mctl-api
           # reads GITHUB_APP_TOKEN_FILE per use (internal/ghtoken), which is
@@ -440,6 +474,16 @@ spec:
           # the principal disabled instead of failing the pod.
           registryPublisherTokenSecret: mctl-api-registry-publisher
           {{- end }}
+          {{- if (default dict .Values.supportIncidentProducer).enabled }}
+
+          # The support-incident-producer token (mctlhq/mctl-api#830), from
+          # the mctl-api-support-incident-producer ExternalSecret. Gated with
+          # it on supportIncidentProducer.enabled in bootstrap/values.yaml;
+          # the chart's reference is optional, so a Secret that has not
+          # synced yet leaves the principal disabled instead of failing the
+          # pod.
+          supportIncidentProducerTokenSecret: mctl-api-support-incident-producer
+          {{- end }}
           {{- if (default dict .Values.surfaceTelegramToken).enabled }}
 
           # The surface:telegram bearer token (mctlhq/mctl-telegram#443), from
@@ -466,6 +510,44 @@ spec:
           # optional repoBindingTokenSecret; until it lands the chart ignores the
           # unknown key.
           repoBindingTokenSecret: mctl-api-repo-binding
+          {{- end }}
+          {{- if (default dict .Values.securityCodeScanning).receiver }}
+
+          # GitHub Code Scanning -> SecurityFinding receiver
+          # (mctlhq/mctl-gitops#2168, mctl-api >= 4.125.0,
+          # docs/runbooks/security-finding-ingestion.md). Gated on
+          # securityCodeScanning.receiver in bootstrap/values.yaml, which
+          # must only be set after the mctl-api-security-code-scanning Secret
+          # has synced: envFrom is read at container start, and a pod that
+          # starts first keeps the receiver disabled until the next restart.
+          #
+          # max_strength provider_claim: a webhook only claims. A `fixed`
+          # alert must never resolve an occurrence; verification stays with
+          # the #809 consumer.
+          # The tenant comes from this config (repository -> tenant), never
+          # from payload text.
+          # securityProviderTokensSecret is deliberately unset: the receiver
+          # writes in-process, and a token would open
+          # POST /api/v1/security/observations to a second credential.
+          # No SECURITY_FINDINGS_DB_URL: the store falls back to AUDIT_DB_URL
+          # (database mctl-api).
+          # Rollback: set securityCodeScanning.receiver to false (the route
+          # then answers 503), or deactivate the repository webhook.
+          securityProviders:
+            - ref: github-code-scanning
+              max_strength: provider_claim
+              tenants: [admins]
+          securityCodeScanning:
+            repositories:
+              mctlhq/mctl-api: admins
+            tools: [Trivy]
+            actions:
+              - created
+              - appeared_in_branch
+              - reopened
+              - reopened_by_user
+              - fixed
+              - closed_by_user
           {{- end }}
 
           resources:

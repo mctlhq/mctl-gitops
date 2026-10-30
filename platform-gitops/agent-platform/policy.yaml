@@ -88,6 +88,9 @@ spec:
     - service_agent
     - mentor_digest
     - review_findings_normalize
+    # mctl-agents#797: the scout's scoring pass. Its cheap relevance pass
+    # (scout_relevance) is not named by any profile.
+    - scout_scoring
 
   # policyRef values an ExecutionProfile may declare. Each is a named,
   # externally-enforced behavior policy (prompt/guardrail scope) — this
@@ -117,6 +120,10 @@ spec:
     # (authoring-canary, mctl-agents#596/#598). Unlike every name above it
     # does not name a write, which is exactly why none of them fits.
     - inert-read-only
+    # news-digest: reads public feeds and the spike backlog, sends one
+    # Telegram message, writes nothing to any repository (scout,
+    # mctl-agents#797).
+    - news-digest
 
   # Profiles whose agent has no caller: no ClusterWorkflowTemplate or
   # CronWorkflow runs them, so no template carries their budget and
@@ -196,6 +203,14 @@ spec:
     - name: gitops-main-write
       mutating: true
       requiresApproval: gitops-main-write
+    # One Telegram sendMessage to the owner's chat: the scout's daily digest
+    # (mctl-agents#797). Outside this repository and not revertible, so it is
+    # named rather than left out. No human gate: the message only links to a
+    # pre-filled GitHub form, and nothing is created until the owner submits
+    # it themselves.
+    - name: telegram-send-message
+      mutating: true
+      requiresApproval: null
 
   # Approval gate names an ExecutionProfile.spec.approval.requiredBefore
   # entry may reference.
@@ -226,6 +241,9 @@ spec:
         # ClusterWorkflowTemplates, and set no budget or deadline of their
         # own.
         - mctl-agents-run
+        # Daily tech-news digest (mctl-agents#797). Its CronWorkflow of the
+        # same name only submits it.
+        - mctl-agents-scout
 
   # Evidence kinds an ExecutionProfile.spec.evidence.required entry may
   # name.
@@ -237,3 +255,5 @@ spec:
     - issue-comment
     # The mentor's weekly digest file: its only output (mctl-agents#470).
     - digest
+    # The scout's Telegram digest message: its only output (mctl-agents#797).
+    - telegram-message

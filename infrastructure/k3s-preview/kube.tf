@@ -120,8 +120,10 @@ locals {
   # v0.13.3-build20260727 in v1.34.12+k3s1). Pinned to the charts running on
   # 2026-10-22 so the k3s upgrade does not also upgrade ingress and ACME.
   # Bump them here, deliberately, in their own change.
+  # v1.20.5 (#2246): drops trust in the compromised eMudhra CA and carries
+  # HTTP/2 dependency security fixes. Live version was not observed.
   traefik_version      = "42.0.0"
-  cert_manager_version = "v1.20.3"
+  cert_manager_version = "v1.20.5"
 
   # Equal to the module default; pinned here so a module upgrade cannot move
   # it without a matching change to extra-manifests/system-upgrade-controller.yaml.tpl.
@@ -304,6 +306,27 @@ module "kube-hetzner" {
       port            = "2465"
       source_ips      = []
       destination_ips = ["0.0.0.0/0", "::/0"]
+    },
+    # Cloudflare Tunnel connector events-tunnel in platform-events
+    # (platform-gitops/infra-components/data/valkey/cloudflared.yaml). cloudflared
+    # dials the edge on 7844 only, QUIC over UDP or HTTP/2 over TCP, with no
+    # fallback to 443; without these the connector retries forever. The ranges
+    # are the ones region1/region2.v2.argotunnel.com resolve into.
+    {
+      description     = "Allow Outbound Cloudflare Tunnel (QUIC) to the Cloudflare edge"
+      direction       = "out"
+      protocol        = "udp"
+      port            = "7844"
+      source_ips      = []
+      destination_ips = ["198.41.192.0/24", "198.41.200.0/24", "2606:4700:a0::/48", "2606:4700:a8::/48"]
+    },
+    {
+      description     = "Allow Outbound Cloudflare Tunnel (HTTP/2) to the Cloudflare edge"
+      direction       = "out"
+      protocol        = "tcp"
+      port            = "7844"
+      source_ips      = []
+      destination_ips = ["198.41.192.0/24", "198.41.200.0/24", "2606:4700:a0::/48", "2606:4700:a8::/48"]
     },
   ]
 

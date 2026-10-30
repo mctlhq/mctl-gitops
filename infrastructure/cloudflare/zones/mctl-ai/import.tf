@@ -111,6 +111,11 @@ import {
 }
 
 import {
+  to = cloudflare_email_routing_rule.moonqua
+  id = "${local.zone_id}/7f64595b1ca849379f15c631d79b92ec"
+}
+
+import {
   to = cloudflare_email_routing_rule.dmarc
   id = "${local.zone_id}/653a2dac00e347598e0a52acd840af78"
 }
@@ -158,4 +163,9 @@ import {
 import {
   to = cloudflare_workers_route.landing_form_api
   id = "${local.zone_id}/762bd90950394fdc963c12028a8caca0"
+}
+
+import {
+  to = cloudflare_dns_record.anthropic_domain_verify
+  id = "${local.zone_id}/98ade15758bb2ecaa791b0d5dc900529"
 }

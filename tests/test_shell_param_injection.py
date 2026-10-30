@@ -55,7 +55,7 @@ CASES = [
 BENIGN_DEFAULT = "okname"
 BENIGN = {"dockerfile_repo": "org/repo", "host": "svc.example.com", "port": "8080", "previous_generation": "7",
           "git_tag": "v1.2.3", "image_tag": "auto", "min_replicas": "1",
-          "max_replicas": "2", "cpu_threshold": "80"}
+          "max_replicas": "2", "cpu_threshold": "80", "image_user": "10001:10001"}
 SENTINEL = "__PRELUDE_END__"
 
 

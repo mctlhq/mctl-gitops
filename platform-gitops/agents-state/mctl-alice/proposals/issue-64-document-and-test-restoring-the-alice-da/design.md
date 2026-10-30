@@ -127,22 +127,32 @@ endpoint URLs, or Vault paths. The runbook tells the operator to copy the
    pg_hba keep pointing at the name `labs-mctl-alice`.
 5. **Verify before the switch.** Run the new check (deliverable 2) against the
    restored database. Pass it the app's real key through the existing secret,
-   from a one-off pod in the `labs` namespace:
-   `kubectl run ... --env-from=secret/mctl-alice-secrets -- node dist/restore-check.js`
-   with `DATABASE_URL` pointing at `labs-mctl-alice-restore`. During this step
-   only, a temporary pg_hba line is needed, or the check runs as local
-   `postgres` with `--as-role labs-mctl-alice`, which uses `SET ROLE` to test
-   grants. The runbook uses the second option, so no gitops change is needed.
+   from a one-off pod in the `labs` namespace. Use
+   a Pod manifest using `envFrom.secretRef` (not an unsupported `kubectl run
+   --env-from` flag), with `DATABASE_URL` pointing at `labs-mctl-alice-restore`
+   and credentials supplied by secret references, never command arguments.
+   Connect over authenticated TCP/TLS as `labs-mctl-alice`. Prepare a temporary
+   pg_hba rule for exactly that database and role and a NetworkPolicy allowance
+   for the verifier through the owning GitOps path. Remove both after verification
+   and confirm the original policy is restored. The restored scratch cluster needs
+   its own working role credential and access configuration; do not assume the
+   live secret matches a role password from the recovery point. A separate Node
+   pod cannot reach the primary pod's local Unix socket; `SET ROLE` does not
+   bypass authentication and `--as-role` is not offered by this CLI.
    Compare the counts with step 3.
-6. **Switch over.** Scale `labs-mctl-alice` to 0 (`kubectl scale`, then let
-   ArgoCD self-heal back after step 6c, or pause auto-sync for the window).
+6. **Switch over.** First record and suspend ArgoCD auto-sync/self-heal and any parent
+   reconciliation that could re-enable it. Confirm suspension remains effective.
+   Then scale `labs-mctl-alice` to 0 and wait for all application pods to stop.
+   Do not rely on self-heal timing to keep the app stopped.
    Terminate leftover sessions with `pg_terminate_backend` for `datname =
    'labs-mctl-alice'`. Then:
    `ALTER DATABASE "labs-mctl-alice" RENAME TO "labs-mctl-alice-pre-restore-<yyyymmdd>"`;
    `ALTER DATABASE "labs-mctl-alice-restore" RENAME TO "labs-mctl-alice"`.
-   Scale back to 1. `DATABASE_URL`, pg_hba and the CNPG `Database` (matched by
-   name) are unchanged, so no secret or gitops edit is needed. That is why
-   this approach was chosen.
+   Scale back to 1 while reconciliation stays suspended. `DATABASE_URL` and
+   the CNPG `Database` (matched by name) remain unchanged. Remove the temporary
+   verification access rules, restore the recorded reconciliation settings after
+   verification (or rollback), and confirm replicas, sync and health. The temporary
+   access configuration requires its own reviewed GitOps change.
 7. **Verify live.** `/readyz` returns 200. The startup log carries no
    "cannot be decrypted with any configured key" line and no "still in clear
    text" line (messages in `credential-rotation.ts` / `postgres-storage.ts`).
@@ -151,7 +161,9 @@ endpoint URLs, or Vault paths. The runbook tells the operator to copy the
 8. **Clean up.** Delete the scratch `Cluster`, its PVCs, the namespace and
    every dump file. Keep `-pre-restore-<date>` for a stated period (default 7
    days), then drop it with `DROP DATABASE`. Record the drop in the log.
-9. **Rollback of a switch-over.** Reverse the two renames while scaled to zero.
+9. **Rollback of a switch-over.** Suspend and verify reconciliation as in step 6, stop all app pods, then
+   reverse the two renames. Restore replicas and the recorded reconciliation
+   settings only after verification.
 
 The runbook also has a "What to check after a restore" section. It maps each
 check to the user-visible risk:
@@ -173,13 +185,17 @@ time, phase durations, check output counts, deviations, teardown confirmed).
 ### 2. Read-only verification tool `src/storage/restore-check.ts` + `src/restore-check.ts`
 
 - `src/storage/restore-check.ts` exports
-  `checkRestoredDatabase(pool: pg.Pool, opts?: { asRole?: string }): Promise<RestoreCheckReport>`.
+  `checkRestoredDatabase(pool: pg.Pool): Promise<RestoreCheckReport>`.
   - **Tables:** it reads `information_schema.tables`/`pg_tables` for the ten
     expected names, taken from a new exported `POSTGRES_TABLES` constant next
     to `initTables()` in `postgres-storage.ts`, so the list cannot drift. It
     reports any that are missing.
   - **Grants:** `tableowner` per table, plus
-    `has_table_privilege(<role>, tbl, 'SELECT,INSERT,UPDATE,DELETE')`.
+    four separate `has_table_privilege(<role>, tbl, <privilege>)` calls for
+    SELECT, INSERT, UPDATE and DELETE, combined with AND. A comma-separated
+    list means ANY listed privilege in PostgreSQL and is not sufficient. Also
+    verify schema USAGE and required sequence privileges. Use the actual
+    connecting application role, not superuser privileges.
   - **Counts:** `count(*)` per table; for `oauth_tokens`, also the count of
     unexpired rows.
   - **Decryption:** for each `ENCRYPTED_COLUMNS` spec, it pages through *all*
@@ -190,7 +206,9 @@ time, phase durations, check output counts, deviations, teardown confirmed).
   - **Hashed secrets:** the same five columns as `initTables()`, counting
     values without the `sha256:` prefix. The column list is shared through a
     new exported `SECRET_COLUMNS` constant, so the two cannot diverge.
-  - Every query runs inside `BEGIN READ ONLY ... ROLLBACK`.
+  - Every query runs inside `BEGIN READ ONLY ... ROLLBACK` on one checked-out
+    pool client, released in `finally`; do not distribute transaction queries
+    across `pool.query` connections.
 - `src/restore-check.ts` is the CLI. It reads `DATABASE_URL`, refuses to run
   when neither `ENCRYPTION_KEY` nor `ENCRYPTION_KEYS` is set (so the dev
   fallback in `getEncryptionKey()` can never mask a missing key), prints a
@@ -223,8 +241,10 @@ backup") with a link to the runbook and the date.
 - **Switch over by pointing the app at a new database name.** That means
   changing the Vault `database` property, adding a pg_hba line and a CNPG
   `Database` in mctl-gitops, and waiting for ExternalSecret refresh. Dropped
-  as the default: it needs a gitops PR and a Vault write during an incident,
-  and it leaves the canonical name pointing at stale data. The rename keeps
+  as the default: it needs a persistent database/secret change and a Vault write
+  during an incident, and it leaves the canonical name pointing at stale data.
+  The chosen procedure still needs a reviewed temporary access-rule change for
+  verification; it does not claim to eliminate all GitOps changes. The rename keeps
   every external reference stable. It is listed in the runbook as the
   fallback if renaming is impossible, for example when sessions cannot be
   terminated.
@@ -260,8 +280,8 @@ backup") with a link to the runbook and the date.
   - *Restored key mismatch.* Restoring before a key rotation needs the old
     key. The check reports `failed` decryptions, and the runbook says to add
     the old key to `ENCRYPTION_KEYS` instead of deleting the rows.
-  - *ArgoCD self-heal re-scaling during the switch.* Pause auto-sync or use a
-    gitops `replicaCount: 0` commit. The runbook documents both.
+  - *ArgoCD self-heal re-scaling during the switch.* Suspend and verify auto-sync/self-heal and any parent reconciliation before
+    scaling down, then restore the recorded settings after verification or rollback.
 - **Disclosure:** the runbook and log name only resources already public in
   this repo or service metadata (`shared-pg`, `labs-mctl-alice`,
   `alice.mctl.ai`), and no security findings.

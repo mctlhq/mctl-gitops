@@ -80,9 +80,21 @@ spec:
               reachable.
 
         - alert: MctlAliceRestarting
+          # Collapse instance before the range function. When kube-state-metrics
+          # is rescheduled its pod IP, and so the instance label, changes, and
+          # every restart counter starts a new series at its current value.
+          # VictoriaMetrics' increase() counts a new series' first sample as
+          # growth, so a per-instance increase() read a pod's whole restart
+          # history as fresh restarts (MctlAliceRestarting, 2026-10-24 11:33,
+          # "6 restarts" with none). max by over the instances is one continuous
+          # series across the move.
           expr: |
             sum by (namespace, pod) (
-              increase(kube_pod_container_status_restarts_total{namespace="labs",pod=~"labs-mctl-alice-base-service-.*"}[30m])
+              increase(
+                (max by (namespace, pod, container) (
+                  kube_pod_container_status_restarts_total{namespace="labs",pod=~"labs-mctl-alice-base-service-.*"}
+                ))[30m:1m]
+              )
             ) >= 2
           for: 0m
           labels:
@@ -215,6 +227,10 @@ spec:
             and
             sum by (upstream) (increase(mctl_alice_upstream_requests_total{namespace="labs",outcome=~"timeout|error|5xx"}[15m])) >= 5
           for: 10m
+          # Calls come in bursts, so a broken upstream drops under the count
+          # floor between them: on 24.10, while yandex.ru/quasar was down,
+          # the rule resolved and fired again six times for one outage.
+          keep_firing_for: 30m
           labels:
             severity: warning
             service: mctl-alice

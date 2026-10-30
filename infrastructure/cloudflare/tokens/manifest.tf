@@ -34,6 +34,9 @@ locals {
   pg = {
     account_api_tokens_read       = "eb56a6953c034b9d97dd838155666f06"
     account_settings_read         = "c1fde68c7bcc44588cbb6ddbc16d6480"
+    ai_gateway_read               = "4dc8917b4b40457d88d3035d5dadb054"
+    ai_gateway_run                = "644535f4ed854494a59cb289d634b257"
+    ai_gateway_write              = "6c8a3737f07f46369c1ea1f22138daaf"
     access_apps_policies_read     = "7ea222f6d5064cfa89ea366d7c1fee89"
     access_apps_policies_write    = "1e13c5124ca64b72b1969a67e8829049"
     access_idps_read              = "9c35051ed89842839a637f81448d8c7c"
@@ -109,6 +112,7 @@ locals {
           local.pg.access_apps_policies_read,
           local.pg.access_idps_read,
           local.pg.account_api_tokens_read,
+          local.pg.ai_gateway_read,
           local.pg.email_routing_addresses_read,
           local.pg.r2_storage_read,
           local.pg.tunnel_read,
@@ -162,6 +166,7 @@ locals {
           local.pg.access_apps_policies_write,
           local.pg.access_orgs_idps_groups_write,
           local.pg.access_service_tokens_write,
+          local.pg.ai_gateway_write,
           local.pg.email_routing_addresses_write,
           local.pg.r2_storage_write,
           local.pg.tunnel_write,
@@ -244,6 +249,12 @@ locals {
       name     = "tempo-traces (observability-eval Tempo, bucket-scoped)"
       policies = [{ permission_groups = [local.pg.r2_bucket_item_write], resources = { "${local.r2_bucket}tempo-traces" = "*" } }]
     },
+    {
+      # Created 2026-10-24 with the rules.mctl.ai launch (gitops#2131); keys
+      # live in Vault teams/labs/mctl-rules.
+      name     = "mctl-rules-artifacts (labs mctl-rules app)"
+      policies = [{ permission_groups = [local.pg.r2_bucket_item_write], resources = { "${local.r2_bucket}mctl-rules-artifacts" = "*" } }]
+    },
 
     # --- Created from the dashboard's R2 page, all named "R2 Account Token" ---
     # Inventoried as found on 2026-10-16. Three of them can write every bucket
@@ -283,6 +294,15 @@ locals {
 
     # --- Other ---------------------------------------------------------------
 
+    # The cf-aig-authorization bearer of the `mctl-support` AI Gateway
+    # (../account/ai-gateway.tf, spike #2262). Run only: it can send requests
+    # through the gateway and nothing else. Its value is in Vault
+    # secret/platform/mctl-support/ai-gateway (property `token`) and nowhere
+    # else; in Phase A only the off-production harness reads it.
+    {
+      name     = "mctl-support-ai-gateway-run (Vault platform/mctl-support/ai-gateway)"
+      policies = [{ permission_groups = [local.pg.ai_gateway_run], resources = { (local.account) = "*" } }]
+    },
     {
       name = "pelican-catalog-worker CI deploy"
       policies = [{
