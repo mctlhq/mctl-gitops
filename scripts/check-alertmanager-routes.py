@@ -22,7 +22,11 @@ it with `amtool`:
        - no alert resolves to telegram more than once (two routes to the same
          receiver are two notification pipelines, i.e. two messages);
        - every severity=critical alert resolves to telegram, unless it is
-         muted outright (resolves to "null" only).
+         muted outright (resolves to "null" only);
+       - no alert resolves to both telegram and the plain mctl-agent
+         receiver: a paged alert reaches the agent through
+         mctl-agent-paged (?paged=1), which keeps the ticket but does not
+         post "no skill matched" a second time in the agent's chat.
 
 amtool is used from PATH only when it reports the pinned version; otherwise
 the pinned Alertmanager release below is downloaded once, its sha256
@@ -40,8 +44,9 @@ is visible only through CASES, so label-scoped combinations that matter need
 an explicit CASES entry.
 
 Run with --selftest to prove the checks still fail on a broken tree: it removes
-the critical route, the dedupe exclusion, the trailing mctl-agent route and an
-alerting-path route, and buries the trailing route, asserting each is caught.
+the critical route, the dedupe exclusion, the trailing mctl-agent route, an
+alerting-path route and a paged twin, and buries the trailing route, asserting
+each is caught.
 
 Run: python3 scripts/check-alertmanager-routes.py [--selftest] [--config FILE]
   --config FILE  test an already-rendered Alertmanager config instead of
@@ -87,7 +92,7 @@ CASES: list[tuple[str, dict[str, str], list[str]]] = [
     # The three cases #1771 asks for.
     ("critical upstream alert pages and still reaches the agent",
      {"alertname": "KubeAPIDown", "severity": "critical"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("warning agent-handled alert stays agent-only",
      {"alertname": "PodCrashLooping", "severity": "warning",
       "namespace": "labs"},
@@ -104,20 +109,29 @@ CASES: list[tuple[str, dict[str, str], list[str]]] = [
      ["null"]),
     ("KubeletDown pages",
      {"alertname": "KubeletDown", "severity": "critical"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("critical alert already on a telegram-only route pages once",
      {"alertname": "VaultBackupStale", "severity": "critical"},
      ["telegram"]),
     ("critical alert already on a continue:true telegram route pages once",
      {"alertname": "MctlApiDown", "severity": "critical"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
+    ("critical shared-pg alert pages once and keeps its ticket",
+     {"alertname": "SharedPgNoPrimary", "severity": "critical"},
+     ["telegram", "mctl-agent-paged"]),
+    ("warning shared-pg alert pages",
+     {"alertname": "SharedPgReplicationLagHigh", "severity": "warning"},
+     ["telegram", "mctl-agent-paged"]),
+    ("shared-pg backup alert pages",
+     {"alertname": "SharedPgBackupStale", "severity": "warning"},
+     ["telegram", "mctl-agent-paged"]),
     ("critical alert in the agent catch-all pages and keeps its ticket",
      {"alertname": "VaultSealed", "severity": "critical"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("warning platform ArgoCD app pages once",
      {"alertname": "ArgoCDApplicationDegraded", "severity": "warning",
       "project": "platform"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("warning tenant ArgoCD app stays agent-only",
      {"alertname": "ArgoCDApplicationDegraded", "severity": "warning",
       "project": "apps"},
@@ -125,18 +139,18 @@ CASES: list[tuple[str, dict[str, str], list[str]]] = [
     # The alerting path pages regardless of severity.
     ("critical Alertmanager alert pages once",
      {"alertname": "AlertmanagerClusterDown", "severity": "critical"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("warning Alertmanager alert pages",
      {"alertname": "AlertmanagerFailedToSendAlerts", "severity": "warning"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("vmalert -> Alertmanager delivery errors page",
      {"alertname": "AlertmanagerErrors", "severity": "warning",
       "alertgroup": "vmalert"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("vmalert rule evaluation errors page",
      {"alertname": "AlertingRulesError", "severity": "warning",
       "alertgroup": "vmalert"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("vmagent's same-named alert is not on the alerting path",
      {"alertname": "ConfigurationReloadFailure", "severity": "warning",
       "alertgroup": "vmagent"},
@@ -147,15 +161,15 @@ CASES: list[tuple[str, dict[str, str], list[str]]] = [
      ["mctl-agent"]),
     ("mctl-agent liveness pages",
      {"alertname": "MctlAgentMetricsAbsent", "severity": "warning"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("ServiceDown for vmalert pages once",
      {"alertname": "ServiceDown", "severity": "critical",
       "job": "vmalert-monitoring-victoria-metrics-k8s-stack"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("downgraded ServiceDown for vmalertmanager still pages",
      {"alertname": "ServiceDown", "severity": "warning",
       "job": "vmalertmanager-monitoring-victoria-metrics-k8s-stack"},
-     ["telegram", "mctl-agent"]),
+     ["telegram", "mctl-agent-paged"]),
     ("downgraded ServiceDown for vmsingle does not",
      {"alertname": "ServiceDown", "severity": "warning",
       "job": "vmsingle-monitoring-victoria-metrics-k8s-stack"},
@@ -299,6 +313,10 @@ def problems(amtool: str, config: dict, workdir: Path,
         name = f"{fname}:{labels['alertname']} (severity={labels.get('severity')})"
         if pages > 1:
             found.append(f"{name} pages Telegram {pages} times: {','.join(got)}")
+        if pages and "mctl-agent" in got:
+            found.append(f"{name} pages Telegram and also reaches the plain "
+                         f"mctl-agent receiver, so the agent posts it a second "
+                         f"time; route it to mctl-agent-paged: {','.join(got)}")
         if (labels.get("severity") == "critical" and pages == 0
                 and got != ["null"]):
             found.append(f"{name} is critical but does not page Telegram: "
@@ -314,9 +332,11 @@ def routes(config: dict) -> list[dict]:
     return config["route"]["routes"]
 
 
-def matcher_index(config: dict, needle: str) -> int:
+def matcher_index(config: dict, needle: str,
+                  receiver: str = "telegram") -> int:
     hits = [i for i, r in enumerate(routes(config))
-            if any(needle in m for m in r.get("matchers") or [])]
+            if r.get("receiver") == receiver
+            and any(needle in m for m in r.get("matchers") or [])]
     if len(hits) != 1:
         raise RuntimeError(f"selftest: {len(hits)} routes carry {needle!r}")
     return hits[0]
@@ -327,9 +347,12 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
     def drop_critical(cfg):
         del routes(cfg)[matcher_index(cfg, 'severity = "critical"')]
 
+    # The paged twins stop routing before the critical route, so the dedupe
+    # exclusion only binds once a twin is missing: drop both.
     def drop_dedupe(cfg):
         r = routes(cfg)[matcher_index(cfg, 'severity = "critical"')]
         r["matchers"] = [m for m in r["matchers"] if "!~" not in m]
+        drop_paged_twin(cfg)
 
     def drop_agent_tail(cfg):
         routes(cfg).pop()
@@ -340,6 +363,10 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
     def drop_meta(cfg):
         del routes(cfg)[matcher_index(cfg, "MctlAgentMetricsAbsent")]
 
+    def drop_paged_twin(cfg):
+        del routes(cfg)[matcher_index(cfg, 'alertname =~ "SharedPg.*"',
+                                      "mctl-agent-paged")]
+
     failed = 0
     base = problems(amtool, config, workdir)
     if base:
@@ -349,10 +376,12 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
     for name, mutate, expect in [
         ("critical route removed", drop_critical, "KubeAPIDown"),
         ("dedupe exclusion removed", drop_dedupe, "pages Telegram 2 times"),
-        ("trailing mctl-agent route removed", drop_agent_tail, "KubeAPIDown"),
+        ("trailing mctl-agent route removed", drop_agent_tail,
+         "last child route"),
         ("route appended after the mctl-agent tail", bury_agent_tail,
          "last child route"),
         ("alerting-path route removed", drop_meta, "MctlAgentMetricsAbsent"),
+        ("paged twin removed", drop_paged_twin, "plain mctl-agent receiver"),
     ]:
         cfg = copy.deepcopy(config)
         mutate(cfg)
@@ -362,7 +391,7 @@ def selftest(config: dict, amtool: str, workdir: Path) -> int:
                   f"{expect!r}. Got: {got}", file=sys.stderr)
             failed = 1
     if not failed:
-        print("check-alertmanager-routes.py self-test: all 5 mutations caught")
+        print("check-alertmanager-routes.py self-test: all 6 mutations caught")
     return failed
 
 

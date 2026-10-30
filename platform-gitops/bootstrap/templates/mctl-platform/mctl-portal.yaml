@@ -2,6 +2,31 @@
 # Consolidates Application, ExternalSecrets, and RBAC
 
 ---
+# Reuse the sending-only mctl.ai key already held in Vault for transactional
+# identity mail. Keep it in a separate Secret so SMTP-key drift cannot stop
+# the portal's existing OAuth/database Secret from reconciling.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: backstage-workspace-ready
+  namespace: backstage
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: backstage-workspace-ready
+    creationPolicy: Owner
+  data:
+    - secretKey: WORKSPACE_READY_RESEND_API_KEY
+      remoteRef:
+        key: platform/zitadel/smtp
+        property: password
+
+---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
@@ -253,10 +278,15 @@ spec:
           automountServiceAccountToken: true
 
         backstage:
+          # Env from backstage-secrets is read only at pod start, so a rotated
+          # Vault value needs a restart. Bump this to roll the pod after ESO
+          # has synced the new value.
+          podAnnotations:
+            mctl.ai/secret-rollout: "2026-10-24-mctl-rules-oidc"
           image:
             registry: ghcr.io
             repository: mctlhq/mctl-portal
-            tag: 4.20.1
+            tag: 4.31.0
             pullSecrets:
               - ghcr-credentials
           resources:
@@ -272,20 +302,39 @@ spec:
               memory: 768Mi
           extraEnvVarsSecrets:
             - backstage-secrets
+            - backstage-workspace-ready
             # ZITADEL client of the portal's OIDC provider (OIDC_ZITADEL_CLIENT_ID
-            # and _SECRET), filled by the zitadel-iac Job (portal.tf).
+            # and _SECRET), the portal UI client (AUTH_OIDC_*) and the
+            # customers organization and GitHub IdP ids, filled by the
+            # zitadel-iac Job (portal.tf).
             - backstage-oidc-zitadel
-          {{- if (default dict .Values.surfacePortalToken).enabled }}
-          # surface:portal token for plugins/work-items-backend
-          # (workItems.surfaceToken). optional: a Secret that has not synced
-          # yet leaves the plugin answering 503 instead of failing the pod.
+          {{- if or (default dict .Values.surfacePortalToken).enabled (default dict .Values.repoBinding).enabled }}
+          # One extraEnvVars list for every gated entry: two keys would leave
+          # only the last one (YAML last-wins).
           extraEnvVars:
+            {{- if (default dict .Values.surfacePortalToken).enabled }}
+            # surface:portal token for plugins/work-items-backend
+            # (workItems.surfaceToken). optional: a Secret that has not synced
+            # yet leaves the plugin answering 503 instead of failing the pod.
             - name: MCTL_SURFACE_PORTAL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: backstage-surface-portal
                   key: MCTL_SURFACE_PORTAL_TOKEN
                   optional: true
+            {{- end }}
+            {{- if (default dict .Values.repoBinding).enabled }}
+            # Token of the mctl-api-repo-binding externalAccess entry below.
+            # optional so the pod spec is valid before the Secret syncs; the
+            # backend needs the value at startup, so enable repoBinding only
+            # after the Vault write (bootstrap/values.yaml).
+            - name: MCTL_API_REPO_BINDING_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backstage-repo-binding
+                  key: MCTL_API_REPO_BINDING_TOKEN
+                  optional: true
+            {{- end }}
           {{- end }}
           startupProbe:
             httpGet:
@@ -340,6 +389,19 @@ spec:
                       subject: mctl-api
                     accessRestrictions:
                       - plugin: custom-domains
+                      - plugin: tenant-management
+                  {{- if (default dict .Values.repoBinding).enabled }}
+                  # mctl-api's repository-binding lookups (GET
+                  # /api/github-app-connect/repo-binding). Its own token and
+                  # subject, restricted to github-app-connect, so it grants
+                  # nothing the custom-domains token does and vice versa.
+                  - type: static
+                    options:
+                      token: ${MCTL_API_REPO_BINDING_TOKEN}
+                      subject: mctl-api-repo-binding
+                    accessRestrictions:
+                      - plugin: github-app-connect
+                  {{- end }}
               reading:
                 allow:
                   - host: app.mctl.ai
@@ -382,12 +444,44 @@ spec:
                 # prompt: auto, because the oidc authenticator defaults to
                 # prompt=none, which fails for anyone without a live ZITADEL
                 # session instead of showing the login.
+                # additionalScopes: the resource-owner scope makes ZITADEL
+                # name the user's organization in the token; the sign-in
+                # refuses any token without it (zitadelCustomers below).
                 oidc:
                   production:
                     metadataUrl: https://auth.mctl.ai/.well-known/openid-configuration
                     clientId: ${AUTH_OIDC_CLIENT_ID}
                     clientSecret: ${AUTH_OIDC_CLIENT_SECRET}
                     prompt: auto
+                    additionalScopes:
+                      - urn:zitadel:iam:user:resourceowner
+                # The customer entry, "Sign in with GitHub" (mctl-web#158):
+                # the same ZITADEL client as oidc, with its own callback
+                # (/api/auth/zitadel-customer/handler/frame, registered in
+                # portal.tf). The portal adds the customers organization and
+                # GitHub IdP scopes itself, from zitadelCustomers below, and
+                # registers the provider only with both ids. Never put those
+                # scopes on oidc: staff would be sent to the customers org.
+                zitadel-customer:
+                  production:
+                    metadataUrl: https://auth.mctl.ai/.well-known/openid-configuration
+                    clientId: ${AUTH_OIDC_CLIENT_ID}
+                    clientSecret: ${AUTH_OIDC_CLIENT_SECRET}
+                    prompt: auto
+                    additionalScopes:
+                      - urn:zitadel:iam:user:resourceowner
+            # The ZITADEL organization of self-service customers (mctl-web
+            # site onboarding, stage C2). The portal signs a customers token in
+            # as the User named by its principal, which mctl-api resolves
+            # (surface-principals/zitadel), and a staff token by its GitHub
+            # login. Unset, it accepts no ZITADEL sign-in: it could not tell
+            # one from the other. Written by the zitadel-iac Job (portal.tf).
+            # githubIdpId is the organization's GitHub IdP: with both ids the
+            # sign-in page offers customers "Sign in with GitHub"
+            # (mctl-web#158). Both ids are public; they reach the browser.
+            zitadelCustomers:
+              organizationId: ${AUTH_OIDC_CUSTOMERS_ORG_ID}
+              githubIdpId: ${AUTH_OIDC_CUSTOMERS_GITHUB_IDP_ID}
             integrations:
               github:
                 - host: github.com
@@ -403,6 +497,10 @@ spec:
               appId: ${GITHUB_APP_ID}
               privateKey: ${GITHUB_APP_PRIVATE_KEY}
               webhookSecret: ${GITHUB_WEBHOOK_SECRET}
+              {{- if (default dict .Values.repoBinding).enabled }}
+              # The only subject /repo-binding answers; unset, it refuses all.
+              bindingCheckSubject: mctl-api-repo-binding
+              {{- end }}
             vaultSecrets:
               endpoint: ${VAULT_ADDR}
               # Kubernetes auth (mctl-portal#53): the backstage ServiceAccount
@@ -435,6 +533,9 @@ spec:
                 pvcs: "2"
                 services: "5"
               maxTeamsPerTenant: 1
+              workspaceReady:
+                enabled: true
+                resendApiKey: ${WORKSPACE_READY_RESEND_API_KEY}
             oidcProvider:
               issuer: https://app.mctl.ai/api/oidc-provider
               # ZITADEL only (mctlhq/mctl-gitops#1500, phase 7): no GitHub
@@ -469,6 +570,9 @@ spec:
                   - tenant: labs
                     service: claude-remote
                     host: claude-remote.mctl.ai
+                  - tenant: admins
+                    service: umami
+                    host: stats.mctl.ai
             {{- if (default dict .Values.surfacePortalToken).enabled }}
             # plugins/work-items-backend (mctlhq/mctl-portal#126). This
             # appConfig is the only config the pod loads, so the repo's

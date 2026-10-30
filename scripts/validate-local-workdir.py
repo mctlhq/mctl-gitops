@@ -257,7 +257,10 @@ def validate_smoke_flow() -> None:
     )
 
     onboard = templates["run-onboard"]["script"]["source"]
-    assert 'value: "${PROVISION_DB}"' in onboard
+    # The child Workflow is built with jq (#1836): PROVISION_DB must reach
+    # provision_database as a --arg value, never spliced into the manifest.
+    assert '--arg db "${PROVISION_DB}"' in onboard
+    assert '{name: "provision_database", value: $db}' in onboard
     assert 'eq \\$node.displayName \\"provision-database\\"' in onboard
     assert 'eq \\$node.displayName \\"commit\\"' in onboard
     assert all(

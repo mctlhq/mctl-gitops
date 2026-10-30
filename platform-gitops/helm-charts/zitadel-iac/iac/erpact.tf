@@ -60,6 +60,13 @@ locals {
   }
 
   # Platform admins (admins.tf) listed for the sites by a `frappe` field.
+  # Grant-only opt-in preserves an existing SSO role without provisioning
+  # Frappe application users or assigning application-level roles.
+  erpact_frappe_grantee_admins = {
+    for key, a in local.platform_admins : key => a
+    if try(a.frappe, null) != null || try(a.frappe_access, false) == true
+  }
+
   erpact_frappe_admins = {
     for key, a in local.platform_admins : key => a if try(a.frappe, null) != null
   }
@@ -105,7 +112,7 @@ resource "zitadel_user_grant" "erpact_frappe_tenant" {
 }
 
 resource "zitadel_user_grant" "erpact_frappe_admin" {
-  for_each = local.erpact_frappe_admins
+  for_each = local.erpact_frappe_grantee_admins
 
   org_id           = local.mctl_org_id
   user_id          = zitadel_human_user.platform_admin[each.key].id

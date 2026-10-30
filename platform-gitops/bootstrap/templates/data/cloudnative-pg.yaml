@@ -10,7 +10,23 @@ spec:
   source:
     repoURL: https://cloudnative-pg.github.io/charts
     chart: cloudnative-pg
-    targetRevision: 0.23.0
+    # Upgraded one operator minor at a time (#2014): 1.29.1 -> 1.30.1 here.
+    # The charts repo follows only the newest operator minor (0.29.1 is
+    # 1.30.1; 0.28.3 was the last chart for 1.29).
+    # In-tree barmanObjectStore (still used by shared-pg) is deprecated and,
+    # per the 1.30.0 notes, removed in 1.31.0. 1.30 is therefore the last
+    # minor before the Barman Cloud Plugin migration must be finished: do not
+    # move to 1.31 until it is. 1.30 is tested upstream on Kubernetes
+    # 1.34-1.36 only; this cluster runs 1.33 (the chart still allows >=1.29,
+    # and the 1.30.1 CRDs pass a server-side dry run here). Do not
+    # retry that migration below 1.28.4 / 1.29.2 / 1.30.0: older operators
+    # deadlock the switchover when a WAL-archiver plugin is enabled on a
+    # running cluster (cnpg#10981, fixed by cnpg#11032; hit on 2026-10-21).
+    # From 1.27 the liveness probe shuts down a primary that can reach
+    # neither the API server nor any other instance. shared-pg's instances
+    # reach each other through allow-shared-pg-ingress (same-namespace pods,
+    # all ports), so an API server outage alone does not trip it.
+    targetRevision: 0.29.1
     helm:
       values: |
         crds:

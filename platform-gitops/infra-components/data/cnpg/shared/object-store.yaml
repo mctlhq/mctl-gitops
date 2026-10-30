@@ -1,0 +1,71 @@
+# Where shared-pg's WAL archive and base backups live, for the Barman Cloud
+# Plugin (#2014). Moved here from the Cluster's in-tree
+# spec.backup.barmanObjectStore, deprecated since CNPG 1.26; the settings are
+# carried over unchanged, so the plugin keeps writing to the same path and
+# server name (the Cluster name) and the R2 lineage continues: backups and
+# WAL written by the in-tree code before the switch stay restorable.
+#
+# Backups go OFF-cluster to R2: the previous in-cluster MinIO target died
+# together with the very cluster/PVCs it was protecting against. Same R2
+# account+bucket as vault-backup and vmbackup; endpoint matches backend.tf.
+# The old MinIO backups (s3://postgres-backups/shared-pg) were deleted with
+# MinIO itself; PITR reaches back only as far as the first R2 base backup.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: shared-pg-r2
+  annotations:
+    # Before the Cluster (wave 0) that names it in spec.plugins.
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  configuration:
+    destinationPath: s3://vault-backup/postgres-backups/shared-pg
+    endpointURL: https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
+    s3Credentials:
+      accessKeyId:
+        name: cnpg-backup-r2
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: cnpg-backup-r2
+        key: SECRET_ACCESS_KEY
+    wal:
+      compression: gzip
+      maxParallel: 2
+    data:
+      compression: gzip
+      # Ask for an immediate checkpoint instead of a spread one. Without
+      # this, barman calls pg_backup_start(..., fast=false), which waits for
+      # a checkpoint paced by checkpoint_completion_target — and that wait
+      # runs as an ordinary session, subject to the cluster-wide
+      # statement_timeout of 60s (cluster.yaml).
+      #
+      # On 2026-08-27 the restartpoint took 61.5s and the backup was
+      # cancelled 1.5s short of finishing. The seven green nights before it
+      # were luck, not margin: restartpoints that same night ranged from 15s
+      # to 50s, so whether the daily backup succeeds was effectively a coin
+      # weighted by how many buffers happened to be dirty. See #905.
+      #
+      # Cost is an I/O spike at 02:00 on the standby (target: prefer-standby),
+      # which serves no writes. That is much cheaper than nondeterministically
+      # skipping nightly backups of nine tenant databases.
+      immediateCheckpoint: true
+  # 14d: 3d left no margin to notice data loss that survives a weekend or
+  # a bad migration discovered late. WAL+base are gzip'd; 9 small tenant DBs
+  # fit comfortably in the R2 bucket at this window. With the plugin the
+  # retention policy belongs to the object store, not to the Cluster, and
+  # the instance sidecar enforces it (every 30 min by default).
+  retentionPolicy: "14d"
+  # The sidecar the plugin adds to every shared-pg instance. WAL archiving
+  # and the nightly base backup (barman-cloud-backup streaming and gzipping
+  # the whole data directory) now run in this container instead of inside
+  # the postgres container's 2Gi, so it gets its own budget. Without
+  # resources it would be the one unbounded container in a data-critical
+  # pod.
+  instanceSidecarConfiguration:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi

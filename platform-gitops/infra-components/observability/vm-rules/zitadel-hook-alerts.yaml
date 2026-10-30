@@ -1,0 +1,64 @@
+# Identity-hook decisions for customer sign-in, from mctl-api's
+# mctl_api_zitadel_hook_decisions_total (target, kind, reason).
+#
+# Login V2 shows one generic "MCTL access is by invitation" page for every
+# refused IdP intent, so the person cannot tell why, and the operator learns
+# the reason only from mctl-api logs. The first external invitee sat on that
+# page for a week (2026-10-20 to 10-22) before anyone looked. These alerts
+# bring the reason to a human; they are routed to telegram in
+# bootstrap/templates/observability/monitoring.yaml because the remedy
+# (re-approve, ask for a verified email, fix a dependency) is an operator's,
+# not something mctl-agent can patch in gitops.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-zitadel-hook-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: zitadel
+spec:
+  groups:
+    - name: mctl.zitadel.hook
+      interval: 60s
+      rules:
+        - alert: ZitadelHookSignInRefused
+          # Only the intent target: that is the GitHub sign-in itself. The
+          # create-user gate refuses API misuse, not people.
+          expr: |
+            sum by (reason) (
+              increase(mctl_api_zitadel_hook_decisions_total{namespace="mctl-api", target="intent", kind="refuse"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+            service: zitadel
+          annotations:
+            summary: "GitHub sign-in refused by the identity hook: {{ $labels.reason }}"
+            description: >-
+              A customer sign-in was refused in the last 15 minutes and the
+              person only saw the generic invitation page.
+              intent_customer_create_not_allowed: the GitHub id is not on an
+              unexpired approval (check mctl_list_signup_requests; the id is in
+              the mctl-api log line) or an uninvited visitor tried.
+              intent_no_verified_email: the GitHub account has no verified
+              primary email; ask the person to verify it and retry.
+              Other reasons: mctl-api docs/zitadel-identity-hook.md.
+              Logs: {app="mctl-api"} |= "zitadel hook" |= "refuse"
+        - alert: ZitadelHookFailing
+          expr: |
+            sum by (target, reason) (
+              increase(mctl_api_zitadel_hook_decisions_total{namespace="mctl-api", kind="failure"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+            service: zitadel
+          annotations:
+            summary: "Identity hook answered 503 on {{ $labels.target }}: {{ $labels.reason }}"
+            description: >-
+              ZITADEL got Errors.Execution.Failed from mctl-api, which blocks
+              the sign-in it was handling. intent_invitation_unreadable and
+              intent_deletion_unreadable point at the principal store
+              (shared-pg); intent_github_emails_unavailable at GitHub's API.
+              Logs: {app="mctl-api"} |= "zitadel hook" |= "failure"

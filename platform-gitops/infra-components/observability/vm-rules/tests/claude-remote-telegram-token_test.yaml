@@ -1,0 +1,184 @@
+# Unit tests for claude-remote-telegram-token.yaml.
+#
+# rule_files is resolved relative to this file. generated/ is produced by
+# scripts/check-vm-rules.sh, which extracts each VMRule's `.spec`.
+#
+# A last-check timestamp written as '0+60xN' equals time() at every step, i.e.
+# a loop that keeps checking. 20 days is 1728000 s, 5 days 432000 s.
+rule_files:
+  - generated/claude-remote-telegram-token.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: a healthy token with no renewal due raises nothing
+    input_series:
+      - series: 'mctl_claude_remote_telegram_token_expires_in_seconds{job="claude-remote-telegram-token"}'
+        values: '1728000-60x300'
+      - series: 'mctl_claude_remote_telegram_token_chain_expires_in_seconds{job="claude-remote-telegram-token"}'
+        values: '30000000-60x300'
+      - series: 'mctl_claude_remote_telegram_token_last_check_timestamp_seconds{job="claude-remote-telegram-token"}'
+        values: '0+60x300'
+      - series: 'mctl_claude_remote_telegram_token_served_expires_in_seconds{job="claude-remote-telegram-token"}'
+        values: '1728000-60x300'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: ClaudeRemoteTelegramTokenExpiring
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: ClaudeRemoteTelegramTokenRenewalFailing
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: ClaudeRemoteTelegramTokenChainEnding
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: ClaudeRemoteTelegramTokenCheckStale
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: ClaudeRemoteTelegramTokenCheckAbsent
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: ClaudeRemoteTelegramTokenSessionExpiring
+        exp_alerts: []
+
+  - interval: 1m
+    name: a token under seven days fires Expiring
+    input_series:
+      - series: 'mctl_claude_remote_telegram_token_expires_in_seconds{job="claude-remote-telegram-token"}'
+        values: '432000-60x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ClaudeRemoteTelegramTokenExpiring
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ClaudeRemoteTelegramTokenExpiring
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: claude-remote
+              job: claude-remote-telegram-token
+            exp_annotations:
+              summary: "claude-remote Telegram token expires in under 7 days"
+              description: "The worker token claude-remote uses to hydrate Telegram events has 4d 23h 45m 0s left. When it expires every Telegram event is acked failed. Mint a new read-only token with mint_worker_token on tg-preview (account 210408407, scopes telegram:dialogs:read and telegram:messages:read) and write it to Vault platform/mctl-claude-remote/telegram-mcp (worker-token). The device picks it up by itself within an hour."
+
+  - interval: 1m
+    name: one failed renewal followed by a success stays quiet
+    input_series:
+      - series: 'mctl_claude_remote_telegram_token_renew_ok{job="claude-remote-telegram-token"}'
+        values: '0x60 1x200'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: ClaudeRemoteTelegramTokenRenewalFailing
+        exp_alerts: []
+
+  - interval: 1m
+    name: renewal failing for two hours fires RenewalFailing
+    input_series:
+      - series: 'mctl_claude_remote_telegram_token_renew_ok{job="claude-remote-telegram-token"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: ClaudeRemoteTelegramTokenRenewalFailing
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: ClaudeRemoteTelegramTokenRenewalFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: claude-remote
+              job: claude-remote-telegram-token
+            exp_annotations:
+              summary: "claude-remote cannot renew its Telegram token"
+              description: "claude-remote tried to renew its Telegram worker token and failed on every attempt for two hours. It still runs on the current token, which expires in about ten days. The reason is in the pod log in labs (lines starting with [telegram-token]); the usual ones are a revoked jti and an exhausted one-year chain."
+
+  - interval: 1m
+    name: a chain under fourteen days fires ChainEnding
+    input_series:
+      - series: 'mctl_claude_remote_telegram_token_chain_expires_in_seconds{job="claude-remote-telegram-token"}'
+        values: '1000000-60x60'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ClaudeRemoteTelegramTokenChainEnding
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: claude-remote
+              job: claude-remote-telegram-token
+            exp_annotations:
+              summary: "claude-remote Telegram token chain ends in under 14 days"
+              description: "The renewal chain of claude-remote's Telegram worker token ends in 11d 13h 31m 40s; after that the server refuses to renew it. Mint a new read-only token with mint_worker_token on tg-preview and write it to Vault platform/mctl-claude-remote/telegram-mcp (worker-token)."
+
+  - interval: 1m
+    name: a loop that stopped checking fires Stale
+    input_series:
+      # Checked once at t=0, then the value never moves.
+      - series: 'mctl_claude_remote_telegram_token_last_check_timestamp_seconds{job="claude-remote-telegram-token"}'
+        values: '0x300'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ClaudeRemoteTelegramTokenCheckStale
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: ClaudeRemoteTelegramTokenCheckStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: claude-remote
+              job: claude-remote-telegram-token
+            exp_annotations:
+              summary: "claude-remote Telegram token check has not run for 3 hours"
+              description: "The Telegram token renewal loop in labs/claude-remote has not pushed metrics for over three hours. Check that the pod is running and look for [telegram-token] lines in its log."
+
+  - interval: 1m
+    name: no metrics at all fires Absent
+    input_series:
+      - series: 'unrelated_metric'
+        values: '1x300'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ClaudeRemoteTelegramTokenCheckAbsent
+        exp_alerts: []
+      - eval_time: 3h10m
+        alertname: ClaudeRemoteTelegramTokenCheckAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: claude-remote
+            exp_annotations:
+              summary: "claude-remote Telegram token metrics absent for 3 hours"
+              description: "No mctl_claude_remote_telegram_token_* samples for three hours. The renewal loop never started (MCTL_EVENTS_TELEGRAM_TOKEN_RENEW, MCTL_EVENTS_PUSHGATEWAY_URL, image older than 0.14.0) or the Pushgateway group was deleted."
+
+  - interval: 1m
+    name: a session still on a token under one day fires SessionExpiring
+    input_series:
+      - series: 'mctl_claude_remote_telegram_token_served_expires_in_seconds{job="claude-remote-telegram-token"}'
+        values: '87000-60x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ClaudeRemoteTelegramTokenSessionExpiring
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ClaudeRemoteTelegramTokenSessionExpiring
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: claude-remote
+              job: claude-remote-telegram-token
+            exp_annotations:
+              summary: "claude-remote session holds a Telegram token expiring within a day"
+              description: "The claude-remote session is still connected with a Telegram worker token that expires in 23h 30m 0s, although a relaunch should already have moved it to a newer one. Restart deploy/labs-claude-remote-base-service in labs so the session reconnects."
+
+  - interval: 1m
+    name: a rollout whose first push lands after a few minutes stays quiet
+    input_series:
+      # No samples for the first five minutes, then hourly-style checks.
+      - series: 'mctl_claude_remote_telegram_token_last_check_timestamp_seconds{job="claude-remote-telegram-token"}'
+        values: '_x5 300+60x300'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: ClaudeRemoteTelegramTokenCheckAbsent
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: ClaudeRemoteTelegramTokenCheckAbsent
+        exp_alerts: []

@@ -1,0 +1,52 @@
+{{- if (default dict .Values.repoBinding).enabled }}
+# Static token mctl-api uses to ask the portal's github-app-connect plugin
+# which repositories are connected to a team (GET
+# /api/github-app-connect/repo-binding). mctl-api sends it as a Bearer from
+# BACKSTAGE_GITHUB_APP_CONNECT_TOKEN; Backstage matches it against the
+# externalAccess entry with subject mctl-api-repo-binding, which is restricted
+# to the github-app-connect plugin (mctl-portal.yaml). Both sides read the same
+# Vault property. Rendered only when repoBinding.enabled is true in
+# bootstrap/values.yaml.
+#
+# Own ExternalSecrets and own file for the same reasons as
+# mctl-api-surface-portal.yaml: a missing Vault property disables only this
+# token, and a file that leads with a template directive is listed in
+# .github/workflows/yamllint.yml's ignore.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-api-repo-binding
+  namespace: mctl-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-api-repo-binding
+    creationPolicy: Owner
+  data:
+    - secretKey: BACKSTAGE_GITHUB_APP_CONNECT_TOKEN
+      remoteRef:
+        key: platform/mctl-portal/repo-binding-token
+        property: token
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: backstage-repo-binding
+  namespace: backstage
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: backstage-repo-binding
+    creationPolicy: Owner
+  data:
+    - secretKey: MCTL_API_REPO_BINDING_TOKEN
+      remoteRef:
+        key: platform/mctl-portal/repo-binding-token
+        property: token
+{{- end }}

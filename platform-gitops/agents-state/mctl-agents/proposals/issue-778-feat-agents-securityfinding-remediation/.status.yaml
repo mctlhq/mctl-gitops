@@ -1,0 +1,53 @@
+status: rejected
+updated_at: '2026-10-26T07:41:26Z'
+updated_by: mashkovd
+execution:
+  context_id: ex-532ee32a7f862970
+  trace_id: 2ad3f8ff8109f4271bb726edfb23acfa
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 778
+  url: https://github.com/mctlhq/mctl-agents/issues/778
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-76ecd0a75ef1c699
+  content_hash: sha256:76ecd0a75ef1c6996ea482bc2ee92520c9880131a5467506109294547a43d744
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-26T01:27:56Z'
+  content_digest: sha256:7ebaa8a782bda99067970c1fbcd56cab2cc63cbb529301e98e6865e08a156acb
+  digest_binding: reviewed
+  approval_ref: aar_4042173adaf34224acc631e22858a2c6
+attempt:
+  id: bf047a599b32ff02523b68d35ec936f423cd63d51b68b5ded60a6f6763aa588a
+  started_at: '2026-10-26T01:29:53Z'
+  expires_at: '2026-10-26T03:39:53Z'
+  finished_at: '2026-10-26T01:30:10Z'
+failure:
+  code: no-commits
+  stage: agent
+  message: implementer produced no commits
+notes: 'superseded by mctlhq/mctl-agents#809: the implementer stopped at the #774 dependency gate (no commits); a DevLoop past implement cannot restart (mctl-agents#748), so the scope moved to a new issue with the gate satisfied (mctl-api 4.124.0)'
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-0101fd24
+  authoritative:
+    completion_id: ic-31ef2426e91756c5
+    content_hash: sha256:31ef2426e91756c58c2f431c99ff9197e182b1453eeeca96e79d6290daa16988
+    proposal_digest: sha256:7ebaa8a782bda99067970c1fbcd56cab2cc63cbb529301e98e6865e08a156acb
+    attempt_id: bf047a599b32ff02523b68d35ec936f423cd63d51b68b5ded60a6f6763aa588a
+    step: primary
+    outcome: deterministic_failure
+    stop_reason: no_commits
+    head_sha: null
+    verification:
+      required_passed: 0
+      required_total: 4
+      optional_total: 1
+  primary_observed: true

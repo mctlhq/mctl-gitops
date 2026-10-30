@@ -73,6 +73,10 @@ spec:
           # Verified with promtool against 5 errors in 155 calls (3.2%):
           # the old expression returns 1, the new one 0.032.
           #
+          # The denominator is status=~"ok|error" (mctl-telegram#757):
+          # caller_error calls are requests refused as the caller's mistake,
+          # which say nothing about the service's health either way.
+          #
           # Aggregating away `tool` (not by tool) is deliberate: the
           # threshold is about the service's overall health, and a single
           # rarely-used tool failing twice should not read as "10% of tool
@@ -85,7 +89,7 @@ spec:
             )
             /
             sum without(tool, status) (
-              rate(mctl_tool_invocations_total[15m])
+              rate(mctl_tool_invocations_total{status=~"ok|error"}[15m])
             ) > 0.1
           for: 5m
           labels:
@@ -96,6 +100,59 @@ spec:
               More than 10% of MCP tool invocations are returning errors over
               the last 15 minutes. Check mctl-telegram logs for the specific
               tools failing (tool label on mctl_tool_invocations_total).
+
+        - alert: MctlTelegramCallerErrorShareHigh
+          # HighToolErrorRate and the SLO read status=~"ok|error" only, so a
+          # call classified caller_error (mctl-telegram#757) leaves both sides
+          # of their ratios. That has one blind spot: a server-side regression
+          # that turns EVERY call into a Telegram 400 (lost access hashes
+          # answering PEER_ID_INVALID everywhere, say) empties the SLI instead
+          # of burning it, and both stay quiet. This alert watches the share
+          # itself (mctl-telegram#759).
+          #
+          # In normal traffic caller errors are about 1% of calls, so half of
+          # them is far outside the noise. The other cause it catches is one
+          # client looping on a bad argument, which is worth a look too.
+          #
+          # The [1h] window and the >= 20 calls floor keep a quiet hour with a
+          # couple of bad calls (2 of 2 = 100%) from firing it. The
+          # denominator lists all three status values, the allow-list the
+          # SLO rules treat as a contract, so a status added later cannot
+          # silently dilute the share.
+          #
+          # Aggregated by (job, namespace) like the SLO recording rules: a
+          # share of the SERVICE's calls. instance is the pod IP, so keeping
+          # it would split the share and the floor per replica, and a rollout
+          # inside the hour would split it again; three pods each serving 15
+          # refused calls would never reach the floor. (Preview exports no
+          # mctl_tool_* series at all: its VMServiceScrape keeps only
+          # mctl_agent_.*.)
+          expr: |
+            (
+              sum by (job, namespace) (
+                increase(mctl_tool_invocations_total{status="caller_error"}[1h])
+              )
+              /
+              sum by (job, namespace) (
+                increase(mctl_tool_invocations_total{status=~"ok|error|caller_error"}[1h])
+              )
+            ) > 0.5
+            and
+            sum by (job, namespace) (
+              increase(mctl_tool_invocations_total{status=~"ok|error|caller_error"}[1h])
+            ) >= 20
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mctl-telegram: more than half of tool calls are caller errors"
+            description: >-
+              Over the last hour more than 50% of MCP tool invocations were
+              classified caller_error, which the availability SLI and
+              HighToolErrorRate do not count. Either one client is looping on
+              a bad request, or a server-side regression makes Telegram refuse
+              every call and the SLI cannot see it.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramcallererrorsharehigh"
 
         - alert: HighToolLatency
           expr: histogram_quantile(0.95, rate(mctl_tool_invocation_duration_seconds_bucket[5m])) > 5

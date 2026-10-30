@@ -30,6 +30,44 @@ spec:
     secondsAfterCompletion: 3600
   entrypoint: preview-pipeline
   serviceAccountName: argo-workflow-sa
+  # Pod Security "restricted": this workflow runs in the tenant namespace
+  # (mctl-api operations.WorkflowNamespace), which is moving from
+  # enforce=baseline to restricted (handoff audit, block B step 3). The pod
+  # securityContext covers every container; container-level fields are not
+  # inherited from it, so podSpecPatch adds them to Argo's own init and wait
+  # containers (argoexec runs as root by default) and to main. HOME=/tmp
+  # because python, alpine/k8s and alpine/git have no passwd entry for uid
+  # 1000; steps that use ssh run mctl-workflow-tools, which has one.
+  # Templates reached through templateRef (tpl-*, the completion hook) run
+  # under this spec too.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  podSpecPatch: |
+    initContainers:
+      - name: init
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+    containers:
+      - name: wait
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      - name: main
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+          - name: HOME
+            value: /tmp
 
   arguments:
     parameters:
@@ -48,7 +86,11 @@ spec:
       - name: dockerfile_path
         default: "Dockerfile"
       - name: port
-        default: ""
+        # `value`, not `default`: Argo rejects a workflow whose argument has
+        # only an empty default and was not submitted ("spec.arguments.port.value
+        # or spec.arguments.port.valueFrom is required"), and mctl-api never
+        # sends port, so every preview-deploy failed validation before any pod.
+        value: ""
         # Container port override. Leave empty to use the value from the service values.yaml.
         # Use when the image being previewed listens on a different port than production.
 
@@ -56,8 +98,25 @@ spec:
     - name: preview-pipeline
       dag:
         tasks:
+          # The component name is the image name: the build pushes
+          # ghcr.io/<org>/<component_name>. Checked before anything is built.
+          - name: image-name
+            templateRef:
+              name: tpl-validate-tenant
+              clusterScope: true
+              template: image-name
+            arguments:
+              parameters:
+                - name: team_name
+                  value: "{{workflow.parameters.team_name}}"
+                - name: component_name
+                  value: "{{workflow.parameters.component_name}}"
+                - name: git_ref
+                  value: "{{workflow.parameters.git_ref}}"
+
           - name: build-image
             template: trigger-github-build
+            dependencies: [image-name]
             when: "\"{{workflow.parameters.git_ref}}\" != \"\""
             arguments:
               parameters:
@@ -76,7 +135,10 @@ spec:
 
           - name: deploy-preview
             template: deploy
-            dependencies: [build-image]
+            # `dependencies` (not `depends`) treats a Skipped build — no
+            # git_ref, deploying an existing image_tag — as satisfied, as it
+            # did before this task existed; a Failed image-name stops it.
+            dependencies: [image-name, build-image]
             arguments:
               parameters:
                 - name: team_name
@@ -253,7 +315,7 @@ spec:
             valueFrom:
               path: /tmp/preview_url
       script:
-        image: alpine/helm:3.16.4
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         env:
           - name: PARAM_TEAM_NAME
@@ -306,8 +368,7 @@ spec:
           # (claude P1 + agy finding 2 on gitops#993.)
           #
           # Neither carries a Pattern in the operations registry, so the
-          # grammar is asserted here. TTL_HOURS is deliberately not
-          # guarded: it reaches only the closing echo, no interpreter.
+          # grammar is asserted here.
           case "$TAG" in
             "" | *[!A-Za-z0-9._-]* )
               echo "❌ image_tag must match the OCI tag grammar [A-Za-z0-9._-]; got: ${TAG}" >&2
@@ -321,6 +382,20 @@ spec:
               exit 1
               ;;
           esac
+          # TTL_HOURS becomes the release's expiry, which preview-reaper
+          # enforces, so it is arithmetic input now and checked like PORT.
+          # Same grammar as the registry pattern ^[0-9]{1,4}$, asserted
+          # here rather than trusted, like TAG and PORT above. Leading zeros
+          # are stripped because sh reads 08 as a bad octal number.
+          case "$TTL_HOURS" in
+            "" | *[!0-9]* | ?????* )
+              echo "❌ ttl_hours must be 1-4 decimal digits; got: ${TTL_HOURS}" >&2
+              exit 1
+              ;;
+          esac
+          TTL_HOURS=$(echo "$TTL_HOURS" | sed 's/^0*//')
+          TTL_HOURS="${TTL_HOURS:-0}"
+          EXPIRES_AT=$(( $(date +%s) + TTL_HOURS * 3600 ))
 
           PREVIEW_ID=$(echo "${ARGO_WORKFLOW_NAME}" | tr -cd 'a-z0-9' | tail -c 6)
           RELEASE="preview-${COMPONENT}-${PREVIEW_ID}"
@@ -329,7 +404,6 @@ spec:
           echo "${PREVIEW_ID}" > /tmp/preview_id
           echo "https://${HOST}" > /tmp/preview_url
 
-          apk add --no-cache git openssh-client python3 py3-yaml > /dev/null 2>&1
           mkdir -p ~/.ssh
           cp /secrets/deploy-key/ssh-privatekey ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -401,6 +475,7 @@ spec:
             ${PORT:+--set service.port="${PORT}"} \
             --set-string "podLabels.mctl\\.ai/preview=true" \
             --set-string "podLabels.mctl\\.ai/preview-id=${PREVIEW_ID}" \
+            --labels "mctl.ai/expires-at=${EXPIRES_AT}" \
             --wait --timeout=5m
 
           echo "Preview deployed: https://${HOST} (release: ${RELEASE}, namespace: ${NS}, ttl: ${TTL_HOURS}h)"

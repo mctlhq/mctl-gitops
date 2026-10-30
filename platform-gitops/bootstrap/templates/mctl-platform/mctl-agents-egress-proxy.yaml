@@ -1,0 +1,59 @@
+# Egress proxy for mctl-agents step pods (mctlhq/mctl-gitops#2159, G1 of
+# mctlhq/mctl-agents#807). STAGE A: observe only.
+#
+# The cluster CNI (flannel + kube-router) matches NetworkPolicy by IP only, so
+# an "approved providers" allowlist by hostname has to live in a forward proxy.
+# In stage A the proxy forwards every request and logs the destination host;
+# nothing is denied and no agent NetworkPolicy exists yet. Stage B replaces
+# the allow-all ACL with a dstdomain allowlist, stage C adds the egress
+# NetworkPolicy in argo-workflows. See docs/runbooks/mctl-agents-egress.md.
+#
+# root-app renders only two objects here: the cluster-scoped Namespace and
+# the Application in `argocd`. Everything namespaced inside
+# `mctl-agents-egress` (ConfigMap, Deployment, PDB, Service, NetworkPolicies)
+# lives in the Application's own path, the same split as
+# observability/tracing.yaml. Argo CD validates every task of a sync against
+# the LIVE AppProject before any wave runs, so a root-app sync that both adds
+# `mctl-agents-egress` to project `default` and creates the first resource
+# inside it loops on "one or more synchronization tasks are not valid"
+# (gitops#1925). With this split root-app's own tasks are all valid against
+# the old project, the project update lands in the same sync, and the
+# Application syncs once its destination is permitted.
+#
+# Nothing routes through the proxy until the agent CWFTs set HTTP(S)_PROXY,
+# which is a separate change merged only after this Application is Healthy.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mctl-agents-egress
+  labels:
+    mctl.ai/purpose: agent-egress-proxy
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mctl-agents-egress-proxy
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mctlhq/mctl-gitops.git
+    targetRevision: main
+    path: platform-gitops/infra-components/mctl-platform/mctl-agents-egress-proxy
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mctl-agents-egress
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m

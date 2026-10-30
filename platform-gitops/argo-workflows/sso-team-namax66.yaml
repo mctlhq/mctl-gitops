@@ -1,0 +1,18 @@
+# SSO RBAC: team namax66 — scoped to team namespace only
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sso-team-namax66
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/rbac-rule: "'namax66' in groups"
+    workflows.argoproj.io/rbac-rule-precedence: "107"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sso-team-namax66.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: sso-team-namax66
+type: kubernetes.io/service-account-token

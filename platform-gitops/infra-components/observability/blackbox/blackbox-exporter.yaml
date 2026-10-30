@@ -134,7 +134,8 @@ spec:
           resources:
             requests:
               cpu: 10m
-              memory: 32Mi
+              # 2026-10-20: 7d peak working set 54Mi.
+              memory: 64Mi
             limits:
               cpu: 100m
               memory: 128Mi

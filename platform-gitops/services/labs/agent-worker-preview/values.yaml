@@ -7,10 +7,21 @@
 # not the previous bounded-test-window pattern. Draft-only — every propose
 # still requires the owner's manual /mctl approve. AGENT_MAX_BUDGET_USD below
 # caps spend per job on this worker's own dedicated OAuth credential.
-replicaCount: 1
+#
+# 2026-10-29: scaled to 0. The same agent-worker binary now runs off-cluster
+# on the owner's always-on host, billed to a Console API key instead of a
+# subscription OAuth token, with the operator events session on that host
+# handling the routed exceptions (EVENTS_OPERATOR_ROUTING stays "true" in
+# mctl-telegram-preview: a job nobody claims within 5m is still routed).
+# Set back to 1 to roll back; the deployment and its API token are kept.
+# The worker's Claude OAuth token was revoked and removed from Vault the same
+# day, so a rollback first needs a new token: write it to
+# secret/platform/labs/agent-worker-preview/anthropic (CLAUDE_CODE_OAUTH_TOKEN)
+# and restore that ExternalSecret and envFrom entry from git history.
+replicaCount: 0
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
-  tag: "main-9c35416"
+  tag: "main-7fe8f31"
   # tag is auto-bumped by mctl-telegram's preview-deploy.yml on every push to
   # main, same as mctl-telegram-preview — do not hand-pin it. It was pinned by
   # hand until 2026-08-03 only because that workflow dispatched a build for the
@@ -38,7 +49,12 @@ resources:
     # it, since 500m demonstrably still throttled sometimes. Do not trim
     # this again from a steady-state p95/max sample alone.
     cpu: 1000m
-    memory: 256Mi
+    # RAISED 2026-10-25 from 256Mi: with AGENT_WORKER_CONCURRENCY=2 two
+    # `claude` CLI processes share this limit, and the worker was OOMKilled
+    # 10 times on 2026-10-24 00:12-01:13Z (peak 217Mi at concurrency 1
+    # before). Each kill lost the claimed jobs: 4 dead letters and 4
+    # unclaimed routes (mctlhq/mctl-agents#760). Request stays 128Mi.
+    memory: 512Mi
     ephemeral-storage: 1Gi
 automountServiceAccountToken: false
 podSecurityContext:
@@ -72,10 +88,13 @@ probes:
     initialDelaySeconds: 60
     periodSeconds: 15
 # AGENT_API_TOKEN is the aud=agent worker credential minted via
-# POST /api/agent/token, scoped to a single Telegram account. It is bound to
-# operator 210408407, and DO NOT "fix" that by reminting it for 8745115872
-# (@mctlhq) — an earlier version of this comment instructed exactly that, and
-# following it breaks the soak.
+# POST /api/agent/token, scoped to a single Telegram account. Its normal
+# binding is operator 210408407; do not remint it for 8745115872 (@mctlhq)
+# as a permanent "fix" — an earlier version of this comment instructed exactly
+# that, and following it breaks the soak.
+#
+# Exception history: rebound to 8745115872 on 2026-10-27 for the
+# mctl-agents#760 coalescing soak (gitops#2201) and rolled back the same day.
 #
 # Tried on 2026-08-27 and reverted the same evening. Job claiming is scoped to
 # the token's user (agentapi.handleClaimJobs -> Queue.Claim(ctx, id.UserID,
@@ -110,6 +129,10 @@ probes:
 env:
   AGENT_API_BASE_URL: "http://labs-mctl-telegram-preview-base-service:8080/api/agent/v1"
   AGENT_MAX_BUDGET_USD: "0.50"
+  # Jobs of different conversations run in parallel, up to this many
+  # (mctlhq/mctl-telegram#872, owner OK 2026-10-24; 1..10, default 1). One
+  # conversation is still served strictly in order.
+  AGENT_WORKER_CONCURRENCY: "2"
   # AGENT_CREDENTIAL_DOMAIN_ID names, in non-secret form, the quota domain the
   # worker's `claude` CLI bills against — the Vault path of the dedicated
   # Claude Code OAuth credential below, NOT the credential. It is exported as
@@ -139,8 +162,6 @@ env:
 envFrom:
   - secretRef:
       name: labs-agent-worker-preview-api
-  - secretRef:
-      name: labs-agent-worker-preview-anthropic
 extraVolumes:
   # Claude Code needs a writable HOME for transient client state, and the
   # worker writes a per-job MCP config under /tmp. Both stay ephemeral.
@@ -166,22 +187,4 @@ extraExternalSecrets:
       - secretKey: AGENT_API_TOKEN
         remoteKey: secret/data/platform/labs/agent-worker-preview/api
         property: AGENT_API_TOKEN
-  # Dedicated Claude Code OAuth token for this worker's `claude -p` invocations
-  # — deliberately NOT the CLAUDE_CODE_OAUTH_TOKEN/_2 secrets shared by
-  # claude-review.yml across the org, which this same session watched exhaust
-  # its monthly quota and stall the interactive session + every repo's PR
-  # review gate simultaneously (see project_communication_agent memory's
-  # "production quota domain" note). internal/agentworker/claudeinvoker.go's
-  # minimalEnv() passes any CLAUDE_*-prefixed env var through to the spawned
-  # `claude` process unmodified, so this is picked up with no other wiring.
-  labs-agent-worker-preview-anthropic:
-    # Platform-scoped path — cluster store required; tenant-store only resolves this tenant's prefix.
-    store: vault-backend
-    storeKind: ClusterSecretStore
-    refreshInterval: 1h
-    targetSecret: labs-agent-worker-preview-anthropic
-    data:
-      - secretKey: CLAUDE_CODE_OAUTH_TOKEN
-        remoteKey: secret/data/platform/labs/agent-worker-preview/anthropic
-        property: CLAUDE_CODE_OAUTH_TOKEN
 extraContainers: []

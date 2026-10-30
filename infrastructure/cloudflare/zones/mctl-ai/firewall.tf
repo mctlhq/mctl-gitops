@@ -45,6 +45,21 @@ resource "cloudflare_ruleset" "firewall_custom" {
       expression  = "(http.host eq \"mctl.ai\" and http.request.uri.path.extension in {\"7z\" \"bak\" \"bz2\" \"dump\" \"gz\" \"rar\" \"sql\" \"tar\" \"tgz\" \"xz\" \"zip\" \"zst\"})"
       ref         = "block_archive_probes_apex"
     },
+    # The scanner that worked through *.mctl.me on 2026-10-22 (see
+    # ../../modules/spoofed-crawlers) is redirected here by the worker, label
+    # for label, so this zone gets the same rule. Verified crawlers are not
+    # affected: the check is on Cloudflare's verification, not on the name.
+    {
+      action      = "block"
+      description = "mctl.ai: ${module.spoofed_crawlers.description}"
+      enabled     = true
+      expression  = module.spoofed_crawlers.expression
+      ref         = "block_spoofed_crawlers"
+    },
   ]
   zone_id = local.zone_id
+}
+
+module "spoofed_crawlers" {
+  source = "../../modules/spoofed-crawlers"
 }

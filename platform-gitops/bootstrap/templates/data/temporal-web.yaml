@@ -24,6 +24,15 @@ spec:
           tag: "2.49.1"
         service:
           port: 8080
+        # Non-root on a read-only root filesystem (base-service hardening,
+        # step 2). The upstream image's USER is the name `temporal`, which
+        # kubelet cannot check for runAsNonRoot, so its ids are pinned.
+        podSecurityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+        containerSecurityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
         env:
           TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
           TEMPORAL_UI_PORT: "8080"

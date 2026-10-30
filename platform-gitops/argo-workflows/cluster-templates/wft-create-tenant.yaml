@@ -47,6 +47,9 @@ spec:
         value: ""
       - name: description
         value: ""
+      - name: workspace_profile
+        value: "standard"
+        enum: [standard, starter]
       - name: quota_cpu_req
         value: "1"
       - name: quota_cpu_lim
@@ -58,11 +61,27 @@ spec:
       - name: quota_pods
         value: "5"
       - name: allow_internet_egress
-        value: "false"
+        value: "true"
       - name: contact_email
         value: ""
       - name: creator_user_id
         value: ""
+      - name: creator_principal_id
+        # The creator's canonical principal (prn_ + 26 Crockford base32),
+        # written as the owner entry's principalId: principal-mode tenant
+        # authorization (mctlhq/mctl-api#377) grants by that key alone, so
+        # an owner entry without it would lock the creator out of their own
+        # tenant. Set by mctl-api from the authenticated session.
+        value: ""
+      - name: creator_catalog_key
+        # What the portal names the creator's catalog User by: `login`
+        # (the GitHub login, as for every member so far) or `principal`
+        # (creator_principal_id). The portal sends `principal` for a
+        # self-service customer account, whose GitHub login is display only
+        # and may later belong to someone else (mctl-web
+        # docs/plans/site-onboarding-review.md, stage C2). Written to the
+        # owner entry as catalogKey only when `principal`.
+        value: "login"
       - name: reprovision
         value: "false"
         # "true": re-run provisioning for a tenant that already exists
@@ -133,6 +152,8 @@ spec:
                   value: "{{workflow.parameters.display_name}}"
                 - name: description
                   value: "{{workflow.parameters.description}}"
+                - name: workspace_profile
+                  value: "{{workflow.parameters.workspace_profile}}"
                 - name: quota_cpu_req
                   value: "{{workflow.parameters.quota_cpu_req}}"
                 - name: quota_cpu_lim
@@ -149,6 +170,10 @@ spec:
                   value: "{{workflow.parameters.contact_email}}"
                 - name: creator_user_id
                   value: "{{workflow.parameters.creator_user_id}}"
+                - name: creator_principal_id
+                  value: "{{workflow.parameters.creator_principal_id}}"
+                - name: creator_catalog_key
+                  value: "{{workflow.parameters.creator_catalog_key}}"
                 - name: reprovision
                   value: "{{workflow.parameters.reprovision}}"
 
@@ -201,7 +226,7 @@ spec:
           fi
 
           # BEGIN tenant-ns-guard
-          # Shared by create-tenant, delete-tenant-safe and delete-tenant. Argo
+          # Shared by create-tenant and delete-tenant-safe. Argo
           # templates cannot share a script file, so the copies are kept
           # byte-identical by tests/test_wft_create_tenant_existing.py.
           #
@@ -222,12 +247,15 @@ spec:
           # reserved because the tenant chart's argocd Role and RoleBinding,
           # argo-workflow-argocd-<tenant>, would take the platform tier's own
           # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
+          # platform is the team image-names.txt grants the platform's own images
+          # to. It is never a tenant, which keeps those grants unreachable from
+          # tenant workflows (check-image-name.sh --tenant).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
-              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|platform|\
               temporal|backstage|minio|database|forgejo|zitadel|\
-              local-path-storage|system-upgrade|observability-eval|\
+              local-path-storage|system-upgrade|observability-eval|tracing|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
@@ -336,7 +364,7 @@ spec:
           fi
 
           # BEGIN tenant-ns-guard
-          # Shared by create-tenant, delete-tenant-safe and delete-tenant. Argo
+          # Shared by create-tenant and delete-tenant-safe. Argo
           # templates cannot share a script file, so the copies are kept
           # byte-identical by tests/test_wft_create_tenant_existing.py.
           #
@@ -357,12 +385,15 @@ spec:
           # reserved because the tenant chart's argocd Role and RoleBinding,
           # argo-workflow-argocd-<tenant>, would take the platform tier's own
           # argo-workflow-argocd-sync (argo-workflow-* is already under argo*).
+          # platform is the team image-names.txt grants the platform's own images
+          # to. It is never a tenant, which keeps those grants unreachable from
+          # tenant workflows (check-image-name.sh --tenant).
           tenant_name_reserved() {
             case "$1" in
               argocd|argo-workflows|argo-events|kube-system|kube-public|kube-node-lease|\
-              default|cert-manager|traefik|vault|external-secrets|monitoring|\
+              default|cert-manager|traefik|vault|external-secrets|monitoring|platform|\
               temporal|backstage|minio|database|forgejo|zitadel|\
-              local-path-storage|system-upgrade|observability-eval|\
+              local-path-storage|system-upgrade|observability-eval|tracing|\
               kube-*|argo*|*-system|platform-*|mctl-*|grafana-*|vault*)
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
@@ -505,11 +536,13 @@ spec:
         image: hashicorp/vault:1.15
         command: [sh]
         env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
 
           echo "Authenticating to Vault via Kubernetes auth..."
           KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
@@ -534,6 +567,19 @@ spec:
 
           echo "Vault policy tenant-${TENANT} created successfully."
           vault policy read "tenant-${TENANT}"
+
+          # The role tenant workflows (deploy, provision-database, retire)
+          # log in with from ${TENANT}/argo-workflow-sa. Bound to the tenant
+          # namespace only, so that SA cannot assume another tenant's role
+          # or the platform role argo-workflow.
+          echo "Creating Kubernetes auth role: argo-workflow-tenant-${TENANT}"
+          vault write "auth/kubernetes/role/argo-workflow-tenant-${TENANT}" \
+            bound_service_account_names=argo-workflow-sa \
+            bound_service_account_namespaces="${TENANT}" \
+            alias_name_source=serviceaccount_uid \
+            token_policies="tenant-${TENANT}" \
+            token_ttl=2h token_max_ttl=2h
+          vault read "auth/kubernetes/role/argo-workflow-tenant-${TENANT}"
 
           # ESO read policy + the Kubernetes auth role that backs the tenant's
           # namespaced SecretStore. Kept separate from tenant-${TENANT} above
@@ -606,6 +652,7 @@ spec:
           - name: tenant_name
           - name: display_name
           - name: description
+          - name: workspace_profile
           - name: quota_cpu_req
           - name: quota_cpu_lim
           - name: quota_memory_req
@@ -614,6 +661,8 @@ spec:
           - name: allow_internet_egress
           - name: contact_email
           - name: creator_user_id
+          - name: creator_principal_id
+          - name: creator_catalog_key
           - name: reprovision
       volumes:
         - name: deploy-key
@@ -637,6 +686,8 @@ spec:
             value: "{{inputs.parameters.display_name}}"
           - name: PARAM_DESCRIPTION
             value: "{{inputs.parameters.description}}"
+          - name: PARAM_WORKSPACE_PROFILE
+            value: "{{inputs.parameters.workspace_profile}}"
           - name: PARAM_QUOTA_CPU_REQ
             value: "{{inputs.parameters.quota_cpu_req}}"
           - name: PARAM_QUOTA_CPU_LIM
@@ -653,6 +704,10 @@ spec:
             value: "{{inputs.parameters.contact_email}}"
           - name: PARAM_CREATOR_USER_ID
             value: "{{inputs.parameters.creator_user_id}}"
+          - name: PARAM_CREATOR_PRINCIPAL_ID
+            value: "{{inputs.parameters.creator_principal_id}}"
+          - name: PARAM_CREATOR_CATALOG_KEY
+            value: "{{inputs.parameters.creator_catalog_key}}"
           - name: PARAM_REPROVISION
             value: "{{inputs.parameters.reprovision}}"
         source: |
@@ -674,6 +729,11 @@ spec:
           # The whole block is bound through env, not just the unvalidated
           # half: a reader should not have to cross-check the registry to
           # know which of these lines is safe.
+          WORKSPACE_PROFILE="${PARAM_WORKSPACE_PROFILE:-standard}"
+          case "$WORKSPACE_PROFILE" in
+            standard|starter) ;;
+            *) echo "ERROR: unsupported workspace profile" >&2; exit 1 ;;
+          esac
           TENANT="$PARAM_TENANT_NAME"
           DISPLAY_NAME="$PARAM_DISPLAY_NAME"
           DESCRIPTION="$PARAM_DESCRIPTION"
@@ -691,6 +751,8 @@ spec:
             echo "ℹ️ contact_email given but not stored: it does not go into the public gitops repository (mctlhq/mctl-gitops#1627)"
           fi
           CREATOR_USER_ID="$PARAM_CREATOR_USER_ID"
+          CREATOR_PRINCIPAL_ID="$PARAM_CREATOR_PRINCIPAL_ID"
+          CREATOR_CATALOG_KEY="$PARAM_CREATOR_CATALOG_KEY"
 
           # Defaults
           [ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$TENANT"
@@ -736,6 +798,59 @@ spec:
                 ;;
             esac
           fi
+
+          # creator_principal_id is spliced into the same members block,
+          # unquoted, so it gets the exact grammar of a principal id:
+          # "prn_" and 26 Crockford base32 characters (mctl-api's
+          # ValidPrincipalID). It keys the creator's owner entry, so it
+          # means nothing without one.
+          #
+          # Matched with case and a length check, not grep -x: grep tests
+          # each LINE, so "<valid id>\n  admin: true" passes it and the
+          # second line becomes a key of the tenant document. The class is
+          # spelled out rather than written as ranges, which follow the
+          # locale's collation order in some shells.
+          if [ -n "$CREATOR_PRINCIPAL_ID" ]; then
+            PRN_BODY="${CREATOR_PRINCIPAL_ID#prn_}"
+            PRN_OK=true
+            [ "$PRN_BODY" = "$CREATOR_PRINCIPAL_ID" ] && PRN_OK=false
+            [ "${#PRN_BODY}" -eq 26 ] || PRN_OK=false
+            case "$PRN_BODY" in
+              *[!0123456789ABCDEFGHJKMNPQRSTVWXYZ]* ) PRN_OK=false ;;
+            esac
+            if [ "$PRN_OK" != true ]; then
+              echo "❌ creator_principal_id must be prn_ followed by 26 Crockford base32 characters; got: ${CREATOR_PRINCIPAL_ID}" >&2
+              exit 1
+            fi
+            if [ -z "$CREATOR_USER_ID" ]; then
+              echo "❌ creator_principal_id given without creator_user_id" >&2
+              exit 1
+            fi
+          elif [ -n "$CREATOR_USER_ID" ]; then
+            # Principal-mode authorization cannot grant ownership from a
+            # login alone. Refuse before writing an unusable owner entry.
+            echo "creator_user_id without creator_principal_id is not allowed (mctl-api#377)" >&2
+            exit 1
+          fi
+
+          # creator_catalog_key is one of two words, and `principal` names
+          # the catalog User by creator_principal_id, so it needs one. An
+          # unknown value is an error, not the login default: a caller that
+          # asked for a principal-keyed owner must never get a login-keyed
+          # one, which the GitHub login's next holder would sign in as.
+          case "$CREATOR_CATALOG_KEY" in
+            ""|login) CREATOR_CATALOG_KEY=login ;;
+            principal)
+              if [ -z "$CREATOR_PRINCIPAL_ID" ]; then
+                echo "❌ creator_catalog_key=principal given without creator_principal_id" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "❌ creator_catalog_key must be login or principal; got: ${CREATOR_CATALOG_KEY}" >&2
+              exit 1
+              ;;
+          esac
 
           # The five quota values land in quoted YAML scalars exactly like
           # displayName/description, and carry no Pattern
@@ -816,8 +931,34 @@ spec:
 
           # Build members section if creator is specified
           MEMBERS_BLOCK=""
-          if [ -n "$CREATOR_USER_ID" ]; then
+          if [ "$CREATOR_CATALOG_KEY" = principal ]; then
+            MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      principalId: %s\n      role: owner\n      catalogKey: principal' "$CREATOR_USER_ID" "$CREATOR_PRINCIPAL_ID")
+          elif [ -n "$CREATOR_PRINCIPAL_ID" ]; then
+            MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      principalId: %s\n      role: owner' "$CREATOR_USER_ID" "$CREATOR_PRINCIPAL_ID")
+          elif [ -n "$CREATOR_USER_ID" ]; then
             MEMBERS_BLOCK=$(printf '  members:\n    - userId: %s\n      role: owner' "$CREATOR_USER_ID")
+          fi
+
+          # The starter envelope is authoritative here, not caller-supplied quotas.
+          PVCS=5; SERVICES=10; MAX_CPU=2; MAX_MEMORY=5Gi
+          STORAGE_QUOTA=""; PREVIEW_BLOCK=""
+          if [ "$WORKSPACE_PROFILE" = starter ]; then
+            CPU_REQ=500m; CPU_LIM=2; MEM_REQ=512Mi; MEM_LIM=1Gi; PODS=5
+            PVCS=1; SERVICES=5; MAX_CPU=2; MAX_MEMORY=1Gi
+            STORAGE_QUOTA='    requests.storage: "10Gi"'
+            PREVIEW_BLOCK=$(cat <<'STARTER_PREVIEW'
+            preview:
+              quotas:
+                requests.cpu: "100m"
+                requests.memory: "256Mi"
+                limits.cpu: "500m"
+                limits.memory: "512Mi"
+                requests.storage: "0"
+                persistentvolumeclaims: "0"
+                pods: "3"
+                services: "3"
+          STARTER_PREVIEW
+            )
           fi
 
           # Write values.yaml
@@ -836,8 +977,9 @@ spec:
               limits.cpu: "${CPU_LIM}"
               limits.memory: "${MEM_LIM}"
               pods: "${PODS}"
-              persistentvolumeclaims: "5"
-              services: "10"
+              persistentvolumeclaims: "${PVCS}"
+              services: "${SERVICES}"
+          ${STORAGE_QUOTA}
             limitRange:
               enabled: true
               default:
@@ -847,8 +989,9 @@ spec:
                 cpu: "100m"
                 memory: "128Mi"
               max:
-                cpu: "2"
-                memory: "5Gi"
+                cpu: "${MAX_CPU}"
+                memory: "${MAX_MEMORY}"
+          ${PREVIEW_BLOCK}
             networking:
               allowIntraNamespace: true
               allowClusterEgress: true
@@ -948,7 +1091,8 @@ spec:
           p, role:team-${TENANT}, applications, get, apps/${TENANT}-*, allow
           p, role:team-${TENANT}, applications, list, apps/${TENANT}-*, allow
           p, role:team-${TENANT}, applications, sync, apps/${TENANT}-*, allow
-          p, role:team-${TENANT}, applications, override, apps/${TENANT}-*, allow
+          p, role:team-${TENANT}, applications, action/apps/Deployment/restart, apps/${TENANT}-*, allow
+          p, role:team-${TENANT}, applications, action/apps/StatefulSet/restart, apps/${TENANT}-*, allow
           p, role:team-${TENANT}, logs, get, apps/${TENANT}-*, allow
           g, ${TENANT}, role:team-${TENANT}
           EOF
@@ -1014,9 +1158,12 @@ spec:
       script:
         image: alpine/k8s:1.33.12
         command: [sh]
+        env:
+          - name: PARAM_TENANT_NAME
+            value: "{{inputs.parameters.tenant_name}}"
         source: |
           set -e
-          TENANT="{{inputs.parameters.tenant_name}}"
+          TENANT="$PARAM_TENANT_NAME"
           APP="tenant-${TENANT}"
 
           echo "Waiting for ArgoCD application ${APP} to become Healthy/Synced..."

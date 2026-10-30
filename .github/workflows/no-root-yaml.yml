@@ -14,7 +14,7 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: reject top-level YAML files
         run: |
           # Cluster manifests and workflows belong under platform-gitops/ so

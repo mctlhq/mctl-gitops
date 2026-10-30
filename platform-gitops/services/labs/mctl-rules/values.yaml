@@ -1,0 +1,88 @@
+# Service: mctl-rules
+# Team: labs
+
+# Chart: base-service
+
+image:
+  repository: ghcr.io/mctlhq/mctl-rules
+  tag: "0.1.3"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 3000
+backstage:
+  kubernetesId: mctl-rules
+# Non-root on a read-only root filesystem. The image pins its user to
+# uid/gid 10001 (Dockerfile), which kubelet needs as a number for
+# runAsNonRoot; the chart's writablePaths gives it a writable /tmp.
+podSecurityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+# Next.js plus the native Zen rules engine; evaluation is CPU-bound.
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+env:
+  APP_BASE_URL: https://rules.mctl.ai
+  OIDC_ISSUER: https://app.mctl.ai/api/oidc-provider
+  OIDC_CLIENT_ID: mctl-rules
+  S3_ENDPOINT: https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
+  S3_REGION: auto
+  S3_BUCKET: mctl-rules-artifacts
+  S3_FORCE_PATH_STYLE: "true"
+  S3_PREFIX: rules
+# rules.mctl.ai is the public host; DNS is the *.mctl.ai wildcard, so no
+# record is needed. It is reserved for this namespace in
+# bootstrap/values.yaml (reservedPlatformHosts). labs-mctl-rules.mctl.ai stays
+# as the canonical host; both callbacks are registered for the mctl-rules
+# OIDC client in mctl-portal.yaml.
+ingress:
+  enabled: true
+  hosts:
+    - rules.mctl.ai
+    - labs-mctl-rules.mctl.ai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: mctl-rules-tls
+      hosts:
+        - rules.mctl.ai
+        - labs-mctl-rules.mctl.ai
+# /readyz also checks the R2 bucket, so a pod without working S3_* is kept
+# out of the Service rather than failing on the first publish.
+probes:
+  liveness:
+    path: /healthz
+  readiness:
+    path: /readyz
+envFrom:
+  - secretRef:
+      name: labs-mctl-rules-db-creds
+  - secretRef:
+      name: mctl-rules-secrets
+dbSecret:
+  vaultPath: teams/labs/mctl-rules/database
+  secretName: labs-mctl-rules-db-creds
+externalSecret:
+  targetSecret: mctl-rules-secrets
+  data:
+    - secretKey: AUTH_SECRET
+      remoteKey: teams/labs/mctl-rules
+      property: AUTH_SECRET
+    - secretKey: OIDC_CLIENT_SECRET
+      remoteKey: teams/labs/mctl-rules
+      property: OIDC_CLIENT_SECRET
+    - secretKey: S3_ACCESS_KEY_ID
+      remoteKey: teams/labs/mctl-rules
+      property: S3_ACCESS_KEY_ID
+    - secretKey: S3_SECRET_ACCESS_KEY
+      remoteKey: teams/labs/mctl-rules
+      property: S3_SECRET_ACCESS_KEY
+extraContainers: []

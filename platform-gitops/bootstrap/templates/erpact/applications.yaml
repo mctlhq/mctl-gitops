@@ -12,8 +12,15 @@
 # (2026-10-03): root-app manages itself in wave 0, and its own health stays
 # Missing until resources in later waves exist, so it waited on itself
 # before ever reaching them. An unreachable erpact repository still holds
-# back nothing of the platform, since no wave follows wave 0. The
-# Applications retry until their secrets and volume are there.
+# back nothing of the platform, since no wave follows wave 0.
+#
+# retry.limit -1 (unlimited; backoff caps a retry at one per 5 minutes): once a
+# finite limit is spent, ArgoCD never auto-syncs that revision again
+# (alreadyAttemptedSync), so a sync blocked by something fixed elsewhere stayed
+# Failed until someone pressed Sync. That happened on 2026-10-14: the first
+# erpact.online site was denied by the Ingress host policy until #1890, after
+# all five retries. The deployer pushes a site and expects it to come up
+# unattended, so the Applications keep retrying until the obstacle is gone.
 ---
 # PVC erpact-data, MariaDB, Valkey: everything the two benches attach to.
 apiVersion: argoproj.io/v1alpha1
@@ -39,8 +46,9 @@ spec:
     syncOptions:
       - ApplyOutOfSyncOnly=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
+    # Retry without limit (see the header).
     retry:
-      limit: 5
+      limit: -1
       backoff:
         duration: 30s
         factor: 2
@@ -76,8 +84,9 @@ spec:
     syncOptions:
       - ApplyOutOfSyncOnly=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
+    # Retry without limit (see the header).
     retry:
-      limit: 5
+      limit: -1
       backoff:
         duration: 30s
         factor: 2
@@ -107,8 +116,9 @@ spec:
     syncOptions:
       - ApplyOutOfSyncOnly=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
+    # Retry without limit (see the header).
     retry:
-      limit: 5
+      limit: -1
       backoff:
         duration: 30s
         factor: 2
@@ -138,8 +148,9 @@ spec:
     syncOptions:
       - ApplyOutOfSyncOnly=true
     # The first sync races the ExternalSecrets, the volume and MariaDB.
+    # Retry without limit (see the header).
     retry:
-      limit: 5
+      limit: -1
       backoff:
         duration: 30s
         factor: 2

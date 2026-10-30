@@ -19,10 +19,15 @@ otelCollector:
   # clusterName/environment.
   clusterName: mctl-preprod
   environment: preprod
-  # Empty until a trace backend is chosen. With this empty, the collector's
-  # traces pipeline lists only the debug exporter -- see
-  # docs/runbooks/otel-collector.md for the one-key swap procedure.
-  backendEndpoint: ""
+  # The permanent trace backend: Tempo in `tracing` (the `tracing` block
+  # below; ADR 0001 verdict, docs/plans/tempo-adoption.md). Set it back to ""
+  # for the cheapest rollback -- the collector keeps only the debug exporter
+  # -- see docs/runbooks/otel-collector.md for the one-key swap procedure.
+  backendEndpoint: "tempo.tracing.svc.cluster.local:4317"
+  # Plaintext OTLP/gRPC to backendEndpoint. Tempo's receiver is
+  # cluster-internal and admits only `monitoring` (tracing/tempo/
+  # networkpolicy.yaml), the same trust boundary the eval fan-out used.
+  backendInsecure: true
   # issue-903: generalized fan-out for the trace-backend comparison spike.
   # Empty by default, so the rendered collector ConfigMap stays
   # byte-identical to the backendEndpoint-only render. Each entry is
@@ -41,16 +46,17 @@ otelCollector:
   # in otel-collector.yaml (issue #1355) -- a candidate with no otlpEndpoint
   # is deployed but receives no spans.
   #
-  # OPEN since mctlhq/mctl-gitops#1280's Tempo round: the bake-off was cut
-  # to ONE candidate (Tempo, single binary) by owner decision, see
-  # docs/runbooks/tracing-bake-off.md. teardownAfter is enforced by
-  # scripts/validate-eval-teardown-date.py (at most 14 days out, CI-red on
-  # main once it passes). Closing the sandbox is the one-commit teardown in
-  # that runbook's section 9: enabled: false here, every candidate's
-  # enabled: false, teardownAfter: "".
+  # CLOSED: mctlhq/mctl-gitops#1280's Tempo round (one candidate, single
+  # binary) ended 2026-10-22 with the verdict ADOPT TEMPO / mctl-native only
+  # (docs/adr/0001-agent-execution-trace-backend.md). This is the one-commit
+  # teardown from docs/runbooks/tracing-bake-off.md section 9. The candidate
+  # entry stays as the record of what was measured; a permanent Tempo is a
+  # separate change (docs/plans/tempo-adoption.md), not this sandbox
+  # reopened. Reopening it would again need teardownAfter, which
+  # scripts/validate-eval-teardown-date.py enforces (at most 14 days out).
   eval:
-    enabled: true
-    teardownAfter: "2026-10-24"
+    enabled: false
+    teardownAfter: ""
     # issue #1355 / #1280: ResourceQuota (eval-namespace.yaml's
     # observability-eval-quota) rendered into observability-eval only while
     # eval.enabled is true. Sized for the one candidate actually deployed --
@@ -91,7 +97,7 @@ otelCollector:
     # self-managed shape to pin (an SDK that ships to Grafana Cloud).
     candidates:
       - name: tempo
-        enabled: true
+        enabled: false
         # The COMMUNITY chart, single binary. grafana/helm-charts' `tempo`
         # and `tempo-distributed` are deprecated since January 2026; the
         # maintained single-binary chart moved to grafana-community.
@@ -220,6 +226,131 @@ otelCollector:
           serviceMonitor:
             enabled: false
 
+# Permanent trace backend (mctlhq/mctl-gitops#1280 verdict, ADR 0001:
+# ADOPT TEMPO / mctl-native only; plan docs/plans/tempo-adoption.md, approved
+# by the owner 2026-10-22). A separate deployment, not the bake-off sandbox
+# promoted: its own namespace `tracing`, its own Application (tracing-tempo,
+# bootstrap/templates/observability/tracing.yaml) and its own manifests
+# (infra-components/observability/tracing/tempo/). It reuses the soak's R2
+# bucket `tempo-traces` and Vault secret/platform/r2-tempo, so traces from
+# the soak stay readable within retention. Runbook: docs/runbooks/tempo.md.
+#
+# KNOWN LIMITATION (owner, 2026-10-22): during the soak a time-bounded
+# trace-by-id returned 5,092 of 6,930 in-window spans, cause unexplained
+# (ADR 0001 Decision). Until it is explained, nothing may promise or rely on
+# complete trace or span enumeration from this Tempo, and it is not a source
+# for completeness-critical counts -- the collector and Tempo ingest counters
+# are.
+tracing:
+  enabled: true
+  # The namespace's ResourceQuota/LimitRange are plain manifests in
+  # manifestsPath (tracing/tempo/namespace-policy.yaml), not values: they
+  # must sync inside the Application, not from root-app (tracing.yaml).
+  tempo:
+    # The version the soak measured: community chart `tempo` 2.4.0 ->
+    # Tempo 2.10.8 (resolved 2026-10-10, digest
+    # sha256:fad57f9ddd7d65f46158ee3455d32b7de6b3c1e4a3ce35757d2a8c5b2eb4481b).
+    # Moving to the 3.x line is its own change.
+    repoURL: https://grafana-community.github.io/helm-charts
+    chart: tempo
+    targetRevision: "2.4.0"
+    manifestsPath: platform-gitops/infra-components/observability/tracing/tempo
+    values:
+      fullnameOverride: tempo
+      # Single binary (target=all). The compactor in it enforces retention,
+      # so it must not be split out.
+      replicas: 1
+      tempo:
+        reportingEnabled: false
+        # A ballast counts as live heap for the Go GC; with GOMEMLIMIT below
+        # the runtime would collect continuously.
+        memBallastSizeMbs: 0
+        # 14 days, half the bucket's 30-day lifecycle rule, so Tempo deletes
+        # its blocks before the bucket expires them underneath it.
+        retention: 336h
+        extraArgs:
+          config.expand-env: "true"
+        extraEnvFrom:
+          - secretRef:
+              name: tempo-r2
+        extraEnv:
+          # Soft limit below the 2Gi container limit.
+          - name: GOMEMLIMIT
+            value: "1600MiB"
+        # The soak's main lesson: one bulk trace-by-id run over ~200 blocks
+        # throttled the 1-CPU sandbox to 80% and took its working set to
+        # 898 MiB. Twice the sandbox's limits, and the read path is bounded
+        # so a heavy reader gets errors instead of starving ingestion.
+        resources:
+          requests:
+            cpu: 200m
+            memory: 768Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        querier:
+          # Default 20. Each query fans out into block reads against R2.
+          max_concurrent_queries: 4
+        queryFrontend:
+          # Default 2000 queued requests per tenant; past 100 the frontend
+          # answers 429 instead of queueing work the querier cannot drain.
+          max_outstanding_per_tenant: 100
+          # Upper bound on every frontend API request, trace-by-id included
+          # (default 0 = none). The unranged full-window fetch in the soak
+          # held the pod at its CPU limit with no end; this ends it instead.
+          api_timeout: 1m
+          trace_by_id:
+            # Parallel block-shard reads per trace-by-id (default: all at
+            # once).
+            concurrent_shards: 4
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+        # tempo.receivers stays at the chart default: the chart's
+        # _ports.tpl dereferences every protocol key, so it cannot be
+        # narrowed through values. The NetworkPolicies decide what reaches
+        # the pod (tracing/tempo/networkpolicy.yaml).
+        storage:
+          trace:
+            backend: s3
+            s3:
+              bucket: ${TEMPO_S3_BUCKET}
+              endpoint: ${TEMPO_S3_ENDPOINT}
+              access_key: ${TEMPO_S3_ACCESS_KEY}
+              secret_key: ${TEMPO_S3_SECRET_KEY}
+              region: auto
+              forcepathstyle: true
+            local: null
+            # WAL on the emptyDir below. It survives a container restart but
+            # not a pod deletion or reschedule, so up to one block duration
+            # (5 minutes) of unflushed spans can be lost. A STANDING accepted
+            # risk, explicitly accepted by the owner on 2026-10-22: the
+            # default StorageClass is a billed Hetzner volume.
+            wal:
+              path: /var/tempo/wal
+        ingester:
+          max_block_duration: 5m
+        extraVolumeMounts:
+          - name: tempo-data
+            mountPath: /var/tempo
+      persistence:
+        enabled: false
+      extraVolumes:
+        - name: tempo-data
+          emptyDir:
+            sizeLimit: 2Gi
+      tempoQuery:
+        enabled: false
+      serviceAccount:
+        automountServiceAccountToken: false
+      # Off: vmagent runs selectAllByDefault: true (monitoring.yaml:287), the
+      # #1159 double-scrape. The one scrape is tracing/tempo/servicescrape.yaml.
+      serviceMonitor:
+        enabled: false
+
 # Usage-writer principal for the FinOps usage ledger (mctlhq/.github#50,
 # variant B): service:mctl-agents-usage, which may only append usage records
 # (POST /api/v1/usage/records). On since 2026-09-24; set false to disable.
@@ -260,6 +391,18 @@ usageWriter:
 evidenceWriter:
   enabled: true
 
+# GitHub Code Scanning -> SecurityFinding receiver (mctlhq/mctl-gitops#2168,
+# mctl-api >= 4.125.0, docs/runbooks/security-finding-ingestion.md).
+# Vault: secret/platform/mctl-api/github-code-scanning-webhook, property
+# secret: >= 32 chars, different from platform/mctl-api/github-webhook, no
+# trailing newline. Steps, in order and in separate merges:
+#   1. Owner writes Vault; set externalSecret: true; confirm the Secret synced.
+#   2. Set receiver: true (the env change rolls the pods, which then read it).
+#   3. Owner registers the repository webhook (runbook).
+securityCodeScanning:
+  externalSecret: true
+  receiver: true
+
 # The registry-publisher principal's bearer token (mctlhq/mctl-agents#470,
 # mctlhq/mctl-api#481, mctl-api >= 4.67.0): the mctl-agents release pipeline
 # publishes and promotes agent versions with it instead of the admin service
@@ -272,6 +415,21 @@ evidenceWriter:
 registryPublisher:
   enabled: true
 
+# The support-incident-producer principal's bearer token (mctlhq/mctl-api#830,
+# mctl-api >= 4.131.0): mctl-support files source=support incidents with it
+# and nothing else. Vault: secret/platform/mctl-support/incident-producer,
+# property token (>= 32 chars, different from every other principal's token,
+# or mctl-api refuses it and disables both sides). Its own path, read by
+# mctl-api here and by mctl-support (services/admins/mctl-support).
+# Owner steps, in this order:
+#   1. printf '%s' "$(openssl rand -hex 32)" \
+#        | vault kv put secret/platform/mctl-support/incident-producer token=-
+#      (a new path, so put is safe; use kv patch -method=rw once it exists).
+#   2. Set enabled: true below (mctl-api then rolls to pick up the env).
+#   Done 2026-10-27: step 2 below, merged after step 1.
+supportIncidentProducer:
+  enabled: true
+
 # The surface:portal principal's bearer token (mctlhq/mctl-portal#126):
 # mctl-api reads it as MCTL_SURFACE_PORTAL_TOKEN (surfaceTokenEnv maps portal
 # to it, minSurfaceTokenLen = 32) and backstage's work-items-backend sends it.
@@ -280,6 +438,21 @@ registryPublisher:
 # mctl-api picks it up once its chart carries surfacePortalTokenSecret
 # (mctlhq/mctl-api#439); backstage reads it as an optional env.
 surfacePortalToken:
+  enabled: true
+
+# Static token for mctl-api's repository-binding lookups against the portal's
+# github-app-connect plugin (subject mctl-api-repo-binding, restricted to that
+# plugin). Vault: secret/platform/mctl-portal/repo-binding-token, property
+# token (no trailing newline, distinct from every other token). Read by both
+# mctl-api (BACKSTAGE_GITHUB_APP_CONNECT_TOKEN) and backstage
+# (MCTL_API_REPO_BINDING_TOKEN) through mctl-api-repo-binding.yaml.
+# Owner steps, in this order:
+#   1. Write the value to Vault.
+#   2. Set enabled: true below. The portal pod reads the token at startup,
+#      so it restarts once the backstage-repo-binding Secret has synced.
+# Until the portal and mctl-api releases that use it are deployed, the token
+# is accepted by the portal but nothing calls it.
+repoBinding:
   enabled: true
 
 # The surface:telegram principal's bearer token (mctlhq/mctl-telegram#443,
@@ -314,9 +487,9 @@ surfaceTelegramToken:
 # templates/system/admission-policies.yaml.
 #
 # Every namespace also holds Secrets it never asked for: the reflector copies
-# argo-workflows/github-actions-pat, argo-workflows/mctl-gitops-deploy-key and
 # the database/* credentials into all of them (#1230), and the tenant chart
-# adds ghcr and artifact-store (R2) credentials. It also creates argo-workflow-sa, whose
+# adds ghcr, artifact-store (R2), github-actions-pat and mctl-gitops-deploy-key
+# credentials. It also creates argo-workflow-sa, whose
 # Roles read every Secret in the namespace through the API. In a reviewed
 # namespace that is a latent risk; where someone outside the platform writes
 # the Pod specs, mounting a Secret or running as that ServiceAccount is one
@@ -360,7 +533,11 @@ externalManifestNamespaces:
     # Ingress hosts (rules and TLS) must match this RE2 pattern in full (the
     # policy anchors it), so the repository cannot claim another tenant's
     # unreserved *.mctl.ai name. Traefik kinds of any sort are refused outright.
-    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai'
+    # Sites created before the switch keep erpact-<label>.mctl.ai; new ones are
+    # <label>.erpact.online (the deployer's mainDomain since erpact/mctl-apps
+    # #16), a zone in this platform's Cloudflare account that serves ERPact only.
+    # The apex erpact.online is not matched.
+    hostPattern: 'erpact-[a-z0-9]([a-z0-9-]*[a-z0-9])?\.mctl\.ai|[a-z0-9]([a-z0-9-]*[a-z0-9])?\.erpact\.online'
 
 # Platform hostnames and the namespaces allowed to serve them (#1503),
 # enforced by the mctl-reserved-platform-hosts-* admission policies in
@@ -381,6 +558,12 @@ reservedPlatformHosts:
   agent.mctl.ai: [admins]
   docs.mctl.ai: [admins]
   ui.mctl.ai: [admins]
+  # Umami analytics (services/admins/umami).
+  stats.mctl.ai: [admins]
+  # mctl-rules public host (services/labs/mctl-rules).
+  rules.mctl.ai: [labs]
+  # mctl-support public host (services/admins/mctl-support).
+  support.mctl.ai: [admins]
   # ZITADEL, plus the usual identity-provider aliases so none of them can be
   # stood up by a tenant to imitate the sign-in page.
   auth.mctl.ai: [zitadel]
@@ -402,3 +585,42 @@ reservedPlatformHosts:
   tg-preview.mctl.ai: [labs]
   # The Cloudflare MCP portal; never served from the cluster.
   mcp.mctl.ai: []
+
+# Whole domains and the namespaces allowed to serve them, enforced by the same
+# mctl-reserved-platform-hosts-* policies: the domain itself, every name under
+# it at any depth, and every wildcard covering it (*.erpact.online, *.online).
+# For a zone in this platform's Cloudflare account that belongs to a single
+# tenant, whose wildcard DNS points at the cluster, so that no other namespace
+# can stand up a route under it.
+reservedDomains:
+  # ERPact's site domain (<label>.erpact.online, erpact/mctl-apps#16).
+  erpact.online: [erpact]
+
+# Log-backend comparison sandbox (issue #2245, docs/adr/0002-log-backend.md).
+# Closed by default: nothing renders while enabled is false. The candidate
+# pins (repoURL, chart, targetRevision) are filled by the live round, which
+# follows docs/runbooks/log-backend-bake-off.md. While enabled, teardownAfter
+# must be a YYYY-MM-DD date at most 14 days out
+# (scripts/validate-eval-teardown-date.py).
+logsEval:
+  enabled: false
+  teardownAfter: ""
+  quota:
+    requests.cpu: "500m"
+    requests.memory: "1Gi"
+    limits.cpu: "1"
+    limits.memory: "2Gi"
+    persistentvolumeclaims: "1"
+    requests.storage: "20Gi"
+  candidate:
+    enabled: false
+    repoURL: ""
+    chart: ""
+    targetRevision: ""
+    values:
+      server:
+        retentionPeriod: 14d
+        # The sandbox scrapes via infra-components/observability/logs-eval/;
+        # the chart's own ServiceMonitor would double-scrape.
+        serviceMonitor:
+          enabled: false

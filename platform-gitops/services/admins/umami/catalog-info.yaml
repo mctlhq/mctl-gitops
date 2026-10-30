@@ -1,0 +1,35 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: umami
+  description: "Umami web analytics for mctl.ai sites"
+  annotations:
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/instance=admins-umami
+    backstage.io/kubernetes-id: umami
+    backstage.io/kubernetes-namespace: admins
+    argocd/app-name: admins-umami
+    github.com/source-repo: umami-software/umami
+    # Upstream image, no tag-push webhook from an mctlhq repository: the tag
+    # is bumped by hand in values.yaml.
+    mctl.me/auto-deploy: "false"
+  links:
+    - url: https://ops.mctl.ai/applications/argocd/admins-umami
+      title: ArgoCD
+      icon: dashboard
+    - url: https://github.com/umami-software/umami
+      title: Source Repository
+      icon: github
+    - url: https://workflows.mctl.ai
+      title: Argo Workflows
+      icon: github
+    - url: https://stats.mctl.ai
+      title: Service URL
+      icon: web
+  labels:
+    team: admins
+    env: apps
+spec:
+  type: service
+  lifecycle: production
+  owner: group:admins
+  system: team-admins

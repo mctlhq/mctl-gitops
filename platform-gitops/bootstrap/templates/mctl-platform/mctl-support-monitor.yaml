@@ -1,0 +1,34 @@
+# Scrape mctl-support's /metrics (mctlhq/mctl-support#4, S1c of
+# mctlhq/.github#243): task outcomes and durations, tool calls, model tokens
+# and spend, budget rejections, escalations.
+#
+# Native VMServiceScrape rather than the chart's ServiceMonitor, for the
+# reason mctl-alice-monitor.yaml gives; the mctl-support values set
+# metrics.serviceMonitor: false.
+#
+# `port: metrics` (9090): mctl-support serves /metrics only on that separate
+# listener (SUPPORT_METRICS_PORT). The chart's Ingress routes the `http` port
+# alone, so the endpoint is not reachable from outside the cluster; admins
+# admits the monitoring namespace on every port (NetworkPolicy
+# allow-ingress-from-monitoring).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: mctl-support
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      # base-service is shared by every admins service; the instance label
+      # pins this scrape to mctl-support.
+      app.kubernetes.io/instance: admins-mctl-support
+      app.kubernetes.io/name: base-service
+  namespaceSelector:
+    matchNames:
+      - admins
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

@@ -17,3 +17,4 @@ resources:
   - traefik-helmchartconfig.yaml
   - kured.yaml
   - metrics-server-resources-patch.yaml
+  - system-upgrade-controller.yaml

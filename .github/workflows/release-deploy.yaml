@@ -43,7 +43,74 @@ on:
         type: string
 
 jobs:
+  # Fail fast, before anything is built or pushed: every dispatch input is
+  # shape-checked here with no checkout, no secrets and no permissions. The
+  # bump script and build-image keep their own checks as a second layer.
+  validate-inputs:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Validate dispatch inputs
+        env:
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+          INPUT_DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+          INPUT_TEAM_NAME: ${{ inputs.team_name }}
+          INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
+          INPUT_VALUES_PATH: ${{ inputs.values_path }}
+          INPUT_VALUES_GLOB: ${{ inputs.values_glob }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::invalid $1"; exit 1; }
+          nl=$'\n'
+          for name in REPO GIT_REF IMAGE_NAME IMAGE_TAG DOCKERFILE_PATH TEAM_NAME COMPONENT_NAME VALUES_GLOB; do
+            v="INPUT_${name}"
+            [[ "${!v}" != *"$nl"* && "${!v}" != *$'\r'* ]] || fail "$name: contains a newline"
+          done
+          label='^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+          [[ "$INPUT_TEAM_NAME" =~ $label ]] || fail "team_name"
+          [[ "$INPUT_COMPONENT_NAME" =~ $label ]] || fail "component_name"
+          [[ "$INPUT_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || fail "repo"
+          [[ "$INPUT_IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] || fail "image_tag"
+          [[ "$INPUT_IMAGE_NAME" =~ ^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$ ]] || fail "image_name"
+          [[ "$INPUT_GIT_REF" =~ ^[A-Za-z0-9._/+-]{1,255}$ && "$INPUT_GIT_REF" != -* ]] || fail "git_ref"
+          [[ "$INPUT_DOCKERFILE_PATH" =~ ^[A-Za-z0-9._/-]+$ && "$INPUT_DOCKERFILE_PATH" != /* \
+            && "/$INPUT_DOCKERFILE_PATH/" != *"/../"* ]] || fail "dockerfile_path"
+
+          # Mirrors ALLOWED_PREFIXES in the "Bump image tag(s)" script below;
+          # tests/test_release_deploy_validate_inputs.py asserts they match.
+          ALLOWED_PREFIXES=(
+            "platform-gitops/services/"
+            "platform-gitops/argo-workflows/cluster-templates/"
+            "platform-gitops/bootstrap/templates/mctl-platform/"
+          )
+          check_path() { # name value charset-regex
+            local name=$1 p=$2 re=$3 ok=1 pre
+            [[ "$p" =~ $re ]] || fail "$name"
+            [[ "$p" != /* && "/$p/" != *"/../"* ]] || fail "$name"
+            for pre in "${ALLOWED_PREFIXES[@]}"; do
+              [[ "$p" == "$pre"* ]] && ok=0
+            done
+            [[ $ok -eq 0 ]] || fail "$name"
+          }
+          if [[ -n "$INPUT_VALUES_GLOB" ]]; then
+            check_path values_glob "$INPUT_VALUES_GLOB" '^[A-Za-z0-9._/*?-]+$'
+          fi
+          if [[ -n "$INPUT_VALUES_PATH" ]]; then
+            items=${INPUT_VALUES_PATH//$'\n'/,}
+            IFS=',' read -r -a parts <<< "$items"
+            for item in "${parts[@]}"; do
+              item=${item#"${item%%[![:space:]]*}"}
+              item=${item%"${item##*[![:space:]]}"}
+              [[ -z "$item" ]] && continue
+              check_path values_path "$item" '^[A-Za-z0-9._/-]+$'
+            done
+          fi
+
   build:
+    needs: validate-inputs
     # A called workflow can never hold more than the job that calls it, and
     # the default GITHUB_TOKEN permission for this org is read. build-image
     # asks for packages: write (push to GHCR) and id-token: write (the OIDC
@@ -81,8 +148,8 @@ jobs:
     # workflow or the runner, and the standing cost of holding credentials a
     # build has no use for.
     #
-    # These four are every inheritable secret build-image references, and it
-    # declares them under `on: workflow_call:`. GITHUB_TOKEN is its fifth and
+    # These three are every inheritable secret build-image references, and it
+    # declares them under `on: workflow_call:`. GITHUB_TOKEN is its fourth and
     # is provided automatically - it is neither inheritable nor declarable.
     #
     # A name missing from this list does not fail loudly: build-image falls
@@ -90,7 +157,6 @@ jobs:
     # change here is verified by the tier lines in the build log, not by a
     # green run - see the PR that introduced this block.
     secrets:
-      APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       GHCR_PAT: ${{ secrets.GHCR_PAT }}
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
@@ -120,7 +186,7 @@ jobs:
       # (#1033). The key is a secret of the `gitops-bump` environment, which
       # only releases it to jobs running on main, so a workflow pushed to a
       # branch cannot read it.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
           ssh-key: ${{ secrets.GITOPS_BUMP_DEPLOY_KEY }}
@@ -399,18 +465,29 @@ jobs:
           exit 1
 
       - name: Summary
+        # Inputs are bound through env, never interpolated into the script
+        # text: this job held the gitops deploy key, and a value such as
+        # `x$(curl ...)` in a ${{ }} expression would run as shell.
+        env:
+          TEAM: ${{ inputs.team_name }}
+          SERVICE: ${{ inputs.component_name }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          NEW_TAG: ${{ inputs.image_tag }}
+          GIT_REF: ${{ inputs.git_ref }}
+          VALUES_PATH: ${{ inputs.values_path }}
+          VALUES_GLOB: ${{ inputs.values_glob }}
         run: |
           {
-            echo "## Released ${{ inputs.team_name }}/${{ inputs.component_name }}"
+            echo "## Released ${TEAM}/${SERVICE}"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
-            echo "| **Image** | \`${{ inputs.image_name }}:${{ inputs.image_tag }}\` |"
-            echo "| **Git ref** | \`${{ inputs.git_ref }}\` |"
-            if [[ -n "${{ inputs.values_glob }}" ]]; then
-              echo "| **Gitops glob** | \`${{ inputs.values_glob }}\` |"
+            echo "| **Image** | \`${IMAGE_NAME}:${NEW_TAG}\` |"
+            echo "| **Git ref** | \`${GIT_REF}\` |"
+            if [[ -n "${VALUES_GLOB}" ]]; then
+              echo "| **Gitops glob** | \`${VALUES_GLOB}\` |"
             fi
-            if [[ -n "${{ inputs.values_path }}" || -z "${{ inputs.values_glob }}" ]]; then
-              echo "| **Gitops file** | \`${{ inputs.values_path || format('platform-gitops/services/{0}/{1}/values.yaml', inputs.team_name, inputs.component_name) }}\` |"
+            if [[ -n "${VALUES_PATH}" || -z "${VALUES_GLOB}" ]]; then
+              echo "| **Gitops file** | \`${VALUES_PATH:-platform-gitops/services/${TEAM}/${SERVICE}/values.yaml}\` |"
             fi
-          } >> $GITHUB_STEP_SUMMARY
+          } >> "$GITHUB_STEP_SUMMARY"

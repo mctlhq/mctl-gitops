@@ -1,0 +1,18 @@
+# SSO RBAC: team commerce-proof — scoped to team namespace only
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sso-team-commerce-proof
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/rbac-rule: "'commerce-proof' in groups"
+    workflows.argoproj.io/rbac-rule-precedence: "106"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sso-team-commerce-proof.service-account-token
+  namespace: argo-workflows
+  annotations:
+    kubernetes.io/service-account.name: sso-team-commerce-proof
+type: kubernetes.io/service-account-token

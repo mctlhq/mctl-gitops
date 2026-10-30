@@ -1,0 +1,55 @@
+status: merged
+updated_at: '2026-10-21T14:11:47Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-adf2525f2c3280b4
+  trace_id: 534780ff5e234d32a5c18edb4aa33bd7
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-telegram
+  issue: 781
+  url: https://github.com/mctlhq/mctl-telegram/issues/781
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-c8d6bd8c74490bc5
+  content_hash: sha256:c8d6bd8c74490bc510a58b1ba36d87df5d0bb3bcd7c624c0d6c7a95ea2d6715d
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-21T11:07:07Z'
+  content_digest: sha256:c541a310ce277dd7ccbe153a1c05bfda5e9fabe92042d2ea2131b96963381177
+  digest_binding: reviewed
+  approval_ref: aar_a05b2b53ad5f46ff9272c9d6436c436f
+attempt:
+  id: aa86c3fcdf9dc10160ecedb6ed2ad8fe70999db75f07e0cfad095838e4f04afa
+  started_at: '2026-10-21T11:08:31Z'
+  expires_at: '2026-10-21T13:18:31Z'
+  finished_at: '2026-10-21T11:19:43Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/793
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-c0228857
+  authoritative:
+    completion_id: ic-589c381d3599a6af
+    content_hash: sha256:589c381d3599a6af5552bfbe53cb04ff15ee66031076ab617c5321c7b0ef9058
+    proposal_digest: sha256:c541a310ce277dd7ccbe153a1c05bfda5e9fabe92042d2ea2131b96963381177
+    attempt_id: aa86c3fcdf9dc10160ecedb6ed2ad8fe70999db75f07e0cfad095838e4f04afa
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 9366fd9312af7292595154d7b2cc8961dd339593
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 1
+  primary_observed: true
+github:
+  state: merged
+  head_sha: a5190431035360222342037640b4f9885854671b
+  observed_at: '2026-10-21T14:11:47Z'
+merged_at: '2026-10-21T14:11:47Z'
+merge_commit: c264d1bfda49a7a0a311d63662a203f496006b14

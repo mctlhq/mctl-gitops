@@ -173,17 +173,6 @@ spec:
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: labs-pfeifenpatenschaft-db
-spec:
-  name: "labs-pfeifenpatenschaft"
-  owner: "labs-pfeifenpatenschaft"
-  cluster:
-    name: shared-pg
-  databaseReclaimPolicy: retain
----
-apiVersion: postgresql.cnpg.io/v1
-kind: Database
-metadata:
   name: labs-pfeifenpatenschaft-backend-db
 spec:
   name: "labs-pfeifenpatenschaft-backend"
@@ -239,6 +228,17 @@ spec:
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
+  name: admins-umami-db
+spec:
+  name: "admins-umami"
+  owner: "admins-umami"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
   name: forgejo-db
 spec:
   name: "forgejo"
@@ -265,6 +265,28 @@ metadata:
 spec:
   name: "grafana"
   owner: "grafana"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: labs-mctl-rules-db
+spec:
+  name: "labs-mctl-rules"
+  owner: "labs-mctl-rules"
+  cluster:
+    name: shared-pg
+  databaseReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: admins-mctl-support-db
+spec:
+  name: "admins-mctl-support"
+  owner: "admins-mctl-support"
   cluster:
     name: shared-pg
   databaseReclaimPolicy: retain

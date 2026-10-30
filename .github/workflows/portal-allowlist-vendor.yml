@@ -19,10 +19,10 @@ run-name: "portal-allowlist-vendor ${{ inputs.server }} @ ${{ inputs.source_sha 
 # --vendor-check closes the loop nightly against the recorded sha and main.
 #
 # Caller requirements: a token with actions: write on mctl-gitops. Callers
-# mint it from the mctl-agents App (org secrets AGENTS_APP_ID /
-# AGENTS_APP_PRIVATE_KEY, `repositories: mctl-gitops`, `permission-actions:
-# write`), the way their release workflows already dispatch here since
-# mctlhq/mctl-gitops#761. No other secret.
+# mint it from the mctl-agents App (org variable AGENTS_APP_CLIENT_ID, org
+# secret AGENTS_APP_PRIVATE_KEY, `repositories: mctl-gitops`,
+# `permission-actions: write`), the way their release workflows already
+# dispatch here since mctlhq/mctl-gitops#761. No other secret.
 on:
   workflow_dispatch:
     inputs:
@@ -59,16 +59,16 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app_token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.AGENTS_APP_ID }}
+          client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
           owner: mctlhq
           repositories: mctl-gitops
           permission-contents: write
           permission-pull-requests: write
 
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
           token: ${{ steps.app_token.outputs.token }}

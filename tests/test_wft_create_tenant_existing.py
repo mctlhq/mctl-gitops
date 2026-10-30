@@ -10,8 +10,8 @@ Both blocks are extracted from the template rather than restated here, because
 a restated copy would keep passing after the template changed. `git clone` is
 replaced by a stub on PATH that copies a fixture checkout, or fails.
 
-The second half covers the namespace guard shared by create-tenant,
-delete-tenant-safe and delete-tenant (gitops#1768): the static denylist, and
+The second half covers the namespace guard shared by create-tenant
+and delete-tenant-safe (gitops#1768): the static denylist, and
 the live "absent / owned / foreign / lookup failed" decision, run against a
 stub kubectl. It lives in this file because CI already runs it.
 """
@@ -154,7 +154,6 @@ GUARD_RE = re.compile(r"^# BEGIN tenant-ns-guard\n.*?^# END tenant-ns-guard\n",
 GUARD_SITES = {
     "wft-create-tenant.yaml": ("validate-tenant-name", "check-namespace-collision"),
     "wft-delete-tenant-safe.yaml": ("validate-tenant-exists", "delete-k8s-resources"),
-    "wft-delete-tenant.yaml": ("validate-tenant-exists", "delete-k8s-resources"),
 }
 ALL_TEMPLATES = {}
 for fname in GUARD_SITES:
@@ -195,7 +194,7 @@ MUST_REJECT = [
     "minio", "database", "platform-db", "platform-events", "forgejo", "zitadel",
     "cnpg-system", "reflector-system", "argo-rollouts", "grafana-iac",
     "vault-human-auth-iac", "local-path-storage", "system-upgrade",
-    "observability-eval", "kube-foo", "argonaut", "foo-system", "platform-x",
+    "observability-eval", "tracing", "kube-foo", "argonaut", "foo-system", "platform-x",
     "mctl-x", "grafana-x", "vaultx",
     # Platform Argo CD Application names and their hyphen-prefixes (mirrors
     # IsReservedTenantName in mctl-api internal/operations/reserved_tenant.go).
@@ -422,18 +421,13 @@ with tempfile.TemporaryDirectory() as d:
 
 RBAC_RE = re.compile(r"^# BEGIN tenant-argocd-rbac-cleanup\n.*?^# END tenant-argocd-rbac-cleanup\n",
                      re.S | re.M)
-rbac_blocks = {}
-for fname in ("wft-delete-tenant-safe.yaml", "wft-delete-tenant.yaml"):
-    src = ALL_TEMPLATES[fname]["delete-k8s-resources"]["script"]["source"]
-    found = RBAC_RE.findall(src)
-    check(f"{fname} carries exactly one tenant-argocd-rbac-cleanup block",
-          len(found) == 1, f"found {len(found)}")
-    rbac_blocks[fname] = found[0] if found else None
-check("every tenant-argocd-rbac-cleanup copy is byte-identical",
-      len(set(rbac_blocks.values())) == 1 and None not in rbac_blocks.values())
+found = RBAC_RE.findall(
+    ALL_TEMPLATES["wft-delete-tenant-safe.yaml"]["delete-k8s-resources"]["script"]["source"])
+check("wft-delete-tenant-safe.yaml carries exactly one tenant-argocd-rbac-cleanup block",
+      len(found) == 1, f"found {len(found)}")
 
-# delete-tenant-safe and legacy delete-tenant.
-for fname in ("wft-delete-tenant-safe.yaml", "wft-delete-tenant.yaml"):
+# delete-tenant-safe.
+for fname in ("wft-delete-tenant-safe.yaml",):
     tpls = ALL_TEMPLATES[fname]
     validate = tpls["validate-tenant-exists"]["script"]["source"]
     delete = tpls["delete-k8s-resources"]["script"]["source"]
@@ -480,9 +474,8 @@ for fname in ("wft-delete-tenant-safe.yaml", "wft-delete-tenant.yaml"):
 
     r, log, left = run_kube(delete, "acme", {"acme": "acme", "acme-preview": "acme"},
                             apps=("tenant-acme",), rbacfail=True)
-    # (legacy delete-tenant never deleted <T>-preview; that is unchanged)
     check(f"{short}: a failed argocd RBAC cleanup still deletes the namespaces",
-          "acme" not in left and (short == "delete-tenant" or "acme-preview" not in left),
+          "acme" not in left and "acme-preview" not in left,
           r.stdout + log)
     check(f"{short}: ...and fails the step",
           r.returncode != 0 and "could not delete" in r.stdout, r.stdout + r.stderr + log)

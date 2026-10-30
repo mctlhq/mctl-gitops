@@ -39,7 +39,7 @@ spec:
       - name: dry_run
         value: "false"
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.73.0
+        value: ghcr.io/mctlhq/mctl-agents:1.112.1
         # Bump alongside the other CWFTs' agent_image default; the registry's
         # resolved image_ref overrides this once a caller pins per-run.
 
@@ -50,6 +50,33 @@ spec:
 
   templates:
     - name: collect-usage
+      initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
       # Least privilege: this step needs neither the Kubernetes API nor Vault.
       # The pod runs as an identity with no role bindings and mounts no API
       # token into the agent or clone containers; only Argo's own init/wait
@@ -91,6 +118,20 @@ spec:
             printf '→'; printf ' %s' "$@"; printf '\n'
             exec "$@"
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           - name: WORKFLOW_LOOKBACK_DAYS
             value: "{{workflow.parameters.lookback_days}}"
           - name: WORKFLOW_DRY_RUN
@@ -127,10 +168,51 @@ spec:
     # reconcile CWFT: a routine Succeeded tick reports nothing, since
     # near-zero artifacts is the expected state until step (d) lands.
     - name: notify-telegram
+      initContainers:
+        # kube-router admits a new pod's IP into the proxy's ingress ipset a
+        # few seconds after the pod starts; a first connection inside that
+        # window is dropped (gitops#2164). Hold the pod until the proxy
+        # accepts a TCP connect, at most ~90s.
+        - name: wait-egress-proxy
+          image: alpine:3.19
+          command: [sh, -c]
+          args:
+            - |
+              for i in $(seq 1 30); do
+                nc -z -w 2 agent-egress-proxy.mctl-agents-egress.svc.cluster.local 3128 && exit 0
+                sleep 1
+              done
+              echo "agent-egress-proxy unreachable after ~90s" >&2
+              exit 1
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 16Mi}
       script:
         image: alpine:3.19
         command: [sh]
         env:
+          - name: HTTPS_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: HTTP_PROXY
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: https_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: http_proxy
+            value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
+          - name: NO_PROXY
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: no_proxy
+            value: ".svc,.svc.cluster.local,.cluster.local,10.43.0.1,10.43.0.0/16,10.0.0.0/8,kubernetes.default,localhost,127.0.0.1"
+          - name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+            value: "1"
           - name: TG_BOT_TOKEN
             valueFrom:
               secretKeyRef:

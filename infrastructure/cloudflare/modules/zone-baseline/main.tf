@@ -1,5 +1,7 @@
 # The shape mctl.me and mctl.ru share: an apex and a wildcard pointing at the
-# platform origin, an apex redirect to mctl.ai, and a block on .php probes.
+# platform origin, an apex redirect to mctl.ai, a block on .php probes, and —
+# since the 2026-10-22 scanner (see the firewall ruleset below) — a block on
+# subdomains outside the redirect allowlist and on spoofed crawler User-Agents.
 #
 # Every resource body below was produced by `tofu plan -generate-config-out`
 # against the live zones and then reduced — the generator emits each optional
@@ -62,6 +64,12 @@ resource "cloudflare_ruleset" "dynamic_redirect" {
   ]
 }
 
+# The spoofed-crawler expression is shared with zones/mctl-ai/firewall.tf
+# through ../spoofed-crawlers, so the three zones cannot drift apart on it.
+module "spoofed_crawlers" {
+  source = "../spoofed-crawlers"
+}
+
 resource "cloudflare_ruleset" "firewall_custom" {
   zone_id     = var.zone_id
   name        = "default"
@@ -77,6 +85,27 @@ resource "cloudflare_ruleset" "firewall_custom" {
       expression        = "(http.request.uri.path contains \".php\")"
       action            = "block"
       action_parameters = {}
+    },
+    # Only the subdomains in var.redirect_subdomains are worth a 301 to the
+    # target zone. Everything else under the wildcard is an invented name from a
+    # scanner's wordlist (metrics., sso., kanban., vault., adminer., ...), and
+    # the worker's 301 to the same label on mctl.ai was confirming each one as a
+    # live host. Blocking here keeps those requests out of the worker, out of
+    # Workers Logs (2.9 GB in the two weeks to 2026-10-29, 99% of it this), and
+    # off the redirect that hands the same wordlist to *.mctl.ai.
+    {
+      ref         = "block_unknown_subdomains"
+      description = "${var.zone_name}: block subdomains outside the redirect allowlist"
+      enabled     = true
+      expression  = format("(http.host ne \"%s\" and not http.host in {%s})", var.zone_name, join(" ", [for s in var.redirect_subdomains : format("\"%s.%s\"", s, var.zone_name)]))
+      action      = "block"
+    },
+    {
+      ref         = "block_spoofed_crawlers"
+      description = "${var.zone_name}: ${module.spoofed_crawlers.description}"
+      enabled     = true
+      expression  = module.spoofed_crawlers.expression
+      action      = "block"
     },
   ]
 }

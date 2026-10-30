@@ -36,8 +36,8 @@ T5. Eval-manifest render. With `otelCollector.eval.enabled: false` (the
     `manifestsPath` renders exactly one source; every Application's
     `targetRevision` is a concrete string.
 
-Committed default (#1280). bootstrap/values.yaml ships the sandbox OPEN
-    with exactly one candidate, tempo. The committed render must differ from
+Tempo round (#1280). Rendered with the sandbox open and its one
+    candidate, tempo, as it ran during the soak. The committed render must differ from
     the eval-off baseline only by the appended `otlp/eval-tempo` exporter
     (receivers and processors unchanged), and must emit the "Tempo (eval)"
     Grafana datasource, whose host matches the candidate's otlpEndpoint host.
@@ -115,7 +115,17 @@ with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
     yaml.safe_dump({"otelCollector": {"eval": {"enabled": False}}}, fh)
     EVAL_OFF = pathlib.Path(fh.name)
 
-default_docs = helm_template(DEFAULT_VALUES, EVAL_OFF)
+# Since the #1280 verdict the committed values ship the permanent Tempo
+# (`tracing` + otelCollector.backendEndpoint). Every check below that is
+# about the eval machinery or the golden "no backend" baseline renders with
+# it switched off, so those checks keep testing what they were written for;
+# the shipped render is checked on its own ("Committed default").
+with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+    yaml.safe_dump({"otelCollector": {"backendEndpoint": "", "backendInsecure": False},
+                    "tracing": {"enabled": False}}, fh)
+    NO_TRACING = pathlib.Path(fh.name)
+
+default_docs = helm_template(DEFAULT_VALUES, NO_TRACING, EVAL_OFF)
 default_cfg = collector_config(default_docs)
 default_rendered = yaml.safe_dump(default_cfg, sort_keys=False, default_flow_style=False, width=100)
 
@@ -149,7 +159,7 @@ check(
 
 # --- T2: fan-out render ------------------------------------------------------
 
-fanout_docs = helm_template(DEFAULT_VALUES, EXAMPLE_OVERLAY)
+fanout_docs = helm_template(DEFAULT_VALUES, NO_TRACING, EXAMPLE_OVERLAY)
 fanout_cfg = collector_config(fanout_docs)
 exporters = fanout_cfg["exporters"]
 pipeline_exporters = fanout_cfg["service"]["pipelines"]["traces"]["exporters"]
@@ -190,7 +200,7 @@ check(
 with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
     yaml.safe_dump({"otelCollector": {"backendEndpoint": "otlp.example.com:4317"}}, fh)
     legacy_only = pathlib.Path(fh.name)
-legacy_docs = helm_template(DEFAULT_VALUES, EVAL_OFF, legacy_only)
+legacy_docs = helm_template(DEFAULT_VALUES, NO_TRACING, EVAL_OFF, legacy_only)
 legacy_cfg = collector_config(legacy_docs)
 check(
     "otlp/backend" in legacy_cfg["exporters"] and list(legacy_cfg["exporters"].keys()) == ["debug", "otlp/backend"],
@@ -205,7 +215,7 @@ with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
         }
     }, fh)
     both_set = pathlib.Path(fh.name)
-both_docs = helm_template(DEFAULT_VALUES, EVAL_OFF, both_set)
+both_docs = helm_template(DEFAULT_VALUES, NO_TRACING, EVAL_OFF, both_set)
 both_cfg = collector_config(both_docs)
 check(
     set(both_cfg["exporters"].keys()) == {"debug", "otlp/backend", "otlp/candidate-a"},
@@ -319,7 +329,7 @@ with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
         }
     }, fh)
     widened_quota = pathlib.Path(fh.name)
-widened_docs = helm_template(DEFAULT_VALUES, widened_quota)
+widened_docs = helm_template(DEFAULT_VALUES, NO_TRACING, widened_quota)
 widened_quota_obj = find(widened_docs, "ResourceQuota", name="observability-eval-quota")
 if widened_quota_obj:
     hard = widened_quota_obj[0].get("spec", {}).get("hard", {})
@@ -360,7 +370,7 @@ all_disabled = _write_values(_eval_values(True, [
     {"name": "cand-a", "enabled": False, **CANDIDATE_TEMPLATE},
     {"name": "cand-b", "enabled": False, **CANDIDATE_TEMPLATE},
 ]))
-all_disabled_docs = helm_template(DEFAULT_VALUES, all_disabled)
+all_disabled_docs = helm_template(DEFAULT_VALUES, NO_TRACING, all_disabled)
 check(
     len(_eval_apps(all_disabled_docs)) == 0,
     "eval.enabled=true with every candidate disabled must render zero Applications into observability-eval",
@@ -370,7 +380,7 @@ one_enabled = _write_values(_eval_values(True, [
     {"name": "cand-a", "enabled": True, **CANDIDATE_TEMPLATE},
     {"name": "cand-b", "enabled": False, **CANDIDATE_TEMPLATE},
 ]))
-one_enabled_docs = helm_template(DEFAULT_VALUES, one_enabled)
+one_enabled_docs = helm_template(DEFAULT_VALUES, NO_TRACING, one_enabled)
 one_enabled_apps = _eval_apps(one_enabled_docs)
 check(
     len(one_enabled_apps) == 1,
@@ -385,7 +395,7 @@ if one_enabled_apps:
 candidate_on_eval_off = _write_values(_eval_values(False, [
     {"name": "cand-a", "enabled": True, **CANDIDATE_TEMPLATE},
 ]))
-candidate_on_eval_off_docs = helm_template(DEFAULT_VALUES, candidate_on_eval_off)
+candidate_on_eval_off_docs = helm_template(DEFAULT_VALUES, NO_TRACING, candidate_on_eval_off)
 check(
     len(_eval_apps(candidate_on_eval_off_docs)) == 0,
     "a candidate flag true while eval.enabled is false must render nothing -- the namespace guard dominates",
@@ -401,7 +411,7 @@ one_enabled_with_endpoint = _write_values(_eval_values(True, [
     {"name": "cand-a", "enabled": True, "otlpEndpoint": "cand-a.observability-eval.svc.cluster.local:4317", "insecure": True, **CANDIDATE_TEMPLATE},
     {"name": "cand-b", "enabled": False, "otlpEndpoint": "cand-b.observability-eval.svc.cluster.local:4317", **CANDIDATE_TEMPLATE},
 ]))
-fanout_one_docs = helm_template(DEFAULT_VALUES, one_enabled_with_endpoint)
+fanout_one_docs = helm_template(DEFAULT_VALUES, NO_TRACING, one_enabled_with_endpoint)
 fanout_one_cfg = collector_config(fanout_one_docs)
 eval_exporter_keys = [k for k in fanout_one_cfg["exporters"] if k.startswith("otlp/eval-")]
 check(eval_exporter_keys == ["otlp/eval-cand-a"], f"expected exactly one otlp/eval-<name> exporter, got {eval_exporter_keys}")
@@ -437,7 +447,7 @@ check(
 all_off_with_endpoint = _write_values(_eval_values(True, [
     {"name": "cand-a", "enabled": False, "otlpEndpoint": "cand-a.observability-eval.svc.cluster.local:4317", **CANDIDATE_TEMPLATE},
 ]))
-all_off_docs = helm_template(DEFAULT_VALUES, all_off_with_endpoint)
+all_off_docs = helm_template(DEFAULT_VALUES, NO_TRACING, all_off_with_endpoint)
 all_off_cfg = collector_config(all_off_docs)
 check(
     not [k for k in all_off_cfg["exporters"] if k.startswith("otlp/eval-")],
@@ -476,7 +486,7 @@ literal_header_candidate = _write_values(_eval_values(True, [
         **CANDIDATE_TEMPLATE,
     },
 ]))
-literal_header_docs = helm_template(DEFAULT_VALUES, literal_header_candidate)
+literal_header_docs = helm_template(DEFAULT_VALUES, NO_TRACING, literal_header_candidate)
 literal_header_cfg = collector_config(literal_header_docs)
 literal_headers = literal_header_cfg["exporters"].get("otlp/eval-cand-a", {}).get("headers", {})
 check(
@@ -508,7 +518,7 @@ tempo_candidate = next(c for c in committed_candidates if c.get("name") == "temp
 tempo_enabled = dict(tempo_candidate, enabled=True)
 
 tempo_values = _write_values(_eval_values(True, [tempo_enabled]))
-tempo_docs = helm_template(DEFAULT_VALUES, tempo_values)
+tempo_docs = helm_template(DEFAULT_VALUES, NO_TRACING, tempo_values)
 tempo_apps = _eval_apps(tempo_docs)
 check(len(tempo_apps) == 1, f"expected exactly one tempo Application, got {len(tempo_apps)}")
 if tempo_apps:
@@ -606,13 +616,138 @@ check(
     f"otlp/eval-tempo missing from traces pipeline exporters, got {tempo_pipeline_exporters}",
 )
 
-# --- Committed default (#1280) -----------------------------------------------
-# What bootstrap/values.yaml actually ships: the sandbox open with tempo as
-# the only candidate. Relative to the eval-off baseline the collector gains
+def _loki_ds_raw(docs):
+    cms = find(docs, "ConfigMap", name="loki-grafana-datasource", namespace="monitoring")
+    return yaml.safe_load(next(iter(cms[0]["data"].values())))["datasources"][0] if cms else {}
+
+
+# --- Committed default: sandbox closed, permanent Tempo on -------------------
+# The soak closed on 2026-10-22 (#2073) and the verdict adopted Tempo as a
+# separate deployment in `tracing` (docs/plans/tempo-adoption.md). Nothing
+# from the bake-off may render; the permanent Tempo must render whole and
+# self-consistent: the collector exports to the Service the Application
+# deploys, Grafana reads the same Service, and Loki links to that datasource.
+
+shipped_docs = helm_template(DEFAULT_VALUES)
+shipped_cfg = collector_config(shipped_docs)
+check(
+    not [e for e in shipped_cfg["exporters"] if e.startswith("otlp/eval-")],
+    f"committed default still renders an eval exporter: {list(shipped_cfg['exporters'])}",
+)
+check(not find(shipped_docs, "ConfigMap", name="tempo-eval-grafana-datasource"),
+      "committed default still renders the Tempo (eval) datasource")
+check(not find(shipped_docs, "Namespace", name="observability-eval"),
+      "committed default still renders the observability-eval Namespace")
+check(not _eval_apps(shipped_docs), "committed default still renders an observability-eval candidate Application")
+
+TEMPO_OTLP = "tempo.tracing.svc.cluster.local:4317"
+check(
+    shipped_cfg["service"]["pipelines"]["traces"]["exporters"] == ["debug", "otlp/backend"],
+    f"committed traces pipeline should be [debug, otlp/backend], got {shipped_cfg['service']['pipelines']['traces']['exporters']}",
+)
+backend = shipped_cfg["exporters"].get("otlp/backend", {})
+check(backend.get("endpoint") == TEMPO_OTLP, f"otlp/backend should target {TEMPO_OTLP}, got {backend.get('endpoint')!r}")
+check(backend.get("tls") == {"insecure": True},
+      f"otlp/backend to Tempo's plaintext receiver needs tls.insecure, got {backend.get('tls')!r}")
+check(
+    shipped_cfg["receivers"] == default_cfg["receivers"] and shipped_cfg["processors"] == default_cfg["processors"]
+    and {k: v for k, v in shipped_cfg["exporters"].items() if k != "otlp/backend"} == default_cfg["exporters"],
+    "adopting Tempo may add otlp/backend and nothing else to the collector config",
+)
+
+# backendInsecure off renders no tls block: the key is opt-in, not a default.
+tls_off_docs = helm_template(DEFAULT_VALUES, _write_values({"otelCollector": {"backendInsecure": False}}))
+check("tls" not in collector_config(tls_off_docs)["exporters"].get("otlp/backend", {}),
+      "backendInsecure: false must not render a tls block on otlp/backend")
+
+ns = find(shipped_docs, "Namespace", name="tracing")
+check(len(ns) == 1, f"committed default should render the tracing Namespace once, got {len(ns)}")
+# root-app renders nothing namespaced inside `tracing` (gitops#1925 deadlock):
+# only the Namespace itself, everything else comes from the Application.
+in_tracing = [(d["kind"], d["metadata"]["name"]) for d in shipped_docs
+              if d and d.get("metadata", {}).get("namespace") == "tracing"]
+check(not in_tracing, f"root-app must not render namespaced resources into tracing, got {in_tracing}")
+
+apps = find(shipped_docs, "Application", name="tracing-tempo", namespace="argocd")
+check(len(apps) == 1, f"expected one tracing-tempo Application, got {len(apps)}")
+tempo_values = {}
+if apps:
+    spec = apps[0]["spec"]
+    check(spec["destination"]["namespace"] == "tracing", f"tracing-tempo deploys to {spec['destination']['namespace']!r}")
+    check(spec["project"] == "default", "tracing-tempo should run in project default")
+    auto = spec.get("syncPolicy", {}).get("automated", {})
+    check(auto.get("prune") is True and auto.get("selfHeal") is True,
+          f"the permanent Tempo is reconciled (prune + selfHeal), got {auto!r}")
+    chart_src, path_src = spec["sources"]
+    check((chart_src["chart"], chart_src["targetRevision"]) == ("tempo", "2.4.0"),
+          f"tracing-tempo must pin the measured chart tempo 2.4.0, got {chart_src.get('chart')!r} {chart_src.get('targetRevision')!r}")
+    tempo_values = chart_src["helm"]["valuesObject"]
+    manifests_dir = ROOT / path_src["path"]
+    check(manifests_dir.is_dir(), f"tracing-tempo manifestsPath {path_src['path']} does not exist")
+    manifest_docs = [d for f in sorted(manifests_dir.glob("*.yaml")) for d in yaml.safe_load_all(f.read_text()) if d]
+    check(all(d["metadata"].get("namespace") == "tracing" for d in manifest_docs),
+          "every tracing/tempo manifest must be namespaced to tracing")
+    deny = [d for d in manifest_docs if d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == "default-deny-all"]
+    check(len(deny) == 1 and deny[0]["spec"]["podSelector"] == {}
+          and set(deny[0]["spec"]["policyTypes"]) == {"Ingress", "Egress"},
+          "tracing needs its namespace-wide default-deny-all NetworkPolicy")
+    quota = [d for d in manifest_docs if d["kind"] == "ResourceQuota"]
+    check(len(quota) == 1 and quota[0]["spec"]["hard"].get("persistentvolumeclaims") == "0"
+          and quota[0]["spec"]["hard"].get("requests.storage") == "0",
+          "tracing's ResourceQuota must refuse PVCs (billed volumes; the WAL is an emptyDir)")
+    def _wave(d):
+        return int((d["metadata"].get("annotations") or {}).get("argocd.argoproj.io/sync-wave", "0"))
+    check(all(_wave(d) < 0 for d in manifest_docs if d["kind"] in ("NetworkPolicy", "ResourceQuota", "LimitRange", "ExternalSecret")),
+          "policies, quota and the R2 ExternalSecret must sync before the StatefulSet (negative waves)")
+
+t = tempo_values.get("tempo", {})
+check(tempo_values.get("persistence", {}).get("enabled") is False, "the permanent Tempo must not request a PVC")
+check(t.get("retention") == "336h", f"retention should be 336h, got {t.get('retention')!r}")
+check(t.get("resources", {}).get("limits") == {"cpu": "2", "memory": "2Gi"},
+      f"Tempo limits should be 2 CPU / 2Gi, got {t.get('resources', {}).get('limits')!r}")
+check({e["name"]: e["value"] for e in t.get("extraEnv", [])}.get("GOMEMLIMIT") == "1600MiB",
+      "GOMEMLIMIT should be 1600MiB under the 2Gi limit")
+check(t.get("querier", {}).get("max_concurrent_queries") == 4, "querier max_concurrent_queries should be bounded to 4")
+check(t.get("queryFrontend", {}).get("api_timeout") == "1m", "query-frontend api_timeout must bound every read (default is none)")
+check(t.get("queryFrontend", {}).get("max_outstanding_per_tenant") == 100,
+      "query-frontend max_outstanding_per_tenant should be bounded to 100")
+check(t.get("storage", {}).get("trace", {}).get("backend") == "s3", "Tempo blocks belong in R2 (s3 backend)")
+check(tempo_values.get("fullnameOverride") == "tempo", "the Service name must not depend on the release name")
+
+project = find(shipped_docs, "AppProject", name="default")
+if project:
+    dests = {d["namespace"] for d in project[0]["spec"]["destinations"]}
+    check("tracing" in dests, "project default must permit the tracing namespace")
+    check("observability-eval" not in dests, "project default must not keep the closed sandbox's namespace")
+    check(chart_src["repoURL"] in project[0]["spec"]["sourceRepos"] if apps else False,
+          "project default must permit the Tempo chart repository")
+
+perm_ds = find(shipped_docs, "ConfigMap", name="tempo-grafana-datasource", namespace="monitoring")
+check(len(perm_ds) == 1, f"expected one Tempo datasource ConfigMap, got {len(perm_ds)}")
+if perm_ds:
+    prov = yaml.safe_load(next(iter(perm_ds[0]["data"].values())))
+    ds = prov["datasources"][0]
+    check((ds.get("name"), ds.get("uid"), ds.get("type")) == ("Tempo", "tempo", "tempo"),
+          f"unexpected permanent datasource identity: {ds.get('name')!r} {ds.get('uid')!r} {ds.get('type')!r}")
+    check(ds.get("url", "").split("://", 1)[-1].rsplit(":", 1)[0] == TEMPO_OTLP.rsplit(":", 1)[0],
+          f"Grafana must read the Service the collector writes to, got {ds.get('url')!r}")
+    check({"name": "Tempo (eval)", "orgId": 1} in prov.get("deleteDatasources", []),
+          "the provisioning file must delete the leftover Tempo (eval) datasource (the API refuses read-only ones)")
+    check(ds.get("jsonData", {}).get("tracesToLogsV2", {}).get("datasourceUid") == "P8E80F9AEF21F6940",
+          "Tempo -> Loki links must point at the Loki uid")
+shipped_derived = _loki_ds_raw(shipped_docs).get("jsonData", {}).get("derivedFields", [])
+check([(f.get("name"), f.get("datasourceUid")) for f in shipped_derived] == [("trace_id", "tempo")],
+      f"Loki's trace_id link must point at the permanent Tempo (uid tempo), got {shipped_derived!r}")
+
+# --- Tempo round as it ran (#1280) -------------------------------------------
+# The committed tempo candidate rendered with the sandbox open, as it was
+# during the soak. Relative to the eval-off baseline the collector gains
 # exactly one exporter and nothing else; the Grafana datasource renders and
 # points at the same Service the collector exports to.
 
-committed_docs = helm_template(DEFAULT_VALUES)
+committed_docs = helm_template(
+    DEFAULT_VALUES, NO_TRACING, _write_values(_eval_values(True, [dict(tempo_candidate, enabled=True)]))
+)
 committed_cfg = collector_config(committed_docs)
 committed_traces = committed_cfg["service"]["pipelines"]["traces"]
 check(
@@ -698,7 +833,7 @@ check(
 
 # Tempo disabled with the sandbox open: no datasource pointing at nothing.
 tempo_off = _write_values(_eval_values(True, [dict(tempo_candidate, enabled=False)]))
-tempo_off_docs = helm_template(DEFAULT_VALUES, tempo_off)
+tempo_off_docs = helm_template(DEFAULT_VALUES, NO_TRACING, tempo_off)
 check(
     not find(tempo_off_docs, "ConfigMap", name="tempo-eval-grafana-datasource"),
     "a disabled tempo candidate must not emit the Tempo (eval) datasource",

@@ -15,13 +15,21 @@ spec:
       values: |
         image:
           repository: ghcr.io/mctlhq/mctl-agent
-          tag: "2.4.2"
+          tag: "2.9.0"
         imagePullSecrets:
           - name: ghcr-credentials
         service:
           port: 8080
+        # Non-root on a read-only root filesystem (base-service hardening,
+        # step 2). USER app:app is a name, which kubelet cannot check for
+        # runAsNonRoot, so the ids it already runs as are pinned.
         podSecurityContext:
           fsGroup: 1000
+          runAsUser: 1000
+          runAsGroup: 1000
+        containerSecurityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
         resources:
           requests:
             cpu: 50m
@@ -80,18 +88,6 @@ spec:
           # mctl-api as of mctl-agent 1.14.1). ALERTMANAGER_URL defaults to the
           # in-cluster vmalertmanager service and is left on that default.
           AM_RECONCILE_ENABLED: "true"
-          # Resource optimizer (mctl Optimize): the collector starts
-          # accumulating hourly usage rollups immediately (read-only —
-          # no side effects), while OPTIMIZER_DRY_RUN keeps the daily
-          # recommendation pass Telegram-only. Flip dry-run to "false" in
-          # a separate PR once ≥7d of rollups exist and the dry-run
-          # recommendations look sane; widen the allowlist after the
-          # first SUCCESS verdict. VICTORIA_METRICS_URL is left on the
-          # in-cluster vmsingle default. Optimizer PRs use agent/optimize/*
-          # branches, which stay review-gated (claude/* would auto-merge).
-          OPTIMIZER_ENABLED: "true"
-          OPTIMIZER_DRY_RUN: "true"
-          OPTIMIZER_TENANT_ALLOWLIST: "labs"
           DATABASE_URL: "postgresql://$(DB_USER):$(DB_PASSWORD)@shared-pg-rw.platform-db.svc:5432/mctl-agent"
           # /start bridge (mctl-telegram#679): when the webhook sees a /start
           # update for @MCTL_AI_bot it forwards a minimal observation (no raw
@@ -101,6 +97,27 @@ spec:
           # only: allow-mctl-agent-to-mctl-telegram-bot-start in labs admits this
           # pod on 8080; the Service is not exposed through any Ingress route.
           BOT_START_FORWARD_URL: "http://labs-mctl-telegram-base-service.labs.svc:8080/internal/bot-start-observations"
+          # Sole Telegram user allowed to press the scout "Create spike N" button
+          # (mctl-agent#186). Unset = the callback refuses every press. Same id as
+          # TELEGRAM_CHAT_ID below: in the 1:1 bot chat the chat id is the user id.
+          TELEGRAM_OWNER_USER_ID: "210408407"
+          # Repos a scout "Create spike N" press may open an issue in. A draft
+          # naming any other repo is refused ("draft target not allowed").
+          # Operator's choice, a subset of the scout's SERVICES (mctl-agents
+          # config/settings.py); keep .github, the digest routes drafts there.
+          SCOUT_SPIKE_REPOS: "mctl-web,mctl-docs,mctl-api,mctl-portal,mctl-agent,mctl-gitops,mctl-agents,mctl-telegram,mctl-design,mctl-academy,mctl-alice,mctl-support,.github"
+        # OTLP trace export through the platform Collector (mctl-agent#38,
+        # #97): renders OTEL_EXPORTER_OTLP_ENDPOINT/_PROTOCOL and
+        # OTEL_RESOURCE_ATTRIBUTES. The agent sets service.name=mctl-agent
+        # itself. With mctl-agent >= the #97 release, each ticket's log lines
+        # carry trace_id/span_id as JSON fields (not Loki labels) and the
+        # ticket stores its trace_id. Older tags emit spans only. Spans go to
+        # the Collector, never to a backend directly; where they land is the
+        # Collector's choice (the permanent Tempo in `tracing`, #1280
+        # verdict). Turning this off restores the untraced agent, which works
+        # unchanged.
+        otel:
+          enabled: true
         envFrom:
           - secretRef:
               name: mctl-agent-secrets
@@ -198,9 +215,19 @@ spec:
               - secretKey: BOT_START_FORWARD_TOKEN
                 remoteKey: secret/data/platform/shared/bot-start-bridge
                 property: token
+        # Only the two paths that must be public are routed: Telegram's
+        # webhook (setWebhook to WEBHOOK_CALLBACK_URL + /api/v1/telegram) and
+        # the external blackbox probe of /healthz (blackbox/vmprobes.yaml).
+        # Everything else -- /api/v1/alerts, /mcp, /api/v1/tickets,
+        # /api/v1/skills* -- is in-cluster only and was reachable from the
+        # internet behind a bearer token alone. /api/v1/github-webhook is not
+        # routed because GITHUB_WEBHOOK_SECRET is unset, so the agent does
+        # not register it; route it here if that is ever enabled.
         ingress:
           enabled: true
           ingressClassName: traefik
+          path: /api/v1/telegram
+          pathType: Exact
           annotations:
             cert-manager.io/cluster-issuer: letsencrypt-prod
           hosts:
@@ -209,6 +236,18 @@ spec:
             - secretName: mctl-agent-tls
               hosts:
                 - agent.mctl.ai
+        # No cert-manager annotation here: the certificate is issued once,
+        # for the ingress above, and this one reuses its secret.
+        extraIngresses:
+          - name: admins-mctl-agent-healthz
+            hosts:
+              - agent.mctl.ai
+            path: /healthz
+            pathType: Exact
+            tls:
+              - secretName: mctl-agent-tls
+                hosts:
+                  - agent.mctl.ai
         probes:
           liveness:
             path: /healthz

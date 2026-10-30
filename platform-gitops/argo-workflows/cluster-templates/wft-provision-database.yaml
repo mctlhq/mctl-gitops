@@ -21,6 +21,44 @@ spec:
     secondsAfterCompletion: 3600
   entrypoint: provision-pipeline
   serviceAccountName: argo-workflow-sa
+  # Pod Security "restricted": this workflow runs in the tenant namespace
+  # (mctl-api operations.WorkflowNamespace), which is moving from
+  # enforce=baseline to restricted (handoff audit, block B step 3). The pod
+  # securityContext covers every container; container-level fields are not
+  # inherited from it, so podSpecPatch adds them to Argo's own init and wait
+  # containers (argoexec runs as root by default) and to main. HOME=/tmp
+  # because python, alpine/k8s and alpine/git have no passwd entry for uid
+  # 1000; steps that use ssh run mctl-workflow-tools, which has one.
+  # Templates reached through templateRef (tpl-*, the completion hook) run
+  # under this spec too.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  podSpecPatch: |
+    initContainers:
+      - name: init
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+    containers:
+      - name: wait
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      - name: main
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+          - name: HOME
+            value: /tmp
 
   arguments:
     parameters:
@@ -46,31 +84,23 @@ spec:
           - name: team_name
           - name: app_name
       script:
-        image: alpine:3.19
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
         command: [sh]
         envFrom:
           - configMapRef:
               name: mctl-platform-config
         source: |
           set -e
-          apk add --no-cache curl openssl git openssh-client > /dev/null 2>&1
-          # Same version tpl-git-commit pins. The values.yaml patch below is a
-          # structured edit, not a text append: gitops#1102 was a blind
-          # `printf >>` that wrote a second top-level `envFrom:` into a file
-          # that already had one, and Helm keeps the last duplicate.
-          curl -fsSL --retry 5 --retry-delay 3 --retry-max-time 60 \
-            -o /usr/local/bin/yq \
-            "https://github.com/mikefarah/yq/releases/download/v4.52.4/yq_linux_amd64"
-          # Verified before it is made executable. This pod runs as
-          # argo-workflow-sa and holds a Vault token, so an altered binary here
-          # is not a broken build, it is code execution next to the platform's
-          # credentials. Pinning the tag is not enough on its own: a release
-          # asset can be replaced under a tag that never moves.
-          echo "0c4d965ea944b64b8fddaf7f27779ee3034e5693263786506ccd1c120f184e8c  /usr/local/bin/yq" | sha256sum -c - >/dev/null
-          chmod +x /usr/local/bin/yq
+          # yq (and curl, git, ssh) come from mctl-workflow-tools, where the yq
+          # download is sha256-verified at build time: this pod holds a Vault
+          # token, so nothing is fetched and executed at runtime. The
+          # values.yaml patch below is a structured edit, not a text append:
+          # gitops#1102 was a blind `printf >>` that wrote a second top-level
+          # `envFrom:` into a file that already had one, and Helm keeps the
+          # last duplicate.
 
-          TEAM="{{inputs.parameters.team_name}}"
-          APP="{{inputs.parameters.app_name}}"
+          TEAM="$PARAM_TEAM_NAME"
+          APP="$PARAM_APP_NAME"
           DB_NAME="${TEAM}-${APP}"
           VAULT_PATH="teams/${TEAM}/${APP}/database"
 
@@ -86,10 +116,18 @@ spec:
 
           # ── Authenticate with Vault (K8s auth) ───────────────────────────
           echo "🔐 Authenticating with Vault..."
+          # A tenant namespace may assume only its own tenant role; the
+          # children wft-smoke-test submits in argo-workflows keep the
+          # platform role.
+          SA_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+          case "$SA_NS" in
+            argo-workflows) VAULT_ROLE=argo-workflow ;;
+            *) VAULT_ROLE="argo-workflow-tenant-${SA_NS}" ;;
+          esac
           SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
           VAULT_TOKEN=$(curl -sS -X POST \
             -H "Content-Type: application/json" \
-            -d "{\"role\":\"argo-workflow\",\"jwt\":\"${SA_TOKEN}\"}" \
+            -d "{\"role\":\"${VAULT_ROLE}\",\"jwt\":\"${SA_TOKEN}\"}" \
             "${VAULT_ADDR}/v1/auth/kubernetes/login" | \
             grep '"client_token"' | sed 's/.*"client_token":"\([^"]*\)".*/\1/')
           export VAULT_TOKEN
@@ -392,6 +430,10 @@ spec:
             fi
           fi
         env:
+          - name: PARAM_TEAM_NAME
+            value: "{{inputs.parameters.team_name}}"
+          - name: PARAM_APP_NAME
+            value: "{{inputs.parameters.app_name}}"
           - name: VAULT_ADDR
             value: "http://vault.vault.svc.cluster.local:8200"
         volumeMounts:

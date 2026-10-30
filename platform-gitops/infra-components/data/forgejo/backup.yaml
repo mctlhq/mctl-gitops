@@ -140,10 +140,10 @@ spec:
                   aws s3 cp /archive/forgejo-data.tar.gz "s3://${BUCKET}/${KEY}" \
                     --endpoint-url "${ENDPOINT}" --region auto
 
-                  echo "Cleaning old archives (keep last 14)..."
+                  echo "Cleaning old archives (keep last 2)..."
                   aws s3 ls "s3://${BUCKET}/forgejo-backups/" \
                     --endpoint-url "${ENDPOINT}" --region auto \
-                    | sort | head -n -14 | while read -r line; do
+                    | sort | head -n -2 | while read -r line; do
                     FILE=$(echo "$line" | awk '{print $4}')
                     if [ -n "$FILE" ]; then
                       aws s3 rm "s3://${BUCKET}/forgejo-backups/${FILE}" \

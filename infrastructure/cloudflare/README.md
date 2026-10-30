@@ -26,6 +26,8 @@ so adding one requires no CI change.
 ```
 infrastructure/cloudflare/
   account/      account-scoped resources (R2, Access, Zero Trust, MCP)
+  portal/       the MCP portal and its servers
+  tokens/       checks only: the account's API tokens, declared (no resources)
   zones/<zone>/ one root per zone — independent blast radius
 ```
 
@@ -176,6 +178,18 @@ So a change to worker routes moves the subdomain redirect. Whatever PR touches
 them has to re-check subdomain redirects; no zone-level configuration here will
 catch that regression.
 
+Since the 2026-10-22 scanner the subdomain redirect is also **gated at the
+edge**: `firewall_custom` in the module blocks every `*.mctl.me` / `*.mctl.ru`
+host that is not in that zone's `redirect_subdomains` list, before the worker
+runs. The wildcard record and the `*.zone/*` route are unchanged, so the list
+is what decides which old links still answer `301`; a label missing from it
+answers `403`. The same ruleset, and `mctl.ai`'s, block crawler User-Agents on
+requests that are not Cloudflare-verified bots — the expression is one module,
+`modules/spoofed-crawlers`, so the three zones cannot drift apart on it. The
+evidence (189k requests in a day from one Google Cloud scanner rotating ~30
+crawler names over a subdomain wordlist, 2.9 GB of Workers Logs in two weeks)
+is in that module's header.
+
 ## Zone settings
 
 Zone settings were outside the #1089 import programme entirely — not considered
@@ -321,21 +335,28 @@ Nothing is committed. CI reads:
   for `infrastructure/k3s-preview` and passes it into the cluster as
   `TF_VAR_etcd_s3_*`, so it has consumers outside this directory entirely.
   Never exposed to a job that plans unreviewed pull-request code.
-- `CLOUDFLARE_API_TOKEN` — plan identity, **read-only across all zones**
-  (`Cache Rules`, `DNS`, `Zone`, `Zone Settings`, `Zone WAF`, `Single Redirect`,
-  `Page Rules`, `Access: Apps and Policies`, `Email Routing Rules`,
-  `Workers Routes`, all `Read`). Verified read-only: a `POST` to create a DNS
-  record is rejected. It is never given to `cloudflare-apply.yml`.
+- `CLOUDFLARE_API_TOKEN` — plan identity of the zone roots, **read-only on
+  mctl.ai, mctl.me and mctl.ru** and on no other zone. Account-owned since
+  2026-10-16 (`mctl-gitops-plan-zones (CLOUDFLARE_API_TOKEN)`), ten groups,
+  all `Read`: Cache Settings, DNS, Zone, Zone Settings, Zone WAF, Dynamic URL
+  Redirects, Page Rules, Access: Apps and Policies, Email Routing Rules,
+  Workers Routes. The exact list and the three zones are declared in
+  `tokens/manifest.tf` and checked every night. It is never given to
+  `cloudflare-apply.yml`.
   Its `Access: Apps and Policies` is **zone**-scoped, which is not the same
   permission as the account-level one: reading an Access application in the
   account answers `1010 auth.forbidden` with this token.
-- `CF_ACCOUNT_READ_TOKEN` — read identity for
-  `infrastructure/cloudflare/account` alone, `Account -> Access: Apps and
-  Policies -> Read` on this account and nothing else. Without it that root
-  cannot refresh the Access application it now holds, and every plan of it
-  fails on the refresh rather than reporting a diff. Absent, the chain in
-  `cloudflare-plan.yml` and `cloudflare-drift.yml` falls back to the zone
-  credential, so the gap shows up as a failing root rather than a silent skip.
+- `CF_ACCOUNT_READ_TOKEN` — read identity for `infrastructure/cloudflare/account`
+  and `infrastructure/cloudflare/tokens`. Account-owned since 2026-10-16
+  (`mctl-gitops-plan-account (CF_ACCOUNT_READ_TOKEN)`), seven `Read` groups on
+  this account and nothing else: Access: Apps and Policies, Access: Identity
+  Providers, Email Routing Addresses, Workers R2 Storage, Cloudflare Tunnel,
+  Workers KV Storage, Account API Tokens. The exact list is declared in
+  `tokens/manifest.tf` and checked every night. Without it the account root
+  cannot refresh what it holds, and every plan of it fails on the refresh
+  rather than reporting a diff. Absent, the chain in `cloudflare-plan.yml` and
+  `cloudflare-drift.yml` falls back to the zone credential, so the gap shows up
+  as a failing root rather than a silent skip.
 
   **Three workflows, not two.** `cloudflare-apply.yml` has a read-only `plan`
   job of its own, and it needs this token for the same reason. That was missed
@@ -343,6 +364,18 @@ Nothing is committed. CI reads:
   second change: the first apply had nothing to refresh, so the gap only
   appeared once the application existed. A new per-root read credential belongs
   in all three chains at once.
+
+**CI tokens are account-owned, and declared.** Every Cloudflare token a
+workflow or a cluster job uses is created under *Manage account -> Account API
+tokens*, never under a person's profile, and gets an entry in
+`tokens/manifest.tf` in the same pull request. An account-owned token survives
+its creator leaving and is visible to the account's token listing, which is
+what `tokens/` checks: any account token that is not declared, or declared and
+not live, fails the plan of that root and the nightly drift run. A
+user-owned token is invisible to that listing, so the check cannot see it at
+all. The last three user-owned CI tokens (`CLOUDFLARE_API_TOKEN`,
+`CF_PORTAL_READ_TOKEN`, `CF_APPLY_TOKEN_PORTAL`) were re-issued as account
+tokens on 2026-10-16.
 
 Everything above is a **repository** secret. `R2_CF_STATE_*` should not be:
 it has exactly one consumer, `opentofu-state-backup.yml`, whose `state-backup`

@@ -20,7 +20,7 @@ export KUBECONFIG="$(pwd)/infrastructure/k3s-preview/kubeconfig.yaml"
 
 | Namespace | Owner | Contents |
 |---|---|---|
-| `<team>` (e.g. `labs`, `admins`, `ovk`) | tenant | `<team>-<service>-base-service` Deployments. Tenant workloads live here. |
+| `<team>` (e.g. `labs`, `admins`, `karabu`) | tenant | `<team>-<service>-base-service` Deployments. Tenant workloads live here. |
 | `mctl-api` | platform | `mctl-api` Deployment and Service. ArgoCD Application is `admins-mctl-api`, but the pod runs here. |
 | `backstage` | platform | Backstage / mctl-portal Deployment and Service. ArgoCD Application is `admins-mctl-portal`. |
 | `argocd` | platform | ArgoCD Applications (`<team>-<service>`, `tenant-<team>`, `loki-stack`, …) |

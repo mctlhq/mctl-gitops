@@ -82,7 +82,7 @@ jobs:
           # any root any more — the Access policy admits any Google account and
           # the server alone decides what each address sees — so watching that
           # path would now only wake the gate for a file it does not read.
-          if grep -qE '^(infrastructure/cloudflare/|\.github/scripts/cloudflare-local-state-roots\.sh$|\.github/workflows/cloudflare-(plan|drift)\.yml$)' <<< "$files"; then
+          if grep -qE '^(infrastructure/cloudflare/|\.github/scripts/cloudflare-local-state-roots\.sh$|\.github/scripts/cloudflare-ai-gateway-custom-providers\.sh$|\.github/workflows/cloudflare-(plan|drift)\.yml$)' <<< "$files"; then
             changed=true
           else
             changed=false
@@ -385,6 +385,12 @@ jobs:
       # Account -> Access: Apps and Policies -> Read and Access: Identity
       # Providers -> Read (since 2026-10-04, #1500) on this account alone;
       # account/access-idps-read.tf fails the plan if the second is lost.
+      #
+      # infrastructure/cloudflare/tokens gets the same token: it reads the
+      # account's API token list (`Account API Tokens Read`, held by
+      # CF_ACCOUNT_READ_TOKEN since 2026-10-16) and fails the plan when it
+      # differs from tokens/manifest.tf. Read-only, and it reads metadata
+      # only: Cloudflare never returns a token's value after creation.
       # Absent, the chain falls back to the zone credential and that root keeps
       # failing visibly rather than being skipped.
       CLOUDFLARE_API_TOKEN: >-
@@ -392,17 +398,23 @@ jobs:
          && secrets.CF_PORTAL_READ_TOKEN
          || matrix.root == 'infrastructure/cloudflare/account'
          && secrets.CF_ACCOUNT_READ_TOKEN
+         || matrix.root == 'infrastructure/cloudflare/tokens'
+         && secrets.CF_ACCOUNT_READ_TOKEN
          || secrets.CLOUDFLARE_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_PLAN_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PLAN_SECRET_ACCESS_KEY }}
       # Personal addresses kept out of this public repository, each scoped to
       # the one root that declares it: the account root's pilot addresses
-      # (account/portal-mcp-apps.tf) and the mctl.ai forward destination
-      # (zones/mctl-ai/email.tf). Empty for every other root, and an unset
-      # secret leaves its root without a value, which fails the plan rather
+      # (account/portal-mcp-apps.tf) and the mctl.ai forward destinations,
+      # declared as addresses in the account root (account/email-routing.tf)
+      # and forwarded to from zones/mctl-ai/email.tf, so both roots get them.
+      # Empty for every other root, and an unset secret leaves its root
+      # without a value, which fails the plan rather
       # than planning an empty policy or a forward to nowhere.
       TF_VAR_portal_pilot_emails: ${{ matrix.root == 'infrastructure/cloudflare/account' && secrets.CF_PORTAL_PILOT_EMAILS || '' }}
-      TF_VAR_email_routing_destination: ${{ matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' && secrets.CF_MCTL_AI_EMAIL_DESTINATION || '' }}
+      TF_VAR_email_routing_destination: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_DESTINATION || '' }}
+      TF_VAR_email_routing_destination_obukhov: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_OBUKHOV || '' }}
+      TF_VAR_email_routing_destination_moonqua: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_MOONQUA || '' }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -560,6 +572,16 @@ jobs:
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # account/ai-gateway-custom-providers.json has no Terraform resource
+      # behind it (cloudflare/cloudflare 5.28.1; spike #2262), so its plan is a
+      # script's, published into the same summary. Read-only with the plan
+      # credential, which holds AI Gateway Read. A destroy here is surfaced
+      # the same way as above: visible, not fatal, for a reviewer to see.
+      - name: Plan AI Gateway custom providers
+        if: matrix.root == 'infrastructure/cloudflare/account'
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh plan infrastructure/cloudflare/account/ai-gateway-custom-providers.json
+
       # The plan file can contain resource attribute values. Nothing here is
       # uploaded as an artifact for that reason.
       - name: Scrub
@@ -593,6 +615,13 @@ jobs:
         env:
           CLOUDFLARE_GUARD_SELF_TEST: '1'
         run: .github/scripts/cloudflare-assert-backend.sh
+      # Proven both ways against a fake of the endpoint: no changes on a
+      # converged account, the right changes on a mutated one, and an error
+      # rather than "no providers" when the listing fails.
+      - name: Custom-provider reconciler
+        env:
+          CLOUDFLARE_GUARD_SELF_TEST: '1'
+        run: .github/scripts/cloudflare-ai-gateway-custom-providers.sh
 
   # The single stable context to mark required in the branch ruleset. It runs on
   # every pull request, including ones that touch nothing here, so it always has

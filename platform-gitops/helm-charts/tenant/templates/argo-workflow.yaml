@@ -80,7 +80,8 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list"]
   {{- /* Blanket write was dropped: this Role is also bound to the central
-      argo-workflows/argo-workflow-sa in every tenant namespace, so patch/update
+      argo-workflows/argo-workflow-sa (in every tenant namespace until
+      tenant.centralWorkflowSA made it opt-in), so patch/update
       on all ExternalSecrets let one workflow repoint another tenant's secret at
       an arbitrary Vault path. Smoke tests refresh via the ArgoCD app's
       refresh=hard annotation (wft-smoke-test), not by patching. */}}
@@ -117,8 +118,13 @@ roleRef:
   kind: Role
   name: argo-workflow-smoke-verify
   apiGroup: rbac.authorization.k8s.io
+{{- if $.Values.tenant.centralWorkflowSA.smokeVerify }}
 ---
-# Bind central workflow SA (argo-workflows ns) to smoke-verify Role in this namespace.
+# Bind central workflow SA (argo-workflows ns) to smoke-verify Role in this
+# namespace, for the platform workflows that inspect it from argo-workflows:
+# wft-smoke-test (deployments, pods/exec, ExternalSecrets of its team) and
+# cwft-rotate-github-token (externalSecretPatchTargets). Opt-in, see
+# tenant.centralWorkflowSA in values.yaml.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -134,12 +140,23 @@ roleRef:
   kind: Role
   name: argo-workflow-smoke-verify
   apiGroup: rbac.authorization.k8s.io
+{{- end }}
 ---
-# SSO RBAC: give the team's SSO SA (in argo-workflows ns) access to workflows here
+# SSO RBAC: the team's SSO SA (in argo-workflows ns) may view workflows here,
+# never create or change them. Tenant workflows are submitted by the portal
+# and mctl-api with their own credentials, after their own team and input
+# checks, which a workflow created in the UI would skip. Platform admins keep
+# write access through the argo-workflows-admin SA ('admins' in groups,
+# argo-workflows/config/sa-and-rbac.yaml).
+# Named apart from the old sso-team-workflows binding (argo-workflows-admin)
+# because a RoleBinding's roleRef cannot change in place: Argo CD prunes the
+# old one and creates this one. argo-workflows-view (get/list/watch on the
+# Argo CRDs), like argo-workflows-admin, comes from the upstream
+# argo-workflows chart pinned in bootstrap/templates/core-infra/argo-workflows.yaml.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: sso-team-workflows
+  name: sso-team-workflows-view
   namespace: {{ $ns }}
   labels:
     {{- include "tenant.labels" $ | nindent 4 }}
@@ -149,14 +166,41 @@ subjects:
     namespace: argo-workflows
 roleRef:
   kind: ClusterRole
-  name: argo-workflows-admin
+  name: argo-workflows-view
   apiGroup: rbac.authorization.k8s.io
 ---
-# SSO RBAC: give the team's SSO SA access to events/secrets/pods/logs for log viewing
+# SSO RBAC: what the Argo UI needs, as the team's SSO SA, to show a run's
+# events and logs. Live logs come from pods/log; archived logs are read from
+# the artifact repository with the credentials Secret the controller config
+# names (bootstrap core-infra/argo-workflows.yaml artifactRepository), which
+# argo-server fetches with the signed-in user's client. That one Secret is all
+# it reads: the old binding to the cluster-wide argo-workflows-admin-extra
+# gave tenant members get on every Secret here, including the gitops deploy
+# key and github-actions-pat the tenant workflows mount. Named apart from the
+# old sso-team-logs binding because a roleRef cannot change in place.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sso-team-log-viewer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["minio-artifact-credentials"]
+    verbs: ["get"]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: sso-team-logs
+  name: sso-team-log-viewer
   namespace: {{ $ns }}
   labels:
     {{- include "tenant.labels" $ | nindent 4 }}
@@ -165,15 +209,46 @@ subjects:
     name: sso-team-{{ $tenantName }}
     namespace: argo-workflows
 roleRef:
-  kind: ClusterRole
-  name: argo-workflows-admin-extra
+  kind: Role
+  name: sso-team-log-viewer
   apiGroup: rbac.authorization.k8s.io
 ---
-# Allow mctl-api to submit and manage workflows in this namespace.
+# Allow mctl-api to submit and manage workflows in this namespace: create,
+# watch, and patch to resume or abort the suspended Workflow of a secret
+# handoff (mctl-api internal/operations/executor.go, secret_handoff.go);
+# resourcequotas for its quota reads (internal/k8s/quotas.go). Its own Role,
+# not argo-workflow-runner: that one is the workflow pods' and carries get on
+# every Secret here, which mctl-api never reads (see mctl-api-secret-handoff
+# below). Named apart from the old mctl-api-workflow-submitter binding
+# because a roleRef cannot change in place.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mctl-api-workflows
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
+  # Tenant-scoped pod state and events for diagnostics (mctl-api#812):
+  # GET /api/v1/pods/{team}/{app} and GET /api/v1/events/{team}. list only;
+  # no pods/log, watch, Secrets, ConfigMaps or write verbs.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: mctl-api-workflow-submitter
+  name: mctl-api-workflows
   namespace: {{ $ns }}
   labels:
     {{- include "tenant.labels" $ | nindent 4 }}
@@ -183,7 +258,7 @@ subjects:
     namespace: mctl-api
 roleRef:
   kind: Role
-  name: argo-workflow-runner
+  name: mctl-api-workflows
   apiGroup: rbac.authorization.k8s.io
 ---
 # mctl-api hands secret workflow inputs (deploy-service secret_env_vars) to
@@ -258,14 +333,36 @@ roleRef:
   kind: Role
   name: argo-workflow-helm-deploy
   apiGroup: rbac.authorization.k8s.io
+{{- with $.Values.tenant.centralWorkflowSA.restartDeployments }}
 ---
-# Bind CENTRAL workflow SA (argo-workflows ns) to helm-deploy Role for preview workflows.
-# The tenant-local binding above targets the per-namespace SA; this one targets the SA
-# that actually runs workflow pods (which live in the argo-workflows namespace).
+# Lets the central workflow SA (argo-workflows ns) `kubectl rollout restart`
+# the listed Deployments here, for CronWorkflows that live in argo-workflows
+# (cronworkflow-labs-claude-remote-restart). It used to hold the whole
+# argo-workflow-helm-deploy Role in every tenant namespace (write on
+# Deployments, Secrets, Services, Pods), which nothing it runs needs: preview
+# and deploy workflows run as the tenant-local SA. Reads stay namespace-wide
+# because `rollout status` lists and watches; the patch is limited by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-central-restart
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      {{- toYaml . | nindent 6 }}
+    verbs: ["patch"]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: argo-workflow-helm-deploy-central
+  name: argo-workflow-central-restart
   namespace: {{ $ns }}
   labels:
     {{- include "tenant.labels" $ | nindent 4 }}
@@ -275,8 +372,9 @@ subjects:
     namespace: argo-workflows
 roleRef:
   kind: Role
-  name: argo-workflow-helm-deploy
+  name: argo-workflow-central-restart
   apiGroup: rbac.authorization.k8s.io
+{{- end }}
 ---
 # Artifact repository credentials — required by Argo Workflows argoexec init
 # container. Secret name kept as "minio-artifact-credentials" (legacy), but
@@ -317,6 +415,65 @@ spec:
       remoteRef:
         key: platform/r2-loki-argo
         property: secret-key
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
+---
+# The two credentials the tenant workflows mount: mctl-api submits
+# deploy-service, preview-deploy, provision-database and retire-service in the
+# team's namespace (operations.WorkflowNamespace), and those clone and push
+# mctl-gitops with the deploy key and dispatch build-image.yaml with the token.
+# Same Vault paths as the argo-workflows copies in
+# argo-workflows/secrets/workflow-credentials.yaml, which documents rotation.
+#
+# They used to be Reflector copies of the argo-workflows Secrets, limited by a
+# namespace list on the source that create-tenant and delete-tenant had to
+# keep in step (gitops#1850). Rendered here, a namespace has them exactly
+# while its tenant exists, and the tenant app prunes them on delete.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-gitops-deploy-key
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-gitops-deploy-key
+    creationPolicy: Owner
+  data:
+    - secretKey: ssh-privatekey
+      remoteRef:
+        key: platform/argo-workflows/gitops-deploy-key
+        property: ssh-privatekey
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: github-actions-pat
+  namespace: {{ $ns }}
+  labels:
+    {{- include "tenant.labels" $ | nindent 4 }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: github-actions-pat
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef:
+        key: platform/argo-workflows/github-actions-pat
+        property: token
         conversionStrategy: Default
         decodingStrategy: None
         metadataPolicy: None

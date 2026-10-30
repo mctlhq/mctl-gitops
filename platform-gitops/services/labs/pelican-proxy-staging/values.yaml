@@ -13,6 +13,16 @@ service:
   port: 8787
 backstage:
   kubernetesId: pelican-proxy-staging
+# Non-root (base-service hardening, step 2). runAsNonRoot is checked by
+# kubelet against a numeric user only, so the ids this image already
+# runs as are pinned (observed 2026-10-16). The root filesystem stays
+# writable: the proxy writes /app/.catalog.json at runtime.
+podSecurityContext:
+  runAsUser: 100
+  runAsGroup: 101
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: false
 resources:
   requests:
     cpu: 75m

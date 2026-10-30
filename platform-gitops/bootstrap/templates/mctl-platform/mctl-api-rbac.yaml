@@ -1,7 +1,7 @@
 # Allow mctl-api to read ClusterWorkflowTemplates and manage workflows in argo-workflows ns.
 # The ServiceAccount itself is created by the mctl-api Helm chart.
 # Per-tenant workflow submission RBAC is provisioned by the tenant Helm chart
-# (see helm-charts/tenant/templates/argo-workflow.yaml — mctl-api-workflow-submitter RB).
+# (see helm-charts/tenant/templates/argo-workflow.yaml — mctl-api-workflows Role/RB).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -14,6 +14,12 @@ rules:
   - apiGroups: ["argoproj.io"]
     resources: ["clusterworkflowtemplates"]
     verbs: ["get", "list"]
+  # Agent run token exchange (mctlhq/mctl-agents#737): mctl-api reads the
+  # pod a presented ServiceAccount token is bound to, to find its Workflow.
+  # get only -- no list, no logs, no exec, no secrets.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -50,4 +56,56 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: mctl-api-cwt-reader
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Read-only postcondition: a failed namespace lookup cannot complete deletion.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mctl-api-customer-namespace-reader
+rules:
+  # Namespace get is cluster-wide because customer names are dynamic. It
+  # exposes metadata/status only; no list, write, workload or secret access.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mctl-api-customer-namespace-reader
+subjects:
+  - kind: ServiceAccount
+    name: mctl-api
+    namespace: mctl-api
+roleRef:
+  kind: ClusterRole
+  name: mctl-api-customer-namespace-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# Agent run token exchange (mctlhq/mctl-agents#737): mctl-api verifies an
+# agent pod's projected ServiceAccount token with TokenReview. Only that one
+# verb, rather than system:auth-delegator, which also grants
+# SubjectAccessReview.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mctl-api-token-reviewer
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mctl-api-token-reviewer
+subjects:
+  - kind: ServiceAccount
+    name: mctl-api
+    namespace: mctl-api
+roleRef:
+  kind: ClusterRole
+  name: mctl-api-token-reviewer
   apiGroup: rbac.authorization.k8s.io

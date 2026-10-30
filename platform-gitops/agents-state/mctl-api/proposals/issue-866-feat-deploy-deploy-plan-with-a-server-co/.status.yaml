@@ -1,0 +1,53 @@
+status: needs-triage
+updated_at: '2026-10-30T12:07:36Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-c6d5d4170d1e13d2
+  trace_id: 0517cbd4a810b24cd85ac45bd3dbbaba
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 866
+  url: https://github.com/mctlhq/mctl-api/issues/866
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-cb1002a616b9574e
+  content_hash: sha256:cb1002a616b9574e8d09d52a112c802db9aa2eb974f354476d9910d24c39058c
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-30T12:05:26Z'
+  content_digest: sha256:3fb192fac1b417ad30a9bc4c4e1429be7d3b52767776764697d9a77a0e059c5b
+  digest_binding: reviewed
+  approval_ref: aar_fd423a75f2154da797cef7f930302d5d
+attempt:
+  id: ec624b753fcad602503cbb0ae80ec9e13009d97bf0cfa8ac40273a6d9041d928
+  started_at: '2026-10-30T12:06:55Z'
+  expires_at: '2026-10-30T14:16:55Z'
+  finished_at: '2026-10-30T12:07:36Z'
+failure:
+  code: no-commits
+  stage: agent
+  message: implementer produced no commits
+notes: 'agent: implementer produced no commits'
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-62d43db3
+  authoritative:
+    completion_id: ic-55ff8a5dca6c7354
+    content_hash: sha256:55ff8a5dca6c7354aa1aaa56ffc4dac32dedc04ee84851f24d005743dc08ea23
+    proposal_digest: sha256:3fb192fac1b417ad30a9bc4c4e1429be7d3b52767776764697d9a77a0e059c5b
+    attempt_id: ec624b753fcad602503cbb0ae80ec9e13009d97bf0cfa8ac40273a6d9041d928
+    step: primary
+    outcome: deterministic_failure
+    stop_reason: no_commits
+    head_sha: null
+    verification:
+      required_passed: 0
+      required_total: 4
+      optional_total: 1
+  primary_observed: true

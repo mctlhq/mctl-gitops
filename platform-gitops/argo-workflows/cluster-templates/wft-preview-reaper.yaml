@@ -1,0 +1,163 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: preview-reaper
+  annotations:
+    workflows.argoproj.io/description: |
+      Delete expired previews in {tenant}-preview. preview-deploy stamps
+      each Helm release with the label mctl.ai/expires-at (unix seconds,
+      now + ttl_hours); this uninstalls every release past it, plus the
+      ${RELEASE}-tls Secret cert-manager leaves behind (same cleanup as
+      preview-delete). Run hourly by the CronWorkflow preview-reaper that
+      the tenant chart renders into each tenant namespace with preview
+      enabled. Before it, nothing enforced ttl_hours at all. A failed
+      run is how an unknown lifetime or a failed cleanup surfaces: alert
+      PreviewReaperFailing (vm-rules/preview-reaper-alerts.yaml).
+spec:
+  entrypoint: reap
+  serviceAccountName: argo-workflow-sa
+  activeDeadlineSeconds: 900
+  ttlStrategy:
+    secondsAfterSuccess: 86400
+    secondsAfterFailure: 259200
+  # Pod Security "restricted": runs in the tenant namespace, like
+  # preview-delete; see the note there for why podSpecPatch repeats the
+  # container-level fields and sets HOME.
+  # init, wait and main get explicit requests because the tenant LimitRange
+  # would otherwise give each its defaultRequest (100m/128Mi), and a pod
+  # then exceeds the smallest tenant quotas (100m/128Mi), where it never
+  # starts. main's requests sit here, not only on the script template,
+  # because this patch also reaches the pod of the controller-wide exit
+  # hook (workflowDefaults: global-workflow-completion-hook), which has no
+  # resources of its own. Without it that pod asks for 110m and stays
+  # Pending forever, the workflow never completes, and concurrencyPolicy
+  # Forbid then skips every later tick. With these each pod requests
+  # 20m/96Mi.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  podSpecPatch: |
+    initContainers:
+      - name: init
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+    containers:
+      - name: wait
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      - name: main
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        env:
+          - name: HOME
+            value: /tmp
+
+  templates:
+    - name: reap
+      script:
+        image: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
+        command: [sh]
+        env:
+          # The preview namespace is derived from where the workflow runs,
+          # not from a parameter: a submission in one tenant's namespace
+          # can only ever reach that tenant's previews (and its SA is bound
+          # only there).
+          - name: WORKFLOW_NAMESPACE
+            value: "{{workflow.namespace}}"
+        source: |
+          set -euo pipefail
+
+          NS="${WORKFLOW_NAMESPACE}-preview"
+          NOW=$(date +%s)
+
+          # Helm keeps one Secret per revision and copies --labels onto
+          # it, so read the newest revision of each release. A failed or
+          # malformed read stops here (set -e): an unreadable namespace is
+          # not an empty one.
+          kubectl get secret -n "${NS}" -l owner=helm -o json > /tmp/releases.json
+          jq -r '
+            [.items[].metadata.labels]
+            | group_by(.name)
+            | map(max_by(.version | tonumber))
+            | .[]
+            | [.name, (.["mctl.ai/expires-at"] // "")]
+            | @tsv' /tmp/releases.json > /tmp/releases.tsv
+
+          reaped=0
+          kept=0
+          errors=0
+          TAB=$(printf '\t')
+          while IFS="${TAB}" read -r RELEASE EXPIRES; do
+            case "${EXPIRES}" in
+              "")
+                # Not stamped by preview-deploy, so its lifetime is
+                # unknown: leave it, and fail the run so it is seen.
+                echo "ERROR: ${RELEASE}: no mctl.ai/expires-at label; lifetime unknown, not deleting" >&2
+                errors=$((errors + 1))
+                continue
+                ;;
+              # More than 11 digits is no unix time this platform will
+              # see, and a value past the shell's integer range would make
+              # `[ -gt ]` error out, which reads as false: "cannot compare"
+              # must not fall through to the reap below.
+              *[!0-9]* | ????????????*)
+                echo "ERROR: ${RELEASE}: malformed mctl.ai/expires-at=${EXPIRES}; not deleting" >&2
+                errors=$((errors + 1))
+                continue
+                ;;
+            esac
+            if [ "${EXPIRES}" -gt "${NOW}" ]; then
+              echo "keep ${RELEASE}: expires in $(( (EXPIRES - NOW) / 60 )) min"
+              kept=$((kept + 1))
+              continue
+            fi
+            echo "reap ${RELEASE}: expired $(( (NOW - EXPIRES) / 60 )) min ago"
+            # One failure does not stop the others; the run still fails.
+            # --timeout 2m keeps several slow releases inside the 900s
+            # deadline; whatever is left is picked up next hour.
+            if helm uninstall "${RELEASE}" -n "${NS}" --wait --timeout 2m \
+              && kubectl delete secret "${RELEASE}-tls" -n "${NS}" --ignore-not-found; then
+              reaped=$((reaped + 1))
+            else
+              echo "ERROR: ${RELEASE}: cleanup failed" >&2
+              errors=$((errors + 1))
+            fi
+          done < /tmp/releases.tsv
+
+          echo "${NS}: reaped=${reaped} kept=${kept} errors=${errors}"
+          [ "${errors}" -eq 0 ]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi

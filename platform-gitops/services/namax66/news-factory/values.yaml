@@ -1,0 +1,63 @@
+# Worker: news-factory
+# Team: namax66
+# Chart: base-service (ingress disabled)
+
+image:
+  repository: ghcr.io/mctlhq/news-factory
+  tag: "0.2.2"
+imagePullSecrets:
+  - name: ghcr-credentials
+ingress:
+  enabled: false
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    # Headless Chromium; 512Mi is what the tenant tested the worker with.
+    memory: 512Mi
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 15
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 60
+    periodSeconds: 15
+env:
+  NEWS_API_BASE: https://sales-with.ai/api/ai
+  NEWS_SCHEDULE_ENABLED: "true"
+  NEWS_RESEARCH_HOUR: "8"
+  NEWS_PUBLISH_HOUR: "10"
+  NEWS_BROWSER_ENABLED: "true"
+  NEWS_CHROMIUM_SANDBOX: "false"
+  HOME: /tmp
+  TMPDIR: /tmp
+  XDG_CACHE_HOME: /tmp/.cache
+  XDG_CONFIG_HOME: /tmp/.config
+  NEWS_DAILY_TARGET: "1"
+externalSecret:
+  targetSecret: news-factory-secrets
+  data:
+    - secretKey: NEWS_FACTORY_TOKEN
+      remoteKey: teams/namax66/news-factory
+      property: NEWS_FACTORY_TOKEN
+envFrom:
+  - secretRef:
+      name: news-factory-secrets
+# The image's USER (10001:10001, read from its config in GHCR), pinned so
+# kubelet and tests/test_check_image_user.py can verify runAsNonRoot.
+containerSecurityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
+extraContainers: []

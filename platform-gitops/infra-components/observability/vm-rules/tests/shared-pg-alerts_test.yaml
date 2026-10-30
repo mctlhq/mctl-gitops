@@ -1,0 +1,423 @@
+# Unit tests for shared-pg-alerts.yaml (group mctl.shared-pg).
+# The healthy fixture carries the live replica values from the #1811 check:
+# the standby reports a huge growing archiver age and streaming_replicas 0.
+# A per-pod (non-primary-joined) rule fails it at the first evaluation.
+rule_files:
+  - generated/shared-pg-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: healthy cluster with a standby reporting replica-only values is quiet
+    input_series:
+      - series: 'up{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x180'
+      - series: 'up{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x180'
+      - series: 'cnpg_collector_up{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x180'
+      - series: 'cnpg_collector_up{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x180'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x180'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-2"}'
+        values: '0x180'
+      - series: 'cnpg_pg_replication_lag{namespace="platform-db",pod="shared-pg-1"}'
+        values: '0x180'
+      - series: 'cnpg_pg_replication_lag{namespace="platform-db",pod="shared-pg-2"}'
+        values: '0x180'
+      - series: 'cnpg_pg_replication_streaming_replicas{namespace="platform-db",pod="shared-pg-1"}'
+        values: '0x180'
+      - series: 'cnpg_pg_replication_streaming_replicas{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x180'
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="platform-db",pod="shared-pg-1"}'
+        values: '71390+60x180'
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="platform-db",pod="shared-pg-2"}'
+        values: '506x180'
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="platform-db",pod="shared-pg-1"}'
+        values: '2000x180'
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1000x180'
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="platform-db",pod="shared-pg-2"}'
+        values: '2000x180'
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1000x180'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="a"}'
+        values: '1x180'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-2",datname="a"}'
+        values: '88x180'
+      - series: 'cnpg_pg_settings_setting{namespace="platform-db",pod="shared-pg-1",name="max_connections"}'
+        values: '200x180'
+      - series: 'cnpg_pg_settings_setting{namespace="platform-db",pod="shared-pg-2",name="max_connections"}'
+        values: '200x180'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-1"}'
+        values: '50x180'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-2"}'
+        values: '50x180'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-1"}'
+        values: '100x180'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-2"}'
+        values: '100x180'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: SharedPgNoPrimary, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgNoPrimary, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgInstanceMissing, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgInstanceMissing, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgInstanceDown, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgReplicationLagHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgStandbyNotStreaming, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgStandbyNotStreaming, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgWALArchivingFailing, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgWALArchivingFailing, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgWALArchivingStale, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgWALArchivingStale, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgConnectionsHigh, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgRoleConnectionsHigh, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgVolumeFillingUp, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgVolumeAlmostFull, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgInstanceMetricsIncomplete, exp_alerts: []}
+      - {eval_time: 2h, alertname: SharedPgMetricsAbsent, exp_alerts: []}
+
+  - interval: 1m
+    name: a missing primary fires SharedPgNoPrimary after 5m
+    input_series:
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x60'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 3m, alertname: SharedPgNoPrimary, exp_alerts: []}
+      - eval_time: 10m
+        alertname: SharedPgNoPrimary
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: shared-pg
+            exp_annotations:
+              summary: "shared-pg does not have exactly one primary"
+              description: >-
+                Counting instances with in_recovery == 0 across platform-db/shared-pg gives something other than 1 (no primary, or split brain). mctl-api, Temporal, Backstage and the other dependants lose their database.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgnoprimary
+
+  # Firing coverage for the join-heavy rules. shared-pg-1 is the primary,
+  # shared-pg-2 the standby seeded with the replica-only values that the
+  # primary joins must mask: exactly one alert (the primary's) is expected
+  # for each, never two. A renamed metric or a join that matches nothing
+  # fails here, where the quiet fixture above would stay green.
+  - interval: 1m
+    name: primary-only alerts fire for the primary and not for the standby
+    input_series:
+      - series: 'up{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x40'
+      - series: 'up{namespace="platform-db",pod="shared-pg-2"}'
+        values: '0x40'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-1"}'
+        values: '0x40'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x40'
+      - series: 'cnpg_pg_replication_streaming_replicas{namespace="platform-db",pod="shared-pg-1"}'
+        values: '0x40'
+      - series: 'cnpg_pg_replication_streaming_replicas{namespace="platform-db",pod="shared-pg-2"}'
+        values: '0x40'
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1000x40'
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="platform-db",pod="shared-pg-1"}'
+        values: '2000x40'
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1000x40'
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="platform-db",pod="shared-pg-2"}'
+        values: '2000x40'
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="platform-db",pod="shared-pg-1"}'
+        values: '8000x40'
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="platform-db",pod="shared-pg-2"}'
+        values: '71390x40'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="a"}'
+        values: '100x40'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="b"}'
+        values: '70x40'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-2",datname="a"}'
+        values: '10x40'
+      - series: 'cnpg_pg_settings_setting{namespace="platform-db",pod="shared-pg-1",name="max_connections"}'
+        values: '200x40'
+      - series: 'cnpg_pg_settings_setting{namespace="platform-db",pod="shared-pg-2",name="max_connections"}'
+        values: '200x40'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-1"}'
+        values: '95x40'
+      - series: 'kubelet_volume_stats_used_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-2"}'
+        values: '85x40'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-1"}'
+        values: '100x40'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="platform-db",persistentvolumeclaim="shared-pg-2"}'
+        values: '100x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SharedPgWALArchivingFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: shared-pg
+              namespace: platform-db
+              pod: shared-pg-1
+            exp_annotations:
+              summary: "shared-pg WAL archiving is failing"
+              description: >-
+                The last WAL archive attempt on the primary shared-pg-1 failed after the last success. WAL accumulates on the volume and PITR is at risk.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgwalarchivingfailing
+      - eval_time: 20m
+        alertname: SharedPgWALArchivingStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+              pod: shared-pg-1
+            exp_annotations:
+              summary: "shared-pg has not archived WAL for over 2 hours"
+              description: >-
+                The primary shared-pg-1 has not archived WAL for over 2h (archive_timeout is 15min). A replica reports a huge, growing value and is masked by the join.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgwalarchivingstale
+      - eval_time: 20m
+        alertname: SharedPgStandbyNotStreaming
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+              pod: shared-pg-1
+            exp_annotations:
+              summary: "shared-pg primary has no streaming standby"
+              description: >-
+                The shared-pg primary shared-pg-1 has no streaming replica. A replica always reports 0 here, hence the join on the primary.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgstandbynotstreaming
+      # 100 + 70 backends over two datname series = 170 of 200 = 0.85.
+      - eval_time: 20m
+        alertname: SharedPgConnectionsHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+              pod: shared-pg-1
+            exp_annotations:
+              summary: "shared-pg instance shared-pg-1 is above 80% of max_connections"
+              description: >-
+                shared-pg-1 uses more than 80% of max_connections (200).
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgconnectionshigh
+      - eval_time: 20m
+        alertname: SharedPgInstanceMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+            exp_annotations:
+              summary: "shared-pg has fewer than 2 scrapeable instances"
+              description: >-
+                Fewer than two shared-pg pods are up. HA is lost.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpginstancemissing
+      - eval_time: 20m
+        alertname: SharedPgVolumeAlmostFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: shared-pg
+              namespace: platform-db
+              persistentvolumeclaim: shared-pg-1
+            exp_annotations:
+              summary: "shared-pg volume shared-pg-1 is above 90% full"
+              description: >-
+                PVC shared-pg-1 is above 90% used. A full volume stops PostgreSQL.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgvolumealmostfull
+      # 85% trips only the 80% rule; 95% trips both.
+      - eval_time: 20m
+        alertname: SharedPgVolumeFillingUp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+              persistentvolumeclaim: shared-pg-1
+            exp_annotations:
+              summary: "shared-pg volume shared-pg-1 is above 80% full"
+              description: >-
+                PVC shared-pg-1 is above 80% used.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgvolumefillingup
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+              persistentvolumeclaim: shared-pg-2
+            exp_annotations:
+              summary: "shared-pg volume shared-pg-2 is above 80% full"
+              description: >-
+                PVC shared-pg-2 is above 80% used.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgvolumefillingup
+
+  - interval: 1m
+    name: an unreachable PostgreSQL fires SharedPgInstanceDown for that pod only
+    input_series:
+      - series: 'cnpg_collector_up{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x40'
+      - series: 'cnpg_collector_up{namespace="platform-db",pod="shared-pg-2"}'
+        values: '0x40'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-1"}'
+        values: '0x40'
+      - series: 'cnpg_pg_settings_setting{namespace="platform-db",pod="shared-pg-1",name="max_connections"}'
+        values: '200x40'
+    alert_rule_test:
+      - {eval_time: 3m, alertname: SharedPgInstanceDown, exp_alerts: []}
+      - eval_time: 10m
+        alertname: SharedPgInstanceDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+              pod: shared-pg-2
+            exp_annotations:
+              summary: "shared-pg instance shared-pg-2 cannot reach its PostgreSQL"
+              description: >-
+                The CNPG metrics exporter on shared-pg-2 reports PostgreSQL as unreachable.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpginstancedown
+      # The down pod exports nothing else; that is InstanceDown's to report.
+      - {eval_time: 30m, alertname: SharedPgInstanceMetricsIncomplete, exp_alerts: []}
+
+  - interval: 1m
+    name: a standby lagging over 300s fires SharedPgReplicationLagHigh after 10m
+    input_series:
+      - series: 'cnpg_pg_replication_lag{namespace="platform-db",pod="shared-pg-1"}'
+        values: '600x40'
+      - series: 'cnpg_pg_replication_lag{namespace="platform-db",pod="shared-pg-2"}'
+        values: '0x40'
+    alert_rule_test:
+      - {eval_time: 5m, alertname: SharedPgReplicationLagHigh, exp_alerts: []}
+      - eval_time: 15m
+        alertname: SharedPgReplicationLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+              pod: shared-pg-1
+            exp_annotations:
+              summary: "shared-pg instance shared-pg-1 replication lag above 300s"
+              description: >-
+                shared-pg-1 lags the primary by more than 5 minutes.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgreplicationlaghigh
+
+  # Could not observe is not observed absent: with no CNPG series at all the
+  # role is unknown, so only SharedPgMetricsAbsent may speak. SharedPgNoPrimary
+  # used to fire here first (its `or vector(0)` turned "no data" into "zero
+  # primaries").
+  - interval: 1m
+    name: no CNPG series fires SharedPgMetricsAbsent and not SharedPgNoPrimary
+    input_series:
+      - series: 'up{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x40'
+      - series: 'up{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x40'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: SharedPgMetricsAbsent, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgNoPrimary, exp_alerts: []}
+      - eval_time: 20m
+        alertname: SharedPgMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+            exp_annotations:
+              summary: "no CNPG metrics for shared-pg"
+              description: >-
+                No cnpg_collector_up series for platform-db/shared-pg. Every other SharedPg alert is blind while this lasts. Check VMPodScrape/shared-pg.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgmetricsabsent
+
+  # Without max_connections SharedPgConnectionsHigh divides by nothing and
+  # stays silent at any load; without in_recovery the pod drops out of the
+  # primary count. Both must surface instead.
+  - interval: 1m
+    name: a reachable pod missing a dependent series fires SharedPgInstanceMetricsIncomplete
+    input_series:
+      - series: 'cnpg_collector_up{namespace="platform-db",pod="shared-pg-1"}'
+        values: '1x40'
+      - series: 'cnpg_collector_up{namespace="platform-db",pod="shared-pg-2"}'
+        values: '1x40'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="platform-db",pod="shared-pg-1"}'
+        values: '0x40'
+      - series: 'cnpg_pg_settings_setting{namespace="platform-db",pod="shared-pg-2",name="max_connections"}'
+        values: '200x40'
+      # Other settings still arrive for shared-pg-1; only max_connections counts.
+      - series: 'cnpg_pg_settings_setting{namespace="platform-db",pod="shared-pg-1",name="shared_buffers"}'
+        values: '16384x40'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="a"}'
+        values: '190x40'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: SharedPgInstanceMetricsIncomplete, exp_alerts: []}
+      - {eval_time: 30m, alertname: SharedPgConnectionsHigh, exp_alerts: []}
+      - eval_time: 20m
+        alertname: SharedPgInstanceMetricsIncomplete
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+              pod: shared-pg-1
+            exp_annotations:
+              summary: "shared-pg instance shared-pg-1 is missing CNPG metrics other alerts depend on"
+              description: >-
+                shared-pg-1 exports cnpg_collector_up but not max_connections or in_recovery, so SharedPgConnectionsHigh, SharedPgNoPrimary and the primary-joined rules cannot see it.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpginstancemetricsincomplete
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              namespace: platform-db
+              pod: shared-pg-2
+            exp_annotations:
+              summary: "shared-pg instance shared-pg-2 is missing CNPG metrics other alerts depend on"
+              description: >-
+                shared-pg-2 exports cnpg_collector_up but not max_connections or in_recovery, so SharedPgConnectionsHigh, SharedPgNoPrimary and the primary-joined rules cannot see it.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpginstancemetricsincomplete
+
+  # Per-role budget: summed across pods, datname and state, compared with 80%
+  # of each role's connectionLimit. mctl-api 52 > 51 fires (three pods of a
+  # rolling update), temporal at exactly 112 does not (strictly above), and
+  # backstage 81 > 80 fires. A role the rule does not list (forgejo, 90) stays
+  # quiet even though it is above every threshold.
+  - interval: 1m
+    name: a role above 80% of its connectionLimit fires SharedPgRoleConnectionsHigh
+    input_series:
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="mctl-api",usename="mctl-api",state="idle"}'
+        values: '40x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="mctl-api",usename="mctl-api",state="active"}'
+        values: '12x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="temporal",usename="temporal",state="idle"}'
+        values: '100x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="temporal_visibility",usename="temporal",state="idle"}'
+        values: '12x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="backstage",usename="backstage",state="idle"}'
+        values: '81x30'
+      - series: 'cnpg_backends_total{namespace="platform-db",pod="shared-pg-1",datname="forgejo",usename="forgejo",state="idle"}'
+        values: '90x30'
+    alert_rule_test:
+      - {eval_time: 5m, alertname: SharedPgRoleConnectionsHigh, exp_alerts: []}
+      - eval_time: 15m
+        alertname: SharedPgRoleConnectionsHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              usename: mctl-api
+            exp_annotations:
+              summary: "shared-pg role mctl-api is above 80% of its connectionLimit"
+              description: >-
+                Role mctl-api holds 52 connections, over 80% of its connectionLimit. New connections for this role start failing at the limit even though shared-pg has free slots.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgroleconnectionshigh
+          - exp_labels:
+              severity: warning
+              service: shared-pg
+              usename: backstage
+            exp_annotations:
+              summary: "shared-pg role backstage is above 80% of its connectionLimit"
+              description: >-
+                Role backstage holds 81 connections, over 80% of its connectionLimit. New connections for this role start failing at the limit even though shared-pg has free slots.
+                Runbook: https://github.com/mctlhq/mctl-gitops/blob/main/docs/runbooks/shared-pg.md#sharedpgroleconnectionshigh

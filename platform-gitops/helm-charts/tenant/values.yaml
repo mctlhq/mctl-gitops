@@ -62,11 +62,24 @@ tenant:
     authMountPath: "kubernetes"
 
   # -- ExternalSecrets in this namespace that Argo Workflows may patch by name.
-  # Workflow RBAC is otherwise read-only on ExternalSecrets, because the Role is
-  # bound to the central argo-workflow-sa in every tenant namespace and blanket
-  # write would let one workflow repoint another tenant's secret. List only
+  # Workflow RBAC is otherwise read-only on ExternalSecrets, because the Role
+  # can also be bound to the central argo-workflow-sa (centralWorkflowSA below)
+  # and blanket write would let one workflow repoint another tenant's secret. List only
   # objects a platform workflow genuinely force-refreshes.
   externalSecretPatchTargets: []
+
+  # -- What the central argo-workflows/argo-workflow-sa may do in this
+  # tenant's namespace. mctl-api runs tenant workflows as the tenant-local
+  # argo-workflow-sa, so the central SA only needs a grant here for a
+  # platform workflow that targets this namespace from argo-workflows.
+  centralWorkflowSA:
+    # Bind argo-workflow-smoke-verify (reads, pods/exec, the
+    # externalSecretPatchTargets patch): the team wft-smoke-test runs
+    # against, and tenants whose ExternalSecrets cwft-rotate-github-token
+    # refreshes.
+    smokeVerify: false
+    # Deployments a CronWorkflow in argo-workflows may `rollout restart`.
+    restartDeployments: []
 
   # -- LimitRange defaults (applied to containers without explicit limits)
   limitRange:
@@ -88,11 +101,12 @@ tenant:
     # Allow egress to cluster-internal services (Vault, ArgoCD, DNS, etc.)
     allowClusterEgress: true
     # Allow egress to the internet (0.0.0.0/0)
-    # Closed by default; opt in per tenant (admin/platform teams, services
-    # calling external APIs). Argo Workflow pods get internet egress
-    # unconditionally via allow-workflow-internet-egress, so builds/deploys
-    # work either way. All existing tenants set this explicitly.
-    allowInternetEgress: false
+    # Open by default (owner decision, 2026-10-25): tenant workloads such as
+    # background workers routinely call external APIs, and a closed default
+    # made every new workspace file a request first. RFC1918 and the node
+    # public CIDRs stay excluded, so cluster and node isolation is unchanged.
+    # Opt out per tenant with false. All existing tenants set this explicitly.
+    allowInternetEgress: true
     # -- Node public addresses, excluded from the internet-egress rules.
     # The private-subnet exceptions in allow-cluster-egress do not cover these:
     # a pod with internet egress can otherwise reach a node's public IP, where
@@ -121,18 +135,32 @@ tenant:
   # Disable only if this tenant must not run preview-deploy at all.
   preview:
     enabled: true
+    # -- Render the hourly CronWorkflow preview-reaper (ttl_hours
+    # enforcement). Off only where no platform workflow can run in the
+    # tenant namespace (bootstrap externalManifestNamespaces: pods there may
+    # use only SA default, so the reaper's argo-workflow-sa is denied).
+    reaper: true
+    # 2026-10-20: requests.memory 2Gi -> 256Mi (the value every tenant
+    # already overrode to, c9b23208f) and limits cpu 4 -> 2, memory
+    # 4Gi -> 1Gi. The override left limits at 16x requests, an overcommit
+    # allowance no preview has used (all six *-preview namespaces were
+    # empty in the 2026-10-19 audit). A tenant that needs a bigger preview
+    # overrides these per tenant.
     quotas:
       requests.cpu: "1"
-      requests.memory: "2Gi"
-      limits.cpu: "4"
-      limits.memory: "4Gi"
+      requests.memory: "256Mi"
+      limits.cpu: "2"
+      limits.memory: "1Gi"
       pods: "8"
       persistentvolumeclaims: "1"
+      requests.storage: "10Gi"
       services: "8"
 
-  # -- Pod Security Standards level for the namespace
-  # "baseline" allows workflow/CI pods running as root (required for apk, git, etc.)
-  # "restricted" enforces non-root + no privilege escalation (stricter, for app-only namespaces)
+  # -- Pod Security Standards enforce level for the tenant's namespaces,
+  # its preview namespace included. Tenant workflow pods meet "restricted"
+  # since #1964-#1969, so a tenant moves to it once its own services do
+  # (ROADMAP 3.2, step 2 of 2). Set it here, under tenant: — the templates
+  # read .Values.tenant.podSecurityLevel; a top-level key is ignored.
   podSecurityLevel: "baseline"
   # -- PSS level for the audit/warn labels only — enforcement stays at
   # podSecurityLevel. Running observe at "restricted" while enforcing
@@ -141,3 +169,10 @@ tenant:
   # flip of podSecurityLevel to "restricted" is based on observed data
   # (ROADMAP 3.2, step 1 of 2).
   podSecurityObserveLevel: "restricted"
+
+  # -- kubectl for the tenant's people through ZITADEL (#1881): a read +
+  # pod-delete Role bound to group oidc:<tenant> in the tenant's namespaces
+  # (templates/kubectl-access.yaml). Users also need "kubectl": true in their
+  # Vault entry (zitadel-iac/iac/kubernetes.tf). Opt-in per tenant.
+  kubectlAccess:
+    enabled: false

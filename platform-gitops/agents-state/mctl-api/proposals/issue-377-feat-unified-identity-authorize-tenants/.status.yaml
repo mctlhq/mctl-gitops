@@ -1,0 +1,37 @@
+status: merged
+updated_at: '2026-10-13T11:45:00Z'
+updated_by: mashkovd
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 377
+  url: https://github.com/mctlhq/mctl-api/issues/377
+control:
+  requires_human_approval: true
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-12T20:14:30Z'
+attempt:
+  id: 68cc00de94314a2d2c4bf60cd79deefc41bb37cf9202ace09dddd0f836f1ccb3
+  started_at: '2026-10-12T20:42:23Z'
+  expires_at: '2026-10-12T22:52:23Z'
+  finished_at: '2026-10-12T20:50:29Z'
+pr: https://github.com/mctlhq/mctl-api/pull/590
+merged_at: '2026-10-12T21:03:50Z'
+merge_commit: 1aaeef7fc993fa602fc709f78ef39bde8f24a329
+execution:
+  context_id: ex-b4b3edb62dcfd21a
+  trace_id: d571527fc75cbefe5117ac6ddd64385d
+  agent: implementer
+  version: ''
+notes: >-
+  The approved PR-A slice was implemented by hand in mctl-api#590 (merged
+  2026-10-12T21:03:50Z, first released in 4.82.0) while the implementer's run was
+  still open. The implementer's own PR, mctl-api#591 (attempt above, finished
+  20:50:29Z), was never merged: it conflicted with #590 and the PR-B slices
+  that followed (#595, #598, #601, #602, #604, #605, #606, #610, #615), which
+  already cover all of its review threads, and it was closed as superseded on
+  2026-10-13. The reconciler then recorded `rejected` from that close; the
+  approval was never withdrawn, so this record is restored to `merged` against
+  #590. mctl-api#377 itself stays open until the principal-mode cut-over; no
+  implementer retry is pending.

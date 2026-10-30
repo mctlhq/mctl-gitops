@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       image_name:
-        description: "Full image name (e.g. ghcr.io/mctlhq/mctl-api)"
+        description: "Full image name; for a direct dispatch it must be ghcr.io/mctlhq/<component_name>"
         required: true
         type: string
       image_tag:
@@ -68,7 +68,7 @@ on:
     # of `secrets: inherit`. This job checks out whichever repository
     # `inputs.repo` names and builds its Dockerfile, so every secret in the
     # caller's environment is a secret handed to a build of third-party
-    # source. These four are the complete set this file references
+    # source. These three are the complete set this file references
     # (mctlhq/mctl-gitops#1010).
     #
     # All optional: each has a documented fallback tier below, and making any
@@ -78,8 +78,6 @@ on:
     # GITHUB_TOKEN is deliberately absent - it is provided automatically, and
     # GitHub rejects a `secrets:` entry whose name starts with GITHUB_.
     secrets:
-      APP_ID:
-        required: false
       APP_PRIVATE_KEY:
         required: false
       GHCR_PAT:
@@ -97,9 +95,82 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # OIDC JWT for Vault JWT auth (ROADMAP 3.3). No long-lived VAULT_TOKEN.
+      # OIDC JWTs: Vault JWT auth (ROADMAP 3.3, no long-lived VAULT_TOKEN)
+      # and the mctl-api repository-binding check in "Check source repository".
       id-token: write
     steps:
+      # --- Image name: build only names owned by the requesting team ---
+      # A direct dispatch is how tenant builds arrive (Argo's deploy-service
+      # and preview-deploy) and how platform images under
+      # platform-gitops/images/ are built by hand (team platform). Every
+      # other dispatcher in the organisation calls release-deploy.yaml. For a
+      # direct dispatch the pushed name must be exactly
+      # <registry>/<component_name>, and that name must be one the team may
+      # build (platform-gitops/argo-workflows/config/image-names.txt, read
+      # from main, not from anything the caller chose).
+      #
+      # Argo's validation (tpl-validate-tenant) is the boundary for tenants:
+      # it also binds team_name to an existing tenant, which this workflow
+      # cannot, because it never sees who asked. This step is a backstop at
+      # the push, for whoever holds actions:write on this repository, and it
+      # has two known gaps that only such a holder can use:
+      #   * release-deploy.yaml takes a free-text image_name and calls this
+      #     workflow (workflow_call), which is not checked here: release
+      #     images are named by their release and may differ from the
+      #     component name (mctl-telegram-preview pushes mctl-telegram).
+      #   * a dispatch at a ref other than main runs that ref's copy of this
+      #     file. The policy data is read from main either way.
+      # github.workflow_ref names the top-level (caller's) workflow in a
+      # called run, so it tells a direct dispatch from a workflow_call. It is
+      # bound explicitly rather than read from the implicit
+      # GITHUB_WORKFLOW_REF. github.event_name cannot make this distinction:
+      # in a called run it is the caller's event, so a dispatched
+      # release-deploy.yaml would also read workflow_dispatch.
+      - name: Classify caller
+        id: caller
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          case "$CALLER_WORKFLOW_REF" in
+            "${GITHUB_REPOSITORY}/.github/workflows/build-image.yaml@"*) direct=true ;;
+            *) direct=false ;;
+          esac
+          echo "direct=${direct}" >> "$GITHUB_OUTPUT"
+          echo "direct dispatch: ${direct} (${CALLER_WORKFLOW_REF})"
+
+      - name: Check out image-name policy
+        if: steps.caller.outputs.direct == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ github.repository }}
+          ref: main
+          path: .image-name-policy
+          persist-credentials: false
+          sparse-checkout: |
+            platform-gitops/services
+            platform-gitops/argo-workflows/config
+            platform-gitops/argo-workflows/scripts
+
+      - name: Check image name
+        if: steps.caller.outputs.direct == 'true'
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_TEAM_NAME: ${{ inputs.team_name }}
+          INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
+        run: |
+          set -euo pipefail
+          expected="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${INPUT_COMPONENT_NAME}"
+          if [ "$INPUT_IMAGE_NAME" != "$expected" ]; then
+            echo "::error::image_name must be ${expected} for a direct dispatch, got: ${INPUT_IMAGE_NAME}"
+            exit 1
+          fi
+          if ! sh .image-name-policy/platform-gitops/argo-workflows/scripts/check-image-name.sh --build \
+              .image-name-policy "${REGISTRY}/${GITHUB_REPOSITORY_OWNER}" \
+              "$INPUT_TEAM_NAME" "$INPUT_COMPONENT_NAME"; then
+            echo "::error::component_name ${INPUT_COMPONENT_NAME} is not available to team ${INPUT_TEAM_NAME}"
+            exit 1
+          fi
+
       # --- Tier 1: Vault PAT via GitHub OIDC -> Vault JWT ---
       - name: Fetch Vault PAT
         id: vault_pat
@@ -207,6 +278,147 @@ jobs:
             echo "has_pat=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # --- Source repository: build only the repo the component is bound to ---
+      # The image-name check above decides what may be pushed; this decides
+      # what may be checked out. Without it, whoever can dispatch this
+      # workflow picks `repo` freely, and the checkout runs with the team's
+      # Vault PAT or the MCTL App token, which reach private repositories:
+      # their source would be built into an image under the team's name.
+      # mctl-api and the portal check the repository before they dispatch;
+      # this is the same backstop at the build, for a direct dispatch only
+      # (the release-deploy.yaml gap above applies here too).
+      #
+      # Allowed, decided from main (the policy checkout), never from inputs:
+      #   * team platform: only this repository (platform-gitops/images/).
+      #   * a component registered under services/<team>/<component>/: only
+      #     its catalog-info.yaml `github.com/source-repo`, which
+      #     tpl-git-commit writes once, at onboard. To build from another
+      #     repository, change that annotation in a reviewed PR first.
+      #   * a component not registered yet (onboard): a repository GitHub
+      #     reports as public, one the team bound a Vault PAT for (the
+      #     Tier 1 step found one for this team/component), or a private
+      #     repository the team connected through the MCTL App. The last is
+      #     asked of mctl-api (GET /api/v1/ci/build-repo-binding) with this
+      #     job's OIDC token: mctl-api answers only to this workflow file on
+      #     main, so the answer cannot be forged by whoever dispatched it.
+      # A registration this step cannot read (a component directory without
+      # catalog-info.yaml, an unparsable file, no annotation), a visibility
+      # lookup that does not answer 200 or 404, and a binding lookup that
+      # does not answer 200 with a boolean refuse the build: they are
+      # unknowns, not "unregistered", "public" or "not bound".
+      - name: Check source repository
+        if: steps.caller.outputs.direct == 'true'
+        env:
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_TEAM_NAME: ${{ inputs.team_name }}
+          INPUT_COMPONENT_NAME: ${{ inputs.component_name }}
+          HAS_PAT: ${{ steps.vault_pat.outputs.has_pat }}
+          GH_TOKEN: ${{ github.token }}
+          MCTL_API_URL: https://api.mctl.ai
+          MCTL_API_AUDIENCE: https://api.mctl.ai
+        run: |
+          set -euo pipefail
+          # Shape already checked by the Vault step, which runs first.
+          lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+          want=$(lower "$INPUT_REPO")
+          dir=".image-name-policy/platform-gitops/services/${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}"
+          refuse() { echo "::error::$1"; exit 1; }
+          # Unique path and removed on every exit, refusals included.
+          resp=$(mktemp)
+          trap 'rm -rf .image-name-policy "$resp"' EXIT
+
+          if [ ! -d .image-name-policy/platform-gitops/services ]; then
+            refuse "cannot read platform-gitops/services from main"
+          fi
+
+          if [ "$INPUT_TEAM_NAME" = "platform" ]; then
+            [ "$want" = "$(lower "$GITHUB_REPOSITORY")" ] \
+              || refuse "team platform builds only from ${GITHUB_REPOSITORY}, got: ${INPUT_REPO}"
+            echo "source repository: ${INPUT_REPO} (platform)"
+          elif [ -e "$dir" ]; then
+            catalog="${dir}/catalog-info.yaml"
+            [ -f "$catalog" ] \
+              || refuse "${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME} is registered but has no catalog-info.yaml; cannot tell its source repository"
+            # Checked apart so a missing yq is not reported as a bad file.
+            command -v yq >/dev/null || refuse "yq is not available on this runner"
+            src=$(yq -r '.metadata.annotations["github.com/source-repo"] // ""' "$catalog") \
+              || refuse "cannot parse ${catalog#.image-name-policy/}"
+            [ -n "$src" ] \
+              || refuse "${catalog#.image-name-policy/} names no github.com/source-repo; refusing to build"
+            [ "$want" = "$(lower "$src")" ] \
+              || refuse "${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME} is bound to ${src}, got: ${INPUT_REPO}"
+            echo "source repository: ${INPUT_REPO} (registered)"
+          elif [ "$HAS_PAT" = "true" ]; then
+            echo "source repository: ${INPUT_REPO} (not registered; team-bound Vault PAT)"
+          else
+            # With the job token first (higher rate limit). It is scoped to
+            # this repository, so if GitHub answers 401/403 for another one,
+            # ask again without it: anonymous reads of a public repository
+            # answer 200, of a private or missing one 404. Any other answer,
+            # such as an anonymous rate-limit 403, stays unknown and refuses.
+            lookup() {
+              curl -sS -o "$resp" -w '%{http_code}' "$@" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${INPUT_REPO}" || echo 000
+            }
+            # Not public: allowed only if mctl-api says the team's GitHub
+            # App installation binds this repository. Exits 0 when bound,
+            # 1 when mctl-api answers "not bound"; anything else refuses.
+            app_bound() {
+              local tok code bound team repo
+              [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] \
+                || refuse "no OIDC token available to ask mctl-api about ${INPUT_REPO}"
+              tok=$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${MCTL_API_AUDIENCE}" | jq -r '.value // empty') \
+                || refuse "could not mint an OIDC token for mctl-api"
+              [ -n "$tok" ] || refuse "could not mint an OIDC token for mctl-api"
+              echo "::add-mask::${tok}"
+              code=$(curl -sS -o "$resp" -w '%{http_code}' -G \
+                -H "Authorization: Bearer ${tok}" \
+                -H "User-Agent: mctl-gitops-build-image" \
+                --data-urlencode "team=${INPUT_TEAM_NAME}" \
+                --data-urlencode "repo=${INPUT_REPO}" \
+                "${MCTL_API_URL}/api/v1/ci/build-repo-binding" || echo 000)
+              unset tok
+              [ "$code" = "200" ] \
+                || refuse "could not ask mctl-api whether ${INPUT_REPO} is bound to ${INPUT_TEAM_NAME} (HTTP ${code}); not building"
+              bound=$(jq -r 'if (.bound|type) == "boolean" then .bound else "invalid" end' "$resp") \
+                || refuse "unreadable binding answer for ${INPUT_REPO}"
+              team=$(jq -r '.team // empty' "$resp")
+              repo=$(jq -r '.repo // empty' "$resp")
+              [ "$team" = "$INPUT_TEAM_NAME" ] && [ "$(lower "$repo")" = "$want" ] \
+                || refuse "mctl-api answered for ${team:-?}/${repo:-?}, not ${INPUT_TEAM_NAME}/${INPUT_REPO}"
+              case "$bound" in
+                true) return 0 ;;
+                false) return 1 ;;
+                *) refuse "malformed binding answer for ${INPUT_REPO}" ;;
+              esac
+            }
+            code=$(lookup -H "Authorization: Bearer ${GH_TOKEN}")
+            case "$code" in
+              401|403) code=$(lookup) ;;
+            esac
+            case "$code" in
+              200)
+                visibility=$(jq -r '.visibility // empty' "$resp") \
+                  || refuse "unreadable response for ${INPUT_REPO}"
+                ;;
+              404)
+                visibility=""
+                ;;
+              *)
+                refuse "could not read the visibility of ${INPUT_REPO} (HTTP ${code}); not building"
+                ;;
+            esac
+            if [ "$visibility" = "public" ]; then
+              echo "source repository: ${INPUT_REPO} (not registered; public)"
+            elif app_bound; then
+              echo "source repository: ${INPUT_REPO} (not registered; bound to ${INPUT_TEAM_NAME} through the GitHub App)"
+            else
+              refuse "${INPUT_REPO} is not public, no repository PAT is bound for ${INPUT_TEAM_NAME}/${INPUT_COMPONENT_NAME}, and the team's GitHub App installation does not bind it"
+            fi
+          fi
+
       # --- Tier 2: GitHub App token ---
       # This is the one place MCTL App is still the right credential: the
       # repo being checked out belongs to the customer, and MCTL App is the
@@ -221,10 +433,10 @@ jobs:
       - name: Generate GitHub App token
         id: app_token
         if: steps.vault_pat.outputs.has_pat != 'true'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         continue-on-error: true
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ steps.vault_pat.outputs.repo_owner }}
           repositories: ${{ steps.vault_pat.outputs.repo_name }}
@@ -246,21 +458,62 @@ jobs:
           fi
 
       # --- Checkout source repo ---
+      # persist-credentials: false keeps the checkout token out of
+      # .git/config. This directory, .git included, is the build context
+      # below, and the Dockerfile comes from the source repository, so no
+      # credential may be left in it. Nothing after this step runs git
+      # against the remote.
       - name: Checkout source repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.git_ref }}
           token: ${{ steps.checkout_token.outputs.token }}
+          persist-credentials: false
 
       # --- Resolve GHCR push token ---
+      # GITHUB_TOKEN canary. GHCR_PAT is a classic PAT with write:packages; it
+      # expired silently on 2026-10-12 and every release-deploy failed at GHCR
+      # login from 07:24Z until it was re-minted. The job's own GITHUB_TOKEN
+      # (packages: write) lives one run and cannot expire that way, but it can
+      # push to an existing package only after the package grants mctl-gitops
+      # Write under "Manage Actions access". Images listed here use it instead
+      # of GHCR_PAT; the list grows as packages are granted, and GHCR_PAT is
+      # deleted once every package is on it. A Vault PAT still wins: tenant
+      # builds push with their own credential.
       - name: Resolve GHCR token
         id: ghcr_token
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          GITHUB_TOKEN_IMAGES: |
+            ghcr.io/mctlhq/grafana-iac
+            ghcr.io/mctlhq/mc
+            ghcr.io/mctlhq/mctl-academy
+            ghcr.io/mctlhq/mctl-agent
+            ghcr.io/mctlhq/mctl-agents
+            ghcr.io/mctlhq/mctl-alice
+            ghcr.io/mctlhq/mctl-api
+            ghcr.io/mctlhq/mctl-design
+            ghcr.io/mctlhq/mctl-docs
+            ghcr.io/mctlhq/mctl-portal
+            ghcr.io/mctlhq/mctl-telegram
+            ghcr.io/mctlhq/mctl-web
+            ghcr.io/mctlhq/mctl-workflow-tools
+            ghcr.io/mctlhq/pfeifenpatenschaft-backend
+            ghcr.io/mctlhq/portfolio
+            ghcr.io/mctlhq/projects-mcp
+            ghcr.io/mctlhq/seerrsense
+            ghcr.io/mctlhq/vault-iac
+            ghcr.io/mctlhq/zitadel-iac
         run: |
           if [[ "${{ steps.vault_pat.outputs.has_pat }}" == "true" ]]; then
             echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
             echo "🔑 Using Vault PAT for GHCR push"
+          elif [[ -n "$IMAGE_NAME" ]] && grep -qxF -- "$IMAGE_NAME" <<< "$GITHUB_TOKEN_IMAGES"; then
+            echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
+            echo "username=${{ github.actor }}" >> $GITHUB_OUTPUT
+            echo "🌐 Using GITHUB_TOKEN for GHCR push (package granted to mctl-gitops)"
           elif [[ -n "${{ secrets.GHCR_PAT }}" ]]; then
             echo "token=${{ secrets.GHCR_PAT }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
@@ -295,6 +548,18 @@ jobs:
           echo "::error::docker pull $image failed after 5 attempts"
           exit 1
 
+      # The checkout above must leave no credential in the build context.
+      # Refuse to build if .git/config carries an auth header or a URL with
+      # embedded credentials; an unreadable config is a refusal too.
+      - name: Check build context for credentials
+        run: |
+          set -euo pipefail
+          [ -r .git/config ] || { echo "::error::cannot read .git/config"; exit 1; }
+          if grep -Eiq 'extraheader|authorization:|://[^/@[:space:]]+@' .git/config; then
+            echo "::error::.git/config in the build context holds a credential; refusing to build"
+            exit 1
+          fi
+
       # Base images in service Dockerfiles (golang, alpine, node, python,
       # nginx, oven/bun) come from Docker Hub, which times out in bursts from
       # GitHub-hosted runners. BuildKit resolves docker.io through
@@ -303,14 +568,14 @@ jobs:
       # add a path, never remove one. Digest-pinned FROM lines are verified
       # against their digest whichever host served them.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
 
       - name: Build and push
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ${{ inputs.dockerfile_path }}
@@ -329,9 +594,12 @@ jobs:
           # the PAT.
           secrets: |
             github_token=${{ contains(fromJSON('["mctlhq/mctl-web","mctlhq/mctl-docs","mctlhq/mctl-academy"]'), inputs.repo) && secrets.GH_PACKAGES_TOKEN || '' }}
+          # :latest only for release builds. Nothing in this repository or the
+          # cluster pulls ghcr.io/mctlhq/*:latest, and a direct dispatch moving
+          # it would repoint the tag at whatever was built last.
           tags: |
             ${{ inputs.image_name }}:${{ inputs.image_tag }}
-            ${{ inputs.image_name }}:latest
+            ${{ steps.caller.outputs.direct != 'true' && format('{0}:latest', inputs.image_name) || '' }}
 
       - name: Summary
         # Same reason as the Vault step: these land in a shell command, so

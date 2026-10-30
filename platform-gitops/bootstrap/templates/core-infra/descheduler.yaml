@@ -1,0 +1,136 @@
+# Descheduler: puts pods back where the scheduler would place them today.
+#
+# Why this exists: every k3s rolling upgrade drains the workers one at a
+# time, and the pods evicted from the drained node pile onto the other two.
+# Nothing moves them back once the node returns, because scheduling
+# preferences (soft anti-affinity, ScheduleAnyway spreads, least-allocated
+# scoring) are only consulted when a pod is created. After the k3s 1.34
+# upgrade (2026-10-22):
+#   - vault-1 and vault-2 both sat on ftx, so losing that one node would have
+#     lost Raft quorum (vault.yaml relaxed anti-affinity to preferred on
+#     2026-06-26 so drains can finish);
+#   - memory requests were 88% on ftx, 80% on hnn and 29% on xgf, with
+#     54 / 51 / 35 pods.
+#
+# Two profiles with different eviction rules:
+#   spread    - RemovePodsViolatingTopologySpreadConstraint only. It touches
+#               only pods that declare a spread constraint (vault, mctl-api,
+#               coredns today). PodsWithLocalStorage protection is disabled
+#               because the vault chart mounts an emptyDir `home`; the vault
+#               PDB (maxUnavailable 1) still allows one eviction at a time,
+#               and a re-created vault pod stays unready (sealed) until
+#               vault-auto-unseal runs (every 2 min), which keeps the PDB
+#               closed for the next one.
+#   rebalance - LowNodeUtilization on requests. Pods with a PVC or local
+#               storage are protected (default + PodsWithPVC), so it never
+#               moves a volume; the platform namespaces whose pods matter most
+#               are excluded outright.
+#
+# nodeFit: a pod is evicted only when another node can actually take it, so a
+# run during a drain (cordoned node) does not evict into nowhere. The tainted
+# control-plane node is excluded via the policy nodeSelector.
+#
+# Eviction caps bound the blast radius of one run; a CronJob every 30 min
+# converges over a few runs instead of reshuffling the cluster at once. Pods
+# in non-excluded namespaces with a single replica restart once when moved.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: descheduler
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes-sigs.github.io/descheduler/
+    chart: descheduler
+    # Minor matches the cluster (k3s v1.34); descheduler only guarantees
+    # the Kubernetes minor it was built against.
+    targetRevision: 0.34.0
+    helm:
+      values: |
+        kind: CronJob
+        schedule: "*/30 * * * *"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        deschedulerPolicy:
+          nodeSelector: "!node-role.kubernetes.io/control-plane"
+          maxNoOfPodsToEvictPerNode: 2
+          maxNoOfPodsToEvictPerNamespace: 1
+          maxNoOfPodsToEvictTotal: 4
+          profiles:
+            - name: spread
+              pluginConfig:
+                - name: DefaultEvictor
+                  args:
+                    nodeFit: true
+                    podProtections:
+                      defaultDisabled:
+                        - PodsWithLocalStorage
+                - name: RemovePodsViolatingTopologySpreadConstraint
+                  args:
+                    constraints:
+                      - DoNotSchedule
+                      - ScheduleAnyway
+              plugins:
+                balance:
+                  enabled:
+                    - RemovePodsViolatingTopologySpreadConstraint
+            - name: rebalance
+              pluginConfig:
+                - name: DefaultEvictor
+                  args:
+                    nodeFit: true
+                    podProtections:
+                      extraEnabled:
+                        - PodsWithPVC
+                - name: LowNodeUtilization
+                  args:
+                    # Underutilized: below ALL of these. Overutilized: above ANY
+                    # of the targets. Percentages of allocatable, by requests.
+                    thresholds:
+                      cpu: 35
+                      memory: 60
+                      pods: 40
+                    targetThresholds:
+                      cpu: 70
+                      memory: 75
+                      pods: 60
+                    evictableNamespaces:
+                      exclude:
+                        - kube-system
+                        - argocd
+                        - vault
+                        - platform-db
+                        # Temporal services exit when shared-pg is unreachable
+                        # at startup. A moved pod gets its new IP admitted by
+                        # kube-router network policy only after ~30s, so the
+                        # first run (2026-10-24) crash-restarted temporal-worker
+                        # once on its new node.
+                        - temporal
+              plugins:
+                balance:
+                  enabled:
+                    - LowNodeUtilization
+
+  destination:
+    server: {{ .Values.spec.destination.server }}
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

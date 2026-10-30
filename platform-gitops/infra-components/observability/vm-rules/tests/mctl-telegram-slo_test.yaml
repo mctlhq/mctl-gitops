@@ -363,3 +363,55 @@ tests:
         exp_samples:
           - labels: 'mctl_telegram:session_borrow_errors:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
             value: 0.25
+
+  # caller_error (mctl-telegram#757) is a request refused as the caller's
+  # mistake and sits outside every tool ratio. 1 ok, 1 error and 3
+  # caller_error must read exactly as 1 ok and 1 error does: 0.5. With the old
+  # bare-counter denominators the same input read 0.2, so caller errors both
+  # diluted real failures and, before the label existed, counted as failures.
+  - interval: 1m
+    name: caller_error calls leave the three tool ratios unchanged
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="ok"}'
+        values: "0+1x420"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="error"}'
+        values: "0+1x420"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="caller_error"}'
+        values: "0+3x420"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_errors:ratio_rate1h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate1h{job="mctl-telegram",namespace="labs"}'
+            value: 0.5
+      - expr: mctl_telegram:tool_errors:ratio_rate6h
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate6h{job="mctl-telegram",namespace="labs"}'
+            value: 0.5
+      - expr: mctl_telegram:tool_availability:ratio_rate28d
+        eval_time: 420m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_availability:ratio_rate28d{job="mctl-telegram",namespace="labs"}'
+            value: 0.5
+
+  # Callers asking for unknown peers all day is not an outage: with no
+  # server-side error the error ratios stay a recorded 0 and the fast burn
+  # stays quiet, whatever the caller_error volume.
+  - interval: 1m
+    name: a flood of caller_error calls neither burns nor blanks the tool SLI
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="ok"}'
+        values: "0+1x90"
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",namespace="labs",pod="a",tool="get_messages",status="caller_error"}'
+        values: "0+10x90"
+    promql_expr_test:
+      - expr: mctl_telegram:tool_errors:ratio_rate1h
+        eval_time: 90m
+        exp_samples:
+          - labels: 'mctl_telegram:tool_errors:ratio_rate1h{job="mctl-telegram",namespace="labs"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramToolAvailabilityFastBurn
+        exp_alerts: []

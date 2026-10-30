@@ -1,0 +1,31 @@
+status: rejected
+updated_at: '2026-10-22T17:20:52Z'
+updated_by: mashkovd
+execution:
+  context_id: ex-92a51285f27ee8fb
+  trace_id: a42b5bc939a900a544f83e99e419b378
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-alice
+  issue: 69
+  url: https://github.com/mctlhq/mctl-alice/issues/69
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-29ec54ddf9c83a47
+  content_hash: sha256:29ec54ddf9c83a47a53bcb488e3849236b28b49f8ac760b31cef1a7b7301cb80
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-22T17:05:48Z'
+  content_digest: sha256:f1739f8f20a3d58178e769926352a3f96f5467dc2a8fc1f621eebc89d5a93cab
+  digest_binding: reviewed
+blocked:
+  code: execution-unauthorized
+  since: '2026-10-22T17:06:50Z'
+  message: 'execution not authorized: approved with no verifiable approval grant'
+  remedy: Approve the proposal through its DevLoop (mctl-api POST /api/v1/agents/dev-loop/<workflow>/approve),
+    which records a human decision bound to this proposal's current content.

@@ -1,0 +1,30 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: mctl-agents-scout
+  namespace: argo-workflows
+  annotations:
+    workflows.argoproj.io/description: |
+      Daily tech-news scout digest to Telegram (mctlhq/mctl-agents#797).
+      Workflow logic lives in ClusterWorkflowTemplate mctl-agents-scout.
+spec:
+  # 06:40 UTC: a minute no other mctl-agents schedule uses (see the slot list
+  # in cronworkflow-mctl-agents-usage-collector.yaml).
+  schedule: "40 6 * * *"
+  timezone: "UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 14
+  failedJobsHistoryLimit: 14
+  # Applied suspended (#2153) and enabled once:
+  #   1. mctl-agents 1.101.0 shipped orchestrator.run_scout, and release-deploy
+  #      bumped agent_image in cwft-mctl-agents-scout.yaml to it;
+  #   2. a dry run of 1.101.0 (run locally with --dry-run, same code path,
+  #      nothing sent) produced a scored top-N with valid draft links.
+  # The first scheduled run is the first real delivery: no MCP tool submits
+  # this template ad hoc. To stop the digest, set suspend: true again.
+  suspend: false
+  workflowSpec:
+    workflowTemplateRef:
+      name: mctl-agents-scout
+      clusterScope: true

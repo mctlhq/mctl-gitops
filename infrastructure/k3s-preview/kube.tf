@@ -78,6 +78,140 @@ variable "etcd_s3_secret_key" {
 
 # --- Kube-Hetzner Module ---
 
+# Inputs of the module's own kustomization (terraform_data.kustomization).
+# When any of them changes, the module re-runs `kubectl apply -k` on its
+# bundled manifests, and those include a kured DaemonSet and a
+# system-upgrade-controller Deployment, both WITHOUT resources.
+# extra-manifests/kured.yaml.tpl and system-upgrade-controller.yaml.tpl own
+# the real ones, but the module re-applies a user manifest only when that
+# file's rendered content changes, so the base copy won the last write: on
+# 2026-10-20 the #2035 apply dropped kured's requests and limits. Feeding a
+# hash of these inputs into both templates changes their rendered content
+# whenever the base layer is replaced, so the user layer re-applies in the
+# same run, after the base (it depends_on it).
+# Anything added here that feeds the module's kustomization triggers must also
+# go into base_kustomization_inputs.
+locals {
+  # v1.34: CloudNativePG 1.30 is tested upstream on Kubernetes 1.34-1.36 only.
+  # The add-on pins below are tested on 1.34 as they stand (CCM v1.33.0 and
+  # CSI v2.21.2 run k3s v1.33-v1.36 in their e2e matrix; kured 1.21.0 and
+  # system-upgrade-controller v0.18.0 are built against client-go 0.34).
+  install_k3s_version = "v1.34.12+k3s1"
+  hetzner_ccm_version = "v1.33.0"
+  hetzner_csi_version = "v2.21.2"
+  kured_version       = "1.21.0"
+
+  # The module's Traefik and cert-manager HelmCharts default to an unpinned
+  # chart ("" and "*"), which resolves to the newest chart whenever
+  # helm-controller re-runs the install job. A k3s minor upgrade always re-runs
+  # it: the job's config hash covers its pod template, and the bundled
+  # klipper-helm image changes (v0.11.1-build20260615 in v1.33.13+k3s1,
+  # v0.13.3-build20260727 in v1.34.12+k3s1). Pinned to the charts running on
+  # 2026-10-22 so the k3s upgrade does not also upgrade ingress and ACME.
+  # Bump them here, deliberately, in their own change.
+  # v1.20.5 (#2246): drops trust in the compromised eMudhra CA and carries
+  # HTTP/2 dependency security fixes. Live version was not observed.
+  traefik_version      = "42.0.0"
+  cert_manager_version = "v1.20.5"
+
+  # Equal to the module default; pinned here so a module upgrade cannot move
+  # it without a matching change to extra-manifests/system-upgrade-controller.yaml.tpl.
+  sys_upgrade_controller_version = "v0.18.0"
+
+  hetzner_ccm_merge_values = <<-EOT
+    resources:
+      requests:
+        cpu: 100m
+        memory: 96Mi
+      limits:
+        memory: 192Mi
+  EOT
+
+  # Replaces the module's default CSI values wholesale, so the node affinity
+  # below is the module default (locals.tf hetzner_csi_values, 2.19.1) copied
+  # verbatim: keep the node plugin off the control plane and off Robot servers.
+  # Requests are the 7-day peak working set on 2026-10-20 rounded up, limits
+  # about twice that. No CPU limits: a throttled attacher or provisioner stalls
+  # every volume attach in the cluster.
+  hetzner_csi_values = <<-EOT
+    controller:
+      resources:
+        csiAttacher:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            memory: 128Mi
+        csiResizer:
+          requests:
+            cpu: 10m
+            memory: 96Mi
+          limits:
+            memory: 192Mi
+        csiProvisioner:
+          requests:
+            cpu: 10m
+            memory: 96Mi
+          limits:
+            memory: 192Mi
+        livenessProbe:
+          requests:
+            cpu: 5m
+            memory: 32Mi
+          limits:
+            memory: 64Mi
+        hcloudCSIDriver:
+          requests:
+            cpu: 10m
+            memory: 48Mi
+          limits:
+            memory: 128Mi
+    node:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: "node-role.kubernetes.io/control-plane"
+                    operator: DoesNotExist
+                  - key: "instance.hetzner.cloud/provided-by"
+                    operator: NotIn
+                    values:
+                      - robot
+      resources:
+        csiNodeDriverRegistrar:
+          requests:
+            cpu: 5m
+            memory: 24Mi
+          limits:
+            memory: 48Mi
+        livenessProbe:
+          requests:
+            cpu: 5m
+            memory: 48Mi
+          limits:
+            memory: 96Mi
+        hcloudCSIDriver:
+          requests:
+            cpu: 10m
+            memory: 48Mi
+          limits:
+            memory: 128Mi
+  EOT
+
+  base_kustomization_inputs = sha1(jsonencode([
+    local.install_k3s_version,
+    local.hetzner_ccm_version,
+    local.hetzner_csi_version,
+    local.kured_version,
+    local.sys_upgrade_controller_version,
+    local.traefik_version,
+    local.cert_manager_version,
+    local.hetzner_ccm_merge_values,
+    local.hetzner_csi_values,
+  ]))
+}
+
 module "kube-hetzner" {
   providers = {
     hcloud = hcloud
@@ -157,6 +291,27 @@ module "kube-hetzner" {
       port            = "2465"
       source_ips      = []
       destination_ips = ["0.0.0.0/0", "::/0"]
+    },
+    # Cloudflare Tunnel connector events-tunnel in platform-events
+    # (platform-gitops/infra-components/data/valkey/cloudflared.yaml). cloudflared
+    # dials the edge on 7844 only, QUIC over UDP or HTTP/2 over TCP, with no
+    # fallback to 443; without these the connector retries forever. The ranges
+    # are the ones region1/region2.v2.argotunnel.com resolve into.
+    {
+      description     = "Allow Outbound Cloudflare Tunnel (QUIC) to the Cloudflare edge"
+      direction       = "out"
+      protocol        = "udp"
+      port            = "7844"
+      source_ips      = []
+      destination_ips = ["198.41.192.0/24", "198.41.200.0/24", "2606:4700:a0::/48", "2606:4700:a8::/48"]
+    },
+    {
+      description     = "Allow Outbound Cloudflare Tunnel (HTTP/2) to the Cloudflare edge"
+      direction       = "out"
+      protocol        = "tcp"
+      port            = "7844"
+      source_ips      = []
+      destination_ips = ["198.41.192.0/24", "198.41.200.0/24", "2606:4700:a0::/48", "2606:4700:a8::/48"]
     },
   ]
 
@@ -256,6 +411,32 @@ module "kube-hetzner" {
   # --- CCM ---
   hetzner_ccm_use_helm = true
 
+  # Pin the add-ons to the versions running today. Left null, the module
+  # resolves each one to the LATEST GitHub release at plan time (data.tf), but
+  # only re-applies them when terraform_data.kustomization is replaced. The
+  # live cluster therefore sat on the versions from the last replace, while
+  # any values change here (CCM or CSI resources, for example) would have
+  # silently upgraded all of them in the same apply. On 2026-10-20 that would
+  # have been CCM v1.33.0 -> v1.39.0, CSI v2.21.2 -> v2.24.0 and kured
+  # 1.21.0 -> 1.23.0. For a deliberate, reviewed upgrade bump the value in the
+  # locals block at the top of this file, never the argument line here: the
+  # locals feed base_kustomization_inputs, which keeps kured re-applying.
+  hetzner_ccm_version            = local.hetzner_ccm_version
+  hetzner_csi_version            = local.hetzner_csi_version
+  kured_version                  = local.kured_version
+  sys_upgrade_controller_version = local.sys_upgrade_controller_version
+  traefik_version                = local.traefik_version
+  cert_manager_version           = local.cert_manager_version
+
+  # The chart default is requests 100m/50Mi with no limit. The 7-day peak
+  # working set was 72Mi on 2026-10-19, above the request, and nothing bounded
+  # it. No CPU limit: the CCM reconciles routes and load balancers and should
+  # not be throttled.
+  hetzner_ccm_merge_values = local.hetzner_ccm_merge_values
+
+  # CSI controller and node plugin resources; see the locals block.
+  hetzner_csi_values = local.hetzner_csi_values
+
   # --- Upgrades ---
   # Disabled: single control-plane node — draining it takes down the API server.
   # Re-enable only after adding a second CP node (or migrating to HA).
@@ -270,10 +451,22 @@ module "kube-hetzner" {
   # OLDER v1.33.12 while all nodes were already on v1.33.13 — the hash mismatch
   # spawned apply jobs that perpetually re-cordoned the un-drainable single
   # control-plane (NodeCordoned alert storm, 2026-06-27). Pinning to the
-  # nodes' current version stops the churn; bump this line for controlled
-  # future upgrades. Matches the live `kubectl patch plan ... spec.version`
+  # nodes' current version stops the churn; for controlled future upgrades
+  # bump local.install_k3s_version at the top of this file, not this line.
+  # Matches the live `kubectl patch plan ... spec.version`
   # mitigation applied 2026-06-27.
-  install_k3s_version = "v1.33.13+k3s1"
+  install_k3s_version = local.install_k3s_version
+
+  # Re-applies extra-manifests/kured.yaml.tpl and
+  # system-upgrade-controller.yaml.tpl whenever the module's own kustomization
+  # is replaced (see base_kustomization_inputs above), and renders their image
+  # tags from the same versions the module gets.
+  # tests/test_k3s_kured_single_owner.py checks this wiring.
+  extra_kustomize_parameters = {
+    base_kustomization_inputs      = local.base_kustomization_inputs
+    kured_version                  = local.kured_version
+    sys_upgrade_controller_version = local.sys_upgrade_controller_version
+  }
 
   # SOC F20: Kubernetes API audit. preinstall_exec writes the policy file
   # before k3s starts (from-zero rebuilds). control_planes_custom_config
@@ -301,12 +494,31 @@ module "kube-hetzner" {
       "audit-log-maxage=30",
       "audit-log-maxbackup=10",
       "audit-log-maxsize=100",
+      # kubectl sign-in through ZITADEL (#1881). The client is
+      # zitadel_application_oidc.kubernetes (zitadel-iac kubernetes.tf); its
+      # id is public and printed by
+      #   kubectl -n zitadel get secret kubernetes-oidc -o jsonpath='{.data.clientID}' | base64 -d
+      # Both prefixes keep OIDC identities apart from service accounts and
+      # system:* groups: the tenant chart binds group `oidc:<tenant>`.
+      # ZITADEL runs in this cluster, so after a restart the issuer is
+      # unreachable for a while; the API server starts anyway and retries
+      # discovery every 10s, and only OIDC tokens fail until it succeeds.
+      "oidc-issuer-url=https://auth.mctl.ai",
+      "oidc-client-id=395107286768486101",
+      "oidc-username-claim=preferred_username",
+      "oidc-username-prefix=oidc:",
+      "oidc-groups-claim=groups",
+      "oidc-groups-prefix=oidc:",
     ]
   }
 
   # --- Kubeconfig ---
-  # Best practice: generate via `terraform output --raw kubeconfig > kubeconfig.yaml`
-  # create_kubeconfig = false
+  # No local files: the providers below read module.kube-hetzner.kubeconfig,
+  # not a file, and a CI runner starts empty, so these two only showed up as
+  # creates in every plan. Operators get a kubeconfig with
+  # `tofu output --raw kubeconfig`.
+  create_kubeconfig    = false
+  create_kustomization = false
 }
 
 # --- Cluster Bootstrap Module ---

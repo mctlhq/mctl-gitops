@@ -1,5 +1,10 @@
 # Tracing bake-off sandbox — operator runbook (issue #903 / #1280)
 
+> **Closed 2026-10-22.** The sandbox was torn down (#2073) and Tempo adopted
+> as a permanent deployment: see `docs/runbooks/tempo.md`. The `TempoEval*`
+> alerts below are now `Tempo*` in `vm-rules/tempo-alerts.yaml`. Kept as the
+> record of how the round ran.
+
 **This runbook is the procedure `mctlhq/mctl-gitops#1280` executes.**
 `mctlhq/mctl-gitops#1355` landed the offline half (a `ResourceQuota` /
 `LimitRange`, a pinned candidate catalogue, a collector exporter fan-out
@@ -152,7 +157,9 @@ The namespace quota is sized for this one pod plus headroom for a rollout:
    an amendment to the declared volume **before** it lands, never after.
    The one recorded so far is the ADR's "Producer amendment: DevLoop
    traces": the `mctl-agents` DevLoop only, capped at 500,000 spans for the
-   window, with a stop rule.
+   window, with a stop rule. The second, "Producer amendment: mctl-agent
+   incident traces", was recorded after the fact on 2026-10-12. It admits
+   `admins-mctl-agent` inside the same cap.
 
 ## 5. Declare the soak — before any measurement
 
@@ -171,6 +178,11 @@ before the first measurement:
 A soak whose length or volume is chosen after looking at the data is not a
 measurement. A change to either is a recorded amendment with a reason,
 never a silent extension.
+
+**What actually ran.** The owner closed the window early, on 2026-10-22
+at 17:00Z, for operator capacity. That is 30 h 59 min short of the
+declared end, and the actual window is 90.4% of the declared one. The ADR's
+"Window amendment" records it, and the verdict carries the same caveat.
 
 ## 6. Measurement sources, per rubric cell
 
@@ -218,8 +230,29 @@ have to revisit each of them.
 
 Fill Tempo's null cells in `docs/adr/0001-rubric.yaml`, apply
 `decision_rule`, pick exactly one of the seven `permitted_verdicts`, and
-write the ADR's Decision section. `tests/test_adr_rubric_frozen.py` stops
-enforcing the freeze once scores are non-null — that is expected.
+write the ADR's Decision section. Once `verdict` is set,
+`tests/test_adr_rubric_frozen.py` switches from the freeze to the scored
+contract: every cell is either a cited score from 0 to 5 or a cited "not
+measured", the ADR is `Accepted`, and its Decision names the verdict.
+
+**Done 2026-10-22: ADOPT TEMPO / mctl-native only, 315/500**, on the
+shortened window above. Lessons for the permanent deployment, from the
+soak:
+
+- **Read in time slices, not by id over everything.** A trace-by-id
+  without `start`/`end` reads every block in the bucket. With about 200
+  blocks, a bulk run of those requests throttled the 1-CPU pod to 80%,
+  raised its working set to 898 MiB and timed out on R2 range reads.
+  Ingestion did not suffer. Pass `start`/`end`, and keep searches within
+  the 168 h limit. The permanent deployment needs query concurrency limits
+  and more memory headroom than 1 GiB.
+- **Long traces.** A DevLoop trace can span about 90 hours, because it
+  waits for approval. A trace-by-id with a narrow time slice returns only
+  part of it, so the slice must cover the whole run. Even a slice of
+  1 h before to 100 h after the trace start came back short: 5,092 of
+  6,930 in-window spans, with whole services missing from 9 traces.
+  Treat a bounded trace-by-id as possibly partial, and compare its span
+  count with search's before drawing a conclusion from it.
 
 ## 9. Teardown — one commit, then the bucket
 
@@ -236,6 +269,10 @@ commit**:
    `bootstrap/templates/observability/monitoring.yaml`. (The rules are
    silent with the sandbox gone, so leaving them for a follow-up is safe,
    but they should not outlive the decision.)
+5. Unless the verdict keeps a backend for them, remove the real producers'
+   export as the ADR's producer amendments require: `otel.enabled` on the
+   `mctl-agents` DevLoop workers and the `otel` block on
+   `admins-mctl-agent`.
 
 Because the bootstrap Application syncs with `prune: true` and the candidate
 Application carries `resources-finalizer.argocd.argoproj.io` and
@@ -247,14 +284,19 @@ and the datasource ConfigMap disappear from the render in the same commit.
 
 Then, outside git:
 
-- **Remove the "Tempo (eval)" datasource from Grafana** (Connections → Data
-  sources, or `DELETE /api/datasources/uid/tempo-eval`).
+- **Remove the "Tempo (eval)" datasource from Grafana.** It was
+  provisioned, so the API refuses (`Cannot delete read-only data source`)
+  and pruning the ConfigMap does not remove it either: list it under
+  `deleteDatasources` in a provisioning file. In #1280 the adoption change
+  does that (`tempo-datasource.yaml`).
 - **If Tempo is not selected, empty the `tempo-traces` bucket** (and revoke
   its token and the Vault entry once nothing reads it). Waiting for the
   30-day lifecycle rule is acceptable only if the owner says so on #1280.
 - If Tempo **is** selected, its permanent home (namespace, storage,
   retention, replicas, real producers) is a new change under a separate
   owner gate; nothing in this sandbox is promoted in place.
+  For #1280 that change is the `tracing` deployment; see
+  `docs/runbooks/tempo.md`.
 
 ## 10. Verify nothing is left running
 

@@ -21,6 +21,24 @@
 # ovk, `nc -zvw3 temporal-frontend.temporal.svc.cluster.local 7233` must time
 # out; from mctl-api, admins workers and the kuptsi-app pod it must connect.
 #
+# Narrowed in #1818: every peer outside the namespace is scoped to the pods
+# and ports it actually uses. Two things that are easy to get wrong here:
+#
+#   * A namespaceSelector also matches hostNetwork pods in that namespace,
+#     whose address is their NODE's address. monitoring runs node-exporter
+#     on every node, and kube-system runs hcloud-cloud-controller-manager on
+#     the host network, so allowing either namespace on all ports admitted
+#     every node's host network (any hostNetwork pod, in any namespace) to
+#     7233. That is why monitoring is limited to the metrics port and
+#     kube-system is gone: nothing in kube-system is a Temporal client.
+#   * kubelet probes do not need a rule. k3s' embedded kube-router policy
+#     controller accepts traffic whose source is the pod's own node
+#     (`-m addrtype --src-type LOCAL`, comment "from local node",
+#     pkg/controllers/netpol/pod.go), before any policy chain.
+#
+# Live probe after #1818: a non-worker pod in admins must time out on 7233,
+# each admins worker must connect; monitoring reaches 9090 only.
+#
 # Rollback: delete this file (the Application prunes the policy).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -35,32 +53,48 @@ spec:
   policyTypes:
     - Ingress
   ingress:
+    # Server-internal frontend/history/matching/worker traffic, schema Job,
+    # namespaces bootstrap Job, temporal-web -> frontend.
     - from:
-        # Server-internal frontend/history/matching/worker traffic, schema
-        # Job, namespaces bootstrap Job, temporal-web -> frontend.
         - podSelector: {}
-        # temporal.mctl.ai UI (temporal-web:8080) via Traefik.
+    # temporal.mctl.ai UI via Traefik: temporal-web's HTTP port only.
+    - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: traefik
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-        # No scrape of the Temporal server today; kept so a future one works.
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Metrics only. No scrape of the Temporal server today; kept so a future
+    # one works. See the header for why this must not be all ports.
+    - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
-        # DevLoop start/signal/query (TEMPORAL_ADDRESS in mctl-api.yaml).
+      ports:
+        - protocol: TCP
+          port: 9090
+    # gRPC frontend clients:
+    #   mctl-api: DevLoop start/signal/query (TEMPORAL_ADDRESS in mctl-api.yaml)
+    #   mctl-agents-worker{,-exec,-implement}: poll their task queues; the
+    #     rest of admins (mctl-agents, cronjobs, Argo pods) has no business here
+    #   kuptsi-app API and its temporal-worker sidecar (labs, the one tenant
+    #     client)
+    - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: mctl-api
-        # mctl-agents-worker{,-exec,-implement} poll their task queues.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: admins
-    # The one tenant client: kuptsi-app API and its temporal-worker sidecar.
-    # Separate rule so the port restriction applies to it only.
-    - from:
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  - admins-mctl-agents-worker
+                  - admins-mctl-agents-worker-exec
+                  - admins-mctl-agents-worker-implement
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: labs

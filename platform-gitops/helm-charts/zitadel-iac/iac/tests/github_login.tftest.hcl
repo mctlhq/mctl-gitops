@@ -24,7 +24,8 @@ variables {
   platform_admins = jsonencode({
     admin = jsonencode({ email = "a@example.com", first_name = "A", last_name = "B" })
   })
-  smtp_password = "test"
+  smtp_password        = "test"
+  customers_github_idp = jsonencode({ client_id = "test-id", client_secret = "test-secret" })
 }
 
 run "absent_login_writes_no_metadata" {

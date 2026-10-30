@@ -58,6 +58,10 @@ spec:
     # that defaults to that store stays NotReady.
     - group: external-secrets.io
       kind: SecretStore
+    # CronWorkflow — the tenant chart's hourly preview-reaper, which runs as
+    # the tenant's own argo-workflow-sa and enforces preview ttl_hours.
+    - group: argoproj.io
+      kind: CronWorkflow
     - group: apps
       kind: Deployment
     - group: networking.k8s.io

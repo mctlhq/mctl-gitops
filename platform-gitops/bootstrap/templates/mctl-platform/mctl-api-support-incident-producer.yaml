@@ -1,0 +1,33 @@
+{{- if (default dict .Values.supportIncidentProducer).enabled }}
+# Bearer token of the support-incident-producer principal
+# (service:mctl-support-incidents, mctlhq/mctl-api#830): it may only create
+# source=support incidents of four known types. Rendered only when
+# supportIncidentProducer.enabled is true in bootstrap/values.yaml.
+#
+# Its own ExternalSecret and file for the same reasons as
+# mctl-api-usage-writer.yaml. The value lives on its own Vault path, read by
+# exactly two consumers: this Secret and the SUPPORT_INCIDENT_PRODUCER_TOKEN
+# key of mctl-support's admins-mctl-support-mctl-api ExternalSecret
+# (services/admins/mctl-support), so there is one value and nothing to keep
+# in step. It is deliberately not a
+# property of secret/platform/mctl-agents, which the agent runner pods
+# extract whole.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: mctl-api-support-incident-producer
+  namespace: mctl-api
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: mctl-api-support-incident-producer
+    creationPolicy: Owner
+  data:
+    - secretKey: MCTL_SUPPORT_INCIDENT_PRODUCER_TOKEN
+      remoteRef:
+        key: platform/mctl-support/incident-producer
+        property: token
+{{- end }}

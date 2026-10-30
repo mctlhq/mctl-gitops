@@ -40,8 +40,8 @@
 # project, or when an entry here is no longer used by any Application.
 # Adding a platform Application with a new chart repository or namespace
 # therefore means adding it here in the same PR. Eval candidates
-# (otelCollector.eval) are derived below, so opening or tearing one down
-# stays a single values edit.
+# (otelCollector.eval) and the permanent Tempo (tracing) are derived below,
+# so opening or tearing one down stays a single values edit.
 #
 # Rollout and rollback: root-app itself is in this project and syncs from
 # {{ .Values.spec.source.repoURL }}, which is always on the list, so root-app
@@ -59,6 +59,7 @@
       "https://emberstack.github.io/helm-charts"
       "https://grafana.github.io/helm-charts"
       "https://helm.releases.hashicorp.com"
+      "https://kubernetes-sigs.github.io/descheduler/"
       "https://open-telemetry.github.io/opentelemetry-helm-charts"
       "https://victoriametrics.github.io/helm-charts/"
 }}
@@ -68,8 +69,8 @@
       "argo-workflows"
       "argocd"
       "backstage"
+      "cert-manager"
       "cnpg-system"
-      "default"
       "erpact"
       "external-secrets"
       "forgejo"
@@ -77,6 +78,7 @@
       "kube-system"
       "labs"
       "local-path-storage"
+      "mctl-agents-egress"
       "mctl-api"
       "monitoring"
       "platform-db"
@@ -87,6 +89,10 @@
       "vault-human-auth-iac"
       "zitadel"
 }}
+{{- if .Values.tracing.enabled }}
+{{- $namespaces = append $namespaces "tracing" }}
+{{- $sourceRepos = append $sourceRepos .Values.tracing.tempo.repoURL }}
+{{- end }}
 {{- if .Values.otelCollector.eval.enabled }}
 {{- $namespaces = append $namespaces "observability-eval" }}
 {{- range .Values.otelCollector.eval.candidates }}

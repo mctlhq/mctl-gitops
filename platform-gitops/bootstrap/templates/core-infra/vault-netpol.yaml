@@ -8,6 +8,29 @@
 #
 # Selecting all pods with policyTypes: [Ingress] makes this an allowlist: any
 # source not named below is denied. No separate default-deny is needed.
+#
+# Clients, from config and 72h of the stdout audit device (remote_address,
+# and the service account on auth/kubernetes logins), 2026-10-12:
+#   external-secrets   the ESO controller, for every ExternalSecret and tenant
+#                      SecretStore in the cluster (the bulk of all requests).
+#   traefik            secrets.mctl.ai: Backstage, labs services and the
+#                      blackbox probe use the public hostname, so their
+#                      connections arrive from a Traefik pod.
+#   mctl-api           VAULT_ADDR http://vault-active.vault.svc.cluster.local:8200.
+#   argo-workflows     workflow pods log in via auth/kubernetes (argo-workflow-sa).
+#   vault-human-auth-iac, and workflows in tenant namespaces: see below.
+#
+# Peers are scoped by podSelector as well as namespace (mctl-gitops#1810,
+# #1818): a namespaceSelector alone also matches hostNetwork pods, whose
+# address is their node's. That is why kube-system (hcloud CCM) and monitoring
+# (node-exporter on every node) are no longer listed; neither appears in the
+# audit log, and kubelet probes need no rule because k3s' kube-router accepts
+# traffic from the pod's own node before any policy chain. backstage and
+# admins are dropped too: Backstage reaches Vault through secrets.mctl.ai, and
+# nothing in admins addresses Vault.
+#
+# Applied by root-app, which prunes: reverting this file restores the previous
+# allowlist.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -18,40 +41,40 @@ spec:
   policyTypes:
     - Ingress
   ingress:
+    # Raft peer traffic (8201), vault-active/standby service routing, and the
+    # in-namespace vault-backup and vault-auto-unseal jobs.
     - from:
-        # Raft peer traffic (8201) and vault-active/standby service routing.
         - podSelector: {}
-        # Vault is published at secrets.mctl.ai, and the two biggest in-cluster
-        # consumers reach it through that public hostname rather than the
-        # Service: mctl-portal and mctl-api both set
-        # VAULT_ADDR: https://secrets.mctl.ai. Their connections therefore
-        # arrive from a Traefik pod, so the mctl-api/backstage entries below do
-        # not cover them and omitting Traefik would break Backstage and mctl-api
-        # outright.
+    - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: traefik
-        - namespaceSelector:
+          podSelector:
             matchLabels:
-              kubernetes.io/metadata.name: kube-system
-        # ESO resolves every ExternalSecret in the cluster from here.
+              app.kubernetes.io/name: traefik
+        # The controller only; the webhook and cert-controller never call Vault.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: external-secrets
-        # Workflows authenticate via auth/kubernetes/login (provision-database,
-        # create-tenant, deploy-service).
-        - namespaceSelector:
+          podSelector:
             matchLabels:
-              kubernetes.io/metadata.name: argo-workflows
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: backstage
+              app.kubernetes.io/name: external-secrets
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: mctl-api
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mctl-api
+        # Workflows authenticate via auth/kubernetes/login (provision-database,
+        # create-tenant, tpl-vault-write). Workflow pods only, not the Argo
+        # server or controller.
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: monitoring
+              kubernetes.io/metadata.name: argo-workflows
+          podSelector:
+            matchExpressions:
+              - key: workflows.argoproj.io/workflow
+                operator: Exists
         # The vault-human-auth-iac Job (auth/kubernetes login, then the
         # auth/oidc mount, identity groups and human-tenant-* policies). Its
         # namespace runs nothing else; the pod label narrows it to the Job.
@@ -61,16 +84,10 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: vault-human-auth-iac
-        # admins hosts platform workloads, not tenant apps, and is named in the
-        # mctl-api and argo-workflows policies for the same reason. No container
-        # there addresses Vault today, so this is for consistency rather than a
-        # known dependency.
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: admins
-        # Argo runs some workflows inside the tenant namespace itself (verified:
-        # an ovk-namespaced Workflow at time of writing), and those pods still
-        # need Vault login. Namespace + pod selector in one element ANDs them.
+        # Argo runs some workflows inside the tenant namespace itself
+        # (deploy-service, whose tpl-vault-write steps log in to Vault), and
+        # those pods still need Vault login. Namespace + pod selector in one
+        # element ANDs them.
         #
         # The label was forgeable when this policy was written: base-service
         # copied arbitrary .Values.podLabels onto pods and update-config applies
@@ -92,3 +109,6 @@ spec:
             matchExpressions:
               - key: workflows.argoproj.io/workflow
                 operator: Exists
+      ports:
+        - protocol: TCP
+          port: 8200

@@ -1,161 +1,182 @@
 # Tasks: issue-428-architecture-implementer-define-bounded
 
-- [ ] 1. Write `docs/adr/012-implementation-completion-contract.md` — the decision,
-      the outcome vocabulary table, the lifecycle-boundary table, the replay rules,
-      and an opening paragraph stating in as many words that this is an
-      implementer-phase completion contract, not an independent review verdict and
-      not another DevLoop. Cross-reference ADR-009 (schema precedent), ADR-010
-      (§6 fencing, §7 projection rule, §8 idempotency), ADR-011 (envelope), #395,
-      #418, #423. — DoD: ADR lands with `Status: proposed`, matches the file it
-      documents field-for-field, and is reachable from `docs/adr/`.
+**This DevLoop implements PR 1 only. PR 2 and PR 3 are separate follow-up work items and
+must not be implemented in this attempt.**
 
-- [ ] 2. Add `orchestrator/implementation_completion.py` (depends on 1) —
-      stdlib-only frozen dataclasses `ImplementationCompletion`, `WorkItemRef`,
-      `AttemptRef`, `SourceRef`, `StopReason`, `VerificationRecord`,
-      `RemainingWork`, `EvidenceRef`; `API_VERSION =
-      "implementation.mctl.ai/v1alpha1"`, `KIND = "ImplementationCompletion"`,
-      `SUPPORTED_API_VERSIONS`; closed `OUTCOMES` / `STOP_REASON_CODES` /
-      `VERIFICATION_RESULTS` frozensets; `MAX_VERIFICATION_RECORDS`,
-      `MAX_REMAINING_WORK`, `MAX_EVIDENCE_REFS`, `MAX_EVIDENCE_REF_LENGTH`,
-      `MAX_MESSAGE_LENGTH`; `to_dict` / `from_dict` / `validate` /
-      `seal` / `recompute_content_hash`; `ImplementationCompletionError`.
-      Hashing reuses `context_snapshot.hash_bytes` and `canonical_json` — no
-      second hash convention. — DoD: `uv run mypy .` and `uv run ruff check .`
-      clean; no import of `claude_agent_sdk`, `httpx` or `yaml`; module is not
-      imported by any production path yet.
+In scope for this attempt: tasks 1, 2, 3, 4 and 7; tests T1, T2, T3, T4 and T7. One branch,
+one PR.
 
-- [ ] 3. Add the replay/staleness functions to the same module (depends on 2) —
-      `idempotency_key_for_completion(...)` delegating to
-      `lifecycle.contract.idempotency_key_for` with
-      `action="implementation-complete"`; `reconcile(prior, new) -> "duplicate" |
-      "accepted" | "refused"`; `staleness_of(doc, *, observed_head_sha,
-      claim_verdict, status_attempt_id) -> "fresh" | "stale"`;
-      `effective_outcome(doc, staleness)`; `reconcile_with_argo(argo_outcome,
-      doc)` consuming `implement_outcome.Outcome`. — DoD: every disagreement
-      resolves to the non-complete side, and no function can return `complete`
-      for an input that did not already carry it.
+Out of scope for this attempt (kept below as reference only):
+- PR 2, shepherd shadow consumption (task 5, T5): mctlhq/mctl-agents#679 — own DevLoop
+  after PR 1 merges.
+- PR 3, Temporal observe-only (task 6, T6): mctlhq/mctl-agents#680 — own DevLoop after
+  PR 1 merges.
+- Task 8, mctl-gitops optional prior-state input: mctlhq/mctl-gitops#1947 — done outside
+  this DevLoop.
 
-- [ ] 4. Add `followup_kind_for(outcome, stop_reason_code)` beside
-      `run_shepherd._followup_code_sets()` (depends on 3) — mapping the six
-      outcomes onto the existing `FollowupKind` literal. The shepherd is NOT
-      rewired to prefer the document in this proposal. — DoD: the function exists,
-      is typed `-> FollowupKind`, and T4 proves it agrees with the current
-      exit-code classification for every sentinel code.
+Do not modify `orchestrator/run_shepherd.py`, `orchestrator/temporal/**`, or any
+mctl-gitops file in this attempt.
 
-- [ ] 5. Add `--completion-out <path>` to `orchestrator/run_implementer.py`
-      (depends on 3) — argparse flag next to `--refusal-out` (`:3592`), a
-      `_build_completion(...)` helper, and a `_write_completion_out(path, doc)`
-      with the same best-effort discipline as `_write_refusal_out` (`:444`):
-      broad except, warn to stderr, never change the exit code. Emit from the
-      `implemented` arm (`:3302`), `_mark_needs_triage` (`:2772`), the refusal
-      arms (`:3710-3725`) and the `--review-feedback` exit path (`:3709/3726`).
-      Emit NOTHING on the `EXIT_FENCED` / `EXIT_CLAIM_REFUSED` arms. — DoD: with
-      the flag absent, behaviour is byte-identical to today; with it present, one
-      sealed document is written whose `stop_reason.exit_code` equals the process
-      exit code.
+## PR 1 (this attempt): contract, emission, projection, fallback authority, ADR
 
-- [ ] 6. Extend `ExecutionRecord` in `orchestrator/temporal/activities/state.py`
-      (depends on 2) — trailing `attempt_id: str = ""` and
-      `completion: dict[str, Any] | None = None`, posted as optional JSON keys in
-      `record_execution`'s body. No new activity call is added to
-      `DevLoopWorkflow._implement`, so no `workflow.patched()` marker is needed
-      (an extra argument to an existing activity is replay-invisible; an extra
-      activity call is not). — DoD: `tests/test_workflow_replay.py` and
-      `tests/test_implement_sweep_replay.py` stay green with the existing
-      fixtures, and all four existing `_record*` call sites compile unchanged.
+- [ ] 1. Add `orchestrator/implementation_completion.py` with:
+  - frozen dataclasses `ImplementationCompletion`, `CompletionSubject`, `AttemptBinding`
+    (with `run_id` and `step: primary|fallback`), `SourceBinding`, `ProposalBinding`,
+    `VerificationRecord`, `RemainingWorkItem`, `StopReason`;
+  - the `CompletionSummary` projection type and the pure
+    `select_authoritative(primary_summary | None, fallback) -> projection` function;
+  - closed sets `OUTCOMES`, `STOP_REASON_CODES` (with `gates_passed` for `complete`),
+    `VERIFICATION_RESULTS`, `VERIFICATION_CLASSIFICATIONS`, and
+    `REQUIRED_CHECKS_V1ALPHA1 = {commits_present, chart_major_guard, push_succeeded,
+    claim_valid_at_push}`;
+  - bounds of 32 per list, plus leaf caps;
+  - `seal()`, `to_dict()`, `from_dict()`, `ImplementationCompletionError`.
 
-- [ ] 7. Add the bounded `.status.yaml` projection helper (depends on 5) —
-      `completion_projection(doc) -> dict` returning only `{api_version,
-      completion_id, content_hash, outcome, attempt_id, stop_reason_code,
-      verification: {passed, failed, unknown, required_failed}}`, written through
-      `update_status_yaml` behind the existing `_status_is_still_ours`
-      compare-and-swap, carrying a `# derived, not authoritative` marker. — DoD:
-      no timing, token-count or log-excerpt field can appear in the projection,
-      proved by T7.
+  Reuse `canonical_json` / `hash_bytes` from `context_snapshot.py` and the validator
+  patterns from `execution_evidence.py`. Redact via `orchestrator/redaction.py`. The
+  module docstring states verbatim that in v1alpha1 `complete` means "the attempt pushed a
+  head that passed the orchestrator gates", not "the approved scope is implemented", and
+  names follow-up F1 (task-coverage verification).
 
-- [ ] 8. Add a fixture and a generator (depends on 2) —
-      `tests/fixtures/completion/implementation-completion.json` plus the seal
-      script path, mirroring `tests/fixtures/context/investigator-snapshot.json`.
-      — DoD: the fixture round-trips through `from_dict`/`to_dict` with a stable
-      `content_hash`, and regenerating it produces no diff.
+  DoD: the module imports nothing from `run_implementer` / `run_shepherd`; invariants are
+  enforced at construction; forbidden keys are rejected; `run_id` and `step` are part of
+  the hash.
+- [ ] 2. (depends on 1) In `orchestrator/run_implementer.py`, add
+  `completion_from_result()` and `_AttemptObservations`:
+  - `proposal_digest` at attempt start via `proposal_state.proposal_content_digest`;
+  - `review_bundle_digest` in `_review_feedback_one`;
+  - `base_sha` / `head_sha`;
+  - the four required gate records;
+  - non-required `CommandBudgetLedger` entries (classification only);
+  - `run_id` from `WORKFLOW_NAME`, `step` from `IS_FALLBACK`.
 
-- [ ] 9. Update `LLMS.md` and `docs/agent-inventory.yaml` (depends on 1) with one
-      paragraph naming the contract and its boundary. — DoD: `uv run pytest
-      tests/test_agent_inventory.py` and `tests/test_diagram_facts.py` pass.
+  DoD: every exit code 0, 1, 42-54 and every `ImplementResult` arm maps to exactly one
+  (outcome, stop_reason) pair through one mapping function.
+- [ ] 3. (depends on 2) Emit once per step:
+  - one `try/finally` emission point after claim acquisition in `_implement_one` and
+    `_review_feedback_one`; emission errors are logged and never change the exit code;
+  - `completion=` passed through `update_status_yaml` on the existing `implemented`,
+    `_mark_needs_triage`, `_mark_rate_limited` and hand-back writes, using the
+    `completion: {api_version, run_id, authoritative, other?, primary_observed}`
+    projection;
+  - a `--completion-out PATH` flag with a bounded writer (mirrors `_write_refusal_out`);
+  - `_completion_write_allowed(existing, new)` keyed on `(run_id, step, attempt_id)`,
+    combined with `_status_is_still_ours`;
+  - no projection when the claim check fails;
+  - when `step == fallback`, `_load_prior_handoff(Path("/tmp/prior-state"), ref, run_id)`
+    reads the primary's `completion.authoritative` (bounded, validated; a `run_id`
+    mismatch or non-`primary` step counts as absent) and applies `select_authoritative`.
+
+  DoD: existing exit codes, `--refusal-out` payloads and status values are byte-identical
+  in the existing tests; a missing `/tmp/prior-state` yields `primary_observed: false`.
+- [ ] 4. (depends on 1) Extend `RefusalMarker` / `_read_refusal_marker` with an optional
+  bounded `remaining: [{item_id, summary}]`. When present on an otherwise successful push,
+  the outcome is `incomplete`.
+
+  DoD: a marker without `remaining` behaves exactly as it does today.
+- [ ] 7. (depends on 1-4) Add `docs/adr/021-implementation-completion-contract.md`
+  covering: the scope statement; the outcome / stop-reason table; the v1alpha1 meaning of
+  `complete` (orchestrator gates only; no check against `tasks.md`) and follow-up F1; the
+  primary / fallback authority rule, including `primary_observed: false` and that
+  `status` and `completion.authoritative` may differ after a failed fallback; the replay
+  key; the carrier boundary; the non-authorities list; a "Consumers (follow-up)" section
+  linking #679, #680 and mctl-gitops#1947.
+
+  DoD: the ADR says explicitly "implementer-phase completion contract — not an independent
+  review verdict, not approval, not another DevLoop".
+
+## Reference only — OUT OF SCOPE for this attempt
+
+These items are kept for the follow-up DevLoops. Do not implement them here.
+
+- [ ] 5. (PR 2, mctlhq/mctl-agents#679; depends on PR 1 merged) In `run_shepherd.py`: pass
+  `--completion-out` next to `--refusal-out`; add `_read_completion(path,
+  expected_run_id)` and `_followup_kind_from_completion()`; always log
+  `completion-disagreement` against `_followup_exit_codes()`; change charging only when
+  `SHEPHERD_TRUST_COMPLETION` is on (default off); record `completion_id` in status notes;
+  append a "Shepherd consumption" section to ADR 021. DoD: flag off means unchanged
+  charging; with it on, a stale, mismatched or absent completion falls back to the exit
+  code; the merge decision does not read `outcome`.
+- [ ] 6. (PR 3, mctlhq/mctl-agents#680; depends on PR 1 merged) Temporal: add
+  `read_proposal_completion(service, slug)` in
+  `orchestrator/temporal/activities/proposals.py`, registered in `worker.py`; add optional
+  `completion_id`, `completion_outcome`, `completion_stop_reason`, `completion_step` to
+  `ExecutionRecord`; in `dev_loop._implement` and `implement_sweep`, read
+  `completion.authoritative` behind `workflow.patched("implement-completion")`, accepted
+  only when `completion.run_id == result.workflow_name`; expose
+  `ImplementExecutionState.completion_outcome`; no control-flow change; pointer in
+  `docs/temporal-flow.md` and an ADR 021 section. DoD: mismatched `run_id` is absent; a
+  `step: fallback, primary_observed: false` record keeps its step; existing replay
+  fixtures still replay.
+- [ ] 8. (mctlhq/mctl-gitops#1947, outside this DevLoop) In
+  `argo-workflows/cluster-templates/cwft-mctl-agents-implement.yaml`, add an
+  `optional: true` input artifact to `run-implementer` at the existing key
+  `{{workflow.name}}/agents-state.tgz`, unpacked to `/tmp/prior-state`. No step-order
+  change, no `outputs.parameters`. DoD: the primary step runs unchanged; the fallback pod
+  sees the primary's handoff.
 
 ## Tests
 
-`tests/test_implementation_completion.py` unless noted.
+In scope for this attempt:
 
-- [ ] T1. Serialization is pinned: the fixture round-trips byte-stably;
-      `content_hash` is independent of `created_at`; `completion_id` equals
-      `"ic-" + content_hash[7:23]`; an unknown key, an unsupported `api_version`,
-      an unsupported `kind` and an out-of-vocabulary `outcome` each raise
-      `ImplementationCompletionError` rather than falling back to a default shape.
-- [ ] T2. Semantic validation, proved by mutation in both directions:
-      `complete` with a failing `required_for_completion` verification is
-      rejected; `incomplete` with empty `remaining_work` is rejected; `complete`
-      with a non-null `stop_reason` is rejected; a non-`complete` outcome with a
-      null `stop_reason` is rejected.
-- [ ] T3. Bounds: exceeding `MAX_VERIFICATION_RECORDS`, `MAX_REMAINING_WORK`,
-      `MAX_EVIDENCE_REFS`, `MAX_EVIDENCE_REF_LENGTH` or `MAX_MESSAGE_LENGTH`
-      raises rather than truncating — so a payload cannot be smuggled through an
-      evidence reference.
-- [ ] T4. Equivalence: for every sentinel in `run_implementer` (42, 43, 44, 46,
-      47, 48, 49, 50, 0, 1), the outcome `_build_completion` derives maps through
-      `followup_kind_for` to exactly the `FollowupKind` that
-      `_followup_code_sets()` / `_refusal_codes()` / `_fenced_codes()` produce
-      today. A new exit code with no mapping fails this test.
-- [ ] T5. Replay and idempotency: sealing the same attempt twice yields identical
-      `completion_id`, `content_hash` and `idempotency_key`; `reconcile` returns
-      `duplicate` for identical content, and `refused` for the same `attempt_id`
-      with a different outcome — asserted specifically for
-      `budget_exhausted -> complete` and `harness_failure -> complete`; a new
-      `attempt_id` is `accepted`. No `uuid` import in the module (same assertion
-      style as `tests/test_run_implementer_claims.py`).
-- [ ] T6. Stale-attempt fail-closed: a moved `head_sha`, a `CLAIM_FENCED` /
-      `CLAIM_HELD_BY_OTHER` / `CLAIM_UNKNOWN` / `CLAIM_UNCLAIMED` verdict, and a
-      `.status.yaml` attempt block naming another attempt each classify `stale`
-      and downgrade `complete` to `harness_failure` with
-      `stop_reason.code = "stale-attempt"`. `reconcile_with_argo` resolves every
-      disagreement to the non-complete side, including
-      `("finalization", complete)` and `("execution", complete)`.
-- [ ] T7. Lifecycle boundary: no dataclass field name in the module matches
-      `approve|approval|merge|release|authoriz|grant|review_clean|lease|owner_state`;
-      and a mutation test that flips a document to `complete` leaves
-      `proposal_state.human_approval_satisfied`,
-      `proposal_state.execution_authorization` and the shepherd's merge path
-      returning exactly what they returned before.
-- [ ] T8. No-document fallback: with no completion available, the shepherd's
-      existing exit-code classification and `implement_outcome.classify` are used
-      unchanged, and nothing synthesizes `complete`.
-- [ ] T9. `tests/test_run_implementer_refusal.py` extension: `--completion-out`
-      absent leaves every existing exit code and status write unchanged;
-      `--completion-out` pointing at an unwritable path warns and still exits with
-      the correct sentinel; the fenced/claim-refused arms write no document.
-- [ ] T10. `tests/test_worker_isolation.py` still passes with
-      `implementation_completion` importable from the Temporal worker.
+- [ ] T1. `tests/test_implementation_completion.py`:
+  - round-trip for every outcome;
+  - hash stable across key order and `created_at`;
+  - the hash differs between `step: primary` and `step: fallback` with the same
+    `attempt_id`;
+  - unknown and forbidden keys (`approved`, `review_verdict`, `merge`, `release`,
+    `owner`, `extend_budget`) are rejected;
+  - list bounds are enforced;
+  - `complete` invariants: a failed required check, remaining work, or a null head is
+    rejected;
+  - `incomplete` with empty `remaining_work` is rejected;
+  - redaction;
+  - the required-check set equals the four gates;
+  - the docstring contains the v1alpha1 `complete` statement;
+  - `select_authoritative` truth table (all four rows).
+- [ ] T2. `tests/test_run_implementer_completion.py`: a parametrized table over every exit
+  code and `ImplementResult` arm. Fails if a new `EXIT_*` constant is added without a
+  mapping.
+- [ ] T3. Primary / fallback authority, driven through `_implement_one` twice with
+  `WORKFLOW_NAME` fixed, `IS_FALLBACK` false then true, and the primary's staged
+  `.status.yaml` copied into a tmp `prior-state` dir. Each scenario runs with
+  `WORKFLOW_UID` set (same `attempt_id`) and unset (different `HOSTNAME`):
+  - T3a. **Primary fails, then fallback fails.** Primary ends `deterministic_failure` /
+    `no_commits`; fallback ends `harness_failure` or `budget_exhausted` / `rate_limited`.
+    Assert `completion.authoritative` is the primary's record, `completion.other.relation
+    == fallback` with the fallback's outcome, and `primary_observed: true`.
+  - T3b. **Primary fails, then fallback succeeds.** Primary ends `harness_failure`;
+    fallback ends `complete` / `gates_passed`. Assert `authoritative` is the fallback's
+    record and `other.relation == superseded` with the primary's outcome.
+  - T3c. Fallback with no `prior-state`: `primary_observed: false`, fallback's own record
+    authoritative.
+  - T3d. `prior-state` from a different `run_id` is treated as absent.
+- [ ] T4. Replay and staleness:
+  - re-sealing the same step yields the same `completion_id`; re-projecting is a no-op;
+  - a different completion under the same `(run_id, step, attempt_id)` is refused
+    (including `budget_exhausted` → `complete` and `harness_failure` → `complete`);
+  - an older attempt is refused when status holds a newer one;
+  - `_check_claim_or_raise` raising at emission produces no projection and a
+    `--completion-out` record of `harness_failure` / `fenced`.
+- [ ] T7. Backward compatibility: the existing `tests/test_run_implementer_*.py` and
+  shepherd tests pass unchanged; a `.status.yaml` without `completion:` parses everywhere;
+  a `RefusalMarker` without `remaining` behaves as before.
+
+Reference only, out of scope for this attempt:
+
+- [ ] T5. (#679) Shepherd: `_read_completion` rejects oversize, invalid and mismatched
+  files; kind table; disagreement logged and exit code used; flag off means no change.
+- [ ] T6. (#680) Temporal: `record_execution` sends the optional keys and retries without
+  them on 4xx; `success` + non-`complete` observed, not failed; `run_id` mismatch is
+  absent; existing `tests/fixtures/histories/dev_loop_*.json` and `implement_sweep.json`
+  replay under the new patch.
 
 ## Rollback
 
-Every step is additive and inert, so rollback is removal rather than migration.
-
-1. **Fastest revert (no deploy coordination):** stop passing
-   `--completion-out` — nothing does yet, and without it `run_implementer`
-   behaves exactly as before. The contract module, ADR and tests can stay in
-   place with zero runtime effect.
-2. **Full revert:** delete `orchestrator/implementation_completion.py`,
-   `docs/adr/012-implementation-completion-contract.md`, the fixture, the
-   `followup_kind_for` helper and the `--completion-out` flag, and drop the two
-   trailing fields from `ExecutionRecord`. No database migration, no gitops
-   schema change, no Temporal patch marker was added, so no history is stranded
-   and `dev_loop_full.*.json` / `implement_sweep.json` replay unchanged.
-3. **Projection revert:** the `.status.yaml` block is derived and
-   preserved-by-default; removing the writer stops new writes, and existing
-   blocks are inert because nothing reads them for a decision (T7). They can be
-   left in place or swept by the next ordinary status write.
-4. **If mctl-api rejects the extra JSON keys** (rather than ignoring them),
-   `record_execution` starts failing — the workflow already treats that as
-   best-effort (`except ActivityError` → warn and continue), but the correct fix
-   is to drop the two fields from the POST body, which is a one-line change
-   isolated to `activities/state.py`.
+PR 1 is additive and changes no consumer behaviour. Revert the PR to remove the schema
+module, `--completion-out`, the projection, the fallback authority logic and ADR 021.
+Nothing reads `--completion-out` yet (the shepherd consumer is #679), and a stray
+`completion:` key left in `.status.yaml` is ignored by every existing reader, so no data
+cleanup is needed. If #679 or #680 has merged by then, revert those first (they depend on
+PR 1). mctl-gitops#1947 can stay deployed after a revert: an unused optional input at
+`/tmp/prior-state` is harmless.

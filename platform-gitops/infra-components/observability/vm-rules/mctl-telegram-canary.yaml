@@ -123,3 +123,70 @@ spec:
               RBAC on the mctl-telegram-canary Secret and an exhausted
               one-year renewal window.
               Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md
+        # Connector login-path probes (mctl-telegram#959, epic
+        # mctlhq/.github#279). The canary publishes every login-path step on
+        # every run, 0 when it passed, so min_over_time over the window means
+        # "failed on every run", the same ~2-run tolerance as
+        # MctlTelegramCanaryFailing. A login-path break never fails the Job, so
+        # these rules are the only thing that reports it.
+        - alert: MctlTelegramConnectorEdgeBlocked
+          # Critical, unlike the other login-path steps: an edge block on the
+          # connector User-Agents breaks every connector request, existing
+          # users included, not only new sign-ins (2026-10-29,
+          # mctl-gitops#2261).
+          expr: min_over_time(mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step="edge_connector_ua"}[25m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: mctl-telegram
+          annotations:
+            summary: "AI connector User-Agents are not reaching mctl-telegram"
+            description: >-
+              An unauthenticated POST /mcp sent as Claude-User, ChatGPT-User or
+              Perplexity-User has not received the app's own 401 on any canary
+              run for ~25 minutes. Something in front of the app, usually a
+              Cloudflare WAF or bot rule, is answering instead. The canary log
+              names the User-Agent and the response. Every connector call is
+              affected, not only new sign-ins.
+              Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md#login-path-probes
+        - alert: MctlTelegramLoginPathStepFailing
+          # Warning: these steps break new connections, while already
+          # connected users keep working.
+          expr: min_over_time(mctl_telegram_canary_step_failure_total{job="mctl_telegram_canary",step=~"prm_root|prm_mcp|connect_page|authorize_redirect|callback_unknown_state|mcp_root"}[25m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram connector login path is failing at {{ $labels.step }}"
+            description: >-
+              The canary's {{ $labels.step }} login-path step has failed on
+              every run for ~25 minutes. New connectors cannot finish
+              connecting, while connected accounts are not affected. mcp_root
+              failing means a connector configured with the bare origin gets
+              "action discovery failed" after OAuth (2026-10-30). The canary
+              pod log in labs carries the response that failed the check.
+              Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md#login-path-probes
+        - alert: MctlTelegramLoginPathAbsent
+          # The tool-path canary is reporting but the login-path gauge is not:
+          # CANARY_LOGIN_PATH was dropped, or the image predates the probes.
+          # Gated on the tool-path series so that a canary that stopped
+          # reporting altogether is MctlTelegramCanaryAbsent's alert, not a
+          # second one here.
+          expr: >-
+            absent_over_time(mctl_telegram_canary_login_path_success{job="mctl_telegram_canary"}[30m])
+            and on() count(count_over_time(mctl_telegram_canary_success{job="mctl_telegram_canary"}[30m])) > 0
+          for: 0m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "mctl-telegram canary is running without its login-path probes"
+            description: >-
+              The canary has pushed tool-path results in the last 30 minutes
+              but no mctl_telegram_canary_login_path_success. Without it, an
+              edge block on connector User-Agents or a broken sign-in path goes
+              unreported. Check that CANARY_LOGIN_PATH=true is still set on
+              labs-mctl-telegram-canary and that the image includes
+              mctl-telegram#959.
+              Runbook: https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbooks/canary.md#login-path-probes

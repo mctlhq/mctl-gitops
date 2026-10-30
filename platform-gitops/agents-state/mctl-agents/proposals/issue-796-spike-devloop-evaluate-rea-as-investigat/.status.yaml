@@ -1,0 +1,63 @@
+status: merged
+updated_at: '2026-10-26T02:05:15Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-d099c6f8f6c7b95c
+  trace_id: 49ee0dcfc8d70d98697b6774c1edeb7a
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-agents
+  issue: 796
+  url: https://github.com/mctlhq/mctl-agents/issues/796
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-44303a69e5c280b1
+  content_hash: sha256:44303a69e5c280b1abaf7233302a618ca5c1f6080b871d7a9a9ef41ce124813f
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-25T22:24:52Z'
+  content_digest: sha256:d560df57ec0f0b3f1780615ca7c8e0c80be93ea90b3e54c14ac809a258061b29
+  digest_binding: reviewed
+  approval_ref: aar_0afeb5531fea48a1a4020ef7b8e4208c
+attempt:
+  id: f36193d10ddac59a5830e556705a024f49c845b02e74e395e349fce466b21f4b
+  started_at: '2026-10-26T00:07:22Z'
+  expires_at: '2026-10-26T02:17:22Z'
+  finished_at: '2026-10-26T00:11:27Z'
+pr: https://github.com/mctlhq/mctl-agents/pull/802
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-c8861a48
+  authoritative:
+    completion_id: ic-d032be5903eeb5f1
+    content_hash: sha256:d032be5903eeb5f1d93eedaa2bd5af9b3bf1a7a417a84e07a9560acd35ea1278
+    proposal_digest: sha256:d560df57ec0f0b3f1780615ca7c8e0c80be93ea90b3e54c14ac809a258061b29
+    attempt_id: f36193d10ddac59a5830e556705a024f49c845b02e74e395e349fce466b21f4b
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 7316eab02566d31e3307a2d135fcc78c8caa77cc
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+github:
+  state: merged
+  head_sha: 6b9794510000738dcafa611c125a379819208e23
+  observed_at: '2026-10-26T02:05:15Z'
+notes: 'implementer declined to act: The three failures come from the external gitops
+  catalog gaining the scout agent (mctl-agents#797/#803: profile scout-default, shadow
+  release scout.yaml pinning agents/_manifests/scout/agent.yaml by sha256 contentHash).
+  No scout code exists on this branch or origin/main (no agents/_manifests/scout,
+  run_scout, build_scout_options, scout_scoring task). This PR only adds the 796 REA
+  spike docs/tools. Fixing in-repo would mean implementing the whole scout agent with
+  a manifest byte-identical to the pinned hash, which is out of scope and not derivable.
+  Resolution: land the scout PR (#803) into main'
+merged_at: '2026-10-26T02:05:15Z'
+merge_commit: c898d659db23c021833b8e5468a86fa65edec734

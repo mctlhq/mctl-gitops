@@ -21,6 +21,10 @@ module "baseline" {
 
   redirect_rule_ref = "37cc4b9b960f4879acbe822e985d36d0"
   firewall_rule_ref = "298f62f070b54b489d10370595afa99b"
+
+  # mctl.ru never had hosts of its own beyond www; nothing in mctlhq references
+  # any other *.mctl.ru name. The rest of the wildcard answers 403 at the edge.
+  redirect_subdomains = ["www"]
 }
 
 # Deliberately NOT managed here: TXT _acme-challenge.mctl.ru

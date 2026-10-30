@@ -18,52 +18,32 @@ spec:
   # instead of the drain deadlocking on the single-instance PDB (0 allowed
   # disruptions) that left worker-cx43-fsn1-ftx cordoned for 13 days during a
   # k3s upgrade. podAntiAffinity (preferred) spreads the two across nodes.
+  # Mirrored by SharedPgInstanceMissing in observability/vm-rules/shared-pg-alerts.yaml.
   instances: 2
 
-  # CNPG operator defaults (explicitly set to prevent ArgoCD OutOfSync)
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.2
+  # Pinned so ArgoCD does not report OutOfSync against the operator default.
+  # The bare 17.x tag is the legacy "system" image (Debian bullseye, which
+  # still bundles barman-cloud; since the switch to the Barman Cloud Plugin
+  # below nothing uses it, the plugin's sidecar brings its own); its digest equals
+  # 17.11-system-bullseye. Staying on bullseye keeps glibc, and with it
+  # index collation, unchanged across minor bumps. The operator rolls the
+  # standby first, then switches over (primaryUpdateMethod below).
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11@sha256:70664ebcfa1100361b5bdc28bbf06fdbe08db2dc4ad7bd14de33c5e05fe8ea8e
 
-  # Backups go OFF-cluster to R2: the previous in-cluster MinIO target died
-  # together with the very cluster/PVCs it was protecting against. Same R2
-  # account+bucket as vault-backup and vmbackup; endpoint matches backend.tf.
-  # The old MinIO backups (s3://postgres-backups/shared-pg) were deleted with
-  # MinIO itself; PITR reaches back only as far as the first R2 base backup.
+  # WAL archiving and base backups go through the Barman Cloud Plugin
+  # (#2014), to the R2 object store defined in object-store.yaml (path,
+  # credentials, compression and the 14d retention live there now). The
+  # in-tree spec.backup.barmanObjectStore that used to be here is deprecated
+  # since CNPG 1.26 and due for removal. isWALArchiver makes the plugin the
+  # cluster's archive_command; only one plugin may hold it.
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: shared-pg-r2
   backup:
-    barmanObjectStore:
-      destinationPath: s3://vault-backup/postgres-backups/shared-pg
-      endpointURL: https://6a09f637d20e1f66a8e9d45ebe778058.r2.cloudflarestorage.com
-      s3Credentials:
-        accessKeyId:
-          name: cnpg-backup-r2
-          key: ACCESS_KEY_ID
-        secretAccessKey:
-          name: cnpg-backup-r2
-          key: SECRET_ACCESS_KEY
-      wal:
-        compression: gzip
-        maxParallel: 2
-      data:
-        compression: gzip
-        # Ask for an immediate checkpoint instead of a spread one. Without
-        # this, barman calls pg_backup_start(..., fast=false), which waits for
-        # a checkpoint paced by checkpoint_completion_target — and that wait
-        # runs as an ordinary session, subject to the cluster-wide
-        # statement_timeout of 60s below.
-        #
-        # On 2026-08-27 the restartpoint took 61.5s and the backup was
-        # cancelled 1.5s short of finishing. The seven green nights before it
-        # were luck, not margin: restartpoints that same night ranged from 15s
-        # to 50s, so whether the daily backup succeeds was effectively a coin
-        # weighted by how many buffers happened to be dirty. See #905.
-        #
-        # Cost is an I/O spike at 02:00 on the standby (target: prefer-standby),
-        # which serves no writes. That is much cheaper than nondeterministically
-        # skipping nightly backups of nine tenant databases.
-        immediateCheckpoint: true
-    # 14d: 3d left no margin to notice data loss that survives a weekend or
-    # a bad migration discovered late. WAL+base are gzip'd; 9 small tenant DBs
-    # fit comfortably in the R2 bucket at this window.
-    retentionPolicy: "14d"
+    # Base backups run on the standby when there is one, so the nightly
+    # immediate checkpoint and data-directory read stay off the primary.
     target: prefer-standby
 
   # Data-path priority (#1774); class declared in
@@ -163,7 +143,6 @@ spec:
       - host labs-mctl-telegram-preview labs-mctl-telegram-preview all scram-sha-256
       - host labs-mctl-loyalty labs-mctl-loyalty all scram-sha-256
       - host labs-mctl-pairdesk labs-mctl-pairdesk all scram-sha-256
-      - host labs-pfeifenpatenschaft labs-pfeifenpatenschaft all scram-sha-256
       - host labs-pfeifenpatenschaft-backend labs-pfeifenpatenschaft-backend all scram-sha-256
       - host labs-mctl-academy labs-mctl-academy all scram-sha-256
       # Read-only Grafana dashboard role — SELECT-only, see
@@ -172,12 +151,15 @@ spec:
       - host labs-seerrsense labs-seerrsense all scram-sha-256
       - host labs-mctl-alice labs-mctl-alice all scram-sha-256
       - host karabu-draw-with-friends karabu-draw-with-friends all scram-sha-256
+      - host admins-umami admins-umami all scram-sha-256
       # Forgejo (platform git, bootstrap/templates/data/forgejo.yaml)
       - host forgejo forgejo all scram-sha-256
       # ZITADEL (platform identity provider, bootstrap/templates/core-infra/zitadel.yaml)
       - host zitadel zitadel all scram-sha-256
       # Grafana's own database (bootstrap/templates/observability/monitoring.yaml)
       - host grafana grafana all scram-sha-256
+      - host labs-mctl-rules labs-mctl-rules all scram-sha-256
+      - host admins-mctl-support admins-mctl-support all scram-sha-256
       - host all all 0.0.0.0/0 reject
 
   managed:
@@ -185,7 +167,10 @@ spec:
       - name: backstage
         login: true
         inherit: true
-        connectionLimit: 100  # 2 replicas * ~25 plugin connections during rolling deploy
+        # 19 plugin schemas (pluginDivisionMode: schema) x knex pool max 3 =
+        # 57 per pod, two pods during a rolling deploy. Observed peak 42.
+        # SharedPgRoleConnectionsHigh mirrors this limit at 80% (80).
+        connectionLimit: 100
         ensure: present
         passwordSecret:
           name: backstage-db-creds
@@ -217,13 +202,35 @@ spec:
         # update has three pods at once, each holding 11-15 connections
         # (measured 2026-10-09: 15 + 13 + 11 = 39). At 40 the surge pod hit
         # the limit again and its agent registry and domains stores stayed
-        # disabled, so it never became Ready. 64 covers three pods at init
-        # with headroom; mctl-api#508 tracks shrinking the per-store pools.
+        # disabled, so it never became Ready.
+        # Since mctl-api 4.109.1 (mctl-api#728) every store shares one pool
+        # per database URL, 8 connections by default (DB_POOL_MAX_CONNS), so
+        # the worst case is 3 pods x (2 URLs x 8 + 3 unpooled) = 57. Measured
+        # right after that rollout: 4 per pod. SharedPgRoleConnectionsHigh
+        # (vm-rules/shared-pg-alerts.yaml) mirrors this limit at 80%.
         connectionLimit: 64
         ensure: present
         passwordSecret:
           name: mctl-api-db-creds
       # Team app roles
+      - name: admins-mctl-support
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: admins-mctl-support-db-creds
+      - name: labs-mctl-rules
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: labs-mctl-rules-db-creds
+      - name: admins-umami
+        login: true
+        connectionLimit: 10
+        ensure: present
+        passwordSecret:
+          name: admins-umami-db-creds
       - name: karabu-draw-with-friends
         login: true
         connectionLimit: 10
@@ -266,12 +273,6 @@ spec:
         ensure: present
         passwordSecret:
           name: labs-pfeifenpatenschaft-backend-db-creds
-      - name: labs-pfeifenpatenschaft
-        login: true
-        connectionLimit: 10
-        ensure: present
-        passwordSecret:
-          name: labs-pfeifenpatenschaft-db-creds
       - name: labs-mctl-pairdesk
         login: true
         connectionLimit: 10
@@ -305,12 +306,17 @@ spec:
       # Temporal server connects from the temporal namespace via shared-pg-rw.
       # Owns both the temporal (history+matching) and temporal_visibility databases.
       # Connection budget: 4 server roles (frontend/history/matching/worker)
-      # × 20 default + 10 visibility = 120 steady-state, plus admintools spikes
-      # during schema-setup hooks. 200 keeps a comfortable head-room.
+      # × 20 default + 10 visibility = 120 if every pool filled at once, plus
+      # admintools during schema-setup hooks. Observed peak 37 (2026-10-12..20).
+      # 140 covers the full pool budget; the old 200 equalled max_connections,
+      # so this one role could take every slot on shared-pg. The 20 above 120
+      # is for admintools and a server pod restarting while its predecessor
+      # still holds its pool. SharedPgRoleConnectionsHigh mirrors this limit
+      # at 80% (112).
       - name: temporal
         login: true
         inherit: true
-        connectionLimit: 200
+        connectionLimit: 140
         ensure: present
         passwordSecret:
           name: temporal-db-creds
@@ -358,4 +364,4 @@ spec:
         name: backstage-db-creds
 
   monitoring:
-    enablePodMonitor: false  # enable when Prometheus is added
+    enablePodMonitor: false  # scraped via vmpodscrape.yaml; true would add a converted duplicate scrape

@@ -1,0 +1,267 @@
+# Alerts for mctl-alice (labs/mctl-alice, alice.mctl.ai): availability, the
+# 5xx ratio, auth failures and the Yandex upstreams it calls.
+#
+# The mctl_alice_* series come from the app's /metrics (mctlhq/mctl-alice#93),
+# scraped by bootstrap/templates/mctl-platform/mctl-alice-monitor.yaml; the
+# probe series from the mctl-alice-healthz VMProbe in blackbox/vmprobes.yaml.
+# Every label value on mctl_alice_* is from a fixed set chosen in the app
+# (route templates, reasons, buckets, upstream names, outcomes).
+#
+# Ratios aggregate to one series for the service (sum, no pod) so a rolling
+# update's two pods do not split the traffic, and each carries a floor on the
+# absolute count so a quiet hour with one failed call out of two does not
+# fire. All alerts are warning: monitoring.yaml routes MctlAlice.* to Telegram
+# (continue: true, so mctl-agent still gets its ticket through the trailing
+# matcher-less route), and a critical one would additionally match the
+# severity route and page twice.
+#
+# Thresholds are starting points for a service at launch traffic; tune them
+# on observed rates rather than raising `for:` to silence a real signal.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: mctl-alice-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: mctl-platform
+    app.kubernetes.io/component: mctl-alice
+spec:
+  groups:
+    - name: mctl.alice.availability
+      interval: 60s
+      rules:
+        - alert: MctlAliceDown
+          expr: probe_success{job="mctl-alice-healthz"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "alice.mctl.ai has failed its health check for 5 minutes"
+            description: >-
+              blackbox-exporter has had no 2xx from {{ $labels.instance }} for
+              5 minutes. The probe goes out through Cloudflare and back through
+              Traefik: a 503 with an empty body is Traefik with no Ready pod
+              (`kubectl -n labs get pods -l app.kubernetes.io/instance=labs-mctl-alice`),
+              a 5xx from the app names it in the pod log, and a 403 is the
+              edge refusing the probe.
+
+        - alert: MctlAliceProbeAbsent
+          expr: absent(probe_success{job="mctl-alice-healthz"})
+          for: 15m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "No probe_success series for job=mctl-alice-healthz"
+            description: >-
+              The VMProbe mctl-alice-healthz (infra-components/observability/
+              blackbox/vmprobes.yaml) has produced no series for 15 minutes,
+              so MctlAliceDown is blind. Check that the VMProbe exists, that
+              vmagent picked it up, and that blackbox-exporter is running.
+
+        - alert: MctlAliceNoReadyReplicas
+          expr: |
+            avg_over_time(
+              kube_deployment_status_replicas_available{namespace="labs",deployment="labs-mctl-alice-base-service"}[10m]
+            ) < 0.5
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice was Ready less than half of the last 10 minutes"
+            description: >-
+              kube-state-metrics reports that deployment
+              labs-mctl-alice-base-service averaged fewer than 0.5 available
+              replicas over the last ten minutes. The readiness probe is
+              /healthz; `kubectl -n labs describe pod` shows why it fails, and
+              /readyz in the pod says whether credential storage (shared-pg) is
+              reachable.
+
+        - alert: MctlAliceRestarting
+          # Collapse instance before the range function. When kube-state-metrics
+          # is rescheduled its pod IP, and so the instance label, changes, and
+          # every restart counter starts a new series at its current value.
+          # VictoriaMetrics' increase() counts a new series' first sample as
+          # growth, so a per-instance increase() read a pod's whole restart
+          # history as fresh restarts (MctlAliceRestarting, 2026-10-24 11:33,
+          # "6 restarts" with none). max by over the instances is one continuous
+          # series across the move.
+          expr: |
+            sum by (namespace, pod) (
+              increase(
+                (max by (namespace, pod, container) (
+                  kube_pod_container_status_restarts_total{namespace="labs",pod=~"labs-mctl-alice-base-service-.*"}
+                ))[30m:1m]
+              )
+            ) >= 2
+          for: 0m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice pod {{ $labels.pod }} restarted {{ $value | humanize }} times in 30 minutes"
+            description: >-
+              The container has restarted at least twice in 30 minutes. The
+              generic KubePodCrashLooping and ContainerOOMKilled alerts reach
+              only mctl-agent; this one reaches a human. `kubectl -n labs logs
+              --previous {{ $labels.pod }}` has the last crash, and the pod's
+              lastState says whether it was OOMKilled (limit 256Mi).
+
+        - alert: MctlAliceMetricsAbsent
+          expr: absent(mctl_alice_build_info{namespace="labs"})
+          for: 15m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "No mctl_alice_* series from labs/mctl-alice for 15 minutes"
+            description: >-
+              The VMServiceScrape mctl-alice (bootstrap/templates/mctl-platform/
+              mctl-alice-monitor.yaml) has delivered no mctl_alice_build_info
+              for 15 minutes, so every other mctl-alice metric alert is blind.
+              A refused connection on port 9464 means the image predates
+              mctlhq/mctl-alice#93 or METRICS_PORT is unset; `up` for the
+              target says whether the scrape itself fails.
+
+    - name: mctl.alice.errors
+      interval: 60s
+      rules:
+        - alert: MctlAliceHigh5xxRatio
+          # Probes and the scrape itself are excluded: they answer 200 every
+          # few seconds and would dilute the ratio to nothing at launch
+          # traffic. `aborted` (client gone before a status was sent) says
+          # nothing about the server and leaves the denominator too.
+          expr: |
+            (
+              sum(rate(mctl_alice_http_requests_total{namespace="labs",status_class="5xx",route!~"/healthz|/readyz|/metrics"}[15m]))
+              /
+              sum(rate(mctl_alice_http_requests_total{namespace="labs",status_class=~"[1-5]xx",route!~"/healthz|/readyz|/metrics"}[15m]))
+            ) > 0.05
+            and
+            sum(increase(mctl_alice_http_requests_total{namespace="labs",status_class="5xx",route!~"/healthz|/readyz|/metrics"}[15m])) >= 5
+          for: 10m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice: {{ $value | humanizePercentage }} of requests answered 5xx over 15 minutes"
+            description: >-
+              More than 5% of requests (and at least five) answered with a 5xx
+              over the last 15 minutes, sustained for 10. Break it down by
+              route: sum by (route, status_class) (rate(mctl_alice_http_requests_total[15m])).
+              A 503 on /oauth/token or /mcp is credential storage (shared-pg)
+              being unreachable; 502/504 on /api/* are Yandex upstream
+              failures, which MctlAliceUpstreamErrorRatioHigh names.
+
+        - alert: MctlAliceAuthFailureSpike
+          # missing_token is excluded: every MCP client's first request carries
+          # no token by design (it is how OAuth discovery starts), so it tracks
+          # traffic, not failures. insufficient_scope is a client asking for
+          # more than it was granted, also not an attack or an outage.
+          expr: |
+            sum(increase(mctl_alice_auth_failures_total{namespace="labs",reason!~"missing_token|insufficient_scope"}[15m])) > 50
+          for: 10m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice: {{ $value | humanize }} rejected auth attempts in 15 minutes"
+            description: >-
+              More than 50 bearer, token-endpoint or sign-in failures in 15
+              minutes, sustained for 10. Look at the reason split:
+              sum by (reason) (increase(mctl_alice_auth_failures_total[15m])).
+              invalid_token or malformed in bulk is token guessing or a broken
+              client; invalid_grant or token_invalid_grant in bulk can be a
+              client stuck refreshing a revoked grant; storage_unavailable and
+              token_unavailable are an outage (see MctlAliceAuthStorageUnavailable).
+
+        - alert: MctlAliceAuthStorageUnavailable
+          expr: |
+            sum(increase(mctl_alice_auth_failures_total{namespace="labs",reason=~"storage_unavailable|token_unavailable"}[10m])) >= 3
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice cannot read credential storage: authenticated requests are failing with 503"
+            description: >-
+              Bearer checks or token exchanges failed because the credential
+              store (shared-pg, database from teams/labs/mctl-alice/database)
+              was unavailable or a stored grant could not be decrypted. Every
+              signed-in user is affected. Check /readyz in the pod, the
+              SharedPg.* alerts, and for a decrypt failure the ENCRYPTION_KEY
+              in Vault.
+
+        - alert: MctlAliceSignInFailing
+          expr: |
+            sum(increase(mctl_alice_auth_failures_total{namespace="labs",reason="login_failed"}[30m])) >= 3
+          for: 5m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice: Yandex sign-in failed {{ $value | humanize }} times in 30 minutes"
+            description: >-
+              The /auth/callback exchange with Yandex OAuth, or the profile
+              check after it, failed at least three times in 30 minutes, so
+              new users cannot connect. The pod log has the error; the oauth
+              and login rows of mctl_alice_upstream_requests_total say whether
+              Yandex answered 4xx (client credentials, YANDEX_CLIENT_SECRET),
+              5xx or timed out.
+
+    - name: mctl.alice.upstream
+      interval: 60s
+      rules:
+        - alert: MctlAliceUpstreamErrorRatioHigh
+          # 4xx and 3xx are excluded: Yandex answers 401/403 and redirects for
+          # a user's expired cookie or revoked token, which is that user's
+          # state, not the upstream's health.
+          expr: |
+            (
+              sum by (upstream) (rate(mctl_alice_upstream_requests_total{namespace="labs",outcome=~"timeout|error|5xx"}[15m]))
+              /
+              sum by (upstream) (rate(mctl_alice_upstream_requests_total{namespace="labs"}[15m]))
+            ) > 0.2
+            and
+            sum by (upstream) (increase(mctl_alice_upstream_requests_total{namespace="labs",outcome=~"timeout|error|5xx"}[15m])) >= 5
+          for: 10m
+          # Calls come in bursts, so a broken upstream drops under the count
+          # floor between them: on 24.10, while yandex.ru/quasar was down,
+          # the rule resolved and fired again six times for one outage.
+          keep_firing_for: 30m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice: {{ $value | humanizePercentage }} of Yandex {{ $labels.upstream }} calls are failing"
+            description: >-
+              More than 20% of calls to the Yandex {{ $labels.upstream }}
+              upstream (and at least five) timed out, failed at the network
+              level or answered 5xx over 15 minutes, sustained for 10. For
+              quasar this is the speaker-control path users see as broken
+              tools. Split by outcome:
+              sum by (outcome) (rate(mctl_alice_upstream_requests_total{upstream="{{ $labels.upstream }}"}[15m])).
+              Mostly timeout means Yandex is slow or unreachable from the
+              cluster (10 s deadline); mostly 5xx means Yandex is failing.
+
+        - alert: MctlAliceQuasarSlow
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(mctl_alice_upstream_request_duration_seconds_bucket{namespace="labs",upstream="quasar"}[15m]))
+            ) > 5
+            and
+            sum(increase(mctl_alice_upstream_request_duration_seconds_count{namespace="labs",upstream="quasar"}[15m])) >= 20
+          for: 15m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice: Yandex Quasar p95 latency is {{ $value | humanizeDuration }}"
+            description: >-
+              The 95th percentile of Quasar call latency (including reading
+              the body) has been above 5 seconds for 15 minutes, against a
+              10-second deadline. Tool calls that need several Quasar requests
+              are close to timing out. Compare with
+              MctlAliceUpstreamErrorRatioHigh for upstream=quasar.

@@ -1,0 +1,41 @@
+# Tenant configuration for: commerce-proof
+# Created by: wft-create-tenant workflow
+# Managed by: ArgoCD ApplicationSet (applicationset-tenants)
+tenant:
+  name: commerce-proof
+  displayName: "Commerce Proof"
+  description: "Isolated tenant for the Agent Commerce C5 live proof (mctlhq/mctl-agents#620): simulated funds only, EUR 1.00 budget, no workloads."
+  members:
+    - userId: mashkovd
+      principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
+      role: owner
+  # Keep an initial preview budget without reserving the full production profile.
+  preview:
+    quotas:
+      requests.memory: "256Mi"
+  quotas:
+    requests.cpu: "100m"
+    requests.memory: "256Mi"
+    limits.cpu: "3"
+    limits.memory: "4Gi"
+    pods: "2"
+    # Set to 0 on 2026-10-20: this tenant is documented as running no
+    # workloads, so it keeps no volume allowance.
+    persistentvolumeclaims: "0"
+    requests.storage: "0"
+    services: "10"
+  limitRange:
+    enabled: true
+    default:
+      cpu: "500m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "5Gi"
+  networking:
+    allowIntraNamespace: true
+    allowClusterEgress: true
+    allowInternetEgress: false

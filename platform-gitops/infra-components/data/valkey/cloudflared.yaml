@@ -1,0 +1,110 @@
+# Outbound-only Cloudflare Tunnel connector for events-valkey.mctl.ai.
+#
+# Lets the operator's Claude Code session on the home Mac mini consume the event
+# streams after labs/claude-remote was paused (#2247). Its ingress rules (one
+# hostname -> tcp://valkey:6379, catch-all 404) and the Access application that
+# admits only one service token are declared in
+# infrastructure/cloudflare/account/events-tunnel.tf; this pod only dials out to
+# Cloudflare and forwards what Access let through. It authenticates to Valkey as
+# nobody: the client on the far side still logs in with its own ACL user.
+#
+# The connector token is read from Vault secret/platform/events-tunnel
+# (property tunnel-token) and mounted as a file, never as env.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: events-tunnel
+  namespace: platform-events
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vault-backend
+  target:
+    name: events-tunnel
+    creationPolicy: Owner
+  data:
+    - secretKey: tunnel-token
+      remoteRef:
+        key: platform/events-tunnel
+        property: tunnel-token
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: events-tunnel
+  namespace: platform-events
+  labels:
+    app.kubernetes.io/name: events-tunnel
+spec:
+  # Tunnel created by the account-root apply (#2254); its connector token is in
+  # Vault secret/platform/events-tunnel, property tunnel-token.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: events-tunnel
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: events-tunnel
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # Secret files are root-owned; fsGroup makes the 0440 token readable
+        # by the connector's group without opening it to "other".
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2026.10.5
+          args:
+            - tunnel
+            - --no-autoupdate
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+            - --token-file
+            - /etc/cloudflared/tunnel-token
+          ports:
+            - name: metrics
+              containerPort: 2000
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tunnel-token
+              mountPath: /etc/cloudflared
+              readOnly: true
+      volumes:
+        - name: tunnel-token
+          secret:
+            secretName: events-tunnel
+            defaultMode: 0440
