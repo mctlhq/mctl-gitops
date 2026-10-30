@@ -92,6 +92,10 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+      # The in-cluster CCM/CSI token, a different one from HCLOUD_TOKEN
+      # (gitops#1140, see kube.tf). An environment secret of k3s-plan and of
+      # k3s-apply, never a repository secret (#1118).
+      TF_VAR_hcloud_csi_token: ${{ secrets.HCLOUD_CSI_TOKEN }}
       # The etcd snapshot credential is NOT the state-backend credential. They
       # are separate R2 tokens for separate buckets, and the etcd pair is part
       # of local.k3s-config: a wrong or empty pair makes CI render a k3s
@@ -140,6 +144,10 @@ jobs:
           set -euo pipefail
           fail=0
           [ -n "$TF_VAR_hcloud_token" ] || { echo "::error::HCLOUD_TOKEN is not set"; fail=1; }
+          # Empty would plan the CCM/CSI secrets with no token; equal would
+          # silently undo the split.
+          [ -n "$TF_VAR_hcloud_csi_token" ] || { echo "::error::HCLOUD_CSI_TOKEN is not set on environment k3s-plan"; fail=1; }
+          [ "$TF_VAR_hcloud_csi_token" != "$TF_VAR_hcloud_token" ] || { echo "::error::HCLOUD_CSI_TOKEN must be a different token from HCLOUD_TOKEN (gitops#1140)"; fail=1; }
           [ -n "$TF_VAR_etcd_s3_access_key" ] || { echo "::error::ETCD_S3_ACCESS_KEY_ID is not set on environment k3s-plan"; fail=1; }
           [ -n "$TF_VAR_etcd_s3_secret_key" ] || { echo "::error::ETCD_S3_SECRET_ACCESS_KEY is not set on environment k3s-plan"; fail=1; }
           case "$TF_VAR_ssh_public_key" in
@@ -235,9 +243,11 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+      TF_VAR_hcloud_csi_token: ${{ secrets.HCLOUD_CSI_TOKEN }}
       # Environment secrets of k3s-apply, never repository secrets (#1118):
       #   gh api repos/mctlhq/mctl-gitops/environments/k3s-apply/secrets
-      # lists SSH_PRIVATE_KEY, ETCD_S3_ACCESS_KEY_ID, ETCD_S3_SECRET_ACCESS_KEY.
+      # lists SSH_PRIVATE_KEY, ETCD_S3_ACCESS_KEY_ID, ETCD_S3_SECRET_ACCESS_KEY,
+      # HCLOUD_CSI_TOKEN.
       TF_VAR_etcd_s3_access_key: ${{ secrets.ETCD_S3_ACCESS_KEY_ID }}
       TF_VAR_etcd_s3_secret_key: ${{ secrets.ETCD_S3_SECRET_ACCESS_KEY }}
       TF_VAR_ssh_public_key: ${{ secrets.K3S_SSH_PUBLIC_KEY }}
@@ -269,6 +279,10 @@ jobs:
           fail=0
           [ -n "$SSH_PRIVATE_KEY" ] || { echo "::error::SSH_PRIVATE_KEY is not set on environment k3s-apply"; fail=1; }
           [ -n "$TF_VAR_hcloud_token" ] || { echo "::error::HCLOUD_TOKEN is not set"; fail=1; }
+          # Empty would plan the CCM/CSI secrets with no token; equal would
+          # silently undo the split.
+          [ -n "$TF_VAR_hcloud_csi_token" ] || { echo "::error::HCLOUD_CSI_TOKEN is not set on environment k3s-apply"; fail=1; }
+          [ "$TF_VAR_hcloud_csi_token" != "$TF_VAR_hcloud_token" ] || { echo "::error::HCLOUD_CSI_TOKEN must be a different token from HCLOUD_TOKEN (gitops#1140)"; fail=1; }
           [ -n "$TF_VAR_etcd_s3_access_key" ] || { echo "::error::ETCD_S3_ACCESS_KEY_ID is not set on environment k3s-apply"; fail=1; }
           [ -n "$TF_VAR_etcd_s3_secret_key" ] || { echo "::error::ETCD_S3_SECRET_ACCESS_KEY is not set on environment k3s-apply"; fail=1; }
           case "$TF_VAR_ssh_public_key" in
