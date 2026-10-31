@@ -160,16 +160,77 @@ spec:
               every call and the SLI cannot see it.
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramcallererrorsharehigh"
 
+        # The original rule was histogram_quantile over an unaggregated 5m rate:
+        # one p95 per pod and tool, from a handful of calls. get_messages runs
+        # about 12 times an hour, so two slow calls on one pod were a "p95".
+        # It fired four times in a week (2026-10-24..31), always on
+        # get_messages, and every slow call it saw was a Telegram FLOOD_WAIT
+        # that borrowWithRetry sleeps through by design (up to 3 x 60s).
+        #
+        # Now, per job and tool over the last hour, the rule counts calls that
+        # took longer than 5s (count minus the le="5" bucket) and subtracts
+        # the FLOOD_WAIT events on that tool. It fires only when more than 5%
+        # of at least 20 calls are slow for a reason other than flood waits.
+        # Flood waits keep their own signal: MctlTelegramFloodWaitSpike in
+        # mctl-telegram-ops.yaml, and since mctl-telegram 0.110.0 the
+        # mctl_telegram_flood_wait_seconds{method} histogram and the
+        # "telegram flood wait" log line.
+        #
+        # One flood event is subtracted per slow call even though a call can
+        # retry up to three times, and a 1s wait is not slow. Both errors only
+        # reduce the count, so a busy flood hour can hide a real slowdown.
+        # That is the side to err on: flood waits page through the ops rule.
+        #
+        # The flood counter is a labelled counter with no series before its
+        # first increment, so it falls back to zero ("or 0 * count").
+        # Otherwise the subtraction would match nothing and the rule could
+        # never fire for a tool that never flood-waited.
+        #
+        # Every term counts only pods that were already up an hour ago
+        # ("and on (job, pod) (up offset 1h)"). VictoriaMetrics' increase()
+        # treats a new series' first sample as growth, and after a restart
+        # it does not do so the same way for every bucket series: the hour
+        # after each restart read like "12 of 20 calls over 10s" when logs
+        # showed 2 slow calls, both flood waits. The same trap is described
+        # in mctl-alice-alerts.yaml. The cost is that a pod is not judged for
+        # its first hour.
+        #
+        # Backtest on 2026-10-24..31: the old rule gave 47 points across 16
+        # pod/tool series and fired 4 times. This rule gives one 5m point
+        # (30.10 13:45Z, 8%). That point is a window edge: a flood event
+        # counts when the wait starts, and the slow call counts when it ends
+        # 30s later. It cannot last the 15m "for", so the rule would not have
+        # fired.
         - alert: HighToolLatency
-          expr: histogram_quantile(0.95, rate(mctl_tool_invocation_duration_seconds_bucket[5m])) > 5
-          for: 5m
+          expr: |
+            (
+              (
+                sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h))
+                - sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_bucket{le="5"}[1h]) and on (job, pod) (up offset 1h))
+                - (
+                    sum by (job, tool) (increase(mctl_telegram_flood_wait_events_total[1h]) and on (job, pod) (up offset 1h))
+                    or
+                    0 * sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h))
+                  )
+              )
+              / sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h))
+            ) > 0.05
+            and on (job, tool)
+            sum by (job, tool) (increase(mctl_tool_invocation_duration_seconds_count[1h]) and on (job, pod) (up offset 1h)) >= 20
+          for: 15m
           labels:
             severity: warning
           annotations:
-            summary: "mctl-telegram: p95 tool invocation latency > 5s"
+            summary: "mctl-telegram: {{ $labels.tool }} calls are slow without a flood wait"
             description: >-
-              The 95th percentile tool invocation latency has exceeded 5 seconds
-              for 5 minutes. Telegram MTProto round-trips may be degraded.
+              Over the last hour, {{ $value | humanizePercentage }} of
+              {{ $labels.tool }} calls took longer than 5 seconds, after
+              subtracting the calls explained by Telegram FLOOD_WAIT. This
+              holds over at least 20 calls. Slowdowns that flood waits do not
+              explain point at MTProto round-trips, DC migration or
+              reconnects, or the server itself. Compare with
+              mctl_telegram_flood_wait_seconds and the "telegram flood wait"
+              log line.
 
         - alert: RateLimitSpike
           expr: rate(mctl_rate_limit_events_total[5m]) > 1
