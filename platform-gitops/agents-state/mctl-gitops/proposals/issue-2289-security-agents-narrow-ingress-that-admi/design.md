@@ -193,6 +193,12 @@ One PR per step, each gated by the probe plus a deploy-service run:
 6. `allow-argo-workflows-ingress` intra-namespace.
 Then one deploy-service workflow and one run of each agent kind.
 
+AMENDMENT 2026-10-31: this proposal implements step 1 only (contract,
+validators, probe script, runbook, live pre-checks). Steps 2-6 and the final
+verification are mctl-gitops#2301 (step B), which starts only if T6 below
+proves the canonical label cannot be overridden at submission and the
+pre-check proves kube-router honours `NotIn`.
+
 ## Alternatives
 - **Positive platform label** (`mctl.ai/workload-class: platform` on every
   non-agent template, with destinations admitting only that label). This is
