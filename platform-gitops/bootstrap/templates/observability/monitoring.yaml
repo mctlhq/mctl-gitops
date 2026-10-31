@@ -1279,15 +1279,12 @@ spec:
           # apiserver_* and etcd_* metrics under job="kubelet". This leaked
           # ~80k active series (including duplicates of SLI buckets) into
           # VictoriaMetrics. Kubelet should only export kubelet/container/node metrics.
+          # Note: chart 0.72.5 uses `vmScrape:` (not `vmNodeScrape:`) to generate VMNodeScrapes.
           kubelet:
             enabled: true
             vmScrape:
               spec:
                 metricRelabelConfigs:
-                  - action: labeldrop
-                    regex: (uid)
-                  - action: labeldrop
-                    regex: (id|name)
                   - action: drop
                     source_labels: [__name__]
                     regex: (rest_client_request_duration_seconds_bucket|rest_client_request_duration_seconds_sum|rest_client_request_duration_seconds_count|apiserver_.*|etcd_.*)
