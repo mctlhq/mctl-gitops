@@ -6,6 +6,9 @@ NetworkPolicy by IP only, so the hostname allowlist lives in a forward proxy
 (`agent-egress-proxy`, Squid, namespace `mctl-agents-egress`) and a later
 NetworkPolicy forces agent pods through it.
 
+The ingress side (the agent-pod label contract and which in-cluster services
+agent pods may reach) is in `docs/runbooks/agent-pod-isolation.md` (#2289).
+
 ## Rollout status
 
 | Stage | State | What it does |

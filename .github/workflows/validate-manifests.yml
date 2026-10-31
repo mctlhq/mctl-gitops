@@ -89,6 +89,10 @@ jobs:
           # --selftest first: a detector never seen to fire is not known to work.
           python3 -m pip install --quiet pyyaml
           scripts/validate-tenant-networkpolicy-allowlist.py --selftest "$tmpdir/bootstrap.yaml"
+          # Union of every NetworkPolicy against the agent-pod allow/deny
+          # matrix (mctl-gitops#2289). Step A: matrix equals today's state.
+          scripts/validate-agent-ingress-isolation.py --selftest
+          scripts/validate-agent-ingress-isolation.py "$tmpdir/bootstrap.yaml"
 
       # Every Application must stay inside its AppProject's sourceRepos and
       # destinations, and every literal project entry must still be used.
@@ -264,6 +268,14 @@ jobs:
           set -euo pipefail
           scripts/validate-agent-pod-security.py --selftest
           scripts/validate-agent-pod-security.py
+
+      # The agent-pod label is a NetworkPolicy selector (mctl-gitops#2289).
+      - name: Validate agent pod labels
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-agent-pod-labels.py --selftest
+          scripts/validate-agent-pod-labels.py
 
       # A proposal committed as `accepted` while demanding an approval it does
       # not carry is unrunnable by every supported path, and nothing fails on
