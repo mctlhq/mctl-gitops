@@ -91,8 +91,14 @@ migration is therefore always model ID **plus** engine:
   CHANGELOG between the two versions for breaking changes.
 - `claude-code-action` pins — `mctlhq/.github` `claude-review.yml` (both
   steps) and `mctl-agents` `diagrams-refresh.yml`: `@<sha> # vX (CLI Y)`.
-  The action's `action.yml` declares `CLAUDE_CODE_VERSION`; resolve the sha
+  `CLAUDE_CODE_VERSION` is set in `base-action/action.yml`, not the top-level
+  `action.yml`. It matches the `claudeCodeVersion` of the
+  `@anthropic-ai/claude-agent-sdk` that `bun.lock` locks. Resolve the sha
   with `gh api repos/anthropics/claude-code-action/commits/<tag> --jq .sha`.
+  Dependabot rewrites only a bare `# vX` comment, so on its pin bumps the
+  label keeps the old version and CLI. Correct both by hand when merging one
+  (mctl-agents#931, .github#288 found `v1.0.238 (CLI 2.1.286)` on pins that
+  were really v1.0.264 and v1.0.261).
 - `mctl-coolify-mcp` uses `@v1` (floating) and follows automatically.
 - `mctl-agent` calls the API directly (anthropic-sdk-go) — no CLI gate.
 
