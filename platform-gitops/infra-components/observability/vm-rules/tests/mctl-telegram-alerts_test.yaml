@@ -392,3 +392,153 @@ tests:
                 rejected" log lines for the error, and Telegram's token
                 endpoint and JWKS reachability.
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#loginpathsignals"
+
+  # HighToolLatency. Each case seeds 90 minutes of calls at a steady rate:
+  # the _count and the le="5" bucket grow per minute, and the difference is
+  # the number of calls that took longer than 5s. Every pod also has an `up`
+  # series, because the rule only counts pods that were up an hour before.
+  #
+  # The old rule took histogram_quantile per pod over 5 minutes. A few slow
+  # calls on one pod among many fast ones then read as a p95 breach.
+  - interval: 1m
+    name: HighToolLatency ignores a slow pod when the job as a whole is fast
+    input_series:
+      # Pod a: 1 call/min, 2 of 60 slow in the last hour. Pod b: 2 calls/min, all fast.
+      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+        values: '1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+        values: '0+1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+        values: '0+1x50 50x2 51+1x38'
+      - series: 'up{job="labs-mctl-telegram-base-service",pod="b"}'
+        values: '1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="b",tool="get_messages"}'
+        values: '0+2x90'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="b",tool="get_messages",le="5"}'
+        values: '0+2x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: HighToolLatency
+        exp_alerts: []
+
+  - interval: 1m
+    name: HighToolLatency stays quiet on fewer than 20 calls an hour, even if all are slow
+    input_series:
+      # 15 calls over the hour (one every 4 minutes), none under 5s.
+      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+        values: '1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+        values: '0+0.25x90'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: HighToolLatency
+        exp_alerts: []
+
+  - interval: 1m
+    name: HighToolLatency leaves slow calls explained by flood waits to the flood-wait signals
+    input_series:
+      # 60 calls/h, 12 of them slow (0.2/min), and as many FLOOD_WAIT events.
+      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+        values: '1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+        values: '0+1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+        values: '0+0.8x90'
+      - series: 'mctl_telegram_flood_wait_events_total{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+        values: '0+0.2x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: HighToolLatency
+        exp_alerts: []
+
+  # The flood counter has no series until its first increment. Without the
+  # "or 0 * count" fallback the subtraction matches nothing, and the rule
+  # could never fire for a tool that had never flood-waited.
+  - interval: 1m
+    name: HighToolLatency fires on slow calls with no flood waits, and no flood series at all
+    input_series:
+      # 60 calls/h, 12 slow, no mctl_telegram_flood_wait_events_total series.
+      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+        values: '1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+        values: '0+1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+        values: '0+0.8x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: HighToolLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: labs-mctl-telegram-base-service
+              tool: get_messages
+            exp_annotations:
+              summary: "mctl-telegram: get_messages calls are slow without a flood wait"
+              description: >-
+                Over the last hour, 20% of get_messages calls took longer
+                than 5 seconds, after subtracting the calls explained by
+                Telegram FLOOD_WAIT. This holds over at least 20 calls.
+                Slowdowns that flood waits do not explain point at MTProto
+                round-trips, DC migration or reconnects, or the server
+                itself. Compare with mctl_telegram_flood_wait_seconds and the
+                "telegram flood wait" log line.
+
+  # Flood waits on one tool must not cover a slowdown on another, and one
+  # flood event per two slow calls leaves half of them unexplained.
+  - interval: 1m
+    name: HighToolLatency fires when flood events explain only part of the slow calls
+    input_series:
+      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+        values: '1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+        values: '0+1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+        values: '0+0.8x90'
+      - series: 'mctl_telegram_flood_wait_events_total{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+        values: '0+0.1x90'
+      - series: 'mctl_telegram_flood_wait_events_total{job="labs-mctl-telegram-base-service",pod="a",tool="list_dialogs"}'
+        values: '0+1x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: HighToolLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: labs-mctl-telegram-base-service
+              tool: get_messages
+            exp_annotations:
+              summary: "mctl-telegram: get_messages calls are slow without a flood wait"
+              description: >-
+                Over the last hour, 10% of get_messages calls took longer
+                than 5 seconds, after subtracting the calls explained by
+                Telegram FLOOD_WAIT. This holds over at least 20 calls.
+                Slowdowns that flood waits do not explain point at MTProto
+                round-trips, DC migration or reconnects, or the server
+                itself. Compare with mctl_telegram_flood_wait_seconds and the
+                "telegram flood wait" log line.
+
+  # A pod that started less than an hour ago is left out. In VictoriaMetrics
+  # its new series make increase() read phantom slow calls. Here the new pod
+  # is genuinely slow, and the rule still waits for it to reach an hour of age.
+  - interval: 1m
+    name: HighToolLatency does not judge a pod in its first hour
+    input_series:
+      # Pod a: up throughout, 1 call/min, all fast. Pod b: started at 50m, 1 call/min, all slow.
+      - series: 'up{job="labs-mctl-telegram-base-service",pod="a"}'
+        values: '1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages"}'
+        values: '0+1x90'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="a",tool="get_messages",le="5"}'
+        values: '0+1x90'
+      - series: 'up{job="labs-mctl-telegram-base-service",pod="b"}'
+        values: '_x50 1x40'
+      - series: 'mctl_tool_invocation_duration_seconds_count{job="labs-mctl-telegram-base-service",pod="b",tool="get_messages"}'
+        values: '_x50 0+1x40'
+      - series: 'mctl_tool_invocation_duration_seconds_bucket{job="labs-mctl-telegram-base-service",pod="b",tool="get_messages",le="5"}'
+        values: '_x50 0x40'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: HighToolLatency
+        exp_alerts: []
