@@ -265,6 +265,39 @@ jobs:
           scripts/validate-agent-pod-security.py --selftest
           scripts/validate-agent-pod-security.py
 
+      # mctl-gitops#2292: the rest of the #807 isolation matrix, from the
+      # vendored auditor pinned in scripts/agent-isolation/auditor.pin.json,
+      # compared with the committed baseline. Rows owned by the pod-security
+      # validator above are not compared here. Never writes the baseline.
+      - name: Validate agent isolation matrix against baseline (#2292)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-agent-isolation-baseline.py --selftest
+          scripts/validate-agent-isolation-baseline.py
+
+      # The vendored auditor is the CI oracle: when the pin or the vendored
+      # bytes change (always on push to main), prove they equal the pinned
+      # upstream commit. A fetch failure fails the step.
+      - name: Verify vendored agent isolation auditor against pinned upstream (#2292)
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            if ! git fetch --quiet --no-tags origin "$BASE_REF"; then
+              echo "cannot fetch base branch $BASE_REF" >&2
+              exit 1
+            fi
+            changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- scripts/agent-isolation/auditor scripts/agent-isolation/auditor.pin.json)
+            if [ -z "$changed" ]; then
+              echo "pin and vendored auditor unchanged; skipping upstream byte check"
+              exit 0
+            fi
+          fi
+          scripts/validate-agent-isolation-baseline.py --verify-upstream
+
       # A proposal committed as `accepted` while demanding an approval it does
       # not carry is unrunnable by every supported path, and nothing fails on
       # it: the approve operation and the implementer both exit 0. One sat in

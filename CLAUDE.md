@@ -109,6 +109,9 @@ its secret, rotation and rollback, see
 For approving a proposal by hand now that `mctl-agents-approve` requires the
 reviewed content digest, see `docs/runbooks/proposal-approval-content-digest.md`.
 
+For the pinned agent-isolation auditor, its baseline and how to upgrade
+them, see `scripts/agent-isolation/README.md`.
+
 For which control-plane failure paths (etcd, apiserver, admission) are
 monitored and which are gaps, see `docs/runbooks/control-plane-failure-paths.md`.
 
