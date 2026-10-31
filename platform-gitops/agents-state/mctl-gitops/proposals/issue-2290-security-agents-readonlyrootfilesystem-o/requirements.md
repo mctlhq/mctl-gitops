@@ -102,18 +102,13 @@ require the field.
 
 ## Open questions
 
-- The agent image's `/entrypoint.sh` symlinks
-  `<STATE_DIR>/<svc>/proposals` onto `/app/agents/<svc>/proposals/`. The
-  `STATE_DIR` comment in `cwft-mctl-agents-implement.yaml` and
-  `cwft-mctl-agents-shepherd.yaml` says so. That write lands on the image root
-  and will fail with EROFS. Two fixes are possible:
-  (a) mctl-agents changes the entrypoint, or bakes the link into the image at
-  build time, so that it points at a writable path;
-  (b) an `emptyDir` is mounted over each `/app/agents/<svc>/proposals`.
-  Option (b) only works if those directories are empty in the image. This
-  proposal assumes (a) as a prerequisite mctl-agents change, with (b) as the
-  fallback if the directories are confirmed empty. The implementer must confirm
-  against the image before choosing.
+- RESOLVED (amendment 2026-10-31): `/entrypoint.sh` runs under `set -e` and,
+  when `STATE_DIR` is set, does `rm -rf` + `ln -s` for `/app/agents/<svc>/inbox`,
+  `/app/agents/<svc>/proposals` and `/app/agents/_mentor/digest`. With a
+  read-only root the step exits on the first write. The fix is the mctl-agents
+  prerequisite mctlhq/mctl-agents#947, which removes every runtime write under
+  `/app`. This proposal opens no mctl-agents PR and has no `emptyDir`
+  fallback over `/app/agents/...`; it starts only after #947 is released.
 - Claude Code, `gh auth setup-git` (which writes `~/.gitconfig`), git, Python and
   language toolchains used by repository tests write under `$HOME` and `/tmp`.
   The exact subpaths (`~/.claude`, `~/.claude.json`, `~/.config/gh`,
