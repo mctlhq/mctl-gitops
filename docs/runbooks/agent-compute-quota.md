@@ -34,8 +34,9 @@ rejects `requests.ephemeral-storage` / `limits.ephemeral-storage` with
 "unsupported scope applied to resource" (confirmed by server dry-run on
 2026-10-31). An unscoped quota would count every platform pod in the
 namespace, which this design rules out. Ephemeral storage is bounded per pod
-by the agent templates' own `ephemeral-storage` limits, except
-`cwft-mctl-agents-daily`, which sets none (follow-up); the sums above remain
+by the agent templates' own `ephemeral-storage` limits. Every agent pod
+template sets one; `cwft-mctl-agents-daily` defines no pods of its own (it is
+a CronWorkflow that runs `mctl-agents-run`, which does). The sums above remain
 the capacity reference.
 
 `requests.*` is the real bound on what agents take from platform workflows;

@@ -8,7 +8,7 @@
 # .ephemeral-storage under a PriorityClass scopeSelector ("unsupported scope
 # applied to resource"), which failed the whole argo-workflows-config sync.
 # Ephemeral storage stays bounded per pod by the agent templates' own limits
-# (cwft-mctl-agents-daily sets none; see the runbook).
+# (every agent pod template sets one; see the runbook).
 apiVersion: v1
 kind: ResourceQuota
 metadata:
