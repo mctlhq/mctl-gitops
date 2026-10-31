@@ -1,0 +1,683 @@
+{{- /*
+issue-2286: default-off sandbox for the OpenTelemetry eBPF Instrumentation
+(OBI) evaluation, step A. Renders nothing while obiSpike.enabled is false
+(the committed value); the live work -- flipping the flag, loading BPF,
+measuring -- is mctlhq/mctl-gitops#2303. The privilege set is PROVISIONAL
+and comes verbatim from obiSpike.* so every privilege field is visible in a
+reviewed diff (tests/test_obi_spike_render.py pins it). Decision rule and
+thresholds: docs/spikes/2286-obi-evaluation.md.
+*/}}
+{{- if .Values.obiSpike.enabled }}
+{{- $o := .Values.obiSpike }}
+{{- $ns := "observability-obi-spike" }}
+{{- $collector := "obi-spike-collector" }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    # privileged PSA admits hostPID and host mounts. Deliberately NO
+    # mctl.me/tenant label: this namespace is platform-owned, and the
+    # unlabelled negative fixture depends on that.
+    pod-security.kubernetes.io/enforce: privileged
+    mctl.ai/purpose: "issue-2286-spike"
+  annotations:
+    # Greppable abandonment guard, enforced by scripts/validate-obi-spike.py.
+    mctl.ai/teardown-after: {{ $o.teardownAfter | quote }}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: observability-obi-spike-quota
+  namespace: {{ $ns }}
+spec:
+  hard:
+    {{- toYaml $o.quota | nindent 4 }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: observability-obi-spike-limits
+  namespace: {{ $ns }}
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 100m
+        memory: 128Mi
+      defaultRequest:
+        cpu: 10m
+        memory: 16Mi
+      max:
+        cpu: "1"
+        memory: 1Gi
+
+# Default deny. podSelector: {} is safe here because this template creates the
+# namespace together with the policy (same reasoning as eval-namespace.yaml).
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ $ns }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# DNS and the API server (OBI and collector informers). kubernetes.default is
+# DNAT-ed to the control-plane endpoint before policy applies, hence the
+# 10.255.0.0/24 carve-out (mirrors eval-namespace.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-and-apiserver
+  namespace: {{ $ns }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    - to:
+        - ipBlock:
+            cidr: 10.255.0.0/24
+      ports:
+        - {port: 6443, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: obi-egress-to-collector
+  namespace: {{ $ns }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: obi
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ $collector }}
+      ports:
+        - {port: 4317, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: collector-ingress-from-obi
+  namespace: {{ $ns }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $collector }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: obi
+      ports:
+        - {port: 4317, protocol: TCP}
+    # Metrics port (prometheus exporter), scraped by vmagent in `monitoring`.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - {port: 8889, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: collector-egress-to-production-collector
+  namespace: {{ $ns }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $collector }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opentelemetry-collector
+              app.kubernetes.io/instance: otel-collector
+      ports:
+        - {port: 4317, protocol: TCP}
+---
+# Additive policy in `monitoring`. NetworkPolicies are a union, so the plain
+# manifest infra-components/observability/otel-collector/networkpolicy.yaml
+# stays untouched and this permission disappears with the flag.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-otel-collector-ingress-obi-spike
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opentelemetry-collector
+      app.kubernetes.io/instance: otel-collector
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns }}
+      ports:
+        - {port: 4317, protocol: TCP}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OBI: ServiceAccount, read-only ClusterRole, config, DaemonSet.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obi
+  namespace: {{ $ns }}
+---
+# Own service account so OBI's API load is separable in
+# apiserver_request_total for #2303. Read-only verbs only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi-spike
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi-spike
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi-spike
+subjects:
+  - kind: ServiceAccount
+    name: obi
+    namespace: {{ $ns }}
+---
+# discovery.instrument is generated from obiSpike.targets: exact namespace and
+# deployment, never a glob. Written in OBI's v1 configuration shape; the
+# Config v2 migration (devdocs/config/version-2.0/migration.md) is #2303's.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obi-config
+  namespace: {{ $ns }}
+data:
+  config.yaml: |
+    discovery:
+      instrument:
+        {{- range $o.targets }}
+        - k8s_namespace: {{ .namespace | quote }}
+          k8s_deployment_name: {{ .deployment | quote }}
+        {{- end }}
+    attributes:
+      kubernetes:
+        enable: {{ $o.features.kubeMetadata }}
+    {{- if $o.features.applicationTraces }}
+    otel_traces_export:
+      endpoint: http://{{ $collector }}.{{ $ns }}.svc.cluster.local:4317
+      protocol: grpc
+    {{- end }}
+    {{- if $o.features.applicationMetrics }}
+    otel_metrics_export:
+      endpoint: http://{{ $collector }}.{{ $ns }}.svc.cluster.local:4317
+      protocol: grpc
+    {{- end }}
+    {{- if $o.features.networkMetrics }}
+    network:
+      enable: true
+    {{- end }}
+    ebpf:
+      context_propagation: {{ if $o.features.contextPropagation }}all{{ else }}disabled{{ end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: obi
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: obi
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: obi
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: obi
+    spec:
+      serviceAccountName: obi
+      hostPID: {{ $o.hostPID }}
+      hostNetwork: {{ $o.hostNetwork }}
+      # The control plane is untainted (infrastructure/k3s-preview/kube.tf), so
+      # without this a DaemonSet would land on it. No tolerations either.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      containers:
+        - name: obi
+          image: "{{ $o.image.repository }}@{{ $o.image.digest }}"
+          args: ["--config=/etc/obi/config.yaml"]
+          securityContext:
+            {{- toYaml $o.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml $o.resources.obi | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/obi, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+            {{- range $o.mounts }}
+            - name: {{ .name }}
+              mountPath: {{ .hostPath }}
+              readOnly: {{ .readOnly | default false }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: obi-config
+        - name: tmp
+          emptyDir: {}
+        {{- range $o.mounts }}
+        - name: {{ .name }}
+          hostPath:
+            path: {{ .hostPath }}
+            type: Directory
+        {{- end }}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Spike collector: the only place tenant attribution is resolved. Production
+# telemetry is untouched (otel-collector.yaml and its networkpolicy are not
+# modified).
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $collector }}
+  namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $collector }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $collector }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $collector }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $collector }}
+    namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $collector }}-config
+  namespace: {{ $ns }}
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 20
+
+      # Values a producer supplied can never survive into the result, including
+      # when the namespace has no label and k8sattributes writes nothing.
+      transform/pre:
+        error_mode: ignore
+        trace_statements:
+          - context: resource
+            statements:
+              - delete_key(attributes, "mctl.tenant")
+              - delete_key(attributes, "mctl.tenant.resolved")
+              - delete_key(attributes, "mctl.tenant.attribution")
+        metric_statements:
+          - context: resource
+            statements:
+              - delete_key(attributes, "mctl.tenant")
+              - delete_key(attributes, "mctl.tenant.resolved")
+              - delete_key(attributes, "mctl.tenant.attribution")
+
+      # Association on k8s.pod.uid ONLY. There is no connection-IP fallback:
+      # every OBI export comes from the OBI pod's own IP, so an IP source would
+      # attribute everything to OBI. The tenant comes from the platform-owned
+      # namespace label mctl.me/tenant (helm-charts/tenant). The pod labels are
+      # tenant-controlled, so they are kept as evidence only.
+      k8sattributes/obi:
+        auth_type: serviceAccount
+        passthrough: false
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.node.name
+            - k8s.deployment.name
+          labels:
+            - tag_name: mctl.tenant.resolved
+              key: mctl.me/tenant
+              from: namespace
+            - tag_name: mctl.team
+              key: mctl.ai/team
+              from: pod
+            - tag_name: mctl.component
+              key: mctl.ai/component
+              from: pod
+
+      # No statement reads mctl.team.
+      transform/attribution:
+        error_mode: propagate
+        trace_statements:
+          - context: resource
+            statements:
+              - set(attributes["mctl.tenant"], attributes["mctl.tenant.resolved"]) where attributes["mctl.tenant.resolved"] != nil and attributes["mctl.tenant.resolved"] != ""
+              - set(attributes["mctl.tenant.attribution"], "namespace-label") where attributes["mctl.tenant"] != nil
+              - set(attributes["mctl.tenant.attribution"], "unattributed") where attributes["mctl.tenant"] == nil
+              - delete_key(attributes, "mctl.tenant.resolved")
+        metric_statements:
+          - context: resource
+            statements:
+              - set(attributes["mctl.tenant"], attributes["mctl.tenant.resolved"]) where attributes["mctl.tenant.resolved"] != nil and attributes["mctl.tenant.resolved"] != ""
+              - set(attributes["mctl.tenant.attribution"], "namespace-label") where attributes["mctl.tenant"] != nil
+              - set(attributes["mctl.tenant.attribution"], "unattributed") where attributes["mctl.tenant"] == nil
+              - delete_key(attributes, "mctl.tenant.resolved")
+
+      # resource, redaction and filter/health are copies of the production
+      # blocks in otel-collector.yaml; tests/test_obi_spike_attribution_e2e.py
+      # asserts they stay equal.
+      # action: insert, never upsert, as in production (a producer value wins).
+      resource:
+        attributes:
+          - key: k8s.cluster.name
+            value: {{ .Values.otelCollector.clusterName | quote }}
+            action: insert
+          - key: deployment.environment.name
+            value: {{ .Values.otelCollector.environment | quote }}
+            action: insert
+
+      # Byte-for-byte the production redaction block (blocked keys and values).
+      redaction:
+        allow_all_keys: true
+        summary: info
+        ignored_key_patterns:
+          - '^gen_ai\.usage\.((cache_read|cache_creation)[._])?(input|output|reasoning|prompt|completion|total)_tokens$'
+        blocked_key_patterns:
+          - '(?i).*(authorization|cookie|api[-_]?key|token|secret|password|credential).*'
+          - '(?i)^vault\..*'
+          - '(?i)^gen_ai\.(prompt|completion).*'
+          - '(?i).*\.messages$'
+          - '(?i)^mcp\.tool\.(arguments|result)$'
+          - '^db\.statement$'
+          - '^http\.(request|response)\.header\..*'
+        blocked_values:
+          - 'ghp_[A-Za-z0-9]{36}'
+          - 'gh[pousr]_[A-Za-z0-9]{20,}'
+          - 'sk-[A-Za-z0-9]{20,}'
+          - 'hvs\.[A-Za-z0-9]{20,}'
+          - 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.'
+
+      filter/health:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["url.path"] == "/healthz"'
+            - 'attributes["url.path"] == "/readyz"'
+            - 'attributes["http.target"] == "/healthz"'
+            - 'attributes["http.target"] == "/readyz"'
+
+      batch:
+        send_batch_size: 512
+        send_batch_max_size: 1024
+        timeout: 5s
+    exporters:
+      otlp/backend:
+        endpoint: otel-collector.monitoring.svc.cluster.local:4317
+        tls:
+          insecure: true
+        sending_queue:
+          enabled: true
+          queue_size: 1000
+        retry_on_failure:
+          enabled: true
+          max_elapsed_time: 120s
+      # The production collector has no metrics pipeline; OBI application
+      # metrics stay here and are scraped by the VMServiceScrape below.
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        resource_to_telemetry_conversion:
+          enabled: true
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors:
+            - memory_limiter
+            - transform/pre
+            - k8sattributes/obi
+            - transform/attribution
+            - resource
+            - redaction
+            - filter/health
+            - batch
+          exporters: [otlp/backend]
+        metrics:
+          receivers: [otlp]
+          processors:
+            - memory_limiter
+            - transform/pre
+            - k8sattributes/obi
+            - transform/attribution
+            - batch
+          exporters: [prometheus]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $collector }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $collector }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $collector }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $collector }}
+    spec:
+      serviceAccountName: {{ $collector }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: collector
+          image: {{ $o.collectorImage | quote }}
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: metrics, containerPort: 8889}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml $o.resources.collector | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol, readOnly: true}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $collector }}-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $collector }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $collector }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ $collector }}
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}
+    - {name: metrics, port: 8889, targetPort: metrics}
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: {{ $collector }}
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [{{ $ns }}]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $collector }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fixtures. Tiny Go servers (the collector's health_check endpoint, one
+# replica, 10m/16Mi) so the allowlisted deployments exist. No customer
+# namespace beyond the two fixture tenants is touched. The forged pair carries
+# a tenant-controlled label and resource attribute claiming tenant `mctl`;
+# the attribution contract must ignore both.
+# ─────────────────────────────────────────────────────────────────────────────
+{{- $fixtures := list
+  (dict "name" "obi-fixture-tenant-a" "ns" $o.fixtures.tenantA "forged" false)
+  (dict "name" "obi-fixture-tenant-b" "ns" $o.fixtures.tenantB "forged" false)
+  (dict "name" "obi-fixture-forged" "ns" $o.fixtures.tenantA "forged" true)
+  (dict "name" "obi-fixture-unlabelled" "ns" $ns "forged" true) }}
+{{- range $f := $fixtures }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $f.name }}
+  namespace: {{ $f.ns }}
+data:
+  config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    receivers:
+      nop:
+    exporters:
+      nop:
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [nop]
+          exporters: [nop]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $f.name }}
+  namespace: {{ $f.ns }}
+  labels:
+    app.kubernetes.io/name: {{ $f.name }}
+    mctl.ai/purpose: "issue-2286-spike"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $f.name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $f.name }}
+        mctl.ai/purpose: "issue-2286-spike"
+        {{- if $f.forged }}
+        mctl.ai/team: mctl
+        {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: fixture
+          image: {{ $.Values.obiSpike.collectorImage | quote }}
+          args: ["--config=/etc/otelcol/config.yaml"]
+          {{- if $f.forged }}
+          env:
+            - {name: OTEL_RESOURCE_ATTRIBUTES, value: "mctl.tenant=mctl"}
+          {{- end }}
+          ports:
+            - {name: http, containerPort: 13133}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml $.Values.obiSpike.resources.fixture | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol, readOnly: true}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $f.name }}
+{{- end }}
+{{- end }}

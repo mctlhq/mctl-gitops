@@ -624,3 +624,86 @@ logsEval:
         # the chart's own ServiceMonitor would double-scrape.
         serviceMonitor:
           enabled: false
+
+# issue-2286: default-off sandbox for the OpenTelemetry eBPF Instrumentation
+# (OBI) evaluation. Step A (this file's contract plus
+# templates/observability/obi-spike.yaml) renders NOTHING while enabled is
+# false. Flipping it, loading BPF and measuring is mctlhq/mctl-gitops#2303.
+# The privilege set below is PROVISIONAL: transcribed from the OBI security
+# doc, never tested against the workers. docs/spikes/2286-obi-evaluation.md
+# holds the citations and the withheld capabilities.
+# Enforced by scripts/validate-obi-spike.py and pinned by
+# tests/test_obi_spike_render.py.
+obiSpike:
+  enabled: false
+  # YYYY-MM-DD, required and at most 14 days out when enabled.
+  teardownAfter: ""
+  image:
+    # OBI v1.0.0 (published 2026-10-30). The digest is the multi-arch index
+    # digest of the v1.0.0 tag, read from ghcr.io on 2026-10-31.
+    repository: ghcr.io/open-telemetry/opentelemetry-ebpf-instrumentation/ebpf-instrument
+    digest: sha256:a68d70e934260f72540f157ccf4fb4adfa38f11de060d7d905696dad6a3fca02
+  # Step A commits false. #2303 may flip it only with a measured reason.
+  allowPrivileged: false
+  # Process discovery across pods (OBI container deployment needs the host PID
+  # namespace to see other containers' processes).
+  hostPID: true
+  hostNetwork: false
+  securityContext:
+    privileged: false
+    runAsUser: 0
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+      # PROVISIONAL, per the OBI security doc (see the spike document).
+      add:
+        - BPF                  # general BPF functionality
+        - PERFMON              # kprobes/uprobes and perf events (application observability)
+        - SYS_PTRACE           # /proc/<pid>/exe and modules, to scan symbols and place probes
+        - DAC_READ_SEARCH      # /proc/self/mem, to determine the kernel version
+        - CHECKPOINT_RESTORE   # /proc symlinks for process and system information
+  # Withheld on purpose, each with its condition (details in the spike doc):
+  #   SYS_ADMIN    - only via allowPrivileged (a #2303 decision)
+  #   NET_ADMIN    - only for TC programs (network flows / context propagation); both off
+  #   NET_RAW      - only for network-flow socket filters; off
+  #   SYS_RESOURCE - only for kernels < 5.11; the worker kernel is not observed
+  mounts:
+    - name: cgroup
+      hostPath: /sys/fs/cgroup   # container id -> pod resolution
+      readOnly: true
+  features:
+    applicationTraces: true
+    applicationMetrics: true
+    networkMetrics: false
+    contextPropagation: false    # off, so no NET_ADMIN and no tracefs mount
+    kubeMetadata: true           # exported resources must carry k8s.pod.uid
+    k8sCache: false              # #2303 flips it only if informer load breaches the threshold
+  # Exact (namespace, deployment) pairs. No globs.
+  targets:
+    - {namespace: labs, deployment: obi-fixture-tenant-a}
+    - {namespace: labs, deployment: obi-fixture-forged}
+    - {namespace: mctl, deployment: obi-fixture-tenant-b}
+    - {namespace: mctl-api, deployment: mctl-api}
+    - {namespace: observability-obi-spike, deployment: obi-fixture-unlabelled}
+  fixtures:
+    tenantA: labs
+    tenantB: mctl
+  # Same image as the production collector, so one tag is pinned in one place.
+  collectorImage: otel/opentelemetry-collector-contrib:0.160.0
+  # Placeholder sizing; #2303 resizes it from measurements.
+  resources:
+    obi:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+    collector:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 256Mi}
+    fixture:
+      requests: {cpu: 10m, memory: 16Mi}
+      limits: {cpu: 50m, memory: 32Mi}
+  quota:
+    requests.cpu: "1"
+    requests.memory: "1Gi"
+    limits.cpu: "3"
+    limits.memory: "3Gi"
+    pods: "10"
