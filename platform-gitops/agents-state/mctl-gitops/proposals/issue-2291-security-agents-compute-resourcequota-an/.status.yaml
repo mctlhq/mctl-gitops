@@ -1,5 +1,5 @@
 status: merged
-updated_at: '2026-10-31T18:39:33Z'
+updated_at: '2026-10-31T18:41:59Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-bd7146fd84b4bfaf
@@ -26,8 +26,8 @@ approval:
   approval_ref: aar_c312824052be45a4bf593fdfe571d9bc
 pr: https://github.com/mctlhq/mctl-gitops/pull/2308
 github:
-  state: open
+  state: merged
   head_sha: e4f3cbcac3e1d323cc0c4e6007295ba3aca48e41
-  observed_at: '2026-10-31T12:57:11Z'
-merged_at: '2026-10-31T18:39:33Z'
+  observed_at: '2026-10-31T18:41:59Z'
+merged_at: '2026-10-31T18:41:59Z'
 merge_commit: f0876a2551b94b4b1e3aba98eda442fbf4d74359
