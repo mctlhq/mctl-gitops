@@ -102,6 +102,9 @@ which are known gaps, see `docs/runbooks/policy-checkpoint-coverage.md`.
 For the agent egress proxy and its staged rollout, see
 `docs/runbooks/mctl-agents-egress.md`.
 
+For the agent-pod label contract and the ingress isolation of agent pods
+in `argo-workflows`, see `docs/runbooks/agent-pod-isolation.md`.
+
 For the GitHub Code Scanning webhook receiver (SecurityFinding ingestion),
 its secret, rotation and rollback, see
 `docs/runbooks/security-finding-ingestion.md`.
