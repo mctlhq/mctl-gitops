@@ -41,6 +41,18 @@ capabilities and kernel filesystem mounts.
 
 ## Acceptance criteria (EARS)
 
+> **Amendment 2026-10-31.** (1) Scope: this proposal is step A, the sandbox
+> shipped with `obiSpike.enabled: false`, plus preconditions, offline tests
+> and pre-registered thresholds. Enabling it, measuring, the report's outcome
+> and teardown are mctl-gitops#2303 (step B). (2) Targets: no customer tenant
+> workload is instrumented. The two-tenant proof uses synthetic HTTP fixture
+> deployments in two owner-controlled tenants chosen in task 1 (`labs` plus one
+> of `mctl`, `admins` or `commerce-proof` that carries `mctl.me/tenant`), and
+> `mctl-api` as the platform workload. (3) Thresholds: the decision rule must
+> also carry numeric thresholds for OBI RSS per node, Kubernetes API list/watch
+> load from OBI service accounts and span/series cardinality delta, written to
+> the report in step A before any measurement.
+
 ### Sandbox bounds
 - WHILE `obiSpike.enabled` is `false` in `platform-gitops/bootstrap/values.yaml`
   THE SYSTEM SHALL render no OBI-related object, and every existing bootstrap
@@ -72,16 +84,16 @@ capabilities and kernel filesystem mounts.
   `mctl.tenant.attribution=unattributed`. It shall never default to another
   tenant, `admins`, or a value taken from a pod label or resource attribute.
 - WHEN a fixture pod in a non-tenant namespace carries pod label
-  `mctl.ai/team: karabu` and emits `mctl.tenant=labs` in its own resource
+  `mctl.ai/team: <tenant A>` and emits `mctl.tenant=labs` in its own resource
   attributes THE SYSTEM SHALL attribute its telemetry as `unattributed`.
 - WHILE OBI telemetry is attributed THE SYSTEM SHALL keep `mctl.ai/team` and
   `mctl.ai/component` only as evidence attributes (`mctl.team`,
   `mctl.component`) and shall not use them to derive `mctl.tenant`.
 
 ### Experiment and measurement
-- WHEN the experiment runs THE SYSTEM SHALL exercise at least
-  `karabu/draw-with-friends`, one `labs` HTTP service and the platform workload
-  `mctl-api`, and shall record per-workload span and metric coverage next to
+- WHEN the experiment runs THE SYSTEM SHALL exercise at least the synthetic
+  fixture deployments in two owner-controlled tenants and the platform workload
+  `mctl-api`, and no customer tenant workload, and shall record per-workload span and metric coverage next to
   the existing explicit-instrumentation path.
 - WHEN the experiment completes THE SYSTEM SHALL produce a report at
   `docs/spikes/2286-obi-evaluation.md`. The report shall contain the
@@ -121,7 +133,9 @@ capabilities and kernel filesystem mounts.
   telemetry is `unattributed`. That fails closed, but it lowers coverage.
 - Whether `labs` should count as an independent "MCTL tenant" for the
   two-tenant proof, given that it hosts platform-adjacent services. The spike
-  uses `karabu` and `labs` because both have HTTP ingress workloads deployed.
+  originally used `karabu` and `labs` because both have HTTP ingress workloads
+  deployed. RESOLVED by the 2026-10-31 amendment: synthetic fixtures in two
+  owner-controlled tenants; no customer workload.
   `namax66/news-factory` has no host and is a fallback only.
 - `mctl-api`'s namespace and whether it already emits spans to the collector
   (mctl-api proposal issue-285) were not verified. The spike measures overlap
