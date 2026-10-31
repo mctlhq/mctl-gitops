@@ -112,6 +112,16 @@ spec:
       secret:
         secretName: mctl-gitops-deploy-key
         defaultMode: 0600
+    # #2288: GITHUB_TOKEN is file-delivered (rotated every 30 min by
+    # rotate-github-app-tokens; kubelet refreshes the volume). 0440 with
+    # fsGroup 1000. Mounted only in the agent container.
+    - name: github-token-file
+      secret:
+        secretName: mctl-agents-secrets
+        defaultMode: 0440
+        items:
+          - key: github-token
+            path: github-token
 
   templates:
     - name: reconcile-proposals
@@ -410,17 +420,20 @@ spec:
           # NOT optional: a non-dry reconcile run requires the token; a missing
           # secret should fail at pod-scheduling time, not as an opaque runtime
           # `gh api` auth error. The in-cluster secret always carries this key.
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: github-token
+          # #2288: the token is delivered only as a file (no secretKeyRef env
+          # seed); refresh_github_token() reads it before the first and every
+          # later gh/git call. The mounted file is model-readable (mctl-agents#869).
+          - name: GITHUB_TOKEN_FILE
+            value: /var/run/gh/github-token
         resources:
           requests: { cpu: 100m, memory: 256Mi, ephemeral-storage: 2Gi }
           limits:   { cpu: 1000m, memory: 1Gi, ephemeral-storage: 3Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
+          - name: github-token-file
+            mountPath: /var/run/gh
+            readOnly: true
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     # Only .status.yaml files should change in agents-state/ (run_shepherd

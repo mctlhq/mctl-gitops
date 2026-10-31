@@ -43,6 +43,16 @@ spec:
     - name: workdir
       emptyDir:
         sizeLimit: 256Mi
+    # #2288: GITHUB_TOKEN is file-delivered (rotated every 30 min by
+    # rotate-github-app-tokens; kubelet refreshes the volume). 0440 with
+    # fsGroup 1000. Mounted only in the agent container.
+    - name: github-token-file
+      secret:
+        secretName: mctl-agents-secrets
+        defaultMode: 0440
+        items:
+          - key: github-token
+            path: github-token
 
   templates:
     - name: scout
@@ -136,11 +146,11 @@ spec:
                 name: mctl-agents-secrets
                 key: claude-code-oauth-token
           # Read-only use: spike:scout dedupe search and the spike backlog.
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: github-token
+          # #2288: the token is delivered only as a file (no secretKeyRef env
+          # seed); refresh_github_token() reads it before the first and every
+          # later gh/git call. The mounted file is model-readable (mctl-agents#869).
+          - name: GITHUB_TOKEN_FILE
+            value: /var/run/gh/github-token
           # @MCTL_AI_bot, referenced from secret/platform/mctl-telegram/login
           # (see secrets/mctl-agents-scout-telegram.yaml). optional: true so a
           # dry_run one-shot schedules even if the ExternalSecret has not
@@ -168,6 +178,9 @@ spec:
         volumeMounts:
           - name: workdir
             mountPath: /workdir
+          - name: github-token-file
+            mountPath: /var/run/gh
+            readOnly: true
 
     # ── Telegram notification (onExit) ──────────────────────────────────
     # Failure-only, through the agents' notification bot. A successful run
