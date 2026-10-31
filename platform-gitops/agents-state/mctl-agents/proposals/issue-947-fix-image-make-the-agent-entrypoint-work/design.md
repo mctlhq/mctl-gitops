@@ -88,17 +88,30 @@ Changes:
    script must not write under `/app` (readOnlyRootFilesystem, mctl-gitops#2290).
 3. `orchestrator/run_service_agent.py`:
    - Resolve and `ensure_dir` the inbox and proposals directories before the session.
-   - Turn `PROMPT` into `build_prompt(inbox_dir, proposals_dir)`. It names the absolute
-     paths and tells the agent to pass them verbatim to the researcher, analyst and
-     spec-writer sub-agents. The existing step wording otherwise stays.
+   - KEEP the module-level constant `PROMPT`: `agents/_manifests/service-agent/agent.yaml`
+     and `docs/agent-inventory.yaml` declare `inline: orchestrator/run_service_agent.py:PROMPT`
+     as the prompt source, `tests/test_agent_inventory.py` asserts the symbol exists, and
+     `agent.yaml` must not change. `PROMPT` stays the static template and gains two
+     explicit markers, `<INBOX_DIR>` and `<PROPOSALS_DIR>`. Add
+     `build_prompt(inbox_dir, proposals_dir)` that returns
+     `PROMPT.replace("<INBOX_DIR>", str(inbox_dir)).replace("<PROPOSALS_DIR>", str(proposals_dir))`.
+     Do NOT use `str.format`: `PROMPT` contains the literal `{today's ISO date YYYY-MM-DD}`,
+     which `format` would reject. The prompt tells the agent to pass the absolute paths
+     verbatim to the researcher, analyst and spec-writer sub-agents.
    - `build_service_agent_options(service_dir, model, state_dirs=...)`: keep `cwd=service_dir`.
      Append the inbox and proposals dirs to `add_dirs` (alongside `_sibling_add_dirs`) and
      update the cwd comment. When `STATE_DIR` is unset the extra dirs sit inside `cwd`;
      adding them again is harmless.
 4. `orchestrator/run_mentor.py`:
    - `run_mentor` calls `_rotate_old_digests(mentor_digest_dir())` after `ensure_dir`.
-   - `build_prompt()` lists `service_proposals_dir(s)` for each `s` in `SERVICES` and the
-     absolute digest path `mentor_digest_dir() / f"{y}-W{w:02d}.md"`.
+   - `build_prompt()` lists `service_proposals_dir(s)` for each `s` in
+     `mentor_services() = [s for s in SERVICES if (AGENTS_DIR / s).is_dir()]` and the
+     absolute digest path. `mentor_services()` keeps today's scope: the mentor
+     currently reads relative `<svc>/proposals/` under `agents/`, which exist only for
+     services with a baked scaffold, so the other `SERVICES` (DevLoop-only targets such
+     as mctl-telegram or mctl-support, whose `agents-state/<svc>/proposals/` do exist)
+     are skipped today and must stay skipped. The "Active services" line in the prompt
+     uses the same list. The absolute digest path `mentor_digest_dir() / f"{y}-W{w:02d}.md"`.
    - `build_mentor_options` adds `agent_state_root()` to `add_dirs`, so the session may
      read proposals and write the digest. `cwd` stays `agents/`.
 5. Prompt files: reword the relative-path references in
