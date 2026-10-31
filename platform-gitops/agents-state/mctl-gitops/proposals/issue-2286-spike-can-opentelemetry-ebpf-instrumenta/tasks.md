@@ -1,90 +1,129 @@
 # Tasks: issue-2286-spike-can-opentelemetry-ebpf-instrumenta
 
-- [ ] 1. Record preconditions in `docs/spikes/2286-obi-evaluation.md` (new): the
-  worker kernel version and BTF presence (`/sys/kernel/btf/vmlinux`) on the
-  `worker-cx43-fsn1` nodes; the choice of two owner-controlled tenants for the synthetic
-  fixtures (`labs` plus one of `mctl`, `admins`, `commerce-proof`; never a
-  customer tenant) and the live `mctl.me/tenant` label on their namespaces and
-  on `mctl-api`; whether `mctl-api` already emits spans to
-  `otel-collector`; and the current span rate and VMSingle series baseline.
-  Also record the decision thresholds from design.md before any measurement,
-  including numeric limits for OBI RSS per node, API list/watch load and
-  cardinality delta.
-  - DoD: each fact is recorded with the command used to get it. Anything
-    unobservable is marked "not observed", never "absent".
-- [ ] 2. Add the `obiSpike` values block (default `enabled: false`) to
-  `platform-gitops/bootstrap/values.yaml`. Pin the OBI v1.0.0 image and chart.
-  Fill `securityContext.capabilities.add`, `hostPID` and `mounts` with the
-  minimum set that loads on the workers (try without `SYS_ADMIN` or
-  privileged first). (depends on 1)
-  - DoD: the values block exists. Every capability and mount has a one-line
-    comment saying which OBI feature needs it.
-- [ ] 3. Add `platform-gitops/bootstrap/templates/observability/obi-spike.yaml`
-  with the namespace (PSA privileged, teardown annotation, no
-  `mctl.me/tenant`), default-deny NetworkPolicies, ResourceQuota, the OBI
-  Application with the control-plane anti-affinity and an explicit
-  `discovery.instrument` built from `obiSpike.targets`, the spike collector
-  Deployment, its ClusterRole and Service, and the `VMServiceScrape`. Add the
-  gated `observability-obi-spike` ingress peer to
-  `infra-components/observability/otel-collector/networkpolicy.yaml`.
-  (depends on 2)
-  - DoD: `helm template` renders nothing with the flag off and the full set
-    with it on. Existing render outputs are byte-identical with the flag off.
-- [ ] 4. Implement the attribution chain in the spike collector config:
-  `k8sattributes/obi` (pod-UID-only association, namespace label
-  `mctl.me/tenant`), then `transform/attribution` (delete the incoming
-  `mctl.tenant`, set it from the namespace label or mark `unattributed`), then
-  the shared `redaction`/`filter/health` values, then `batch`. (depends on 3)
-  - DoD: the rendered config contains no association source other than
-    `k8s.pod.uid`, and no OTTL statement reads `mctl.team`.
-- [ ] 5. Add the synthetic tenant fixtures `obi-fixture-tenant-a` and
-  `obi-fixture-tenant-b` (tiny HTTP servers in the two tenants from task 1,
-  rendered only while the spike is enabled), the negative fixture
-  `obi-fixture-forged` (pod label `mctl.ai/team: <tenant A>`,
-  `OTEL_RESOURCE_ATTRIBUTES=mctl.tenant=<tenant B>`) and the load CWFT
-  `argo-workflows/cluster-templates/wft-obi-spike-load.yaml`, which sends a
-  fixed request mix to the two tenant fixtures, `mctl-api` and the forged
-  fixture. No customer host is a target. (depends on 3)
-  - DoD: the CWFT is registered and inert until submitted. It has no
-    CronWorkflow.
-- [ ] 6. Out of scope: enabling the spike, measuring, the report's outcome and
-  teardown (former tasks 6-8 and T4) are mctl-gitops#2303. This proposal's PR
-  keeps `obiSpike.enabled: false`. — DoD: nothing new runs on the cluster;
-  the report holds preconditions and all pre-registered thresholds, with
-  `STATUS: PENDING_EXPERIMENT`.
+Step A only (default-off sandbox). Nothing in these tasks enables
+`obiSpike`, loads BPF or runs a capability trial. That is mctl-gitops#2303.
+
+- [ ] 1. Create `docs/spikes/2286-obi-evaluation.md` with
+  `STATUS: PENDING_EXPERIMENT` and record the preconditions read-only, each with
+  the command or source used:
+  - the worker kernel version and `osImage`
+    (`kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo}'`);
+  - BTF presence (`/sys/kernel/btf/vmlinux`) and the kernel lockdown mode on
+    `worker-cx43-fsn1`;
+  - fixture tenants `labs` and `mctl`, and the platform workload
+    `mctl-api/mctl-api`;
+  - the expected `mctl.me/tenant` labels (from `helm-charts/tenant`);
+  - the explicit `otel:` coverage (overlap-map skeleton);
+  - the selected OBI feature subset;
+  - the "Tenant identity today" finding (forgeable `mctl.team`).
+
+  Copy the threshold table and the decision rule from design.md section 4
+  verbatim, and add empty sections for #2303. — DoD: every fact has a source or
+  says "not observed" (never "absent"); there are no measured values and no
+  outcome.
+- [ ] 2. Transcribe the OBI v1.0.0 security doc's capability and mount table
+  (URL and revision recorded) for the selected subset. Apply the task 1
+  kernel facts: add `SYS_RESOURCE` only if the kernel is below 5.11, and leave
+  it out if that fact is not observed. Fix the provisional
+  `capabilities.add` and `mounts`, and record the withheld capabilities
+  (`SYS_ADMIN`, `NET_ADMIN`, `NET_RAW`, `SYS_RESOURCE`) with their conditions in
+  the document. (depends on 1) — DoD: the doc table and design.md section 1
+  agree, and every entry cites the doc.
+- [ ] 3. Add the `obiSpike` block to `platform-gitops/bootstrap/values.yaml`
+  exactly as in design.md section 1, with the task 2 results. It contains
+  `enabled: false`, `allowPrivileged: false`, an empty `teardownAfter` and an
+  empty `digest`, a comment on every capability and mount, the targets
+  allowlist and the fixtures `tenantA: labs` and `tenantB: mctl`. Record the
+  OBI v1.0.0 image repository and digest from the release notes. (depends on 2)
+  — DoD: `helm template` of bootstrap with the default values is byte-identical
+  to `main`.
+- [ ] 4. Add `platform-gitops/bootstrap/templates/observability/obi-spike.yaml`,
+  fully gated by `obiSpike.enabled`. It contains:
+  - the namespace `observability-obi-spike` (PSA `privileged`, teardown
+    annotation, `mctl.ai/purpose`, no `mctl.me/tenant`);
+  - the default-deny and allow NetworkPolicies, ResourceQuota and LimitRange;
+  - the additive `allow-otel-collector-ingress-obi-spike` policy in
+    `monitoring`;
+  - the OBI ServiceAccount, ClusterRole and DaemonSet (control-plane
+    anti-affinity, no tolerations, digest image, explicit `securityContext`,
+    `hostPID` and mounts from values), plus a ConfigMap whose
+    `discovery.instrument` is generated from `obiSpike.targets`.
+
+  (depends on 3) — DoD: the enabled overlay renders and passes `kubeconform`;
+  the default render is unchanged.
+- [ ] 5. Add the spike collector to `obi-spike.yaml`: Deployment
+  (`otelcol-contrib:0.160.0`), ServiceAccount, ClusterRole, Service and
+  `VMServiceScrape`. Wire the pipeline `transform/pre` -> `k8sattributes/obi`
+  (association on `k8s.pod.uid` only; namespace label `mctl.me/tenant` ->
+  `mctl.tenant.resolved`) -> `transform/attribution` -> shared `resource`,
+  `redaction`, `filter/health` -> `batch`. Render `redaction` and
+  `filter/health` from the same values as `otel-collector.yaml`. (depends on 4)
+  — DoD: the rendered config has no association source other than
+  `k8s.pod.uid`, no OTTL statement reads `mctl.team`, and the redaction blocks
+  equal production's.
+- [ ] 6. Add the gated fixture Deployments: `obi-fixture-tenant-a` (`labs`),
+  `obi-fixture-tenant-b` (`mctl`), `obi-fixture-forged` (`labs`, with label
+  `mctl.ai/team: mctl` and `OTEL_RESOURCE_ATTRIBUTES=mctl.tenant=mctl`) and
+  `obi-fixture-unlabelled` (spike namespace, same forgery). Each is one replica
+  at 10m/16Mi. (depends on 4) — DoD: the fixtures render only when enabled; no
+  customer namespace appears in any rendered object.
+- [ ] 7. Add `scripts/validate-obi-spike.py` with `--selftest`, and an enabled
+  overlay `tests/fixtures/obi-spike.example-values.yaml` (a dummy digest and a
+  `teardownAfter` injected relative to `--today`). Wire both into
+  `.github/workflows/validate-manifests.yml` next to the otel-eval overlay
+  step. (depends on 4-6) — DoD: the CI job is green on the PR, and the selftest
+  proves every failure case in T2.
 
 ## Tests
 
-- [ ] T1. `tests/test_obi_spike_render.py`: with the flag off, nothing renders
-  and every other bootstrap template is byte-identical. With the flag on, the
-  test pins the exact capability set, `hostPID`, `hostNetwork: false`, the
-  hostPath list, no tolerations, the control-plane anti-affinity, and
-  `discovery.instrument` equal to `obiSpike.targets` with no wildcards.
-- [ ] T2. A CI guard (extend `scripts/validate-eval-teardown-date.py` or add
-  `scripts/validate-obi-spike.py` with `--selftest`): it fails when the spike
-  is enabled with a missing, past or more-than-14-days `teardownAfter`, or
-  when `privileged: true` is set without `obiSpike.allowPrivileged: true`.
-  Wire it into `.github/workflows/validate-manifests.yml`.
-- [ ] T3. `tests/test_obi_spike_attribution_e2e.py` (pattern of
-  `test_otel_collector_redaction_e2e.py`): runs the rendered spike collector
-  processors on fixture spans and checks four cases. The tenant A fixture pod resolves
-  to tenant A. The tenant B fixture pod resolves to tenant B. A forged-label pod
-  in a non-tenant namespace resolves to `unattributed` with no `mctl.tenant`.
-  An unknown pod UID resolves to `unattributed`. A `--mutation` flag swaps
-  association to connection IP or reads `mctl.team`, and the test must then
+- [ ] T1. `tests/test_obi_spike_render.py`: flag off renders zero OBI objects
+  and the bootstrap output is byte-identical to the baseline. With the flag on,
+  the test pins:
+  - the exact `capabilities.add` list, `drop: [ALL]`, `privileged: false`,
+    `hostPID: true`, `hostNetwork: false` and the hostPath list;
+  - no tolerations and the required control-plane `DoesNotExist` affinity;
+  - `discovery.instrument` equal to `obiSpike.targets` with no glob
+    characters;
+  - the ClusterRole verbs (`get`/`list`/`watch` only);
+  - the absence of `mctl.me/tenant` on the spike namespace.
+- [ ] T2. `scripts/validate-obi-spike.py --selftest` fails each of these when
+  the spike is enabled:
+  - missing, past or more than 14 days out `teardownAfter` (reuse the date
+    logic of `scripts/validate-eval-teardown-date.py`);
+  - empty image digest;
+  - `privileged: true` or `SYS_ADMIN` in `add` while `allowPrivileged: false`;
+  - any capability in `add` outside the pinned list;
+  - an empty or globbed target;
+  - any toleration.
+
+  The default values pass.
+- [ ] T3. `tests/test_obi_spike_attribution_e2e.py`, modelled on
+  `tests/test_otel_collector_redaction_e2e.py` (Docker, real
+  `otelcol-contrib:0.160.0`). It renders the spike collector config and swaps
+  only `k8sattributes/obi` for a test-only `transform/fixture-metadata` that
+  sets `mctl.tenant.resolved` and the namespace by `k8s.pod.uid` lookup. A
+  static assertion separately pins the real `k8sattributes/obi` block. The test
+  sends fixture spans and checks:
+  - tenant A UID -> `mctl.tenant=labs`;
+  - tenant B UID -> `mctl`;
+  - `mctl-api` UID -> `unattributed`;
+  - the forged-in-`labs` UID with `mctl.tenant=mctl` in its resource ->
+    `labs`;
+  - the unlabelled forged UID -> `unattributed` with no `mctl.tenant`;
+  - an unknown UID -> `unattributed`.
+
+  `--mutation {ip-association,read-team,keep-incoming}` must make the test
   fail.
-- [ ] T4. Moved to mctl-gitops#2303 (live check during the experiment).
 
 ## Rollback
 
-- Fastest: set `obiSpike.enabled: false` in `platform-gitops/bootstrap/values.yaml`
-  and merge. ArgoCD prunes the OBI DaemonSet, spike collector, RBAC, fixture
-  and namespace, and the production collector NetworkPolicy peer disappears
-  with the flag. Production traces and metrics are untouched throughout,
-  because the production collector config is not modified.
-- Emergency (host instability on a worker): `kubectl -n argocd patch
-  application obi-spike` to disable auto-sync, then
-  `kubectl -n observability-obi-spike delete daemonset --all`, then land the
-  values revert.
-- Full: `git revert` of the spike PRs. No migrations or persistent state exist,
-  apart from spans already in Tempo, which age out under Tempo retention.
+- Nothing runs at merge, so rollback is `git revert` of the step A PR. There
+  is no cluster state, no migration and no persisted data.
+- If #2303 later enables the flag and something goes wrong, set
+  `obiSpike.enabled: false` and merge. Argo CD then prunes the namespace,
+  DaemonSet, collector, RBAC, fixtures and the additive `monitoring` policy.
+  Production telemetry is untouched throughout, because the production
+  collector config and `networkpolicy.yaml` are not modified.
+- Emergency (worker instability during #2303): disable auto-sync on the root
+  app, `kubectl -n observability-obi-spike delete daemonset obi`, then land
+  the values revert.
