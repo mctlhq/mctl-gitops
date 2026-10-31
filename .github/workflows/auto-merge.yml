@@ -30,7 +30,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
-      startsWith(github.event.pull_request.head.ref, 'claude/')
+      (startsWith(github.event.pull_request.head.ref, 'claude/') || startsWith(github.event.pull_request.head.ref, 'portal-allowlist/'))
     steps:
       # A bot approval is enough to merge an ordinary `claude/*` PR, but not
       # one that decides which agent exists or what it may do
