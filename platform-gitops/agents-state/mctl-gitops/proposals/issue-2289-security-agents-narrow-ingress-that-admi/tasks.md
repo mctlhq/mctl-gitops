@@ -25,7 +25,7 @@ The text below applies to #2301: each policy change is its own PR touching one f
 Applications that apply these files (root-app, shared-pg, otel-collector)
 prune and re-sync the previous policy within about 3 minutes. Revert in
 reverse order of the #2301 steps if several need undoing. Deploy-service depends on
-Vault and mctl-api, so if a deploy-service run fails after task 5 or 8,
+Vault and mctl-api, so if a deploy-service run fails after the #2301 mctl-api or Vault step,
 revert that PR first and investigate afterwards. The validators (tasks 3-4)
 change nothing at runtime. If they block an urgent fix, revert their CI
 wiring, not the policies. After any rollback, update the static check's
