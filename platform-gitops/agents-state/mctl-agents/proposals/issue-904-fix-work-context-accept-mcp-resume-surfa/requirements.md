@@ -113,20 +113,23 @@ Rollout
 
 ## Out of scope
 
-- Implementing the DevLoop-to-CWFT surface and actor forwarding itself. That is
-  mctl-agents#573. This proposal integrates with it and adds the end-to-end regression.
+- The mctl-gitops CWFT parameter declaration and the mctl-api operations-registry
+  declaration for `surface`, `actor_kind` and `actor_id`. Both are follow-up PRs in
+  their own repositories. The mctl-agents side of the forwarding (DevLoop
+  `investigate_params`) IS in scope here: it absorbs mctl-agents#573, which has no
+  separate implementation.
 - Request-side refusal of redacted intents in mctl-api (mctl-api#871), and mctl-api#868.
 - Any live rollout or enabling of new execution admission. This planning phase only
   defines the order.
 - Recording client, session, model or inference-account identity anywhere.
-- Changes to mctl-gitops CWFT templates. They are listed as a rollout prerequisite
-  and are tracked under #573.
+- Changes to mctl-gitops CWFT templates and the mctl-api operations registry. They
+  are rollout prerequisites (design.md rollout steps 2-3) done as separate PRs.
 
 ## Open questions
 
-- Parameter names for the CWFT forwarding (`surface`, `actor_kind`, `actor_id`) are for
-  #573 to fix. This proposal assumes those names and the matching `--surface`,
-  `--actor-kind` and `--actor-id` CLI flags that already exist.
+- Parameter names for the forwarding are fixed here as `surface`, `actor_kind` and
+  `actor_id`, matching the existing `--surface`, `--actor-kind` and `--actor-id` CLI
+  flags. The gitops CWFT and the mctl-api registry follow-ups use the same names.
 - Who answers the redacted-intent `WAITING_FOR_INPUT` request? ADR 013 names the issue
   author. The resume's `requested_by` principal looks more correct, but it may not
   have a GitHub identity. Assumption: name the `requested_by` principal when the

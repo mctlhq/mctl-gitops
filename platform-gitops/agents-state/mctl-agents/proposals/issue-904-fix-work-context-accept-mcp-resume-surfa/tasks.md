@@ -19,11 +19,17 @@
   `orchestrator/run_issue_investigator.py` returns None unless the current surface or
   actor and the baseline are both known. — DoD: existing snapshot fixtures re-serialise
   byte-identical, and a new test shows that unknown provenance never yields `false`.
-- [ ] 5. (depends on 1, coordinate with #573) Integrate #573's forwarding of `surface`,
-  `actor_kind` and `actor_id` from `investigate_params` (dev_loop.py, around
-  lines 3565-3602) and the investigate CWFT. Add the end-to-end regression only. Do not
-  re-implement the forwarding. — DoD: T5 passes against the #573 branch, and the
-  mutation run (T6) fails it.
+- [ ] 5. (depends on 1; implements the mctl-agents side of #573) Add `surface`,
+  `actor_kind` and `actor_id` to `investigate_params` in
+  `orchestrator/temporal/workflows/dev_loop.py` (around lines 3565-3602) for a
+  dispatched or resumed execution, from `self._current_surface` and
+  `self._current_actor`, omitted when empty like the other params. Keep it replay-safe
+  the same way as the `temporal_workflow_id` params (activity input is not compared on
+  replay; cite tests/test_workflow_replay.py). Do NOT edit mctl-gitops or mctl-api: the
+  CWFT declaration and the mctl-api registry declaration are follow-up PRs (design.md
+  Slice B 1a). The PR body says `Refs mctlhq/mctl-agents#573`, not a closing keyword.
+  — DoD: T5 and T6 pass in this repository, and T6 fails when the new keys are removed
+  from `investigate_params`.
 - [ ] 6. Add a typed `ResumeIntentUnavailable` error in `orchestrator/context_assembly.py`,
   raised when the pinned `resume_intent` is `text_redacted` or unreadable. The
   placeholder candidate is never built for the pinned slot. — DoD: no code path renders
@@ -41,8 +47,12 @@
 - [ ] 9. Update `docs/adr/011-work-item-resume-contract.md` and
   `docs/adr/013-human-input-contract.md` (the redacted-intent park, the `mcp` surface,
   and the optional `surface_transition`), plus a rollout-order note in
-  `docs/runbooks/`. — DoD: the docs name the order: images, then CWFT (#573), then
-  admission.
+  `docs/runbooks/`. — DoD: the docs name the order: images, then the gitops CWFT
+  parameters, then the mctl-api registry declaration, then admission.
+- [ ] 10. In the PR description, list the two follow-ups the implementer does not
+  do: the mctl-gitops investigate CWFT parameters and the mctl-api operations-registry
+  declaration (design.md Slice B 1a, rollout steps 2-3). — DoD: both are named with
+  the exact files.
 
 ## Tests
 

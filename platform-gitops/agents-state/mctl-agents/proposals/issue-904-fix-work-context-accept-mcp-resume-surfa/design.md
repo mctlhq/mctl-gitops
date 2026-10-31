@@ -103,15 +103,34 @@
 3. With no further code change, `_resume_provenance`, the Update validator and the CLI
    accept `mcp`, because they all read `SURFACE_KINDS`.
 
-### Slice B: provenance integration (with #573, required for closure)
+### Slice B: provenance forwarding (absorbs the mctl-agents side of #573)
 
-1. #573 adds `surface`, `actor_kind` and `actor_id` to `investigate_params` for a
-   dispatched or resumed execution, from `self._current_surface` and
-   `self._current_actor`, using the omit-when-empty rule of the other params. It also
-   adds them to the CWFT, mapped to the existing `--surface/--actor-kind/--actor-id`
-   flags. #904 does not implement this a second time. It adds the end-to-end regression:
-   a Telegram-origin item resumed over `mcp` seals `current_surface="mcp"` and
-   `surface_transition=true`.
+1. This proposal implements the mctl-agents side of #573 itself; #573 has no branch
+   or code to integrate against. Add `surface`, `actor_kind` and `actor_id` to
+   `investigate_params` (dev_loop.py, around lines 3565-3602) for a dispatched or
+   resumed execution, from `self._current_surface` and `self._current_actor`, using
+   the omit-when-empty rule of the other params. Add the end-to-end regression: a
+   Telegram-origin item resumed over `mcp` seals `current_surface="mcp"` and
+   `surface_transition=true`, and the mutation run (T6) shows it fails with the
+   forwarding removed. The PR references #573 (`Refs`, not a closing keyword: #573
+   closes only when the forwarding works live, see the rollout order).
+1a. The forwarding crosses three repositories, and only the first is in this
+   proposal's implementation scope:
+   - mctl-agents (this proposal): the DevLoop puts the three keys into
+     `investigate_params`; the investigator already accepts
+     `--surface/--actor-kind/--actor-id`.
+   - mctl-gitops (follow-up PR, not the implementer's): declare `surface`,
+     `actor_kind` and `actor_id` in
+     `argo-workflows/cluster-templates/cwft-mctl-agents-investigate.yaml` with default
+     `""`, and map each to its flag only when non-empty.
+   - mctl-api (follow-up PR, not the implementer's): mctl-api strips investigate
+     parameters it does not declare (mctl-api#372; `internal/operations/registry.go`,
+     `devLoopCorrelationParams`). Declare the three keys with validation patterns:
+     `surface` limited to the vocabulary, `actor_kind` to the actor kinds, `actor_id`
+     to the principal formats `requested_by` can take.
+   Until both follow-ups ship, the new keys are dropped by mctl-api and the forwarding
+   is inert. That is safe: with Task 4 the investigator then seals an unknown (absent)
+   `surface_transition`, never `false`.
 2. Unknown is never false. Change `WorkContextRef.surface_transition` to
    `bool | None`. `to_dict` omits the key when it is None, following the
    `intent_high_water` pattern, so existing documents serialise to the same bytes.
@@ -158,9 +177,14 @@ There are no changes to lifecycle claims. A resume over `mcp` goes through the s
 
 ### Rollout order (documented, not executed here)
 
-1. Ship investigator and worker images that contain Slice A and Slice C.
-2. Ship the #573 CWFT parameter-forwarding template.
-3. Only then enable new MCP execution admission in mctl-api. A mixed-version test shows
+1. Ship investigator and worker images that contain Slice A, Slice B and Slice C. The
+   new `investigate_params` keys are inert at this point (stripped by mctl-api).
+2. mctl-gitops PR: the investigate CWFT declares `surface`, `actor_kind`, `actor_id`
+   (default `""`) and maps them to the flags.
+3. mctl-api PR: the operations registry declares the same three keys with validation
+   patterns. Only after this release does a live resume seal real provenance; the
+   live T5 proof (and closing #573) happens here.
+4. Only then enable new MCP execution admission in mctl-api. A mixed-version test shows
    that an old image receiving `--surface mcp` exits non-zero at
    `_validate_work_context_args`, and that an old DevLoop refuses with
    `surface-or-actor-unrecognised`. Both fail closed, and neither seals a wrong
@@ -188,9 +212,14 @@ There are no changes to lifecycle claims. A resume over `mcp` goes through the s
 
 - **Migrations:** none. `surface_transition` becomes optional in the sealed schema in an
   additive way, within `context.mctl.ai/v1alpha1`. Existing documents always carry the
-  key, so their bytes and hashes are unchanged. Consumers in mctl-api that treat a
-  missing key as `false` must treat it as unknown. Coordinate this with mctl-api before
-  the change ships.
+  key, so their bytes and hashes are unchanged. mctl-api does not read
+  `surface_transition` (verified on main 2026-10-31: no non-test reference), so no
+  mctl-api consumer change is needed; the readers are all in mctl-agents and are covered
+  by Task 4.
+- **Slice C reachability:** the redacted-intent park is reachable in production only
+  while `WORK_ITEM_INTENT_SOURCE` is on. It is currently off (mctl-gitops#2320), so
+  Slice C is proven by T8-T10 against fixtures only. Do not claim a live proof for it
+  in this PR.
 - **Backward compatibility:** legacy surfaces are unchanged. Temporal determinism is not
   affected, because the vocabulary is read in a validator and signal handler. A history
   that refused `mcp` earlier stays refused, and replay sees the same recorded
