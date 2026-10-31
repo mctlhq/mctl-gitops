@@ -33,6 +33,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -158,7 +160,10 @@ def push(url: str, job: str, body: str) -> None:
 def report(servers: list[dict]) -> int:
     bad = [s for s in servers if not is_ready(s)]
     for s in sorted(servers, key=lambda s: str(s["id"])):
-        err = s.get("error") or ""
+        # str(): is_ready() counts any truthy `error`, whatever its type. A
+        # structured one added to a string raised, and main() then reported
+        # the whole read as failed instead of this server as not ready.
+        err = str(s.get("error") or "")
         print(f"{'ok    ' if is_ready(s) else 'NOT OK'} {s['id']}: {s.get('status')}, "
               f"last successful sync {s.get('last_successful_sync') or 'never'}{', error: ' + err if err else ''}")
     return 1 if bad else 0
@@ -235,6 +240,16 @@ def selftest() -> int:
     check("label values are escaped", label('a"b\\c\nd') == 'a\\"b\\\\c\\nd')
     check("report exits 1 when a server is not ready", report([ready, stale]) == 1)
     check("report exits 0 when every server is ready", report([ready]) == 0)
+    structured = {"id": "d", "status": "stale",
+                  "error": {"code": 10000, "message": "Authorization failed: needs_reauth"}}
+    printed = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(printed):
+            code = report([structured])
+    except Exception:  # noqa: BLE001 -- raising at all is what this case checks
+        code = None
+    check("report prints an error that is not a string instead of raising",
+          code == 1 and "NOT OK d:" in printed.getvalue() and "needs_reauth" in printed.getvalue())
     return 0 if all(cases) else 1
 
 
