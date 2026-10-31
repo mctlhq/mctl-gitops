@@ -208,6 +208,16 @@ env:
 
   AGENT_ENABLED: "true"
   AGENT_KILL_SWITCH: "false"
+  # Assistant registry (mctl-telegram#1020, P3.4 of epic #1002). Installs
+  # fetch the materialized definition from mctl-api's assistant catalog
+  # (4.142.0+), check its digest and store it next to the install revision;
+  # claims read that stored copy and never call the registry. A 5-minute
+  # refresh tracks the registry lifecycle; disabled, or no successful check
+  # for 24 h, stops new jobs. Uses the surface:telegram token that workContext
+  # below already provides (the server refuses to start with this on and no
+  # token). Preview only, for the P3 acceptance (mctl-telegram#1022).
+  # Rollback: set "false"; stored copies keep serving claims.
+  ASSISTANT_REGISTRY_ENABLED: "true"
   # Human-input adapter (mctl-telegram#571, 0.79.0+): polls mctl-api for
   # clarification questions addressed to linked operators and posts them to
   # Saved Messages; /mctl input answers. Enabled on THIS instance only, the
