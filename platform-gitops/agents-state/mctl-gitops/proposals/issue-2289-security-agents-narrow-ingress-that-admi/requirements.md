@@ -30,6 +30,13 @@ proven against the full set of installed policies, in both directions.
 - AS a reviewer I WANT CI to fail when a policy broadens an agent selector or reintroduces whole-namespace admission of `argo-workflows` SO THAT the boundary does not erode through later edits.
 
 ## Acceptance criteria (EARS)
+
+> **Amendment 2026-10-31 (scope).** This proposal is step A: the label
+> contract, both validators with today's matrix, the probe script, the
+> runbook and the live pre-checks. It changes no NetworkPolicy. Criteria
+> below about refusing agent pods at a destination are delivered by
+> mctl-gitops#2301 (step B). The `NotIn` selector is fail-open for a pod that
+> loses the label, so T6 is a hard gate for step B, not a record.
 - THE SYSTEM SHALL treat `app.kubernetes.io/name: mctl-agents`, set in `spec.podMetadata.labels` of an agent ClusterWorkflowTemplate, as the canonical agent-pod label, documented in `docs/runbooks/agent-pod-isolation.md`.
 - WHEN a ClusterWorkflowTemplate under `platform-gitops/argo-workflows/cluster-templates/` runs the mctl-agents image (the `workflow.parameters.agent_image` marker, or an image under `ghcr.io/mctlhq/mctl-agents`), or is named `cwft-mctl-agents-*`, THE SYSTEM SHALL fail CI unless its `spec.podMetadata.labels` carries the canonical agent label.
 - WHEN a CronWorkflow or WorkflowTemplate that references an agent CWFT sets `podMetadata.labels["app.kubernetes.io/name"]` to any other value, THE SYSTEM SHALL fail CI.
