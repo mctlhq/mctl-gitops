@@ -2,10 +2,14 @@
 
 - [ ] 1. Record preconditions in `docs/spikes/2286-obi-evaluation.md` (new): the
   worker kernel version and BTF presence (`/sys/kernel/btf/vmlinux`) on the
-  `worker-cx43-fsn1` nodes; the live `mctl.me/tenant` label on the `karabu`,
-  `labs` and `mctl-api` namespaces; whether `mctl-api` already emits spans to
+  `worker-cx43-fsn1` nodes; the choice of two owner-controlled tenants for the synthetic
+  fixtures (`labs` plus one of `mctl`, `admins`, `commerce-proof`; never a
+  customer tenant) and the live `mctl.me/tenant` label on their namespaces and
+  on `mctl-api`; whether `mctl-api` already emits spans to
   `otel-collector`; and the current span rate and VMSingle series baseline.
-  Also record the decision thresholds from design.md before any measurement.
+  Also record the decision thresholds from design.md before any measurement,
+  including numeric limits for OBI RSS per node, API list/watch load and
+  cardinality delta.
   - DoD: each fact is recorded with the command used to get it. Anything
     unobservable is marked "not observed", never "absent".
 - [ ] 2. Add the `obiSpike` values block (default `enabled: false`) to
@@ -33,36 +37,21 @@
   the shared `redaction`/`filter/health` values, then `batch`. (depends on 3)
   - DoD: the rendered config contains no association source other than
     `k8s.pod.uid`, and no OTTL statement reads `mctl.team`.
-- [ ] 5. Add the negative fixture `obi-fixture-forged` (pod label
-  `mctl.ai/team: karabu`, `OTEL_RESOURCE_ATTRIBUTES=mctl.tenant=labs`) and the
-  load CWFT `argo-workflows/cluster-templates/wft-obi-spike-load.yaml`, which
-  sends a fixed request mix to `draw-with-friends.mctl.ai`,
-  `labs-portfolio.mctl.ai`, `mctl-api` and the fixture. (depends on 3)
+- [ ] 5. Add the synthetic tenant fixtures `obi-fixture-tenant-a` and
+  `obi-fixture-tenant-b` (tiny HTTP servers in the two tenants from task 1,
+  rendered only while the spike is enabled), the negative fixture
+  `obi-fixture-forged` (pod label `mctl.ai/team: <tenant A>`,
+  `OTEL_RESOURCE_ATTRIBUTES=mctl.tenant=<tenant B>`) and the load CWFT
+  `argo-workflows/cluster-templates/wft-obi-spike-load.yaml`, which sends a
+  fixed request mix to the two tenant fixtures, `mctl-api` and the forged
+  fixture. No customer host is a target. (depends on 3)
   - DoD: the CWFT is registered and inert until submitted. It has no
     CronWorkflow.
-- [ ] 6. Run the experiment: set `obiSpike.enabled: true` with `teardownAfter`
-  no more than 14 days out. Collect an OBI-off baseline window and an OBI-on
-  window. Exercise failure modes: spike collector scaled to 0, API egress
-  blocked, OBI restart. Measure CPU/RSS per node, Traefik p50/p95 latency
-  delta, span and series volume, `apiserver_request_total` list/watch from OBI
-  service accounts (try `k8sCache` only if this is material), and the
-  trace-context continuity of Traefik -> service and service -> DB/HTTP
-  egress. (depends on 4, 5)
-  - DoD: every measurement in the issue's list has a number or an explicit
-    "unsupported/gapped" entry in the report.
-- [ ] 7. Write up `docs/spikes/2286-obi-evaluation.md`: the overlap map
-  (explicit `otel.enabled` services vs OBI-added signals), the attribution
-  contract and evidence for karabu, labs, the platform workload and the forged
-  fixture, the coverage matrix by protocol/runtime, the exact privilege set,
-  the deployment-shape recommendation with rollback, exactly one outcome, and
-  follow-up issues only for proven gaps. One expected follow-up is "replace
-  pod-label `mctl.team` with namespace-label `mctl.tenant` in the production
-  collector". (depends on 6)
-  - DoD: the report is merged and the outcome is posted on #2286.
-- [ ] 8. Teardown: set `obiSpike.enabled: false` and `teardownAfter: ""` in
-  the same PR as the report or earlier. (depends on 6)
-  - DoD: ArgoCD shows the OBI Application pruned and the
-    `observability-obi-spike` namespace is gone.
+- [ ] 6. Out of scope: enabling the spike, measuring, the report's outcome and
+  teardown (former tasks 6-8 and T4) are mctl-gitops#2303. This proposal's PR
+  keeps `obiSpike.enabled: false`. — DoD: nothing new runs on the cluster;
+  the report holds preconditions and all pre-registered thresholds, with
+  `STATUS: PENDING_EXPERIMENT`.
 
 ## Tests
 
@@ -78,16 +67,13 @@
   Wire it into `.github/workflows/validate-manifests.yml`.
 - [ ] T3. `tests/test_obi_spike_attribution_e2e.py` (pattern of
   `test_otel_collector_redaction_e2e.py`): runs the rendered spike collector
-  processors on fixture spans and checks four cases. The karabu pod resolves
-  to `mctl.tenant=karabu`. The labs pod resolves to `labs`. A forged-label pod
+  processors on fixture spans and checks four cases. The tenant A fixture pod resolves
+  to tenant A. The tenant B fixture pod resolves to tenant B. A forged-label pod
   in a non-tenant namespace resolves to `unattributed` with no `mctl.tenant`.
   An unknown pod UID resolves to `unattributed`. A `--mutation` flag swaps
   association to connection IP or reads `mctl.team`, and the test must then
   fail.
-- [ ] T4. A live check during Task 6: query Tempo and VMSingle for the
-  karabu/labs/fixture spans and series. Expect zero spans or series where
-  `mctl.tenant` disagrees with the namespace's `mctl.me/tenant`, and the
-  forged fixture always `unattributed`.
+- [ ] T4. Moved to mctl-gitops#2303 (live check during the experiment).
 
 ## Rollback
 

@@ -110,10 +110,11 @@ obiSpike:
   hostNetwork: false
   mounts: []                    # e.g. /sys/fs/cgroup, /sys/kernel/security, /sys/fs/bpf
   targets:                      # explicit allowlist, no wildcard discovery
-    - namespace: karabu
-      deployment: draw-with-friends
+    # Amendment 2026-10-31: synthetic fixtures only, no customer workloads.
     - namespace: labs
-      deployment: portfolio
+      deployment: obi-fixture-tenant-a
+    - namespace: <tenant B, owner-controlled, chosen in task 1>
+      deployment: obi-fixture-tenant-b
     - namespace: mctl-api
       deployment: mctl-api
   k8sCache: false               # flip only if Task 6 shows material informer load
@@ -189,13 +190,13 @@ synthetic "platform" tenant) is invented.
 **Negative fixtures**, rendered only while the spike is enabled, live in
 `observability-obi-spike`:
 - `obi-fixture-forged`: a tiny HTTP server with pod label `mctl.ai/team:
-  karabu` and `OTEL_RESOURCE_ATTRIBUTES=mctl.tenant=labs`. Expected:
+  <tenant A>` and `OTEL_RESOURCE_ATTRIBUTES=mctl.tenant=<tenant B>`. Expected:
   `unattributed` every time.
 - An offline e2e test, `tests/test_obi_spike_attribution_e2e.py`, modelled on
   `test_otel_collector_redaction_e2e.py`. It runs the spike collector config
   with a fake k8s metadata source, or with the processors driven by
   pre-resolved fixtures where the binary allows that, and checks four cases:
-  correct karabu, correct labs, forged label, and an unknown pod UID.
+  correct tenant A, correct tenant B, forged label, and an unknown pod UID.
 
 ### 4. Experiment procedure and report
 
@@ -223,7 +224,10 @@ required, or node CPU overhead exceeds 3% at p95, or latency overhead exceeds
 `ADOPT_BOUNDED_OBI_LAYER` requires clean attribution, the non-privileged
 capability set, and coverage the explicit path does not already provide. The
 thresholds are recorded in the report before measurement, so they cannot be
-tuned afterwards.
+tuned afterwards. Amendment 2026-10-31: the same pre-registration must also
+set numeric limits for OBI RSS per node, Kubernetes API list/watch load from
+OBI service accounts and span/series cardinality delta; exceeding any of them
+caps the outcome at `PILOT_SELECTED_WORKLOADS`.
 
 ### Sidecar vs DaemonSet
 
