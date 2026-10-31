@@ -104,6 +104,16 @@ spec:
       secret:
         secretName: mctl-gitops-deploy-key
         defaultMode: 0600
+    # #2288: GITHUB_TOKEN is file-delivered (rotated every 30 min by
+    # rotate-github-app-tokens; kubelet refreshes the volume). 0440 with
+    # fsGroup 1000. Mounted only in the agent container.
+    - name: github-token-file
+      secret:
+        secretName: mctl-agents-secrets
+        defaultMode: 0440
+        items:
+          - key: github-token
+            path: github-token
 
   templates:
     - name: run-agents
@@ -542,12 +552,11 @@ spec:
           # proposals. Same secret + key as the Tier 2 implementer.
           # Marked optional so the cron run still works (degraded) if
           # Vault hasn't been seeded yet.
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: github-token
-                optional: true
+          # #2288: the token is delivered only as a file (no secretKeyRef env
+          # seed); refresh_github_token() reads it before the first and every
+          # later gh/git call. The mounted file is model-readable (mctl-agents#869).
+          - name: GITHUB_TOKEN_FILE
+            value: /var/run/gh/github-token
           - name: SERVICE_AGENT_BUDGET_USD
             value: "5.00"
           - name: MENTOR_BUDGET_USD
@@ -586,6 +595,9 @@ spec:
         volumeMounts:
           - name: workdir
             mountPath: /workdir
+          - name: github-token-file
+            mountPath: /var/run/gh
+            readOnly: true
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     - name: commit-and-push
