@@ -190,6 +190,7 @@ spec:
     - name: github-token-file
       secret:
         secretName: mctl-agents-secrets
+        defaultMode: 0440
         items:
           - key: github-token
             path: github-token
@@ -535,8 +536,8 @@ spec:
             # `gh auth setup-git` installs `gh auth git-credential` as
             # the credential helper, which reads GITHUB_TOKEN from the
             # env at push time. Skip silently if no token.
-            if [ -n "$GITHUB_TOKEN" ]; then
-              gh auth setup-git
+            if [ -s "$GITHUB_TOKEN_FILE" ]; then
+              GITHUB_TOKEN="$(cat "$GITHUB_TOKEN_FILE")" gh auth setup-git
             fi
             # Read params from env, NOT inline workflow.parameters
             # (Argo template syntax) interpolation: a value like
@@ -766,17 +767,11 @@ spec:
           # calls. PAT must have repo write scope on mctlhq/*.
           # Marked optional: a local smoke run without GITHUB_TOKEN
           # can still exercise the discovery path (--dry-run).
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: github-token
-                optional: true
           # Path to the mounted Secret volume (see spec.volumes above).
           # refresh_github_token() re-reads GITHUB_TOKEN from this file
           # before every gh/git subprocess, so a tick that outlives the
-          # token's ~60min TTL still authenticates correctly. GITHUB_TOKEN
-          # above only seeds the very first call before any refresh happens.
+          # token's ~60min TTL still authenticates correctly. There is no
+          # GITHUB_TOKEN env seed (#2288): the file is the only delivery.
           - name: GITHUB_TOKEN_FILE
             value: /var/run/gh/github-token
           # Optional MCP token, same convention as the run + implement

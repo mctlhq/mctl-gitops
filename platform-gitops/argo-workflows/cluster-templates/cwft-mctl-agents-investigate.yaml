@@ -199,6 +199,7 @@ spec:
     - name: github-token-file
       secret:
         secretName: mctl-agents-secrets
+        defaultMode: 0440
         items:
           - key: github-token
             path: github-token
@@ -477,13 +478,14 @@ spec:
             # for local/offline debugging — fail fast here with a clear
             # message instead of surfacing an opaque `gh` auth error from
             # deep inside Python.
-            if [ -z "$GITHUB_TOKEN" ]; then
-              echo "❌ GITHUB_TOKEN is not set — the investigator needs it to read the issue, clone the repo, and comment" >&2
+            if [ ! -s "$GITHUB_TOKEN_FILE" ]; then
+              echo "❌ GITHUB_TOKEN_FILE is empty or missing — the investigator needs it to read the issue, clone the repo, and comment" >&2
               exit 1
             fi
             # Wire git's HTTPS credential helper to GITHUB_TOKEN so `gh repo
             # clone` and any later git op authenticate non-interactively.
-            gh auth setup-git
+            # setup-git needs a token in its env; scope it to this one command.
+            GITHUB_TOKEN="$(cat "$GITHUB_TOKEN_FILE")" gh auth setup-git
             # issue_url is required. Fail fast with a clear message rather
             # than letting argparse emit a terse usage error deep in logs.
             if [ -z "$WORKFLOW_ISSUE_URL" ]; then
@@ -836,17 +838,11 @@ spec:
           # GitHub PAT for `gh issue view`, `gh repo clone` and
           # `gh issue comment`. Needs repo read on the target repo plus
           # `issues: write` for the closing comment.
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: github-token
-                optional: true
           # Path to the mounted Secret volume (see spec.volumes above).
           # refresh_github_token() re-reads GITHUB_TOKEN from this file
           # before every gh/git subprocess, so a run that outlives the
-          # token's ~60min TTL still authenticates correctly. GITHUB_TOKEN
-          # above only seeds the very first call before any refresh happens.
+          # token's ~60min TTL still authenticates correctly. There is no
+          # GITHUB_TOKEN env seed (#2288): the file is the only delivery.
           - name: GITHUB_TOKEN_FILE
             value: /var/run/gh/github-token
           # No MCTL_TOKEN here (mctlhq/mctl-agents#717, option c): the run's

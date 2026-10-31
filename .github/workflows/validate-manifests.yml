@@ -265,6 +265,15 @@ jobs:
           scripts/validate-agent-pod-security.py --selftest
           scripts/validate-agent-pod-security.py
 
+      # mctl-gitops#2288: github-token is file-delivered; a secretKeyRef env
+      # seed must not come back and every agent secretKeyRef must be classified.
+      - name: Validate agent credential delivery
+        run: |
+          set -euo pipefail
+          scripts/validate-agent-credential-delivery.py --selftest
+          scripts/validate-agent-credential-delivery.py
+          python3 tests/test_agent_credential_delivery.py
+
       # A proposal committed as `accepted` while demanding an approval it does
       # not carry is unrunnable by every supported path, and nothing fails on
       # it: the approve operation and the implementer both exit 0. One sat in
