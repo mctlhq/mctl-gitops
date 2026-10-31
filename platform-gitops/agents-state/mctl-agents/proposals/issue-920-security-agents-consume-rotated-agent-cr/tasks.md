@@ -10,8 +10,8 @@
   longer interpolates the exception message; `tests/test_github_token.py` passes, with assertions
   updated only for the log text.
 - [ ] 3. Call `refresh_github_token()` once at the start of `main()` in `run_issue_investigator.py`,
-  `run_implementer.py`, `run_shepherd.py`, `run_usage_collector.py`, `run_scout.py` and the Temporal
-  worker entrypoint (depends on 2) — DoD: with only `GITHUB_TOKEN_FILE` set, the first `gh` call
+  `run_implementer.py`, `run_shepherd.py`, `run_usage_collector.py`, `run_scout.py`, `run_all.py`
+  (entrypoint of `cwft-mctl-agents-run.yaml`) and the Temporal worker entrypoint (depends on 2) — DoD: with only `GITHUB_TOKEN_FILE` set, the first `gh` call
   inherits the file's token.
 - [ ] 4. Switch the usage writer: `UsageRecorder` holds a token source and resolves it per delivery
   (`usage_ledger.py:543`, `:704`) (depends on 1) — DoD: `enabled` and `_off_reason` are unchanged for

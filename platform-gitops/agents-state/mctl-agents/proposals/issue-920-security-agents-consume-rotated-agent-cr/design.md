@@ -126,8 +126,9 @@ in `tests/test_usage_ledger.py` still applies.
   need it.
 - Change the log line to the exception type name, which closes the one-byte leak.
 - Call `refresh_github_token()` once at the top of each entrypoint `main()` (`run_issue_investigator`,
-  `run_implementer`, `run_shepherd`, `run_usage_collector`, `run_scout`, the Temporal worker
-  entrypoint). With the env seed removed, the first call then authenticates from the file.
+  `run_implementer`, `run_shepherd`, `run_usage_collector`, `run_scout`, `run_all`, the Temporal
+  worker entrypoint). `run_all` is the entrypoint of `cwft-mctl-agents-run.yaml` and today calls
+  `refresh_github_token()` nowhere, so without it the `run` kind keeps needing the env seed. With the env seed removed, the first call then authenticates from the file.
 - This credential stays in the subprocess-env class, visible to model `Bash` (#869 residual).
 
 ### 5. Anthropic credential: file-backed, session-scoped
