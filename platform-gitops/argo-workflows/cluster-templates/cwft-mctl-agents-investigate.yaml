@@ -743,8 +743,14 @@ spec:
           # provenance and input only, never authorization. Only this template
           # reads it: the Temporal workers run no context assembly. Roll back by
           # setting "off" (the default, byte-neutral).
+          # OFF since mctl-api#880 (owner decision 2026-10-31): scoped agent
+          # run tokens are refused raw intent reads on MCP and REST, own work
+          # item included, so this scoped-token read must stop BEFORE that
+          # mctl-api release ships, or runs naming an intent_id would fail
+          # `intent-unresolved`. Turning it back on needs a credential the
+          # model cannot reach, decided separately.
           - name: WORK_ITEM_INTENT_SOURCE
-            value: "on"
+            value: "off"
           # Workflow param injected as an env var so the shell layer can
           # quote it safely. Direct workflow.parameters.* interpolation in
           # the script body is a shell-injection vector.
