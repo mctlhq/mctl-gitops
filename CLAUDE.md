@@ -102,6 +102,9 @@ which are known gaps, see `docs/runbooks/policy-checkpoint-coverage.md`.
 For the agent egress proxy and its staged rollout, see
 `docs/runbooks/mctl-agents-egress.md`.
 
+For the agent compute ResourceQuota in `argo-workflows` (enforcement pending
+#2299), see `docs/runbooks/agent-compute-quota.md`.
+
 For the GitHub Code Scanning webhook receiver (SecurityFinding ingestion),
 its secret, rotation and rollback, see
 `docs/runbooks/security-finding-ingestion.md`.
