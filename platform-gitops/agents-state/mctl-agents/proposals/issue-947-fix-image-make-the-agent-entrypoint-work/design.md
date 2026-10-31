@@ -97,8 +97,14 @@ Changes:
      adding them again is harmless.
 4. `orchestrator/run_mentor.py`:
    - `run_mentor` calls `_rotate_old_digests(mentor_digest_dir())` after `ensure_dir`.
-   - `build_prompt()` lists `service_proposals_dir(s)` for each `s` in `SERVICES` and the
-     absolute digest path `mentor_digest_dir() / f"{y}-W{w:02d}.md"`.
+   - `build_prompt()` lists `service_proposals_dir(s)` for each `s` in
+     `mentor_services() = [s for s in SERVICES if (AGENTS_DIR / s).is_dir()]` and the
+     absolute digest path. `mentor_services()` keeps today's scope: the mentor
+     currently reads relative `<svc>/proposals/` under `agents/`, which exist only for
+     services with a baked scaffold, so the other `SERVICES` (DevLoop-only targets such
+     as mctl-telegram or mctl-support, whose `agents-state/<svc>/proposals/` do exist)
+     are skipped today and must stay skipped. The "Active services" line in the prompt
+     uses the same list. The absolute digest path `mentor_digest_dir() / f"{y}-W{w:02d}.md"`.
    - `build_mentor_options` adds `agent_state_root()` to `add_dirs`, so the session may
      read proposals and write the digest. `cwd` stays `agents/`.
 5. Prompt files: reword the relative-path references in
