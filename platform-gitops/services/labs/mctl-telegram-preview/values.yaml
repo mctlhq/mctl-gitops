@@ -271,6 +271,12 @@ env:
   # A job nobody claimed for this long is routed to the operator
   # (worker_unclaimed). Must exceed AGENT_TURN_MAX_WAIT while coalescing is on.
   AGENT_UNCLAIMED_ROUTE_AFTER: "5m"
+  # First contacts only (mctl-telegram#1017, owner 2026-10-31): a chat the
+  # agent has never seen is handled only when Telegram holds no earlier
+  # message in it; otherwise it starts closed and never runs the model.
+  # The agent runs on a fixed promotional credit until 2026-11-11.
+  # Inert until the image carries #1017. Rollback: "false".
+  AGENT_NEW_CHATS_ONLY: "true"
 ingress:
   enabled: true
   hosts:
