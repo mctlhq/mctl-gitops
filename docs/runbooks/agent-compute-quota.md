@@ -23,10 +23,20 @@ approve 2, scout 1, usage-collector 1 = 13 pods):
 | pods | 13 | 20 |
 | requests.cpu | 2.13 | 3 |
 | requests.memory | 12.7Gi | 16Gi |
-| requests.ephemeral-storage | 47.3Gi | 60Gi |
+| requests.ephemeral-storage | 47.3Gi | not in the quota (see below) |
 | limits.cpu | 28 | 36 |
 | limits.memory | 46.75Gi | 60Gi |
-| limits.ephemeral-storage | 71Gi | 90Gi |
+| limits.ephemeral-storage | 71Gi | not in the quota (see below) |
+
+Ephemeral storage cannot be part of this quota. The API server accepts only
+pods, cpu and memory (requests/limits) under a `PriorityClass` scope, and
+rejects `requests.ephemeral-storage` / `limits.ephemeral-storage` with
+"unsupported scope applied to resource" (confirmed by server dry-run on
+2026-10-31). An unscoped quota would count every platform pod in the
+namespace, which this design rules out. Ephemeral storage is bounded per pod
+by the agent templates' own `ephemeral-storage` limits, except
+`cwft-mctl-agents-daily`, which sets none (follow-up); the sums above remain
+the capacity reference.
 
 `requests.*` is the real bound on what agents take from platform workflows;
 limits are overcommitted by design. Agent `requests.memory` plus the platform
