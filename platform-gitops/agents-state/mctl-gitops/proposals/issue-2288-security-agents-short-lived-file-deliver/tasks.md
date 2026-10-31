@@ -23,7 +23,9 @@
   `GITHUB_TOKEN_FILE` before their first credentialed call with no env seed
   (`run_issue_investigator`, `run_implementer`, `run_shepherd` and
   `--reconcile`, `run_all`, `run_scout`, `run_usage_collector`), and the
-  minimum `agent_image` for each. — DoD: list recorded in the inventory
+  minimum `agent_image` for each. Phase 1 starts only after the #920 release
+  (which adds `refresh_github_token()` to `run_all`) is the pinned
+  `agent_image`. — DoD: list recorded in the inventory
   `reader` field; any entrypoint without support stays `env-seed`.
 - [ ] 5. Phase 1 `github-token` migration (depends on 3, 4): remove the
   `GITHUB_TOKEN` `secretKeyRef` from each supported agent-image step; add or
@@ -32,6 +34,11 @@
   `GITHUB_TOKEN_FILE=/var/run/gh/github-token`; rewrite shell guards at
   `cwft-mctl-agents-investigate.yaml:480`, `cwft-mctl-agents-implement.yaml:517`,
   `cwft-mctl-agents-shepherd.yaml:538` to test `-s "$GITHUB_TOKEN_FILE"`;
+  replace every `gh auth setup-git` call (investigate:486, implement:518,
+  shepherd:539) with the command-scoped
+  `GITHUB_TOKEN="$(cat "$GITHUB_TOKEN_FILE")" gh auth setup-git` (design
+  section 2: setup-git exits 1 without a token and the scripts run under
+  `set -e`);
   update the stale "only seeds the very first call" comments; flip the
   inventory rows to `delivery: file`. — DoD: validator green; `helm`/kubeconform
   checks in `validate-manifests.yml` green; no `GITHUB_TOKEN` `secretKeyRef`
@@ -43,18 +50,8 @@
   operation (clone, issue comment, push/PR as applicable); for one
   run longer than 30 min, the logs or a rotation timestamp show the token
   file changed and the next gh call succeeded.
-- [ ] 7. Phase 2, per credential, only after its #920 reader ships in the
-  pinned `agent_image` (depends on 3): `MCTL_USAGE_WRITER_TOKEN`,
-  `MCTL_EVIDENCE_WRITER_TOKEN`, `MCTL_TOKEN` (implement, shepherd, run model
-  steps), `CLAUDE_CODE_OAUTH_TOKEN` (template-level volume keyed by
-  `{{inputs.parameters.oauth-key}}`), `SCOUT_TELEGRAM_*`. Replace the
-  `secretKeyRef` with a per-key Secret volume item (`optional: true` where the
-  env entry was optional, `defaultMode: 0440`, `readOnly` mount under
-  `/var/run/mctl-agents/creds`) and the `*_FILE` var; move
-  `$CLAUDE_CODE_OAUTH_TOKEN` fallback guards (`implement:497`,
-  `investigate:467`, `run:339`, `shepherd:522`) to file checks; flip the
-  inventory row. — DoD: one PR per credential (or small group), validator
-  green, real run of each affected agent kind succeeds.
+- [ ] 7. Phase 2 is out of scope: it moved to mctl-gitops#2296. Do not
+  migrate any credential other than `github-token` here.
 - [ ] 8. Completion report on issue #2288 and in the final PR: per inventory
   row, the three claims `NO_LONG_LIVED_SECRET_ENV_SEED`,
   `SHORT_LIVED_OR_ROTATABLE`, `MODEL_SHELL_CANNOT_READ_CREDENTIAL_BYTES`
@@ -86,7 +83,7 @@
 
 ## Rollback
 
-Per credential: revert the PR that migrated it, which restores the
+Revert the phase 1 PR, which restores the
 `env[].valueFrom.secretKeyRef` entry, the previous `*_FILE` wiring and shell
 guards, and flips the inventory row back to `delivery: env-seed` in the same
 commit (so the validator stays green). ArgoCD re-syncs in about 3 min;

@@ -120,7 +120,7 @@ Initial classification:
 | `claude-code-oauth-token`, `-2` | file-capable-long-lived (manual `claude setup-token`) | env-seed until #920 provides a file reader that passes the token only to the CLI process; then file | Residual: no short-lived form; CLI reads env. |
 | `mctl-token` (implement, shepherd, run model steps) | file-capable-long-lived (static admin bearer) | file when #920 supports `MCTL_TOKEN_FILE` | Residual: the short-lived replacement is the run-token exchange already enforced on investigate; extending it is a separate mctl-agents/mctl-api follow-up. |
 | `usage-writer-token`, `evidence-writer-token` | file-capable-long-lived (static, narrowly scoped bearer) | file when #920 supports the `_FILE` names | Residual: not short-lived. |
-| `mctl-agents-scout-telegram/bot-token` (+ chat id) | no-file-or-rotation-form (Telegram bot tokens are static; chat id is not a secret) | file if #920 supports it, else env-seed | Residual. |
+| `mctl-agents-scout-telegram/bot-token` (+ chat id) | file-capable-long-lived (#920 adds the `SCOUT_TELEGRAM_BOT_TOKEN_FILE` reader; Telegram bot tokens are static, not rotatable; chat id is not a secret) | env-seed in this issue; file in mctl-gitops#2296 | Residual: not short-lived. |
 | `telegram-bot-token`, `telegram-chat-id`, `mctl-token` in `notify-telegram` | not agent image, no model shell | unchanged (env-seed) | Listed for completeness; out of model-step scope. |
 
 ### 2. Phase 1: `github-token` (reader already present)
@@ -136,7 +136,16 @@ shepherd, run, scout, reconcile, usage-collector):
   Add the volume to run, scout, reconcile and usage-collector, which lack it.
 - Rewrite shell guards to test the file: `investigate:480`
   -> `[ ! -s "$GITHUB_TOKEN_FILE" ]`; `implement:517`, `shepherd:538`
-  -> `[ -s "$GITHUB_TOKEN_FILE" ]`. `gh auth setup-git` installs
+  -> `[ -s "$GITHUB_TOKEN_FILE" ]`.
+- `gh auth setup-git` runs in shell BEFORE the Python entrypoint, so
+  `refresh_github_token()` has not populated `GITHUB_TOKEN` yet. Without a
+  token in its env `gh auth setup-git` exits 1 ("You are not logged into any
+  GitHub hosts"; verified 2026-10-31), and the scripts run under `set -e`, so
+  the step would fail at investigate:486, implement:518 and shepherd:539. Pass
+  the token to that one command only, never exported to the shell:
+  `GITHUB_TOKEN="$(cat "$GITHUB_TOKEN_FILE")" gh auth setup-git`. setup-git
+  only writes the credential-helper line to `~/.gitconfig`; it stores no token.
+- `gh auth setup-git` installs
   `gh auth git-credential`, which reads `GITHUB_TOKEN` from the process env at
   push time; that env is the one `refresh_github_token()` maintains in the
   orchestrator, so push keeps working (validated by the real-run task).
@@ -148,7 +157,11 @@ shepherd, run, scout, reconcile, usage-collector):
 - Comment changes: replace "GITHUB_TOKEN above only seeds the very first
   call" with a note citing #2288 and that the file is the only delivery.
 
-### 3. Phase 2: remaining file-capable credentials, gated on #920
+### 3. Phase 2: remaining file-capable credentials — OUT OF SCOPE, moved to mctl-gitops#2296
+
+This proposal implements phase 1 only (`github-token`). The text below is
+kept as the design input for mctl-gitops#2296.
+
 
 Per credential, once the pinned `agent_image` contains the #920 reader:
 replace the `secretKeyRef` entry with a Secret volume item from
