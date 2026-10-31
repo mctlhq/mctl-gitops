@@ -84,7 +84,7 @@ capabilities and kernel filesystem mounts.
   `mctl.tenant.attribution=unattributed`. It shall never default to another
   tenant, `admins`, or a value taken from a pod label or resource attribute.
 - WHEN a fixture pod in a non-tenant namespace carries pod label
-  `mctl.ai/team: <tenant A>` and emits `mctl.tenant=labs` in its own resource
+  `mctl.ai/team: <tenant A>` and emits `mctl.tenant=<tenant B>` in its own resource
   attributes THE SYSTEM SHALL attribute its telemetry as `unattributed`.
 - WHILE OBI telemetry is attributed THE SYSTEM SHALL keep `mctl.ai/team` and
   `mctl.ai/component` only as evidence attributes (`mctl.team`,
