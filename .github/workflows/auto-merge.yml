@@ -67,6 +67,15 @@ jobs:
           fi
           protected=$(printf '%s\n' "$files" | tr '\t' '\n' | grep -E \
             '^platform-gitops/agent-platform/|^platform-gitops/agents-state/[^/]+/proposals/[^/]+/\.status\.yaml$' || true)
+          # portal-allowlist/* PRs may only auto-merge if they do not widen exposure.
+          # A widening touches baseline.json and requires an explicit human merge.
+          if [[ "$HEAD_REF" =~ ^portal-allowlist/ ]]; then
+            portal_widening=$(printf '%s\n' "$files" | tr '\t' '\n' | grep -E \
+              '^infrastructure/cloudflare/portal/allowlists/baseline\.json$' || true)
+            if [ -n "$portal_widening" ]; then
+              protected=$(printf '%s\n%s\n' "$protected" "$portal_widening" | grep -v '^$' || true)
+            fi
+          fi
           if [ -n "$protected" ]; then
             echo "::notice::#${PR} touches paths that need a human merge; leaving it open:"
             printf '%s\n' "$protected"
@@ -79,6 +88,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
       - name: Merge PR
         if: steps.guard.outputs.merge == 'true'
         run: |

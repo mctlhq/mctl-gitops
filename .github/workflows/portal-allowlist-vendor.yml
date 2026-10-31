@@ -137,23 +137,6 @@ jobs:
           entry["vendored_at"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
           sources_path.write_text(json.dumps(sources, indent=2, ensure_ascii=False) + "\n")
 
-          baseline_path = d / "baseline.json"
-          if baseline_path.is_file():
-              baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-              s_entry = baseline.get("servers", {}).get(server)
-              if s_entry is not None:
-                  doc_tools = doc.get("tools") if isinstance(doc, dict) else []
-                  doc_tools = doc_tools if isinstance(doc_tools, list) else []
-                  enabled_names = sorted([
-                      t["name"] for t in doc_tools
-                      if isinstance(t, dict) and t.get("enabled") is True and isinstance(t.get("name"), str)
-                  ])
-                  s_entry["tools_total"] = after[1]
-                  s_entry["tools_enabled"] = after[0]
-                  s_entry["enabled_tools"] = enabled_names
-                  s_entry["recorded"] = datetime.date.today().isoformat()
-                  baseline_path.write_text(json.dumps(baseline, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"delta={before[0]}/{before[1]} -> {after[0]}/{after[1]}\n")
           PYEOF
@@ -208,7 +191,7 @@ jobs:
             git config user.email "ci@mctl.ai"
             git config user.name  "mctl-ci"
             git switch -c "$branch"
-            git add "$file" infrastructure/cloudflare/portal/allowlists/sources.json infrastructure/cloudflare/portal/allowlists/baseline.json
+            git add "$file" infrastructure/cloudflare/portal/allowlists/sources.json
             git commit -m "portal(${SERVER}): vendor allowlist ${DELTA} tools enabled/total" \
                        -m "From ${SOURCE_REPO}@${SOURCE_SHA}. Refs mctlhq/mctl-gitops#1370."
             git push origin "$branch"

@@ -1111,7 +1111,9 @@ def main() -> int:
                 lag = catalogue_file_lag(server, snapshot, committed)
                 if lag:
                     lagging.append(lag)
-                    live_tools = [t.get("name") for t in (snapshot.get("tools") or []) if isinstance(t, dict)]
+                    # Replace the catalogue entry wholesale with the portal's live tools in portal order.
+                    # An empty or non-array tool list is left to compare() to report as undetermined.
+                    live_tools = [t.get("name") for t in (snapshot.get("tools") or []) if isinstance(t, dict) and t.get("name")]
                     if live_tools:
                         fix_updates[server] = live_tools
             allowlist = owner_allowlist(server)
@@ -1124,11 +1126,15 @@ def main() -> int:
             undetermined.append(f"{server}: the check failed before it could compare: {e!r}")
 
     if args.fix and fix_updates and committed_doc is not None:
-        apply_catalogue_fix(committed_doc, fix_updates)
-        CATALOGUE_FILE.write_text(json.dumps(committed_doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        for s, tools in fix_updates.items():
-            print(f"[fix] updated {s} in {CATALOGUE_FILE.name} ({len(tools)} tools)")
-        lagging = []
+        try:
+            apply_catalogue_fix(committed_doc, fix_updates)
+            CATALOGUE_FILE.write_text(json.dumps(committed_doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            for s, tools in fix_updates.items():
+                print(f"[fix] updated {s} in {CATALOGUE_FILE.name} ({len(tools)} tools)")
+            # Retain any lag findings that were not fixed by this run; clear only the fixed servers.
+            lagging = [lag for lag in lagging if not any(lag.startswith(f"{s}:") for s in fix_updates)]
+        except Exception as e:  # noqa: BLE001 - record write failure as undetermined
+            undetermined.append(f"{CATALOGUE_FILE.name}: could not write --fix update: {e!r}")
 
     failing, waived, maintenance = apply_waivers(
         findings, _dt.date.today().isoformat(), compared)
