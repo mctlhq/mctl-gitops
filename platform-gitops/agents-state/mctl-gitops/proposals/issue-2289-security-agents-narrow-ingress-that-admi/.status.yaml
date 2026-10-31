@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-31T18:41:57Z'
+status: needs-triage
+updated_at: '2026-10-31T20:42:13Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-3dd13177c9ff8171
@@ -50,6 +50,12 @@ completion:
 github:
   state: open
   head_sha: 5c455016f72b94a7d5dee8120636286a3ad3a5ca
-  observed_at: '2026-10-31T18:41:57Z'
+  blocking_reason: conflict
+  observed_at: '2026-10-31T20:42:13Z'
 review_attempts: 1
 merge_owner: human-codeowner
+failure:
+  code: merge-conflict
+  stage: reconcile
+  message: GitHub reports a merge conflict with the base branch.
+notes: 'reconcile: open PR has a merge conflict'
