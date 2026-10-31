@@ -9,13 +9,6 @@ tenant:
     - userId: mashkovd
       principalId: prn_01M39HRB7JRXZ2PHW5VVB695YZ
       role: owner
-    # TEMPORARY (mctlhq/mctl-agents#909 live negative-auth matrix): a
-    # second, login-less principal as viewer, to prove a viewer append is
-    # refused 403 and a member cannot see another member's private item.
-    # Remove after the run.
-    - principalId: prn_01M6A1G2YVMJVS8D874BQG8Q8Y
-      role: viewer
-      catalogKey: principal
   # Keep an initial preview budget without reserving the full production profile.
   preview:
     quotas:
