@@ -177,14 +177,16 @@
       "recorded": "2026-09-25"
     },
     "tg": {
-      "tools_total": 37,
-      "tools_enabled": 36,
+      "tools_total": 45,
+      "tools_enabled": 42,
       "enabled_tools": [
         "cancel_broadcast",
+        "delete_fork",
         "delete_messages",
         "delete_telegram_account",
         "disconnect_telegram_account",
         "edit_message",
+        "fork_assistant",
         "forward_messages",
         "get_broadcast",
         "get_media",
@@ -195,6 +197,8 @@
         "get_my_send_status",
         "get_unread_messages",
         "get_user_audit_log",
+        "install_assistant",
+        "list_assistants",
         "list_broadcasts",
         "list_dialogs",
         "list_telegram_identities",
@@ -215,11 +219,13 @@
         "set_my_notification_preferences",
         "set_reaction",
         "set_send_consent",
-        "set_telegram_access"
+        "set_telegram_access",
+        "update_fork",
+        "update_install"
       ],
       "prompts_total": 0,
       "prompts_enabled": 0,
-      "recorded": "2026-09-25"
+      "recorded": "2026-10-31"
     }
   }
 }
