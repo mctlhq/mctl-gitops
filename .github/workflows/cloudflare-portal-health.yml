@@ -131,7 +131,9 @@ jobs:
             "Until then its tools are served from a stale snapshot, or not at all.",
             "Run: \($run)"
           ' problems.json > message.txt
-          jq -r '.[] | "::error::\(.id) is \(.status)\(if (.error // "") != "" then ": " + .error else "" end)"' problems.json
+          # Interpolated, not added: `": " + .error` fails on an error that is
+          # not a string, and jq stops at the first one.
+          jq -r '.[] | "::error::\(.id) is \(.status)\(if (.error // "") != "" then ": \(.error)" else "" end)"' problems.json
           exit 1
 
       # Once per problem per day. `always()` because the judge fails the job on
