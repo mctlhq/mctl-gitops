@@ -30,7 +30,7 @@ spec:
             )
             /
             sum by (namespace) (
-              kube_resourcequota{type="hard", resource="limits.cpu"}
+              kube_resourcequota{type="hard", resource="limits.cpu", namespace!="argo-workflows"}
             ) > 0.85
           for: 10m
           labels:
@@ -47,7 +47,7 @@ spec:
             )
             /
             sum by (namespace) (
-              kube_resourcequota{type="hard", resource="limits.memory"}
+              kube_resourcequota{type="hard", resource="limits.memory", namespace!="argo-workflows"}
             ) > 0.85
           for: 10m
           labels:
@@ -239,6 +239,54 @@ spec:
           annotations:
             summary: >-
               Argo local workdir quota is above 95%
+
+        # The agent compute quota is scoped to a PriorityClass, so the
+        # namespace-wide usage/hard ratio in TenantCPUQuotaHigh and
+        # TenantMemoryQuotaHigh is meaningless for argo-workflows (excluded
+        # above). A quota rejection creates no pod, so the unschedulable-pod
+        # alerts cannot see it; these alerts are the only signal.
+        - alert: ArgoAgentComputeQuotaHigh
+          expr: |
+            kube_resourcequota{
+              namespace="argo-workflows",
+              resourcequota="mctl-agents-compute",
+              type="used"
+            }
+            / ignoring(type)
+            kube_resourcequota{
+              namespace="argo-workflows",
+              resourcequota="mctl-agents-compute",
+              type="hard"
+            } > 0.9
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Agent compute quota mctl-agents-compute is above 90% on
+              {{ $labels.resource }}
+
+        - alert: ArgoAgentComputeQuotaExhausted
+          expr: |
+            kube_resourcequota{
+              namespace="argo-workflows",
+              resourcequota="mctl-agents-compute",
+              type="used"
+            }
+            / ignoring(type)
+            kube_resourcequota{
+              namespace="argo-workflows",
+              resourcequota="mctl-agents-compute",
+              type="hard"
+            } >= 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: >-
+              Agent compute quota mctl-agents-compute is exhausted on
+              {{ $labels.resource }}; agent runs are queueing on quota, not
+              on node capacity
 
         # A node left unschedulable longer than a normal upgrade drain.
         # Catches the system-upgrade-controller failure mode where a failed

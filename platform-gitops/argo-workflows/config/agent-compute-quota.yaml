@@ -1,0 +1,28 @@
+# Bounds compute held by mctl-agents pods in argo-workflows (gitops#2291, G6).
+# Scoped by PriorityClass, so platform workflow pods (many declare no
+# resources) are never counted or rejected. Inert until pods name the class
+# (mctl-gitops#2299). No LimitRange is added on purpose.
+# Sizing: sum of intended concurrent worst-case pods plus ~25% burst; see
+# docs/runbooks/agent-compute-quota.md.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: mctl-agents-compute
+  namespace: argo-workflows
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  hard:
+    pods: "20"
+    requests.cpu: "3"
+    requests.memory: 16Gi
+    requests.ephemeral-storage: 60Gi
+    limits.cpu: "36"
+    limits.memory: 60Gi
+    limits.ephemeral-storage: 90Gi
+  scopeSelector:
+    matchExpressions:
+      - scopeName: PriorityClass
+        operator: In
+        values:
+          - mctl-agents-quota-scope

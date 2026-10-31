@@ -1,0 +1,22 @@
+# Quota scoping only (gitops#2291, spike mctl-agents#807 G6). A ResourceQuota
+# cannot select on labels, so a PriorityClass is the only supported way to
+# scope a quota to agent pods. Nothing names this class yet; pods adopt it in
+# mctl-gitops#2299, which activates the quota.
+#
+# Why scheduling semantics do not change for pods that adopt it:
+# - value 0 equals the priority of an unclassed pod (no globalDefault class
+#   exists in git; verify live before adoption), so queue order, kubelet
+#   eviction ranking and preemption-victim status are unchanged.
+# - preemptionPolicy Never means agent pods cannot preempt anything.
+# - globalDefault false means no other pod is affected.
+# Sync-wave -1: the class must exist before templates that reference it.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: mctl-agents-quota-scope
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+value: 0
+globalDefault: false
+preemptionPolicy: Never
+description: Quota scoping only (gitops#2291). Same priority as an unclassed pod.
