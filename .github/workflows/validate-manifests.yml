@@ -298,6 +298,15 @@ jobs:
           fi
           scripts/validate-agent-isolation-baseline.py --verify-upstream
 
+      # mctl-gitops#2288: github-token is file-delivered; a secretKeyRef env
+      # seed must not come back and every agent secretKeyRef must be classified.
+      - name: Validate agent credential delivery
+        run: |
+          set -euo pipefail
+          scripts/validate-agent-credential-delivery.py --selftest
+          scripts/validate-agent-credential-delivery.py
+          python3 tests/test_agent_credential_delivery.py
+
       # A proposal committed as `accepted` while demanding an approval it does
       # not carry is unrunnable by every supported path, and nothing fails on
       # it: the approve operation and the implementer both exit 0. One sat in
@@ -630,7 +639,7 @@ jobs:
         # retire-service deletes the Application <team>-<component>. The
         # guard only lets through an absent Application or one the `apps`
         # ApplicationSet generated for that team, and treats an unreadable
-        # one as an error. Runs the template's own script against a stub
+        # one as an error. Runs the template's script against a stub
         # kubectl.
         run: python3 tests/test_wft_retire_service_guard.py
 
@@ -1196,5 +1205,5 @@ jobs:
           missing = sorted(want - set(cm["data"]))
           if missing:
               sys.exit(f"grafana-iac-inputs is missing {missing}")
-          print(f"grafana-iac-inputs carries all {len(want)} root files")
+          print(f"zitadel-iac-inputs carries all {len(want)} root files")
           PY
