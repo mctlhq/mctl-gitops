@@ -14,8 +14,9 @@ mctl-gitops#2159; medium once egress is enforced).
 
 This proposal covers the mctl-gitops side only: inventory and classify every
 credential in the agent CWFTs, remove the long-lived `secretKeyRef` env seed
-for each credential whose runtime reader (mctlhq/mctl-agents#920) supports a
-file contract, deliver it as a least-readable mounted file, add a CI check
+for `github-token` only (phase 1; every other credential moves in
+mctl-gitops#2296 once its mctlhq/mctl-agents#920 reader ships), deliver it as a
+least-readable mounted file, add a CI check
 that fails if a migrated credential regains an env seed, and record every
 credential that has no short-lived or rotatable form as an open gap. It
 explicitly does not claim that a Secret file in the same model-readable
@@ -80,6 +81,10 @@ owned by mctlhq/mctl-agents#869.
   `cwft-mctl-agents-implement.yaml`) THE SYSTEM SHALL test the mounted file
   instead (`[ -s "$GITHUB_TOKEN_FILE" ]`), so removing the env seed does not
   change control flow.
+- WHEN a migrated template runs `gh auth setup-git` before the Python
+  entrypoint THE SYSTEM SHALL pass the token from `$GITHUB_TOKEN_FILE` to that
+  single command without exporting it to the shell, because setup-git exits 1
+  without a token and the scripts run under `set -e`.
 - THE completion report SHALL state three claims separately per credential:
   `NO_LONG_LIVED_SECRET_ENV_SEED` (this proposal), `SHORT_LIVED_OR_ROTATABLE`
   (only where true per the inventory), and
