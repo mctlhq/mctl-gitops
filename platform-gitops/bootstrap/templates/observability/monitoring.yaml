@@ -1286,7 +1286,7 @@ spec:
               spec:
                 metricRelabelConfigs:
                   - action: drop
-                    source_labels: [__name__]
+                    sourceLabels: [__name__]
                     regex: (rest_client_request_duration_seconds_bucket|rest_client_request_duration_seconds_sum|rest_client_request_duration_seconds_count|apiserver_.*|etcd_.*)
 
           kubeControllerManager:
