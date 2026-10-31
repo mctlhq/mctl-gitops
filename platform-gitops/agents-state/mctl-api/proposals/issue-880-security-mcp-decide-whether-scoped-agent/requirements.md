@@ -1,61 +1,114 @@
-# Scoped agent run tokens: own WorkItem only, and intent text withheld unless explicitly granted (decision for mctl-api#880)
+# Refuse raw WorkItem intent reads to scoped agent run tokens (MCP tool and REST routes)
 
 ## Context
-mctl-api#868 added `mctl_list_work_item_intents` (`internal/mcp/workitems.go`,
-`toolListWorkItemIntents`). Scoped agent run tokens choose MCP tools with
-`auth.IsReadTool` (`internal/auth/agent_scope.go`), which admits every
-`list_` tool, so the `investigate` scope admits this tool. Raw intents are
-text written by people, more sensitive than state metadata.
 
-The investigation found that the exposure is narrower than the issue first
-assumed, and that the control point is the REST handler, not the MCP tool:
-- The MCP tool sends `GET /api/v1/work-items/{id}/intents` with the caller's
-  own token, so the REST scope gate (`internal/api/agent_scope_gate.go`)
-  checks it again.
-- The `investigate` scope admits work-item reads only through a
-  `BindWorkItem` route, `^/api/v1/work-items/([^/]+)(/.*)?$`, so a scoped run
-  can reach only the intents of the WorkItem it was minted for. That same
-  route also admits the REST read directly, so excluding only the MCP tool
-  would leave the data reachable.
-- The `support` scope already refuses the tool (not in `supportTools`).
+`auth.IsReadTool` (`internal/auth/agent_scope.go`) treats every `list_` tool
+as a read, and the `investigate` scope uses `IsReadTool` as its tool
+predicate. A scoped issue-investigator run token can therefore call
+`mctl_list_work_item_intents`. The same scope also admits
+`GET ^/api/v1/work-items/([^/]+)(/.*)?$` bound to the run's own work item,
+which covers `GET /api/v1/work-items/{id}/intents` and
+`GET /api/v1/work-items/{id}/intents/{intent_id}`. Raw intents are
+human-authored instructions and are more sensitive than state metadata. The
+issue asks the owner to choose between accepting this (option 1) and
+excluding it (option 2).
 
-**Owner decision (2026-10-31, recorded on mctl-api#880): fail closed.** A
-scoped agent run token does not receive raw intent text by default, on any
-path. Raw text requires an explicit, server-defined capability
-`workitem:intents:read_raw` on the scope. No existing scope is granted it in
-this change: no current agent flow needs intent text (the mcp-origin
-fulfilment flows are mctl-agents#904 / mctl-api#871 and will request the
-capability as their own decision). The own-WorkItem bound found by the
-investigation is kept as well, as defence in depth.
+The owner chose option 2 (answer to clarification hir-5ac263d9fe137575):
+scoped agent runs are refused raw intents, and both the MCP tool and the REST
+`/intents` routes are closed, including for the run's own work item. One
+deployed dependency matters here. The mctl-gitops investigate template
+(`argo-workflows/cluster-templates/cwft-mctl-agents-investigate.yaml`) sets
+`WORK_ITEM_INTENT_SOURCE: "on"` and `MCTL_RUN_TOKEN_MODE: enforce`, so the
+investigator pod already reads `GET /api/v1/work-items/{id}/intents` with its
+scoped run token to seal intents into its ContextSnapshot. A referenced intent
+it cannot resolve fails the run (`intent-unresolved`). That consumer has to be
+switched off, or moved to another credential, before this change is deployed.
 
 ## User stories
-- AS the platform owner I WANT scoped agent runs to see that intents exist but not their text unless a scope is explicitly granted the capability SO THAT human-written instructions reach an automated run only by decision.
-- AS a tenant member who wrote an intent I WANT no agent run to read its text unless its scope was granted `workitem:intents:read_raw`, and never for a WorkItem the run was not minted for SO THAT my instruction does not leak to unrelated or ungranted runs.
-- AS a client reading intents I WANT text withheld by scope to be distinguishable from text removed by retention SO THAT I do not treat a withheld intent as permanently gone, or as an empty instruction.
+
+- AS the platform owner I WANT scoped agent run tokens to be unable to read
+  raw WorkItem intent text SO THAT human-authored instructions reach only
+  human principals and surfaces that can see the item, never an autonomous
+  run's model or tools.
+- AS a security reviewer I WANT a test that fails if the exclusion is removed
+  SO THAT `IsReadTool`'s naming rule cannot widen the investigate scope back
+  to intents without notice.
+- AS an owner using OAuth (Claude or ChatGPT, mctl-agents#909) I WANT
+  `mctl_list_work_item_intents` and the REST intent reads to keep working for
+  my own identity SO THAT the manual cross-client proof is not affected.
 
 ## Acceptance criteria (EARS)
-- WHEN a scoped run token whose scope does not grant `workitem:intents:read_raw` reads the intents of its own WorkItem (REST `GET /work-items/{id}/intents`, `GET /work-items/{id}/intents/{intent_id}`, or `mctl_list_work_item_intents`) THE SYSTEM SHALL return every intent with `text: ""` and `text_withheld: true`, keeping id, actor, surface, timestamps and `text_redacted` unchanged.
-- WHEN a scoped run token whose scope grants `workitem:intents:read_raw` reads the intents of its own WorkItem THE SYSTEM SHALL return the text as stored, with `text_withheld: false`.
-- WHEN a human caller, an admin, or an unscoped token reads intents THE SYSTEM SHALL behave exactly as today, with `text_withheld: false` on every intent.
-- THE SYSTEM SHALL apply the withholding in the REST handlers (`ListWorkItemIntents`, `GetWorkItemIntent`), so the MCP tool and direct REST calls get the same result. The MCP tool passes the response through unchanged.
-- THE SYSTEM SHALL keep `text_redacted` (retention) and `text_withheld` (scope) as separate fields. An intent can be both. Neither ever carries reconstructed or placeholder text.
-- IF a run token with scope `investigate` bound to work item W requests `GET /api/v1/work-items/{X}/intents` or `.../intents/{intent_id}` for X != W (directly or through `mctl_list_work_item_intents`) THEN THE SYSTEM SHALL refuse with 403 `agent_scope_denied` and write an `agent_scope_denied` audit row.
-- IF a scoped run token reaches `ListWorkItemIntents` or `GetWorkItemIntent` for a WorkItem other than its own (for example because the gate was misconfigured) THEN THE SYSTEM SHALL answer 404 `work_item_not_found`, the same as an invisible item.
-- IF a run token with scope `support` calls `mctl_list_work_item_intents` THEN THE SYSTEM SHALL refuse it with `agent_scope_denied` before the handler runs.
-- WHILE a scoped run reads intents THE SYSTEM SHALL keep the existing private-item rule: a `private` WorkItem is visible only to its owner principal, never to a run token.
-- THE SYSTEM SHALL grant `workitem:intents:read_raw` to no scope in this change. A unit test SHALL fail the build if any scope in `AgentScopeNames()` grants it without being listed in an explicit, reviewed allowlist in the test (empty today).
-- IF a future change adds an agent scope with a route that admits `/work-items/{id}/intents` without `BindWorkItem` THEN THE SYSTEM SHALL fail the build through a unit test.
-- IF `mctl_list_work_item_intents` is added to `supportTools` THEN THE SYSTEM SHALL fail the build through a unit test.
-- WHILE this decision stands THE SYSTEM SHALL keep `mctl_list_work_item_intents` at `enabled: false` in `docs/portal-allowlist.json` (shared-portal exposure is mctlhq/.github#237).
+
+- WHEN a principal holding a run token with the `investigate` scope calls the
+  MCP tool `mctl_list_work_item_intents` (with or without the `mctl_` prefix)
+  THE SYSTEM SHALL refuse it with an `agent_scope_denied` tool error and SHALL
+  NOT run the tool handler, even when `work_item_id` is the run's own work item.
+- WHEN a principal holding a run token with any agent scope sends
+  `GET /api/v1/work-items/{id}/intents` or
+  `GET /api/v1/work-items/{id}/intents/{intent_id}` (or any other path under
+  `/intents`) THE SYSTEM SHALL answer 403 with code `agent_scope_denied` and
+  write one `agent_scope.denied` audit row, even when `{id}` is the run's own
+  work item.
+- WHILE an agent scope lists a route in its exclusion list THE SYSTEM SHALL
+  refuse a matching request whatever its allow routes admit, so a broader
+  allow route (such as the bound `^/api/v1/work-items/([^/]+)(/.*)?$`) cannot
+  re-admit it.
+- WHEN a scoped investigate run reads its own work item, executions,
+  execution requests, events or snapshots THE SYSTEM SHALL keep admitting
+  them as today.
+- WHEN a scoped investigate run calls any other read tool admitted today
+  (for example `mctl_get_work_item`, `mctl_list_work_item_snapshots`)
+  THE SYSTEM SHALL keep admitting it.
+- WHEN an unscoped run token, an owner OAuth identity, a human GitHub/Dex
+  identity or a surface relaying for its linked human reads intents THE SYSTEM
+  SHALL behave exactly as before this change.
+- WHEN a direct service principal shadows the `investigate` scope (header
+  `X-Mctl-Agent-Scope-Shadow`) and reads intents or calls
+  `mctl_list_work_item_intents` THE SYSTEM SHALL count the decision as `deny`
+  in `mctl_agent_scope_decisions_total` and SHALL NOT refuse the request.
+- IF the exclusion entry for `mctl_list_work_item_intents` or for the
+  `/intents` route is removed THEN THE SYSTEM's unit tests SHALL fail.
+- WHILE the exclusion is in place THE SYSTEM SHALL keep
+  `mctl_list_work_item_intents` at `enabled: false` in
+  `docs/portal-allowlist.json`.
+- THE SYSTEM's documentation (`docs/work-context-contract.md`) SHALL state that
+  scoped agent run tokens are refused raw intent reads on both MCP and REST,
+  for their own work item too.
 
 ## Out of scope
-- Granting `workitem:intents:read_raw` to any scope (`investigate` included). That is the decision of the flow that needs it (mctl-agents#904 / mctl-api#871).
-- Enabling `mctl_list_work_item_intents` or `mctl_append_work_item_intent` on the shared portal.
-- Changing `auth.IsReadTool`, `readVerbs` or the mctl-agents policy checkpoint naming rule.
-- Unscoped run tokens. They have no tenant access, so `canSeeWorkItem` already returns 404 for them.
-- Retention/redaction of intent text (mctl-api#353), and the server-derived client id on intents (mctl-api#883).
-- Prompt-injection hardening in mctl-agents for intent text, once a scope is granted it.
+
+- Changing `IsReadTool` or the `readVerbs` naming rule itself; the exclusion
+  is scope-specific.
+- Changing which non-agent principals may read intents, or enabling the tool
+  on the shared portal.
+- Closing ContextSnapshot reads (`GET /work-items/{id}/snapshots[...]`,
+  `GET /work-items/{id}/executions/{execution_id}/snapshot`,
+  `mctl_list_work_item_snapshots`). Sealed snapshot bytes can embed intent
+  text, but the owner's decision named only the intent tool and routes (see
+  Open questions).
+- The mctl-gitops change that turns off `WORK_ITEM_INTENT_SOURCE` for the
+  investigate template, and any mctl-agents change giving context assembly a
+  different credential. These live in other repositories. This proposal
+  records the first as a hard deploy prerequisite (tasks.md task 1).
 
 ## Open questions
-- None blocking. The owner answered the investigator's human-input request (`hir-5ac263d9fe137575`) on mctl-api#880: fail closed, with the capability-based exception.
-- Deployed state of mctl-api (scope enforcement mode, agent-scope env) was not observable from the investigation run. This change is code, tests and docs only.
+
+- Deploy ordering conflict with a live consumer. The investigate template
+  reads intents with the scoped run token (`WORK_ITEM_INTENT_SOURCE: "on"`,
+  `MCTL_RUN_TOKEN_MODE: enforce`). After this change those reads get 403.
+  That would put `intent-unresolved` failures on runs whose execution request
+  names an `intent_id`. Proposed interpretation: set `WORK_ITEM_INTENT_SOURCE`
+  to `"off"` in mctl-gitops first. The template documents `"off"` as the
+  byte-neutral default. With `ISSUE_INVESTIGATOR_CONTEXT_MODE: "shadow"` the
+  prompt does not change, so only the sealed snapshot loses intents. If the
+  owner instead wants intents in snapshots, mctl-agents needs a credential the
+  model cannot reach. A clarification draft asks which way to go.
+- Snapshots may already contain intent text. Snapshots sealed while
+  `WORK_ITEM_INTENT_SOURCE` was `"on"` embed intents. A later run on the same
+  work item can still read them through the bound snapshot routes. Whether
+  snapshot reads should also be closed, or only new snapshots kept free of
+  intents, is not settled.
+- `mctl_get_service_config admins/mctl-api` returned "service not found", so
+  this run did not observe the deployed mctl-api version or tenant. The
+  investigate template's comments reference mctl-api 4.58.0 (intents route)
+  and 4.117.0 (run-token enforce).

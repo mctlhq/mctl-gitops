@@ -1,28 +1,81 @@
 # Tasks: issue-880-security-mcp-decide-whether-scoped-agent
 
-Owner decision: fail closed (mctl-api#880). Scoped runs read only their own WorkItem's intents, with the text withheld unless the scope grants `workitem:intents:read_raw`. No scope grants it in this change.
-
-- [ ] 1. Add `ReadRawIntents bool` to `AgentScope` in `internal/auth/agent_scope.go`, commented as the capability `workitem:intents:read_raw`. Add `func (u *User) MayReadRawIntents() bool`: true for non-agent callers and unscoped tokens, the scope's `ReadRawIntents` for a scoped run token. Set it on no scope. — DoD: `investigate` and `support` both report false; a human, an admin and an unscoped token report true.
-- [ ] 2. Add ``TextWithheld bool `json:"text_withheld"` `` to `workitems.Intent` in `internal/workitems/types.go`, with a comment that it is distinct from `TextRedacted` (retention). — DoD: always serialized; store code never sets it.
-- [ ] 3. (depends on 1, 2) In `internal/api/handlers_work_item_intents.go`, after visibility and the own-item check (task 4), when `!user.MayReadRawIntents()` set `Text = ""` and `TextWithheld = true` on each returned intent in `ListWorkItemIntents` and `GetWorkItemIntent`, on the response copy only, leaving `TextRedacted` as stored. — DoD: a scoped run gets metadata with text withheld; human/admin/unscoped responses are byte-identical to today apart from `"text_withheld": false`.
-- [ ] 4. Add `scopedRunMayReadIntents(user *auth.User, item *workitems.WorkItem) bool` in the same file. It returns false when `user.IsAgent() && user.AgentScopeName() != "" && item.ID != user.WorkItemID()`. Call it in both handlers right after `visibleWorkItem`, answering through `writeWorkItemError(w, workitems.ErrNotFound)`. — DoD: 404 `work_item_not_found` for a scoped run reading another item; other callers unchanged.
-- [ ] 5. Add intents cases to `TestInvestigateScope_Routes` in `internal/auth/agent_scope_test.go`: GET `/work-items/wi_a/intents` and `/work-items/wi_a/intents/1` bound to `wi_a` → true; `/work-items/wi_b/intents` bound to `wi_a` → false; empty work item → false; POST `/work-items/wi_a/intents` → false.
-- [ ] 6. Add `TestAgentScopes_IntentGuards` in `internal/auth/agent_scope_test.go`: (a) every route in every scope whose `Pattern` matches `/api/v1/work-items/wi_x/intents` has `BindWorkItem`; (b) `support` does not `AllowsTool("mctl_list_work_item_intents")`; (c) no scope has `ReadRawIntents` unless its name is in `rawIntentScopes` declared in the test as an empty set.
-- [ ] 7. Extend the `mctl_list_work_item_intents` description in `internal/mcp/workitems.go` with the meaning of `text_withheld` (text exists but the caller's scope may not read it; not empty, not removed).
-- [ ] 8. Docs: in `docs/work-context-contract.md` add the "Agent run scopes" paragraph under "MCP surface (mctl-api#341)" and document `text_withheld` beside `text_redacted` in the intents schema. Append "agent run tokens: own WorkItem only, text withheld without workitem:intents:read_raw (mctl-api#880)" to the `reason` of `mctl_list_work_item_intents` in `docs/portal-allowlist.json`, keeping `enabled: false`. — DoD: docs match tests; JSON valid; tool disabled.
-- [ ] 9. Run `go fmt ./... && go vet ./... && golangci-lint run && go test ./...`. — DoD: all green.
+- [ ] 1. Deploy prerequisite (mctl-gitops, not this repo): confirm that
+  `argo-workflows/cluster-templates/cwft-mctl-agents-investigate.yaml` sets
+  `WORK_ITEM_INTENT_SOURCE: "off"`, or that the owner has chosen another
+  credential path for context assembly. Do this before the mctl-api release
+  carrying task 2 is deployed. — DoD: the mctl-api PR description names this
+  prerequisite and links the gitops PR or the owner's decision. The mctl-api
+  PR is not merged for release while the template still says `"on"`.
+- [ ] 2. In `internal/auth/agent_scope.go`, add `Deny []AgentScopeRoute` to
+  `AgentScope`. In `Allows`, refuse any request whose method matches (an
+  empty Method matches all) and whose path matches a `Deny` pattern, before
+  the `Routes` loop. — DoD: `go build ./...` passes, and `Allows` returns
+  false for a Deny match even when an allow route also matches.
+- [ ] 3. (depends on 2) In the same file, add `agentDeniedTools`
+  (`list_work_item_intents`) and `agentDeniedRoutes`
+  (`^/api/v1/work-items/[^/]+/intents(/.*)?$`), with a comment citing
+  mctl-api#880. Make `AllowsTool` refuse `agentDeniedTools` before consulting
+  `Tool`. Set `Deny: agentDeniedRoutes` on the `investigate` and `support`
+  scopes. — DoD: the investigate scope refuses the tool, with and without the
+  `mctl_` prefix, and refuses the REST intents paths for its own work item.
+  Every other existing allow is unchanged.
+- [ ] 4. (depends on 3) Update `docs/work-context-contract.md`: the
+  `WorkItemIntent` bullet and the "MCP surface" section must say scoped agent
+  run tokens are refused intent reads on MCP and REST, own work item
+  included, with `agent_scope_denied`. Keep `mctl_list_work_item_intents` at
+  `"enabled": false` in `docs/portal-allowlist.json`, and extend its `reason`
+  to cite mctl-api#880 only if no test pins that text. — DoD: the docs match
+  the behaviour, and the allowlist still validates in its existing tests.
+- [ ] 5. Run `go fmt ./...`, `go vet ./...` and `golangci-lint run`, then
+  `go test ./...`. The MCP tool count in `server_test.go` does not change
+  (no tool added or removed). — DoD: all pass.
 
 ## Tests
-Every guard test below must be mutation-verified: revert the guard, watch the test fail, restore. Record each mutant and its failing test in the PR description.
 
-- [ ] T1. `internal/api/handlers_work_item_intents_test.go`, the #909 intent-6 check: a scoped `investigate` run token bound to `wi_a`, which can read `wi_a` itself (`GET /work-items/wi_a` = 200), lists `wi_a`'s intents and gets 200 with every intent `text == ""` and `text_withheld == true`, ids/actor/surface/created_at present; the single-intent route behaves the same. Mutants that must fail it: `MayReadRawIntents` returns true; the withholding branch removed; `investigate` given `ReadRawIntents: true`.
-- [ ] T2. Same file: a human tenant member, an admin and an unscoped token get the full text with `text_withheld == false`. A scope with `ReadRawIntents: true` (test-only scope) gets the full text. Mutant that must fail it: withholding applied unconditionally.
-- [ ] T3. Same file: an intent that is both retention-redacted and read by a scoped run returns `text_redacted == true` and `text_withheld == true`; for a human it returns `text_redacted == true`, `text_withheld == false`. The stored row is unchanged after the scoped read (read it back as a human). Mutant: withholding writes to the stored intent.
-- [ ] T4. Same file: the scoped run token bound to `wi_a` gets 404 `work_item_not_found` for a visible tenant item `wi_b`, on list and single-intent routes, when the gate is bypassed in the test. A private item is still 404 for the run token. Mutant: `scopedRunMayReadIntents` always true.
-- [ ] T5. `TestInvestigateScope_Routes` intents cases (task 5). Mutant: drop `BindWorkItem` from the investigate work-item route.
-- [ ] T6. `TestAgentScopes_IntentGuards` (task 6). Mutants: an unbound intents route; `list_work_item_intents` added to `supportTools`; `ReadRawIntents: true` on `investigate`.
-- [ ] T7. `internal/mcp/agent_scope_test.go` / `workitems_test.go`: the investigate token is allowed the tool and the response passes through `text_withheld` unchanged; the support token is refused with `agent_scope_denied` and the handler does not run.
-- [ ] T8. Existing `TestReadToolsAreRecordedReadOnly`, the annotations tests and the `server_test.go` tool count pass unchanged (no new tools).
+- [ ] T1. `internal/auth/agent_scope_test.go`, `TestInvestigateScope_Routes`:
+  add cases.
+  - Refused with own work item `wi_a`: `GET /api/v1/work-items/wi_a/intents`,
+    `GET /api/v1/work-items/wi_a/intents/1`,
+    `GET /api/v1/work-items/wi_a/intents/`,
+    `HEAD /api/v1/work-items/wi_a/intents`.
+  - Still allowed: `GET /api/v1/work-items/wi_a/snapshots` and
+    `GET /api/v1/work-items/wi_a/execution-requests`.
+- [ ] T2. New `TestAgentScopes_RefuseWorkItemIntents` in
+  `internal/auth/agent_scope_test.go`. For every name in `AgentScopeNames()`:
+  `AllowsTool("mctl_list_work_item_intents")` and
+  `AllowsTool("list_work_item_intents")` are false. In the same test, assert
+  `IsReadTool("mctl_list_work_item_intents")` is true, so the refusal comes
+  from the exclusion and not from naming. If the `agentDeniedTools` entry is
+  removed, the investigate case fails.
+- [ ] T3. New `TestInvestigateScope_DenyIsLoadBearing`. Copy the investigate
+  scope, set the copy's `Deny` to nil, and assert the copy would allow
+  `GET /api/v1/work-items/wi_a/intents` for `wi_a`. Assert the real scope
+  refuses it. This proves the deny entry, not a missing allow route, is what
+  closes the path, so removing it fails T1.
+- [ ] T4. `internal/mcp/agent_scope_test.go`,
+  `TestAgentScopeMiddleware_ScopedRunCallsOnlyItsTools`: add
+  `mctl_list_work_item_intents` to the refused list (handler not run, error
+  text contains `agent_scope_denied`). Assert `mctl_list_work_item_snapshots`
+  and `mctl_get_work_item` still run.
+- [ ] T5. `internal/api/agent_scope_gate_test.go`,
+  `TestAgentScopeGate_ScopedRunReachesOnlyItsScope`: add
+  `GET /api/v1/work-items/wi_own/intents` and
+  `GET /api/v1/work-items/wi_own/intents/7`, each expecting 403 with code
+  `agent_scope_denied`. Raise the expected `agent_scope.denied` row count from
+  6 to 8.
+- [ ] T6. `TestAgentScopeGate_ShadowCountsAndNeverRefuses` (or a sibling
+  test): a direct service request with shadow header `investigate` to
+  `/api/v1/work-items/wi_x/intents` is served (not 403) and counted
+  `verdict="deny"`.
+- [ ] T7. Regression: `TestAgentScopeGate_UnscopedRunTokenIsUnchanged` and
+  the existing intents handler tests still pass. A non-agent principal and an
+  unscoped run token still reach the intents handlers.
 
 ## Rollback
-Revert the PR. The only runtime changes are the withheld projection for scoped run tokens and the cross-item 404 the gate already enforces. `text_withheld` is additive; readers must treat a missing key as `false`. No data, schema or config to unwind; `docs/portal-allowlist.json` keeps `enabled: false` either way.
+
+Revert the mctl-api commit and release. The change is code-only, with no
+schema, data or config migration, so a revert restores the previous
+behaviour at once. The gitops `WORK_ITEM_INTENT_SOURCE` flag can be set back
+to `"on"` independently, but only after the revert is deployed. Otherwise
+investigate runs that reference an intent fail with `intent-unresolved`.
