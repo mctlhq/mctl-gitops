@@ -190,7 +190,7 @@ synthetic "platform" tenant) is invented.
 **Negative fixtures**, rendered only while the spike is enabled, live in
 `observability-obi-spike`:
 - `obi-fixture-forged`: a tiny HTTP server with pod label `mctl.ai/team:
-  <tenant A>` and `OTEL_RESOURCE_ATTRIBUTES=mctl.tenant=labs`. Expected:
+  <tenant A>` and `OTEL_RESOURCE_ATTRIBUTES=mctl.tenant=<tenant B>`. Expected:
   `unattributed` every time.
 - An offline e2e test, `tests/test_obi_spike_attribution_e2e.py`, modelled on
   `test_otel_collector_redaction_e2e.py`. It runs the spike collector config
