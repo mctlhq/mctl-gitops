@@ -22,7 +22,7 @@
 - [ ] T1. Moved to mctl-gitops#2299 (needs enforcement).
 - [ ] T2. Run one deploy-service (`mctl_deploy_service action=deploy` on a test service). It succeeds with unchanged pod resources. Its pods carry no `mctl-agents-quota-scope`, and the completion hook pod in the tenant namespace shows the same CPU and memory values as before.
 - [ ] T3-T6. Live enforcement tests (over-quota refusal, platform headroom, missing-value refusal, priority unchanged after PR 2) moved to mctl-gitops#2299. Here: the validator selftest fails a template with a missing `limits.ephemeral-storage`, and agent pod priority is 0 after this PR syncs.
-- [ ] T7. Alerts. In the vmalert unit tests, `ArgoAgentComputeQuotaExhausted` fires at used=hard, and the unschedulable/FailedScheduling alerts do not fire for the same input. During T3, the live alert appears in Alertmanager under its own name.
+- [ ] T7. Alerts. In the vmalert unit tests, `ArgoAgentComputeQuotaExhausted` fires at used=hard, and the unschedulable/FailedScheduling alerts do not fire for the same input. The live Alertmanager check under a full quota moved to mctl-gitops#2299 with T3.
 
 ## Rollback
 
