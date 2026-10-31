@@ -1,12 +1,13 @@
 # Tasks: issue-880-security-mcp-decide-whether-scoped-agent
 
-- [ ] 1. Deploy prerequisite (mctl-gitops, not this repo): confirm that
-  `argo-workflows/cluster-templates/cwft-mctl-agents-investigate.yaml` sets
-  `WORK_ITEM_INTENT_SOURCE: "off"`, or that the owner has chosen another
-  credential path for context assembly. Do this before the mctl-api release
-  carrying task 2 is deployed. — DoD: the mctl-api PR description names this
-  prerequisite and links the gitops PR or the owner's decision. The mctl-api
-  PR is not merged for release while the template still says `"on"`.
+- [ ] 1. Deploy prerequisite (mctl-gitops, not this repo; owner decision
+  hir-6053c71d87283c69): `argo-workflows/cluster-templates/cwft-mctl-agents-investigate.yaml`
+  must set `WORK_ITEM_INTENT_SOURCE: "off"` (today `"on"`), with the comment
+  citing mctl-api#880. Newly sealed snapshots then carry no intents, which
+  is accepted. This lands before the mctl-api release carrying task 2 is
+  deployed. — DoD: the mctl-api PR description names this prerequisite and
+  links the merged gitops PR. The mctl-api PR is not released while the
+  template still says `"on"`.
 - [ ] 2. In `internal/auth/agent_scope.go`, add `Deny []AgentScopeRoute` to
   `AgentScope`. In `Allows`, refuse any request whose method matches (an
   empty Method matches all) and whose path matches a `Deny` pattern, before
@@ -23,7 +24,8 @@
 - [ ] 4. (depends on 3) Update `docs/work-context-contract.md`: the
   `WorkItemIntent` bullet and the "MCP surface" section must say scoped agent
   run tokens are refused intent reads on MCP and REST, own work item
-  included, with `agent_scope_denied`. Keep `mctl_list_work_item_intents` at
+  included, with `agent_scope_denied`, and that the investigator's intent
+  source therefore stays `off` and its snapshots omit intents. Keep `mctl_list_work_item_intents` at
   `"enabled": false` in `docs/portal-allowlist.json`, and extend its `reason`
   to cite mctl-api#880 only if no test pins that text. — DoD: the docs match
   the behaviour, and the allowlist still validates in its existing tests.

@@ -60,8 +60,9 @@ Deployed state checked:
     so intents reach only the sealed snapshot, not the model's prompt.
   - The template says only this template reads intents; the Temporal workers
     do no context assembly.
-- `mctl_get_service_config(team=admins, service=mctl-api)`: error "service
-  not found". The deployed mctl-api version and tenant were not observed.
+- `mctl_get_service_config(team=admins, service=mctl-api)` (called by the
+  earlier run of this proposal, not repeated here): error "service not
+  found". The deployed mctl-api version and tenant were not observed.
   This is recorded under Open questions in requirements.md, not treated as
   absent.
 - `$MCTL_GITOPS_ROOT/services/*/mctl-api`: no such directory exists in this
@@ -117,11 +118,19 @@ both layers, checked before the allow lists.
    - `docs/portal-allowlist.json`: keep `"enabled": false` and extend the
      `reason` to cite mctl-api#880. Do this only if no test pins the reason
      text; otherwise leave the file unchanged.
-4. Deploy prerequisite (outside this repo): the mctl-gitops investigate
-   template must set `WORK_ITEM_INTENT_SOURCE: "off"` before an mctl-api
-   release carrying this change reaches the cluster. Otherwise runs whose
-   execution request references an `intent_id` would fail with
-   `intent-unresolved`. The PR description must state this ordering.
+4. Deploy prerequisite (outside this repo, owner decision
+   hir-6053c71d87283c69): the mctl-gitops investigate template must set
+   `WORK_ITEM_INTENT_SOURCE: "off"` before an mctl-api release carrying this
+   change reaches the cluster. Otherwise runs whose execution request
+   references an `intent_id` would fail with `intent-unresolved`. The
+   template documents `"off"` as the byte-neutral default, and with
+   `ISSUE_INVESTIGATOR_CONTEXT_MODE: "shadow"` the prompt is unchanged, so
+   the only effect is that newly sealed ContextSnapshots carry no intents.
+   The owner accepted that loss. The PR description must state this ordering
+   and link the gitops change.
+5. `docs/work-context-contract.md` also records the consequence: with scoped
+   run tokens refused intents, the investigator's intent source must stay
+   `off`, and its snapshots do not include intents.
 
 Path-matching notes: the gate matches on `r.URL.Path` (decoded). chi routes
 on `RawPath` when one is set, so an encoded variant such as `/%69ntents` does
@@ -144,6 +153,11 @@ it, and the deny entry with an empty Method also covers it.
 - Rename the tool so `IsReadTool` stops classifying it as a read. Dropped: it
   breaks the policy-checkpoint naming rule mirrored from mctl-agents and the
   annotation test, and it is an API break for owner OAuth clients.
+- Keep intents in snapshots by giving mctl-agents context assembly a
+  credential the model cannot reach (a non-scoped service token used only by
+  the orchestrator). Dropped by the owner (hir-6053c71d87283c69): it
+  reintroduces a static credential into the investigate pod, which
+  `MCTL_RUN_TOKEN_MODE: enforce` removed, and it needs an mctl-agents change.
 - Gate intents by principal type inside `ListWorkItemIntents` /
   `GetWorkItemIntent`. Dropped: it splits scope policy between the gate and
   the handlers, the shadow observe stage would not see it, and the scope file
@@ -158,7 +172,10 @@ it, and the deny entry with an empty Method also covers it.
   (`WORK_ITEM_INTENT_SOURCE: "on"`). Risk: `intent-unresolved` run failures
   if mctl-api ships first. Mitigation: the gitops flip to `"off"` must land
   first (tasks.md task 1). The prompt is unaffected because context mode is
-  `shadow`.
+  `shadow`; new snapshots lose intents, which the owner accepted. A later
+  flip back to `"on"` while the exclusion is deployed would cause
+  `intent-unresolved` failures, so the template comment should cite
+  mctl-api#880.
 - Observability: refusals show as `verdict="deny"` in
   `mctl_agent_scope_decisions_total{scope="investigate"}` and as
   `agent_scope.denied` audit rows. After the release, a non-zero rate on
@@ -166,6 +183,7 @@ it, and the deny entry with an empty Method also covers it.
 - Resource impact: one extra short slice scan per scoped request. Negligible.
 - Residual risk: snapshots sealed while intents were on still embed intent
   text and stay readable by later runs on the same work item through the
-  bound snapshot routes. This is recorded as an open question, not addressed
+  bound snapshot routes until the retention sweeper (#353) deletes them on
+  the intent-text schedule. Recorded as an open question, not addressed
   here.
 - Rollback: revert the commit. No data is touched.

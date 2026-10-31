@@ -21,8 +21,11 @@ deployed dependency matters here. The mctl-gitops investigate template
 `WORK_ITEM_INTENT_SOURCE: "on"` and `MCTL_RUN_TOKEN_MODE: enforce`, so the
 investigator pod already reads `GET /api/v1/work-items/{id}/intents` with its
 scoped run token to seal intents into its ContextSnapshot. A referenced intent
-it cannot resolve fails the run (`intent-unresolved`). That consumer has to be
-switched off, or moved to another credential, before this change is deployed.
+it cannot resolve fails the run (`intent-unresolved`). The owner settled how
+to handle that consumer (answer to clarification hir-6053c71d87283c69): set
+`WORK_ITEM_INTENT_SOURCE` to `"off"` first, and accept that newly sealed
+ContextSnapshots no longer contain intents. No alternative credential for
+context assembly is introduced.
 
 ## User stories
 
@@ -71,6 +74,13 @@ switched off, or moved to another credential, before this change is deployed.
 - WHILE the exclusion is in place THE SYSTEM SHALL keep
   `mctl_list_work_item_intents` at `enabled: false` in
   `docs/portal-allowlist.json`.
+- WHILE the mctl-gitops investigate template still sets
+  `WORK_ITEM_INTENT_SOURCE: "on"` THE SYSTEM's release carrying this
+  exclusion SHALL NOT be deployed; the flip to `"off"` lands first.
+- WHEN `WORK_ITEM_INTENT_SOURCE` is `"off"` and a scoped investigate run
+  seals its ContextSnapshot THE SYSTEM SHALL accept a snapshot with no intents
+  (the owner accepted this loss), and SHALL NOT receive any intent read from
+  that run.
 - THE SYSTEM's documentation (`docs/work-context-contract.md`) SHALL state that
   scoped agent run tokens are refused raw intent reads on both MCP and REST,
   for their own work item too.
@@ -86,28 +96,22 @@ switched off, or moved to another credential, before this change is deployed.
   `mctl_list_work_item_snapshots`). Sealed snapshot bytes can embed intent
   text, but the owner's decision named only the intent tool and routes (see
   Open questions).
-- The mctl-gitops change that turns off `WORK_ITEM_INTENT_SOURCE` for the
-  investigate template, and any mctl-agents change giving context assembly a
-  different credential. These live in other repositories. This proposal
-  records the first as a hard deploy prerequisite (tasks.md task 1).
+- The mctl-gitops edit itself (`WORK_ITEM_INTENT_SOURCE: "on"` to `"off"` in
+  the investigate template) lives in another repository. This proposal
+  records it as a hard deploy prerequisite (tasks.md task 1), not as an
+  mctl-api code change.
+- Giving mctl-agents context assembly a separate credential so snapshots
+  could keep intents. The owner chose to lose intents in snapshots instead.
 
 ## Open questions
 
-- Deploy ordering conflict with a live consumer. The investigate template
-  reads intents with the scoped run token (`WORK_ITEM_INTENT_SOURCE: "on"`,
-  `MCTL_RUN_TOKEN_MODE: enforce`). After this change those reads get 403.
-  That would put `intent-unresolved` failures on runs whose execution request
-  names an `intent_id`. Proposed interpretation: set `WORK_ITEM_INTENT_SOURCE`
-  to `"off"` in mctl-gitops first. The template documents `"off"` as the
-  byte-neutral default. With `ISSUE_INVESTIGATOR_CONTEXT_MODE: "shadow"` the
-  prompt does not change, so only the sealed snapshot loses intents. If the
-  owner instead wants intents in snapshots, mctl-agents needs a credential the
-  model cannot reach. A clarification draft asks which way to go.
 - Snapshots may already contain intent text. Snapshots sealed while
   `WORK_ITEM_INTENT_SOURCE` was `"on"` embed intents. A later run on the same
-  work item can still read them through the bound snapshot routes. Whether
-  snapshot reads should also be closed, or only new snapshots kept free of
-  intents, is not settled.
+  work item can still read them through the bound snapshot routes. Proposed
+  interpretation: out of scope here (new snapshots stop carrying intents
+  once the flag is `"off"`); closing or purging older snapshots is a
+  follow-up the owner may file. Snapshot rows are already swept on the
+  intent-text retention schedule (`docs/work-context-contract.md`).
 - `mctl_get_service_config admins/mctl-api` returned "service not found", so
   this run did not observe the deployed mctl-api version or tenant. The
   investigate template's comments reference mctl-api 4.58.0 (intents route)
