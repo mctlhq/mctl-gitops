@@ -612,6 +612,14 @@ def expected_missing(servers, applied: set[str] | None = None) -> list[str]:
     ]
 
 
+def apply_catalogue_fix(cat_doc: dict, updates: dict[str, list[str]]) -> dict:
+    """Apply live portal tools to a catalogue document."""
+    servers = cat_doc.setdefault("servers", {})
+    for s, tools in updates.items():
+        servers[s] = list(tools)
+    return cat_doc
+
+
 def selftest() -> int:
     """A detector never seen to fire is not known to work."""
     def snap(names, closed=False, extra=None, closed_input=False):
@@ -1000,6 +1008,13 @@ def selftest() -> int:
     if not ok:
         failures.append("catalogue owners")
 
+    sample_cat = {"servers": {"a": ["old"]}}
+    updated_cat = apply_catalogue_fix(sample_cat, {"a": ["new1", "new2"], "b": ["tool_b"]})
+    ok = updated_cat.get("servers", {}).get("a") == ["new1", "new2"] and updated_cat.get("servers", {}).get("b") == ["tool_b"]
+    print(f"{'ok  ' if ok else 'FAIL'} apply_catalogue_fix updates servers in catalogue doc")
+    if not ok:
+        failures.append("apply_catalogue_fix")
+
     if failures:
         print(f"\n{len(failures)} failing: {', '.join(map(str, failures))}")
         return 1
@@ -1010,6 +1025,7 @@ def selftest() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--account", help="Cloudflare account id (default: $CLOUDFLARE_ACCOUNT_ID)")
+    ap.add_argument("--fix", action="store_true", help="update allowlists/catalogue.json when committed catalogue lags the live portal")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -1075,13 +1091,16 @@ def main() -> int:
     # the real finding waited until someone opened the raw step log.
     compared: set[str] = set()
     lagging: list[str] = []
+    committed_doc: dict | None = None
     committed: dict | None = None
     try:
-        committed = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8"))["servers"]
+        committed_doc = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8"))
+        committed = committed_doc["servers"]
         if not isinstance(committed, dict):
             raise ValueError("'servers' is not an object")
     except Exception as e:  # noqa: BLE001 - the exit code is the point
         undetermined.append(f"{CATALOGUE_FILE.name}: could not be read, so it was not compared: {e!r}")
+    fix_updates: dict[str, list[str]] = {}
     for server in servers:
         try:
             snapshot = live_snapshot(account, server, token)
@@ -1092,6 +1111,11 @@ def main() -> int:
                 lag = catalogue_file_lag(server, snapshot, committed)
                 if lag:
                     lagging.append(lag)
+                    # Replace the catalogue entry wholesale with the portal's live tools in portal order.
+                    # An empty or non-array tool list is left to compare() to report as undetermined.
+                    live_tools = [t.get("name") for t in (snapshot.get("tools") or []) if isinstance(t, dict) and t.get("name")]
+                    if live_tools:
+                        fix_updates[server] = live_tools
             allowlist = owner_allowlist(server)
             findings += compare(server, snapshot, allowlist)
             checked.append(f"{server}={len(snapshot.get('tools') or [])}@{snapshot.get('last_synced')}")
@@ -1100,6 +1124,17 @@ def main() -> int:
             undetermined.append(str(e))
         except Exception as e:  # noqa: BLE001 - the exit code is the point
             undetermined.append(f"{server}: the check failed before it could compare: {e!r}")
+
+    if args.fix and fix_updates and committed_doc is not None:
+        try:
+            apply_catalogue_fix(committed_doc, fix_updates)
+            CATALOGUE_FILE.write_text(json.dumps(committed_doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            for s, tools in fix_updates.items():
+                print(f"[fix] updated {s} in {CATALOGUE_FILE.name} ({len(tools)} tools)")
+            # Retain any lag findings that were not fixed by this run; clear only the fixed servers.
+            lagging = [lag for lag in lagging if not any(lag.startswith(f"{s}:") for s in fix_updates)]
+        except Exception as e:  # noqa: BLE001 - record write failure as undetermined
+            undetermined.append(f"{CATALOGUE_FILE.name}: could not write --fix update: {e!r}")
 
     failing, waived, maintenance = apply_waivers(
         findings, _dt.date.today().isoformat(), compared)
