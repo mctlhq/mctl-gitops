@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-31T21:21:23Z'
+status: merged
+updated_at: '2026-10-31T21:35:23Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-a671cf9414cc412e
@@ -47,9 +47,13 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
-refusals: 1
-refusals_head: ae37ecfbcfd07d9f63109f1596fc56c528957109
 notes: 'implementer declined to act: Reviewer text 1 is a Claude bot status comment,
   not a defect. It says ''Review of ae37ecf: approved (0 P1, 0 P2, 0 P3)'', lists
   previous findings as resolved, and its ''Also checked'' items all pass. No actionable
   finding exists, so no change is needed.'
+github:
+  state: merged
+  head_sha: ae37ecfbcfd07d9f63109f1596fc56c528957109
+  observed_at: '2026-10-31T21:35:23Z'
+merged_at: '2026-10-31T21:35:23Z'
+merge_commit: e894a3e1587e1b442883f3e6eb0fd550f3e51f66
