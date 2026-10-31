@@ -61,7 +61,11 @@ env:
   # a ~16 MiB per-message limit; above the cap get_media now returns a clear
   # "exceeds the download cap" error instead of a transport failure.
   # ChatGPT (direct) accepted up to 19.9 MB in the same test.
-  MEDIA_DOWNLOAD_MAX_BYTES: "12000000"
+  # 11 MiB since 2026-10-31: a binary unit like the 20 MiB upload and 8 MiB
+  # bulk caps, so /platforms shows one unit. 12 MiB would encode to exactly
+  # 16 MiB of base64 before the JSON envelope, past the 12.4 MB that tested
+  # fine; 11 MiB encodes to ~15.4M chars, inside the tested range.
+  MEDIA_DOWNLOAD_MAX_BYTES: "11534336"
   APP_ENV: production
   # Soft heap target below the 768Mi limit so the Go GC works harder before
   # the kernel OOM-kills the container.
