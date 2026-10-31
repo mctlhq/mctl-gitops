@@ -50,6 +50,14 @@ tenant workloads keep their current sizing.
 
 ## Acceptance criteria (EARS)
 
+> **Amendment 2026-10-31 (scope).** This proposal implements step A only:
+> resources, executor patch, PriorityClass, ResourceQuota, validator, alerts
+> and runbook, with nothing naming the class. The requirements below that
+> need agent pods to carry `mctl-agents-quota-scope` (the
+> `podPriorityClassName` requirement, the validator's missing-class rule,
+> admission rejection and headroom under a full quota) are delivered by
+> mctl-gitops#2299 (step B). Here the class check ships disabled.
+
 - THE SYSTEM SHALL define a PriorityClass `mctl-agents-quota-scope` with
   `value: 0`, `globalDefault: false` and `preemptionPolicy: Never`, and SHALL
   document why these values keep scheduling order, preemption and kubelet

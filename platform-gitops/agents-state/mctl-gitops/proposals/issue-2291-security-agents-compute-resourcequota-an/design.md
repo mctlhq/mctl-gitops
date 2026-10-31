@@ -319,7 +319,9 @@ value. Tests are added in `vm-rules/tests/mctl-alerts_test.yaml`.
      validator and alerts. Nothing is enforced yet; the quota is created with
      the hard values but nothing names the class.
   2. PR 2: `podPriorityClassName` on the agent templates, which activates
-     the quota.
+     the quota. AMENDMENT 2026-10-31: PR 2 is OUT OF SCOPE of this proposal
+     and is mctl-gitops#2299 (step B), started only after the owner confirms
+     the measured per-kind concurrency. This proposal implements PR 1 only.
 
   Between them, task 6 confirms on live pods that every container has all
   six values.
