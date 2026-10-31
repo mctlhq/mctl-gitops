@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "repo": "mctlhq/mctl-agents",
+  "commit": "eb6297b78c9cb0e4feb212ceeda167d3ac27b739",
+  "includes": ["mctlhq/mctl-agents#921"],
+  "entrypoint": "auditor/agent_isolation_audit.py",
+  "files": [
+    {
+      "source_path": "tools/agent_isolation_audit.py",
+      "vendored_path": "auditor/agent_isolation_audit.py",
+      "sha256": "457ca64bd0f269ed43c7788e49378e81b0b4704d32ae7c64229cdf695c3db296"
+    }
+  ],
+  "auditor_version": null,
+  "output_schema_version": 2
+}

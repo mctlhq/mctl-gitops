@@ -1,0 +1,845 @@
+{
+  "schema_version": 1,
+  "auditor": {
+    "repo": "mctlhq/mctl-agents",
+    "commit": "eb6297b78c9cb0e4feb212ceeda167d3ac27b739",
+    "sha256": "457ca64bd0f269ed43c7788e49378e81b0b4704d32ae7c64229cdf695c3db296",
+    "auditor_version": null,
+    "output_schema_version": 2
+  },
+  "generated_from_gitops": "dacab6744fb014a5a4c811dce40cc1e9515afffd",
+  "agent_steps": [
+    "mctl-agents-implement/run-implementer",
+    "mctl-agents-investigate/run-investigator",
+    "mctl-agents-reconcile/run-reconcile",
+    "mctl-agents-run/run-orchestrator",
+    "mctl-agents-scout/scout",
+    "mctl-agents-shepherd/run-shepherd",
+    "mctl-agents-usage-collector/collect-usage"
+  ],
+  "rows": [
+    {
+      "primitive": "CredentialExposure",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "container.env[].valueFrom.secretKeyRef",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "CredentialExposure",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "container.env[].valueFrom.secretKeyRef",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "CredentialExposure",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "container.env[].valueFrom.secretKeyRef",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "CredentialExposure",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "container.env[].valueFrom.secretKeyRef",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "CredentialExposure",
+      "scope": "mctl-agents-scout/scout",
+      "field": "container.env[].valueFrom.secretKeyRef",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "CredentialExposure",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "container.env[].valueFrom.secretKeyRef",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "CredentialExposure",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "container.env[].valueFrom.secretKeyRef",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/cross-namespace",
+      "scope": "allow-agent-ingress",
+      "field": "spec.ingress[].from[].namespaceSelector+podSelector",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "NetworkPolicy/cross-namespace",
+      "scope": "allow-backstage-ingress",
+      "field": "spec.ingress[].from[]",
+      "status": "not-observed",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/cross-namespace",
+      "scope": "allow-mctl-api-ingress",
+      "field": "spec.ingress[].from[].namespaceSelector",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/cross-namespace",
+      "scope": "allow-otel-collector-ingress",
+      "field": "spec.ingress[].from[].namespaceSelector",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/cross-namespace",
+      "scope": "allow-shared-pg-ingress",
+      "field": "spec.ingress[].from[].namespaceSelector",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/cross-namespace",
+      "scope": "allow-vault-ingress",
+      "field": "spec.ingress[].from[]",
+      "status": "not-observed",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/cross-namespace",
+      "scope": "bootstrap/templates/observability/eval-namespace.yaml",
+      "field": "kind: NetworkPolicy",
+      "status": "not-observed",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/cross-namespace",
+      "scope": "helm-charts/tenant/templates/networkpolicy.yaml",
+      "field": "kind: NetworkPolicy",
+      "status": "not-observed",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/cross-namespace",
+      "scope": "helm-charts/tenant/templates/preview.yaml",
+      "field": "kind: NetworkPolicy",
+      "status": "not-observed",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/east-west",
+      "scope": "argo-workflows",
+      "field": "spec.ingress[].from[].podSelector",
+      "status": "partial",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/egress",
+      "scope": "argo-workflows",
+      "field": "spec.policyTypes+podSelector+metadata.namespace",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/profile",
+      "scope": "authoring-canary-default",
+      "field": "spec.permissions.network",
+      "status": "declared-not-enforced",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/profile",
+      "scope": "implementer-default",
+      "field": "spec.permissions.network",
+      "status": "declared-not-enforced",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/profile",
+      "scope": "incident-responder-default",
+      "field": "spec.permissions.network",
+      "status": "declared-not-enforced",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/profile",
+      "scope": "issue-investigator-default",
+      "field": "spec.permissions.network",
+      "status": "declared-not-enforced",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/profile",
+      "scope": "mentor-default",
+      "field": "spec.permissions.network",
+      "status": "declared-not-enforced",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/profile",
+      "scope": "scout-default",
+      "field": "spec.permissions.network",
+      "status": "declared-not-enforced",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/profile",
+      "scope": "service-agent-default",
+      "field": "spec.permissions.network",
+      "status": "declared-not-enforced",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "NetworkPolicy/profile",
+      "scope": "shepherd-default",
+      "field": "spec.permissions.network",
+      "status": "declared-not-enforced",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "container.securityContext.allowPrivilegeEscalation",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "container.securityContext.capabilities.drop",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "container.securityContext.readOnlyRootFilesystem",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "securityContext.runAsNonRoot",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "securityContext.seccompProfile.type",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "container.securityContext.allowPrivilegeEscalation",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "container.securityContext.capabilities.drop",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "container.securityContext.readOnlyRootFilesystem",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "securityContext.runAsNonRoot",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "securityContext.seccompProfile.type",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "container.securityContext.allowPrivilegeEscalation",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "container.securityContext.capabilities.drop",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "container.securityContext.readOnlyRootFilesystem",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "securityContext.runAsNonRoot",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "securityContext.seccompProfile.type",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "container.securityContext.allowPrivilegeEscalation",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "container.securityContext.capabilities.drop",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "container.securityContext.readOnlyRootFilesystem",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "securityContext.runAsNonRoot",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "securityContext.seccompProfile.type",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-scout/scout",
+      "field": "container.securityContext.allowPrivilegeEscalation",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-scout/scout",
+      "field": "container.securityContext.capabilities.drop",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-scout/scout",
+      "field": "container.securityContext.readOnlyRootFilesystem",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-scout/scout",
+      "field": "securityContext.runAsNonRoot",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-scout/scout",
+      "field": "securityContext.seccompProfile.type",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "container.securityContext.allowPrivilegeEscalation",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "container.securityContext.capabilities.drop",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "container.securityContext.readOnlyRootFilesystem",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "securityContext.runAsNonRoot",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "securityContext.seccompProfile.type",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "container.securityContext.allowPrivilegeEscalation",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "container.securityContext.capabilities.drop",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "container.securityContext.readOnlyRootFilesystem",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "securityContext.runAsNonRoot",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "PodSecurity",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "securityContext.seccompProfile.type",
+      "status": "enforced",
+      "owner": "validate-agent-pod-security"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "RoleBinding/ClusterRoleBinding subjects",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "automountServiceAccountToken",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "serviceAccountName",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "RoleBinding/ClusterRoleBinding subjects",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "automountServiceAccountToken",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "serviceAccountName",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "RoleBinding/ClusterRoleBinding subjects",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "automountServiceAccountToken",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "serviceAccountName",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "RoleBinding/ClusterRoleBinding subjects",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "automountServiceAccountToken",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "serviceAccountName",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-scout/scout",
+      "field": "RoleBinding/ClusterRoleBinding subjects",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-scout/scout",
+      "field": "automountServiceAccountToken",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-scout/scout",
+      "field": "serviceAccountName",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "RoleBinding/ClusterRoleBinding subjects",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "automountServiceAccountToken",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "serviceAccountName",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "RoleBinding/ClusterRoleBinding subjects",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "automountServiceAccountToken",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "RBAC/ServiceAccount",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "serviceAccountName",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "ResourceQuota",
+      "scope": "argo-workflows",
+      "field": "spec.hard",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "activeDeadlineSeconds",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "container.resources",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "synchronization",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "activeDeadlineSeconds",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "container.resources",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "synchronization",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "activeDeadlineSeconds",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "container.resources",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "synchronization",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "activeDeadlineSeconds",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "container.resources",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "synchronization",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-scout/scout",
+      "field": "activeDeadlineSeconds",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-scout/scout",
+      "field": "container.resources",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-scout/scout",
+      "field": "synchronization",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "activeDeadlineSeconds",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "container.resources",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "synchronization",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "activeDeadlineSeconds",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "container.resources",
+      "status": "enforced",
+      "owner": "agent-isolation-gate"
+    },
+    {
+      "primitive": "Resources",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "synchronization",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "SandboxRuntime",
+      "scope": "mctl-agents-implement/run-implementer",
+      "field": "runtimeClassName",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "SandboxRuntime",
+      "scope": "mctl-agents-investigate/run-investigator",
+      "field": "runtimeClassName",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "SandboxRuntime",
+      "scope": "mctl-agents-reconcile/run-reconcile",
+      "field": "runtimeClassName",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "SandboxRuntime",
+      "scope": "mctl-agents-run/run-orchestrator",
+      "field": "runtimeClassName",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "SandboxRuntime",
+      "scope": "mctl-agents-scout/scout",
+      "field": "runtimeClassName",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "SandboxRuntime",
+      "scope": "mctl-agents-shepherd/run-shepherd",
+      "field": "runtimeClassName",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    },
+    {
+      "primitive": "SandboxRuntime",
+      "scope": "mctl-agents-usage-collector/collect-usage",
+      "field": "runtimeClassName",
+      "status": "absent",
+      "owner": "agent-isolation-gate",
+      "issue": "mctlhq/mctl-agents#807"
+    }
+  ]
+}
