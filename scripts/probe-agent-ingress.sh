@@ -35,7 +35,7 @@ run_probe() { # name labels
   kubectl -n "$NS" wait --for=condition=Ready "pod/$name" --timeout=120s >/dev/null
   for t in "${TARGETS[@]}"; do
     read -r tname host port <<<"$t"
-    if kubectl -n "$NS" exec "$name" -- nc -z -w 3 "$host" "$port" >/dev/null 2>&1; then r=allow; else r=deny; fi
+    if kubectl -n "$NS" exec "$name" -- sh -c 'nc -w 3 "$0" "$1" </dev/null' "$host" "$port" >/dev/null 2>&1; then r=allow; else r=deny; fi
     printf '%-15s -> %-12s %s:%s  %s\n' "$name" "$tname" "$host" "$port" "$r"
   done
 }

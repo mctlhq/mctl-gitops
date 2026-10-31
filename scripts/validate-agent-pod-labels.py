@@ -38,6 +38,17 @@ def _label(spec: dict):
     return ((spec.get("podMetadata") or {}).get("labels") or {}).get(AGENT_LABEL_KEY)
 
 
+def _template_labels(spec: dict):
+    """Yield (template name, label value) for per-template metadata that sets the key.
+
+    Argo applies templates[].metadata.labels to the step pod over podMetadata.
+    """
+    for t in spec.get("templates") or []:
+        labels = ((t or {}).get("metadata") or {}).get("labels") or {}
+        if AGENT_LABEL_KEY in labels:
+            yield (t or {}).get("name", "?"), labels[AGENT_LABEL_KEY]
+
+
 def violations(docs: list[tuple[str, dict]]) -> list[str]:
     found: list[str] = []
     agents: set[str] = set()
@@ -51,9 +62,18 @@ def violations(docs: list[tuple[str, dict]]) -> list[str]:
             if label != AGENT_LABEL_VALUE:
                 found.append(f"{where}: agent template {name} must set spec.podMetadata.labels"
                              f"[{AGENT_LABEL_KEY}] to {AGENT_LABEL_VALUE} (got {label!r})")
+            for tname, val in _template_labels(spec):
+                if val != AGENT_LABEL_VALUE:
+                    found.append(f"{where}: agent template {name} step {tname} overrides "
+                                 f"{AGENT_LABEL_KEY} to {val!r} in templates[].metadata.labels")
         elif label == AGENT_LABEL_VALUE:
             found.append(f"{where}: non-agent template {name} carries {AGENT_LABEL_KEY}: "
                          f"{AGENT_LABEL_VALUE}; it would lose platform paths")
+        if not is_agent_cwft(name, spec):
+            for tname, val in _template_labels(spec):
+                if val == AGENT_LABEL_VALUE:
+                    found.append(f"{where}: non-agent template {name} step {tname} carries "
+                                 f"{AGENT_LABEL_KEY}: {AGENT_LABEL_VALUE}; it would lose platform paths")
     if not agents:
         found.append("no agent templates found; glob or detection changed")
 
@@ -65,6 +85,12 @@ def violations(docs: list[tuple[str, dict]]) -> list[str]:
         wspec = wspec or {}
         ref = (wspec.get("workflowTemplateRef") or {}).get("name")
         label = _label(wspec)
+        inline_agent = is_agent_cwft((doc.get("metadata") or {}).get("name", ""), wspec)
+        if ref in agents or inline_agent:
+            for tname, val in _template_labels(wspec):
+                if val != AGENT_LABEL_VALUE:
+                    found.append(f"{where}: agent run overrides {AGENT_LABEL_KEY} to {val!r} "
+                                 f"in inline template {tname}")
         if ref in agents and label is not None and label != AGENT_LABEL_VALUE:
             found.append(f"{where}: references agent template {ref} but sets podMetadata "
                          f"{AGENT_LABEL_KEY}: {label}")
@@ -101,10 +127,20 @@ def selftest() -> int:
         d[0][1]["spec"]["templates"][0]["container"]["image"] = "ghcr.io/mctlhq/mctl-agents:1"
         del d[0][1]["spec"]["podMetadata"]
 
+    def tmpl_override(d): d[0][1]["spec"]["templates"][0]["metadata"] = {"labels": {AGENT_LABEL_KEY: "other"}}
+    def platform_tmpl_labelled(d):
+        d[1][1]["spec"]["templates"][0]["metadata"] = {"labels": {AGENT_LABEL_KEY: AGENT_LABEL_VALUE}}
+    def cron_inline_override(d):
+        d[2][1]["spec"]["workflowSpec"]["templates"] = [
+            {"name": "i", "metadata": {"labels": {AGENT_LABEL_KEY: "x"}}}]
+
     cases = [("clean", None, False), ("missing label", no_label, True),
              ("wrong label", wrong_label, True), ("cron override", cron_override, True),
              ("platform carries label", platform_labelled, True),
-             ("image-detected agent without label", image_only, True)]
+             ("image-detected agent without label", image_only, True),
+             ("template-level override", tmpl_override, True),
+             ("platform template-level agent label", platform_tmpl_labelled, True),
+             ("cron inline template override", cron_inline_override, True)]
     ok = True
     for label, mut, should_fail in cases:
         docs = copy.deepcopy(_fixture())

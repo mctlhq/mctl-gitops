@@ -185,7 +185,7 @@ def lint_namespace_only(policies: list[dict], baseline: set) -> list[str]:
         ns, name = p["metadata"].get("namespace", ""), p["metadata"].get("name", "")
         for rule in (p.get("spec") or {}).get("ingress") or []:
             for peer in rule.get("from") or []:
-                if "namespaceSelector" in peer and "podSelector" not in peer \
+                if "namespaceSelector" in peer and not peer.get("podSelector") \
                         and sel_matches(peer["namespaceSelector"], ns_labels(WF)):
                     if (ns, name) in baseline:
                         seen.add((ns, name))
@@ -285,7 +285,11 @@ def selftest() -> int:
     def extra_policy(pols):  # a second policy: only the union catches it
         pols.append(_np("vault", "extra", {}, [{"from": [{"namespaceSelector": _ns(WF)}]}]))
 
-    for label, fn in [("removed NotIn exclusion", drop_notin),
+    def ns_empty_podsel(pols):  # cross-namespace peer with podSelector {}
+        pols[3]["spec"]["ingress"][0]["from"][0]["podSelector"] = {}
+
+    for label, fn in [("namespace peer with podSelector {}", ns_empty_podsel),
+                      ("removed NotIn exclusion", drop_notin),
                       ("podSelector {} restored intra-namespace", restore_podselector_all),
                       ("namespace-only peer", ns_only),
                       ("second policy re-admits the namespace", extra_policy)]:
@@ -294,6 +298,7 @@ def selftest() -> int:
         check(f"detects: {label}", detected)
     # The lint alone must catch a namespace-only peer even if the matrix is satisfied.
     check("lint detects namespace-only peer", bool(lint_namespace_only(mut(ns_only), set())))
+    check("lint detects podSelector {} peer", bool(lint_namespace_only(mut(ns_empty_podsel), set())))
     # Missing agent label on the source flips the NotIn side: platform-side reach for an agent.
     agent_unlabelled = {"agent": (WF, dict(_WFLBL))}
     check("unlabelled agent pod reaches vault in hardened set (fail-open shape is real)",
