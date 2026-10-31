@@ -116,13 +116,10 @@ Record the result as a per-kind writable-path table in a new runbook,
     written for a kind, that kind should get narrower mounts or env redirects
     instead (`GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` onto
     `/workdir`).
-  - Entrypoint proposals symlink. Preferred: a prerequisite mctl-agents PR makes
-    `/entrypoint.sh` link from a writable location, or bakes the
-    `/app/agents/<svc>/proposals -> $STATE_DIR/<svc>/proposals` links into the
-    image at build time, so that nothing writes under `/app` at runtime. Bump
-    `agent_image` to that version in the same gitops PR. Fallback, only if the
-    image's proposals directories are verified empty: one `emptyDir` per
-    `/app/agents/<svc>/proposals`. Never mount over `/app` or `/app/agents`.
+  - Entrypoint writes under `/app` (inbox, proposals and `_mentor/digest`
+    links, under `set -e`): fixed by the prerequisite mctlhq/mctl-agents#947.
+    This proposal only pins `agent_image` to the #947 release. It opens no
+    mctl-agents PR and mounts nothing over `/app` or `/app/agents`.
 - Do not change `workdir` sizing. Keep `TMPDIR=/workdir/clones` where it is
   already set.
 - Do not touch the `clone-gitops` or `wait-egress-proxy` specs (see inventory).

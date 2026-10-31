@@ -1,6 +1,10 @@
 # Tasks: issue-2290-security-agents-readonlyrootfilesystem-o
 
-- [ ] 1. Re-inventory the agent steps and discover their writable paths.
+- [ ] 0. Gate: mctlhq/mctl-agents#947 is merged and released. Record the
+  image version; every debug and real run below uses it. Without it the
+  entrypoint aborts on the first write under `/app` and no other writable
+  path can be observed. If #947 is not released, stop.
+- [ ] 1. Re-inventory the agent steps and discover their writable paths (depends on 0).
   Re-run the inventory: every template under
   `platform-gitops/argo-workflows/cluster-templates/` whose image contains
   `workflow.parameters.agent_image` (7 at 633112e). For each agent kind, run a
@@ -12,21 +16,17 @@
   — DoD: `docs/runbooks/agent-readonly-rootfs.md` holds a per-kind table of
   writable paths, each with its writer and the evidence (workflow name or code
   path).
-- [ ] 2. Remove the runtime write under `/app` (depends on 1).
-  Preferred: open an mctl-agents PR so that `/entrypoint.sh` no longer creates
-  the `/app/agents/<svc>/proposals` symlinks at runtime (bake them at build time,
-  or point them at a writable path), and release a new image. Fallback, only if
-  task 1 shows those directories are empty in the image: an `emptyDir` per
-  `/app/agents/<svc>/proposals` path.
-  — DoD: an agent step on the chosen image writes nothing under `/app`. The
-  image version, or the fallback decision, is recorded in the runbook.
+- [ ] 2. Pin `agent_image` defaults in the 7 agent CWFTs to the #947 release
+  (depends on 0). No mctl-agents PR and no `emptyDir` over `/app/agents/...`
+  from this proposal. — DoD: an agent step on that image writes nothing under
+  `/app`; the version is recorded in the runbook.
 - [ ] 3. Harden the 7 agent steps (depends on 1, 2).
   In `cwft-mctl-agents-{implement,investigate,shepherd,run,reconcile,scout,usage-collector}.yaml`:
   add `readOnlyRootFilesystem: true` to the agent container's
   `securityContext`, and add only the `emptyDir` mounts that task 1 proved
   necessary. Baseline: `/tmp`, and `$HOME` or narrower subpaths/env redirects,
-  each with a `sizeLimit` and a comment naming path, consumer and evidence. If
-  task 2 took the image route, bump `agent_image` defaults to the new image.
+  each with a `sizeLimit` and a comment naming path, consumer and evidence.
+  `agent_image` is the #947 release pinned in task 2.
   Leave `workdir`, `TMPDIR`, `clone-gitops` and `wait-egress-proxy` unchanged.
   — DoD: all 7 steps carry the field. No mount covers `/`, `/app`, `/usr`,
   `/etc` or `/home` as a whole. `helm`/`kubeconform` validation in
@@ -42,6 +42,12 @@
     field), each expected to fail, with "hardened" still expected to pass;
   - optionally also scan `spec.workflowSpec.templates`;
   - update the docstring to cite #2290.
+  - ownership: `readOnlyRootFilesystem` on agent steps is owned by
+    `validate-agent-pod-security.py` from this change on. If mctl-gitops#2292
+    has landed, the same PR adds `readOnlyRootFilesystem` to the gate's
+    `POD_SECURITY_OWNED` table and moves the baseline row to
+    `owner: validate-agent-pod-security`, so the field has one validator. If
+    #2292 has not landed, note this on #2292 so its first baseline uses that owner.
   — DoD: `--selftest` prints `selftest ok`. The default run passes on the
   hardened tree and fails on a copy with the field removed from
   `run-implementer`, and that failing output is pasted in the PR.
