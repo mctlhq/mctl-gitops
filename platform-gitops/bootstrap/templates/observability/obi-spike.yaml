@@ -517,6 +517,8 @@ data:
             - transform/pre
             - k8sattributes/obi
             - transform/attribution
+            - resource
+            - redaction
             - batch
           exporters: [prometheus]
 ---
