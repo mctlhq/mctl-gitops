@@ -88,9 +88,16 @@ Changes:
    script must not write under `/app` (readOnlyRootFilesystem, mctl-gitops#2290).
 3. `orchestrator/run_service_agent.py`:
    - Resolve and `ensure_dir` the inbox and proposals directories before the session.
-   - Turn `PROMPT` into `build_prompt(inbox_dir, proposals_dir)`. It names the absolute
-     paths and tells the agent to pass them verbatim to the researcher, analyst and
-     spec-writer sub-agents. The existing step wording otherwise stays.
+   - KEEP the module-level constant `PROMPT`: `agents/_manifests/service-agent/agent.yaml`
+     and `docs/agent-inventory.yaml` declare `inline: orchestrator/run_service_agent.py:PROMPT`
+     as the prompt source, `tests/test_agent_inventory.py` asserts the symbol exists, and
+     `agent.yaml` must not change. `PROMPT` stays the static template and gains two
+     explicit markers, `<INBOX_DIR>` and `<PROPOSALS_DIR>`. Add
+     `build_prompt(inbox_dir, proposals_dir)` that returns
+     `PROMPT.replace("<INBOX_DIR>", str(inbox_dir)).replace("<PROPOSALS_DIR>", str(proposals_dir))`.
+     Do NOT use `str.format`: `PROMPT` contains the literal `{today's ISO date YYYY-MM-DD}`,
+     which `format` would reject. The prompt tells the agent to pass the absolute paths
+     verbatim to the researcher, analyst and spec-writer sub-agents.
    - `build_service_agent_options(service_dir, model, state_dirs=...)`: keep `cwd=service_dir`.
      Append the inbox and proposals dirs to `add_dirs` (alongside `_sibling_add_dirs`) and
      update the cwd comment. When `STATE_DIR` is unset the extra dirs sit inside `cwd`;
