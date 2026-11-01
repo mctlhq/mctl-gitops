@@ -68,6 +68,13 @@ spec:
             # is read only at container start.
             ROLLOUT_MARKER: "2026-10-26-jwt-signing-keys"
             ARGOCD_URL: https://ops.mctl.ai
+            # ERPact site tools (mctl_erpact_*, mctlhq/mctl-api#486) call the ERPact site
+            # deployer. The ERPact sites moved to CLO on 2026-11-01 (this cluster's *.mctl.ai is
+            # unreachable from RF without VPN), so the deployer is called at its public CLO
+            # address instead of erpact-deployer.erpact.svc.cluster.local. The token is the same
+            # one (Vault teams/erpact/deployer, DEPLOYER_API_TOKEN) and is accepted there.
+            # Rollback: delete this line (the default is the in-cluster address).
+            ERPACT_DEPLOYER_URL: https://deployer.erpact.online
             ARGO_WORKFLOWS_NAMESPACE: argo-workflows
             GITHUB_ORG: mctlhq
             ADMIN_USERS: mashkovd
