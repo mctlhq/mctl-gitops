@@ -27,7 +27,7 @@ snapshot; this repo supplies the provenance it needs.
 - WHEN an execution request is created with an `intent_id` whose stored text is NULL (redacted or unavailable) THE SYSTEM SHALL refuse with HTTP 409, code `intent_unavailable`, details `{intent_id}`, and SHALL record no request, event or idempotency entry.
 - IF `intent_id` names no intent of this work item, including an intent of another item or another tenant, THEN THE SYSTEM SHALL keep answering 404 `intent_not_found`, and the answer SHALL not tell a foreign intent apart from a missing one.
 - WHEN a claimed request is fulfilled and its pinned intent's text is now NULL THE SYSTEM SHALL refuse the fulfil with 409 `intent_unavailable`, attach no execution, and leave the request claimed so the holder can reject it.
-- WHEN a claimed request is returned by `POST /api/v1/execution-requests/claim` THE SYSTEM SHALL include `intent_available` (true or false, never omitted when `intent_id` is set) so a worker can park before starting any engine run.
+- WHEN a claimed request is returned by `POST /api/v1/execution-requests/claim` THE SYSTEM SHALL include `intent_available` (true or false, never omitted when `intent_id` is set), so the dispatcher can reject the request before it delivers it to any loop (mctlhq/mctl-agents#963).
 - WHILE a request pins an intent THE SYSTEM SHALL never substitute another intent. Binding a replacement intent requires a new request, authorized for the caller, with its own idempotency key.
 - WHEN the same idempotency key and body are replayed THE SYSTEM SHALL return the original request (200, `replayed: true` over MCP) and SHALL never create a second request or execution.
 - IF the same idempotency key is reused with a different `intent_id` THEN THE SYSTEM SHALL refuse with 409 `idempotency_key_reused`.
@@ -36,17 +36,22 @@ snapshot; this repo supplies the provenance it needs.
 - IF the request's surface provenance is missing or empty THEN THE SYSTEM SHALL NOT present it as a known surface. A consumer must treat it as unknown and refuse, never as `surface_transition=false`.
 - WHILE a request moves between surfaces THE SYSTEM SHALL grant no additional approval authority from the surface label. Existing approvals stay usable only under their original content digest, authority and freshness conditions.
 - WHEN the same principal switches between MCP clients (MCP to MCP) THE SYSTEM SHALL record the same surface `mcp`, which is not a transition.
+- WHEN executions are listed (`GET /api/v1/work-items/{id}/executions`) or a work item is read with its latest execution, THE SYSTEM SHALL include, for each execution that was minted by fulfilling an execution request, that request's `surface` and `requested_by` (and `acting_principal` when set). An execution with no fulfilled request, such as a DevLoop attach, SHALL carry neither field: absent means unknown, never a surface. This is what lets the snapshot's `surface_transition` compare against the previous execution instead of the item's origin (mctlhq/mctl-agents#960).
 
 ## Out of scope
 - The three-wrapper manual handoff deliverable (separate slice).
 - Enabling Portal `request_execution`. It stays disabled pending a separate owner decision.
 - Implementing the retention sweeper (mctl-api#353). Tests use fixtures (`UPDATE work_item_intents SET text=NULL`) and do not claim a sweeper exists.
-- The mctl-agents worker's parking with an ADR 013 clarification and the snapshot's `current_surface`/`surface_transition` computation. Both are owned by mctl-agents#573/#904; this repo only provides the inputs and the API-side guard.
+- Worker-side behaviour, which is owned by mctl-agents:
+  - Since mctl-agents 1.114.1 (ADR 011 §10, #961), the investigator **refuses** a pinned intent that is redacted, absent or foreign (`refused` / `intent-redacted` | `intent-absent` | `intent-foreign-principal`). It does **not** park with an ADR 013 clarification. The remedy is a new request that pins a replacement intent.
+  - The dispatcher's handling of the new code and field is mctlhq/mctl-agents#963.
+  - The snapshot's `surface_transition` computation is mctlhq/mctl-agents#960.
+  - This repo provides the inputs and the API-side guard only.
 - Any approval, agents:intake, rollout or roadmap graph mutation.
 
 ## Open questions
 - Final error code name: the issue proposes `intent_unavailable`. This proposal adopts it for both request-time and fulfil-time refusals.
 - Should the fulfil-time refusal also be enforced on `kind=start`? Proposed yes: the guard is kind-independent.
 - Whether `intent_available` belongs on the claim response or whether the worker should re-read `GET /work-items/{id}/intents/{intent_id}`. Proposed: both work; the claim field saves a round trip, and the fulfil guard is the backstop either way.
-- The exact surface-transition fields in the sealed snapshot are defined by mctl-agents#573. This repo does not validate snapshot canonical bytes, so the cross-surface proof is an integration test owned jointly with that issue.
+- The cross-surface proof itself was done live on 2026-11-01 (mctlhq/mctl-agents#573, closed). This repo does not validate snapshot canonical bytes. What this repo still owes is the per-execution provenance above, so that the agents side of #960 can stop using the origin as its baseline.
 - The deployed mctl-api configuration and which worker image claims execution requests could not be confirmed (see design.md "Deployed state checked").
