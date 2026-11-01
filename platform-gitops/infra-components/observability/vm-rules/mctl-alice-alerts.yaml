@@ -216,7 +216,7 @@ spec:
           # with 500 streams: RSS 71 -> 148 MiB). Real peak is a handful; 800
           # streams would add ~120 MiB to a pod that peaks near 200 MiB against
           # a 384 MiB limit, i.e. an OOM kill is close.
-          expr: max(mctl_alice_sse_streams_open{namespace="labs"}) > 800
+          expr: max by (pod) (mctl_alice_sse_streams_open{namespace="labs"}) > 800
           for: 10m
           labels:
             severity: warning
@@ -292,7 +292,9 @@ spec:
           # refusing us, which looks healthy from the outside.
           expr: |
             sum by (upstream) (increase(mctl_alice_upstream_requests_total{namespace="labs",outcome="blocked"}[15m])) >= 3
-          for: 5m
+          # No `for`: the 15 m window already filters a lone event, and a `for`
+          # would shrink the effective window (3 events spread over 11 m would
+          # roll out of the window before the pending timer ended).
           keep_firing_for: 30m
           labels:
             severity: warning
