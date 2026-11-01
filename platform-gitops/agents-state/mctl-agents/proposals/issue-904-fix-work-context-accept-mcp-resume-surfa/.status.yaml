@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-10-31T23:35:18Z'
+status: merged
+updated_at: '2026-11-01T00:21:27Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-3ea55206b4ee9418
@@ -50,3 +50,9 @@ completion:
 ci_blockers_head: e02b31baed899dad9c6ec109daecbb77e4e0e5a6
 ci_blockers:
 - PR validation / tests
+github:
+  state: merged
+  head_sha: 4519d9e8e6ea90d20fa9ff74aee63b47ef904f50
+  observed_at: '2026-11-01T00:21:27Z'
+merged_at: '2026-11-01T00:21:27Z'
+merge_commit: a0129a836f1caec349701b33af3e2d6d674f2b3c
