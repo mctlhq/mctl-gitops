@@ -42,8 +42,9 @@
   row and form.
 - [ ] 9. `/mctl assistant` (depends on 3): Runtime line and re-consent line in
   `handleAssistant` — DoD: router tests pass.
-- [ ] 10. Admin profile route (depends on 6): `runtime` / `consent` in
-  `upsertAgentProfileRequest` and `upsertAgentProfileKeys`, `DecideRuntime` validation, status
+- [ ] 10. Admin profile route (depends on 6): `runtime` in `upsertAgentProfileRequest` and
+  `upsertAgentProfileKeys` (`consent` is NOT accepted: 400 from the strict decoder),
+  `DecideRuntime` validation with the stored consent version as the only consent source, status
   codes, audit, `runtime` in the response; constructor gains the gate — DoD: agentapi tests pass.
 - [ ] 11. Update ADR 0008 only where implemented names differ from the record (ADR says the code
   becomes authoritative) — DoD: names in the ADR match the code.
@@ -62,10 +63,11 @@ Fixtures use the existing personas (Alice, Bob, Carol, Dana) and ids already use
 - [ ] T3. Migration adds the four columns idempotently on both dialects; an old row reads
   `own`, empty consent, zero times [mutation: default `''`].
 - [ ] T4. own -> managed without consent, and with `consent: "managed-data-flow/v0"`, is
-  `KindManagedConsentRequired`; the profile, revision and install are unchanged
+  `KindManagedConsentRequired` (flag on); the profile, revision and install are unchanged
   [mutation: drop the consent check in `DecideRuntime`].
-- [ ] T5. own -> managed with consent while `Enabled == false` is `KindManagedDisabled`; nothing
-  changes [mutation: drop the flag check].
+- [ ] T5. own -> managed while `Enabled == false` is `KindManagedDisabled` both with and without
+  consent (flag check runs first); nothing changes [mutation: drop the flag check / swap the
+  order so consent is checked first].
 - [ ] T6. With `MaxAccounts = 1` and Bob already managed, Alice's own -> managed is
   `KindManagedQuota`; with Bob switched back to own it succeeds; a reinstall of an already
   managed account does not count itself [mutation: remove the WHERE guard / count self].
@@ -98,10 +100,13 @@ Fixtures use the existing personas (Alice, Bob, Carol, Dana) and ids already use
   checkbox].
 - [ ] T15. `/mctl assistant` prints `Runtime: own (your worker)` for a default profile and
   `Runtime: managed (platform worker)` for a managed one.
-- [ ] T16. Admin route: `runtime` omitted leaves it unchanged; `runtime: "managed"` without
-  consent is 409 `managed_consent_required`; flag off is 403; quota is 409; invalid value 400;
-  `consent` and `runtime` keys accepted by the strict decoder [mutation: write `runtime`
-  without `DecideRuntime`].
+- [ ] T16. Admin route: `runtime` omitted leaves it unchanged; `runtime: "managed"` on a
+  profile whose stored consent version is empty or `managed-data-flow/v0` is 409
+  `managed_consent_required` even when the body carries `consent` (which is 400 from the strict
+  decoder); on a profile whose owner consented to the current version it succeeds with the flag
+  on, is 403 with the flag off and 409 at quota; `runtime: "own"` always succeeds; invalid value
+  400 [mutation: accept `consent` on the admin route / write `runtime` without
+  `DecideRuntime`].
 - [ ] T17. The verbatim consent constant appears in `docs/adr/0008-managed-runtime.md` after
   whitespace normalisation and stripping the italic markers.
 - [ ] T18. Regression: an own-runtime install, update, `/mctl assistant` and admin upsert with
