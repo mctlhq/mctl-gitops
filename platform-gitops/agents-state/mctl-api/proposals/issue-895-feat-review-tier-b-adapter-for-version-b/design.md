@@ -1,88 +1,35 @@
-# Design: issue-895-feat-review-tier-b-adapter-for-version-b
+# Design: Slice A of issue-895 (Tier A-compatible Go library and gate)
 
 ## Current state
 
-- **Evidence ingest** is `internal/api/handlers_evidence.go`. `IngestEvidence` handles `POST /api/v1/evidence/records`. It is admitted by `requireEvidenceWriter` (`auth.PermissionEvidenceWrite = "evidence:write"`) and has typed codes such as `evidence_store_unavailable` and `evidence_current_pool_too_large`. Store errors go through `writeEvidenceError`. A nil store answers 503, never an empty result.
-- **Evidence storage** is `internal/evidence/store.go`. It keeps an immutable `execution_evidence` table: a `BEFORE UPDATE` trigger `execution_evidence_immutable()` refuses every update, there is no FK to work items, and DELETE is the retention mechanism. It also keeps a rebuildable `execution_evidence_refs` projection that carries `tenant`, `repository`, `pr_number` and so on. The schema is applied idempotently in `NewStore`.
-- **Subject kinds** live in `internal/evidence/amendment2.go` (`subjectKinds`, `shaBoundSubjectKinds`, `SubjectRef`). That is the extension the issue rules out.
-- **Decision records** (`internal/decisions/store.go`) are the closest analogue: append-only records plus an attempts table, with `UNIQUE (recorded_by, idempotency_key)`, an `EvidenceLookup` interface (`Get(ctx, id)`) wired in `cmd/api/main.go`, and a "nil interface means unobservable, not absent" rule.
-- **Writer principals.** In `internal/auth/oidc.go`, `EvidenceWriterUserID = "service:mctl-agents-evidence"` is minted from `MCTL_EVIDENCE_WRITER_TOKEN`, and `evidenceWriterToken()` refuses a token that is too short or that collides with another principal's. `evidenceWriterGate` (`handlers_evidence.go`) confines that principal to its own routes. The Helm chart wires the token through `helm/values.yaml` `evidenceWriterTokenSecret` and `helm/templates/deployment.yaml`.
-- **Human checks.** `isHumanAdmin` (`internal/api/handlers_action_approvals.go:87`) is `IsAdmin && !IsService && !relayed && !surface`. `isDirectService` sits beside it. `checkHumanPrincipal` (`internal/api/handlers_surface_identity.go`) calls `auth.HumanPrincipalChecker.CheckHumanPrincipal`, which is implemented by `internal/principals/resolver.go`, and maps the result to `principal_disabled` / `identity_refused`. Any other error means the store could not answer (503). `principalOf` is in `handlers_work_items.go`.
-- **Fencing (ADR 010).** In `internal/lifecycle`, `Ownership.Epoch` is the fencing generation and `Store.Get(ctx, EntityRef, phase)` reads it. `LegalPhase(kind, phase)` checks kind/phase pairs; the kinds are `devloop-proposal` and `pull-request`, and the phases include `implement` and `review-remediation`.
-- **Router.** `internal/api/router.go` keeps optional stores in `Options` (`Evidence`, `Decisions`, `Lifecycle`). Write routes sit in rate-limited groups (`evidenceIngestPerMinute`), and reads are grouped at about lines 891-905.
-- **MCP.** `internal/mcp/server.go` registers tools; `internal/mcp/lifecycle.go` is the pattern of a tool that calls REST. Every tool must be listed in `recordedHints` in `internal/mcp/annotations_test.go`, which asserts that `len(ListTools())` equals the table size, and in `docs/portal-allowlist.json` (`portal_allowlist_test.go`).
-
-- **Agent run tokens (observed on mctl-api `ede0b3b`).** `internal/workitems/agent_run_tokens.go` stores `agent`, `agent_principal_id`, `execution_id`, `work_item_id`, permissions and expiry for an execution-scoped credential (mctl-api#376). `internal/k8s/agent_run_binding.go` (mctl-agents#737) mints it from a pod's projected ServiceAccount token: pod -> Workflow -> agent, scope and `execution_id`. Its own comment records that `execution_id` is the argument the Workflow was submitted with and is not read back from an execution row. `execution_id` values are `we_`-prefixed (`workitems.ExecutionIDPrefix`), the form Tier A accepts. This is the only existing principal -> execution record; whether it is enough for a reviewer is blocker B1 in requirements.md.
-- **Tier A is merged** (mctl-agents#971, ADR 025): the sealed request has no expiry field and no lifecycle reference, and its key set is `api_version, kind, request_id, content_hash, subject, rubric, mode, author_actors, authoring_execution_id, authoring_attempt_ids, authoring_lineage_root, nonce, created_at`.
-
-Deployed state checked:
-- `$MCTL_GITOPS_ROOT/services/*` shows tenants admins, karabu, labs and namax66, with no `mctl-api` service directory. mctl-api's deployed values are therefore not observable here.
-- `mctl_get_service_config(team=admins, service=mctl-api)` returned "service not found". mctl-api is not a catalogue service, so its deployed env (whether `MCTL_EVIDENCE_WRITER_TOKEN` / `EVIDENCE_DB_URL` are set, and the replica count) was **not observed**. It is not assumed absent.
-- The repository's `helm/values.yaml` and `helm/templates/deployment.yaml` show only how optional writer-token Secrets are wired, not their deployed values.
+- Tier A is merged (mctl-agents#971, `577306dd`): `orchestrator/review_receipts.py` defines the sealed documents (`seal_request`, `seal_receipt`), `ReviewSubject` with `identity()` and `binding()`, the closed rubrics, the bounds (`MAX_STR = 256`, `MAX_ACTORS = 64`), the error codes, the gate `evaluate_review_gate`, and `canonical_json` / `hash_bytes` for identity. ADR 025 (`docs/adr/025-independent-review-receipts.md`) is the prose contract. The only fixture file in mctl-agents today is `tests/fixtures/review/spike_digest_vectors.json`; vectors for sealed documents and the gate do not exist yet.
+- mctl-api (`ede0b3b` observed) has no review-receipt code. The package name `internal/reviewreceipts` is free. mctl-api uses plain Go tests; `go test ./...`, `go vet` and `golangci-lint` are the repository gates.
+- Earlier revisions of this proposal (mctl-gitops#2337, #2343, #2344) hold the full Tier B design. Slice A takes only the library part of it.
 
 ## Proposed solution
 
-### 1. New package `internal/reviewreceipts`
+One package, `internal/reviewreceipts`, standard library only.
 
-- `types.go`: a Go port of Tier A `ReviewRequest` and `ReviewReceipt` (strict unknown-key detection) with a sentinel error per code that Tier B can actually decide: `ErrRubricMismatch`, `ErrUnobservedOutcome`, `ErrMalformed`, `ErrUnknownKey`, `ErrBadSubject`, `ErrBadIdentity`, `ErrNonceReplayed`, `ErrRequestClosed`, `ErrSubjectMismatch`, `ErrProducerNotEnrolled`, `ErrExecutionUnproven`, `ErrFenceStale` (emitted only under B1/B2), `ErrPassWithUnobserved`, `ErrPoolTooLarge`, `ErrUnavailable`. There is no `ErrSpikeDigestRefused`: Tier B cannot recompute the digest.
-- `identity.go`: recomputes `content_hash`, `request_id` and `receipt_id` from the received document exactly as Tier A seals them, and refuses a mismatch with `review_bad_identity`. The nonce is read from the sealed document. Tier B does not generate it and stores the received bytes unchanged. Golden vectors copied from #971 go in `testdata/` and include a stored-and-read-back request whose identity must not change, and a request whose nonce was altered after sealing.
-- Gate. There is one policy. Preferred shape: the Go gate takes the same typed input as Tier A (`live`, `request`, `pool`, `required_assurance`) and is checked against the shared vectors; if the implementer finds a way to call the canonical Tier A implementation instead of a port, that is preferred, and the choice is recorded in the PR. Either way parity is enforced by vectors, never by reading the Python. Vectors required: one for each of the four #971 rules (request binding differs from live binding -> `unknown`; receipt of another `request_id` is ignored -> `missing`; empty `reviewer_execution_id`, `attempt_id` or `lineage_root` -> `not_independent`; `Operator` vs `operator` -> `not_independent`), plus `stale`, `missing`, `unknown`, `advisory_only`, and manual-never-independent.
-- `store.go`: applied idempotently in `NewStore`, three tables, all with the immutable `BEFORE UPDATE` trigger:
-  - `review_requests` (id, content_hash UNIQUE, envelope BYTEA verbatim, authoring_execution_id, tenant, subject columns, nonce_sha256 UNIQUE (a single-use index, not confidentiality: the nonce is also in the verbatim envelope), ingested_at, created_by). No expiry column from the body: closing is computed from `ingested_at + REVIEW_REQUEST_TTL` and from a request for the same subject identity with a newer binding.
-  - `review_receipts` (id, content_hash UNIQUE, envelope BYTEA, request_id, mode CHECK IN ('worker','manual'), assurance, CHECK `mode <> 'manual' OR assurance = 'advisory'`, reviewer_actor, reviewer_execution_id, attempt_id, tenant, submitted_by_principal_id, ingest_seq BIGSERIAL, ingested_at).
-  - `review_nonce_consumptions` (nonce_sha256 PRIMARY KEY, request_id, receipt_id, consumed_at). Only worker receipts write here.
-- `Store.CreateRequest` validates and verifies identity, resolves the authoring execution through the injected `EvidenceLookup`, stores the sealed bytes and `nonce_sha256`. It returns the `request_id`.
-- `Store.SubmitWorkerReceipt` checks, in one `pgx.Tx`: the request row (`SELECT ... FOR SHARE`), not closed, nonce equals the sealed request's nonce, subject binding, Tier A rules, pass-with-unobserved, then inserts the nonce consumption (unique violation -> `ErrNonceReplayed`) and the receipt. The reviewer execution proof and freshness are read from the injected `ReviewerExecutionSource` BEFORE the transaction (see Concurrency). Every refusal rolls back.
-- `Store.SubmitManualReceipt` forces `mode=manual, assurance=advisory`, runs the same request-exists, not-closed, subject-binding and structural checks, writes no nonce consumption and does not close the request.
-- `Store.ListPool(ctx, requestID)` returns `([]Receipt, error)`, reads `limit+1` rows, maps more than the bound to `ErrPoolTooLarge`, and maps any scan or `rows.Err()` failure to `ErrUnavailable`. It never returns a partial slice with a nil error.
+- `types.go`: `ReviewSubject` (spike and proposal), `Criterion`, `ArtifactRef`, `ReviewRequest`, `ReviewReceipt`, the closed rubrics and choices, the bounds, and the Tier A gate constants. Field and key sets are ported from Tier A exactly; the implementer reads the Python source at the pinned commit, not this prose.
+- `errors.go`: one typed error with a stable `Code` string, and sentinels for exactly these codes: `review_malformed`, `review_unknown_key`, `review_bad_subject`, `review_bad_identity`, `review_rubric_mismatch`, `review_pass_with_unobserved`, `review_unobserved_outcome`. No other code exists in this package.
+- `parse.go`: strict decoding of requests, receipts and subjects (unknown keys, types, bounds, shapes, choices). Parsing and sealing share the same validation so a sealed document always round-trips.
+- `identity.go`: Tier A's canonical JSON and hashing, `SealRequest`, `SealReceipt`, and recomputation on parse. The nonce is an input to sealing and never produced here.
+- `gate.go`: `EvaluateReviewGate(live *ReviewSubject, request *ReviewRequest, pool []ReviewReceipt, requiredAssurance string) (string, error)`, a pure function in the Tier A order. Return values are the Tier A constants.
+- `testdata/`: the vector file(s) and, if generated, the generator's source commit, recorded in the file header.
+- `purity_test.go`: runs `go list -deps` for the package and fails if a forbidden import is present.
 
-### 2. Reviewer principal and execution proof
+Vector provenance. Expected values come only from the canonical Tier A Python. The Go tests load the vectors and compare. A Go test never computes an expected hash with the Go code it is testing. If the vector file is generated, the generator is run against a read-only clone of mctl-agents and only its output is committed.
 
-The static bearer `MCTL_REVIEWER_TOKEN` of the first draft is dropped: it proves a secret, not an execution. By owner decision (2026-11-01) the reviewer authenticates with an execution-scoped agent run token (mctl-api#376).
-
-- `reviewer_actor` is `principalOf(user)`, non-empty. The sealed receipt carries it (it is part of the receipt identity), so the producer sets it and the server accepts it only when it equals the derived actor; any other value is `review_bad_identity`.
-- `ReviewerExecutionSource.Prove(ctx, user, executionID)` is implemented over the run-token store and execution state. It returns proven only if: the token's agent is the reviewer agent (`independent-review` profile); `user.ExecutionID() == executionID`; principal and actor non-empty; token not expired and not revoked; execution not terminal. A read failure is unobservable (503). A negative answer is 403 `review_execution_unproven`. This is also the freshness check; the authoring fence is not used.
-- Trust limit accepted by the owner: the pod binding takes `execution_id` from the parameter of an allowed Workflow; forging it requires the platform-level ability to create such a Workflow under an allowed ServiceAccount. The PR description repeats it.
-- Attempt and lineage. `lineage_root` must equal the `trace_id` of the stored ExecutionEvidence for `reviewer_execution_id` (evidence-writer provenance); `attempt_id` has no authoritative source (blocker B3), so a worker receipt whose `attempt_id` cannot be verified is refused with `review_execution_unproven`, not stored. No caller-supplied value is trusted. The implementer reports whether reviewer evidence exists at submission time.
-- Until B3 is resolved the effective behaviour is: manual path live, worker path fail closed.
-- `PermissionReviewWrite = "review:write"` and a `reviewerGate` confine the reviewer principal to `POST /api/v1/review-receipts`.
-
-### 3. HTTP adapter (`internal/api/handlers_review_receipts.go`)
-
-- `POST /api/v1/review-requests` admits `isHumanAdmin` or `isDirectService`. Tenant comes from the `evidence.Store` refs for `authoring_execution_id`. The response is `{request_id}`.
-- `POST /api/v1/review-receipts`: worker mode when the sealed receipt has `mode=worker`. The caller must be the reviewer principal (else 403 `review_producer_not_enrolled`), the execution proof is required, and the nonce is checked against the sealed request. Manual mode admits only `isHumanAdmin(user)` plus a passing `checkHumanPrincipal`; a store that does not answer gives 503; relayed and surface callers get 403. Tenant is copied from the request row.
-- `GET /api/v1/review-receipts?request_id=` returns `{receipts, complete: true}`; errors map through `writeReviewError`.
-- Rate-limited group, `Options.ReviewReceipts`, nil store gives 503, audit of accepted writes as before.
-
-### 4. Wiring (`cmd/api/main.go`)
-
-`REVIEW_RECEIPTS_DB_URL` falling back to `EVIDENCE_DB_URL` then `AUDIT_DB_URL`, kill switch `REVIEW_RECEIPTS_DISABLED`, `REVIEW_REQUEST_TTL` (default 24h, a bounded server setting, never from the body). Lookups (`EvidenceLookup`, `ReviewerExecutionSource`) may be nil interfaces; a write that needs a nil lookup answers 503.
-
-### 5. MCP (`internal/mcp/review_receipts.go`)
-
-- `mctl_submit_review_assertion` posts a manual receipt. Not readOnly, not destructive, not idempotent.
-- `mctl_get_review_gate` takes the request id and the observed live subject (or states that it is unobservable), reads the sealed request and the complete pool, evaluates the gate with the full Tier A input, and passes any typed REST error through as a tool error. ReadOnly. A failed read is never reported as "gate unsatisfied".
-- Both tools are added to `recordedHints` and `docs/portal-allowlist.json`.
-
-### 6. Concurrency
-
-Option B is chosen, and stated plainly. The reviewer execution proof (run token, execution state, evidence trace) and freshness, and the evidence lookup, are read from stores outside this SQL transaction before it starts. The transaction then locks the request row (`FOR SHARE`), checks closed, nonce, binding and Tier A rules, and inserts the nonce consumption and the receipt atomically. Residual window: the reviewer execution or its credential can end between the proof read and the commit, so a receipt can be accepted for an execution that ended within that interval. Consequences: the receipt is still bound to a sealed request, a nonce and a subject, so it cannot be replayed or applied to another revision; a later request for the same subject closes the old one; and the gate is re-evaluated on read. The window is bounded by the duration of the transaction and is not a promise of atomicity with the lifecycle or execution state. Option A (locking a lifecycle row in the same transaction) is not used because no reviewer-owned lifecycle row exists and `lifecycle.Store` uses its own pool.
-
-### 7. Docs
-
-`docs/review-receipts.md`: contract, code table, auth matrix, the three-way split of checks (proved / carried / not performable), the blockers B1 and B2, the one-receipt-per-request rule, and the concurrency note. Links ADR 025, mctl-gitops#2337 and mctl-agents#971.
+Why a port and not a call: mctl-api cannot run Python in its request path, and Slice B needs a synchronous gate. One policy is preserved by the shared vectors, which run on the Go side in CI and are produced from Tier A.
 
 ## Alternatives
 
-1. **Extend ExecutionEvidence `SUBJECT_KINDS`.** Dropped; mctl-gitops#2337 decided against it and evidence has no nonce semantics.
-2. **Reuse the evidence-writer principal.** Dropped; a leaked evidence credential could forge independent reviews.
-3. **A static reviewer token as proof of execution.** Dropped; it proves possession of a secret, not ownership of an execution.
-4. **Tier B generates the nonce.** Dropped; it would change the sealed request identity that Tier A defines.
-5. **Hand-maintained second copy of the gate.** Avoided; one policy, parity by shared vectors (or the canonical implementation if callable).
+1. **Implement the whole adapter in one run.** Tried; the implementer declined it. Replaced by the three slices.
+2. **Hand-write expected values in Go tests.** Rejected: it proves the Go code against itself.
+3. **Include the Postgres store in this slice.** Rejected by the owner: a clean deterministic library first, storage after parity is proven.
 
 ## Platform impact
 
-- **Migrations.** Three new tables created idempotently at startup; existing tables unchanged; no backfill.
-- **Backward compatibility.** New routes and tools only; MCP tool count +2 with hints and allowlist updated in the same PR.
-- **Resources.** Low-volume writes on the existing Postgres; the pool read is bounded.
-- **Risks.** Tier A drift (shared vectors per rule); reviewer execution cannot be proven today (B1, worker path disabled by default); partial read presenting as empty (typed errors plus a mutation test); deployed env not observed (feature inert until configured).
+- **Code.** One new package; no change to existing packages, routes, tools, tables or configuration.
+- **Runtime.** Nothing imports the package yet, so there is no runtime effect and no rollback beyond reverting the PR.
+- **Risks.** Tier A drift (shared vectors, recorded source commit); a vector that the Go code computed instead of Tier A (provenance rule above, checked in review); hidden I/O creeping into the package (purity test).
