@@ -1,13 +1,14 @@
 # Tasks: issue-737-test-work-context-controlled-work-item-f
 
-None of these tasks changes code. Do not approve this proposal for implementation.
+No implementation tasks. This proposal must not be approved (issue #737 forbids it).
 
-- [ ] 1. Owner confirms that `/mctl work status` in Saved Messages showed the `start` request for #737 as fulfilled — DoD: the request id and final state are noted on #443.
-- [ ] 2. Owner opens the same WorkItem at portal `/work-items/<id>` (mctlhq/mctl-portal#126) (depends on 1) — DoD: the portal shows the same `wi_` id and execution; evidence recorded on #443 and mctlhq/mctl-api#341.
-- [ ] 3. End the DevLoop without implementing (depends on 2) — DoD: `dev-loop-mctlhq-mctl-telegram-737` is abandoned or the proposal is rejected; no PR is opened.
+- [ ] 1. Owner confirms `/mctl work status` shows the start request as `fulfilled, execution <id>` — DoD: request id and execution id captured.
+- [ ] 2. Owner opens the same WorkItem in the portal at `/work-items/<id>` (depends on 1) — DoD: portal shows the same WorkItem id and execution.
+- [ ] 3. Owner records the evidence on #443 and the REST evidence for mctlhq/mctl-api#341 (depends on 2) — DoD: comment posted.
+- [ ] 4. Reject this proposal / abandon its DevLoop (depends on 3) — DoD: no PR opened against mctl-telegram; #737 stays closed.
 
 ## Tests
-- [ ] T1. Manual check: no branch `feat/agents-issue-737-*` and no PR exist for this proposal after task 3.
+- [ ] T1. None to add. Existing `internal/agent/control/work_test.go` and `internal/workctx/client_test.go` already cover the exercised paths; the live session itself is the manual end-to-end check.
 
 ## Rollback
-Nothing to roll back: no code, config or gitops state changes. If the proposal is approved by mistake and a PR appears, close it unmerged and abandon the DevLoop.
+Nothing to roll back: no code, config or gitops change is made. If the proposal was approved by mistake, abandon the DevLoop and close any resulting PR unmerged.
