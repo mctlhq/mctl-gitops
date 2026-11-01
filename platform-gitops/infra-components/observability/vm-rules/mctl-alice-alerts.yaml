@@ -211,6 +211,25 @@ spec:
               Yandex answered 4xx (client credentials, YANDEX_CLIENT_SECRET),
               5xx or timed out.
 
+        - alert: MctlAliceSseStreamsHigh
+          # Each legacy-SSE stream holds a socket and about 0.15 MiB (measured
+          # with 500 streams: RSS 71 -> 148 MiB). Real peak is a handful; 800
+          # streams would add ~120 MiB to a pod that peaks near 200 MiB against
+          # a 384 MiB limit, i.e. an OOM kill is close.
+          expr: max(mctl_alice_sse_streams_open{namespace="labs"}) > 800
+          for: 10m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice: {{ $value | humanize }} SSE streams open"
+            description: >-
+              More than 800 legacy SSE streams have been open for 10 minutes.
+              They live in pod memory (about 0.15 MiB each) and are not shared
+              between replicas, so this approaches the 384 MiB limit. Look for
+              clients that reconnect without closing, or a leak in the
+              transport map (sseTransports).
+
     - name: mctl.alice.upstream
       interval: 60s
       rules:
@@ -265,3 +284,26 @@ spec:
               10-second deadline. Tool calls that need several Quasar requests
               are close to timing out. Compare with
               MctlAliceUpstreamErrorRatioHigh for upstream=quasar.
+
+        - alert: MctlAliceUpstreamBlocked
+          # outcome="blocked" is HTTP 429 or a redirect to a captcha page. It is
+          # not in MctlAliceUpstreamErrorRatioHigh's outcome list on purpose:
+          # that rule is about Yandex being down, this one is about Yandex
+          # refusing us, which looks healthy from the outside.
+          expr: |
+            sum by (upstream) (increase(mctl_alice_upstream_requests_total{namespace="labs",outcome="blocked"}[15m])) >= 3
+          for: 5m
+          keep_firing_for: 30m
+          labels:
+            severity: warning
+            service: mctl-alice
+          annotations:
+            summary: "mctl-alice: Yandex {{ $labels.upstream }} is throttling or challenging us"
+            description: >-
+              At least three calls to the Yandex {{ $labels.upstream }}
+              upstream in 15 minutes were answered 429 or redirected to a
+              captcha page. Yandex is treating an egress IP as a bot. Pods
+              leave through the worker nodes' public IPs, so check whether
+              one node or all of them are affected before changing anything.
+              The pod log has no body; compare with
+              sum by (outcome) (rate(mctl_alice_upstream_requests_total{upstream="{{ $labels.upstream }}"}[15m])).
