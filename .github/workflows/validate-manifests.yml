@@ -17,7 +17,15 @@ env:
   KUBECONFORM_VERSION: "0.8.0"
   # Community CRD schema catalog — covers ArgoCD Application, Argo Workflows,
   # ExternalSecrets, CNPG Cluster, etc. that aren't in the core k8s schema set.
-  CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+  #
+  # Pinned to a catalog commit, not `main`: on 2026-11-01 the catalog's main
+  # moved its Argo Workflows schemas to v4.1.5 (datreeio/CRDs-catalog#1000), which
+  # rejects `spec.schedule` and `synchronization.mutex` that our v3.7 controller
+  # (chart argo-workflows 0.47.5) requires, and 11 valid manifests went red at
+  # once. This SHA is the last commit before that bump (schemas regenerated from
+  # Argo Workflows v3.7.7). Move it together with the argo-workflows chart in
+  # platform-gitops/bootstrap/templates/core-infra/argo-workflows.yaml.
+  CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/522267593c567f301ce7852e00463309fe62fa10/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 
 jobs:
   validate:
