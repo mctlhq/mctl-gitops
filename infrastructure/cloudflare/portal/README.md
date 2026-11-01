@@ -703,12 +703,20 @@ after its date, and it answers for its own upkeep under a separate heading —
 because editing a list in a script is not the same job as taking a server down to
 re-snapshot it. Two things land there: a waiver whose finding has gone
 entirely, which is a deletion, and one that is merely wider than what fires,
-which is a narrowing. Deleting in the second case is the wrong half: for the
-committed `seerrsense` waiver it would fail the still-closed schemas unwaived
-on the next run and point at the recipe, which captures them closed again.
+which is a narrowing. Deleting in the second case is the wrong half: it would
+fail the findings that still fire unwaived on the next run and point at the
+recipe, which for a closed schema captures them closed again.
 
-One waiver is committed today: `seerrsense` publishes closed output schemas
-in code, and the fix waits on that repository's review freeze.
+One waiver is committed today, on `tg` `missing-tool`, until 2026-12-31. The
+seven tools it names are ones the portal's sync credential can never see, so a
+re-snapshot would not add them: `prepare_send_message` is flag-gated,
+`draft_reply` and `send_reply` are core-reply-profile only, and the four
+`*_broadcast` tools need `admin:broadcast`, a scope the sync credential lacks.
+`tg` is a DCR server, so the portal re-syncs it itself (the recipe above is for
+manual-OAuth servers, and none is left). If the portal is ever granted
+`admin:broadcast`, the four broadcast tools reach the catalogue, the waiver
+becomes wider than what fires, and the nightly exits 3 until it is narrowed
+here and `catalogue.json` gains them (an exit 5 until it does).
 
 The waived findings are printed even on a passing run, and the nightly summary
 repeats them, so a green check never reads as more than it is.
