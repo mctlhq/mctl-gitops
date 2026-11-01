@@ -131,6 +131,13 @@ Independence
 - IF the receipt's actor equals any author/committer actor of the reviewed
   revision (spike head commits since base, or the proposal's writer
   execution), THEN THE gate SHALL answer `not_independent`.
+- THE SYSTEM SHALL NOT treat actor inequality as proof of independence,
+  because agent commits carry the operator's identity: a worker request
+  SHALL carry the authoring execution id, and IF it is absent THEN THE gate
+  SHALL answer `unknown`.
+- IF the reviewer's execution lineage (execution id, attempt id, shared
+  trace/parent root) overlaps the authoring execution's, THEN THE gate
+  SHALL answer `not_independent` even when the actors differ.
 - IF the only current receipts are `mode: manual`, THEN THE gate SHALL
   answer `advisory_only` for an autonomous independent-worker gate.
 - IF the reviewer execution id equals the authoring execution id or shares
@@ -165,24 +172,22 @@ Regression
 
 ## Open questions
 
-- Deployed Tier B capability is unobserved: whether mctl-api's deployed
-  `internal/evidence` already accepts the ADR 018 Amendment 2 blocks and
-  `GET /api/v1/evidence/current` could not be read from this run (see
-  design.md "Deployed state checked"). The proposal assumes no user-write
-  endpoint exists and plans a new adapter.
-- Should receipts be a new Tier B resource (`/api/v1/review-receipts`) or
-  an `ExecutionEvidence` envelope extension? This proposal chooses a new
-  resource that references `ExecutionEvidence` by `ev-` id and
-  `ArtifactRef`; the owner may prefer extending `SUBJECT_KINDS`.
+- Tier B on `origin/main` has only the `evidence:write`-gated
+  `POST /api/v1/evidence/records` and no user-write path (design.md
+  "Deployed state checked"); the new adapter is therefore required. That
+  the NEW routes answer on the deployed build is a live-acceptance
+  condition (task 9), not an assumption.
+- RESOLVED (owner, 2026-11-01): receipts are a NEW Tier B resource
+  (`/api/v1/review-receipts`) that references `ExecutionEvidence` by `ev-`
+  id and `ArtifactRef`; `SUBJECT_KINDS` is not extended.
 - Exact author set for spike independence: all commit authors and
   committers in `base_sha..head_sha`, or also the PR opener? Proposal uses
   the union of all three.
-- Whether `report_root` is the spike issue's directory under
-  `roadmap/spikes/` (as `orchestrator/spike_issue.py` reads manifests) or a
-  per-spike `reports/` path; the digest is root-agnostic, the root is a
-  binding field. The report file name is assumed to be fixed as
-  `<report_root>/report.md` by `spike_report_digest_v1`; if spikes use
-  another name, the version must name it before golden vectors are pinned.
+- RESOLVED in design: `spike_report_digest_v1` no longer fixes a report
+  file name. The subject carries `report_root` and `report_path` as binding
+  fields and the digest covers that one file plus `measurements/`. Where
+  spikes actually keep their reports (none exist in `mctlhq/.github`
+  today) is chosen by the first consumer, without changing the digest.
 - Who enrols reviewer producers (admin MCP tool vs gitops-declared
   principal); proposal assumes a gitops-declared service principal like
   `service:mctl-agents-evidence`.
