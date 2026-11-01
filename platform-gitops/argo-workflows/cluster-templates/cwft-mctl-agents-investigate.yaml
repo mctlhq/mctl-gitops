@@ -150,6 +150,27 @@ spec:
         # work_item_id. Requires an issue-investigator release containing
         # mctl-agents#686; an earlier pin does not recognise the flag and
         # exits non-zero.
+      - name: surface
+        value: ""
+        # Optional. The surface the dispatched execution request was made on
+        # (github, telegram, web, cli, api, mcp), sent by the DevLoop for a
+        # dispatched run only (mctl-agents#573, #904). Forwarded as
+        # --surface, so the sealed ContextSnapshot records the current
+        # surface and whether this execution moved surfaces. A label only:
+        # it names no client, session or model. Same omit-when-empty rule as
+        # work_item_id; with it absent the investigator seals the transition
+        # as unknown, never false. `mcp` requires an issue-investigator
+        # release containing mctl-agents#904 (1.114.0+); an earlier pin
+        # refuses it and exits non-zero.
+      - name: actor_kind
+        value: ""
+        # Optional. Kind of actor that made that request (human, agent,
+        # system), forwarded as --actor-kind. Same rules as surface.
+      - name: actor_id
+        value: ""
+        # Optional. The authenticated principal that made that request
+        # (mctl-api's requested_by), forwarded as --actor-id. Same rules as
+        # surface; the investigator bounds its length before any clone.
       - name: traceparent
         value: ""
         # Optional. W3C trace context of the Temporal activity that
@@ -529,6 +550,17 @@ spec:
             if [ -n "$WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID" ]; then
               set -- "$@" --work-item-owner-principal-id "$WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID"
             fi
+            # The dispatched request's provenance (mctl-agents#573, #904).
+            # Same omit-when-empty rule; read from env like the rest.
+            if [ -n "$WORKFLOW_SURFACE" ]; then
+              set -- "$@" --surface "$WORKFLOW_SURFACE"
+            fi
+            if [ -n "$WORKFLOW_ACTOR_KIND" ]; then
+              set -- "$@" --actor-kind "$WORKFLOW_ACTOR_KIND"
+            fi
+            if [ -n "$WORKFLOW_ACTOR_ID" ]; then
+              set -- "$@" --actor-id "$WORKFLOW_ACTOR_ID"
+            fi
             printf '→'
             printf ' %s' "$@"
             printf '\n'
@@ -775,6 +807,12 @@ spec:
             value: "{{workflow.parameters.human_input_responses}}"
           - name: WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID
             value: "{{workflow.parameters.work_item_owner_principal_id}}"
+          - name: WORKFLOW_SURFACE
+            value: "{{workflow.parameters.surface}}"
+          - name: WORKFLOW_ACTOR_KIND
+            value: "{{workflow.parameters.actor_kind}}"
+          - name: WORKFLOW_ACTOR_ID
+            value: "{{workflow.parameters.actor_id}}"
           # The engine run this attempt belongs to (mctl-agents#455): the
           # investigator attaches it to the work item as (argo, workflow name)
           # and takes the store's `we_` id as its execution identity. The
