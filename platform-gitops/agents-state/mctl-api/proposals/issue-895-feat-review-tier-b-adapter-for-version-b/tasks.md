@@ -15,7 +15,7 @@ Planning only. Blockers B1 and B2 are in requirements.md. Task 4 decides whether
 ## Tests
 
 - [ ] T1. Replayed nonce -> `review_nonce_replayed`; receipt count unchanged.
-- [ ] T2. Closed request (past TTL, or superseded by a later request for the same subject) -> `review_request_closed`; nothing stored; nonce not consumed.
+- [ ] T2. Closed request (past TTL, or superseded by a request for the same subject identity with a newer binding; a repeated request for the same binding does not close it) -> `review_request_closed`; nothing stored; nonce not consumed.
 - [ ] T3. Subject binding differs from the request's -> `review_subject_mismatch`; nothing stored.
 - [ ] T4. Worker-mode body from a non-reviewer principal -> `review_producer_not_enrolled`.
 - [ ] T5. A correct reviewer credential with a `reviewer_execution_id` it cannot be tied to -> 403 `review_execution_unproven`; an unreadable source -> 503; a terminal or expired execution -> refused; nothing stored and nonce unconsumed in each case. The authoring/request fence is never accepted as freshness.
