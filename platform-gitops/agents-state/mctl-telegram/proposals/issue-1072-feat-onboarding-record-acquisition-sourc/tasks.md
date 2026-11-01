@@ -1,0 +1,31 @@
+# Tasks: issue-1072-feat-onboarding-record-acquisition-sourc
+
+- [ ] 1. Create `internal/acquisition` with `Snapshot`, `Capture`, `clean`, `Encode`/`Decode` (HMAC-SHA256, 2048-byte cap, 24h TTL, 5m future skew) and `DeriveKey(jwtSecret)` (HKDF info `mctl-telegram/acquisition-cookie/v1`) — DoD: unit tests cover the whitelist, the 100-rune truncation, control and bidi stripping, host-only referrer, self-host referrer treated as none, the `attributed`/`direct` decision, and Decode rejecting bad MAC, oversized, expired and malformed input.
+- [ ] 2. Add `acquisition.Middleware` and wrap `chromePage` (`internal/web/security.go`) and the landing handler used by `RootMCP` — DoD: a GET without a valid cookie sets `mctl_acq` (HttpOnly, SameSite=Lax, Secure on https, MaxAge 86400); a GET with a valid cookie sets nothing; non-GET and `/oauth/*`, `/telegram/connect` and `/local-bridge/activate` never set it.
+- [ ] 3. Schema (depends on nothing): add `user_acquisition` and `acquisition_capture_epoch` to `sqliteSchema()` and `pgSchema()` in `internal/db/db.go`, seed the epoch row in `Migrate`, and add `oauth_pending_auth.acquisition` via `addColumnIfMissing` — DoD: `Migrate` runs twice cleanly on SQLite and Postgres, and the existing migration tests pass.
+- [ ] 4. Carry the snapshot through OAuth (depends on 1, 3): add `Acquisition` to `pendingAuth` and `db.OAuthPendingAuth`, extend `InsertOAuthPending`/`ConsumeOAuthPending`, decode the cookie in `handleAuthorize` with `MCPClient = connectfunnel.ClientLabel(redirectURI)`, and add the `mctl_acquisition_capture_total{state,reason}` metric — DoD: both in-memory and DB-backed modes round-trip the snapshot, and an empty stored value consumes as `unknown`.
+- [ ] 5. Persist at creation (depends on 3): add `Acquisition *Acquisition` to `TelegramIdentityCapture`; in `EnsureUserByTelegramCapture`, wrap the INSERT in a tx and, when `RowsAffected()==1` and a snapshot is present, write `user_acquisition` inside `SAVEPOINT acq` with rollback-to-savepoint, a warning log without values, and the `mctl_acquisition_write_failures_total` counter on error — DoD: a returning user never writes, and a failed acquisition insert still returns the user id with no row.
+- [ ] 6. Wire callers (depends on 4, 5): `handleTelegramCallback` passes the pending snapshot; `local_bridge_activate.go` passes `{State: unknown, MCPClient: local-bridge}` — DoD: the full OIDC sign-up test produces the expected row.
+- [ ] 7. Deletion (depends on 3): add `DELETE FROM user_acquisition WHERE user_id = $1` to `HardDeleteAccount` in `internal/db/store.go` — DoD: a deletion test asserts the row is gone while `users` survives.
+- [ ] 8. Reporting (depends on 5): add `Store.AcquisitionLabelsFor` and `Store.AcquisitionReport` (dialect-aware day bucketing); add a `src=` suffix to `buildDigestMessage` and `runDigest` that degrades to no suffix on lookup error; add the `get_acquisition_report` MCP tool (admin scopes, audited, output schema) registered in `internal/mcp/server.go` and in any tool-enumerating tests and catalogs — DoD: digest and tool tests pass, and labels are sanitized.
+- [ ] 9. Disclosure (depends on 2): update `internal/web/privacy.html` for the cookie and stored fields, fix the "sets no cookies" statement, and adjust `landing_privacy_test.go` if needed — DoD: the copy matches the implemented fields and TTL.
+- [ ] 10. Add any new slog attribute names to `internal/audit/redact.go`; run `go fmt`, `go vet`, `golangci-lint` and the full test suite — DoD: CI green.
+
+## Tests
+
+All fixtures use synthetic personas (Alice, Bob, Carol, Dana) and `git grep`-checked ids.
+
+- [ ] T1. End-to-end: GET `/?utm_source=x&utm_campaign=y` with `Referer: https://news.example/post/1`, carry the cookie to `/oauth/authorize`, complete a stubbed OIDC callback for Alice. Expect exactly one `user_acquisition` row with `state=attributed`, `utm_source=x`, `utm_campaign=y`, `referrer_host=news.example`, and no path in any field.
+- [ ] T2. Direct visit (no UTM, no Referer), then sign-up. Expect `state=direct`. Sign-up with no cookie: expect `state=unknown`. Tampered-MAC cookie: expect `unknown`. Expired cookie: expect `unknown`. Assert neither state is ever written as the other.
+- [ ] T3. Returning user: Bob signs up, then signs in again with a different cookie. The row is byte-identical.
+- [ ] T4. First touch: landing with `utm_source=a`, then `utm_source=b` before sign-up. The cookie and the row hold `a`.
+- [ ] T5. Bounds: a 500-char UTM value is stored as 100 runes; control and bidi characters are stripped; a cookie over 2048 bytes is rejected; a digest line with a hostile `utm_source` (newline, RTL override) renders sanitized on one line.
+- [ ] T6. Write failure: inject a failing acquisition insert (for example drop the table or use a hook). Sign-in succeeds, the user row exists, no acquisition row exists, the failure counter increments, and no `direct` row is written.
+- [ ] T7. Deletion: `HardDeleteAccount` for Carol removes her `user_acquisition` row in the same tx.
+- [ ] T8. Report: seed users across labels plus `audit_logs` on 1 and 2 distinct days. `AcquisitionReport` returns the correct signups, tool_call_users and active_2plus_days per label on both SQLite and Postgres. Users created before the epoch report `unknown (pre-capture)`.
+- [ ] T9. `get_acquisition_report` is refused without admin scopes and returns the JSON schema with them.
+- [ ] T10. Mutation proof (recorded in the PR description): (a) make the middleware overwrite an existing valid cookie, and T4 goes red; (b) map a missing cookie to `direct`, and T2 goes red; (c) skip the `RowsAffected()==1` guard, and T3 goes red; (d) remove the `HardDeleteAccount` purge, and T7 goes red. Revert each and confirm green.
+
+## Rollback
+
+Redeploy the previous image tag. All schema changes are additive. The old image ignores `user_acquisition`, `acquisition_capture_epoch` and `oauth_pending_auth.acquisition`, and the stray `mctl_acq` cookie expires within 24h. To purge the collected data as well, run `DROP TABLE user_acquisition; DROP TABLE acquisition_capture_epoch;`; the extra pending-auth column is harmless and transient. Sign-in does not depend on any of it, because acquisition failures are already non-fatal by design.
