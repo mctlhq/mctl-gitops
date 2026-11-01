@@ -1,0 +1,26 @@
+# Tasks: issue-871-feat-mcp-bind-execution-to-readable-inte
+
+- [ ] 1. Add `ErrIntentUnavailable`, `IntentUnavailableError{IntentID}` and the `pinnedIntentState` helper in `internal/workitems/execution_requests.go`; use it in `CreateExecutionRequest` in place of the EXISTS query, after the replay check — DoD: a NULL-text intent returns `ErrIntentUnavailable`; a missing or foreign intent still returns `ErrIntentNotFound`; on a refusal no row, event or idempotency record is written.
+- [ ] 2. (depends on 1) Re-check the pinned intent in `FulfilExecutionRequest` before `checkStart`/`resumeTx`, for both kinds; skip the re-check on an already-fulfilled replay — DoD: fulfilling after redaction attaches no execution and leaves the request `claimed` with its claim token still valid for reject.
+- [ ] 3. (depends on 1) Surface `intent_available` from `ClaimExecutionRequest`, computed in the claim transaction — DoD: the claim response carries `intent_available` exactly when `intent_id` is set.
+- [ ] 4. (depends on 1-3) In `internal/api/handlers_execution_requests.go`, add `xrCodeIntentUnavailable`, map it to 409 with details `{intent_id}`, add it to `executionRequestRefusalCode`, and add `intent_available` to the claim response — DoD: the handler tests pass; no intent text appears in the error body or the audit params.
+- [ ] 5. Add the optional `intent_id` number argument to `toolRequestWorkItemExecution` in `internal/mcp/workitems.go`, with local validation and an updated description — DoD: a valid value is forwarded as an integer, an invalid one is refused without an HTTP call, and when it is absent no key is sent; the MCP tool count is unchanged.
+- [ ] 6. (depends on 4) Update OpenAPI and the docs for the new 409 code and the claim field — DoD: `go test ./...`, `go vet` and `golangci-lint` are clean.
+- [ ] 7. Write the cross-repo rollout note in the PR: the mctl-agents worker that understands `intent_available`/`intent_unavailable` (#573/#904) deploys before any MCP-origin intent-pinned request is admitted; Portal `request_execution` stays disabled — DoD: the note is in the PR description, and nothing in this PR changes Portal or worker config.
+
+## Tests
+- [ ] T1. Store: an intent redacted before the request (fixture `UPDATE work_item_intents SET text=NULL`) makes create return `ErrIntentUnavailable` and leaves no open request.
+- [ ] T2. Store: an intent redacted after enqueue (create, claim, fixture redaction, then fulfil) returns `ErrIntentUnavailable`; no execution exists; reject by the holder succeeds.
+- [ ] T3. Store: a missing intent id and another item's intent id both return `ErrIntentNotFound`.
+- [ ] T4. Store: replacement context. After the T2 rejection, a new intent and a new request with a new key pinning it fulfil, and the execution request names the new intent_id. The old request is unchanged, and no substitution happened on the old one.
+- [ ] T5. Store: replaying the same key and body after redaction returns the original request (created=false), not 409; the same key with a different intent_id is `idempotency_key_reused`.
+- [ ] T6. API: a viewer is refused 403 `tenant_role_forbidden` on create with and without intent_id; a foreign-tenant item answers 404 (not visible); a foreign item's intent answers 404 `intent_not_found`; a redacted intent answers 409 `intent_unavailable` with details `{intent_id}` and no text.
+- [ ] T7. API: the claim response includes `intent_available=false` after the fixture redaction and true otherwise; fulfil returns 409 `intent_unavailable` and is audited as a refusal.
+- [ ] T8. MCP: `intent_id` is forwarded verbatim as an integer (asserted on the captured request body); bad values (0, -1, 1.5, a string, above 2^53) are refused without calling the API. Mutation test: deleting the `body["intent_id"]` assignment must fail this test.
+- [ ] T9. MCP/API: resume of a Telegram-origin item (origin_surface=telegram) via the MCP wrapper records the request with `surface=mcp` and `requested_by` from the token. Mutation test: forcing the surface to the item's origin must fail. A relayed telegram token naming `surface=mcp` is refused 400, so the label cannot be forged.
+- [ ] T10. MCP to MCP with a different OAuth client and the same principal records `surface=mcp` on both requests (no transition), and action-approval lookups are unaffected by the surface label.
+- [ ] T11. Old-image simulation: a fulfil client that does not recognize `intent_unavailable` gets a 409, no execution is attached, and the request stays claimed until lease lapse.
+- [ ] T12. Integration with mctl-agents#573 (in that repo, referenced here): the sealed snapshot of the T9 resume has `current_surface=mcp` and `surface_transition=true`; missing provenance seals as unknown and is refused.
+
+## Rollback
+Revert the PR. There is no schema change, so a revert is a plain image rollback (`mctl_rollback_service`, or the image tag in gitops). After the revert, the MCP wrapper simply stops sending `intent_id`, the create path goes back to the existence-only check, and the claim response drops `intent_available`. Workers must tolerate the field's absence, which keeps an mctl-agents worker that reads it safe. Until mctl-api#353 ships a sweeper no stored intent has NULL text, so rolling back changes no observable behavior for real data.
