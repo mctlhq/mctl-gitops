@@ -224,12 +224,11 @@ env:
   ASSISTANT_REGISTRY_ENABLED: "true"
   # Human-input adapter (mctl-telegram#571, 0.79.0+): polls mctl-api for
   # clarification questions addressed to linked operators and posts them to
-  # Saved Messages; /mctl input answers. Enabled on THIS instance only, the
-  # one that serves the owner's Saved Messages (see workContext below);
-  # enabling production too would deliver every question twice. Requires
-  # WORK_CONTEXT_ENABLED, which workContext.featureEnabled sets. Rollback:
-  # set "false" (docs/runbook.md, "Human-input adapter").
-  HUMAN_INPUT_ENABLED: "true"
+  # Saved Messages; /mctl input answers. It must run on exactly one instance
+  # or every question is delivered twice. Moved to production on 2026-11-01
+  # with the agent plane (services/labs/mctl-telegram); off here since then.
+  # Requires WORK_CONTEXT_ENABLED, which workContext.featureEnabled sets.
+  HUMAN_INPUT_ENABLED: "false"
   # Absolute-TTL exemptions (mctl-telegram#410, 0.51.0+). Preview had none,
   # which meant the soak identity acquired expires_at = connected_at + 90d the
   # moment it logged in: 2026-11-25 for the @mctlhq session created on
