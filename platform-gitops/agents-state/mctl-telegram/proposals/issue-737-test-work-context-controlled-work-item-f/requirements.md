@@ -1,37 +1,25 @@
-# Controlled work item for the #443 live session: no code change
+# Controlled work item for the #443 live session (no code change)
 
 ## Context
-Issue #737 is not a feature request or a bug. It is a controlled GitHub issue the
-owner created as the target of a live session that closes mctlhq/mctl-telegram#443
-(the Telegram work-context adapter) and supplies REST evidence for
-mctlhq/mctl-api#341. In that session the owner runs `/mctl link`, then
-`/mctl work https://github.com/mctlhq/mctl-telegram/issues/737` from Telegram Saved
-Messages, polls `/mctl work status` until the `start` execution request is
-fulfilled, and opens the same WorkItem in the portal at `/work-items/<id>`
-(mctlhq/mctl-portal#126).
+Issue mctlhq/mctl-telegram#737 is a deliberately controlled test work item. It exists only so the owner can run the #443 live session end to end: `/mctl link`, then `/mctl work https://github.com/mctlhq/mctl-telegram/issues/737` from Telegram Saved Messages, `/mctl work status` until the `start` execution request is fulfilled, and the same WorkItem opened in the portal at `/work-items/<id>` (mctlhq/mctl-portal#126). That session also supplies REST evidence for mctlhq/mctl-api#341.
 
-The `start` request is what started this DevLoop investigation. The issue says
-plainly that the proposal must not be approved and nothing must be implemented.
-The issue is already CLOSED. This proposal therefore records that this run
-happened and specifies no change to the repository. It exists so the session can
-observe a fulfilled execution with a sealed proposal.
+The DevLoop investigation that produced this proposal is itself the execution the session observes. The issue states explicitly that the proposal must not be approved and that nothing is to be implemented; the issue is already CLOSED. This proposal therefore specifies no repository change. It records the expected observable behaviour of the already-shipped work-context adapter (`internal/agent/control/work.go`, `internal/workctx/`) so the reviewer can check the session evidence against it, and it is meant to be left unapproved (or rejected).
 
 ## User stories
-- AS the platform owner I WANT the DevLoop started by `/mctl work` to finish with a proposal SO THAT the live session can observe a fulfilled start request end to end.
-- AS a reviewer I WANT the proposal to state that no implementation is intended SO THAT nobody approves it by mistake and no PR is opened.
+- AS the platform owner I WANT a throwaway issue whose DevLoop run I can observe from Telegram and the portal SO THAT I can record end-to-end evidence for #443 and mctl-api#341 without changing any code.
+- AS a reviewer I WANT the proposal to state plainly that it contains no implementation work SO THAT nobody approves it and sends it to the implementer by mistake.
 
 ## Acceptance criteria (EARS)
-- WHEN this proposal is reviewed THE SYSTEM SHALL present no code, config or gitops change to implement.
-- WHILE issue #737 is a controlled test item THE SYSTEM SHALL leave the proposal unapproved (status remains `proposed`, or the DevLoop is abandoned by the owner).
-- IF someone approves this proposal THEN the implementer SHALL find no tasks that change files, and SHALL open no pull request.
-- WHEN the session evidence is recorded on #443 THE SYSTEM SHALL need no follow-up from this proposal.
+- WHEN the owner sends `/mctl work https://github.com/mctlhq/mctl-telegram/issues/737` in Saved Messages from a linked account THE SYSTEM SHALL create (or reuse) one WorkItem with external key equal to the issue URL, bind it, and submit exactly one `start` execution request (existing behaviour of `WorkHandler.handleOpen`).
+- WHEN the owner sends `/mctl work status` THE SYSTEM SHALL reply with the WorkItem id, issue URL, state, and the request line from `formatRequestState` (`pending`, `claimed`, `fulfilled, execution <id>`, or `failed: <reason>`).
+- WHILE this proposal exists THE SYSTEM SHALL NOT receive any code, configuration, schema or gitops change attributable to it.
+- IF this proposal is approved THEN the reviewer SHALL treat that as an error and reject or abandon the DevLoop, because the issue forbids approval and implementation.
+- WHEN the session evidence (WorkItem id, request id, execution id, portal URL) is recorded on #443 THE SYSTEM SHALL require no further action on #737 (it is already closed).
 
 ## Out of scope
-- Any change to `internal/agent/control/work.go`, `internal/workctx/`, `internal/db/work_item_bindings.go` or other repository code.
-- Any change to `services/labs/mctl-telegram/values.yaml` in mctl-gitops.
-- Recording the session evidence on #443 or mctl-api#341. The owner does this by hand.
-- Approving, implementing or merging anything for #737.
+- Any change to `mctl-telegram` code, tests, migrations, Helm values or docs.
+- Fixing any defect the live session might surface; such findings go into new issues.
+- Approving this proposal or running the Tier 2 implementer for it.
 
 ## Open questions
-- Should the owner abandon this DevLoop (`mctl_abandon_dev_loop` on `dev-loop-mctlhq-mctl-telegram-737`) once the evidence is recorded, rather than leaving it parked at the approval gate? Leaving it parked is harmless, but an abandoned loop releases its lifecycle-ownership row. This proposal recommends abandoning it.
-- The gitops comment above `workContext` says the tenant step was done with "tenant admins", but the deployed value is `tenant: mctl`. That does not affect this proposal; it is noted so the owner can confirm which tenant the WorkItem was created in when collecting evidence.
+- None blocking. If the session surfaced a defect, it is not captured in this issue and needs its own issue.
