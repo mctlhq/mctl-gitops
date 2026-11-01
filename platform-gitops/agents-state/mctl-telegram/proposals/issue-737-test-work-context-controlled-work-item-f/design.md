@@ -1,57 +1,28 @@
 # Design: issue-737-test-work-context-controlled-work-item-f
 
 ## Current state
-The path the live session exercises already exists in the clone:
+The Telegram side of the flow under observation already exists:
+- `internal/agent/control/work.go`: `WorkHandler.Handle` handles the `/mctl work` subcommands. `handleLink` binds the account. `handleOpen` canonicalises the issue URL with `workctx.CanonicalIssueURL`, resolves the linked actor, reuses or creates the per-thread binding (`Store.GetWorkItemBinding` / `UpsertWorkItemBinding`), and submits a `start` execution request (`workctx.ExecutionKindStart`) with an idempotency key from `workctx.IdempotencyKey(chat, msg, "start", 0)`. `handleWorkStatus` and `formatRequestState` print the request state, for example "claimed — the platform is starting it."
+- `internal/workctx/client.go`, `envelope.go`, `errors.go`: the mctl-api WorkItem REST client and its typed error mapping (`workctxErrText`).
+- `internal/db/work_item_bindings.go`: stores each Saved Messages thread's binding to a WorkItem.
 
-- `internal/agent/control/work.go`: `WorkHandler.Handle` dispatches `/mctl link`
-  (`handleLink`), `/mctl work <issue-url>` (`handleOpen`), `/mctl work status`
-  (`handleWorkStatus`), `/mctl work note` (`handleNote`) and `/mctl work resume`
-  (`handleResume`). `handleOpen` creates or reuses the WorkItem binding, then
-  submits a start request with kind `workctx.ExecutionKindStart` and an idempotency
-  key from `workctx.IdempotencyKey(meta.ChatTGID, meta.TGMessageID, "start", 0)`.
-  If the binding exists but no start request was recorded, it redoes the
-  create-and-start step. `formatRequestState` renders the pending, claimed and
-  fulfilled states that `/mctl work status` shows.
-- `internal/workctx/client.go`, `envelope.go`, `errors.go`: the mctl-api
-  work-context REST client. `workctxErrText` maps typed errors such as
-  `execution_request_open` and `execution_active` to replies.
-- `internal/db/work_item_bindings.go`: the persisted Telegram-chat-to-WorkItem
-  binding.
-
-Issue #737 asks only that this path be exercised against a real issue. It asks
-for no change.
+This issue needs none of that code to change. The issue is the input to the flow, not a change to it.
 
 Deployed state checked:
-- `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml`: the service is
-  deployed in tenant `labs` with hosts `tg.mctl.ai` and
-  `labs-mctl-telegram.mctl.ai`. The `workContext` block reads `enabled: true`,
-  `featureEnabled: true`, `tenant: mctl`,
-  `tokenVaultKey: platform/mctl-api/surface-tokens`,
-  `tokenVaultProperty: telegram-token` and `apiBaseUrl: ""`. Its comment says the
-  owner steps were done on 2026-10-04, so the adapter is on in production and the
-  session can run against it.
-- No mctl MCP read tools were called. Runtime state (logs, the WorkItem id, the
-  request state) was not observed, and none of it is needed for a no-change
-  proposal.
+- `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml`: image tag `0.119.0`. `workContext.enabled: true`, `featureEnabled: true`, `tenant: mctl`, token from Vault `platform/mctl-api/surface-tokens` / `telegram-token`. `HUMAN_INPUT_ENABLED: "true"`. So `/mctl work` is enabled in production, consistent with the session the issue describes.
+- No mctl MCP read tools were called. They were not needed, because this proposal asserts nothing about runtime behaviour beyond the gitops values above.
 
 ## Proposed solution
-Change nothing. The deliverable is this proposal: the observable artifact of a
-fulfilled `start` execution request. The proposal must not be approved. After the
-owner records the evidence on #443, the DevLoop should be abandoned, not approved,
-so that the implementer never runs.
+No change. This proposal is the evidence artifact of the observed DevLoop
+investigation. Expected handling:
+1. Keep it at `proposed` and do not approve it.
+2. When the owner has recorded the session evidence on #443, end the DevLoop by abandoning or rejecting it (for example `mctl_abandon_dev_loop` on `dev-loop-mctlhq-mctl-telegram-737`).
 
 ## Alternatives
-- Propose a small real change, such as more tests for `handleOpen`. Rejected: the
-  issue explicitly forbids implementation, and an actionable proposal invites a
-  mistaken approval.
-- File a clarification question instead. Rejected: the issue is fully clear about
-  the intent, and a question would delay the fulfilled state the session observes.
-- Write a deliberately empty or failing proposal. Rejected: the session needs a
-  normal, complete proposal to observe the success path.
+- Invent a small change (for example a test for `formatRequestState`) so the proposal is "implementable". Rejected: the issue explicitly forbids implementation, and a real diff could be approved and merged by accident.
+- File a clarification question. Rejected: the issue already answers the only question that matters (do not implement).
+- Write no proposal. Rejected: the session must observe a completed investigation with a proposal, and the orchestrator expects the three files.
 
 ## Platform impact
-- Migrations: none. Backward compatibility: unaffected. Resources: none beyond
-  this already-spent investigation run.
-- Risk: someone approves the proposal and the implementer runs. Mitigation: the
-  tasks change no files, so the implementer has nothing to commit and the proposal
-  moves to needs-triage with no PR. The owner should abandon the loop instead.
+- Migrations: none. Backward compatibility: unaffected. Resources: none beyond the investigation run already spent.
+- Risk: someone approves the proposal by mistake. Mitigation: requirements and tasks contain no code-changing task, and the implementer has nothing to build. A parked DevLoop is closed by abandoning it.
