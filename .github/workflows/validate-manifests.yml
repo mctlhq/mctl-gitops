@@ -141,6 +141,31 @@ jobs:
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap-eval.yaml"
 
+      # issue-2286: obiSpike.enabled is false by default, so this overlay is
+      # the only place obi-spike.yaml renders in CI. teardownAfter is
+      # injected relative to today (a fixed date would go stale), and the
+      # guard runs --selftest first: a detector never seen to fire is not
+      # known to work.
+      - name: Render and validate the OBI spike overlay (issue-2286)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-obi-spike.py --selftest
+          scripts/validate-obi-spike.py
+          printf 'obiSpike:\n  teardownAfter: "%s"\n' "$(date -u -d '+7 days' +%F)" > "$tmpdir/teardown.yaml"
+          scripts/validate-obi-spike.py \
+            --values platform-gitops/bootstrap/values.yaml \
+            --values tests/fixtures/obi-spike.example-values.yaml \
+            --values "$tmpdir/teardown.yaml"
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            -f tests/fixtures/obi-spike.example-values.yaml \
+            -f "$tmpdir/teardown.yaml" > "$tmpdir/bootstrap-obi.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" \
+            "$tmpdir/bootstrap-obi.yaml"
+
       # .github#50: both flag states are rendered explicitly with --set, so
       # the assertion does not depend on the committed default (enabled
       # since the owner-approved rollout). On: the usage-writer ExternalSecret
@@ -921,6 +946,22 @@ jobs:
             exit 1
           fi
           python3 tests/test_otel_collector_redaction_e2e.py
+
+      - name: Unit-test the OBI spike render and attribution (issue-2286)
+        # The render test pins the privilege set and the default-off
+        # byte-identity. The attribution e2e runs the pinned otelcol-contrib
+        # image; each --mutation reintroduces one forgeable-identity defect
+        # and must fail first, so the detector is seen to fire on every run.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_obi_spike_render.py
+          for m in ip-association read-team keep-incoming; do
+            if python3 tests/test_obi_spike_attribution_e2e.py --mutation "$m"; then
+              echo "::error::attribution e2e passed with mutation $m -- the detector does not detect it"
+              exit 1
+            fi
+          done
+          python3 tests/test_obi_spike_attribution_e2e.py
 
       - name: Validate storage & finops Grafana dashboards
         run: |
