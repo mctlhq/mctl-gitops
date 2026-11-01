@@ -38,14 +38,23 @@ Deployed state checked:
    - `executionRequestRefusalCode` returns it for fulfil, so the refusal is audited (`auditExecutionRequestRefusal`) as `work_item.execution_request_fulfil_refused` with reason `intent_unavailable`.
    - Claim response: `writeExecutionRequest(w, 200, x, {"claim_token": ..., "intent_available": b})`, with `intent_available` present only when `intent_id` is set.
 4. OpenAPI and docs: add `intent_unavailable` (409) to the create and fulfil responses and `intent_available` to the claim response in `internal/openapi`, if the spec is maintained there, and in the docs page describing work items.
-5. Surface provenance: no new code. The MCP wrapper already pins `surface:"mcp"`, and `mutationFor` refuses a relayed token that claims another surface. Tests prove the request row carries `surface=mcp` with `requested_by` from the token for a Telegram-origin item. The mctl-agents#573 consumer derives `surface_transition` from the item's `origin_surface` and the request's `surface`, and an empty value there is unknown. Surface labels are never consulted by `internal/workitems/action_approvals.go`; a regression test pins that.
+5. Surface provenance on the request: no new code. The MCP wrapper already pins `surface:"mcp"`, and `mutationFor` refuses a relayed token that claims another surface. Tests prove the request row carries `surface=mcp` with `requested_by` from the token for a Telegram-origin item. Surface labels are never consulted by `internal/workitems/action_approvals.go`; a regression test pins that.
+6. Per-execution provenance (for mctlhq/mctl-agents#960)
+   - Why: today the investigator compares the new surface with the **item's origin**, because v1 executions carry no surface. An MCP->MCP resume over a Telegram origin therefore seals `surface_transition=true` (observed live on 2026-11-01, snapshot `cs_0c8288c65db5f2e917592fa112d1950b`). That breaks the acceptance line "MCP to MCP is not a transition".
+   - What:
+     - Add `Surface`, `RequestedBy` and `ActingPrincipal` (all `omitempty`) to `workitems.Execution`.
+     - Fill them in `listExecutions`, and in the latest-execution read behind the work-item view, with a `LEFT JOIN work_item_execution_requests xr ON xr.execution_id = wie.id AND xr.state = 'fulfilled'`.
+     - Execution ids are unique, so the join yields at most one row.
+     - An execution that was attached rather than dispatched has no row and carries none of the fields.
+   - The change is read-only: no migration and no write path.
+   - The mctl-agents side then uses the previous execution's `surface`/`requested_by` as its baseline. That is a separate PR in mctl-agents after this release.
 
 Why this way: the fail-closed decision sits next to the existing intent check, under the same item lock, using the store's established NULL-text meaning of redaction. The fulfil-time recheck is the only place mctl-api can stop a placeholder run after enqueue without trusting the worker.
 
 ## Alternatives
 - Substitute the latest readable intent when the pinned one is redacted. Rejected: the issue forbids automatic substitution, and it would run work the requester never bound.
 - Recheck only in the worker (mctl-agents). Rejected as the sole guard: an old worker image would run on placeholder text. Kept as the first line (via `intent_available`), with fulfil as the backstop.
-- Auto-reject the request in the store when the intent is redacted at claim. Rejected: rejection is the holder's act (claim-token fenced), and the worker must park with an ADR 013 clarification rather than silently closing the request.
+- Auto-reject the request in the store when the intent is redacted at claim. Rejected: rejection is the holder's act (claim-token fenced). The holder (mctl-agents' dispatcher, #963) rejects it with a typed reason as soon as it sees `intent_available=false`. That is not a silent close: the request records the reason, and no loop or engine run is ever started.
 
 ## Platform impact
 - Migrations: none. The `intent_id` column already exists, and the check reads `work_item_intents.text`.
@@ -53,10 +62,16 @@ Why this way: the fail-closed decision sits next to the existing intent check, u
   - The REST create of a readable intent is unchanged.
   - A NULL-text intent changes from 201 to 409. No production intent is NULL yet (no sweeper), so in practice no live caller sees this change.
   - The claim response gains one field, which tolerant decoders ignore.
-- Old worker image: a fulfil refused with `intent_unavailable` arrives as a 409 code the worker does not know. It must not retry into a loop. Its request stays claimed until the lease lapses and is then re-claimable, which can repeat. Mitigation:
-  - roll out the mctl-agents worker that understands `intent_available` / `intent_unavailable` before admitting new MCP-origin intent-pinned requests;
-  - add a test of old-image behavior that simulates an unknown-code 409 and asserts no execution is attached;
-  - the condition cannot occur until mctl-api#353 ships a sweeper.
+- Dispatcher behaviour, verified against `orchestrator/temporal/dispatcher.py` on mctl-agents main (1.114.1):
+  - Today it rejects on a fulfil refusal only for `TERMINAL_FULFIL_CODES = {state_version_conflict, invalid_transition}`, and **defers** on any other 4xx.
+  - An `intent_unavailable` fulfil refusal from an unchanged dispatcher therefore cycles through claim, deliver, fulfil 409 and defer until the accepting loop's `FULFILMENT_WAIT` runs out. The next claim then rejects with the misleading reason `engine_run_ended`.
+  - mctlhq/mctl-agents#963 fixes this: it adds `intent_unavailable` to the terminal codes and rejects on `intent_available=false` before any delivery.
+- **Rollout order (hard):**
+  1. mctl-agents#963 released and running on the exec workers. It is inert against today's API.
+  2. This PR is released.
+  3. The agents side of #960 follows this release.
+- Old-image test (T11) stays, rewritten for the dispatcher's real behaviour: an unknown-code 409 attaches no execution, and the request stays claimed until the lease lapses.
+- The condition cannot occur in production until mctl-api#353 ships a sweeper.
 - Portal `request_execution` stays disabled; this change does not touch it.
 - Resource impact: one indexed primary-key lookup per create, claim and fulfil.
 - Risk: a leak of intent text in errors or audit records. Mitigation: only ids appear in errors and audit records, and a test asserts it.
