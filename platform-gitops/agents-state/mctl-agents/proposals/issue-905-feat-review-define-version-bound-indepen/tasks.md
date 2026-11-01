@@ -18,6 +18,7 @@
 - [ ] T4. Invalidation: report byte change, measurement byte change, added measurement file, `source_sha` change with identical bytes, `base_sha` change, proposal amendment -> `stale`; unchanged -> `satisfied` (positive and negative per rule).
 - [ ] T5. Unknown live revision or `observation_failed` -> `unknown`, never `missing` or `satisfied`.
 - [ ] T6. `PASS` with an `unobserved` criterion rejected; `UNOBSERVABLE` accepted.
+- [ ] T7a. Authors and reviewer have different actors (operator identity vs service principal) but share an attempt id or lineage root -> `not_independent`; a worker request with no `authoring_execution_id` -> `unknown`; removing the lineage check turns this red.
 - [ ] T7. Independence: reviewer actor in `author_actors` -> `not_independent`; same execution/attempt id -> `not_independent`; manual-only receipts under `required_assurance=independent` -> `advisory_only`; model-name strings are never consulted (a receipt whose reviewer name differs but actor matches is still `not_independent`).
 - [ ] T8. Regression: amended `.github` spike PR fixture with an old `claude[bot]` `APPROVED` review and green checks -> gate `stale` (receipt bound to pre-amendment head/inventory).
 - [ ] T9. mctl-api adapter (in mctl-api repo): replayed nonce, closed request, subject mismatch, unenrolled producer, stale fence, forged actor field -> typed refusal, zero rows written; valid worker and manual submissions stored with server-derived actor.

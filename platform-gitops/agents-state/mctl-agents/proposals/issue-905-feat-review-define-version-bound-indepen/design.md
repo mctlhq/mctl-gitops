@@ -63,9 +63,19 @@ Deployed state checked:
   whether `MCTL_EVIDENCE_AMENDMENT_2` is on in production was not observed
   here (earlier proposals issue-735/issue-744 in agents-state claim the CWFTs
   set it to `"true"`; that is a claim, not an observation by this run).
-- Consequence: the existence and shape of any review-capable Tier B write
-  path is **unknown**; this design plans the adapter explicitly (task 6) and
-  makes live acceptance conditional on observing it deployed.
+- Observed later on mctl-api `origin/main` (amendment, 2026-11-01):
+  `POST /api/v1/evidence/records` exists (`internal/api/handlers_evidence.go`,
+  `router.go`), admitting only holders of `evidence:write` (the
+  evidence-writer service principal and admins), and `evidenceWriterGate`
+  confines that principal to that route plus decision records. There is no
+  user-write path and no review resource. So an adapter is required, and a
+  manual assertion cannot reuse this route (it would need `evidence:write`
+  for a human, and would carry no request/nonce binding).
+- Consequence: this design plans the adapter explicitly (task 6) as a NEW
+  Tier B resource (owner decision 2026-11-01), referencing
+  `ExecutionEvidence` by `ev-` id. Live acceptance stays conditional on
+  observing the new routes answering on the deployed mctl-api (task 9);
+  `origin/main` is not the deployed build.
 
 ## Proposed solution
 
@@ -91,7 +101,12 @@ rejecting unknown keys, `seal()` as the only identity filler,
 `ReviewRequest`: `subject`, `rubric` (`spike_v1` | `proposal_v1`, must
 match subject kind), `mode` (`worker` | `manual`), `author_actors` (the
 set of principals/commit identities that authored the revision),
-`authoring_execution_id` (optional `we_`/`ex-`), `nonce` (server-minted,
+`authoring_execution_id` (`we_`/`ex-`; REQUIRED when `mode=worker`, because
+commit identity cannot establish independence: every agent commit is
+authored by the operator's global git identity, so `author_actors` is
+the same human for author and reviewer and an actor-inequality check
+is vacuous for a service-principal reviewer), `authoring_attempt_ids`
+(the attempt/lineage ids of the writer execution), `nonce` (server-minted,
 opaque), `created_at`. Id `rr_` + 16 hex of content hash.
 
 `ReviewReceipt`: `request_id`, `subject` (must equal request's, compared
@@ -129,9 +144,15 @@ f"{len(entries)}\n"
 digest = "sha256:" + sha256(...).hexdigest()
 ```
 
-Inventory = the single report file `<report_root>/report.md` (name fixed
-by the rubric version; open question if spikes use another name) plus every
-regular file under `<report_root>/measurements/`. Tree modes other than
+Inventory = the single report file named by the subject's `report_path`
+(a validated root-relative POSIX path to one `.md` regular file; the digest
+does NOT hardcode a file name, so the golden vectors do not depend on how
+spikes name their report) plus every regular file under
+`<report_root>/measurements/`. `report_path` and `report_root` are both
+binding fields of the receipt subject, so a receipt for one report cannot
+satisfy another. No spike report layout exists in `mctlhq/.github` today
+(only `roadmap/spikes/*.yaml` manifests), so the first consumer fixes
+`report_path` when it requests a review; the digest layout is unaffected. Tree modes other than
 `100644`/`100755` (symlink `120000`, submodule `160000`) are a typed
 refusal, as are path anomalies, case-fold collisions, oversize blobs, and
 any non-200 read. Golden vectors live in
@@ -150,9 +171,14 @@ gate's `required_assurance` (`independent` | `any`). Order:
    commit are the same proposal under #701 semantics). Receipts for other
    values -> historical; if the pool is empty but historical exist ->
    `stale`, else `missing`.
-3. drop receipts whose `reviewer_actor` is in `author_actors` or whose
-   `reviewer_execution_id`/`attempt_id` equals the authoring one ->
-   if nothing remains, `not_independent`.
+3. independence. A worker request without `authoring_execution_id` ->
+   `unknown` (independence not observable, never assumed). Otherwise drop
+   receipts whose `reviewer_actor` is in `author_actors`, whose
+   `reviewer_execution_id` equals the authoring execution, or whose
+   `attempt_id` is in `authoring_attempt_ids` or shares a lineage root
+   (same `trace_id`/parent execution) with the authoring execution ->
+   if nothing remains, `not_independent`. Actor inequality alone is never
+   sufficient evidence of independence; it is only a necessary condition.
 4. if `required_assurance == independent` and only `advisory` remain ->
    `advisory_only`.
 5. latest remaining receipt by server ingest order: `PASS` -> `satisfied`;
@@ -175,8 +201,10 @@ New resource in mctl-api, alongside `internal/evidence`:
     and the receipt; server checks request open, subject bytes equal,
     nonce unused (single-use, consumed atomically), epoch current, then
     fills `reviewer_actor` from the token and `assurance=independent`.
-  - Manual: direct human MCTL OAuth principal (not a service/agent token,
-    mirroring the "human admins only" rule of `mctl_approve_dev_loop`),
+  - Manual: direct human MCTL OAuth principal (not a service/agent token),
+    decided by the EXISTING `isHumanAdmin` / `CheckHumanPrincipal` check, no
+    new parallel principal test and no widening of relay/surface checks
+    (the same rule `mctl_approve_dev_loop` follows),
     tenant and actor derived server-side, `mode=manual`,
     `assurance=advisory`, same nonce/subject checks.
   - Typed refusals: `review_nonce_replayed`, `review_request_closed`,
