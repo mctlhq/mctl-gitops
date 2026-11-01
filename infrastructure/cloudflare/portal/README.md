@@ -703,9 +703,9 @@ after its date, and it answers for its own upkeep under a separate heading —
 because editing a list in a script is not the same job as taking a server down to
 re-snapshot it. Two things land there: a waiver whose finding has gone
 entirely, which is a deletion, and one that is merely wider than what fires,
-which is a narrowing. Deleting in the second case is the wrong half: for the
-committed `seerrsense` waiver it would fail the still-closed schemas unwaived
-on the next run and point at the recipe, which captures them closed again.
+which is a narrowing. Deleting in the second case is the wrong half: it would
+fail the findings that still fire unwaived on the next run and point at the
+recipe, which for a closed schema captures them closed again.
 
 One waiver is committed today, on `tg` `missing-tool`, until 2026-12-31. The
 seven tools it names are ones the portal's sync credential can never see, so a
