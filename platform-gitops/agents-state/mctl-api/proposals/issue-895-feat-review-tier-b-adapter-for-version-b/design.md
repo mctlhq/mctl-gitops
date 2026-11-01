@@ -38,14 +38,14 @@ Deployed state checked:
 
 ### 2. Reviewer principal and execution proof
 
-The static bearer `MCTL_REVIEWER_TOKEN` of the first draft is dropped as the proof of execution: it proves a caller holds a secret, not that a given `reviewer_execution_id` is that caller's.
+The static bearer `MCTL_REVIEWER_TOKEN` of the first draft is dropped: it proves a secret, not an execution. By owner decision (2026-11-01) the reviewer authenticates with an execution-scoped agent run token (mctl-api#376).
 
-- `reviewer_actor` is always `principalOf(user)`. The sealed receipt carries `reviewer_actor` (it is part of the receipt identity), so the producer sets it, and the server accepts it only when it equals the derived actor; any other value is `review_bad_identity`. The body is never the source of the actor.
-- `ReviewerExecutionSource` is an interface: `Prove(ctx, principalID, executionID) (ExecutionProof, error)` returning whether the execution belongs to that principal and whether it is live (credential unexpired, execution not terminal). Error means unobservable (503). A negative answer is 403 `review_execution_unproven`.
-- Candidate implementation to verify against the code, not assumed: the agent run token store (`agent_principal_id`, `execution_id`, expiry) and the execution state in `workitems`. If the implementer confirms it, the reviewer authenticates with a reviewer-agent run token and `user.ExecutionID()` must equal `reviewer_execution_id`. Known limit, to be carried into the PR description: the binding trusts the `execution_id` the Workflow was submitted with.
-- If the candidate does not hold, the worker path is shipped disabled (every worker submission answers 503 `review_store_unavailable`), and only the manual path is live. That is the fail-closed default, not an error to be worked around with a static token.
-- Freshness of the reviewer execution comes from the same source. The authoring or request lifecycle fence is not used for it. `PermissionReviewWrite = "review:write"` and a `reviewerGate` confine the principal to `POST /api/v1/review-receipts` as before.
-- The collision refusals between token readers apply to any new token that is introduced.
+- `reviewer_actor` is `principalOf(user)`, non-empty. The sealed receipt carries it (it is part of the receipt identity), so the producer sets it and the server accepts it only when it equals the derived actor; any other value is `review_bad_identity`.
+- `ReviewerExecutionSource.Prove(ctx, user, executionID)` is implemented over the run-token store and execution state. It returns proven only if: the token's agent is the reviewer agent (`independent-review` profile); `user.ExecutionID() == executionID`; principal and actor non-empty; token not expired and not revoked; execution not terminal. A read failure is unobservable (503). A negative answer is 403 `review_execution_unproven`. This is also the freshness check; the authoring fence is not used.
+- Trust limit accepted by the owner: the pod binding takes `execution_id` from the parameter of an allowed Workflow; forging it requires the platform-level ability to create such a Workflow under an allowed ServiceAccount. The PR description repeats it.
+- Attempt and lineage. `lineage_root` must equal the `trace_id` of the stored ExecutionEvidence for `reviewer_execution_id` (evidence-writer provenance); `attempt_id` has no authoritative source (blocker B3), so a worker receipt whose `attempt_id` cannot be verified is refused with `review_execution_unproven`, not stored. No caller-supplied value is trusted. The implementer reports whether reviewer evidence exists at submission time.
+- Until B3 is resolved the effective behaviour is: manual path live, worker path fail closed.
+- `PermissionReviewWrite = "review:write"` and a `reviewerGate` confine the reviewer principal to `POST /api/v1/review-receipts`.
 
 ### 3. HTTP adapter (`internal/api/handlers_review_receipts.go`)
 
@@ -56,7 +56,7 @@ The static bearer `MCTL_REVIEWER_TOKEN` of the first draft is dropped as the pro
 
 ### 4. Wiring (`cmd/api/main.go`)
 
-`REVIEW_RECEIPTS_DB_URL` falling back to `EVIDENCE_DB_URL` then `AUDIT_DB_URL`, kill switch `REVIEW_RECEIPTS_DISABLED`, `REVIEW_REQUEST_TTL`. Lookups (`EvidenceLookup`, `ReviewerExecutionSource`) may be nil interfaces; a write that needs a nil lookup answers 503.
+`REVIEW_RECEIPTS_DB_URL` falling back to `EVIDENCE_DB_URL` then `AUDIT_DB_URL`, kill switch `REVIEW_RECEIPTS_DISABLED`, `REVIEW_REQUEST_TTL` (default 24h, a bounded server setting, never from the body). Lookups (`EvidenceLookup`, `ReviewerExecutionSource`) may be nil interfaces; a write that needs a nil lookup answers 503.
 
 ### 5. MCP (`internal/mcp/review_receipts.go`)
 
@@ -66,7 +66,7 @@ The static bearer `MCTL_REVIEWER_TOKEN` of the first draft is dropped as the pro
 
 ### 6. Concurrency
 
-Option B is chosen, and stated plainly. The reviewer execution proof and freshness, and the evidence lookup, are read from stores outside this SQL transaction before it starts. The transaction then locks the request row (`FOR SHARE`), checks closed, nonce, binding and Tier A rules, and inserts the nonce consumption and the receipt atomically. Residual window: the reviewer execution or its credential can end between the proof read and the commit, so a receipt can be accepted for an execution that ended within that interval. Consequences: the receipt is still bound to a sealed request, a nonce and a subject, so it cannot be replayed or applied to another revision; a later request for the same subject closes the old one; and the gate is re-evaluated on read. The window is bounded by the duration of the transaction and is not a promise of atomicity with the lifecycle or execution state. Option A (locking a lifecycle row in the same transaction) is not used because no reviewer-owned lifecycle row exists and `lifecycle.Store` uses its own pool.
+Option B is chosen, and stated plainly. The reviewer execution proof (run token, execution state, evidence trace) and freshness, and the evidence lookup, are read from stores outside this SQL transaction before it starts. The transaction then locks the request row (`FOR SHARE`), checks closed, nonce, binding and Tier A rules, and inserts the nonce consumption and the receipt atomically. Residual window: the reviewer execution or its credential can end between the proof read and the commit, so a receipt can be accepted for an execution that ended within that interval. Consequences: the receipt is still bound to a sealed request, a nonce and a subject, so it cannot be replayed or applied to another revision; a later request for the same subject closes the old one; and the gate is re-evaluated on read. The window is bounded by the duration of the transaction and is not a promise of atomicity with the lifecycle or execution state. Option A (locking a lifecycle row in the same transaction) is not used because no reviewer-owned lifecycle row exists and `lifecycle.Store` uses its own pool.
 
 ### 7. Docs
 

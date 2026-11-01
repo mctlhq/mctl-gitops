@@ -2,6 +2,8 @@
 
 ## Amendments to the first proposal (planning only, 2026-11-01)
 
+A second amendment (same day) records the owner decisions on B1/B2 (run-token binding), `REVIEW_REQUEST_TTL = 24h`, and the attempt/lineage provenance rule with blocker B3.
+
 The first version of this proposal was reviewed against merged Tier A (mctl-agents#971) and amended in these seven points. Tier A stays authoritative; Tier B carries and checks, it does not redefine.
 
 1. **Nonce belongs to the sealed request.** Created before sealing, part of `request_id`. Tier B never generates or rewrites it, and stores only `nonce_sha256` for single use.
@@ -49,7 +51,7 @@ Requests
 - IF a ReviewRequest's `authoring_execution_id` does not resolve to a stored ExecutionEvidence projection THEN THE SYSTEM SHALL refuse it with `review_bad_subject` and store nothing. (Format of the id is a Tier A check; resolution is a Tier B check.)
 - WHEN a request or receipt is accepted THE SYSTEM SHALL derive tenant and actor on the server: tenant from the referenced ExecutionEvidence projection, actor from `principalOf(user)`.
 - IF a request or receipt body carries a key outside the Tier A schema (including `tenant`, `submitted_by`) THEN THE SYSTEM SHALL refuse it with `review_unknown_key` and store nothing.
-- Closing. The sealed request has no expiry field, so expiry is server policy and never comes from the body: a request is closed when `ingested_at + REVIEW_REQUEST_TTL` has passed (configured, bounded), or when a request for the same subject identity but a different, newer binding (a new revision) has been ingested. A repeated request for the same binding supersedes nothing. Request creation is limited to human admins and the direct mctl-agent service, so the accepted risk is that such a caller can close an in-flight review by registering a newer revision; the older receipt is then correctly stale for the new revision, and the event is audited. The request is not closed by receiving a receipt.
+- Closing. The sealed request has no expiry field, so expiry is server policy and never comes from the body. `REVIEW_REQUEST_TTL` defaults to 24h (owner decision, 2026-11-01). A request is closed when `ingested_at + REVIEW_REQUEST_TTL` has passed, or earlier when a request for the same subject identity but a different, newer binding (a new revision) has been ingested. A repeated request for the same binding supersedes nothing. Request creation is limited to human admins and the direct mctl-agent service, so the accepted risk is that such a caller can close an in-flight review by registering a newer revision; the older receipt is then correctly stale for the new revision, and the event is audited. The request is not closed by receiving a receipt.
 - Request identity vectors. THE SYSTEM SHALL ship golden vectors copied from #971 showing that storing and reading back a sealed request leaves `content_hash` and `request_id` byte-identical, and that a request whose nonce was altered after sealing is refused with `review_bad_identity`.
 
 Worker receipts
@@ -57,13 +59,21 @@ Worker receipts
 - A worker receipt is a sealed Tier A ReviewReceipt. WHEN it arrives THE SYSTEM SHALL check, in one transaction and in this order: the request exists, is not closed (`review_request_closed`), the receipt `nonce` equals the sealed request's nonce, the receipt subject binding equals the request subject binding (`review_subject_mismatch`), the Tier A structural rules, then `pass` with an unobserved criterion (`review_pass_with_unobserved`).
 - IF the nonce was already consumed THEN THE SYSTEM SHALL refuse with `review_nonce_replayed` and store nothing.
 - Reviewer actor. THE SYSTEM SHALL derive the reviewer actor from the authenticated principal and SHALL NOT accept an authoritative actor from the body. IF the body carries `reviewer_actor` and it differs from the derived actor THEN THE SYSTEM SHALL refuse the receipt with `review_bad_identity`.
-- Worker identity. A worker receipt SHALL carry non-empty `reviewer_execution_id`, `attempt_id` and `lineage_root`. A missing value is `review_malformed`, never an independent receipt.
-- Reviewer execution proof (prerequisite, see "Blockers"). THE SYSTEM SHALL accept a `reviewer_execution_id` only when an authoritative server-side record ties that execution to the authenticated reviewer principal. IF no such record can be read THEN THE SYSTEM SHALL answer 503 `review_store_unavailable`; IF it reads and does not tie them THEN 403 `review_execution_unproven`. A correct reviewer token alone is never sufficient. Both leave the nonce unconsumed and store nothing.
-- Reviewer freshness. THE SYSTEM SHALL refuse a worker receipt unless the reviewer execution is still live at submission (its credential unexpired and its execution not terminal), as read from the same authoritative source. The fencing epoch of the authoring or request lifecycle row is NOT evidence of reviewer freshness, and the adapter SHALL NOT use it as such. `review_fence_stale` stays in the contract but is enforced only against a lifecycle row that belongs to the reviewer execution; until that row exists, the code is not emitted and not claimed.
+- Worker identity. A worker receipt SHALL carry a non-empty `reviewer_execution_id`; a missing value is `review_malformed`, never an independent receipt. `attempt_id` and `lineage_root` are provenance facts and SHALL NOT be accepted on the caller's word (see "Attempt and lineage provenance").
+- Reviewer execution proof (owner decision 2026-11-01, B1 accepted). The worker path SHALL authenticate only with an execution-scoped agent run token (mctl-api#376). It SHALL accept a receipt only when all of these hold: the authenticated agent is the reviewer agent (the `independent-review` profile); `user.ExecutionID()` equals the sealed `reviewer_execution_id` exactly; the server-derived principal and actor are non-empty; the token is live (not expired, not revoked) and the execution is not terminal. A static token is never sufficient. IF the run-token store or execution state cannot be read THEN 503 `review_store_unavailable`; IF any condition fails THEN 403 `review_execution_unproven`. Both leave the nonce unconsumed and store nothing. Accepted trust limit: the pod binding takes `execution_id` from the parameter of an allowed Workflow, so forging it needs the platform-level ability to create such a Workflow under an allowed ServiceAccount.
+- Reviewer freshness. Freshness is the liveness condition above (token unexpired and unrevoked, execution non-terminal), read at submission from the same run-token source. The fencing epoch of the authoring or request lifecycle row is NOT evidence of reviewer freshness and is not used for it. `review_fence_stale` stays in the contract and is emitted only against a lifecycle row that belongs to the reviewer execution; until one exists the code is not emitted.
 - IF a worker-mode caller is not the enrolled reviewer principal THEN THE SYSTEM SHALL refuse with `review_producer_not_enrolled` and store nothing.
 - IF the lifecycle store, the evidence store, the execution source or the review store cannot answer THEN THE SYSTEM SHALL answer a typed 503 and store nothing. Fail closed.
 - WHILE any refusal is returned THE SYSTEM SHALL leave the nonce unconsumed and write no row. The database checks, the nonce consumption and the insert are one transaction. Reads of state outside this database are made before it and are not part of its atomicity (see design, "Concurrency").
 - Terminal outcomes. A nonce admits at most one worker receipt per ReviewRequest. Any accepted worker receipt, including `UNOBSERVABLE` and `NEEDS_HUMAN`, consumes the nonce. A rerun needs a new sealed ReviewRequest with a new nonce and `request_id`.
+
+Attempt and lineage provenance (owner P2, 2026-11-01)
+
+Tier A decides independence from `attempt_id` and `lineage_root`, so a worker cannot supply arbitrary non-empty values. Tier B SHALL NOT trust caller-supplied values for either, and SHALL NOT add a weaker assumption to make the worker path work.
+
+- `lineage_root`. Observed source (mctl-api `ede0b3b`): a stored ExecutionEvidence row carries `execution_id` (`we_`) and `trace_id`, written by the evidence-writer principal and not by the reviewer. WHEN the worker path is enabled THE SYSTEM SHALL require `lineage_root` to equal the `trace_id` of the stored ExecutionEvidence for `reviewer_execution_id`, and SHALL refuse with 403 `review_execution_unproven` if no such record exists or the trace differs. Whether that evidence exists before the receipt is submitted was not observed and is checked by the implementer; if it is written only afterwards, the lineage source is unavailable and the same blocker B3 applies.
+- `attempt_id`. No authoritative record maps an execution to a Tier A `attempt_id` today. Observed: `WorkItemExecution.Attempt` is a per-work-item sequence number (`workitems`), the run token has a `RunID`, and `securityfindings` has its own unrelated attempt id. None is defined as the Tier A `attempt_id`, and none is related to `authoring_attempt_ids`. This is recorded as blocker B3. Until a source is defined, THE SYSTEM SHALL refuse any worker receipt whose `attempt_id` it cannot verify with 403 `review_execution_unproven` and store nothing, rather than store a receipt that the gate would later call `not_independent`.
+- Authoring side. `authoring_lineage_root` in a ReviewRequest SHALL be checked against the `trace_id` of the stored ExecutionEvidence for `authoring_execution_id` when that record has one, and a mismatch is refused (`review_bad_subject`). `authoring_attempt_ids` are asserted by the request creator (a human admin or the direct service) and have no authoritative source either; this is stated, not hidden.
 
 Digest and sealed-identifier checks (what Tier B can and cannot prove)
 
@@ -90,9 +100,10 @@ Reads and the gate
 
 ## Blockers and prerequisites
 
-- **B1. Authoritative reviewer principal -> execution mapping.** Observed on mctl-api `ede0b3b`: the closest existing record is the agent run token (mctl-api#376, `workitems/agent_run_tokens.go`: `agent`, `agent_principal_id`, `execution_id`, `work_item_id`, expiry) and the pod binding that mints it (mctl-agents#737, `k8s/agent_run_binding.go`). A run token ties a credential to an `execution_id` of the `we_` form. Limits recorded there: the binding takes `execution_id` from the argument the Workflow was submitted with and does not read it back from any execution row, and no reviewer agent or `independent-review` profile exists yet (mctl-agents#905, task 7). This proposal therefore does NOT assume the static `MCTL_REVIEWER_TOKEN` can prove an execution. The worker path stays disabled (503) until the implementer shows, against the code, that a run-token principal for the reviewer agent can be matched to `reviewer_execution_id` and that its `execution_id` is acceptable as proof, or until the owner accepts the trust limit above in writing. If neither holds, only the manual path ships.
-- **B2. Reviewer freshness source.** The same source as B1 must also tell whether the reviewer execution is live. Not observed today for a reviewer.
-- **B3. Deployed environment** (token secrets, DB URL, replica count) was not observed.
+- **B1. Reviewer principal -> execution: RESOLVED by owner decision (2026-11-01).** The agent run token is accepted as the authoritative binding, under the conditions in "Reviewer execution proof" (reviewer agent, `user.ExecutionID()` equal to the sealed `reviewer_execution_id`, derived non-empty actor, live token and non-terminal execution) and with the stated trust limit. It is no longer an open question.
+- **B2. Reviewer freshness: RESOLVED** by the same decision: liveness of the run token and execution state. The authoring fence is not used.
+- **B3. Attempt provenance: OPEN, blocks the autonomous path.** No authoritative `execution -> attempt_id` source exists (see above), and `lineage_root` depends on evidence that may not exist before submission. Until both are defined, worker submissions fail closed and the manual (advisory) path is the only live one. Unblocking needs a separate change that defines and records the attempt and lineage facts for an execution; it is not invented here.
+- **B4. Deployed environment** (token secrets, DB URL, replica count) was not observed.
 
 ## Out of scope
 
@@ -105,7 +116,8 @@ Reads and the gate
 
 ## Open questions
 
-- The Tier A schema is in mctl-agents (`orchestrator/review_receipts.py`, ADR 025, merged in #971). The implementer ports it exactly and locks parity with golden fixtures copied from there.
-- B1 and B2: which concrete source proves and freshness-checks a reviewer execution. Decision needed from the owner if the run-token route is not enough.
+- Tier A is merged (mctl-agents#971, ADR 025); the implementer ports it exactly and locks parity with golden vectors.
+- B3: where an authoritative `attempt_id` (and, if needed, `lineage_root`) for an execution will come from, and whether the reviewer's evidence exists before submission.
 - Who may create requests and read the pool: assumed human admins and the direct mctl-agent service principal (`isDirectService`). The reviewer principal is confined to `POST /api/v1/review-receipts`.
-- The value of `REVIEW_REQUEST_TTL`.
+
+Decided by the owner: B1 and B2 (run-token binding, above); `REVIEW_REQUEST_TTL = 24h`.
