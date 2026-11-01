@@ -75,7 +75,7 @@ Errors name the variable and the rule, never the value.
 ### Destination check (`verify.go`)
 Called once at startup and again before every send:
 1. `getMe`: the bot id.
-2. `getChat`: `type == "supergroup"` and `is_forum == true`.
+2. `getChat`: `type == "supergroup"` and `is_forum == true`. Require an empty or absent `username` and an empty or absent `active_usernames`. Reject malformed metadata and API failures.
 3. `getChatMemberCount == 2`.
 4. `getChatMember(owner)`: `status == "creator"`.
 5. `getChatMember(bot id)`: `status` is `member` or `administrator`.
@@ -100,7 +100,7 @@ in-memory `map[string]struct{}` bounded at 1024 ids, held in the caller. Peer ma
   the store is created, `os.Chmod` sets the file to `0600`, along with any `-wal`/`-shm` files.
 - `whatsmeow.NewClient(device, waLog.Noop)`. whatsmeow's own logs can contain JIDs, so they are
   silenced.
-- If `client.Store.ID == nil`, the spike runs the `GetQRChannel` flow and renders each code with `qrterminal`
+- If `client.Store.ID == nil`, the spike first checks the actual stdout descriptor with `term.IsTerminal` (golang.org/x/term). On a pipe, regular file, or failed check it exits before requesting a QR, with a static error and no pairing data. Only on a terminal it runs the `GetQRChannel` flow and renders each code with `qrterminal`
   to **stdout only**, never through slog.
 - The event handler handles only `*events.Message` (to `wa.go` adapter, `Route`, `verify`, then
   `sendMessage`) and logs `*events.Connected`, `*events.LoggedOut` and `*events.StreamReplaced` as
