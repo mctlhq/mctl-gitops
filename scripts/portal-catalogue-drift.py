@@ -466,16 +466,36 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
 KNOWN_STALE = {
     ("tg", "missing-tool"): {
         "until": "2026-12-31",
-        # Not stale and never will be while the flag is off: mctl-telegram
-        # registers prepare_send_message only with MCP_APPS_ENABLED=true (the
-        # MCP Apps prototype, mctlhq/mctl-telegram#569), which production does
-        # not set. Its allowlist entry is `enabled: false` for that reason.
-        # Confirmed after tg moved to DCR: the catalogue synced on 2026-09-26
-        # 07:19 and the tool is still absent, so re-snapshotting (what this
-        # finding tells the on-call to do) would change nothing.
-        "tools": ["prepare_send_message"],
-        "why": "flag-gated (MCP_APPS_ENABLED) and disabled in the allowlist; "
-               "never registered in production -- mctlhq/mctl-telegram#569",
+        # None of these is stale, and re-snapshotting would change nothing:
+        # tg is a DCR server (since 2026-09-26), the portal re-syncs it on its
+        # own (last_synced moves nightly), and the sync still lacks them.
+        # The server filters tools/list by what the caller may use, and the
+        # portal's admin sync credential is not that caller.
+        #   - prepare_send_message: registered only with MCP_APPS_ENABLED=true
+        #     (the MCP Apps prototype, mctlhq/mctl-telegram#569), which
+        #     production does not set. Disabled in the allowlist. Confirmed
+        #     after tg moved to DCR: synced 2026-09-26 07:19, still absent.
+        #   - draft_reply, send_reply: offered only to a connection whose OAuth
+        #     client is bound to the core-reply tool profile; the shared portal
+        #     carries no profile. Disabled in the allowlist.
+        #   - prepare_broadcast, list_broadcasts, get_broadcast,
+        #     cancel_broadcast: need the admin:broadcast scope
+        #     (mctlhq/mctl-telegram 4f048db, 2026-10-20); the portal's sync
+        #     credential has no such scope, so they dropped out of the
+        #     catalogue on the next sync (mctl-gitops 495ba1d, 2026-10-24).
+        #     They stay `enabled: true` in tg.json, so they are exposed the
+        #     moment a sync can see them. If the portal is ever granted the
+        #     scope they stop firing as missing, this waiver becomes wider
+        #     than what fires, and the nightly asks for it to be narrowed
+        #     (exit 3).
+        "tools": ["prepare_send_message", "draft_reply", "send_reply",
+                  "prepare_broadcast", "list_broadcasts", "get_broadcast",
+                  "cancel_broadcast"],
+        "why": "not visible to the portal's sync credential: flag-gated "
+               "(prepare_send_message, mctlhq/mctl-telegram#569), core-reply "
+               "profile only (draft_reply, send_reply), or needing the "
+               "admin:broadcast scope the sync credential lacks (the four "
+               "*_broadcast tools); a re-snapshot cannot add them",
     },
 }
 
