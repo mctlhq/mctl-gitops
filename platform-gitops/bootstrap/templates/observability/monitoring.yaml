@@ -747,15 +747,6 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "ErpactSite.*"
-                  # claude-remote's Telegram hydration token
-                  # (vm-rules/claude-remote-telegram-token.yaml,
-                  # mctlhq/mctl-claude-remote#82). Telegram only, no ticket:
-                  # the remedy is an admin:users login minting a new worker
-                  # token into Vault, which mctl-agent cannot do. Prefix match
-                  # so the next alert in that file is covered too.
-                  - receiver: telegram
-                    matchers:
-                      - alertname =~ "ClaudeRemoteTelegramToken.*"
                   # The MCP portal health check (vm-rules/cloudflare-portal-health.yaml).
                   # Telegram only, no ticket: every remedy is a human's -- the
                   # dashboard's "Re-authenticate server", a token, or a sync
