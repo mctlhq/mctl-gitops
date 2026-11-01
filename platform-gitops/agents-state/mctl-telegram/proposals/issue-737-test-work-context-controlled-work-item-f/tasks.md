@@ -1,24 +1,12 @@
 # Tasks: issue-737-test-work-context-controlled-work-item-f
 
-There are no implementation tasks. This proposal must NOT be approved.
+This proposal intentionally contains no implementation tasks (see requirements.md). Do not approve it.
 
-- [ ] 1. (Owner, manual, outside the implementer) Confirm `/mctl work status`
-  shows the #737 start request as `fulfilled` with this investigation's
-  execution id, and that the portal `/work-items/<id>` shows the same execution
-  and snapshot pointer — DoD: evidence recorded on mctlhq/mctl-telegram#443 and
-  mctlhq/mctl-api#341.
-- [ ] 2. (Owner, manual, depends on 1) End the parked DevLoop for #737 without
-  approving it (e.g. `mctl_abandon_dev_loop`, reason "controlled test item for
-  #443") and leave the proposal un-accepted — DoD: no `feat/agents-issue-737-*`
-  branch or PR exists in `mctlhq/mctl-telegram`.
+- [ ] 1. Owner records the live-session evidence (the WorkItem id, the start request reaching `fulfilled` in `/mctl work status`, and the portal `/work-items/<id>` view) on mctlhq/mctl-telegram#443 and mctlhq/mctl-api#341. This is manual and outside this repository. DoD: evidence comment posted.
+- [ ] 2. (depends on 1) Owner abandons the DevLoop `dev-loop-mctlhq-mctl-telegram-737` without approving it. DoD: the loop status is not Running, and no PR exists for this proposal.
 
 ## Tests
-- [ ] T1. `git log` / PR list on `mctlhq/mctl-telegram` shows no change
-  attributable to issue #737.
-- [ ] T2. `/mctl work status` in Saved Messages renders the request line via
-  `formatRequestState` in `internal/agent/control/work.go` as `fulfilled`.
+- [ ] T1. Confirm no branch `feat/agents-issue-737-*` and no PR were created in mctlhq/mctl-telegram.
 
 ## Rollback
-Nothing to roll back: no code, config or docs change is made. If the proposal
-was approved by mistake, abandon the DevLoop, close any resulting PR unmerged,
-and mark the proposal `rejected`.
+Nothing to roll back: no code, config or gitops change is proposed. If the proposal was approved by mistake, close any resulting PR unmerged.
