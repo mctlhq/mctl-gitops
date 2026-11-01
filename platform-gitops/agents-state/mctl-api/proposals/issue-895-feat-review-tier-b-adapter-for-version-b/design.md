@@ -2,7 +2,7 @@
 
 ## Current state
 
-- Tier A is merged (mctl-agents#971, `577306dd`): `orchestrator/review_receipts.py` defines the sealed documents (`seal_request`, `seal_receipt`), `ReviewSubject` with `identity()` and `binding()`, the closed rubrics, the bounds (`MAX_STR = 256`, `MAX_ACTORS = 64`), the error codes, the gate `evaluate_review_gate`, and `canonical_json` / `hash_bytes` for identity. ADR 025 (`docs/adr/025-independent-review-receipts.md`) is the prose contract. The only fixture file in mctl-agents today is `tests/fixtures/review/spike_digest_vectors.json`; vectors for sealed documents and the gate do not exist yet.
+- Tier A is merged (mctl-agents#971, `577306dd`): `orchestrator/review_receipts.py` defines the sealed documents (`seal_request`, `seal_receipt`), `ReviewSubject` with `identity()` and `binding()`, the closed rubrics, the bounds (`MAX_STR = 256`, `MAX_ACTORS = 64`), the error codes, the gate `evaluate_review_gate`, and `canonical_json` / `hash_bytes` for identity. ADR 025 (`docs/adr/025-independent-review-receipts.md`) is the prose contract. Since mctl-agents#973 the fixture `tests/fixtures/review/review_receipt_vectors.json` also holds the sealed-document, parse and gate vectors (the earlier `spike_digest_vectors.json` is for spike digests, which Tier B does not recompute).
 - mctl-api (`ede0b3b` observed) has no review-receipt code. The package name `internal/reviewreceipts` is free. mctl-api uses plain Go tests; `go test ./...`, `go vet` and `golangci-lint` are the repository gates.
 - Earlier revisions of this proposal (mctl-gitops#2337, #2343, #2344) hold the full Tier B design. Slice A takes only the library part of it.
 
@@ -15,10 +15,10 @@ One package, `internal/reviewreceipts`, standard library only.
 - `parse.go`: strict decoding of requests, receipts and subjects (unknown keys, types, bounds, shapes, choices). Parsing and sealing share the same validation so a sealed document always round-trips.
 - `identity.go`: Tier A's canonical JSON and hashing, `SealRequest`, `SealReceipt`, and recomputation on parse. The nonce is an input to sealing and never produced here.
 - `gate.go`: `EvaluateReviewGate(live *ReviewSubject, request *ReviewRequest, pool []ReviewReceipt, requiredAssurance string) (string, error)`, a pure function in the Tier A order. Return values are the Tier A constants.
-- `testdata/`: the vector file(s) and, if generated, the generator's source commit, recorded in the file header.
+- `testdata/review_receipt_vectors.json`: a verbatim copy of the Tier A fixture; the loader test records the mctl-agents commit it was copied from.
 - `purity_test.go`: runs `go list -deps` for the package and fails if a forbidden import is present.
 
-Vector provenance. Expected values come only from the canonical Tier A Python. The Go tests load the vectors and compare. A Go test never computes an expected hash with the Go code it is testing. If the vector file is generated, the generator is run against a read-only clone of mctl-agents and only its output is committed.
+Vector provenance. Expected values come only from the canonical Tier A Python, through the fixture `tests/fixtures/review/review_receipt_vectors.json` merged in mctl-agents#973 (`2684641c`). That file is built by `tests/test_review_parity_vectors.py` from Tier A functions and a test there fails if it drifts. The Go tests load a verbatim copy and compare; a Go test never computes an expected hash with the Go code it is testing. When Tier A changes, the fixture is regenerated in mctl-agents and the copy is refreshed in a follow-up.
 
 Why a port and not a call: mctl-api cannot run Python in its request path, and Slice B needs a synchronous gate. One policy is preserved by the shared vectors, which run on the Go side in CI and are produced from Tier A.
 

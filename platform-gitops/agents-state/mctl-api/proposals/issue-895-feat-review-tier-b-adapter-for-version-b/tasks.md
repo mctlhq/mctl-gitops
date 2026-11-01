@@ -4,7 +4,7 @@
 
 Scope is binary: the run is complete only when every task below is done. Do not do a partial subset and report success. The only paths that may change are under `internal/reviewreceipts/`. If another path seems necessary, stop and report.
 
-- [ ] 1. Vectors first. Obtain the parity vectors from the canonical Tier A: copy `tests/fixtures/review/tier_b_parity_vectors.json` from mctl-agents `main` if it exists, otherwise generate it by running `orchestrator/review_receipts.py` (commit `577306dd` or later) in a read-only clone. Put it in `internal/reviewreceipts/testdata/` with the source commit recorded in its header. Never compute expected values by hand or with the Go code under test. — DoD: the file exists, names its Tier A commit, and covers every case class listed in requirements.md. If it cannot be obtained, stop and report.
+- [ ] 1. Vectors first. Copy `tests/fixtures/review/review_receipt_vectors.json` from mctl-agents at commit `2684641c719b7c7b3944243f0f9ae1f70a238693` (mctl-agents#973) byte for byte into `internal/reviewreceipts/testdata/`, and record that commit in the Go test that loads it. Never compute expected values by hand or with the Go code under test, and do not edit the file. — DoD: the file is identical to the mctl-agents one at that commit, and the loader test names the commit. If it cannot be read, stop and report.
 - [ ] 2. Types, bounds, rubrics, gate constants, typed errors (`types.go`, `errors.go`) ported from the Tier A source at the pinned commit. Only the seven codes listed in design.md. — DoD: compiles; no other error code exists in the package.
 - [ ] 3. Strict parsing (`parse.go`) for subject, request and receipt, sharing validation with sealing (depends on 2). — DoD: every refusal vector yields the vector's code; a sealed document round-trips; oversized fields are rejected identically on both paths.
 - [ ] 4. Identity (`identity.go`): canonical JSON, `SealRequest`, `SealReceipt`, recomputation on parse (depends on 2, 3). — DoD: ids and hashes equal the vectors byte for byte; a stored-and-read-back request keeps its identity; an altered nonce is `review_bad_identity`; no function generates a nonce.
@@ -24,7 +24,7 @@ Scope is binary: the run is complete only when every task below is done. Do not 
 - [ ] T6. Gate: one vector per outcome (`satisfied`, `changes_requested`, `needs_human`, `unobservable`, `stale`, `missing`, `unknown`, `advisory_only`, `not_independent`).
 - [ ] T7. Gate rule vectors: request bound to an older revision -> `unknown`; a receipt of another `request_id` is ignored -> `missing`; empty `reviewer_execution_id`, `attempt_id` or `lineage_root` on a worker receipt -> `not_independent`; `Operator` vs `operator` -> `not_independent`; latest receipt wins; unknown `requiredAssurance` -> error.
 - [ ] T8. Purity test as in task 7.
-- [ ] T9. Provenance check: the vector file names a Tier A commit, and no test computes an expected hash with the code under test.
+- [ ] T9. Provenance check: the loader test names the mctl-agents commit, the copy is byte-identical to it, and no test computes an expected hash with the code under test.
 
 ## Rollback
 
