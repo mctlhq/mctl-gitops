@@ -129,10 +129,10 @@ Deployed state checked:
   ```
 
   `requested == ""` means "unchanged" (admin route) and `RuntimeChange` is empty. Rules, in
-  this order so the most actionable refusal wins: own -> managed requires consent ==
-  `ManagedConsentCurrent` (`KindManagedConsentRequired`), then `Enabled`
-  (`KindManagedDisabled`), then sets `ManagedQuota = &MaxAccounts` (the store refuses
-  `KindManagedQuota`). managed -> managed with the current consent refreshes version/time;
+  this order so the least actionable refusal wins (the owner is never asked to consent to a
+  runtime the server cannot offer): own -> managed requires `Enabled` (`KindManagedDisabled`),
+  then consent == `ManagedConsentCurrent` (`KindManagedConsentRequired`), then sets
+  `ManagedQuota = &MaxAccounts` (the store refuses `KindManagedQuota`). managed -> managed with the current consent refreshes version/time;
   without it, sets only `Runtime`. managed -> own sets only `Runtime`, no checks.
   `RuntimeChange{Runtime, ConsentVersion, ConsentAt, Quota, Changed, Consented}` is copied onto
   the `db.AgentProfileUpdate`.
@@ -192,11 +192,16 @@ after the Mode line, and `Managed consent: needs renewal (open the manage page)`
 
 ### 7. `internal/agentapi/profilehandler.go`
 
-`upsertAgentProfileRequest` gains `Runtime *string` and `Consent *string`; both keys are added
-to `upsertAgentProfileKeys`. Validation: runtime must be own/managed (400). The handler gets the
-`ManagedRuntime` gate (constructor argument), reads the current runtime, calls
-`DecideRuntime`, and maps refusals to 409 `managed_consent_required`, 403 `managed_disabled`,
-409 `managed_quota` (via `db.ErrManagedQuota`). A change is audited with the same
+`upsertAgentProfileRequest` gains `Runtime *string` only; `runtime` is added to
+`upsertAgentProfileKeys` and `consent` is NOT (the strict decoder answers 400 for it). The admin
+route never carries consent: consent is an act of the account owner on their own surfaces. The
+handler gets the `ManagedRuntime` gate (constructor argument), reads the current runtime and
+stored `managed_consent_version`, and calls `DecideRuntime(current, requested,
+storedConsentIfCurrent, now)`, i.e. it passes the stored version as the consent only when it
+equals `ManagedConsentCurrent`; `own -> managed` on a profile whose owner never consented (or
+consented to an older version) is therefore 409 `managed_consent_required`, 403
+`managed_disabled` and 409 `managed_quota` follow as for the owner surfaces, and `managed ->
+own` always succeeds. A change is audited with the same
 `assistant.runtime` row under the target user, and the admin's own `admin.agent_profile.upsert`
 row as today. The response gains `runtime`.
 

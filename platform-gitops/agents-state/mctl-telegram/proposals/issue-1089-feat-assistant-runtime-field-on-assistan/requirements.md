@@ -58,12 +58,13 @@ Storage
   is a per-call assertion, recorded only as `managed_consent_version` and `managed_consent_at`.
 
 Transition rules (install_assistant, update_install, manage page, admin profile route)
+- IF a write would change the runtime from `own` to `managed` while `MANAGED_RUNTIME_ENABLED`
+  is false THEN THE SYSTEM SHALL refuse it with `KindManagedDisabled` (MCP error
+  `managed_disabled`) and change nothing; this check runs before the consent check so an owner
+  is never asked to consent to something the server cannot offer.
 - IF a write would change the runtime from `own` to `managed` and the call does not carry
   `consent` equal to `managed-data-flow/v1` THEN THE SYSTEM SHALL refuse it with
   `KindManagedConsentRequired` (MCP error `managed_consent_required`) and change nothing.
-- IF a write would change the runtime from `own` to `managed` while `MANAGED_RUNTIME_ENABLED`
-  is false THEN THE SYSTEM SHALL refuse it with `KindManagedDisabled` (MCP error
-  `managed_disabled`) and change nothing.
 - IF a write would change the runtime from `own` to `managed` while the number of other
   accounts with `runtime = 'managed'` is at least `MANAGED_RUNTIME_MAX_ACCOUNTS` THEN THE
   SYSTEM SHALL refuse it with `KindManagedQuota` (MCP error `managed_quota`) and change
@@ -103,9 +104,15 @@ Surfaces
   ADR text: "Messages needed to perform assistant tasks will be sent to MCTL's configured
   third-party AI provider through MCTL's AI gateway; gateway logging and caching are
   disabled."
-- WHEN the admin route `PUT /api/admin/agent/profile` receives an optional `runtime` (and
-  `consent`) THE SYSTEM SHALL apply the same transition rules and answer 400 / 403 / 409 with
-  the same error codes; WHEN `runtime` is omitted THE SYSTEM SHALL leave it unchanged.
+- WHEN the admin route `PUT /api/admin/agent/profile` receives an optional `runtime` THE
+  SYSTEM SHALL accept `own` always (no consent, flag or quota check); IF it is `managed` and the
+  profile's stored `managed_consent_version` is not the current consent version THEN THE SYSTEM
+  SHALL refuse with 409 `managed_consent_required` without accepting any consent from the admin
+  (consent is given only by the account owner through `install_assistant`, `update_install` or
+  the manage page); IF it is `managed` and the stored consent is current THEN THE SYSTEM SHALL
+  apply the flag (403 `managed_disabled`) and quota (409 `managed_quota`) checks; a `consent`
+  key on the admin route SHALL be rejected by the strict decoder (400); WHEN `runtime` is
+  omitted THE SYSTEM SHALL leave it unchanged.
 - WHEN the MCP tool surface changes THE SYSTEM SHALL update `docs/tool-descriptors.json` (and
   the per-profile snapshots) and add an approved entry under `docs/product-updates/` (ADR 0007).
 
@@ -127,6 +134,8 @@ Invariants
 
 ## Open questions
 
+- (Amended 2026-11-01 by the reviewer: check order is flag -> consent -> quota; the admin route
+  never carries consent and may set `managed` only on a profile whose owner already consented.)
 - Flag off while already managed: this proposal lets a managed account keep reinstalling
   (managed -> managed) and switch to own with the flag off, and only refuses own -> managed.
   The alternative (refuse any managed write with the flag off) would block an owner from
