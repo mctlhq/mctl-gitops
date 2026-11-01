@@ -1,5 +1,5 @@
-status: accepted
-updated_at: '2026-11-01T18:55:57Z'
+status: needs-triage
+updated_at: '2026-11-01T18:58:27Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-0b54bedf841add5d
@@ -19,8 +19,35 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-11-01T18:55:57Z'
-  content_digest: 'sha256:51b8cbe846d6c660c1968cb752d2d1b797ff6d3b7d05637b1c85494d3c6aac17'
-  digest_binding: 'reviewed'
-  approval_ref: 'aar_a4cc6a58b26545358d7cb91210e1e575'
+  content_digest: sha256:51b8cbe846d6c660c1968cb752d2d1b797ff6d3b7d05637b1c85494d3c6aac17
+  digest_binding: reviewed
+  approval_ref: aar_a4cc6a58b26545358d7cb91210e1e575
+attempt:
+  id: a8318bd2e48ef8fe9d20981f2b1895fccfc79dc847d0110d0fb647e27567be40
+  started_at: '2026-11-01T18:57:56Z'
+  expires_at: '2026-11-01T21:07:56Z'
+  finished_at: '2026-11-01T18:58:27Z'
+failure:
+  code: no-commits
+  stage: agent
+  message: implementer produced no commits
+notes: 'agent: implementer produced no commits'
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-5bda6849
+  authoritative:
+    completion_id: ic-daeb629673b7f596
+    content_hash: sha256:daeb629673b7f5963d35a6837f9861cb716d33b6e01ab5a1b7fc3424c55d4bbb
+    proposal_digest: sha256:51b8cbe846d6c660c1968cb752d2d1b797ff6d3b7d05637b1c85494d3c6aac17
+    attempt_id: a8318bd2e48ef8fe9d20981f2b1895fccfc79dc847d0110d0fb647e27567be40
+    step: primary
+    outcome: deterministic_failure
+    stop_reason: no_commits
+    head_sha: null
+    verification:
+      required_passed: 0
+      required_total: 4
+      optional_total: 1
+  primary_observed: true
