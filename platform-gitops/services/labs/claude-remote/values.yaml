@@ -170,9 +170,9 @@ env:
   # The file below is the seed (Vault platform/mctl-claude-remote/telegram-mcp):
   # since image 0.14.0 the device renews the token itself and keeps renewals
   # in /workspace/.claude, so the seed is only rewritten for a human mint
-  # (yearly, or after an expiry). Renewal metrics go to the Pushgateway and
-  # alert through vm-rules/claude-remote-telegram-token.yaml
-  # (mctlhq/mctl-claude-remote#82).
+  # (yearly, or after an expiry). Renewal metrics go to the Pushgateway
+  # (mctlhq/mctl-claude-remote#82); the cluster-side alerts were retired when
+  # claude-remote moved to a Mac mini.
   MCTL_EVENTS_TELEGRAM_MCP_URL: "https://tg-preview.mctl.ai/mcp"
   MCTL_EVENTS_TELEGRAM_MCP_TOKEN_FILE: "/etc/mctl-events/secrets/telegram-mcp-token"
   MCTL_EVENTS_PUSHGATEWAY_URL: "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
