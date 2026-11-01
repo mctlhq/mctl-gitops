@@ -1,53 +1,34 @@
-# Tasks: issue-869-feat-governance-bind-direct-human-decisi
+# Tasks: Slice 1 of issue-869
 
-- [ ] 1. Add `cardBinding` type, `checkCardBinding`, and `Options.ApprovalCardBinding`. The option is parsed from `MCTL_APPROVAL_CARD_BINDING` (`legacy`|`require`, default `legacy`, invalid value fails startup) in `cmd/api/main.go`. — DoD:
-  - `guardDecision` in `internal/api/handlers_approval_governance.go` uses the binding.
-  - Empty fields refuse 422 `approval_context_incomplete`.
-  - An id, context or content mismatch refuses 409 `approval_context_changed`.
-  - Legacy mode keeps today's behaviour and audits `binding=legacy`.
-- [ ] 2. Wire `card_binding` into `DecideActionApproval` (`actionDecisionBody`). Add the replay rule: an identical decider and binding on an approved grant answers 200 `replayed:true`. (depends on 1) — DoD: path id mismatch gives 409, and the store still records exactly one decision.
-- [ ] 3. Wire `card_binding` into `ApproveDevLoopWorkflow` / `decideDevLoopApproval` (`approveDevLoopRequest`). (depends on 1) — DoD:
-  - The binding's `approval_id` is compared with the newest grant, and the newest grant is never substituted.
-  - `require` mode refuses the legacy no-grant payload.
-  - A pre-signal re-read plus `revalidateApproval` runs before `SignalApprove`.
-  - The response carries `approval_id` and `decision_outcome`, including `decided_not_signalled` on signal failure.
-- [ ] 4. Abandon: refuse relayed/surface callers with 403. Add the `effects` block (`pending`/`in_flight`/`applied`, plus status `cancellation_pending` or `cancellation_effects_unknown`) in `AbandonDevLoopWorkflow`. — DoD: abandon never mutates any `aar_`, and a store read failure still returns the signal outcome, with `cancellation_effects_unknown`.
-- [ ] 5. Create `internal/autonomy` with the store (`autonomy_enrollments`, append-only versions) and the `Evaluator`, which returns the outcome codes `allowed`, `delegation_missing`, `delegation_expired`, `delegation_revoked`, `delegation_scope_mismatch` and `policy_checkpoint_unavailable`. — DoD:
-  - Unit tests cover each outcome.
-  - A store error never yields `missing` or `allowed`.
-  - Mode `off`/`advisory`/`enforce` comes from `MCTL_AUTONOMY_POLICY_MODE` (default `advisory`).
-  - `enforce` requires `MCTL_POLICY_CHECKPOINT_ATTESTED`.
-- [ ] 6. Add the autonomy REST handlers and routes in `internal/api/router.go`: create, revoke and downgrade (all `isHumanAdmin`; the policy actor must be non-human via `CheckHumanPrincipal`; `expires_at` is mandatory and capped by `MCTL_AUTONOMY_MAX_TTL`), list (admin), and evaluate (direct service/policy principal). (depends on 5) — DoD: handlers have audit entries and OpenAPI entries (`internal/openapi`).
-- [ ] 7. Add `governance.AuthorityBasisAutonomyPolicy`. Extend `decisions.DecisionInput.validate` and `RecordDecision` so that the basis requires an empty `approval_id`, a non-human actor equal to the enrollment's policy actor, and a live `enrollment:` reason. (depends on 5) — DoD: an invalid combination gives 422 `decision_invalid`.
-- [ ] 8. Add the separation guards: `DecideActionApproval`, `ConsumeActionApproval` and `MarkActionApprovalExecuted` refuse an active policy actor principal. (depends on 5) — DoD: 403 `approval_decider_forbidden`.
-- [ ] 9. Add the optional `approval_id`/`context_digest`/`content_digest` args to MCP `mctl_approve_dev_loop` (`internal/mcp/server.go`) and update its description. (depends on 3) — DoD: the tool count in `server_test.go` is unchanged.
-- [ ] 10. Docs: describe the migration mode, codes and the advisory default in the README/OpenAPI. State that no enrollment or enforce flag is activated. — DoD: `go fmt`, `go vet` and `golangci-lint` are clean.
+**This implementation run is authorized for Slice 1 only (stale-card binding). Action semantics (cancel, request-changes, defer) and the delegation enrollment/policy evaluator are out of scope and must not be implemented in this run.**
+
+Scope is binary: the run is complete only when every task below is done. The only paths that may change are `internal/api/**`, `internal/openapi/openapi.yaml`, the MCP tool schemas under `internal/mcp/**` that wrap the two routes, `cmd/api/main.go` (flag wiring only) and `docs/decision-context-contract.md`. If another path seems necessary, stop and report.
+
+- [ ] 1. `decisionBinding` type, shape validation, and `approval_binding_missing` (422, `details.missing_fields`) wired into the error table in `handlers_action_approvals.go`. — DoD: compiles; the code appears in the refusal table and in OpenAPI.
+- [ ] 2. `MCTL_APPROVAL_BINDING` (`off|observe|enforce`, default `observe`), parsed at startup in `cmd/api/main.go`, unknown value fails startup, plumbed into `Handlers` options. — DoD: unit test for each value and for the bad value.
+- [ ] 3. Action-approval route: accept `binding`, require path id == `approval_ref`, compare digests inside `guardDecision`. — DoD: tests T1, T2, T3.
+- [ ] 4. DevLoop approve route: accept `binding`, resolve the grant by `approval_ref` in `decideDevLoopApproval`, never fall back to the newest, report `current_approval_ref`. — DoD: tests T4, T5, T6.
+- [ ] 5. Idempotence: an already approved grant with the same binding returns the existing decision, no second `DecideActionApproval` write. — DoD: T7.
+- [ ] 6. Mode behavior: `observe` audits `approval.binding_absent` and increments a per-route counter; `enforce` refuses; `off` is silent. — DoD: T8.
+- [ ] 7. Authority unchanged: relay/service/policy principal gets 403 with and without `binding`. — DoD: T9.
+- [ ] 8. OpenAPI, MCP tool schemas (`binding` optional) and `docs/decision-context-contract.md` (new code, migration, precedence). — DoD: openapi lint and the repo's schema tests pass.
+- [ ] 9. Mutation proof: for each guard, remove it, run the tests, confirm a failure, restore. Guards: path id vs `approval_ref`; newest-grant fallback (reintroduce it); context digest compare; content digest compare; missing-field check; enforce refusal; observe audit; idempotent return; `isHumanAdmin` ahead of the binding code. Record each mutation and result in the PR description. — DoD: no surviving mutation.
+- [ ] 10. `go fmt`, `go vet`, `golangci-lint run`, `go test ./...`. — DoD: clean.
 
 ## Tests
 
-- [ ] T1. Decision route: a relay, surface, service and policy principal each get 403 `approval_decider_forbidden`, and the grant stays pending.
-- [ ] T2. Card binding missing a field: 422 `approval_context_incomplete` with `missing_fields`. Run in both modes, so that an empty value is never a bypass.
-- [ ] T3. `require` mode with no `card_binding`: 422 on both routes. `legacy` mode with no binding: today's behaviour, and the audit carries `binding=legacy`.
-- [ ] T4. Stale card after supersession: grant A is shown, grant B is created, and an approve with `approval_id=A` gives 409 `approval_context_changed`. B stays pending and nothing is signalled.
-- [ ] T5. Context digest changed (for example a policy version change) gives 409. A changed `artifact_hash` gives 409. An empty `artifact_hash` gives `approval_content_unbound`.
-- [ ] T6. Pre-signal recheck: a fake store that changes the grant between the decide and the signal leads to no `SignalApprove` call and a 409.
-- [ ] T7. Signal failure after the decide answers `decision_outcome=decided_not_signalled` with `approval_id`. A retry with the same binding re-signals and decides nothing new.
-- [ ] T8. Duplicate identical decision: one stored decision, and the second call answers 200 `replayed:true`.
-- [ ] T9. `request_changes`, `defer` and `cancel` as decisions are refused, and the `aar_` stays pending. A human-input response leaves the `aar_` pending.
-- [ ] T10. Abandon: a relayed caller gets 403. A direct admin gets `effects` grouped correctly. A store failure gives `cancellation_effects_unknown`, and no `aar_` state changes.
-- [ ] T11. Evaluator table tests: missing, expired, revoked, scope mismatch (action class, work scope, risk, cross-tenant), checkpoint not attested, store error (gives `policy_checkpoint_unavailable`), and allowed. In advisory mode, `permitted` is always false.
-- [ ] T12. Downgrade or revoke after an allowed evaluation: the next evaluation, and the pre-effect recheck, refuse.
-- [ ] T13. Enrollment create with a human `policy_actor_principal_id` is refused. Create by a non-`isHumanAdmin` caller is refused.
-- [ ] T14. A `dec_` with `authority_basis=autonomy-policy` and a non-empty `approval_id`, a human actor, or a dead enrollment gives 422.
-- [ ] T15. A policy actor calling decide, consume or execute gets 403.
-- [ ] T16. Mutation tests (a build-tag or table-driven guard toggle): disabling each guard in turn (isHumanAdmin, binding presence, id equality, context digest, content digest, pre-signal recheck, non-human actor, empty approval_id, policy-actor refusal) makes at least one of T1-T15 fail.
+- [ ] T1. Action-approval decision with a matching binding approves; with a differing `context_digest` -> 409 `approval_context_changed`, grant stays pending.
+- [ ] T2. Differing `content_digest` -> 409 `approval_context_changed`.
+- [ ] T3. Path id different from `approval_ref` -> 409 `approval_context_changed`.
+- [ ] T4. DevLoop approve: the card names grant A, the execution's newest grant is B (A superseded) -> 409 `approval_context_changed` with `current_approval_ref=B`; B is NOT approved.
+- [ ] T5. DevLoop approve with the matching newest grant approves it and signals with that `approval_ref`.
+- [ ] T6. DevLoop approve where the grant lookup fails -> 503, not the legacy payload.
+- [ ] T7. Two identical bound requests produce one decision row and one signal payload.
+- [ ] T8. Mode matrix: no binding in `off` ok, in `observe` ok plus audit and counter, in `enforce` 422.
+- [ ] T9. Relay principal and service principal get 403 `approval_decider_forbidden`, bound and unbound.
+- [ ] T10. A partial binding (any one field missing or malformed) is 422 `approval_binding_missing` in every mode.
+- [ ] T11. Terminal-state precedence: a denied or expired grant with a stale binding answers the state code, not `approval_context_changed`.
 
 ## Rollback
 
-Every behaviour change is gated or additive:
-
-- Set `MCTL_APPROVAL_CARD_BINDING=legacy` to restore today's approve behaviour.
-- Set `MCTL_AUTONOMY_POLICY_MODE=off` to disable evaluation entirely.
-- The `autonomy_enrollments` table is unused when the mode is off and can stay in place.
-- For a full rollback, revert the release image through the normal gitops image-tag rollback. The new table is additive and needs no down-migration.
-- If the abandon relay refusal breaks a caller, revert that one commit (task 4) independently.
+Revert the change. `MCTL_APPROVAL_BINDING=off` restores the old behavior without a deploy of code. No migration, no table, no data change.
