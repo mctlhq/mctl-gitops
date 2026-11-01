@@ -67,10 +67,10 @@ resources:
   # accurate again — which is why 256Mi stays.
   requests:
     cpu: 50m
-    memory: 192Mi
+    memory: 320Mi
   limits:
     cpu: 500m
-    memory: 384Mi
+    memory: 576Mi
 automountServiceAccountToken: false
 # 1.28.0 is the first tag with USER app (uid 1000) in the image.
 podSecurityContext:
