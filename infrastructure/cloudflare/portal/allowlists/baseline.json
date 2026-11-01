@@ -177,8 +177,8 @@
       "recorded": "2026-09-25"
     },
     "tg": {
-      "tools_total": 45,
-      "tools_enabled": 42,
+      "tools_total": 46,
+      "tools_enabled": 43,
       "enabled_tools": [
         "cancel_broadcast",
         "delete_fork",
@@ -188,6 +188,7 @@
         "edit_message",
         "fork_assistant",
         "forward_messages",
+        "get_acquisition_report",
         "get_broadcast",
         "get_media",
         "get_messages",
@@ -225,7 +226,7 @@
       ],
       "prompts_total": 0,
       "prompts_enabled": 0,
-      "recorded": "2026-10-31"
+      "recorded": "2026-11-01"
     }
   }
 }
