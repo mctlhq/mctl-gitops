@@ -52,7 +52,7 @@
     facts.
 - [ ] 6. Rewrite `SubmitWorkerReview` in
   `internal/api/handlers_review_receipts.go`:
-  - an enable gate from the new `HandlerOptions.ReviewWorkerIngestEnabled`;
+  - an enable gate from the new `api.Options.ReviewWorkerIngestEnabled`;
     the 501 path is unchanged when off;
   - the run-token check;
   - a strict body decode, extracting the decode helper shared with the
@@ -68,18 +68,24 @@
     tests.
 - [ ] 7. Docs and contract:
   - `docs/review-receipts.md`: routes, codes, a "Worker path" section with
-    the eligibility rule and the remaining prerequisite mctl-agents#975, and
-    the `review_nonce_consumptions` writer;
+    the eligibility rule, the enable switch and what enabling still needs
+    (the real reviewer agent name from mctl-agents#905 and the operator's
+    gitops change), and the `review_nonce_consumptions` writer;
   - `internal/openapi/openapi.yaml`;
   - `helm/values.yaml` comment for `REVIEW_WORKER_INGEST_ENABLED`;
-  - reword the item-4 prerequisite in "Disabled worker path" as delivered.
+  - mark prerequisites 2 (mctl-agents#980 and #923) and 3 (mctl-agents#979)
+    in "Disabled worker path" as delivered, and reword item 4 as delivered.
+    Item 4 currently says eligibility uses "the recorded `attached_by`
+    fields". Change it to the new `attached_direct_service` rule.
     The current `#895` mentions, at lines 4 and 138, already credit Slice A
     correctly.
 
   (depends on 6)
   - DoD: openapi lint/tests pass.
-  - DoD: the docs name mctl-api#917 as the worker-enablement owner and
-    mctl-agents#975 as the remaining prerequisite.
+  - DoD: the docs name mctl-api#917 as the worker-enablement owner. They
+    show prerequisites 1-4 as delivered, and they name the remaining
+    enablement step: the agent name from mctl-agents#905 plus
+    `REVIEW_WORKER_INGEST_ENABLED`.
 - [ ] 8. Run `go fmt`, `go vet`, `golangci-lint` and `go test ./...`.
   Confirm the MCP tool count in `internal/mcp/server_test.go` is unchanged.
   (depends on 1-7)
