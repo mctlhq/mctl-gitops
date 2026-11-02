@@ -112,10 +112,9 @@ bar is in `docs/agent-worker.md` ("Testing") and ADR 0008: classification at
 least 29/32, 32/32 terminal, 0 leaks, 0 binding violations, 0 wrong auto-sends.
 
 **Relationship to ADR 0008.** ADR 0008 (Proposed; #1090 not merged — no
-`agent-pool`/`requireNotPool` symbols exist in the clone) plans a claim-only
-`aud=agent-pool` credential with a `requireNotPool` guard. It cites #1046 as
-its foundation. The claim-only guard below is designed to be the one guard
-both credentials use.
+`agent-pool` symbols exist in the clone) plans a claim-only `aud=agent-pool`
+credential for the managed runtime. It cites #1046 as its foundation. This
+proposal documents that plan as design intent and implements none of it.
 
 Deployed state checked:
 - `$MCTL_GITOPS_ROOT/services/labs/agent-worker-preview/values.yaml`: shows
@@ -173,8 +172,9 @@ enforcing code:
   example `PublicProfile` stripping `never` and restricted fields).
 - **Threats and mitigations**, at minimum:
   - T1 credential theft:
-    - runtime token: claim-only, 7-day default, `jti`-revocable;
-    - job token: about 5 min, one job/attempt/conversation;
+    - the account-scoped `aud=agent` token: 30 to 90 day lifetime, no `jti`,
+      reach as stated below, revoked only by blanket revocation by Telegram id;
+    - the job token: about 5 min, one job/attempt/conversation;
   - T2 replay:
     - a job token past its attempt is refused by the attempt fence
       (`CompleteAgentJob`) and by the `install_revision` fence
@@ -182,7 +182,9 @@ enforcing code:
     - propose idempotency;
     - no TTL extension;
   - T3 cross-job/cross-account access: `enforceBinding`, the per-route
-    checks, user scoping in every store query;
+    checks, user scoping in every store query. State plainly that
+    `enforceBinding` is a no-op for the account token, so job binding is
+    voluntary for a holder of it;
   - T4 tool widening: signed `job_tools`, `toolGate`;
   - T5 policy bypass: there is no route that sends; propose goes through
     `policy.Evaluate` and the send gate;
@@ -195,145 +197,92 @@ enforcing code:
   - T9 DoS: 1 MiB body cap (`maxRequestBodyBytes`), long-poll bound,
     claim limit at most 10;
   - T10 credential confusion: distinct audiences, the job provider requires
-    `aud=agent-job`.
+    `aud=agent-job`;
+  - T11 compromised worker host or model provider: everything the API returns
+    reaches them; mitigations are the above plus the fact that no route sends
+    and no Telegram session material is exposed.
+- **Blast radius of the account-scoped token**, a dedicated section: what a
+  thief can read and do for the token's whole lifetime.
 - **Residual risks:**
   - bearer tokens are not sender-constrained;
   - owner notes and the engaged profile view reach a provider MCTL does not
-    choose;
-  - existing account tokens keep their wide reach until the follow-up.
+    choose (documented, not changed);
+  - the account-scoped token keeps its wide reach and has no `jti`.
 
-  Each has an owner and a revisit trigger.
+  Each has an owner and a revisit trigger. The revisit trigger for the wide
+  account token is "an external runtime is onboarded for an account other than
+  the owner's own".
 
-### 2. Contract: `docs/contracts/agent-job-api.md`, plus stable error codes
+### 2. Contract: `docs/contracts/agent-job-api.md` (current behaviour)
 
 - A versioned document, "agent job API v1", in the same layout as
   `docs/contracts/mctl-api-work-context.md`:
-  - authentication and the credential matrix (runtime/job/account x route);
+  - authentication and the credential matrix (account `aud=agent`, job
+    `aud=agent-job` x route);
   - the job lifecycle: claim -> read -> propose/request approval/summary ->
-    complete, plus job status;
+    complete, plus job status and cost report;
   - the claim envelope fields (`jobEnvelope`);
   - per-route schemas;
   - the binding rules;
   - deadlines (`deadline` is advisory, the sweeper enforces);
-  - idempotency and fencing (attempt, `install_revision`);
+  - retry, idempotency and fencing (attempt, `install_revision`);
   - deprecations (`GET /events`, sunset 2026-12-31);
-  - the error code table.
-- **Error codes.** Add `writeAPIError(w, status, code, msg)` in
-  `internal/agentapi/json.go`. It writes `{"error": msg, "code": code}`.
-  `code` is a closed enum declared in a new `internal/agentapi/codes.go`:
-  - `unauthenticated`, `invalid_request`, `not_found`;
-  - `binding_mismatch` (from `denyBinding`), `credential_claim_only`,
-    `account_route_job_credential` (from `requireAccountToken`);
-  - `attempt_fenced` and `install_changed` (the 409s in `events.go` and
-    `actions.go`);
-  - `tool_not_allowed`, `tool_set_unavailable`;
-  - `assistant_unavailable` (the 503s for registry disabled, lifecycle
-    unknown, forks off);
-  - `job_token_unavailable`;
-  - `policy_denied`, with `reason` set to the `policy.DenyCode`;
-  - `internal`.
-
-  Existing `writeJSONError` call sites move to `writeAPIError`. The `error`
-  string stays byte-identical, so existing workers that match on it, and
-  `toolGate`'s `error: tool_not_allowed`, keep working.
+  - the current error semantics: statuses, the free-text `{"error": "..."}`
+    bodies, and the `policy.DenyCode` values policy refusals carry.
+- **No error redesign.** Response bodies and codes stay exactly as the code
+  writes them. The document records them; it does not add a `code` field or
+  an enum.
 - **Doc sync test.** `docs/agent_job_api_test.go` (package `docs`, the same
-  pattern as `docs/compatibility_test.go`) parses the route table and code
-  table from the doc. An exported `agentapi.Routes()`, which returns what
-  `Register` binds (refactor `Register` to iterate it), and
-  `agentapi.ErrorCodes()` supply the other side. The test fails on any
-  difference.
+  pattern as `docs/compatibility_test.go`) drives `Server.Register` with a
+  recording router (the `Register` parameter is already an interface with
+  `Get`/`Post`), so no refactor is needed. It compares the recorded routes
+  with the contract's route table, and checks that the threat model names
+  every route. It fails on any difference.
 - Update `docs/assistants/spec.md` (T4 row) and `docs/agent-worker.md` to link
-  to the contract and to state that external runtimes use a runtime token.
+  to the contract and the threat model.
 
-### 3. Scoped credentials: claim-only runtime token plus job tokens
+### 3. Credential boundary (documentation only)
 
-Decision: **external runtimes get only an `agent-runtime` credential, which
-can claim and do nothing else, and the per-job tokens the server mints at
-claim.** They never get an account `agent` token.
+The owner-approved model is written into the threat model (section 1), the
+contract (section 2) and the `docs/assistants/spec.md` T4 row. No code
+changes.
 
-- **Mint.** `POST /api/agent/runtime-token`. `NewRuntimeTokenHandler` lives in
-  `internal/agentapi/tokenhandler.go`, beside `NewAgentTokenHandler`, and
-  reuses its admin gate and strict decoder:
-  - body `{telegram_id, ttl_hours}`;
-  - `aud=agent-runtime`, `sub=tg:<id>`, `TelegramID`, a fresh `jti` (reuse
-    `workertoken`'s `generateJti` by exporting it, or a local copy), and
-    `orig_iat`;
-  - TTL 7 days by default, 30 days maximum (clamped, as the existing handlers
-    do);
-  - logged as `agent runtime token minted` with the admin id, target id,
-    `jti` and TTL, never the token.
+- **Own / external runtime:** the existing account-scoped `aud=agent` token
+  (`POST /api/agent/token`, admin-only, 30 days by default, 90 days maximum,
+  no `jti`). The documents state its blast radius as it is today (it can
+  claim, read any conversation's context, leads and events of the account,
+  and call every per-job route for any job of the account; revocation is by
+  blanket revocation by Telegram id). Job-level binding comes from the
+  `aud=agent-job` tokens that `POST /jobs/claim` mints where a job-token
+  signer is configured. Mutating actions go through the policy engine and the
+  send gate regardless of the credential. The worker never receives Telegram
+  session material.
+- **Managed runtime (planned, #1090, ADR 0008):** a claim-only
+  `aud=agent-pool` credential, then job-bound `aud=agent-job`. The documents
+  mark it as design intent, not implemented. Its guard and the proof that
+  pool revocation kills derived job tokens are #1090 deliverables.
 
-  Mounted in `cmd/server/main.go` next to `/api/agent/token`.
-- **Verify.** `selectAgentRuntimeProvider` in `cmd/server/main.go` builds a
-  `localjwt.NewProvider` with `ExpectedAudience: "agent-runtime"`,
-  `AudienceRequired: true`, the shared `RevocationCache`, and a new
-  `ProviderConfig.ClaimOnly: true`. The provider sets a new
-  `auth.Identity.ClaimOnly bool` on success. It is chained:
-  `chainProvider{agentProvider, jobProvider, runtimeProvider}`. It is signed
-  under this service's own issuer in every `AUTH_MODE`, as the job provider
-  is. It is present only when `OAUTH_JWT_SECRET` is set; with no secret,
-  neither mint nor verify exists. `agent-runtime` is added to
-  `derivedAudiences` in `internal/auth/localjwt/issuer.go`.
-- **Guard.** In `internal/agentapi/binding.go`, add
-  `requireNotClaimOnly(w, r, id, tool) bool`. It returns 403 with code
-  `credential_claim_only` and audits `denied`. It is applied centrally in
-  `Register`'s `get`/`post` wrappers to every route except `POST /jobs/claim`,
-  so a new route is covered by default. ADR 0008's pool provider sets the same
-  `ClaimOnly` flag; `requireNotPool` then becomes this guard.
-- **Claim.** In `handleClaimJobs`, for a `ClaimOnly` identity:
-  - refuse with 503 `job_token_unavailable` before claiming if
-    `jobTokenSigner == nil`;
-  - if `mintJobToken` returns `""` for a claimed job (signing failure, or a
-    TTL already elapsed), release the claim with the existing requeue path
-    and omit the job, rather than handing out a job the worker cannot act on.
-
-  `mintJobToken` already copies `parent.Jti` and `parent.OriginalIssuedAt`, so
-  revoking the runtime `jti` kills derived job tokens within 15 s.
-- **Account tokens.** `NewAgentTokenHandler` starts minting a `jti`. Existing
-  tokens without one keep working, and blanket revocation still reaches them.
-  This closes ADR 0008's "today's account token has no `jti` at all" gap.
-  Reach is unchanged; restricting it is an open question and a follow-up.
-- **First-party worker.** The tool calls already use the job token when one
-  is present. `ClaudeInvoker`'s fallback to the account token
-  (`claudeinvoker.go:143`) is never reached, because a claim-only claim never
-  returns a job without a `job_token`. The post-run `finishRun`
-  (`internal/agentworker/finishrun.go`: `GetJobStatus` and `ReportJobCost`)
-  is different. Both runners give it a client built from the configured
-  worker token: `ClaudeInvoker.Run` uses
-  `NewClient(c.APIBaseURL, c.APIToken, nil)` at `claudeinvoker.go:270`, and
-  `OpenAIRunner.Run` builds `workerAPI` from `r.APIToken` when it is set, at
-  `openairunner.go:53-56`. With a claim-only credential those two calls
-  would get 403. Change both runners to build the `finishRun` client from
-  `job.JobToken` when it is present, and fall back to the worker token only
-  without one. This is required for the first-party worker to pass its own
-  conformance run, and ADR 0008 §2 requires it too.
-
-### 4. Conformance harness
+### 4. Conformance runner (black box, existing fixtures and gates)
 
 - **Claim-serving fake.** New `internal/agenteval/conformance.go`, type
-  `Conformance`, an `http.Handler` that wraps a queue of `Task`s:
-  - `POST /jobs/claim` accepts only the harness claim token. It returns the
+  `Conformance`, an `http.Handler` that wraps a queue of the existing `Task`s:
+  - `POST /jobs/claim` accepts the harness-issued token. It returns the
     next fixture's `JobEnvelope`: job id, attempt 1, conversation 1, the
     `instructions` from `Target.Instructions`, `tools` from
-    `Target.JobTools`, the deadline, and a **fresh random `job_token` per
-    job**. When the queue is empty it returns `{"jobs": []}` after a short
-    hold.
-  - Every other route is dispatched by bearer token to the owning `Task`.
-  - Recorded as a new violation class, `claim_token_on_job_route`: the claim
-    token used on a non-claim route (answered 403 `credential_claim_only`, as
-    production does).
-  - Recorded as binding violations: an unknown token (401); a job token used
-    with another job's id, attempt or conversation in the path or body. These
-    extend `Task.boundBody` to path ids.
-  - `GET /jobs/{id}` (job status) and `POST /jobs/{id}/cost` are routed to the
-    Task, as before.
+    `Target.JobTools`, the deadline, and a fresh random `job_token`. When the
+    queue is empty it returns `{"jobs": []}` after a short hold.
+  - Every other route is dispatched to the `Task` of the currently claimed
+    fixture. The harness token stands for the account-scoped `aud=agent`
+    token and is accepted where production accepts it; the existing `Task`
+    checks (`tools.Endpoints`, `boundBody`, guarded policy dry run) and
+    recording apply unchanged.
+  - One fixture is served at a time, so routing needs no job-id lookup.
 
   The fake still never reaches a store, the executor or Telegram:
-  `TestNoPathToEffects` is extended to cover `conformance.go`. `Score` gains
-  the new violation class as a hard failure. `HarnessVersion` is bumped to
-  `agenteval/2`, because a run that passed under v1 can now fail.
-- **Runner.** New `cmd/agent-conformance/main.go`, a CLI and not only a test.
-  An external author can `go install` it or use it from the worker image.
+  `TestNoPathToEffects` is extended to cover `conformance.go`. `Score`,
+  `FixtureResult`, the violation classes and `HarnessVersion` are unchanged.
+- **Runner.** New `cmd/agent-conformance/main.go`, a CLI. An external author
+  can `go install` it.
   - Flags or env:
     - `--suite hr-recruiter@0.1.0` (catalog plus `agenteval.LoadSuite`);
     - `--worker-cmd "<argv>"` (`AGENT_CONFORMANCE_WORKER_CMD`), *or*
@@ -341,80 +290,39 @@ claim.** They never get an account `agent` token.
     - `--timeout` (`AGENT_CONFORMANCE_TIMEOUT`, default 32 x 3 min);
     - `--filter`;
     - `--report out.json`.
-  - With `--worker-cmd`: start an `httptest`-like server on loopback, then
-    exec the command with `AGENT_API_BASE_URL=<url>` and
-    `AGENT_API_TOKEN=<claim token>`, the env names `cmd/agent-worker` reads.
-    Inherit the rest of the environment (model credentials are the author's),
-    and kill the command when every fixture is terminal or the timeout hits.
-  - With `--listen`: print the base URL and claim token, and wait for the
-    same condition.
+  - With `--worker-cmd`: start a loopback server, then exec the command with
+    `AGENT_API_BASE_URL=<url>` and `AGENT_API_TOKEN=<harness token>`, the env
+    names `cmd/agent-worker` reads. Inherit the rest of the environment
+    (model credentials are the author's), and kill the command when every
+    fixture is terminal or the timeout hits.
+  - With `--listen`: print the base URL and token, and wait for the same
+    condition.
   - Output: the `Score` report as JSON with `harness_version`,
     `suite_digest`, `definition_digest`, per-fixture outcomes (no model text,
     as `FixtureResult` already guarantees) and a pass/fail exit code.
-- **C1 reuse.** `TestC1ObserveEval` keeps its in-process mode for runner
-  development. A new opt-in `TestC1Conformance` (`AGENT_CONFORMANCE=1`)
-  builds `cmd/agent-worker` and runs it through `Conformance` as a black box.
-  This is the C1 harness "run against any worker binary". The acceptance bar
-  is the suite threshold plus 0 claim-token-on-job-route.
-- `Dockerfile.agent-worker` already ships the eval test binary. Add the
-  `agent-conformance` binary so the run can be a one-shot Kubernetes Job.
+- **C1 reuse.** `TestC1ObserveEval` keeps its in-process mode, unchanged. A new
+  opt-in `TestC1Conformance` (`AGENT_CONFORMANCE=1`) builds `cmd/agent-worker`
+  and runs it through `Conformance` as a black box. This is the C1 harness
+  "run against any worker binary". The acceptance bar is the existing one:
+  suite threshold, 32/32 terminal, 0 leaks, 0 binding violations, 0 wrong
+  auto-sends.
 
 ## Alternatives
 
-- **Give external runtimes the existing account token (status quo, T4 row in
-  spec.md).** Dropped. A leaked 30 to 90 day token with no `jti` reads every
-  conversation of the account and acts on any job. That contradicts
-  "narrow, short-lived, job-bound", and job-level binding is entirely
-  voluntary for the holder.
-- **Job tokens only, delivered by push (server -> runtime webhook) with no
-  standing runtime credential.** This is the narrowest option. It needs the
-  server to call out to arbitrary user endpoints (SSRF and egress surface,
-  `internal/netsafe` work), retries and reachability for workers behind NAT
-  (the Mac mini). It also reverses today's pull model, which every worker and
-  the C1 harness use. Dropped for now. The claim-only token keeps pull and
-  holds no reading power on its own.
-- **Restrict the existing `aud=agent` token to claim-only in place.** This is
-  simpler, with one credential. But it breaks the deployed first-party
-  worker, and any worker without a signer (the shared-hmac
-  `parent.TelegramID == 0` case in `mintJobToken`), in one step. It also gives
-  no way to tell an external runtime apart in audit. It is kept as the open
-  follow-up once `Worker` uses job tokens everywhere.
-- **Sender-constrained tokens (DPoP or mTLS) now.** Stronger against theft,
-  but there is no client-side support in the worker or the runtimes and no
-  ingress mTLS. Recorded as a residual risk instead.
+- **A separate claim-only `agent-runtime` credential for external runtimes (the first version of this proposal).** Rejected by the owner on 2026-11-02: own and managed are different trust boundaries, and reworking the own path would widen P5 without need. The owner-approved model is own = existing `aud=agent`, managed = `agent-pool -> agent-job` in #1090.
+- **Restrict the existing `aud=agent` token to claim-only in place.** Out of scope: it would break the deployed first-party worker and change the own credential path. The wide reach of the account token is recorded as a residual risk with a revisit trigger instead.
+- **Job tokens only, delivered by push to the runtime.** Out of scope: it reverses the pull model every worker and the C1 harness use.
+- **Sender-constrained tokens (DPoP or mTLS).** Out of scope; recorded as a residual risk.
+- **A new evaluation framework for conformance.** Rejected: the existing `agenteval` fixtures, `Task` fake and `Score` gates already define the bar. Only a claim-serving wrapper and a CLI are added.
 
 ## Platform impact
 
-- **Migrations:** none. No schema change: revocation reuses
-  `worker_token_revocations`, and jobs and audit are unchanged.
-- **Backward compatibility:**
-  - Account tokens keep their reach. Newly minted ones gain a `jti`, which is
-    additive (`needsRevocationCheck` already handles `jti`).
-  - Error bodies gain a `code` field. The `error` text is unchanged, so
-    strict clients that reject unknown fields are the only risk. The worker
-    client (`internal/agentworker/client.go`) decodes errors leniently; this
-    is verified in task 3.
-  - `HarnessVersion` bumps to `agenteval/2`, so stored P4.3 eval run bindings
-    (`agenteval/binding.go`) under v1 stay valid as historical records, but a
-    re-run is v2.
-- **Deployed config:** none required. The runtime provider is enabled
-  wherever `OAUTH_JWT_SECRET` is set, which is already true in local-jwt
-  `labs/mctl-telegram{,-preview}`. No gitops change ships with this proposal.
-  Minting a runtime token for a real account is an operator action after
-  merge.
-- **Resources:** negligible. One extra provider in the auth chain on agent
-  routes, and one extra revocation lookup per runtime/job request (cached,
-  15 s TTL).
+- **Migrations:** none.
+- **Runtime behaviour:** none. No change to auth, token handlers, the claim handler, error bodies, runners or `Server.Register`. The server and worker binaries behave exactly as before.
+- **Backward compatibility:** nothing to break. `HarnessVersion` is unchanged, so stored P4.3 eval run bindings stay comparable.
+- **Deployed config:** none. No gitops change ships with the implementation. The conformance binary is not added to any image.
+- **Resources:** none at runtime. The one manual 32-fixture conformance run spends model quota once, inside the existing eval budget.
 - **Risks and mitigations:**
-  - *A central guard misses a route.* Applying it in `Register`'s wrappers,
-    plus a table test over `agentapi.Routes()`, makes "new route without the
-    guard" impossible.
-  - *A claim-only claim strands jobs when signing fails.* The job is requeued
-    rather than returned. The sweeper is the backstop.
-  - *Chain ordering lets a runtime token authenticate as an account token.*
-    The audiences differ (`agent` vs `agent-runtime`) and each provider
-    requires its own audience. A test asserts that a runtime token is rejected
-    by `selectAgentProvider` and is `ClaimOnly` through the chain.
-  - *Conflict with ADR 0008 (#1090), which edits the same files.* Land this
-    first and have #1090 reuse `ClaimOnly` and `requireNotClaimOnly`, or
-    rebase whichever lands second. Both designs agree on semantics.
+  - *Documents drift from the code.* The doc-sync tests (T1, T2) fail when a route is added or removed on one side only. Error semantics are prose and are reviewed with the code.
+  - *The harness token semantics are mistaken for a new production credential.* The contract and the tool's help say the harness token mirrors `aud=agent` and exists only inside the fake. No server code reads it.
+  - *Overlap with #1090.* None in code: #1090 owns `aud=agent-pool`, its guard and the revocation proof. This proposal only documents the planned model.
