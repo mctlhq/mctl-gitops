@@ -42,12 +42,16 @@
 - [ ] 9. Pool claim branch in `events.go`: `handlePoolClaim` (503 without
   signer, candidate loop, blanket-revocation skip, render-before-claim per
   account, `Claim(..., RuntimeManaged, 1)`, round robin one job per account,
-  release on mint failure via `RetryAgentJob`, audit under the job user with
+  release on mint failure via the new no-charge
+  `Store.ReleaseUnissuedClaim` / `Queue.ReleaseUnissued` (never
+  `RetryAgentJob`; CAS on status, attempt and claimant, attempt count
+  restored, open attempt row removed, turn membership kept, fixed short
+  delay), audit under the job user with
   `pool:<name>`); `mintJobToken` takes Subject/TelegramID from
   `Store.TelegramIDByUserID` for a pool parent and keeps the pool's
   jti/orig_iat; account branch passes `RuntimeOwn` and is otherwise unchanged;
   `Server.WithManagedClaims` (depends on 2, 6, 7, 8).
-  — DoD: all `TestHandleClaimJobs_Pool_*` tests pass.
+  — DoD: all `TestHandleClaimJobs_Pool_*` tests pass, including T17.
 - [ ] 10. Server wiring in `cmd/server/main.go`: under
   `cfg.ManagedRuntimeEnabled && cfg.OAUTHJWTSecret != ""` mount
   `POST /api/agent/pool-token`, chain `selectAgentPoolProvider` after the agent
@@ -126,12 +130,33 @@ each.
   no token. Mutation: compute TTL as `Duration(hours)*Hour` before clamping.
 - [ ] T14. `TestServer_PoolFlagOff`: with `MANAGED_RUNTIME_ENABLED=false` the
   mint route is 404 and a pool token is 401 on `/api/agent/v1/jobs/claim`.
+  The test drives the same wiring function `cmd/server/main.go` uses (extract
+  it if needed), not a copy of it. Mutation: drop the
+  `cfg.ManagedRuntimeEnabled` condition so the pool provider is chained and the
+  mint route mounted regardless of the flag; the test fails because the route
+  answers and the pool token authenticates.
 - [ ] T15. Worker: `TestClaudeInvoker_PoolMode_NoFallback`,
   `TestFinishRun_PoolMode_UsesJobToken` (both runners, asserting the
   Authorization header on `GET /jobs/{id}` and `POST /jobs/{id}/cost`), and
   `TestClaudeInvoker_OwnMode_Unchanged`. Mutation: fall back to `APIToken`.
 - [ ] T16. `TestHandleClaimJobs_OwnPathUnchanged`: account-token claim for an
-  own account returns the same envelope fields and job-token claims as before.
+  own account returns the same envelope fields and job-token claims as before,
+  asserting `sub`, `telegram_id`, `tg_username`, the absence of `jti` and
+  `orig_iat`, and that the claim used `RuntimeOwn`. Mutations (each must fail
+  the test): (a) mint the account-parent job token through the pool branch
+  (Subject/TelegramID from `TelegramIDByUserID`, empty `tg_username`);
+  (b) pass `db.RuntimeManaged` from the account branch to `Queue.Claim`.
+- [ ] T17. `TestHandleClaimJobs_Pool_MintFailureRequeuesWithoutChargingAttempt`:
+  with a signer that fails, a pool claim takes the job and gets no token; the
+  job is back to `pending` with `attempts` and `max_attempts` unchanged from
+  before the claim, `claimed_by` cleared and no open `agent_job_attempts` row,
+  and the response does not contain it. Repeating the failing claim more than
+  `max_attempts` times never moves it to `dead_letter`. With a healthy signer a
+  later pool claim reclaims it with a job token, `attempts` one above the
+  pre-claim value, and (coalesced path) the same `SourceEventIDs`. A release
+  whose CAS no longer matches (status changed, other claimant) writes nothing.
+  Mutation: replace `ReleaseUnissuedClaim` with `RetryAgentJob`; the test
+  fails on the attempt count and, after the loop, on `dead_letter`.
 
 ## Rollback
 

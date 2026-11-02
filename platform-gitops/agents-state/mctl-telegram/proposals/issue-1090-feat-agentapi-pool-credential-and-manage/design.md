@@ -259,8 +259,11 @@ mint route 404. Log `managed runtime pool credential enabled` once.
      with `user_id` (no content), skip, jobs stay pending;
    - `s.Queue.Claim(ctx, c.UserID, db.RuntimeManaged, 1)`; zero jobs -> next;
    - `tok := s.mintJobTokenFor(id, j, jobTools)`; if `tok == ""` ->
-     `Store.RetryAgentJob(ctx, j.ID, j.Attempts, "job token mint failed")`
-     and skip (a pool-claimed job is never returned without a token);
+     `Store.ReleaseUnissuedClaim(ctx, j.ID, j.Attempts, replicaID)` (see
+     below) and skip (a pool-claimed job is never returned without a token).
+     `RetryAgentJob` is not used here: it treats the claim as a failed worker
+     attempt, so a signer outage would spend the job's retry budget and finally
+     dead-letter a valid job;
    - append the envelope (same `jobEnvelope` fields as the account branch) and
      `s.audit(ctx, c.UserID, "get_events", "ok", "pool:"+id.Pool)`.
    One pass over candidates is one round; with limit > 1 the loop does further
@@ -268,6 +271,37 @@ mint route 404. Log `managed runtime pool credential enabled` once.
    per account per response by construction.
 4. Return when `out` is non-empty, else wait for the next tick or the
    deadline, exactly as the account branch.
+
+`Store.ReleaseUnissuedClaim(ctx, jobID int64, attempt int, replicaID string) error`
+(new, `internal/db/agent_jobs.go`, reached through `Queue.ReleaseUnissued` so
+the replica id is the queue's) undoes a claim whose credential was never issued.
+In one transaction:
+- `UPDATE agent_jobs SET status = 'pending', attempts = attempts - 1,
+  claimed_by = NULL, claimed_at = NULL, next_run_at = $now + releaseDelay,
+  last_error = 'job token mint failed', updated_at = $now
+  WHERE id = $1 AND status = 'processing' AND attempts = $2 AND claimed_by = $3`.
+  The CAS is the same shape as `RetryAgentJob`'s plus the claimant; zero rows
+  -> `ErrAgentJobNotFound` (the sweeper or another path moved it; nothing is
+  written). `releaseDelay` is a fixed short constant (`eventsPollInterval`),
+  not `AgentJobBackoff(attempts)`, so repeated outages do not grow the delay
+  toward the dead-letter horizon.
+- `DELETE FROM agent_job_attempts WHERE job_id = $1 AND attempt = $2 AND
+  finished_at IS NULL`: the attempt never ran, so it leaves no history row and
+  the reclaim inserts that attempt number afresh.
+- `turn_id` and the members already `coalesced_into` the head are left as they
+  are, exactly as on a retry: the reclaim takes the "membership is frozen"
+  branch of `claimCoalesced` and returns the same `SourceEventIDs`. The head
+  cannot itself be absorbed as a follower while back at `attempts = 0`, because
+  it is still the oldest pending job of its conversation (the claim's
+  `NOT EXISTS` older-pending check is why it was claimable).
+- No `routeJobEventTx`, no dead-letter branch, no metric for a worker failure.
+
+Fencing: the released attempt number is reused by the reclaim, which is safe
+because nothing bound to it ever left the server — release runs only when
+`mintJobTokenFor` returned no token and before the envelope is appended, so no
+job token, envelope or worker holds that attempt. Any token for an earlier
+attempt is still refused by the attempt and install-revision fence in
+`actions.go`, and the reclaim re-stamps `install_revision` from the profile.
 
 `mintJobToken` becomes a thin wrapper choosing subject source:
 - account parent: unchanged (`parent.Subject`, `parent.TelegramID`,
@@ -354,3 +388,11 @@ runtime's claim (the predicate reads the profile live) picks it up.
     caller; mechanical, compiler-enforced.
   - Audit rows for pool refusals cannot use `UserID=0`; mitigated by slog +
     metric, plus the job owner's row when resolvable.
+  - A signer outage leaves managed jobs pending (released without charge,
+    retried every `releaseDelay`) instead of dead-lettering them; they are
+    visible as pending age, not as failures.
+  - Candidate window fairness (`limit*4` over-fetch): if many accounts in the
+    window are skipped (blanket revocation, render failure, in-flight cap), an
+    account just outside it waits for a later tick. Non-blocking at
+    `MANAGED_RUNTIME_MAX_ACCOUNTS=1`; recorded as a follow-up, not redesigned
+    here.
