@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-11-02T00:55:06Z'
+status: review-stuck
+updated_at: '2026-11-02T01:13:34Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-e8e3412714ccde94
@@ -51,4 +51,12 @@ review_attempts: 1
 ci_blockers_head: 2a6ee2dc2c4e194b9083b7cb982987bde89e4007
 ci_blockers:
 - build / test
-harness_failures: 2
+harness_failures: 3
+notes: 'The platform lost the implementer''s work 3 time(s) in a row (implementer
+  follow-up exited non-zero (50) for mctl-telegram/issue-1057-e2e-low-frequency-live-telegram-login-pr).
+  This is a harness defect, not a problem with the proposal — review_attempts was
+  never charged. Human triage required; see mctl-agents#366. Reason: The bounded log
+  excerpt elides the failing package: it shows only a bare FAIL and exit code 1 for
+  test-cross-platform (macos-latest), with every visible package ok. The Linux test
+  job failure line is elided as well. Local go test runs here timed out without output,
+  so no failure could be reproduced. A code change would be a guess.'
