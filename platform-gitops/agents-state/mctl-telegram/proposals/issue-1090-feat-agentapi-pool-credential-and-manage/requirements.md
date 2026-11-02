@@ -110,9 +110,12 @@ Pool claim branch
   `Subject=tg:<id>` and `TelegramID` from the job's user via
   `Store.TelegramIDByUserID`, and SHALL keep the pool's `jti` and `orig_iat`.
 - IF a job token cannot be minted for a pool-claimed job THEN THE SYSTEM SHALL
-  NOT return that job without a token (the claim is released back to pending
-  via the existing retry path) — a pool-claimed job is never handed out without
-  a job token.
+  NOT return that job without a token — a pool-claimed job is never handed out
+  without a job token — AND SHALL release the claim with
+  `Store.ReleaseUnissuedClaim`, never with `RetryAgentJob`: the job returns from
+  `processing` to `pending`, its attempt count is restored to the pre-claim
+  value, it makes no progress toward `dead_letter` however often the mint
+  fails, and a later pool claim can reclaim it.
 - WHEN the pool claims a job THE SYSTEM SHALL audit it under the job's user id
   with tool `get_events`, status `ok` and message `pool:<name>`.
 - WHEN the pool's `jti` is revoked THE SYSTEM SHALL refuse every job token
