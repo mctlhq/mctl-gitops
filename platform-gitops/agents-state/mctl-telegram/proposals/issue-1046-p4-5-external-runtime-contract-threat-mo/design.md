@@ -271,12 +271,36 @@ changes.
     `instructions` from `Target.Instructions`, `tools` from
     `Target.JobTools`, the deadline, and a fresh random `job_token`. When the
     queue is empty it returns `{"jobs": []}` after a short hold.
-  - Every other route is dispatched to the `Task` of the currently claimed
-    fixture. The harness token stands for the account-scoped `aud=agent`
-    token and is accepted where production accepts it; the existing `Task`
-    checks (`tools.Endpoints`, `boundBody`, guarded policy dry run) and
-    recording apply unchanged.
-  - One fixture is served at a time, so routing needs no job-id lookup.
+  - **Routing is by identity, never by "the current fixture".** For the whole
+    run `Conformance` keeps two tables, both filled at claim time and never
+    pruned: `job_token -> Task` and `job_id -> Task`. A per-job request is
+    resolved in this order:
+    1. a job token resolves to the `Task` it was issued for, whichever
+       fixture was claimed since;
+    2. the harness (account-scoped) token resolves through the job id in the
+       path or body (`/jobs/{id}`, `/jobs/{id}/complete`, `/jobs/{id}/cost`,
+       and the job fields of the other write routes);
+    3. if neither names a job (for example `GET /policy` with the harness
+       token), the request goes to the one fixture that is claimed and not
+       yet terminal; if there is none, or more than one, the request is
+       answered 409 and recorded as a binding violation. Nothing is guessed.
+  - **Late requests of a finished job.** After a job reaches a terminal
+    status its `Task` stays in the tables. Its token keeps resolving to it,
+    so a late request can never reach another fixture's `Task`. The status
+    read (`GET /jobs/{id}`) and the cost report (`POST /jobs/{id}/cost`),
+    which `finishRun` sends after completion, are answered as in production.
+    A late write (propose, save lead, approval, summary, pause, complete) is
+    answered 409, the fence production applies to a finished attempt, and
+    does not change any score.
+  - **Cross-job use.** A job token presented with another job's id in the
+    path or body is answered 403 and recorded through the existing
+    binding-violation recording on the `Task` that owns the token. If `Task`
+    exposes no way to record from outside, a small method is added to `Task`;
+    `Score`, `FixtureResult`, the violation classes and `HarnessVersion` do
+    not change.
+  - The harness token stands for the account-scoped `aud=agent` token and is
+    accepted where production accepts it. The existing `Task` checks
+    (`tools.Endpoints`, `boundBody`, guarded policy dry run) apply unchanged.
 
   The fake still never reaches a store, the executor or Telegram:
   `TestNoPathToEffects` is extended to cover `conformance.go`. `Score`,
@@ -293,13 +317,35 @@ changes.
   - With `--worker-cmd`: start a loopback server, then exec the command with
     `AGENT_API_BASE_URL=<url>` and `AGENT_API_TOKEN=<harness token>`, the env
     names `cmd/agent-worker` reads. Inherit the rest of the environment
-    (model credentials are the author's), and kill the command when every
-    fixture is terminal or the timeout hits.
-  - With `--listen`: print the base URL and token, and wait for the same
-    condition.
+    (model credentials are the author's).
+  - With `--listen`: print the base URL and token and serve the same fake.
+  - **Shutdown is a drain, not a kill.** `finishRun` sends `GET /jobs/{id}`
+    and `POST /jobs/{id}/cost` after the job is already terminal, so the run
+    must not stop at "every fixture terminal". The run goes through these
+    states:
+    1. *Running:* claims are served, requests are routed as above.
+    2. *Settling:* entered when every fixture is terminal or the timeout hits.
+       A fixture is settled when its post-terminal status read and cost
+       report have both arrived, or when no request has arrived for it within
+       `--settle-quiet` (default 2 s, for black-box workers that do not send
+       them). Settling ends when every fixture is settled, or after
+       `--settle-max` (default 30 s) in total. A timeout here is written to
+       the report as `settle_timeout: true` and a list of unsettled fixtures;
+       it is informational and does not change the pass/fail rule.
+    3. *Draining:* `POST /jobs/claim` now returns `{"jobs": []}` at once, so a
+       long-polling worker is released. With `--worker-cmd` the command gets
+       SIGTERM and then SIGKILL after `--stop-grace` (default 10 s). The HTTP
+       server is shut down with `http.Server.Shutdown` and the same grace, so
+       requests already in flight finish, and only then are the listener and
+       the tables closed.
+    4. *Scored:* the report is computed after the worker and the server have
+       stopped, from everything recorded, including requests that arrived
+       while draining.
+    The last fixture is not special: the same states apply to it.
   - Output: the `Score` report as JSON with `harness_version`,
     `suite_digest`, `definition_digest`, per-fixture outcomes (no model text,
-    as `FixtureResult` already guarantees) and a pass/fail exit code.
+    as `FixtureResult` already guarantees), the settle fields above, and a
+    pass/fail exit code.
 - **C1 reuse.** `TestC1ObserveEval` keeps its in-process mode, unchanged. A new
   opt-in `TestC1Conformance` (`AGENT_CONFORMANCE=1`) builds `cmd/agent-worker`
   and runs it through `Conformance` as a black box. This is the C1 harness
@@ -325,4 +371,7 @@ changes.
 - **Risks and mitigations:**
   - *Documents drift from the code.* The doc-sync tests (T1, T2) fail when a route is added or removed on one side only. Error semantics are prose and are reviewed with the code.
   - *The harness token semantics are mistaken for a new production credential.* The contract and the tool's help say the harness token mirrors `aud=agent` and exists only inside the fake. No server code reads it.
+  - *Late requests mis-attributed, or lost at shutdown.* Routing by token and
+    job id, and the drain sequence, are covered by T6 and T7, which are
+    mutation-checked.
   - *Overlap with #1090.* None in code: #1090 owns `aud=agent-pool`, its guard and the revocation proof. This proposal only documents the planned model.
