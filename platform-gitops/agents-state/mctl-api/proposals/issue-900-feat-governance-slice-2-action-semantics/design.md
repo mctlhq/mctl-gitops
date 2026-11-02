@@ -247,8 +247,9 @@ that cancel is not rollback. It also states:
   cancelled or finished;
 - for owner-triage consumers (mctlhq/mctl-agents#907): do not present an
   actionable Approve control solely because such a grant is still pending
-  when the bound DevLoop run is terminal or has a recorded owner cancel. Add the three routes to
-`internal/openapi/openapi.yaml` and `embed_test.go`.
+  when the bound DevLoop run is terminal or has a recorded owner cancel.
+
+Add the three routes to `internal/openapi/openapi.yaml` and `embed_test.go`.
 
 ## Alternatives
 
