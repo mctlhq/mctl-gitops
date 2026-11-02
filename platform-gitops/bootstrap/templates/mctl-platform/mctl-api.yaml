@@ -42,7 +42,7 @@ spec:
 
           image:
             repository: ghcr.io/mctlhq/mctl-api
-            tag: "4.151.0"
+            tag: "4.152.0"
 
           ingress:
             enabled: true
