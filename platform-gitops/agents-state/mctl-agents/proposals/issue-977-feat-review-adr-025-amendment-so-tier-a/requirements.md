@@ -59,9 +59,11 @@ mctl-agents#905.
 
 - Should the legacy `we_[0-9a-f]{16,64}` form stay accepted? The issue says existing forms keep their behavior,
   so this proposal keeps it. No real minting path for it was found, so a later ADR revision could retire it.
-- Is mctl-api's UUID always lowercase (Go `uuid.New().String()` is)? This proposal accepts lowercase only, to
-  match the deployed fixtures. If mctl-api ever emits uppercase, it must be lowercased at mint time, not in the
-  review contract.
-- Tier B validation of `reviewer_execution_id`: the issue states Tier B "has the matching regex" but this run
-  could not read mctl-api to see whether Tier B also patterns `reviewer_execution_id`. The mctl-api PR must
-  confirm and keep both tiers equal.
+- Resolved (mctl-api main, checked during proposal review): mctl-api mints store execution ids as
+  `ExecutionIDPrefix+uuid.NewString()` (`internal/workitems/store.go:672`), which is always lowercase. This
+  proposal accepts lowercase only. If mctl-api ever emits uppercase, it must be lowercased at mint time, not in
+  the review contract.
+- Resolved (mctl-api main): Tier B applies `executionIDRE` only to `authoring_execution_id`
+  (`internal/reviewreceipts/parse.go:326`, `checkStrValue(..., executionIDRE, ...)`). It has no pattern check on
+  `reviewer_execution_id`, which matches Tier A. Tier B's regex is `anchored(...)` = `^(?:...)$`
+  (`internal/reviewreceipts/types.go:82,90`).

@@ -30,8 +30,11 @@ Deployed state checked:
   pure library and contract change in mctl-agents (with a sibling mctl-api code change). It has no deployed config,
   env var, replica or hostname impact, so no service values were relevant. No mctl MCP calls were made: no
   runtime state bears on a regex.
-- mctl-api source (`internal/reviewreceipts/types.go`) is not in this clone and was not observed. The claim that
-  Tier B's `executionIDRE` matches Tier A comes from the issue body only (see Open questions in requirements.md).
+- mctl-api main, checked during proposal review: `internal/reviewreceipts/types.go:90` is
+  `` executionIDRE = anchored(`(?:we_[0-9a-f]{16,64}|ex-[0-9a-f]{16})`) ``, identical to Tier A, and `anchored`
+  wraps it in `^(?:...)$`. It is used only for `authoring_execution_id` (`parse.go:326`).
+  `internal/reviewreceipts/vectors_test.go:23` pins the vendored fixture with
+  `vectorsSHA256 = "7d5ddb23..."`, and the replay test reads that pinned copy, never mctl-agents main.
 
 ## Proposed solution
 
@@ -75,9 +78,11 @@ Deployed state checked:
 5. **Tier B (mctl-api, separate PR, linked from the mctl-agents PR and this issue):** change
    `reviewreceipts.executionIDRE` in `internal/reviewreceipts/types.go` to the identical alternation, anchored
    `^(?:...)$` (Go `regexp` has no fullmatch). Re-vendor the regenerated fixture and confirm the existing
-   vector-replay test covers the new names. The ordering is: mctl-agents merges first (the fixture is
-   generated here), then mctl-api vendors it. If mctl-api's vendoring CI compares against mctl-agents main,
-   the two PRs must land close together.
+   vector-replay test covers the new names. Update `vectorsSHA256` in `internal/reviewreceipts/vectors_test.go`
+   to the sha256 of the regenerated fixture; the pin is part of the re-vendor. The ordering is: mctl-agents
+   merges first (the fixture is generated here), then mctl-api vendors it. mctl-api CI reads only its pinned
+   copy, so the merge in mctl-agents does not break mctl-api in the gap; until the mctl-api PR lands, Tier B
+   simply keeps refusing `we_<uuid>`.
 
 ## Alternatives
 
