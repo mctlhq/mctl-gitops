@@ -22,7 +22,8 @@ authorization.
 - [ ] 4. Add parametrized accept/refuse unit tests for `_EXECUTION_ID_RE` through the `ReviewRequest` API in
   `tests/test_review_receipts.py`. (depends on 2) — DoD: the tests pass, and each case names its form.
 - [ ] 5. Open the mctl-api PR. Change `executionIDRE` in `internal/reviewreceipts/types.go` to the identical
-  anchored alternation, re-vendor the regenerated fixture, and make sure the vector-replay test covers the new
+  anchored alternation, re-vendor the regenerated fixture byte-identical, update `vectorsSHA256` in
+  `internal/reviewreceipts/vectors_test.go` to its sha256, and make sure the vector-replay test covers the new
   vectors. Cross-link it from the mctl-agents PR and from issue #977. (depends on 3) — DoD: mctl-api CI passes
   with the new fixture, and both PRs reference each other.
 - [ ] 6. Revert check in both repos. Locally revert only the regex line and confirm the shared-vector tests fail,
