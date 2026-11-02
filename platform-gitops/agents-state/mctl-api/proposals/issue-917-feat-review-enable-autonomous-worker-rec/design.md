@@ -62,22 +62,26 @@
   when all three reviewer facts are present and differ from the authoring
   execution, attempts and lineage, and the actor is not an author.
 - **Docs.** `docs/review-receipts.md` "Disabled worker path" lists four
-  prerequisites. Items 1 (#896) and the Tier B half of 2 (#923) have landed.
-  Item 3 (mctl-agents#975) is external, and item 4 is this issue.
+  prerequisites. Items 1-3 have landed: 1 is #896; 2 is #923 (Tier B,
+  mctl-api 4.151.0) and mctl-agents#980 (Tier A); 3 is mctl-agents#979
+  (mctl-agents 1.116.0). The docs still describe 2 and 3 as pending. Item 4
+  is this issue.
 
 Deployed state checked:
-- `mctl_list_services(team=admins)`: lists mctl-agents workers, mctl-design,
-  mctl-docs, mctl-support, mctl-web and umami. mctl-api is not a catalogue
-  tenant service, so its deployed config cannot be read this way.
-- `$MCTL_GITOPS_ROOT/services/*`: tenants admins, karabu, labs, namax66. No
-  `services/*/mctl-api/values.yaml` exists, and no file there sets
-  `REVIEW_*` or `EVIDENCE_DB_URL`. The deployed values of mctl-api (whether
-  `REVIEW_RECEIPTS_DISABLED` is set, which DB backs the review store) were
-  not observed. The only source read is the repo's own `helm/values.yaml`
-  (comments for `REVIEW_RECEIPTS_DISABLED`, `REVIEW_REQUEST_TTL` and
-  `REVIEW_POOL_MAX`). This gap is recorded under Open questions in
-  requirements.md. The operator must confirm the deployed values before
-  setting `REVIEW_WORKER_INGEST_ENABLED`.
+- mctl-api is not a catalogue tenant service, and no
+  `services/*/mctl-api/values.yaml` exists. Its env lives in the ArgoCD
+  Application `platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml`
+  in mctl-gitops (verified on main 2026-11-02).
+- That file sets `AUDIT_DB_URL` (shared-pg database `mctl-api`) and
+  `LIFECYCLE_DB_URL`. It sets no `REVIEW_*` variable, no `EVIDENCE_DB_URL` and
+  no `WORK_ITEMS_DB_URL`.
+- So `REVIEW_RECEIPTS_DISABLED` is unset and the review routes are live. The
+  review store and the work-items store both fall back to `AUDIT_DB_URL`, the
+  same database. The code must still not assume one DB: see Cross-DB
+  atomicity below.
+- Enabling the worker route means adding `REVIEW_WORKER_INGEST_ENABLED:
+  "true"` to that file in a separate mctl-gitops PR. That is an operator
+  decision and not part of this proposal.
 
 ## Proposed solution
 
@@ -187,7 +191,8 @@ CHECK.
 `SubmitWorkerReview` becomes:
 
 1. `if !h.opts.ReviewWorkerIngestEnabled` gives the existing 501. A new
-   `HandlerOptions` field is read from `REVIEW_WORKER_INGEST_ENABLED` in
+   `api.Options` field (`internal/api/router.go`, held as `h.opts`) is read
+   from `REVIEW_WORKER_INGEST_ENABLED` in
    `cmd/api/main.go`, default false, and documented in `helm/values.yaml`
    comments.
 2. `reviewStoreOrUnavailable`.
@@ -287,9 +292,9 @@ agent per run.
     path.* The only direct-service attach paths are the execution platform's
     own. A test enumerates every `insertExecution` caller and fails if a new
     caller does not pass an explicit path.
-  - *Enabling before mctl-agents parity is proven.* The flag defaults off,
-    and the docs list the remaining prerequisite (mctl-agents#975) with its
-    owner.
+  - *Enabling with a placeholder agent name.* The flag defaults off. The
+    docs say that enabling also needs the real reviewer agent name from
+    mctl-agents#905 in the `review` scope.
   - *Burnt nonce on a transient failure after consumption.* Consumption and
     receipt insert share one transaction, so either both commit or neither
     does.

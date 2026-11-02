@@ -31,8 +31,9 @@ of mctlhq/mctl-agents#905.
   with my execution-bound run token SO THAT a worker-mode review request gets
   an `independent` receipt without a human in the loop.
 - AS a platform operator I WANT the worker route behind an explicit enable
-  switch that defaults off SO THAT it opens only after every cross-repo
-  prerequisite (mctl-agents vector parity) is proven.
+  switch that defaults off SO THAT it opens only by an explicit operator
+  decision, once the reviewer agent's real name (mctl-agents#905) is in the
+  `review` scope.
 - AS the owner of the review gate I WANT the reviewer's execution, attempt,
   lineage and actor to be server-derived and checked against the authoring
   facts SO THAT no caller can assert independence.
@@ -103,10 +104,10 @@ of mctlhq/mctl-agents#905.
 ## Out of scope
 
 - Vendoring `execution_attempt_vectors.json` into mctl-agents and its parity
-  test (mctl-agents#975). It is a prerequisite tracked there. This proposal
-  only keeps the route switched off until it is proven.
-- The ADR 025 regex amendment in mctl-agents (mctl-agents#977). The Tier B
-  side already landed in #923.
+  test (mctl-agents#975). Delivered: mctl-agents#979, released in mctl-agents
+  1.116.0.
+- The ADR 025 regex amendment (mctl-agents#977). Delivered: Tier A in
+  mctl-agents#980 (mctl-agents 1.116.0), Tier B in #923 (mctl-api 4.151.0).
 - The reviewer agent itself, and how mctl-agents dispatches it and mints its
   token (mctl-agents#905).
 - Receipt retention and per-identity pool reads (the `REVIEW_POOL_MAX`
@@ -134,4 +135,8 @@ of mctlhq/mctl-agents#905.
 - A retry after a successful submit gets `409 review_nonce_consumed`, not a
   replay. `created_at` changes per call, so the receipt id is not stable.
   Accept, or add an idempotency key?
-- The deployed mctl-api configuration could not be observed (see design.md).
+- Deployed configuration (observed, see design.md): no `REVIEW_*` variable and
+  no `EVIDENCE_DB_URL`/`WORK_ITEMS_DB_URL` are set, so review routes are on
+  and both stores fall back to `AUDIT_DB_URL`. Enabling the worker route
+  needs `REVIEW_WORKER_INGEST_ENABLED: "true"` added to that file through a
+  separate mctl-gitops PR, an operator decision outside this proposal.
