@@ -54,16 +54,16 @@ Supporting pieces:
 Nothing in the repo models request-changes, defer or owner cancel today
 (searched for `request_changes`, `cancellation_`, owner actions).
 
-Deployed state checked:
+Deployed state (observed in mctl-gitops main,
+`platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml`, the ArgoCD
+Application that carries mctl-api's env; mctl-api is not a tenant service, so
+`services/*/` and `mctl_get_service_config` do not show it):
 
-- `$MCTL_GITOPS_ROOT/services/*/` grep for `mctl-api` / `MCTL_APPROVAL_BINDING`:
-  no `services/<tenant>/mctl-api/values.yaml` exists; mctl-api is not deployed
-  as a tenant service in this checkout, so its deployed
-  `MCTL_APPROVAL_BINDING` and `MCTL_AGENTS_APPROVE_LEGACY_APPROVER` values
-  were not observed.
-- `mctl_get_service_config(team=admins, service=mctl-api)`: error
-  `service not found: admins/mctl-api`. Could not observe; not treated as
-  "not configured".
+- `MCTL_AGENTS_APPROVE_LEGACY_APPROVER: "false"` is set.
+- `MCTL_APPROVAL_BINDING` is absent. `ParseApprovalBindingMode` reads empty
+  as `observe`, so production runs in observe mode today.
+- That is evidence of the current mode, not a reason to relax enforce: every
+  rule below is specified and tested for both observe and enforce.
 
 ## Proposed solution
 
@@ -80,9 +80,13 @@ group as `/abandon` (same rate-limit bucket), plus reads
   "action": "request_changes | defer | request_cancel",
   "idempotency_key": "<= 128 bytes, required",
   "binding": {"approval_ref": "aar_...", "context_digest": "...", "content_digest": "..."},
+  "expected_run_id": "optional, request_cancel only: the Temporal run the card was rendered for",
   "reason_code": "optional, ^[a-z0-9._:-]{1,64}$"
 }
 ```
+
+`expected_run_id` on `request_changes` or `defer` is refused with 400, like
+any other key that does not belong to the action.
 
 Decoded with `refuseIdentityFields` and `DisallowUnknownFields`; no free text.
 
@@ -110,6 +114,29 @@ Add `bindingRouteDevLoopOwnerAction = "dev_loop_owner_action"` and call
 `guardDecision` computes for pending grants, `DecidedContextDigest` for
 decided ones) -> 409 `approval_context_changed`. All refusals happen before
 any write or signal.
+
+When `bindingGate` is consulted depends on the action and on whether a grant
+exists:
+
+| action | grant exists | binding absent, enforce | binding absent, observe |
+| --- | --- | --- | --- |
+| `request_changes`, `defer` | yes | 422 `approval_binding_missing` | accepted, audited `approval.binding_absent` |
+| `request_changes`, `defer` | no | 409 `approval_grant_missing` | 409 `approval_grant_missing` |
+| `request_cancel` | yes | 422 `approval_binding_missing` | accepted, audited `approval.binding_absent` |
+| `request_cancel` | no | accepted, run-bound (below) | accepted, run-bound (below) |
+
+So for a pre-grant `request_cancel` the handler resolves the grant first and,
+finding none, skips `bindingGate` entirely rather than letting it answer 422.
+The `isHumanAdmin` check runs before this resolution, so the exception never
+reaches a caller who is not a direct human admin. No other action gets the
+exception.
+
+Run binding for `request_cancel` (always, grant or not): the body may carry
+`expected_run_id`, the run the card was rendered for. The handler describes
+the execution; if `expected_run_id` is set and differs from the described
+`run_id` it answers 409 `cancellation_run_changed` before any write or signal.
+The described `run_id` is stored on the row and is the only run the abandon
+signal is ever pinned to (step 5).
 
 ### 4. Owner-action store
 
@@ -169,9 +196,11 @@ binding fields and reason code.
    `{outcome: signalled|already_finished|run_changed|not_found|failed, exec, after, err}`
    and leaving response writing to the caller. `AbandonDevLoopWorkflow` keeps
    its exact responses and audit using it.
-2. Owner path: resolve the grant (may be absent when no binding is sent),
-   create the row in state `requested` with the described `run_id`
-   (describe first so the per-run unique index applies). A replayed row in
+2. Owner path: resolve the grant (absent is allowed here, see section 3),
+   describe the run and apply the `expected_run_id` check, then create the
+   row in state `requested` with the described `run_id` (describe first so
+   the per-run unique index applies). `approval_ref` on the row is the
+   observed grant id, or empty when no grant exists. A replayed row in
    state `signalled` or `finished` is returned as is, without a signal. A
    replayed row in `requested` retries the signal to the stored `run_id`.
 3. Signal payload: `{"reason": "owner_action:<oa_id>:<reason_code>", "abandoned_by": user.ID}`
@@ -208,8 +237,19 @@ the same fields plus `state`.
 Add an "Owner actions (mctl-api#900)" section to
 `docs/decision-context-contract.md`: approve/deny are the only `aar_`
 decisions; the three owner actions, their codes, cancel outcome table, and
-that cancel is not rollback. Add the three routes to
-`internal/openapi/openapi.yaml` and `embed_test.go`.
+that cancel is not rollback. It also states:
+
+- the binding table of section 3, including that a pre-grant cancel is
+  run-bound and needs no `aar_` binding in either mode;
+- the grant after cancellation: cancel does not approve, deny, consume,
+  expire or supersede an `aar_`, and this slice adds no grant terminal state,
+  so a grant may stay `pending` until `expires_at` after its DevLoop was
+  cancelled or finished;
+- for owner-triage consumers (mctlhq/mctl-agents#907): do not present an
+  actionable Approve control solely because such a grant is still pending
+  when the bound DevLoop run is terminal or has a recorded owner cancel.
+
+Add the three routes to `internal/openapi/openapi.yaml` and `embed_test.go`.
 
 ## Alternatives
 

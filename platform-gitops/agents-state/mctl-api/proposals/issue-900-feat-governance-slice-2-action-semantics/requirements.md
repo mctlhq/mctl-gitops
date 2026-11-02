@@ -85,12 +85,31 @@ Stale-card binding
   differs, SHALL answer 409 `approval_context_changed` with
   `details.current_approval_ref` and SHALL record no action and send no
   signal.
-- WHILE `MCTL_APPROVAL_BINDING=enforce` THE SYSTEM SHALL refuse an owner
-  action without `binding` with 422 `approval_binding_missing`; WHILE it is
-  `observe` THE SYSTEM SHALL accept it and audit `approval.binding_absent`
-  with route `dev_loop_owner_action`.
+- WHILE `MCTL_APPROVAL_BINDING=enforce` THE SYSTEM SHALL refuse a
+  `request_changes` or `defer` without `binding` with 422
+  `approval_binding_missing`; WHILE it is `observe` THE SYSTEM SHALL accept it
+  and audit `approval.binding_absent` with route `dev_loop_owner_action`.
+- WHILE `MCTL_APPROVAL_BINDING=enforce` and the DevLoop execution has a
+  current grant (in any state), THE SYSTEM SHALL refuse a `request_cancel`
+  without `binding` with 422 `approval_binding_missing`, and SHALL validate a
+  present binding against that grant with the Slice 1 rules above.
+- WHEN a `request_cancel` arrives and the DevLoop execution has no grant yet
+  (for example it is still investigating), THE SYSTEM SHALL NOT treat the
+  absence of an `aar_` or approval context as an error, in observe and in
+  enforce mode alike. The cancel is bound instead to the exact Temporal run:
+  the server describes the execution, records the described `run_id`, and
+  pins the abandon signal to it.
+- WHEN a `request_cancel` carries the optional `expected_run_id` (the run the
+  owner's card was rendered for) and it differs from the described `run_id`,
+  THE SYSTEM SHALL answer 409 `cancellation_run_changed` and SHALL record no
+  action and send no signal.
 - IF a `request_cancel` carries a binding and the DevLoop has no grant THEN
-  THE SYSTEM SHALL answer 409 `approval_grant_missing`.
+  THE SYSTEM SHALL answer 409 `approval_grant_missing`: a card that names a
+  grant which does not exist is not current.
+- THE SYSTEM SHALL apply the direct-human-admin check before any grant or run
+  lookup, so the absence of a grant never weakens who may cancel.
+- The pre-grant exception is for `request_cancel` only. `request_changes` and
+  `defer` keep requiring a current pending grant and its binding.
 
 Cancellation semantics
 
@@ -146,6 +165,19 @@ Privacy
 - THE SYSTEM SHALL write only ids, digests, codes and states into the owner
   action row, the abandon signal payload and the audit log, never proposal
   text or owner free text.
+
+Approval grant after cancellation
+
+- WHEN a `request_cancel` succeeds, or the DevLoop finishes, THE SYSTEM SHALL
+  leave the grant as it was: cancellation does not approve, deny, consume,
+  expire or supersede an `aar_`, and this slice adds no grant terminal state
+  for it. A grant may therefore stay `pending` until its `expires_at` after
+  its DevLoop is cancelled or finished.
+- THE SYSTEM SHALL document that an owner-triage consumer
+  (mctlhq/mctl-agents#907) must not present an actionable Approve control
+  merely because such a grant is still `pending` while the bound DevLoop
+  run is terminal or cancelled (an `abandoned: ` result or a recorded owner
+  cancel).
 
 ## Out of scope
 
