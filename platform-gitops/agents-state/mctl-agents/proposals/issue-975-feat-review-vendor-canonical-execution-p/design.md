@@ -79,8 +79,9 @@ def lineage_root(root_execution_id) -> str: return "ln_" + sha256(lineage_canoni
 ```
 
 The module has no I/O, no network and no import from other `orchestrator` modules. That mirrors
-mctl-api's `purity_test.go` and lets later consumers (mctl-api#917 ingest, mctl-agents#905 live
-acceptance) reuse one Python derivation. Non-string inputs raise `TypeError`. The module adds no
+mctl-api's `purity_test.go` and lets later Python callers in mctl-agents (mctl-agents#905 live
+acceptance) reuse one Python derivation. mctl-api#917 is Go and never imports this module; it
+consumes only the contract and the canonical vectors. Non-string inputs raise `TypeError`. The module adds no
 input validation beyond that; validation of the `we_` shape belongs to the sibling regex fix.
 
 ### 3. `tests/test_execution_provenance_vectors.py`
@@ -145,7 +146,7 @@ Tests:
    criterion is that a byte change with all ids still matching must fail. Only a digest of the raw
    bytes catches whitespace, key-order or added-field drift.
 4. **Keep the derivation inside the test file only.** Viable and noted under Open questions. It was
-   not chosen because the two downstream consumers would otherwise grow a second copy.
+   not chosen because later Python callers in mctl-agents would otherwise grow a second copy.
 
 ## Platform impact
 

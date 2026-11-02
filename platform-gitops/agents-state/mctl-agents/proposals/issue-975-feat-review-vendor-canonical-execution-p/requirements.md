@@ -78,8 +78,10 @@ mctl-api `main` was recomputed during this investigation and equals the publishe
 ## Open questions
 
 - Location of the Python derivation: this proposal puts it in a small, pure production module
-  (`orchestrator/execution_provenance.py`) so that mctl-api#917 / mctl-agents#905 can reuse one
-  implementation instead of a second copy. If reviewers want this issue to stay test-only, the same
+  (`orchestrator/execution_provenance.py`) so that later Python callers in mctl-agents (for
+  example mctl-agents#905 live acceptance) can reuse one implementation instead of a second copy.
+  mctl-api#917 is Go: it does not import this module and consumes only the contract and the
+  canonical vectors. If reviewers want this issue to stay test-only, the same
   functions can live in the test file. The tests are unchanged either way.
 - Fixture path: `tests/fixtures/execution_provenance/` follows the per-contract directories under
   `tests/fixtures/` (`review/`, `commerce/`, `workitem/`). The issue does not prescribe a path.

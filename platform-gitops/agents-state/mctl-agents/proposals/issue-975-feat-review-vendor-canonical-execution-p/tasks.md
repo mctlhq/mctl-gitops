@@ -25,9 +25,10 @@
   `verify_vendored` and confirm that `test_one_byte_change_with_valid_ids_is_refused` fails, then
   restore it. Separately, change one byte of the vendored file and confirm that the suite fails.
   — DoD: both observations are recorded in the PR description.
-- [ ] 6. Cross-link (depends on 4): mention the vendored file and the pinned digest in ADR 025's
-  references, or in a short note under `docs/` next to the review-receipt docs. — DoD: a reader of
-  ADR 025 can find where `attempt_id` / `lineage_root` are proven to match mctl-api.
+- [ ] 6. Cross-link (depends on 4): add the smallest possible note under `docs/`, next to the
+  review-receipt docs, naming the vendored file and the pinned digest. Do not edit ADR 025; its
+  amendment belongs to mctl-agents#977. — DoD: a reader of the review-receipt docs can find where
+  `attempt_id` / `lineage_root` are proven to match mctl-api.
 
 ## Tests
 
