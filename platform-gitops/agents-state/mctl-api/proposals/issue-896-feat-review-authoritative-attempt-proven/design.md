@@ -64,7 +64,7 @@ The routes `POST /work-items/{id}/executions` and `/resume` (`handlers_work_item
 
 - `mctl_get_service_config(team=admins, service=mctl-api)` answered "service not found". mctl-api is not a tenant catalogue service, so its deployed config could not be observed this way.
 - `$MCTL_GITOPS_ROOT/services/` holds `admins`, `karabu`, `labs` and `namax66`. `services/admins/` has no `mctl-api` directory (it lists mctl-agents-worker*, mctl-design, mctl-docs, mctl-support, mctl-web and umami).
-- So it was not observed whether `WORK_ITEMS_DB_URL` and `EVIDENCE_DB_URL` are set or share a database. The design does not depend on it, because the lookup goes through an interface and not through SQL joins. The gap is recorded under Open questions in requirements.md.
+- So it was not observed whether `WORK_ITEMS_DB_URL` and `EVIDENCE_DB_URL` are set or share a database. The design does not depend on it, because the lookup goes through an interface and not through SQL joins. The gap is recorded under "Remaining unobserved facts" in requirements.md.
 
 ## Proposed solution
 
@@ -89,6 +89,8 @@ Rationale:
 - **Prefixes and the version string are part of the hash input**, so a future `execution_attempt_v2` can never collide with v1 values.
 
 The contract is documented in a new `docs/execution-provenance.md`, and its golden vectors are in `internal/executionprovenance/testdata/execution_attempt_vectors.json`. Each vector lists inputs, the expected canonical bytes and the expected ids. It includes `#` suffixes, non-ASCII engine refs, and a hyphenated `we_` UUID root.
+
+**Ownership.** This file in mctl-api is the canonical copy. mctl-agents vendors the exact bytes. Each repo's parity test recomputes every vector and also checks the SHA-256 of the whole file against a pinned digest, so a divergence in bytes or in any derived id fails the build. Changing the file is a `contract_version` change.
 
 ### 2. Server-side record (`internal/workitems`)
 
@@ -158,7 +160,7 @@ It lives in the admin read group of `router.go`, next to `/review-gate`. There a
 ### 5. Documentation
 
 - New `docs/execution-provenance.md` covering the contract, derivation, vectors, guarantees and codes.
-- Update `docs/review-receipts.md`: authoring verification, new codes, and the "Disabled worker path" section, which keeps only the reviewer run-token binding (#895) as the remaining prerequisite.
+- Update `docs/review-receipts.md`: authoring verification, new codes, and the "Disabled worker path" section, which lists every hard prerequisite of worker ingest: this provenance change, the `we_` id regex amendment in both tiers, the vendored vector parity in mctl-agents, and #895 (run-token binding, nonce consumption and the attacher eligibility check). It must not say that only the run-token binding remains.
 - Update `docs/work-context-contract.md`, adding `execution_provenance` to the resource model.
 
 ## Alternatives
@@ -174,10 +176,10 @@ It lives in the admin read group of `router.go`, next to `/review-gate`. There a
 - **Backward compatibility.**
   - Manual review requests with empty attempt and lineage fields are unaffected.
   - Requests that carried creator-asserted values (worker or manual) are now refused with 422 `review_authoring_unproven` unless the values match the record. This is intended ("no fallback to caller-supplied ids"), but mctl-agents' request creator must compute the facts from the record, for example through the REST read, before this deploys.
-  - Worker requests cannot be parsed today anyway, because of the `we_` regex mismatch (see Open questions).
+  - Worker requests cannot be parsed today anyway, because of the `we_` regex mismatch. Fixing it is a hard prerequisite of worker ingest (requirements.md, "Worker ingest prerequisites") and stays outside this change.
 - **Resources.** One extra small insert per execution, plus one PK read during request ingest. Negligible.
 - **Risks and mitigations.**
   - Provenance insert failure blocks execution attach. This is intentional and fail closed; it is covered by a test and visible as a 500 on attach.
-  - Tier A and Tier B could diverge on the derivation. Mitigation: shared golden vectors and a parity test in both repos.
-  - The attacher chooses `engine`/`engine_ref`. Mitigation: the attaching principal is recorded for #895 to restrict on, and the run token can only follow the record.
+  - Tier A and Tier B could diverge on the derivation. Mitigation: one canonical vector file in mctl-api, vendored byte for byte by mctl-agents, with a parity test in both repos that also pins the file digest.
+  - The attacher chooses `engine`/`engine_ref`. Mitigation: the attaching principal is recorded, and #895 MUST verify that the reviewer execution was attached by an eligible platform-authorized principal or path before it enables worker ingest. Provenance alone never establishes reviewer independence. The run token can only follow the record.
   - The cross-database deployment layout is unknown. Mitigation: the lookup goes through an interface with no SQL join across stores.

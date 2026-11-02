@@ -51,22 +51,37 @@ creator. Enabling worker receipts stays with mctl-api#895.
 - IF the authoring check cannot read provenance THEN THE SYSTEM SHALL answer 503 `review_provenance_unavailable` and store nothing.
 - THE SYSTEM SHALL keep `POST /api/v1/review-receipts` at 501 `review_worker_ingest_disabled` in this change. It SHALL expose `reviewstore` method `ProveReviewer(ctx, executionID)`, which returns only server-recorded facts or a typed refusal (`review_execution_unproven` or `review_provenance_unavailable`), for mctl-api#895 to call.
 - THE SYSTEM SHALL ship golden vectors (`internal/executionprovenance/testdata/execution_attempt_vectors.json`). Go tests SHALL reproduce every vector byte for byte, and the same file SHALL be published for the mctl-agents parity test.
+- THE SYSTEM SHALL treat `internal/executionprovenance/testdata/execution_attempt_vectors.json` in mctl-api as the single canonical vector file. mctl-agents SHALL vendor the exact bytes. A parity test in each repo SHALL recompute every vector and also compare the SHA-256 of the vector file with a pinned digest, so that a byte-level divergence of the file, or a divergence of any derived `attempt_id` or `lineage_root`, fails the build. A change to the file is a `contract_version` change.
+- THE SYSTEM SHALL record the attaching principal in `execution_provenance` (`attached_by`, `attached_by_principal`) and SHALL NOT treat an `engine` or `engine_ref` chosen by the attacher as proof of reviewer independence. Provenance proves only which attempt and lineage an execution has, not that it is an eligible reviewer.
+- THE SYSTEM SHALL keep `POST /api/v1/review-receipts` at 501 `review_worker_ingest_disabled` until every hard prerequisite in "Worker ingest prerequisites" below has landed. Documentation SHALL list all of them and SHALL NOT claim that the reviewer run-token binding of mctl-api#895 is the only one remaining.
 - WHEN any guard listed in tasks.md is removed THE SYSTEM's test suite SHALL fail. The guards are the derivation-input rule, the same-transaction insert, the immutability trigger, absent vs unavailable, and each authoring check.
 
 ## Out of scope
 
-- Enabling worker receipt ingest, writing `review_nonce_consumptions`, and the run-token binding of the reviewer. These belong to mctl-api#895.
-- Changing the Tier A document regex or Tier A code in mctl-agents. The parity test and vector file are published for it, but the mctl-agents change is a separate PR.
+- Enabling worker receipt ingest, writing `review_nonce_consumptions`, the run-token binding of the reviewer, and the eligibility check on the principal that attached the reviewer execution. These belong to mctl-api#895 (see "Worker ingest prerequisites").
+- Changing the Tier A document regex or Tier A code in mctl-agents, and the matching Tier B `reviewreceipts.executionIDRE`. They are a hard prerequisite of worker ingest (below), tracked as their own issues, and not delivered by this change. The mctl-agents vendoring and parity test of the vector file is likewise a separate PR.
 - Backfilling provenance for executions created before this change. They answer `execution_provenance_absent`.
 - Provenance for runtime `ex-` ExecutionContext ids (ADR 011) or for runs attached to no work item.
 - New MCP tools. The lookup is REST plus in-process only.
 - Retention or deletion policy for `execution_provenance`. It follows `work_item_executions` through `ON DELETE CASCADE`.
 
-## Open questions
+## Owner decisions (resolved before approval)
 
-- Tier A semantics of `attempt_id`. This proposal defines an attempt as one engine run, so the same Temporal or Argo run attached to two work items is one attempt. If a DevLoop Temporal workflow hosts both the authoring stage and a reviewer stage under one `engine_ref`, the two share an attempt and the review is never independent. Tier A (ADR 025) owners must confirm this, or ask for the attempt to be per execution row. Proceeding with per engine run because it is the stricter choice.
-- Lineage root equals the root of the `resumed_from_execution_id` chain. In practice this is the first execution of the work item, so a reviewer in the same work item as the author always shares a lineage. The issue also mentions "same trace". The evidence `trace_id` is written later by the evidence writer, so it cannot be authoritative at execution start, and it is not used here.
-- Real `we_` ids are `we_` plus a hyphenated UUID (`workitems.insertExecution`). The Tier A regex `executionIDRE = we_[0-9a-f]{16,64}` in `internal/reviewreceipts/types.go` rejects them, so no real worker request can parse today. The regex needs an ADR 025 amendment in both tiers. That fix is a prerequisite for #895, not part of this change.
-- Who may attach executions. `POST /work-items/{id}/executions` and `/resume` need only the tenant `developer` role. The record is written by mctl-api, and the run token can only exist after it, but `engine`/`engine_ref` are still chosen by the attacher. The attaching principal is recorded so that #895 can restrict eligible reviewers to platform-attached executions. Whether to enforce that here is left to the reviewer.
-- Where the canonical golden-vector file lives (this repo or mctl-agents). The proposal ships it here and asks Tier A to vendor it.
-- Deployed configuration of mctl-api (database URLs, whether `WORK_ITEMS_DB_URL` and `EVIDENCE_DB_URL` point to the same database) could not be observed. See design.md.
+1. **Attempt semantics.** `attempt_id` identifies one engine run. If author and reviewer share an engine run, the review is not independent. Accepted as proposed.
+2. **Lineage semantics.** `lineage_root` is the root of the `resumed_from_execution_id` chain. A reviewer in the same work-item lineage as the author is not independent. Accepted as proposed. `trace_id` is not used.
+3. **`we_` id format.** Real ids are `we_` plus a hyphenated UUID, and the Tier A `executionIDRE` (`we_[0-9a-f]{16,64}|ex-[0-9a-f]{16}`) rejects them, so no real worker ReviewRequest can parse today. This change does not fix the regex. It is a hard prerequisite of worker ingest, see below.
+4. **Golden vectors.** The canonical file lives in mctl-api at `internal/executionprovenance/testdata/execution_attempt_vectors.json`. mctl-agents vendors the exact bytes. The parity test detects byte and digest divergence.
+5. **Attacher authorization.** Out of this implementation, but the contract is fixed here: provenance records the attaching principal, and mctl-api#895 MUST verify that the reviewer execution was attached by an eligible, platform-authorized principal or path. An arbitrary developer-attached `engine` / `engine_ref` does not by itself establish reviewer independence.
+
+## Worker ingest prerequisites
+
+`POST /api/v1/review-receipts` stays at 501 `review_worker_ingest_disabled` until ALL of these have landed and are verified. This change delivers only the first.
+
+1. Authoritative attempt and lineage provenance, with `ProveReviewer` (this change, mctl-api#896).
+2. Tier A and Tier B accept real `we_<hyphenated-uuid>` execution ids: an ADR 025 amendment that changes `executionIDRE` in mctl-agents `orchestrator/review_receipts.py` and in `internal/reviewreceipts/types.go` together, with a shared vector containing a real hyphenated id, verified in both repos. Until it lands, a worker request cannot parse.
+3. mctl-agents vendors the canonical vector file and runs the parity test (decision 4).
+4. mctl-api#895: run-token binding of the reviewer, nonce consumption, and an eligibility check that the reviewer execution was attached by a platform-authorized principal or path, using the `attached_by` fields recorded here (decision 5).
+
+## Remaining unobserved facts
+
+- Deployed configuration of mctl-api (database URLs, whether `WORK_ITEMS_DB_URL` and `EVIDENCE_DB_URL` point to the same database) could not be observed. The design does not depend on it. See design.md.

@@ -22,11 +22,13 @@
 - [ ] 9. Wire `reviewStore.SetProvenance(workItemsStore)` in `cmd/api/main.go` when both stores are configured (depends on 6). DoD: with either store absent, the authoring checks answer `review_provenance_unavailable`, never pass.
 - [ ] 10. Docs (depends on 1-8). DoD:
   - New `docs/execution-provenance.md` covers the contract, derivation, guarantees and codes.
-  - `docs/review-receipts.md` is updated with authoring verification and the new codes, and its "Disabled worker path" names only #895's run-token binding as remaining.
+  - `docs/review-receipts.md` is updated with authoring verification and the new codes, and its "Disabled worker path" lists all four hard prerequisites of worker ingest (provenance, `we_` regex amendment in both tiers, vendored vector parity, #895 binding plus attacher eligibility) and never says that only #895 remains.
   - `docs/work-context-contract.md` resource model lists `execution_provenance`.
-- [ ] 11. Open the cross-repo follow-ups. DoD: issues filed and linked from the PR for:
-  - the mctl-agents parity test that vendors the vector file;
-  - the ADR 025 amendment for the `we_` id regex mismatch (`reviewreceipts.executionIDRE` rejects real `we_<uuid>` ids).
+- [ ] 11. Add a pinned-digest parity test for the vector file (depends on 2). DoD: the Go test recomputes every vector and compares the SHA-256 of `execution_attempt_vectors.json` with a digest pinned in the test. The digest is also written to `docs/execution-provenance.md` so that mctl-agents can pin the same value.
+- [ ] 12. Open the cross-repo follow-ups and link them to #895. DoD: issues filed, linked from the PR and recorded as hard blockers on mctl-api#895 for:
+  - the mctl-agents vendoring of the exact vector file with a parity test that detects byte and digest divergence;
+  - the ADR 025 amendment so that mctl-agents `executionIDRE` and `reviewreceipts.executionIDRE` accept real `we_<hyphenated-uuid>` ids, with a shared vector containing a real id;
+  - the #895 acceptance item: verify the reviewer execution was attached by an eligible platform-authorized principal or path using the recorded `attached_by` fields, and refuse a developer-attached `engine`/`engine_ref` on its own.
 
 ## Tests
 
@@ -48,7 +50,9 @@
   - lookup not wired: 503.
 - [ ] T9. `ProveReviewer` returns the stored facts, `ErrExecutionUnproven` for an absent record and `ErrProvenanceUnavailable` on a read error. There is no code path that accepts caller-supplied ids; a test passes a caller value and asserts it is ignored.
 - [ ] T10. REST read: admin gets 200. A run token for the same execution gets 200; a run token for another execution gets 403. Absent gives 404 and unavailable gives 503.
-- [ ] T11. Regression: the existing `reviewreceipts` vectors, `reviewstore` tests, worker route 501, and the MCP tool count in `internal/mcp/server_test.go` are unchanged.
+- [ ] T11. Vector file pin: changing one byte of `execution_attempt_vectors.json` fails the digest check even when every derived id still matches. Removing the digest comparison makes the test fail.
+- [ ] T12. Contract recorded: a test asserts that `execution_provenance` stores `attached_by` and `attached_by_principal` for an execution attached by a developer, and that `ProveReviewer` does not return any field that could be read as an eligibility decision.
+- [ ] T13. Regression: the existing `reviewreceipts` vectors, `reviewstore` tests, worker route 501, and the MCP tool count in `internal/mcp/server_test.go` are unchanged.
 
 ## Rollback
 
