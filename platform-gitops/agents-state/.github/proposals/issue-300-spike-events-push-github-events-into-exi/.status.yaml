@@ -1,5 +1,5 @@
 status: accepted
-updated_at: '2026-11-02T17:45:15Z'
+updated_at: '2026-11-02T17:47:51Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-dbb5461add5c9cc6
@@ -19,7 +19,13 @@ context:
   strategy: deterministic-fixed-order
   strategy_version: 1.0.0
 approval:
-  approved_by: 'mashkovd'
+  approved_by: mashkovd
   approved_at: '2026-11-02T17:45:15Z'
-  content_digest: 'sha256:8e0093bbf6ade9570490a1e24ecf844cd90295aea00561904601add52d847b12'
-  digest_binding: 'reviewed'
+  content_digest: sha256:8e0093bbf6ade9570490a1e24ecf844cd90295aea00561904601add52d847b12
+  digest_binding: reviewed
+blocked:
+  code: execution-unauthorized
+  since: '2026-11-02T17:47:51Z'
+  message: 'execution not authorized: approved with no verifiable approval grant'
+  remedy: Approve the proposal through its DevLoop (mctl-api POST /api/v1/agents/dev-loop/<workflow>/approve),
+    which records a human decision bound to this proposal's current content.
