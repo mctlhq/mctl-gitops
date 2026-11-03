@@ -1,7 +1,7 @@
 # Design: issue-993-feat-devloop-deferred-resume-after-imple
 
 Amended 2026-11-03 (see requirements.md, "Amendment 2026-11-03"). Part M = lands on `main` via this proposal's
-implementer. Part S = commits on PR #992's branch by its owner/shepherd. Line numbers are approximate (`~`) and
+implementer. Part S = commits on PR #992's branch by an operator-directed session under the approved #993 digest. Line numbers are approximate (`~`) and
 refer to `main` (a99c888) for Part M and to `origin/pr992` (6b60a7f) for Part S.
 
 ## Current state
@@ -239,6 +239,26 @@ Fix `_await_canonical_reapproval` (the hold means no resume opens a new executio
 `implement_hold` field to `RolloutSwitches`; record fixtures: pre-switch (existing `.patched.json`), post-switch with
 hold on, post-switch with hold off, and one with a retried advance and one across a hop.
 
+## Part S authority (verified)
+The shepherd and `run_implementer --review-feedback` cannot carry Part S:
+- The shepherd discovers proposals in `{implemented, review-fixing}` by slug (`run_shepherd.py:1-8`) and the follow-up
+  runs `run_implementer --service <svc> --slug <slug> --review-feedback <bundle>` (`run_shepherd.py:3208-3215`), i.e.
+  under the `issue-991-*` slug and its approval, not #993's.
+- The bundle is a findings bundle (`{"p1","p2","summaries":[{file,line,severity,body}]}`, `run_implementer.py:18-24`) of
+  codex findings and CI blockers, not an arbitrary task. The prompt it builds is the proposal spec of THAT slug
+  (`_build_prompt(review_feedback=...)` ~:1917-1960). The #993 spec is never in it.
+- The content-digest approval check runs on the new-branch path only (`run_implementer.py:~4568`
+  `approval_digest_verdict`); the review-feedback mode explicitly leaves status as is (`:30-36`).
+- The new-branch path (what a #993 implementer run does) creates `feat/agents-<slug of #993>` from the default branch
+  (`:4958-4959`), never #992's branch.
+- `decide()` returns `wait` for a draft PR (`run_shepherd.py:2666`), so while #992 stays draft the shepherd takes no
+  action on it. This is what makes a single-writer rule enforceable by a draft state plus a check for an in-flight tick.
+Conclusion: no automated mechanism exists. Part S is an operator-directed session (human, or an explicitly started
+Claude session) pushing to #992's branch under the approved #993 digest, with the single-writer rule of requirements.md.
+The commit trailers name the #993 digest and S-task ids, so the authority is auditable from git. The PR's own
+claude-review still reviews each push. If the owner prefers an automated path, the only one is a base option for the
+implementer plus a task-scoped bundle, which is a separate proposal.
+
 ## Delivery
 Part M and Part S are developed independently and can merge in either order, because Part S's off state equals `main`
 and Part M needs none of #992's code.
@@ -253,8 +273,42 @@ and Part M needs none of #992's code.
   3. Write the on leg last, after the Part M behaviour and the mutation-discriminating tests T-S* exist; each on-leg
      test asserts a delivered or typed-refused request, never a lost one.
   Any of the 21 that still fails with the switch off is a real contract difference and is handled like an on-leg test.
-- If the implementer cannot be pointed at #992's branch (confirmed), the owner decides: Part S by #992's owner
-  (recommended), or a separate proposal for a base option.
+- If the implementer cannot be pointed at #992's branch (confirmed), the owner decides: Part S by an operator-directed session
+  under the approved #993 digest (recommended; see "Part S authority"), or a separate proposal for a base option.
+
+## Desync matrix and observability
+Dimensions: mctl-api queue switch (API), worker image (OLD = without Part M, M = Part M, M+S), `DEVLOOP_DEFERRED_FEEDBACK`
+(FB), `DEVLOOP_IMPLEMENT_HOLD` (HOLD), dispatcher (D: on / paused / old image). "Observe" lists only confirmed reads:
+the worker log lines below via `mctl_get_service_logs`, `mctl_get_service_pods`/`status` for image tags,
+`mctl_list_work_item_execution_requests` (= `GET /work-items/{id}/execution-requests`, per item, has `created_at`),
+`mctl_list_work_item_executions`, and the new `rollout-status`. mctl-api has NO global list of requests
+(`router.go:920-921`, per item only).
+
+| # | State | What happens to a request | Observe | Typed outcome / requirement |
+|---|-------|---------------------------|---------|------------------------------|
+| 1 | API off, any worker, HOLD off | create during open `we_` -> 409, nothing stored (today) | requester sees 409 | unchanged |
+| 2 | API off, HOLD on (misconfig) | `we_` held through implement; every create 409 for minutes | 409 to requesters; `ROLLOUT_STATE hold=on`; `rollout-status` shows held `we_` age | gate: functional check must precede HOLD; window check "no unexpected 409" |
+| 3 | API on, OLD worker, D on | queued only in investigate-to-approval; after delivery a post-gates old loop ends `Succeeded` with no work (FALSE SUCCESS) | not observable on the old image | PREVENTED by order: Part M released first; step 5 requires `ROLLOUT_STATE` of the new image on every pod and an empty drain check |
+| 4 | API on, rolling update (mixed OLD/M pods) | a validator on an old pod can still no-op a request | `mctl_get_service_pods` image tags differ; start lines differ | pause D during the roll (owner decision 3); gate "all pods new" before step 3 |
+| 5 | API on, M, loop without marker (post-gates) | `ResumeDeferred legacy-loop`, request stays claimable | rate-limited `defer reason=legacy-loop`; `rollout-status` lists the loop | typed deferral; never Succeeded; loop upgrades at next hop or ends |
+| 6 | API on, M, FB off, PR open | accepted, `we_` minted, ends `Failed` | `ResumeRejection feedback-disabled` in `work_context`; execution phase Failed; `rollout-status` counts | typed; never Succeeded |
+| 7 | API on, M, FB on, CWFT output missing | tick runs, outcome unreadable | `Failed feedback-unobservable` | typed; never Succeeded |
+| 8 | API on, M, FB on, PR merged | refused before minting | dispatcher `reject resume_refused:work-merged`; request row keeps the intent | typed refusal |
+| 9 | API on, M+S, HOLD on, FB off | queued during implement, delivered after `we_` closes, ends `Failed feedback-disabled` | as 6, plus held `we_` age in `rollout-status` | typed |
+| 10 | API on, M+S, HOLD on, D PAUSED | request stays `pending`/`claimed`, nothing processes it | `ROLLOUT_STATE` line missing >5 min; `rollout-status` shows open requests of held items with age; claim/defer lines absent | window gate: age bound; for items no running loop names: UNKNOWN, owner decision 7 |
+| 11 | API on, HOLD on, post-implement end-advance keeps failing | `we_` stays open; request not claimable | `rollout-status` held `we_` age; retried each poll (Part S); audit of failed advances | retry per poll; age bound in the window gate |
+| 12 | API switched OFF after requests were queued | rows stay `pending`; claim guard off so they are claimable | defer lines `implement-running` for contract loops | validator defers while implement runs; never Succeeded |
+| 13 | API on, M+S, HOLD off | `we_` ends at the flip; queued requests only in the early window | `ROLLOUT_STATE hold=off` | equals today's |
+Mismatch states with a possible silent mishandling: 3, 4 (prevented by order and the pod gate, not detectable after
+the fact), 10 for items outside any running loop (needs a new aggregate read, owner decision 7). Every other state
+yields a typed ResumeRefused, a typed ResumeDeferred, or `Failed` plus a recorded `ResumeRejection`, and is visible.
+
+Implementation notes (confirmed mechanisms only): the dispatcher already prints structured audit lines with the prefix
+`EXECUTION_REQUEST_DISPATCH` (`dispatcher.py:103,211-215`: events claim, claim_failed, deliver, defer, reconcile,
+deliver_stale); the worker logs one line at dispatcher start (`worker.py:~935`). `ROLLOUT_STATE` and the age fields extend
+those. The agents-side `ExecutionRequest` parser (`work_context/execution_requests.py`) does not read `created_at`
+today, although mctl-api returns it (`execution_requests.go:217`): add it as a defaulted field. No metrics are added:
+the worker exports Prometheus metrics for Temporal only (`worker.py:645`), and a new metric family is out of scope.
 
 ## Alternatives
 - Re-approve every deferred resume (route all through the closed-loop path, including PR-open). Dropped: the owner chose

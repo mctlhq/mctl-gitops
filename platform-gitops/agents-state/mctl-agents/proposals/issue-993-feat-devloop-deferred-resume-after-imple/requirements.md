@@ -13,7 +13,7 @@ mctl-agents#993, 2026-11-03: path A, and the disposition with items 1-7):
   (`IMPLEMENT_EXECUTION_PATCH`, the hold of the canonical `we_`, which exist only on #992's branch). The
   implementer cannot stack on another PR's branch (it clones the default branch and opens the PR against `main`).
   The work is therefore split into Part M (lands on `main` through this proposal's implementer) and Part S (lands
-  as commits on #992's existing branch, by its single owner/shepherd). See "Delivery and rollout order".
+  as commits on #992's existing branch, by an operator-directed session under this proposal's approved digest, because the shepherd cannot). See "Delivery and rollout order".
 - Rollout switch. The earlier text assumed the worker could learn from mctl-api that its queue switch is on. The
   accepted mctl-api#931 proposal adds no capability endpoint or field (only `queued_behind_execution_id` on a
   successful create), so that assumption is removed. The hold is gated by an explicit worker switch, off by default,
@@ -194,6 +194,30 @@ Orphaned-execution recovery (Part M; Temporal only)
 - WHERE `EXECUTION_ORPHAN_SWEEP_SECONDS` is 0 (the default until the spike task passes) THE SYSTEM SHALL disable the
   sweep, leaving the claim-time reconciliation unchanged.
 
+Observability of mismatched states (Part M; see the matrix in design.md)
+The property: an API that accepts a queued request while the worker cannot process it is never silent, and a request
+is never ended `Succeeded` unless its feedback was processed.
+- WHEN a worker starts THE SYSTEM SHALL log one line `ROLLOUT_STATE` with the effective `DEVLOOP_DEFERRED_FEEDBACK`,
+  `DEVLOOP_IMPLEMENT_HOLD` (once Part S is present), `EXECUTION_REQUEST_DISPATCHER`, `EXECUTION_ORPHAN_SWEEP_SECONDS`,
+  the dispatcher interval, the image/contract version, and `parse_errors` for any value that was set but not
+  recognised. THE SYSTEM SHALL repeat the line at most every 5 minutes while the dispatcher runs, so a paused or stuck
+  dispatcher is visible as a missing line.
+- THE SYSTEM SHALL log the age of each request at `claim` and at `defer`, and a rate-limited `defer` line for
+  `legacy-loop`, `implement-running` and `feedback-disabled`, so a request that is not progressing is visible with its reason.
+- THE SYSTEM SHALL provide a read-only command `orchestrator/temporal/cli.py rollout-status` that, from confirmed
+  reads only (Temporal visibility and the `contract_state`/`work_context` queries of RUNNING DevLoop runs, and the
+  existing `GET /api/v1/work-items/{id}/execution-requests` for the items those runs name), prints: loops without the
+  contract; loops holding a `we_` open with its age and any open (`pending`/`claimed`) requests with their `created_at`
+  age; the recorded `ResumeRejection` reasons; and every read it could not make. A read it could not make SHALL be
+  printed as UNKNOWN, never as zero.
+- THE SYSTEM SHALL treat a documented observation window after each rollout step as a gate: no open request whose item
+  has NO open execution older than 2x the dispatcher interval (30 s at the default 15 s) plus its lease; no open request
+  behind a held `we_` older than the implement timeout plus 2x the interval; no unexpected 409 `execution_active` while a
+  `we_` held by the hold switch is open (a repeat of the functional check on a fresh item while a held `we_` exists); no
+  `defer` repeating for the same request for more than 3 lease periods.
+- IF a state cannot be observed from confirmed reads (a request queued on an item that no running loop names, while the
+  dispatcher is paused) THEN this is an explicit owner decision with a cost, not an assumed capability (below).
+
 Tests and documents
 - WHEN this change is merged THE SYSTEM SHALL have mutation-discriminating regression tests and end-to-end tests
   for the new contract, for BOTH states of each switch. These tests SHALL be committed before any existing
@@ -209,11 +233,33 @@ Parts
   the shepherd outputs, the switch activity and its tests, and the ADR. None of it needs #992's code. The existing
   `main` test `test_a_resume_delivered_after_the_implement_step_succeeds_at_once` is rewritten here, after the
   behaviour and its mutation tests exist.
-- Part S lands as commits on PR #992's existing branch, by its single owner/shepherd (owner disposition 2: put
-  changes in the existing branch, do not overwrite its owner): the `implement_hold` switch read at the flip site,
-  `IMPLEMENT_END_RETRY_PATCH` and the hop-carried fields, the `after_flip` change, the two docstrings, the
-  replay fixtures, the new tests for both switch states, and the rewrite of the 21 tests. This proposal specifies
-  Part S; its implementer run SHALL NOT edit those files or tasks.
+- Part S lands as commits on PR #992's existing branch (owner disposition 2: put changes in the existing branch,
+  do not overwrite its owner): the `implement_hold` switch read at the flip site, `IMPLEMENT_END_RETRY_PATCH` and the
+  hop-carried fields, the `after_flip` change, the two docstrings, the replay fixtures, the new tests for both switch
+  states, and the rewrite of the 21 tests. This proposal specifies Part S; its implementer run SHALL NOT edit those
+  files or tasks.
+- WHO executes Part S, and under WHICH approval. Neither the shepherd nor `run_implementer --review-feedback` can:
+  they act on findings of a non-draft PR under the #991 slug and its approval (verified, design.md "Part S authority").
+  Part S is executed by an operator-directed session (a human, or a Claude session the owner starts explicitly) that
+  pushes commits to #992's branch under THIS proposal's approved digest. The commits SHALL name the #993 approved
+  content digest and the S-task ids. The session SHALL first verify that `.status.yaml` of #993 is `accepted` with a
+  named approver and that the approved digest equals the current digest of the proposal directory.
+- Single-writer rule for #992's branch. Before ANY push the session SHALL confirm that #992 is still a draft (the
+  shepherd then only waits), that no shepherd or implement Workflow for the `issue-991-*` slug is running, and SHALL
+  fetch and fast-forward or merge the remote head first; it SHALL push without force. A push that is rejected is
+  re-fetched and re-examined, never forced. The PR stays draft throughout.
+- Conflict risk and order. Part M (on `main`) and Part S (on #992's branch) both edit `dev_loop.py` (`ResumeDelivery`,
+  `MergeWatchResume`, `_validate_execution_request`, `_deliver`, `_watch_pr`, `_carry_work_context`,
+  `_resume_merge_watch`, the marker constants and `run`), the replay scenario registry and the worker's activity
+  list. THEREFORE Part S SHALL NOT be pushed until Part M is merged AND released; #992's branch SHALL then be brought up
+  to date with `main` (by merging `main` into it, which needs no force-push; a rebase needs a force-push and is
+  an owner decision), the marker and replay order re-checked, and the full suite and the replay of ALL fixtures (old
+  and new) rerun green BEFORE the Part S commits are pushed. Files likely to conflict:
+  `orchestrator/temporal/workflows/dev_loop.py`, `orchestrator/temporal/worker.py` (activity registration),
+  `tests/replay_scenarios.py`, `tests/test_workflow_replay.py`, `tests/test_dev_loop_workflow.py`,
+  `tests/test_execution_request_replay.py`, `tests/test_execution_request_resume.py`,
+  `tests/test_patch_memoization.py`, `tests/fixtures/histories/`, and `orchestrator/temporal/activities/rollout_switches.py`
+  (created by Part M, extended by Part S).
 
 Why not one stacked PR
 - `run_implementer` clones the default branch (`_clone_target`, `gh repo clone ... --depth=10`,
@@ -227,7 +273,9 @@ Order (each step is a gate; nothing is marked ready, released or deployed before
    `feedback_actor` params and the `feedback_outcome` output. Additive; changes no behaviour.
 2. Part M merged and released with `DEVLOOP_DEFERRED_FEEDBACK` off (inert). Optionally set
    `EXECUTION_REQUEST_DISPATCHER` to `"false"` for the duration of the image roll, so a request cannot reach a
-   pod that still runs the old image (owner decision below). After the roll, wait until every pod runs the new image.
+   pod that still runs the old image (owner decision below). After the roll, wait until every pod runs the new image
+   (`mctl_get_service_pods` image tags and a `ROLLOUT_STATE` line from each pod). After each of steps 2-7 hold the
+   observation window of "Observability of mismatched states" before the next step.
 3. Drain proof: the read-only contract-state command lists no RUNNING post-gates loop without the contract, or each
    listed loop has been drained or abandoned. The `legacy-loop` fence makes a straggler harmless meanwhile.
 4. Turn `DEVLOOP_DEFERRED_FEEDBACK` on (gitops, human), once the CWFT output is live and the T-tests pass.
@@ -281,7 +329,7 @@ Resolved by the owner or by code evidence in this amendment (kept for the record
 - Who bumps the worker image: a human release owner.
 
 Still open (owner decisions needed; each has a recommended default in design.md):
-1. Delivery of Part S: commits on #992's branch by its owner/shepherd (recommended), or a base option for the
+1. Delivery of Part S: commits on #992's branch by an operator-directed session under the approved #993 digest (recommended; the shepherd and review-feedback cannot), or a base option for the
    implementer (a separate proposal).
 2. Whether a machine-checkable capability field in mctl-api (an amendment of #931) is preferred over the human-gated
    switch. Cost: an API change, a new #931 digest and approval, and a worker probe that fails closed. Not assumed.
@@ -289,6 +337,12 @@ Still open (owner decisions needed; each has a recommended default in design.md)
 4. Whether the orphan sweep ships disabled (`EXECUTION_ORPHAN_SWEEP_SECONDS=0`) until the spike passes, and who
    files the separate tracking issue for argo/a2a orphans.
 5. Whether #992 stays draft until step 6 even though, with the hold switch off, it would be inert.
+6. Part S branch update: merge `main` into #992's branch (recommended, no force) or rebase it (needs a force-push,
+   contrary to the single-writer rule, so an explicit exception).
+7. A queued request on an item that no running loop names (dispatcher paused, or loop gone) cannot be listed
+   without a new aggregate read in mctl-api (a count/oldest-age of open requests, or a metric). Cost: an additive
+   mctl-api change with its own proposal and approval; until then it is covered only by the pause being a human step
+   with a documented window, and by the per-item list for known items. Not assumed.
 
 Unknowns that a task must settle (the proposal does not assume an answer):
 - How the shepherd reports "meaningful feedback processing confirmed": assumed a new structured result

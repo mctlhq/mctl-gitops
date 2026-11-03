@@ -5,9 +5,9 @@ and fail against the old behaviour; only then is behaviour implemented; existing
 Tests run against real Temporal replay and real Postgres where the existing suites do; every new check is
 mutation-verified (revert the change, watch the test fail).
 
-Scope split: tasks 1-13 and tests T1-T11 are Part M, executed by this proposal's implementer on `main`. Tasks S1-S8
-and tests TS1-TS8 are Part S: they change code that exists only on PR #992's branch and are executed there by its
-owner/shepherd. THE IMPLEMENTER OF THIS PROPOSAL MUST NOT DO S-TASKS (their symbols do not exist on `main`) and must
+Scope split: tasks 1-16 and tests T1-T14 are Part M, executed by this proposal's implementer on `main`. Tasks S0-S8
+and tests TS1-TS10 are Part S: they change code that exists only on PR #992's branch and are executed there by an
+operator-directed session under this proposal's approved digest (the shepherd and `--review-feedback` cannot). THE IMPLEMENTER OF THIS PROPOSAL MUST NOT DO S-TASKS (their symbols do not exist on `main`) and must
 not edit #991's proposal. Nothing is marked ready, released or deployed before the gates in requirements.md
 ("Delivery and rollout order").
 
@@ -56,8 +56,22 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
 - [ ] 13. ADR `docs/adr/026-deferred-resume-contract.md` (table, authority rule, two switches, sweep and division of
   labour with #931, spike result) (depends on 4-11) - DoD: merged.
 
-## Part S (executed on PR #992's branch by its owner/shepherd; not by this proposal's implementer)
+- [ ] 14. Observability: the `ROLLOUT_STATE` startup line and 5-minute repeat (switch values, dispatcher interval, contract
+  version, unrecognised values), request age at `claim`/`defer` (parse `created_at` as a defaulted field), rate-limited
+  `defer` lines for `legacy-loop` / `implement-running` / `feedback-disabled` (depends on 5) - DoD: T12, T13 pass.
+- [ ] 15. `cli.py rollout-status` (read-only): loops without the contract, held `we_` with age and open requests with age
+  (existing per-item request list only), recorded rejection reasons, UNKNOWN for any failed read (depends on 4, 14)
+  - DoD: T14 passes; the command writes nothing.
+- [ ] 16. Rollout runbook in the ADR: the observation window after each step with the thresholds in requirements.md
+  (depends on 14, 15) - DoD: each step lists what to read and the pass/fail numbers.
 
+## Part S (executed on PR #992's branch by an operator-directed session under the approved #993 digest; not by this proposal's implementer)
+
+- [ ] S0. Before any push: verify #993 `.status.yaml` is `accepted` with a named approver and the approved digest equals
+  `scripts/proposal-content-digest.py` of the directory; verify #992 is draft and no shepherd/implement Workflow for
+  the `issue-991-*` slug is running; fetch; bring the branch up to date with `main` AFTER Part M is merged and released
+  (merge `main` into it; no force); re-check marker and replay order; run the full suite and replay ALL fixtures (old
+  and new) green - DoD: the evidence is in the PR body; commits carry the #993 digest and S-task ids; pushes are without force.
 - [ ] S1. Run the 21 failing tests (`test_execution_request_resume.py` 17, `test_execution_request_dispatch.py` 1,
   `test_execution_request_replay.py` 3) with a fake `read_rollout_switches` defaulted off, unchanged, and record which
   pass - DoD: the list is in the PR body.
@@ -110,6 +124,19 @@ Part M
   within ceil(total / batch) cycles; a fresh close is found in the next cycle; the cursor wraps. Mutation: always restart
   from the newest `batch` rows -> the later orphan is never found.
 
+- [ ] T12. Never a false Succeeded: a matrix over {contract marker present/absent} x {FB on/off} x {PR open/merged} x
+  {tick outcome processed / scope-expansion / failed / unobservable / activity error} x {gates passed / not}: a delivery
+  `we_` ends `Succeeded` ONLY for (contract, FB on, PR open, outcome `processed`); every other cell is a typed
+  `ResumeRefused`, `ResumeDeferred`, or `Failed` with a recorded `ResumeRejection`, never none. Mutation: restore the
+  at-once Succeeded in any cell -> that cell fails.
+- [ ] T13. Visible, not silent: each non-Succeeded cell leaves an observable trace: the dispatcher audit line (`reject` or
+  `defer` with the reason and request age) or the `ResumeRejection` in `work_context`; `ROLLOUT_STATE` is printed at
+  start with the effective values and `parse_errors` for a malformed switch, and repeats; a repeating `legacy-loop`
+  defer is rate-limited but still logged. Mutation: drop the log/record -> the cell fails.
+- [ ] T14. `rollout-status`: fixtures for a held `we_` with open requests of known age, a loop without the contract, an
+  unreadable item (printed UNKNOWN, not 0), a Temporal listing failure (UNKNOWN), and the window-gate thresholds
+  (2x interval; implement timeout + 2x interval). Mutation: treat a failed read as zero -> fails.
+
 Part S (on #992's branch)
 - [ ] TS1. Hold switch on: the `we_` is held through implement, `execution_id` is passed, it ends after implement Succeeded.
   Off: it ends at the flip, no `execution_id`, equal to `main`. No answer / error -> off. Mutation: ignore the switch -> fails.
@@ -129,6 +156,13 @@ Part S (on #992's branch)
   grant is requested on the canonical `we_` (`after_flip=False`). Mutation: `after_flip=True` -> waits on `opened()`.
 - [ ] TS7. End-to-end with the hold on: a resume queued during implement is delivered after implement Succeeded with the PR
   open (one tick), and after Failed/Cancelled/TimedOut (closed-loop path). Depends on Part M.
+- [ ] TS9. After `main` (with Part M) is merged into #992's branch: the whole suite and the replay of every fixture, old
+  (pre-marker, `implement-execution-id` only) and new (switch marker, retry marker, deferred contract), are green; a
+  history with the Part S markers but not `deferred-resume-contract`, and one with both in either recorded order,
+  replay unchanged. Mutation: reorder the `patched` calls at the flip site -> a recorded fixture raises non-determinism.
+- [ ] TS10. Mismatch states with the hold on: a delivery after the held `we_` closes with FB off, with a legacy loop, with a
+  merged PR and with a failed implement each ends in a typed outcome and never `Succeeded` (the T12 matrix extended
+  with `implement_hold`).
 - [ ] TS8. The 21 tests, both legs of `implement_hold`: off legs unchanged and green; on legs rewritten last.
 
 ## Rollback
