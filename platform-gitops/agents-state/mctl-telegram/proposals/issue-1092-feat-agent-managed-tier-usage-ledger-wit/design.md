@@ -96,7 +96,7 @@ input_tokens  BIGINT NOT NULL DEFAULT 0
 output_tokens BIGINT NOT NULL DEFAULT 0
 reserved_usd  REAL/DOUBLE PRECISION NOT NULL DEFAULT 0
 cost_usd      REAL/DOUBLE PRECISION      -- NULL until settled
-status        TEXT NOT NULL              -- reserved|settled|released
+status        TEXT NOT NULL              -- reserved|held|settled
 created_at, updated_at, settled_at
 UNIQUE(job_id, attempt)
 INDEX (user_id, runtime, created_at), INDEX (runtime, created_at)
@@ -121,26 +121,50 @@ func (s *Store) WithManagedBudget(b ManagedBudget) *Store
 Without a configured budget (a zero struct), the claim behaves as it does
 today. This keeps every existing test and own-runtime path unchanged.
 
-`reserveBudget(ctx, tx, pg, userID, limit) (int, error)` runs inside the
-claim transaction directly after `reserveInflight`, in both `claimAgentJobs`
-and `claimCoalesced`, when `runtime == managed` and a budget is configured:
+#### Lock order (owner amendment 2026-11-03)
 
-1. `SELECT managed_budget_usd_day, managed_budget_usd_month FROM agent_profiles WHERE user_id = $1` plus ` FOR UPDATE` on Postgres. This is the profile row lock the issue asks for.
-2. On Postgres, `pg_advisory_xact_lock(hashtextextended('mctl-telegram:managed-budget:global'))`.
-   Every managed claim takes its locks in the same order (account advisory
-   lock, profile row, global lock), so there is no deadlock cycle. The global
-   lock serializes managed claims across accounts. That is acceptable at the
-   pool's scale (`MANAGED_RUNTIME_MAX_ACCOUNTS`, 1 at first, and claims are
-   short).
-3. Sum `COALESCE(cost_usd, reserved_usd)` over `agent_usage` rows with
-   `runtime='managed' AND status <> 'released'` for three windows: the account
-   day, the account month and the global day. A `settled` row contributes its
-   cost and a `reserved` row its reservation. That sum is
-   "settled + outstanding reservations". The windows are the UTC start of day
-   and of month, compared with `created_at`.
-4. `room = floor(min(capDay-usedDay, capMonth-usedMonth, globalCap-usedGlobal) / PerJobUSD)`,
-   limited to `limit`. If `room == 0`, call `pauseForBudget(tx, scope, windowEnd)`
-   and return 0. The claim then commits only the pause and claims nothing.
+When `runtime == managed` and a budget is configured, `claimAgentJobs` and
+`claimCoalesced` take the global budget lock FIRST, before `reserveInflight`:
+on Postgres `pg_advisory_xact_lock(hashtextextended('mctl-telegram:managed-budget:global'))`.
+The order is global lock, then the account advisory lock in `reserveInflight`,
+then the claim's `FOR UPDATE SKIP LOCKED`. There is no `agent_profiles ... FOR UPDATE`.
+
+Why the first draft's order (account lock, profile `FOR UPDATE`, global lock)
+was rejected: claim A holds the global lock and finds the global cap durably
+exhausted, so `pauseForBudget` updates every managed profile with pending jobs,
+including account B's. Meanwhile claim B holds B's profile row lock and waits
+for the global lock. A waits on B's row and B waits on A's lock, which is a
+deadlock (`40P01`). With the global lock first, B waits before it holds
+anything, and the cycle cannot form. The global lock already serializes every
+managed claim that has a budget, so a profile row lock adds no protection a
+test could show. It is removed rather than kept as an unproven guard. The cost
+is the same as before: managed claims are serialized platform-wide, which is
+acceptable at the pool's scale (`MANAGED_RUNTIME_MAX_ACCOUNTS`, 1 at first,
+and claims are short). Own-runtime claims and managed claims without a budget
+never take the global lock.
+
+#### `reserveBudget(ctx, tx, pg, userID, limit) (int, error)`
+
+It runs inside the claim transaction directly after `reserveInflight` (the
+global lock is already held):
+
+1. `SELECT managed_budget_usd_day, managed_budget_usd_month FROM agent_profiles WHERE user_id = $1`, a plain read.
+2. For three windows (the account day, the account month and the global day,
+   with the UTC start of day and of month compared against `created_at`),
+   compute over `runtime='managed'` rows:
+   - `durable` = `SUM(cost_usd)` of `settled` rows + `SUM(reserved_usd)` of `held` rows;
+   - `inflight` = `SUM(reserved_usd)` of `reserved` rows.
+3. `room = floor(min over windows of (cap - durable - inflight) / PerJobUSD)`,
+   limited to `limit`. If `room > 0`, return it.
+4. If `room == 0`:
+   - if some window has `cap - durable < PerJobUSD` (durable exhaustion), call
+     `pauseForBudget(tx, scope, windowEnd)` for the first such window in the
+     order global day, account month, account day, and return 0;
+   - otherwise (transient: in-flight reservations only), return 0 without a
+     pause, a notification or `mctl_agent_budget_exhausted_total`, and report
+     `mctl_agent_budget_deferred_total{scope}` through the same hook.
+
+   The claim then commits only what step 4 wrote and claims nothing.
 
 After the claim's `UPDATE ... RETURNING`, insert one `agent_usage` row per
 claimed job: `(job_id, attempts, user_id, 'managed', reserved_usd=PerJobUSD, status='reserved')`.
@@ -152,7 +176,8 @@ together.
 - Account scope:
   `UPDATE agent_profiles SET budget_paused_until=$end WHERE user_id=$1 AND (budget_paused_until IS NULL OR budget_paused_until < $end)`.
 - Global scope: the same update across every `runtime='managed'` profile with
-  a pending job, with `RETURNING user_id`.
+  a pending job, with `RETURNING user_id`. It runs only under the global lock,
+  which no other claim waits for while holding a profile row (see "Lock order").
 - For each row actually updated, insert an `owner_notifications` row with
   kind `NotificationBudget = "budget"`. The body is sealed like the others and
   states which window and when it resets. Because the update fires only when
@@ -167,7 +192,8 @@ together.
 In `ListManagedClaimCandidates`, replace the placeholder with
 `AND (ap.budget_paused_until IS NULL OR ap.budget_paused_until <= $now)` and a
 global guard:
-`AND (SELECT COALESCE(SUM(COALESCE(u.cost_usd,u.reserved_usd)),0) FROM agent_usage u WHERE u.runtime='managed' AND u.status<>'released' AND u.created_at >= $dayStart) + $perJob <= $globalCap`.
+`AND (SELECT COALESCE(SUM(COALESCE(u.cost_usd,u.reserved_usd)),0) FROM agent_usage u WHERE u.runtime='managed' AND u.created_at >= $dayStart) + $perJob <= $globalCap`
+(every status counts: settled at its cost, `reserved` and `held` at the reservation).
 This is emitted only when a budget is configured. The candidate list stays a
 hint and the claim stays the authority.
 
@@ -186,18 +212,37 @@ In `RouteUnclaimedAgentJobs`, add
   3. Select the `agent_usage` row for (job, attempt).
      - None (an own job, or a pre-ledger managed claim): insert `settled`
        with the runtime from the job row (`own` when NULL).
-     - `reserved` or `released`: update to `settled` with the reported fields.
+     - `reserved` or `held`: update to `settled` with the reported fields.
      - `settled` with identical fields: `UsageUnchanged`, no write.
      - `settled` with different fields: `ErrUsageConflict`, rolled back.
+
+     A late report for a `held` attempt settles only while `agent_jobs.attempts`
+     still equals that attempt (step 1's fence). Once the job has been
+     re-claimed, the report is refused as before and the row stays `held`,
+     counted at the full reservation. That is the conservative outcome.
 - In `RequeueStaleAgentJobs`, for `fencedIDs`, `deadIDs` and `requeuedIDs`,
   run
-  `UPDATE agent_usage SET status='released', updated_at=$now WHERE job_id=$1 AND status='reserved'`
+  `UPDATE agent_usage SET status='held', updated_at=$now WHERE job_id=$1 AND status='reserved'`
   in the same transaction, after the attempt rows. This follows the existing
-  lock order: `agent_jobs` first.
+  lock order: `agent_jobs` first. (Owner amendment 2026-11-03.) The first
+  draft released these rows. But a pool job token expires at
+  `ClaimedAt + jobVisibility` (`events.go`, the envelope `Deadline`), which is
+  exactly the threshold the sweeper requeues on. A run that crosses its
+  deadline has spent money, its cost report is refused with 401 (the risk
+  #1090 accepted and assigned to this slice), and releasing the reservation
+  would drop that spend from every cap. `held` keeps it counted at the
+  reservation, the upper bound the runner enforces up to one model call, until
+  a report settles it or the window ends.
 - In `ReleaseUnissuedClaim`, run
   `DELETE FROM agent_usage WHERE job_id=$1 AND attempt=$2 AND status='reserved'`,
-  because the attempt number is reused and UNIQUE(job_id, attempt) would
-  otherwise block the next claim.
+  because no token for that attempt ever left the server, the attempt number
+  is reused, and UNIQUE(job_id, attempt) would otherwise block the next claim.
+  This is the only path that removes a reservation without a cost report.
+- Overshoot bound: the runner checks `totalCost > MaxBudgetUSD` after each
+  model call (`openairunner.go`), so one attempt can exceed `reserved_usd` by at
+  most one call. The settle records the actual cost, so later claims see it. A
+  cap can therefore be overrun by at most one model call per in-flight managed
+  attempt. This is stated in ADR 0008 section 5 by task 11.
 - In `purgeAgentJobs`, add
   `DELETE FROM agent_usage WHERE user_id = $1` after the `agent_jobs` lock
   statement and before deleting `agent_jobs`.
@@ -258,9 +303,13 @@ carries the value.
 
 Add `AgentUsageCostUSDTotal{runner,model}`,
 `AgentUsageTokensTotal{direction,model}`,
-`AgentBudgetExhaustedTotal{scope}` and `AgentManagedAccounts` (a gauge). The
-gauge is refreshed by the existing sweeper loop through a new
-`Store.CountManagedAccounts`. Gitops alert rules are a follow-up PR.
+`AgentBudgetExhaustedTotal{scope}`, `AgentBudgetDeferredTotal{scope}`
+(transient: in-flight reservations only), `AgentManagedAccounts` (a gauge), and
+the drift gauges `AgentUsageHeldUSD` (`mctl_agent_usage_held_usd`) and
+`AgentUsageHeldRows` (`mctl_agent_usage_held_rows`) over `held` rows of the
+current UTC day. The gauges are refreshed by the existing sweeper loop through
+the new `Store.CountManagedAccounts` and `Store.HeldUsage`. Gitops alert rules
+are a follow-up PR.
 
 ## Alternatives
 
@@ -281,6 +330,17 @@ gauge is refreshed by the existing sweeper loop through a new
   row instead of an advisory lock.** That would also work on Postgres. The
   advisory lock matches the existing `reserveInflight` pattern and needs no
   seed row. Either one passes the race test.
+- **Release the reservation on requeue** (first draft). Rejected in owner
+  review (2026-11-03): it drops the spend of a deadline-crossing run whose
+  report was refused with 401, so the caps would not be hard.
+- **Accept job-token cost reports after the deadline (a grace window).**
+  Rejected for this slice: it widens the authority of an expired credential
+  that #1090 deliberately bounds, and it still loses the report when the
+  worker dies. `held` bounds spend without changing token rules.
+- **Keep the profile `FOR UPDATE` after the global lock.** Rejected: it
+  protects nothing once the global lock serializes the claim, no test could
+  fail without it, and in the first draft's order it formed a deadlock with
+  the global pause.
 
 ## Platform impact
 
@@ -302,11 +362,16 @@ gauge is refreshed by the existing sweeper loop through a new
   claim, and one row per job attempt. The global advisory lock serializes
   managed claims, which costs milliseconds at current scale.
 - **Risks and mitigations**:
-  - A reservation that is never settled counts at the full cap until its
-    window ends. This is conservative, and is reported as reconciliation drift
-    in the rollout soak (see open questions).
-  - Lock ordering: the account advisory lock, then the profile row, then the
-    global lock, the same for every claim. The sweeper and the purge touch
+  - A reservation that is never settled (`reserved` on a completed job, or
+    `held` after a requeue, dead-letter or fence) counts at the full per-job
+    cap until its window ends. With the defaults (per job 0.50, account day
+    1.00), one deadline-crossing run without a report takes half an account's
+    day. That is the conservative trade the owner chose over uncounted spend,
+    and it is visible as `mctl_agent_usage_held_usd` / `_rows`, which are the
+    soak's reconciliation-drift figures.
+  - Lock ordering: the global budget lock, then the account advisory lock,
+    then the claim's row locks, the same for every managed claim with a
+    budget. No profile row lock. The sweeper and the purge touch
     `agent_usage` only after `agent_jobs`, matching the worker's order.
   - Label cardinality: model and runner values are validated and runner is
     clamped. The set of models is bounded by worker configuration.
