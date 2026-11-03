@@ -44,6 +44,11 @@
   - Add the `MANAGED_RUNTIME_MAX_ACCOUNTS` row and the JWT-secret note.
   - Add a `### Managed runtime: pool token` section with mint, rotate and
     revoke steps. The token goes straight to Vault and is never echoed.
+  - In the mint step use `pool_name` `agent-worker-managed-preview` and Vault
+    `secret/platform/labs/agent-worker-managed-preview/api`, property `token`.
+  - Add a `### Managed runtime activation` section with A1-A6 as in design.md
+    (owner approval first, verify before the next step, A4 and A5 never in one
+    PR, gateway and token declared in the A2 PR after mctl-gitops#2378).
   - Add a `### Managed runtime rollback` section, in this order: runtime own,
     then scale 0, then revoke jti, then flag off.
   - Add three alert sections with anchors `mctlagentmanagedglobalcaphit`,
@@ -79,6 +84,12 @@
   anchors. Mutation: remove `id="mctlagentmanagedpoolworkerdown"`.
 - [ ] T5. `TestRunbookManagedRollbackOrder` (new): the rollback steps appear in
   ADR order. Mutation: swap "revoke" and "scale 0".
+- [ ] T5b. `TestRunbookManagedActivationOrder` (new): in the activation
+  section, the markers of A1 (`MANAGED_RUNTIME_ENABLED: "true"`), A2
+  (`mctl-telegram-ai-gateway-run`), A3 (`pool-token`), A4 (`SecretSynced`),
+  A5 (`replicaCount: 1`) and A6 (`runtime: managed`) appear in that order,
+  and the section names `agent-worker-managed-preview/api`. Mutation: swap
+  the A4 and A5 lines, and the test fails.
 - [ ] T6. `TestSpecConsentTextMatchesCode` (new): `spec.md` contains
   `managed-data-flow/v1` and the exact consent sentence from the code
   constant. Mutation: change one word in the doc's sentence.
