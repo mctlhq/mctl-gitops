@@ -170,10 +170,13 @@ by file:
    - New `### Managed runtime: pool token` under Communication Agent
      operations:
      - Mint: an `admin:users` bearer, `POST /api/agent/pool-token` with
-       `{"pool_name":"labs-preview","ttl_hours":720}`. Record `jti` and
-       `expires_at`, and write `pool_token` straight to
-       `secret/platform/labs/agent-worker-managed-preview/`. Never paste it
-       into a chat or a log.
+       `{"pool_name":"agent-worker-managed-preview","ttl_hours":720}` (the
+       pool name mctl-gitops#2345 uses). Record `jti` and `expires_at`, and
+       write `pool_token` straight to Vault
+       `secret/platform/labs/agent-worker-managed-preview/api`, property
+       `token` (the activation-step-4 ExternalSecret
+       `labs-agent-worker-managed-preview-api` maps that property to
+       `AGENT_API_TOKEN`). Never paste it into a chat or a log.
      - Rotate: with one replica, mint a new token and write it to Vault. Wait
        for ExternalSecret refresh or force it, roll the pod, and verify claims
        on the new token. Then revoke the old `jti`. Make clear that job tokens
@@ -183,6 +186,43 @@ by file:
      - Revoke: `revoke_worker_token` with the `jti`, by cross-reference to
        "Revoking a leaked worker token", with a note that it also covers
        `aud=agent-pool` because `derivedAudiences` includes it.
+   - New `### Managed runtime activation` (owner amendment 2026-11-03),
+     before the rollback section. It states that the sequence starts only
+     after the owner's separate activation approval, that each step starts
+     only after the previous one is verified, and points at the canonical
+     list in mctl-gitops
+     `platform-gitops/agents-state/mctl-gitops/proposals/issue-2345-feat-labs-agent-worker-managed-preview-m/requirements.md`
+     ("Activation"). It gives the steps in this order, each with its verify
+     line:
+     1. A1 PR: `MANAGED_RUNTIME_ENABLED: "true"` on `mctl-telegram-preview`.
+        Verify `POST /api/agent/pool-token` no longer answers 404 and no
+        account is `managed`.
+     2. A2 Cloudflare: one PR declares `cloudflare_ai_gateway.mctl_telegram`
+        in `infrastructure/cloudflare/account/ai-gateway.tf` and the token
+        `mctl-telegram-ai-gateway-run (Vault platform/mctl-telegram/ai-gateway)`
+        in `infrastructure/cloudflare/tokens/manifest.tf`; the owner creates
+        that token in the dashboard (AI Gateway Run only) in the same PR, as
+        the tokens README requires. Both were moved out of mctl-gitops#2376
+        for this reason. The PR's required `cloudflare-plan` stays red while
+        the unrelated tokens drift mctl-gitops#2378 (two undeclared erpact
+        tokens) is open, so #2378 is resolved first. Then
+        `cloudflare-apply.yml` for the account root (one gateway create).
+        Verify by reading the gateway back: logs off, auth on, byok_only on,
+        cache 0.
+     3. A3 Vault: mint the pool token (see "pool token" above), then write
+        `.../agent-worker-managed-preview/api`, `.../openai` (Hetzner key)
+        and `.../gateway` (run token, with its canonical copy at
+        `secret/platform/mctl-telegram/ai-gateway`), property `token` each.
+     4. A4 PR: the three ExternalSecrets and `envFrom`, still at
+        `replicaCount: 0`. Verify all three `SecretSynced` and the
+        Application Healthy.
+     5. A5 PR: `replicaCount: 1`. Verify pod Ready, scrape target up,
+        `mctl_agent_credential_domain` present, gateway smoke 200 with the
+        bearer and 401 without.
+     6. A6: the owner switches one preview account to `runtime: managed`
+        with consent; soak of at least 30 jobs.
+     It states that A4 and A5 never share a PR, and that A2-A6 are never
+     combined into one change.
    - New `### Managed runtime rollback`: the ordered list from ADR 0008
      section 6, the flag-off effect and the start log line.
    - Three alert sections, each with an `<a id>` that matches the gitops
@@ -225,6 +265,10 @@ by file:
      the indexes of `runtime: own`, `replicaCount`/`scale`, `revoke_worker_token`
      and `MANAGED_RUNTIME_ENABLED` are strictly increasing. Mutation: swap two
      steps.
+   - New `TestRunbookManagedActivationOrder`: in the managed activation
+     section, the markers of A1-A6 (see tasks.md T5b) are strictly increasing
+     and `agent-worker-managed-preview/api` is named. Mutation: swap A4 and
+     A5.
    - New `TestSpecConsentTextMatchesCode`: the consent value
      `managed-data-flow/v1` appears in `spec.md`, and the consent sentence in
      `spec.md` equals the constant in `internal/db/managed_runtime.go` (or the

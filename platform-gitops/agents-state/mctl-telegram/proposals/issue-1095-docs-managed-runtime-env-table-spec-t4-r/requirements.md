@@ -85,6 +85,18 @@ removed or reverted. The PR states the mutation for each test.
   `mctlagentmanagedpoolworkerdown`, each with Symptom, Likely causes,
   Diagnostic queries and Mitigation subsections, and SHALL list them in the
   table of contents.
+- WHEN the runbook mint procedure is read THE SYSTEM SHALL use
+  `pool_name` `agent-worker-managed-preview` and write the token to Vault
+  `secret/platform/labs/agent-worker-managed-preview/api`, property `token`,
+  never to a directory path or an unnamed property.
+- WHEN `docs/runbook.md` describes activation THE SYSTEM SHALL list steps
+  A1-A6 in the order of the mctl-gitops#2345 proposal ("Activation"): flag on,
+  gateway and run token (declared in one PR with the dashboard token creation,
+  after mctl-gitops#2378 is resolved), pool token and Vault, ExternalSecrets at
+  0 replicas, `replicaCount: 1`, one account to `managed`. It SHALL state that
+  the sequence needs the owner's separate activation approval, that each step
+  waits for the previous step's verification, and that A4 and A5 never share a
+  PR.
 - WHEN `docs/runbook.md` gives the rollback THE SYSTEM SHALL list it in this
   order: `runtime: own`, scale the pool worker to 0, revoke the pool `jti`, then
   `MANAGED_RUNTIME_ENABLED=false`. It SHALL state that flag off pauses managed
