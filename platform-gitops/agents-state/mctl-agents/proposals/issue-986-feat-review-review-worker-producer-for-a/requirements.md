@@ -49,9 +49,21 @@ Request
   and never log it, write it to a file, put it in evidence or pass it to the reviewer model session.
 
 Reviewer execution
-- WHEN the request is created THE SYSTEM SHALL attach a NEW execution for the reviewer run through
+- WHEN the request is created THE SYSTEM SHALL create a dedicated reviewer work item with the service
+  credential acting directly (`POST /api/v1/work-items`). It goes in the authoring work item's tenant, with
+  `external_key` `review:<request_id>` and an idempotency key derived from the `request_id`. It SHALL NOT
+  attach the reviewer execution to the authoring work item. mctl-api keeps at most one non-terminal
+  execution per work item (`attachNewTx` answers `409 execution_active`) and refuses an attach to a
+  terminal item. A proposal under review normally still has its DevLoop execution running, parked at the
+  approval gate, and a finished item is terminal. So the authoring item can take the reviewer in neither
+  case.
+- THE SYSTEM SHALL then attach a NEW execution for the reviewer run to that reviewer work item through
   `POST /api/v1/work-items/{id}/executions` with the service credential acting directly. It SHALL NOT use a
   relayed surface header, an agent run token, or a resume of the authoring execution.
+- IF creating the reviewer work item is refused or unobserved (including `409 external_key_in_use` for an
+  item that is not this request's), THEN THE SYSTEM SHALL stop with a typed refusal or `unobserved`, and
+  SHALL NOT attach, mint or submit. A `replayed` answer for the same `external_key` and idempotency key is
+  this request's own item and may be used.
 - THE SYSTEM SHALL use an `engine_ref` whose engine run (the part before `#`) is the reviewer's own Argo
   workflow name, so that `execution_provenance.attempt_id(engine, engine_ref)` differs from every authoring
   attempt.
@@ -132,10 +144,11 @@ Typed refusals
 
 ## Open questions
 
-- Is agent `review-worker` registered in the mctl-api agent registry? The mint refuses unregistered names
-  with `400 agent_unknown`. This run could not observe the registry (`GET /api/v1/agents` is outside the
-  investigate scope). Assumption: registration is done with `mctl_create_agent` before live acceptance, and
-  until then the producer reports the typed `agent_unknown` refusal.
+- Agent registration is a precondition, not an open question. The mint refuses an unregistered name with
+  `400 agent_unknown`. Registering `review-worker` in the mctl-api agent registry is an explicit
+  live-acceptance precondition in the runbook (task 10), done by an admin before enablement. Until then the
+  producer reports the typed `refused(agent_unknown)` outcome and never treats it as success. This run could
+  not observe the registry (`GET /api/v1/agents` is outside the investigate scope).
 - Does `POST /api/v1/agent-run-tokens` take the scope as a body field (`"scope": "review"`), or does
   mctl-api derive it from the agent name? `delegated_approval.py` sends no scope today. Assumption: send
   `"scope": "review"` and verify the `scope` field of the answer. The implementer must confirm against
@@ -146,9 +159,10 @@ Typed refusals
   two-envelope scheme (seal an input-evidence first), which is listed under Alternatives.
 - Where do the private findings bytes live? Assumption: an Argo output artifact (private S3) of the
   review-worker Workflow, referenced only by hash. No public gitops, GitHub or envelope copy.
-- Which work item does the reviewer execution attach to, and is a second concurrent execution on it
-  allowed? Assumption: the authoring work item, attached after the authoring execution is terminal. A
-  `409 execution_active` answer is reported as the typed refusal `execution_active`, with no retry loop.
+- Reviewer work item placement is decided, not open: a dedicated item per review request, in the
+  authoring item's tenant (see Reviewer execution). Whether the reviewer item should later be linked to the
+  authoring item for display is left to a follow-up. mctl-api#917 does not require the two to share an item
+  or tenant.
 - Who is the authoring execution for a proposal subject? Assumption: the work-item store `we_` of the
   authoring run, from the DevLoop `work_context` query. The producer takes it as an explicit argument and
   never guesses it. A runtime `ex-` id (for example `.status.yaml` `execution.context_id`) passes the Tier A
