@@ -1,5 +1,27 @@
 # DevLoop passes its canonical execution_id to the implement run (#717 S5)
 
+## Amendment 2026-11-03
+This amendment supersedes the version approved earlier on 2026-11-03 (grant `aar_9a49222610984cfc86599faffdae5c25`).
+It needs a fresh approval and a new content digest. What changed and why:
+- Facts corrected (found while reviewing PR mctl-agents#992 against mctl-agents#993): the loop only ever writes
+  `Succeeded` or `Failed` to a `we_`, never `Error` (mctl-api's orphan sweeper, mctlhq/mctl-api#931, is the only
+  writer of `Error`). Under #992 a failed, cancelled or timed-out implement raises out of `_implement`, so
+  `run`'s exception path ends the `we_` `Failed`; the `Succeeded if ... else Failed` line after `_implement` is
+  reachable on success only. Cancel and Timeout are indistinguishable from Failed to mctl-api.
+- New requirement (owner decision 7 on mctl-agents#993): a pending end-advance of the canonical `we_` after the
+  implement run is retried during the merge watch, so an open `we_` cannot block queued requests for up to 14 days.
+- The "after-flip resume semantics" open question is resolved. With the mctl-api queue switch on
+  (mctlhq/mctl-api#931) a resume made while the `we_` is open is stored `pending` and is not claimable until the
+  `we_` closes, so no delivery reaches the loop between the flip and the end of implement. What a deferred resume
+  does after the `we_` closes is NOT defined here: it is the deferred-resume contract of mctl-agents#993, which
+  gets its own proposal and is only referenced from this one.
+- Deployed state: `EXECUTION_REQUEST_DISPATCHER: "true"` is already set in production
+  (`platform-gitops/services/admins/mctl-agents-worker/values.yaml:139`, commit f1fc08233), so the dispatcher is
+  not a rollout switch. The gates are the mctl-api queue switch, `IMPLEMENT_EXECUTION_PATCH` and the worker image
+  bump, in that order (see Rollout gate).
+- Explicit rollout gate, test-order rule, rollback ordering and a corrected docstring task were added.
+Everything else, including the empty-canonical-id rule, is unchanged.
+
 ## Context
 Slice S5 of #717 runs `mctl-agents-implement` with `MCTL_RUN_TOKEN_MODE=observe`. The run-token exchange
 for that template is bound to an execution: mctl-api refuses an empty `execution_id` with
@@ -31,11 +53,28 @@ before it replay unchanged.
 - WHEN `_implement` requeues a pre-start failure, THE SYSTEM SHALL resubmit with the same `execution_id`.
 - WHILE the marker is recorded, THE SYSTEM SHALL NOT end the canonical execution at the approve flip, and SHALL
   keep it non-terminal from the flip until `_implement` returns.
-- WHEN `_implement` returns under the marker, THE SYSTEM SHALL end the canonical execution once, in `Succeeded`
-  if the implement result succeeded and `Failed` otherwise, before the abandon check and the merge watch.
+- WHEN `_implement` returns under the marker, THE SYSTEM SHALL end the canonical execution once, in `Succeeded`,
+  before the abandon check and the merge watch. (`_implement` returns only for a succeeded run; the
+  `Succeeded if implement_result.succeeded else Failed` expression is kept as a defensive guard and is not the
+  path that records a failed implement.)
+- IF `_implement` raises (a failed, cancelled or timed-out implement run, or a non-retryable error), THEN THE
+  SYSTEM SHALL end the canonical execution `Failed` from `run`'s exception path, and SHALL NOT end it from the
+  line after `_implement`. THE SYSTEM SHALL only ever write `Succeeded` or `Failed` to the `we_`; `Error` belongs
+  to mctl-api's orphan sweeper.
 - IF the loop exits between the flip and the end of the implement run (abandon, re-approval expiry, release
   resolution failure, exception, cancellation), THEN THE SYSTEM SHALL still end the canonical execution through
   the existing exit paths in `run` (`_canonical_pending_phase` / `_canonical_end_phase` / "Failed").
+- IF the post-implement end-advance does not land (the `we_` is still open and `_canonical_pending_phase` is set),
+  THEN THE SYSTEM SHALL retry it on every merge-watch poll, with its own marker `IMPLEMENT_END_RETRY_PATCH`
+  ("implement-end-retry"), not only at loop exit, and SHALL stop retrying as soon as it lands.
+- WHILE the merge watch hops via continue-as-new, THE SYSTEM SHALL NOT drop an end-advance that has not landed:
+  it SHALL make a last attempt before the hop and, if it still has not landed, carry the pending phase and the
+  open `we_` identity into the continued run, which keeps retrying.
+- WHILE a history records `IMPLEMENT_EXECUTION_PATCH` but not `IMPLEMENT_END_RETRY_PATCH`, THE SYSTEM SHALL
+  replay it with no retry command in the merge watch.
+- WHILE the marker is recorded, THE SYSTEM SHALL bind the re-approval gate between the flip and the implement
+  submit with `after_flip=False` (grant on the canonical `we_`, `execution_id=""`); `after_flip=True` is kept
+  only for histories without the marker and for a legacy `resume` signal (no sender in production).
 - IF the marker is recorded and the canonical execution id resolves empty at the implement submit, THEN THE
   SYSTEM SHALL fail the loop with a non-retryable `ApplicationError` naming the missing execution, and SHALL NOT
   submit `mctl-agents-implement` without one.
@@ -54,17 +93,36 @@ before it replay unchanged.
 - The in-loop shepherd tick, the shepherd subprocess path and `MCTL_RUN_TOKEN_MODE` on the shepherd CWFT.
 - `ClaimClient` bearer, mctl-api scope/handler reconciliation, the gitops `enforce` flip, claims going live,
   `LIFECYCLE_ROLLOUT_MODE`.
-- Any gitops change: `cwft-mctl-agents-implement.yaml` already declares `execution_id` and maps it to
+- Any gitops change to the CWFT: `cwft-mctl-agents-implement.yaml` already declares `execution_id` and maps it to
   `WORKFLOW_EXECUTION_ID`.
+- The deferred-resume contract (what a queued resume does after the `we_` closes) and orphaned-execution recovery:
+  mctl-agents#993, own proposal.
+
+## Rollout gate
+- PR mctl-agents#992 stays in draft, and `IMPLEMENT_EXECUTION_PATCH` must not run in production, until ALL of:
+  1. mctlhq/mctl-api#931 is released with its queue switch ON, and that is observed (not assumed);
+  2. the deferred-resume behaviour of mctl-agents#993 exists and its integration tests pass;
+  3. this amendment is approved with a new content digest.
+- Order: the mctl-api queue switch, then the worker image bump that carries `IMPLEMENT_EXECUTION_PATCH`. The
+  dispatcher is already on (`EXECUTION_REQUEST_DISPATCHER: "true"`), so it is not a step.
+- Failure modes the order prevents: (a) a #992 worker with an old mctl-api (queue switch off) widens the window in
+  which an execution request is refused and dropped from "investigate to approval" to the whole implement run;
+  (b) a new mctl-api (switch on) with a worker that predates #993 delivers queued resumes into a loop whose
+  `_deliver` lands `Succeeded` with no work done (a silent no-op).
+- Test order: mutation-discriminating regression and end-to-end tests for the new behaviour MUST exist before any
+  existing expectation is rewritten. The 21 tests that fail on #992 (`test_execution_request_resume.py` 17,
+  `test_execution_request_dispatch.py` 1, `test_execution_request_replay.py` 3) are rewritten to the #993 contract
+  only after that behaviour exists, never fitted to a lost request.
 
 ## Open questions
-- After-flip resume semantics. Holding the canonical `we_` open past the flip means mctl-api's attach rule
-  (`execution_active`) refuses a new resume execution until the implement run ends, so the after-flip re-approval
-  gate (`_await_canonical_reapproval(..., after_flip=True)`, which waits for a NEW execution to be opened) can no
-  longer be satisfied by a resume in that window. Proposed interpretation: under the marker the after-flip gate
-  binds a fresh grant to the still-open canonical `we_` (the pre-flip behaviour, `execution_id=""`) instead of
-  waiting for a new execution. The implementer must confirm this with a test; if mctl-api refuses a second
-  `aar_` on that `we_`, record it and keep the existing gate (a resume then simply waits for the implement end).
+- Resolved (was: after-flip resume semantics). With the queue switch on, a resume made while the canonical `we_`
+  is open is stored `pending` by mctl-api and is not claimable until the `we_` closes, so no delivery reaches the
+  loop between the flip and the end of implement. `after_flip=False` is therefore used under the marker, and
+  `after_flip=True` remains only for the legacy `resume` signal. mctl-api verifies the second-grant behaviour with
+  `TestDevLoopApprove_SecondGrantOnOpenExecutionAfterFlip` (mctlhq/mctl-api#931). What a deferred resume does
+  once the `we_` has closed (merge watch with open PR, merged PR, failed/cancelled/timed-out implement,
+  intent-less resume) is defined by mctl-agents#993 and gets its own proposal; releasing or enabling #992 is
+  gated on it.
 - Usage attribution: `test_neither_submit_carries_an_execution_id` documents an earlier decision that an
   implementer invocation is not the investigator's `we_` ("would misattribute spend"). The resolved answer
   overrides it for the implement submit; the usage ledger does not read `WORKFLOW_EXECUTION_ID`
