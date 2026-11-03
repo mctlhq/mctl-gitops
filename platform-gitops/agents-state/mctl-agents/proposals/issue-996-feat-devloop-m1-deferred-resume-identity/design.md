@@ -50,13 +50,14 @@ st = self._implement_state
 if st.stage == "implementer" and st.outcome is None: -> ResumeDeferred  "implement-running"
 pr = self._last_pr
 if pr is not None and pr.merged:                  -> ResumeRefused   "work-merged"
-if (st.outcome not in (None, "success")) or (pr is not None and pr.state == "CLOSED")
-   or delivery.intent_id is None:                 -> ResumeRefused   "nothing-to-resume"
+if delivery.intent_id is None:                    -> ResumeRefused   "nothing-to-resume"
+if (st.outcome not in (None, "success")) or (pr is not None and pr.state == "CLOSED"):
+                                                  -> ResumeDeferred  "recovery-not-ready"
 otherwise (intent, PR open or not yet observed):  -> ResumeDeferred  "feedback-not-ready"
 ```
 
 - A rejected Update writes no history event, and the Python SDK does not run validators on replay. The fence is therefore replay-neutral, and the dispatcher never reaches `_fulfil`, so no `we_` is minted.
-- Name the constants: `RESUME_DEFERRAL_REASONS` (in `dev_loop.py`, re-exported to the dispatcher) = `{loop-not-ready, loop-ending, legacy-loop, implement-running, feedback-not-ready}`. Add `work-merged` and `nothing-to-resume` to `xr.RESUME_REFUSAL_REASONS`.
+- Name the constants: `RESUME_DEFERRAL_REASONS` (in `dev_loop.py`, re-exported to the dispatcher) = `{loop-not-ready, loop-ending, legacy-loop, implement-running, recovery-not-ready, feedback-not-ready}`. Add `work-merged` and `nothing-to-resume` to `xr.RESUME_REFUSAL_REASONS`.
 - `TemporalClientPort.deliver` normalises a deferral reason outside `RESUME_DEFERRAL_REASONS` to `unspecified`, mirroring the refusal path. `_defer` audits `resume_deferred:<reason>`.
 - Idempotence is unchanged. A refused or deferred update id is not in Temporal's registry, so a re-send is validated again. Once accepted, `_accepted_request_ids` makes repeats a no-op. There is never a second delivery.
 
@@ -67,7 +68,8 @@ otherwise (intent, PR open or not yet observed):  -> ResumeDeferred  "feedback-n
 | gates passed, legacy history | accept; `Succeeded` at once | `ResumeDeferred(legacy-loop)`, no `we_` |
 | gates passed, implement running | accept; `Succeeded` at once | `ResumeDeferred(implement-running)` |
 | gates passed, PR merged | accept; `Succeeded` at once | `ResumeRefused(work-merged)` |
-| gates passed, implement failed / PR closed / no intent | accept; `Succeeded` at once | `ResumeRefused(nothing-to-resume)` |
+| gates passed, no intent | accept; `Succeeded` at once | `ResumeRefused(nothing-to-resume)` |
+| gates passed, implement failed / PR closed unmerged, intent | accept; `Succeeded` at once | `ResumeDeferred(recovery-not-ready)` (M3 defines recovery) |
 | gates passed, intent, PR open or unknown | accept; `Succeeded` at once | `ResumeDeferred(feedback-not-ready)` |
 
 Defence in depth: `OpenDelivery` gets `accepted_after_gates: bool = False`, set in `accept_execution_request` from `self._gates_passed and self._deferred_resume_contract`. In `_deliver`, after the bind, a delivery with that flag lands `Failed` with refusal `feedback-not-ready` instead of entering the `Succeeded` wait. This uses the existing `_land_delivery` path, so there is no new command type. It is reachable only under the marker. With the validator in place it should be unreachable, and a unit test proves it fails closed if reached anyway.
@@ -91,3 +93,17 @@ M2 will later replace the `feedback-not-ready` arm behind its own new patch id. 
 - **Resource impact:** negligible (one marker per loop, one dataclass reference).
 - **Risk:** the dispatcher re-claims deferred requests on each lease expiry, which is extra polling load. The lease already bounds this. Risk: the existing test that asserts `Succeeded`-at-once is rewritten. The PR must say so explicitly for the merge decision.
 - **Release:** no release, deploy or flag change. The PR is left for an explicit human merge decision.
+
+## Deferred requests: release, operator view and later slices
+- Release paths: loop end (a later claim starts a continuation run); PR merge (refused `work-merged`); operator rejection through the existing mctl-api `RejectExecutionRequest` (`internal/api/handlers_execution_requests.go`); a later slice serving a `feedback-not-ready` request.
+- Operator view: the claimed request in `mctl_list_work_item_execution_requests`, the dispatcher audit `resume_deferred:<reason>`, and a dispatcher WARN once a request has been deferred more than 24 hours (request id, work item, reason, age). The dispatcher computes the age from the request's claim history, so the workflow gets no new command.
+- `feedback-not-ready` and `recovery-not-ready` need no row change to be served later: the next claim re-validates against the validator of the then-current build. M2 swaps the `feedback-not-ready` arm behind its own patch id and only for loops with `deferred_resume_contract=True`. M3 does the same for `recovery-not-ready`.
+- `legacy-loop` is permanent for that loop (the flag is carried across continue-as-new and never re-evaluated), so no later slice serves it. The request waits for loop end, merge, or an operator rejection.
+
+## Rollback fence
+Reverting M1 alone is unsafe if requests are still deferred: a pre-M1 `_deliver` would accept a re-claimed post-gates resume and land a false `Succeeded`. Rollback therefore runs in this order:
+1. Pause the dispatcher: set `EXECUTION_REQUEST_DISPATCHER` to off in the worker values (mctl-gitops PR) and wait for the roll.
+2. List every claimed request for the affected work items. Reject each deferred one through `RejectExecutionRequest` (operator decision per request), or confirm none exist.
+3. Roll the worker image back.
+4. Re-enable the dispatcher only after the owner accepts that, with the pre-M1 build, new post-gates resumes behave as before M1 (the false `Succeeded` baseline), or after M1 is re-applied.
+M1 does not automate this. The runbook goes in the PR body, and the dispatcher test below proves the fence.
