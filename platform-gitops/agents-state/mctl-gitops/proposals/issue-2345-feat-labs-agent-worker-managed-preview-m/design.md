@@ -89,9 +89,14 @@ Deployed state checked:
 
 ## Proposed solution
 
-One PR in mctl-gitops, with five parts. All of them are inert until an operator
-acts: the worker is at 0 replicas, the Cloudflare roots need a reviewed apply,
-and no account is managed.
+One PR in mctl-gitops, with five parts. All of them are inert until the owner's
+separate activation approval (owner amendment 2026-11-03): the worker is at 0
+replicas with no ExternalSecret, `MANAGED_RUNTIME_ENABLED` stays "false" so no
+account can switch to managed and no pool token can be minted, and the
+Cloudflare roots need a reviewed, manually dispatched apply
+(`cloudflare-apply.yml` is `workflow_dispatch` only, behind the
+`cloudflare-apply` environment). The activation sequence is in
+requirements.md, "Activation".
 
 ### 1. New component `services/labs/agent-worker-managed-preview/`
 
@@ -101,9 +106,11 @@ runner:
 - `replicaCount: 0`, with a header comment describing the staged rollout and
   rollback.
 - `image.repository: ghcr.io/mctlhq/agent-worker-preview`, with `image.tag` equal
-  to the current `agent-worker-preview` tag. A comment says it is auto-bumped by
-  mctl-telegram `preview-deploy.yml` once that workflow is extended, and must
-  not be hand-pinned.
+  to the current `agent-worker-preview` tag (`main-a787e97`, the #1113 merge,
+  which contains #1089, #1090 and #1092). A comment says it is auto-bumped by
+  mctl-telegram `preview-deploy.yml` (mctl-telegram#1094, merged: its guarded
+  dispatch skips until this file exists on main and then bumps it on every
+  push) and must not be hand-pinned.
 - `ingress.enabled: false`, `imagePullSecrets: ghcr-credentials`, and probes
   copied verbatim (the binary and health server are the same).
 - `resources`: requests `cpu: 50m, memory: 64Mi`, limits `cpu: 500m,
@@ -120,35 +127,31 @@ runner:
   AGENT_API_BASE_URL: "http://labs-mctl-telegram-preview-base-service:8080/api/agent/v1"
   AGENT_RUNNER: "openai"
   AGENT_POOL_MODE: "true"
-  AGENT_MODEL: "<C1 gate model id>"
+  AGENT_MODEL: "Qwen/Qwen3.6-35B-A3B"   # C1 gate dev/eval model (#1093, .github#293)
   AGENT_OPENAI_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-telegram/custom-hetzner/v1"
   AGENT_MAX_BUDGET_USD: "0.25"
   AGENT_MAX_TURNS: "12"
-  AGENT_OPENAI_MIN_INTERVAL: "6s"     # Hetzner: 10 req/60s per key
+  AGENT_OPENAI_MIN_INTERVAL: "6s"     # conservative; Hetzner measured ~35 req/min per key
   AGENT_WORKER_CONCURRENCY: "1"
-  MODEL_INPUT_USD_PER_MTOK: "<Nebius rate>"   # shadow price, Hetzner bills differently
-  MODEL_OUTPUT_USD_PER_MTOK: "<Nebius rate>"
+  MODEL_INPUT_USD_PER_MTOK: "1.40"    # shadow price: Nebius GLM-5.1 (production model)
+  MODEL_OUTPUT_USD_PER_MTOK: "4.40"
   AGENT_CREDENTIAL_DOMAIN_ID: "platform/labs/agent-worker-managed-preview/openai"
   ```
   There is no `AGENT_SYSTEM_PROMPT`: in the managed runtime the prompt comes
   from the account's assistant install, not from the platform deployment. The
   account id in the URL is the non-secret value already committed in
   `ai-gateway-custom-providers.json` and `mctl-support/values.yaml`.
-- `envFrom` with three secretRefs, and `extraExternalSecrets` with three entries
-  (`store: vault-backend`, `storeKind: ClusterSecretStore`, `refreshInterval:
-  1h`, one property each). Each carries the standard "Platform-scoped path"
-  comment:
-  - `labs-agent-worker-managed-preview-api`: `AGENT_API_TOKEN` from
-    `secret/data/platform/labs/agent-worker-managed-preview/api`, the `aud=agent-pool`
-    token from `POST /api/agent/pool-token` with pool_name
-    `agent-worker-managed-preview`.
-  - `labs-agent-worker-managed-preview-openai`: the provider (Hetzner) key from
-    `.../openai`.
-  - `labs-agent-worker-managed-preview-gateway`: the `cf-aig-authorization`
-    bearer from `.../gateway`.
-  The `secretKey`s for the last two must equal the names the worker reads. The
-  implementer confirms them in mctl-telegram `cmd/agent-worker/main.go` (see
-  Open questions).
+- No `envFrom` and no `extraExternalSecrets` in this change (owner amendment
+  2026-11-03). base-service renders every `extraExternalSecrets` entry
+  unconditionally, and an ExternalSecret whose Vault path does not exist yet
+  makes the Application Degraded, which fires `ArgoCDApplicationDegraded`
+  (`mctl-alerts.yaml`, warning, `for: 30m`) for the whole pre-activation
+  window. A header comment in the values file states this and points at the
+  activation step 4 block in requirements.md, which holds the exact entries:
+  `labs-agent-worker-managed-preview-{api,openai,gateway}` with secret keys
+  `AGENT_API_TOKEN`, `AGENT_OPENAI_API_KEY` and `AGENT_GATEWAY_TOKEN` (the names
+  mctl-telegram `cmd/agent-worker/main.go` reads). At 0 replicas no pod
+  starts, so the missing env is never read.
 
 `catalog-info.yaml` is a copy of the `agent-worker-preview` one with every
 `agent-worker-preview` replaced by `agent-worker-managed-preview`.
@@ -163,15 +166,22 @@ Four keys are added to `mctl-telegram-preview/values.yaml` `env`, after the
 the rollback order:
 
 ```yaml
-MANAGED_RUNTIME_ENABLED: "true"
+MANAGED_RUNTIME_ENABLED: "false"        # turned on only in activation step 1
 MANAGED_RUNTIME_MAX_ACCOUNTS: "1"
 MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
 MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
+MANAGED_MAX_JOB_COST_USD: "0.25"        # = worker AGENT_MAX_BUDGET_USD
 ```
 
-`MANAGED_RUNTIME_ENABLED` must be true in this PR, because `POST
-/api/agent/pool-token` returns 404 without it (#1090). With no account switched
-to `managed`, it changes no job routing.
+`MANAGED_RUNTIME_ENABLED` stays "false" (owner amendment 2026-11-03). With it
+on, any allowlisted preview account could switch itself to `managed` (up to
+`MANAGED_RUNTIME_MAX_ACCOUNTS`) and the pool-token mint route would be live,
+both before the owner approves activation. Off, the caps are present but
+inert. `MANAGED_MAX_JOB_COST_USD` matches the worker cap so the reservation is
+what a job can actually spend: with the 0.50 default and a 1.00 day cap the
+soak account would pause after roughly 29 jobs a day, with 0.25 after roughly
+44 (estimates at about USD 0.017 per job; the real count depends on settled
+cost and held reservations).
 
 ### 3. Cloudflare
 
@@ -209,7 +219,7 @@ A new group `mctl-telegram-managed` in `vm-rules/mctl-telegram-ops.yaml`, all
 mctl-telegram runbook:
 
 - `MctlAgentManagedGlobalCapHit`:
-  `sum(increase(mctl_agent_budget_exhausted_total{scope=~"global.*"}[15m])) > 0`,
+  `sum(increase(mctl_agent_budget_exhausted_total{scope="global_day"}[15m])) > 0`,
   `for: 0m`.
 - `MctlAgentManagedSpendHigh`:
   `sum(increase(mctl_agent_usage_cost_usd_total{runner="openai"}[1h])) > 1.00`,
@@ -265,7 +275,10 @@ cover firing and non-firing cases for each rule.
     send-only. It is recorded, not fixed here.
   - Alerts reference metrics not yet seen live. Mitigation: promtool tests and
     the "not yet live" provenance note, with a task to confirm the series.
-  - The image tag is not bumped until mctl-telegram `preview-deploy.yml` knows
-    the new file. Mitigation: deploy-signal `tracks_main` surfaces drift.
-  - Missing secrets at scale-up cause a crash loop. Mitigation: the order in
-    tasks.md (Vault before replicas 1).
+  - Merging the Cloudflare roots without applying them leaves the daily
+    `cloudflare-drift` run reporting the gateway and the token as pending
+    creates until activation step 2. That is expected and is listed in the
+    pre-activation handoff; it is not a failure of this change.
+  - Missing secrets at scale-up would cause a crash loop. Mitigation: the
+    activation order (Vault written, ExternalSecrets `SecretSynced` in their
+    own step, only then `replicaCount: 1`).

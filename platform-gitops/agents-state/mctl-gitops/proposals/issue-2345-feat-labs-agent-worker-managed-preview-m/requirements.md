@@ -49,33 +49,63 @@ Worker component
   `agent-worker-preview`, and SHALL list the new values file in
   `.github/deploy-signal.yaml` as `tracks_main: true`.
 - THE SYSTEM SHALL set this worker env: `AGENT_RUNNER=openai`,
-  `AGENT_POOL_MODE=true`, `AGENT_MODEL=<C1 gate model>`,
+  `AGENT_POOL_MODE=true`, `AGENT_MODEL=Qwen/Qwen3.6-35B-A3B` (the dev/eval
+  model the C1 gate named: mctl-telegram#1093 and mctlhq/.github#293 are
+  closed with GO_HETZNER_DEV_NEBIUS_PROD, Qwen3.6-35B-A3B on Hetzner 31/32,
+  0 leaks, 0 wrong auto-sends),
   `AGENT_OPENAI_BASE_URL=https://gateway.ai.cloudflare.com/v1/<account>/mctl-telegram/custom-hetzner/v1`,
   `AGENT_MAX_BUDGET_USD=0.25`, `AGENT_MAX_TURNS=12`,
   `AGENT_OPENAI_MIN_INTERVAL=6s`, `AGENT_WORKER_CONCURRENCY=1`,
-  `MODEL_INPUT_USD_PER_MTOK` and `MODEL_OUTPUT_USD_PER_MTOK` at the Nebius
-  (shadow) rates, and
+  `MODEL_INPUT_USD_PER_MTOK=1.40` and `MODEL_OUTPUT_USD_PER_MTOK=4.40` (shadow
+  prices: Nebius GLM-5.1, the production model, as in
+  `admins/mctl-support/values.yaml`, so the preview ledger and caps behave as
+  production would), and
   `AGENT_CREDENTIAL_DOMAIN_ID=platform/labs/agent-worker-managed-preview/openai`.
   It SHALL NOT set `AGENT_SYSTEM_PROMPT`.
-- THE SYSTEM SHALL source the worker's secrets from three ExternalSecrets
-  (`store: vault-backend`, `storeKind: ClusterSecretStore`). They read
-  `secret/data/platform/labs/agent-worker-managed-preview/api` (the pool token
-  as `AGENT_API_TOKEN`), `.../openai` (the provider key) and `.../gateway` (the
-  `cf-aig-authorization` bearer), one property each, and are wired through
-  `envFrom`.
+- THE SYSTEM SHALL NOT create any ExternalSecret or `envFrom` entry for the
+  worker in this change (owner amendment 2026-11-03). The Vault paths do not
+  exist before activation, and an ExternalSecret that cannot sync makes the
+  Application Degraded, which fires `ArgoCDApplicationDegraded` for the whole
+  pre-activation window. Their exact specification is part of this proposal
+  and is applied in activation step 4 (see "Activation"): three
+  ExternalSecrets (`store: vault-backend`, `storeKind: ClusterSecretStore`,
+  `refreshInterval: 1h`, one property each) wired through `envFrom`:
+  - `labs-agent-worker-managed-preview-api`: `AGENT_API_TOKEN` from
+    `secret/data/platform/labs/agent-worker-managed-preview/api` (the
+    `aud=agent-pool` pool token);
+  - `labs-agent-worker-managed-preview-openai`: `AGENT_OPENAI_API_KEY` from
+    `.../openai` (the Hetzner key);
+  - `labs-agent-worker-managed-preview-gateway`: `AGENT_GATEWAY_TOKEN` from
+    `.../gateway` (the `cf-aig-authorization` bearer).
+  These names are the ones `cmd/agent-worker/main.go` reads
+  (`requireEnv("AGENT_API_TOKEN")`, `requireEnv("AGENT_OPENAI_API_KEY")`,
+  `os.Getenv("AGENT_GATEWAY_TOKEN")`).
 - THE SYSTEM SHALL request `cpu: 50m, memory: 64Mi` and limit
   `cpu: 500m, memory: 256Mi`. It SHALL run with `readOnlyRootFilesystem: true`,
   non-root, all capabilities dropped and `automountServiceAccountToken: false`,
   with `/tmp` as the only writable mount, an `emptyDir`.
-- WHILE `replicaCount` is 0 THE SYSTEM SHALL create no worker pod, so missing
-  Vault paths or a pool token not yet minted cause no crash loop.
+- WHILE `replicaCount` is 0 THE SYSTEM SHALL create no worker pod, and the
+  Application SHALL be Healthy (no ExternalSecret, nothing waiting on Vault).
 
 Preview server flags
 - WHEN the change is merged THE SYSTEM SHALL set these in
   `platform-gitops/services/labs/mctl-telegram-preview/values.yaml`:
-  `MANAGED_RUNTIME_ENABLED: "true"`, `MANAGED_RUNTIME_MAX_ACCOUNTS: "1"`,
-  `MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"` and
-  `MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"`.
+  `MANAGED_RUNTIME_ENABLED: "false"`, `MANAGED_RUNTIME_MAX_ACCOUNTS: "1"`,
+  `MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"`,
+  `MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"` and `MANAGED_MAX_JOB_COST_USD: "0.25"`.
+- WHILE `MANAGED_RUNTIME_ENABLED` is "false" THE SYSTEM SHALL keep managed
+  runtime unreachable: no account can switch to `managed` and
+  `POST /api/agent/pool-token` returns 404 (#1089, #1090). The flag is turned
+  on only in activation step 1, after the owner's separate activation
+  approval (owner amendment 2026-11-03).
+- THE SYSTEM SHALL set `MANAGED_MAX_JOB_COST_USD` equal to the worker's
+  `AGENT_MAX_BUDGET_USD` (0.25). With the 0.50 default, the per-job
+  reservation is twice what the worker can spend, and at a 1.00 day cap one
+  account is paused once its durable spend passes 0.50 (#1092: pause when
+  cap - durable < per-job). At about USD 0.017 per job (C1 GLM-5.1 shadow cost)
+  that is roughly 29 jobs a day; with 0.25 it is roughly 44. Both are
+  estimates, not guarantees: the real count depends on the cost of the
+  settled jobs and on held reservations.
 - THE SYSTEM SHALL NOT add any `MANAGED_*` key to
   `platform-gitops/services/labs/mctl-telegram/values.yaml` (production).
 
@@ -96,8 +126,9 @@ Observability
 - THE SYSTEM SHALL scrape `labs-agent-worker-managed-preview` on `port: http`,
   path `/metrics`, keeping only `mctl_agent_.*` series, by the same rules as
   `mctl-telegram-agent-preview-monitor.yaml`.
-- IF `mctl_agent_budget_exhausted_total` increases for the global scope THEN THE
-  SYSTEM SHALL fire a warning alert (managed global cap hit).
+- IF `mctl_agent_budget_exhausted_total{scope="global_day"}` increases THEN THE
+  SYSTEM SHALL fire a warning alert (managed global cap hit). `global_day` is
+  the exact label value (`db.BudgetScopeGlobalDay`, merged in #1113).
 - IF the managed spend over the last hour (`mctl_agent_usage_cost_usd_total` for
   runner `openai`) exceeds the hourly threshold THEN THE SYSTEM SHALL fire a
   warning alert.
@@ -111,47 +142,73 @@ Observability
 
 ## Out of scope
 
-- The data-plane steps of the rollout order. These are operator actions
-  recorded in tasks.md, not in git: `tofu apply`, writing Vault secrets, minting
-  the pool token on tg-preview, scaling to 1, switching the account to managed,
-  and the soak.
+- Activation (see "Activation" below). None of its steps runs as part of this
+  change, and none runs without the owner's separate activation approval:
+  turning `MANAGED_RUNTIME_ENABLED` on, the Cloudflare applies, writing Vault
+  secrets, minting the pool token, adding the ExternalSecrets, scaling to 1,
+  switching an account to managed, and the soak.
 - Production (`services/labs/mctl-telegram`, a production pool worker,
   `custom-nebius` and the release image). These wait for mctl-telegram#889 and
   #334.
-- The mctl-telegram `preview-deploy.yml` change that also bumps the new
-  values file's `image.tag`. That lives in mctlhq/mctl-telegram and is a
-  prerequisite for keeping the tag current.
+- Any change to mctl-telegram CI. mctl-telegram#1094 (PR #1114, merged) already
+  dispatches `agent-worker-managed-preview` on every push to main, guarded by
+  an existence check of this values file on mctl-gitops main: it skips with a
+  notice until this change lands, then bumps `image.tag` with no further
+  change.
 - Any change to the own-runtime `agent-worker-preview` deployment.
 - New custom providers or changes to the `mctl-support` gateway.
 
+## Activation (owner amendment 2026-11-03; not part of this change)
+
+Each step starts only after the previous one is verified, and the sequence as a
+whole starts only after the owner's separate activation approval. Nothing here
+runs when this change merges.
+
+1. PR: `MANAGED_RUNTIME_ENABLED: "true"` on `mctl-telegram-preview`. Verify:
+   `POST /api/agent/pool-token` answers (no 404) and still no account is
+   `managed`.
+2. Cloudflare: `cloudflare-apply.yml` for `infrastructure/cloudflare/account`
+   (one gateway create) and `infrastructure/cloudflare/tokens` (one token
+   create), each plan reviewed before the apply. Verify by reading the
+   gateway back: logs off, auth on, byok_only on, cache 0.
+3. Mint the pool token on tg-preview (`pool_name=agent-worker-managed-preview`),
+   record its `jti`, and write all three Vault secrets: `.../api` (pool token),
+   `.../openai` (Hetzner key), `.../gateway` (run token; also its canonical
+   copy at `secret/platform/mctl-telegram/ai-gateway`).
+4. PR: add the three ExternalSecrets and `envFrom` specified above, still at
+   `replicaCount: 0`. Verify: all three are `SecretSynced` and the Application
+   is Healthy. This step never shares a PR with step 5.
+5. PR: `replicaCount: 1`. Verify: pod Ready, scrape target up,
+   `mctl_agent_credential_domain{domain_id="platform/labs/agent-worker-managed-preview/openai"}`
+   present, and the T6 gateway smoke request (200 with the bearer, 401 without).
+6. The owner switches one preview account to `runtime: managed` (with
+   consent), then the soak of at least 30 jobs runs.
+
+Rollback, at any step, in this order: account back to `runtime: own`, then
+`replicaCount: 0`, then revoke the pool `jti`, then
+`MANAGED_RUNTIME_ENABLED: "false"`.
+
+## Resolved (owner amendment 2026-11-03)
+
+- C1 gate: closed (mctl-telegram#1093, mctlhq/.github#293). Preview runs
+  `Qwen/Qwen3.6-35B-A3B` on Hetzner through `custom-hetzner`; production will
+  run GLM-5.1 on Nebius. Shadow prices are Nebius GLM-5.1, 1.40/4.40 per MTok.
+- Worker env names: `AGENT_OPENAI_API_KEY` and `AGENT_GATEWAY_TOKEN`, read in
+  mctl-telegram `cmd/agent-worker/main.go`.
+- Budget scope label: `global_day`.
+- Image: `main-a787e97` is the #1113 merge, so it contains #1089, #1090 and
+  #1092 (server and worker).
+- `MANAGED_MAX_JOB_COST_USD`: 0.25, equal to the worker cap.
+- mctl-telegram#1092, #1093 and #1094 are closed; none of them is a task here.
+
 ## Open questions
 
-- `AGENT_MODEL`: the issue says "from the C1 gate". The gating spike
-  (mctlhq/.github#293, proposal still `proposed` in this clone) has no recorded
-  result. Candidates in that spike are Hetzner Qwen3.8-27B and Qwen3.6-35B-A3B
-  via `custom-hetzner`. The exact model id and the matching Nebius
-  input/output USD-per-MTok prices must come from the gate report. The
-  implementer uses the gate's id. If there is no report, it must not invent one;
-  it leaves a TODO and keeps `replicaCount: 0`.
-- The env-var names under which the OpenAI runner reads the provider key and
-  the gateway bearer are not visible in this repo (mctl-telegram
-  `cmd/agent-worker/main.go`). The ExternalSecret `secretKey`s must match them.
 - The issue puts the run token in Vault `secret/platform/mctl-telegram/ai-gateway`
   (manifest) but has the worker read
   `secret/platform/labs/agent-worker-managed-preview/gateway`. This proposal
-  keeps both as written: the manifest names the canonical home and the operator
-  copies the value to the worker path. The alternative is to point the worker's
-  gateway ExternalSecret straight at `platform/mctl-telegram/ai-gateway` and
-  keep a single copy.
-- The `scope` label value of `mctl_agent_budget_exhausted_total` for the global
-  window (for example `global` or `global_day`) is not confirmed. The rule uses
-  `scope=~"global.*"` until the live series is checked.
+  keeps both as written: the manifest names the canonical home and activation
+  step 3 writes both. The alternative is to point the worker's gateway
+  ExternalSecret straight at `platform/mctl-telegram/ai-gateway` and keep a
+  single copy; that is decided at activation step 4 and changes no file here.
 - The hourly spend threshold is not given in the issue. This proposal uses
   $1.00/h (20 % of the $5.00 global daily cap).
-- `MANAGED_MAX_JOB_COST_USD` (per-job reservation, default 0.50 per #1092) is
-  higher than the worker's `AGENT_MAX_BUDGET_USD=0.25`. This is left at the
-  default, which reserves conservatively. Whether to align it to 0.25 is the
-  owner's call.
-- Whether preview image `main-a787e97` already contains #1098, #1105 and #1113 is
-  not verified. Older images ignore the `MANAGED_*` keys, so this is harmless,
-  but the pool token cannot be minted until it does.
