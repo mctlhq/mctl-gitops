@@ -19,14 +19,27 @@ release workflow") cannot happen. The matching gitops components are a separate 
 - AS a reviewer I WANT a Go test that pins these dispatches SO THAT a later workflow edit cannot silently drop them.
 
 ## Acceptance criteria (EARS)
-- WHEN a commit is pushed to `main` THE SYSTEM SHALL dispatch `mctlhq/mctl-gitops` `release-deploy.yaml` with `repo=mctlhq/mctl-telegram`, `git_ref=<sha>`, `image_name=ghcr.io/mctlhq/agent-worker-preview`, `image_tag=main-<short sha>`, `dockerfile_path=Dockerfile.agent-worker`, `team_name=labs`, `component_name=agent-worker-managed-preview`.
-- WHEN a commit is pushed to `main` THE SYSTEM SHALL continue to dispatch the existing `mctl-telegram-preview` and `agent-worker-preview` deploys unchanged.
-- WHEN release-please creates a release (`release_created == 'true'`) THE SYSTEM SHALL dispatch `release-deploy.yaml` with `repo=mctlhq/mctl-telegram`, `git_ref=$TAG`, `image_name=ghcr.io/mctlhq/agent-worker`, `image_tag=$TAG`, `dockerfile_path=Dockerfile.agent-worker`, `team_name=labs`, `component_name=agent-worker-managed`.
-- WHEN release-please creates a release THE SYSTEM SHALL dispatch the agent-worker release deploy before the Local Bridge binary build steps, so that a failed cross-compile cannot block it.
+- WHEN a commit is pushed to `main` AND the gitops existence guard reports `platform-gitops/services/labs/agent-worker-managed-preview/values.yaml` present on mctl-gitops `main` THE SYSTEM SHALL dispatch `mctlhq/mctl-gitops` `release-deploy.yaml` with `repo=mctlhq/mctl-telegram`, `git_ref=<sha>`, `image_name=ghcr.io/mctlhq/agent-worker-preview`, `image_tag=main-<short sha>`, `dockerfile_path=Dockerfile.agent-worker`, `team_name=labs`, `component_name=agent-worker-managed-preview`.
+- WHEN a commit is pushed to `main` THE SYSTEM SHALL continue to dispatch the existing `mctl-telegram-preview` and `agent-worker-preview` deploys unchanged and unguarded.
+- WHEN release-please creates a release (`release_created == 'true'`) AND the gitops existence guard reports `platform-gitops/services/labs/agent-worker-managed/values.yaml` present on mctl-gitops `main` THE SYSTEM SHALL dispatch `release-deploy.yaml` with `repo=mctlhq/mctl-telegram`, `git_ref=$TAG`, `image_name=ghcr.io/mctlhq/agent-worker`, `image_tag=$TAG`, `dockerfile_path=Dockerfile.agent-worker`, `team_name=labs`, `component_name=agent-worker-managed`.
+- WHEN release-please creates a release THE SYSTEM SHALL run the guarded agent-worker release dispatch before the Local Bridge binary build steps, so that a failed cross-compile cannot block it.
 - IF release-please did not create a release THEN THE SYSTEM SHALL NOT dispatch the agent-worker release deploy.
+
+### Gitops existence guard (owner amendment 2026-11-03)
+`release-deploy.yaml` has no build-only mode: it exits 2 (`ERROR: file(s) not found`) when the component's
+values file is missing. `agent-worker-managed-preview` is created only by mctl-gitops#2345, which the roadmap
+opens after this issue closes, and production `agent-worker-managed` is not created by #2345 at all (production
+follows mctl-telegram#889/#334). Unguarded, every merge to `main` and every release (several a day) would leave
+a red `release-deploy` run for weeks. Each new dispatch is therefore guarded; the two existing dispatches are not.
+- BEFORE each new dispatch THE SYSTEM SHALL read the component's values file on mctl-gitops `main` through the GitHub contents API with the dispatch step's existing App token.
+- IF the read answers HTTP 200 THEN THE SYSTEM SHALL dispatch.
+- IF the read answers HTTP 404 THEN THE SYSTEM SHALL NOT dispatch, SHALL emit one `::notice::` naming the missing path and the component, and SHALL let the job succeed.
+- IF the read fails in any other way (any other HTTP status, a transport error, a missing token, a missing status code) THEN THE SYSTEM SHALL fail the step. A read that could not be observed is never treated as "component absent".
+- WHILE `agent-worker-managed` does not exist in gitops THE SYSTEM SHALL NOT publish `ghcr.io/mctlhq/agent-worker:<tag>`. The issue's acceptance "a release publishes `ghcr.io/mctlhq/agent-worker:<tag>`" holds from the first release after that component lands, which belongs to the production rollout after #889/#334.
 - WHILE a pull request is open THE SYSTEM SHALL keep building `Dockerfile.agent-worker` in `build.yml` job `docker-agent-worker` with `push: false`. That job name and its no-push behaviour stay unchanged.
-- IF any of the dispatches above is removed, or one of its `image_name`, `dockerfile_path`, `component_name` or tag inputs is changed, THEN THE SYSTEM SHALL fail `go test ./cmd/agent-worker/...`.
-- THE SYSTEM SHALL use only the existing `mctl-agents` App token (`AGENTS_APP_CLIENT_ID` / `AGENTS_APP_PRIVATE_KEY`) for the new dispatches. It shall add no new secret and no new job permission.
+- IF any of the dispatches above is removed, or one of its `image_name`, `dockerfile_path`, `component_name` or tag inputs is changed, or a new dispatch loses its existence guard, or the guard's path no longer matches the dispatch's component, THEN THE SYSTEM SHALL fail `go test ./cmd/agent-worker/...`.
+- IF the existence guard treats any answer other than HTTP 404 as "absent", or any answer other than HTTP 200 as "present", THEN THE SYSTEM SHALL fail `go test ./cmd/agent-worker/...`.
+- THE SYSTEM SHALL use only the existing `mctl-agents` App token (`AGENTS_APP_CLIENT_ID` / `AGENTS_APP_PRIVATE_KEY`) for the new dispatches and the guard reads. It shall add no new secret and no new job permission.
 
 ## Out of scope
 - Creating `platform-gitops/services/labs/agent-worker-managed-preview/` and `.../agent-worker-managed/` values, ExternalSecrets and Vault paths. That is the separate mctl-gitops issue.
@@ -36,5 +49,5 @@ release workflow") cannot happen. The matching gitops components are a separate 
 - Any change to mctl-gitops `release-deploy.yaml` or `build-image.yaml`.
 
 ## Open questions
-- Merge order with the gitops issue. `release-deploy.yaml` (mctl-gitops, "update gitops" step) exits with `ERROR: file(s) not found` when `platform-gitops/services/<team>/<component>/values.yaml` does not exist. It does this after the image build job has already pushed. Neither component exists in gitops today. Proceeding on: merge the gitops components first, or accept one or more red release-deploy runs until they land. The image still gets pushed in that case.
+- Merge order with the gitops issue: RESOLVED by the owner amendment of 2026-11-03 (gitops existence guard above). Landing the gitops components first is impossible for preview (the roadmap opens mctl-gitops#2345 only after this issue closes) and out of scope for production, and accepting red runs was rejected.
 - Preview build duplication. The issue asks for a third dispatch block, which builds and pushes the same `agent-worker-preview:main-<sha>` tag a second time in parallel. `release-deploy.yaml` accepts a comma-separated `values_path` that could bump both preview components from one build. Proceeding on the literal issue (third dispatch block) and recording the alternative in design.md.
