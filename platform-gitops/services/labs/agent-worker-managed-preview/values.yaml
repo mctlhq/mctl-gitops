@@ -5,8 +5,9 @@
 # Platform-operated pool worker for the `managed` communication-agent runtime
 # (mctlhq/mctl-telegram#1088, ADR 0008 section 6; gitops#2345). It runs an
 # account's jobs on an OpenAI-compatible model reached through the dedicated
-# `mctl-telegram` Cloudflare AI Gateway (infrastructure/cloudflare/account/
-# ai-gateway.tf). Separate from agent-worker-preview, which is the own-runtime
+# `mctl-telegram` Cloudflare AI Gateway. The gateway and its run token are
+# declared in infrastructure/cloudflare/ by the activation PR (steps 2-3), not
+# here. Separate from agent-worker-preview, which is the own-runtime
 # worker and the own-runtime rollback target; this deployment never touches it.
 #
 # Staged rollout. This file lands INERT: replicaCount 0 and no ExternalSecret.
