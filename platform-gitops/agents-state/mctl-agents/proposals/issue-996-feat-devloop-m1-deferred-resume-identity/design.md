@@ -106,6 +106,6 @@ M1 can be approved, implemented and merged. It cannot be deployed or released al
 
 ## Rollback
 Rollback below M1 is blocked, not procedural. A pre-M1 `_deliver` accepts a re-claimed post-gates resume and lands a false `Succeeded`, and deferred requests cannot be drained by id: reject needs the claimant's `claim_token`, `state=claimed` and an unexpired lease, none of which an ordinary read or a paused dispatcher provides.
-- Supported responses: a forward fix, or keeping an M1-or-later worker image with `EXECUTION_REQUEST_DISPATCHER` off.
+- Supported responses: a forward fix, or keeping an M1-or-later worker image with the dispatcher stopped. Stopping the dispatcher means setting `EXECUTION_REQUEST_DISPATCHER=false` in the worker values (a mctl-gitops PR) and rolling the worker pods so they read it; the setting is not in effect until the new pods are running.
 - Rollback below M1 stays blocked unless a proven exhaustive drain or zero-open-requests proof exists AND Temporal replay and decode compatibility is shown by T6. Reading every work item's request list is not such a proof without a demonstrated complete enumeration.
 - The lease-aware drain is designed separately (mctlhq/mctl-api#935). Mass rejection of requests is never presumed authorized.
