@@ -90,8 +90,9 @@ output "mctl_support_ai_gateway_url" {
 # custom-nebius providers are account-wide (ai-gateway-custom-providers.json),
 # so the route /mctl-telegram/custom-hetzner/v1 resolves once this exists.
 # Its run token `mctl-telegram-ai-gateway-run (Vault platform/mctl-telegram/ai-gateway)`
-# is declared in ../tokens/manifest.tf and was created in the dashboard in the
-# same PR (activation step A2, tokens README).
+# is declared in ../tokens/manifest.tf. Tokens are created out of band in the
+# dashboard; this one was created before the PR that declares it was merged
+# (activation step A2, tokens README), so the tokens plan stayed green.
 resource "cloudflare_ai_gateway" "mctl_telegram" {
   account_id = var.account_id
   id         = "mctl-telegram"
