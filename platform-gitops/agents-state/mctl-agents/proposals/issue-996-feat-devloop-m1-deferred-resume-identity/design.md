@@ -45,11 +45,11 @@ The solution is option (b) of the issue: an explicit, fail-closed typed `ResumeD
 A new block in `_validate_execution_request` sits after the existing `resume-already-pending` and provenance checks, so existing reasons keep their precedence. It applies only to `kind == resume` deliveries that are not this run's own start request, and only `if self._gates_passed:`.
 
 ```
+pr = self._last_pr
+if pr is not None and pr.merged:                  -> ResumeRefused   "work-merged"   (also on a legacy loop)
 if not self._deferred_resume_contract:            -> ResumeDeferred  "legacy-loop"
 st = self._implement_state
 if st.stage == "implementer" and st.outcome is None: -> ResumeDeferred  "implement-running"
-pr = self._last_pr
-if pr is not None and pr.merged:                  -> ResumeRefused   "work-merged"
 if delivery.intent_id is None:                    -> ResumeRefused   "nothing-to-resume"
 if (st.outcome not in (None, "success")) or (pr is not None and pr.state == "CLOSED"):
                                                   -> ResumeDeferred  "recovery-not-ready"
@@ -95,15 +95,15 @@ M2 will later replace the `feedback-not-ready` arm behind its own new patch id. 
 - **Release:** no release, deploy or flag change. The PR is left for an explicit human merge decision.
 
 ## Deferred requests: release, operator view and later slices
-- Release paths: loop end (a later claim starts a continuation run); PR merge (refused `work-merged`); operator rejection through the existing mctl-api `RejectExecutionRequest` (`internal/api/handlers_execution_requests.go`); a later slice serving a `feedback-not-ready` request.
-- Operator view: the claimed request in `mctl_list_work_item_execution_requests`, the dispatcher audit `resume_deferred:<reason>`, and a dispatcher WARN once a request has been deferred more than 24 hours (request id, work item, reason, age). The dispatcher computes the age from the request's claim history, so the workflow gets no new command.
-- `feedback-not-ready` and `recovery-not-ready` need no row change to be served later: the next claim re-validates against the validator of the then-current build. M2 swaps the `feedback-not-ready` arm behind its own patch id and only for loops with `deferred_resume_contract=True`. M3 does the same for `recovery-not-ready`.
-- `legacy-loop` is permanent for that loop (the flag is carried across continue-as-new and never re-evaluated), so no later slice serves it. The request waits for loop end, merge, or an operator rejection.
+- The loop ending is NOT a release. A claim after the loop ended starts a new run through the Update-with-Start; with the proposal past `proposed` that run takes the context-only branch (`dev_loop.py` around the `CONTEXT_ONLY_RESUME_PATCH` check, and `run_issue_investigator.py` which does not rewrite such a proposal) and its dispatched execution lands `Succeeded`. M1 stops this with a dispatcher pre-delivery fence (below).
+- Dispatcher pre-delivery fence: in `Dispatcher._dispatch`, for `kind == resume` with `intent_id is not None`, call a new injected `ProposalStatusReader` port (the production implementation wraps the existing status read used by `find_proposal_slug` / `read_proposal_status`; tests use a fake). Status past `proposed` gives `defer(recovery-not-ready)`; an unreadable status gives `defer(loop-not-ready)`; both happen before the Update-with-Start and before fulfil, so neither a run nor a `we_` is created. A request without an intent is untouched. This is plain dispatcher code and adds no workflow command.
+- Release paths: the PR merging while the loop runs (the validator refuses `work-merged`, including on a legacy loop, because the merged check precedes the `legacy-loop` arm); a later slice serving the request. There is no operator release in M1: `RejectExecutionRequest` needs `state=claimed`, the same claimant's `claim_token` and an unexpired lease (`internal/workitems/execution_requests.go`), and the token is only in a claim response (`orchestrator/work_context/execution_requests.py`). A lease-aware drain capability is a separate approved item (see Rollback).
+- Operator view: the request in `mctl_list_work_item_execution_requests`, the dispatcher audit `resume_deferred:<reason>`, and the dispatcher WARN. `ExecutionRequest` gets a defaulted `created_at: str = ""` parsed from the mctl-api body. The WARN fires for a deferred request older than 24 hours by `created_at`, once per re-claim, and is restart-safe because it reads only the row. It reports request age, not time since first deferral, because no durable first-deferral timestamp exists. A missing or unparsable `created_at` yields an explicit `age-unknown` WARN.
+- `feedback-not-ready` and `recovery-not-ready` need no row change to be served later: the next claim re-validates against the then-current build. M2 swaps the `feedback-not-ready` arm and M3 the `recovery-not-ready` arm, each behind its own patch id and only for loops with `deferred_resume_contract=True`. The pre-delivery fence is relaxed by the slice that can act on a past-`proposed` proposal.
+- `legacy-loop` is permanent for that loop (the flag is carried across continue-as-new and never re-evaluated), so no later slice serves it.
 
-## Rollback fence
-Reverting M1 alone is unsafe if requests are still deferred: a pre-M1 `_deliver` would accept a re-claimed post-gates resume and land a false `Succeeded`. Rollback therefore runs in this order:
-1. Pause the dispatcher: set `EXECUTION_REQUEST_DISPATCHER` to off in the worker values (mctl-gitops PR) and wait for the roll.
-2. List every claimed request for the affected work items. Reject each deferred one through `RejectExecutionRequest` (operator decision per request), or confirm none exist.
-3. Roll the worker image back.
-4. Re-enable the dispatcher only after the owner accepts that, with the pre-M1 build, new post-gates resumes behave as before M1 (the false `Succeeded` baseline), or after M1 is re-applied.
-M1 does not automate this. The runbook goes in the PR body, and the dispatcher test below proves the fence.
+## Rollback
+Rollback below M1 is blocked, not procedural. A pre-M1 `_deliver` accepts a re-claimed post-gates resume and lands a false `Succeeded`, and an operator cannot drain the deferred requests first: reject needs the claimant's `claim_token`, `state=claimed` and an unexpired lease, none of which an ordinary read or a paused dispatcher provides. Pausing does not help, because a lapsed lease makes the request non-rejectable without a fresh claim.
+- Supported responses: a forward fix, or keeping an M1-or-later worker image with `EXECUTION_REQUEST_DISPATCHER` off.
+- Rollback below M1 requires all of: the dispatcher paused; every work item's request list read, with no non-terminal request found (an unreadable list is UNKNOWN and blocks rollback); and the replay and decode behaviour of T6 shown to hold.
+- A lease-aware drain (claim as the dispatcher's own identity, reject with that token, fence ownership across a restart) would remove the block. It is a new administrative capability, is out of scope for M1, and needs its own approval. Mass rejection of requests is never presumed authorized.
