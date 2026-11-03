@@ -14,8 +14,9 @@
 # base-service renders every extraExternalSecrets entry unconditionally and an
 # ExternalSecret whose Vault path does not exist would leave the Application
 # Degraded. Activation step 4 (2026-11-03, after step 3 wrote the three Vault
-# paths) added the ExternalSecrets and the envFrom below; replicaCount goes to
-# 1 in a later, separate PR (step 5). The exact entries and the order are in
+# paths) added the ExternalSecrets and the envFrom below, and all three synced.
+# Step 5 (this PR) starts one replica. No account is on the managed runtime yet,
+# so the worker polls an empty queue until step 6. The exact entries and the order are in
 # platform-gitops/agents-state/mctl-gitops/proposals/
 # issue-2345-feat-labs-agent-worker-managed-preview-m/requirements.md,
 # "Activation". Env names are the ones mctl-telegram cmd/agent-worker/main.go
@@ -23,7 +24,7 @@
 #
 # Rollback, in order: account back to runtime "own", replicaCount 0, revoke the
 # pool token jti, MANAGED_RUNTIME_ENABLED "false" in mctl-telegram-preview.
-replicaCount: 0
+replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/agent-worker-preview
   tag: "main-0bf4c0f"
