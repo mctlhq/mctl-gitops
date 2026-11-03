@@ -62,6 +62,23 @@
 #     Other provider values are live now, which is what confirms the metric
 #     family itself is scraped.
 #
+# Managed-runtime series (group mctl-telegram-managed, gitops#2345). Declared
+# in mctl-telegram by #1092 (PR #1113); NOT YET LIVE in VictoriaMetrics when
+# the rules were written: the managed worker runs at 0 replicas and
+# MANAGED_RUNTIME_ENABLED is "false" until activation. Confirm each series
+# after the first managed jobs (activation step 6) and update this note.
+#
+#   mctl_agent_usage_cost_usd_total{runner,model}   counter, not yet live
+#   mctl_agent_managed_accounts                      gauge, not yet live
+#   mctl_agent_budget_exhausted_total{scope}         counter, not yet live
+#                                         scope="global_day" is
+#                                         db.BudgetScopeGlobalDay exactly
+#   mctl_agent_budget_deferred_total{scope}          counter, not yet live
+#                                         (not used by a rule)
+# The PoolWorkerDown rule also uses the scrape-synthetic `up` series with the
+# namespace/service labels the labs-agent-worker-preview target carries
+# (service = <instance>-base-service); not re-queried live when written.
+#
 # Routing is configured in bootstrap/templates/observability/monitoring.yaml,
 # on alertname — see the comment on the MctlAgentDeadLetter route there for
 # why the two communication-agent alerts must not reach an operator through
@@ -513,3 +530,56 @@ spec:
               +Inf when spend occurred with zero finished jobs in the window;
               that is intended.
             runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentjobcosthigh"
+
+    - name: mctl-telegram-managed
+      rules:
+        # scope="global_day" is the exact label value (db.BudgetScopeGlobalDay).
+        # The per-account scopes are deliberately not matched: one account
+        # reaching its own cap is the cap working, the global cap means the
+        # whole managed runtime has stopped taking work for the day.
+        - alert: MctlAgentManagedGlobalCapHit
+          expr: sum(increase(mctl_agent_budget_exhausted_total{scope="global_day"}[15m])) > 0
+          for: 0m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "Managed-runtime global daily budget cap reached"
+            description: >-
+              The managed runtime hit its global daily budget cap in the last
+              15 minutes; managed jobs are paused until the day rolls over.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentmanagedglobalcaphit"
+
+        # 1.00 per hour is 20 percent of the 5.00 global daily cap on preview.
+        - alert: MctlAgentManagedSpendHigh
+          expr: sum(increase(mctl_agent_usage_cost_usd_total{runner="openai"}[1h])) > 1.00
+          for: 0m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "Managed-runtime spend over the last hour is high"
+            description: >-
+              Managed (openai runner) spend over the last hour is above the
+              $1.00 threshold.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentmanagedspendhigh"
+
+        # With 0 replicas there is no `up` series, so `unless` lets the left
+        # side through: an account on managed with no worker is the case this
+        # rule exists for (its jobs fall to operator routing).
+        - alert: MctlAgentManagedPoolWorkerDown
+          expr: |
+            max(mctl_agent_managed_accounts) > 0
+            unless on()
+            (sum(up{namespace="labs", service="labs-agent-worker-managed-preview-base-service"}) > 0)
+          for: 10m
+          labels:
+            severity: warning
+            service: mctl-telegram
+          annotations:
+            summary: "Managed-runtime pool worker is down while managed accounts exist"
+            description: >-
+              Accounts are on the managed runtime but no
+              labs-agent-worker-managed-preview scrape target has been up for
+              10 minutes. This includes a worker scaled to 0 replicas.
+            runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentmanagedpoolworkerdown"
