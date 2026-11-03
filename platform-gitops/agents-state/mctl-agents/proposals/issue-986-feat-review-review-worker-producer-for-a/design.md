@@ -82,14 +82,15 @@ A new package, `orchestrator/review_worker/`, and a runner, `orchestrator/run_re
 is the one place where the service credential and the run token meet. The model session never sees either.
 
 ```
-run_review_worker.main(subject args, authoring_execution_id, work_item_id, author_actors)
+run_review_worker.main(subject args, authoring_execution_id, authoring_work_item_id, author_actors)
   with evidence_producer.run("reviewer") as ev:
     1. authoring = api.authoring_facts(authoring_execution_id)        # service cred, GET provenance
     2. nonce = secrets.token_urlsafe(32)                                # memory only
        request = review_receipts.seal_request(subject, mode="worker", author_actors, nonce,
                                               authoring_execution_id, attempt_ids, lineage_root)
        api.open_request(request)                                       # service cred, POST review-requests
-    3. reviewer = api.attach_reviewer(work_item_id, EngineRun(engine, engine_ref=<own workflow>#review), "review")
+    3. item = api.reviewer_work_item(request, tenant_of(authoring_work_item_id))  # own item, external_key review:<request_id>
+       reviewer = api.attach_reviewer(item.id, EngineRun(engine, engine_ref=<own workflow>#review), "review")
        independence.check_local(request, reviewer.provenance)           # guard A
     4. verdict = reviewer_session.run(subject_dir)                      # read-only SDK session
        draft = review_receipts.seal_receipt(...)                        # Tier A shape guard
@@ -131,6 +132,11 @@ run_review_worker.main(subject args, authoring_execution_id, work_item_id, autho
   - `open_request(request)`: POST `/api/v1/review-requests`, service credential. The body is
     `request.to_dict()` without `created_at`. On 201 the server's `request_id` must equal the locally sealed
     `request_id`, otherwise `refused("review_request_conflict")`.
+  - `reviewer_work_item(request, tenant)`: POST `/api/v1/work-items`, service credential acting directly.
+    It uses the authoring item's tenant, `external_key="review:<request_id>"` and an idempotency key derived
+    from `request_id`. A `replayed` answer for that key is this request's item. A refusal or an unobserved
+    answer stops the run. The authoring item is never the attach target, because mctl-api allows one
+    non-terminal execution per item (`409 execution_active`) and no attach to a terminal item.
   - `attach_reviewer(...)`: delegates to `WorkContextClient.attach_execution`, then reads provenance for the
     new execution. Only `EXECUTION_ATTACHED` is usable. `EXISTING` means an earlier review attempt reused
     the engine run and is refused as `review_reviewer_not_independent`, never reused. The client is
@@ -170,7 +176,8 @@ run_review_worker.main(subject args, authoring_execution_id, work_item_id, autho
     document, not a local file.
   - The envelope therefore carries `ArtifactRef(kind="review-receipt")` and, when present, the
     `review-findings` hash. It never carries text.
-  - `note_work_execution(reviewer_execution_id, work_item_id)` ties the envelope to the reviewer `we_`.
+  - `note_work_execution(reviewer_execution_id, reviewer_work_item_id)` ties the envelope to the reviewer
+    `we_` and its own work item.
 - `agents/_manifests/review-worker/agent.yaml` and `agents/_review_worker/.claude/agents/review-worker.md`
   (the reviewer prompt: rubric ids per subject kind; it must answer `unobserved` instead of guessing).
 - `docs/adr/025-independent-review-receipts.md` gets an amendment section, "Producer", that records the
@@ -227,9 +234,11 @@ builder) fail earlier, spend no nonce, and are each pinned by a mutation test (t
   - *Reviewer shares the authoring attempt.* The `engine_ref` is the review Workflow's own name, and the
     local check refuses before mint. `EXECUTION_EXISTING` is refused, never reused.
   - *Agent not registered or scope body field differs.* Both surface as typed refusals (`agent_unknown`,
-    the mint's own code), never as success. The live-acceptance runbook lists registration as a
-    precondition.
+    the mint's own code), never as success. Registering `review-worker` is an explicit precondition in the
+    live-acceptance runbook (task 10).
   - *Findings leakage.* There is no GitHub credential in the process, the policy denies `github.*`, and
     findings exist only as private artifact bytes plus a hash.
-  - *Second active execution on the work item.* `409 execution_active` is a typed refusal. The runbook runs
-    the reviewer after the authoring execution is terminal.
+  - *Second active execution on the work item.* Avoided by construction. The reviewer always attaches to
+    its own work item, so a pending proposal can be reviewed while its DevLoop execution is still parked at
+    the approval gate. A `409 execution_active` on the reviewer's own item, for example from an aborted
+    earlier attempt of the same request, is a typed refusal with no retry loop.
