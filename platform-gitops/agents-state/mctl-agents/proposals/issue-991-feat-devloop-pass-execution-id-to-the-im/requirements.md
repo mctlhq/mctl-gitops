@@ -1,52 +1,72 @@
-# DevLoop passes execution_id to the implement run so its run token can bind (#717 S5)
+# DevLoop passes its canonical execution_id to the implement run (#717 S5)
 
 ## Context
-Slice S5 of mctlhq/mctl-agents#717 runs the `mctl-agents-implement` CWFT with
-`MCTL_RUN_TOKEN_MODE=observe`. The run-token exchange for that template needs a
-non-empty `execution_id`. mctl-api refuses an empty one with
-`workflow_without_execution`, and in `enforce` mode
-`orchestrator/run_implementer.py::_setup_run_token` exits 2 when
-`WORKFLOW_EXECUTION_ID` is empty. `DevLoopWorkflow` builds `implement_params`
-in `orchestrator/temporal/workflows/dev_loop.py` (~:4194-4205) from
-`service`/`slug`/`agent_*` plus `_launch_correlation()`, and never adds
-`execution_id`. Today every DevLoop implement run therefore logs
-`workflow_without_execution`, and would fail under `enforce`.
+Slice S5 of #717 runs `mctl-agents-implement` with `MCTL_RUN_TOKEN_MODE=observe`. The run-token exchange
+for that template is bound to an execution: mctl-api refuses an empty `execution_id` with
+`workflow_without_execution`, and `orchestrator/run_implementer.py::_setup_run_token` exits 2 under `enforce`
+when `WORKFLOW_EXECUTION_ID` is empty. Today `DevLoopWorkflow` builds `implement_params`
+(`orchestrator/temporal/workflows/dev_loop.py`, ~:4194-4205) with `service`, `slug`, agent image/version and
+`_launch_correlation()` (`temporal_workflow_id`, `temporal_run_id`, `work_item_id`), but never `execution_id`.
 
-The investigate submit already passes the loop's execution identity
-(`dispatched.execution_id` or `self._canonical_execution_id()`, ~:3605-3617).
-The implement submit must use the same source. There is a complication the
-issue does not mention. The canonical `we_` is ended by
-`_end_canonical_execution` right after the approve flip (~:4160), before the
-implementer is resolved or submitted. That method's docstring says mctl-api
-"only ... mints a run token for ... a NON-TERMINAL execution". If the id is
-just copied into the implement params, the exchange most likely still fails,
-only with a different refusal, and the S5 acceptance would not be met. This
-proposal therefore also keeps that same `we_` open until the implement run
-finishes, behind one new `workflow.patched` marker.
+A second gap makes simply adding the id insufficient: the loop's canonical `we_` is ended right after the
+approve flip (`_end_canonical_execution` at ~:4160), before the implement submit, and mctl-api only mints run
+tokens for a NON-TERMINAL execution. The issue author resolved this (clarification hir-42a9712465540dc5,
+option a): the implement run names the SAME canonical `we_`, which is kept non-terminal until the implement run
+finishes. This proposal implements both halves behind one new `workflow.patched` marker so histories recorded
+before it replay unchanged.
 
 ## User stories
-- AS the platform operator rolling out run tokens I WANT every DevLoop implement run to carry the loop's execution id SO THAT the S5 observe proof can show a successful exchange and revoke before anyone flips to `enforce`.
-- AS an operator of long-running DevLoop executions I WANT histories recorded before this change to replay unchanged SO THAT deploying the worker cannot cause non-determinism errors.
-- AS a reviewer of the S5 rollout I WANT the sweep, manual and shepherd paths left visibly without an execution id SO THAT their semantics are decided later, on evidence, and not hidden.
+- AS the platform operator I WANT every DevLoop implement run to carry the loop's canonical execution id SO THAT
+  its run-token exchange binds and S5 can be proven in `observe` before `enforce` is planned.
+- AS the platform operator I WANT the canonical execution to stay non-terminal until the implement run ends SO
+  THAT mctl-api accepts the exchange for the whole implement run.
+- AS a maintainer of running DevLoops I WANT pre-patch histories to keep their recorded command sequence SO THAT
+  a worker deploy causes no non-determinism errors.
 
 ## Acceptance criteria (EARS)
-- WHEN a DevLoopWorkflow whose history records the new marker `implement-execution-id` submits `mctl-agents-implement` THE SYSTEM SHALL include `execution_id` equal to `self._canonical_execution_id()` (the dispatched `we_` for a dispatched loop, else the loop's own ensured `we_`): the same value the investigate submit carried.
-- WHILE the implement run of such a loop is in flight (including every pre-start requeue attempt in `_implement`) THE SYSTEM SHALL keep that `we_` non-terminal, and end it, once, after `_implement` returns or on any exit path.
-- WHEN such a loop ends its canonical `we_` after implement THE SYSTEM SHALL end it `Succeeded` if the implement run succeeded and `Failed` otherwise (an investigator failure still ends it `Failed`, as today).
-- IF the marker is recorded but no canonical execution id can be resolved (empty `_canonical_execution_id()`, for example a loop started before `canonical-approval` that reaches the implement step on new code) THEN THE SYSTEM SHALL omit the `execution_id` key, never send an empty or invented value, and log a warning naming the workflow id and the reason `no canonical execution`, the same omission rule the investigate path follows.
-- WHILE an execution's history predates the marker THE SYSTEM SHALL submit exactly the implement params it submitted before, and end the canonical `we_` at the approve flip as before.
-- THE SYSTEM SHALL NOT add `execution_id` to the in-loop shepherd tick (`tick_params`), to `_launch_correlation()`, to `ImplementSweepWorkflow`/`SweptImplementWorkflow`, or to any manual trigger path.
-- WHEN the recorded fixture `tests/fixtures/histories/dev_loop_full.prepatch.json` (and every other recorded DevLoop history) is replayed against the new code THE SYSTEM SHALL replay without non-determinism.
+- WHEN a DevLoop new enough to record the new marker (`IMPLEMENT_EXECUTION_PATCH`, "implement-execution-id")
+  and `CANONICAL_APPROVAL_PATCH` submits `mctl-agents-implement`, THE SYSTEM SHALL include
+  `execution_id = self._canonical_execution_id()` in the submitted parameters (for a dispatched loop this equals
+  `dispatched.execution_id`, the same source the investigate submit uses at ~:3614-3617).
+- WHEN `_implement` requeues a pre-start failure, THE SYSTEM SHALL resubmit with the same `execution_id`.
+- WHILE the marker is recorded, THE SYSTEM SHALL NOT end the canonical execution at the approve flip, and SHALL
+  keep it non-terminal from the flip until `_implement` returns.
+- WHEN `_implement` returns under the marker, THE SYSTEM SHALL end the canonical execution once, in `Succeeded`
+  if the implement result succeeded and `Failed` otherwise, before the abandon check and the merge watch.
+- IF the loop exits between the flip and the end of the implement run (abandon, re-approval expiry, release
+  resolution failure, exception, cancellation), THEN THE SYSTEM SHALL still end the canonical execution through
+  the existing exit paths in `run` (`_canonical_pending_phase` / `_canonical_end_phase` / "Failed").
+- IF the marker is recorded and the canonical execution id resolves empty at the implement submit, THEN THE
+  SYSTEM SHALL fail the loop with a non-retryable `ApplicationError` naming the missing execution, and SHALL NOT
+  submit `mctl-agents-implement` without one.
+- WHILE a history predates the marker, THE SYSTEM SHALL replay it with the old command sequence: canonical end at
+  the flip, implement submitted without `execution_id`.
+- WHILE the in-loop shepherd tick runs, THE SYSTEM SHALL keep submitting it without `execution_id` (the
+  `_launch_correlation()` result is unchanged; the id is added only to `implement_params`).
+- WHEN the change is deployed and the first real DevLoop implement runs, THE SYSTEM SHALL produce an Argo
+  Workflow with `workflowTemplateRef.name=mctl-agents-implement`, `clusterScope: true`, a non-empty
+  `execution_id` argument, and a run-token exchange and revoke with no `workflow_without_execution`.
 
 ## Out of scope
-- `ImplementSweepWorkflow` / `SweptImplementWorkflow` (`orchestrator/temporal/workflows/implement_sweep.py` ~:167-176): they keep submitting without `execution_id`.
+- `ImplementSweepWorkflow` / `SweptImplementWorkflow` (`implement_sweep.py` ~:167-176): keeps submitting without
+  `execution_id`; stays documented as unresolved.
 - Manual triggers (`mctl_trigger_implementer`, operator `argo submit`, generic `/operations/.../execute`).
 - The in-loop shepherd tick, the shepherd subprocess path and `MCTL_RUN_TOKEN_MODE` on the shepherd CWFT.
-- `ClaimClient` bearer, mctl-api scope/handler reconciliation, the gitops `enforce` flip, claims going live, `LIFECYCLE_ROLLOUT_MODE`.
-- Any change to mctl-gitops (the implement CWFT already declares `execution_id` and maps it to `WORKFLOW_EXECUTION_ID`).
+- `ClaimClient` bearer, mctl-api scope/handler reconciliation, the gitops `enforce` flip, claims going live,
+  `LIFECYCLE_ROLLOUT_MODE`.
+- Any gitops change: `cwft-mctl-agents-implement.yaml` already declares `execution_id` and maps it to
+  `WORKFLOW_EXECUTION_ID`.
 
 ## Open questions
-- Blocking-level (filed as the one clarification question): which execution should the implement run bind to, given the canonical `we_` is terminal at implement time today? This proposal defaults to (a), holding the same `we_` open through implement. The alternatives are (b) passing the already-terminal id unchanged, which is the issue's literal scope but probably refused by the exchange, and (c) opening a second execution on the same WorkItem for the implement run.
-- Holding the `we_` open longer means mctl-api refuses new execution requests for that WorkItem (`execution_active`) between the flip and the end of implement. Today a resume can land in that window, and `_await_canonical_reapproval(after_flip=True)` handles it. With this change such a request is refused by mctl-api until implement ends. That is arguably correct, since the loop is still working, but it changes behaviour.
-- Could not observe: the mctl-api source and deployed version (4.154.0 per the issue). Whether the exchange refuses a terminal execution is taken from the `_end_canonical_execution` docstring, not verified against mctl-api.
-- The issue allows either "fail loudly" or "follow the investigate behaviour" when no execution resolves. This proposal follows investigate (omit the key) plus a warning log, so a legacy loop is not killed during `observe`. Failing the loop instead is a one-line change if preferred.
+- After-flip resume semantics. Holding the canonical `we_` open past the flip means mctl-api's attach rule
+  (`execution_active`) refuses a new resume execution until the implement run ends, so the after-flip re-approval
+  gate (`_await_canonical_reapproval(..., after_flip=True)`, which waits for a NEW execution to be opened) can no
+  longer be satisfied by a resume in that window. Proposed interpretation: under the marker the after-flip gate
+  binds a fresh grant to the still-open canonical `we_` (the pre-flip behaviour, `execution_id=""`) instead of
+  waiting for a new execution. The implementer must confirm this with a test; if mctl-api refuses a second
+  `aar_` on that `we_`, record it and keep the existing gate (a resume then simply waits for the implement end).
+- Usage attribution: `test_neither_submit_carries_an_execution_id` documents an earlier decision that an
+  implementer invocation is not the investigator's `we_` ("would misattribute spend"). The resolved answer
+  overrides it for the implement submit; the usage ledger does not read `WORKFLOW_EXECUTION_ID`
+  (`orchestrator/usage_ledger.py::_CORRELATION_ENV`), so no spend changes attribution, but reviewers should
+  confirm.

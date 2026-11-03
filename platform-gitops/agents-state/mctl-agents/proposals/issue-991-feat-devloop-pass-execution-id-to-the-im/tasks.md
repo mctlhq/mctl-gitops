@@ -1,19 +1,54 @@
 # Tasks: issue-991-feat-devloop-pass-execution-id-to-the-im
 
-- [ ] 1. In `orchestrator/temporal/workflows/dev_loop.py`, add `IMPLEMENT_EXECUTION_ID_PATCH = "implement-execution-id"` next to `LAUNCH_CORRELATION_PATCH` (~:466), with a doc comment (#991, #717 S5, CWFT `execution_id` -> `WORKFLOW_EXECUTION_ID`), and initialise `self._implement_holds_execution = False` in `__init__`. DoD: the constant exists; nothing calls it yet; the existing suite passes.
-- [ ] 2. (depends on 1) At the post-flip site (~:4157-4160), evaluate `workflow.patched(IMPLEMENT_EXECUTION_ID_PATCH)` once inside `if self._canonical:`, store it, and skip `_end_canonical_execution` when it is True. DoD: a patched canonical loop reaches the implement submit with `_canonical_open` still True; an unpatched one is byte-for-byte unchanged.
-- [ ] 3. (depends on 2) After `implement_params.update(self._launch_correlation())` (~:4205), add `execution_id = self._canonical_execution_id()` when `_implement_holds_execution` is set and the id is non-empty. Otherwise log the `no canonical execution` warning and omit the key. Do not touch `_launch_correlation` or `tick_params`. DoD: the implement submit carries the same `we_` the investigate submit carried; the shepherd params are unchanged.
-- [ ] 4. (depends on 2) Right after `implement_result = await self._implement(...)` (~:4235), when `_implement_holds_execution`, set `_canonical_end_phase` from `implement_result.succeeded` and call `_end_canonical_execution`. DoD: the `we_` is advanced exactly once, after implement and before `_watch_pr`/`continue_as_new`; on an exception, `run`'s existing handler ends it `Failed`.
-- [ ] 5. (depends on 2-4) Update the comments at ~:4200-4205 and the `_end_canonical_execution` docstring to describe the new end point and the pre-marker behaviour. DoD: no comment still says the `we_` always ends at the flip.
+- [ ] 1. Declare `IMPLEMENT_EXECUTION_PATCH = "implement-execution-id"` and
+  `IMPLEMENT_EXECUTION_MISSING_ERROR_TYPE` in `orchestrator/temporal/workflows/dev_loop.py` beside
+  `LAUNCH_CORRELATION_PATCH`, with a `#:` comment (purpose, #717 S5, migration by attrition); init
+  `self._hold_canonical_for_implement = False` in `__init__`. — DoD: constants importable; lint passes.
+- [ ] 2. (depends on 1) At the flip site (~:4157-4160) evaluate the marker once inside `if self._canonical:` and
+  skip `_end_canonical_execution` when it is recorded. — DoD: pre-patch fixtures still replay; a new run
+  schedules no advance at the flip.
+- [ ] 3. (depends on 2) After `implement_params.update(self._launch_correlation())` (~:4205) add
+  `execution_id = self._canonical_execution_id()` under the marker; raise a non-retryable `ApplicationError`
+  when it is empty. Do not touch `_launch_correlation` or the shepherd tick params. — DoD: implement submit
+  carries the canonical `we_`; shepherd submit unchanged.
+- [ ] 4. (depends on 2) Right after `_implement` returns (~:4236), under the marker, set
+  `_canonical_end_phase` from `implement_result.succeeded` and call `_end_canonical_execution`. — DoD: exactly
+  one advance per loop, after the implement; exits before it still end the `we_` via `run`.
+- [ ] 5. (depends on 2) Under the marker, make the after-flip re-approval bind its grant to the still-open
+  canonical `we_` rather than waiting for a new execution (or, if the test in T6 shows mctl-api semantics forbid
+  it, keep the existing gate and document the behaviour). — DoD: T6 passes; decision noted in the PR body.
+- [ ] 6. Update docstrings of `_end_canonical_execution` and `_canonical_execution_id`, and the CHANGELOG entry
+  via the normal release-please flow (feat commit). — DoD: no stale "ends right after the approve flip" text.
 
 ## Tests
-- [ ] T1. In `tests/test_dev_loop_workflow.py`, rename `test_neither_submit_carries_an_execution_id` (~:5409) to something like `test_implement_carries_the_canonical_execution_id_and_shepherd_does_not`. Assert `implement_log[0]["execution_id"] == "we_test_own"` (the fake's ensured `we_`, ~:263) and that it equals the investigate submit's `execution_id`. Keep `assert "execution_id" not in shepherd_log[0]`. Mutation-verify: remove step 3 and watch it fail.
-- [ ] T2. A dispatched canonical loop (fake `bind_dispatched_execution` returning `execution_id="we_ctx_test"`, as at ~:5350-5358, with `proposal_status="proposed"`) submits implement with `execution_id == "we_ctx_test"`. Mutation-verify: hard-code another source and watch it fail.
-- [ ] T3. Ordering: using the fake advance/end activity's call log, assert that the canonical `we_`'s advance happens after the implement submit, exactly once, and with `Succeeded` for a succeeded implement and `Failed` for a failed one. Mutation-verify: restore the unconditional end at the flip (revert step 2) and watch it fail.
-- [ ] T4. An exit between the flip and implement (for example the implementer resolve failing permanently, or an abandon during the post-flip re-approval park) still ends the `we_` exactly once, `Failed` or the investigator phase as today. Mutation-verify: remove the `run` exit handling for this path in a scratch revert and watch it fail.
-- [ ] T5. In `tests/test_workflow_replay.py`, update `test_todays_dev_loop_full_carries_the_launch_correlation_marker` (~:425): `assert "execution_id" not in params` becomes `params.get("execution_id") == "we_test_own"`, and also assert that `"implement-execution-id" in _patch_ids(events)` (both halves, as the existing docstring argues). Mutation-verify: drop the `patched()` call (param added unguarded) and watch the marker assertion fail; drop the param and watch the value assertion fail.
-- [ ] T6. Add `test_dev_loop_full_prepatch_history_predates_the_implement_execution_id_marker`, modelled on ~:346: the prepatch fixture has no `implement-execution-id` marker, and none of its `mctl-agents-implement` submits carry `execution_id`. Then confirm that `test_recorded_history_replays_against_current_definitions` replays every existing `dev_loop_*` fixture unchanged, without re-recording any fixture. Mutation-verify: move the deferred end outside the patch guard and watch the replay of a canonical fixture (`dev_loop_full.patched.json` / `dev_loop_issue_keyed.json`) fail with non-determinism.
-- [ ] T7. Run `tests/test_implement_sweep_replay.py` and the sweep tests unchanged, to show the sweep still submits without `execution_id` (out of scope, not masked).
+- [ ] T1. In `tests/test_dev_loop_workflow.py` replace `test_neither_submit_carries_an_execution_id`: assert
+  `implement_log[0]["execution_id"]` equals the loop's canonical `we_` (from the fake ensure/dispatch activity)
+  and keep `assert "execution_id" not in shepherd_log[0]`. Mutation: revert task 3 -> the implement assertion
+  fails; add the id in `_launch_correlation` instead -> the shepherd assertion fails.
+- [ ] T2. Dispatched loop (`execution_request_id` set, fake `BoundExecution(execution_id="we_ctx_test")`):
+  implement submit carries `we_ctx_test`. Mutation: use `self._executions[-1]` after a delivered resume -> fails.
+- [ ] T3. Ordering: record the activity call order from `_fake_activities`; assert the canonical advance happens
+  after the implement submit and not between approve and implement, with phase `Succeeded`, and `Failed` when
+  the fake implement fails. Mutation: restore the flip-site end -> fails.
+- [ ] T4. Requeue: a pre-start implement failure followed by success -> both submits carry the same
+  `execution_id`.
+- [ ] T5. Empty canonical id under the marker (fake ensure returns "") -> loop fails with
+  `IMPLEMENT_EXECUTION_MISSING_ERROR_TYPE` and no implement submit is recorded. Mutation: remove the raise ->
+  fails.
+- [ ] T6. Resume delivered between flip and implement under the marker: the loop does not hang on
+  `opened()` and the grant is requested on the canonical `we_` (or the documented fallback from task 5).
+- [ ] T7. Replay: existing `tests/fixtures/histories/dev_loop_*.json` (no new marker) replay unchanged via
+  `tests/test_workflow_replay.py`; add an assertion that they do not contain "implement-execution-id" so they
+  keep exercising the unpatched branch. Record a new fixture (e.g. `dev_loop_implement_execution.json`, new
+  scenario in `tests/replay_scenarios.py`) with the current code and assert it contains the marker and an
+  implement submit with `execution_id`. Mutation: move the `patched()` call after the advance -> pre-patch
+  replay raises non-determinism.
+- [ ] T8. `tests/test_patch_memoization.py` still passes; full `pytest` and lint green.
 
 ## Rollback
-Revert the PR and release. Executions that recorded `implement-execution-id` while the new code ran would then hit a non-determinism error on replay against the old code (old code ends the `we_` at the flip). So roll back with a forward fix that keeps the marker branch (`workflow.patched(...)` still called, step 3 disabled, step 4 kept) until those executions close. Alternatively, wait for in-flight patched loops to pass their implement step (usually minutes) before deploying the plain revert. No gitops or data migration needs undoing. Under `observe`, the only externally visible effect is the `execution_id` argument and an exchange log line.
+Revert the PR and release; the worker image rollback (`services/admins/mctl-agents-worker*/values.yaml` tag
+back to the previous release) is safe for loops that never reached the flip. Loops that already recorded
+`implement-execution-id` would hit non-determinism on an image without the marker, so prefer a forward fix that
+keeps the marker and makes the patched branch behave like the old one (end at the flip, no `execution_id`),
+or let those loops finish before rolling back. The runner side needs no rollback: under `observe` a refused
+exchange is only logged, and `MCTL_RUN_TOKEN_MODE` can be removed from the CWFT (mode off).
