@@ -12,8 +12,8 @@ Commit order is test-first. The commits for T1-T5 land before the commits for ta
   - Have `_defer` audit `resume_deferred:<reason>`.
 
   DoD: T2 and T4 pass. A refused or deferred delivery leaves no Update-accepted event and no fulfil call.
-- [ ] 3b. Dispatcher pre-delivery fence (depends on 3): add the injected `ProposalStatusReader` port and the fence in `Dispatcher._dispatch` as in design.md, the `created_at` age WARN and the `age-unknown` WARN. DoD: T7 and T8 pass, and no Update-with-Start is sent for a fenced request.
-- [ ] 4. Incomplete-contract gate (depends on 3b):
+- [ ] 3b. Age WARN (depends on 3): the standalone dispatcher WARN for deferred requests older than 24 hours by the parsed `created_at`, reported UNKNOWN when missing. DoD: T7 passes. No other port or status read is added.
+- [ ] 4. Incomplete-contract gate (depends on 3):
   - Add `OpenDelivery.accepted_after_gates: bool = False`, set at acceptance.
   - In `_deliver`, land `Failed` with `feedback-not-ready` for such a delivery.
   - Rewrite only `test_a_resume_delivered_after_the_implement_step_succeeds_at_once`, which validates a NEW delivery: a `MergeWatchResume` with `deferred_resume_contract=False` gives `legacy-loop`, and one with `True` plus an intent gives `feedback-not-ready`. Neither mints a `we_`.
@@ -28,7 +28,7 @@ Commit order is test-first. The commits for T1-T5 land before the commits for ta
   - the replay evidence;
   - residual risks.
 
-  Do not merge, release, or touch flags. DoD: independent review with 0 P1/P2 findings, and the PR is left for an explicit human merge decision.
+  Do not merge, release, or touch flags. State in the PR body that M1 is not releasable alone and list the Release blockers. DoD: independent review with 0 P1/P2 findings, and the PR is left for an explicit human merge decision.
 
 ## Tests
 - [ ] T1. Identity and compatibility:
@@ -57,12 +57,15 @@ Commit order is test-first. The commits for T1-T5 land before the commits for ta
 - [ ] T7. Deferred request across slices, age and restart:
   - A request deferred `feedback-not-ready` by a contract-True loop is re-validated on the next claim. With the arm swapped (a test double for M2) it is accepted exactly once, with no second delivery and no second execution.
   - A request deferred `legacy-loop` stays deferred under the same swap, and `recovery-not-ready` stays deferred until its own arm exists.
-  - `created_at` is parsed from the API body; absent or unparsable gives `age-unknown`. A request older than 24 hours by `created_at` produces the WARN once per re-claim, and a dispatcher restart in between neither loses nor duplicates it (state is read from the row only).
-- [ ] T8. Closed loop and legacy-merged:
-  - Deferred request, loop ends, next claim: with the proposal past `proposed` and an intent, the dispatcher defers `recovery-not-ready` before the Update-with-Start. No run starts, no `we_` is minted, the context-only branch is never reached, and nothing lands `Succeeded`. The intent stays on the work item. Cover both failed-implement and closed-unmerged, and merged.
-  - Unreadable proposal status gives `loop-not-ready` and no delivery. A request with no intent still takes the context-only path unchanged.
-  - A legacy loop with a merged PR refuses `work-merged` (not `legacy-loop`).
-  - Mutation check: removing the pre-delivery fence makes the first case land `Succeeded` on the context-only run, and the test fails.
+  - `created_at` is parsed from the API body; absent or unparsable is reported UNKNOWN. A request older than 24 hours by `created_at` produces the WARN once per re-claim, and a dispatcher restart in between neither loses nor duplicates it (state is read from the row only).
+- A legacy loop with a merged PR refuses `work-merged` (not `legacy-loop`); this is covered by the T2 legacy case.
+
+## Release blockers (not M1 acceptance)
+These are tracked as rollout blockers owned by later slices. They are not green M1 acceptance, and M1 must not claim them.
+- B1 (M3). Closed loop: a deferred or newly claimed intentful resume that meets a closed loop must not take the context-only branch and land `Succeeded`. The proof must be an atomic, authoritative fail-closed path with an end-to-end test that includes a loop closing between the check and the delivery, and a request waiting across loop closure is preserved. A status or `loop_state` read followed by an Update-with-Start does not count.
+- B2 (M2). A tested feedback tick serves requests deferred `feedback-not-ready`.
+- B3 (drain). Either an approved lease-aware drain (mctlhq/mctl-api#935) or an owner-approved, time-bounded plan for requests already deferred.
+- B4. Rollback below M1 is not feasible without an exhaustive drain proof and the T6 compatibility result.
 
 ## Rollback
-See design.md, Rollback. Rollback below M1 is blocked while any non-terminal request may exist, because a pre-M1 `_deliver` lands a false `Succeeded` and an operator cannot drain deferred requests by id (reject needs the claimant's `claim_token`, `state=claimed` and an unexpired lease). Use a forward fix, or keep an M1-or-later worker with the dispatcher off. T6 tests the real reject constraints and the pre-M1 replay and decode behaviour; until it passes that compatibility is UNKNOWN, not green. A lease-aware drain is a separate capability that needs its own approval. No flag, release or mctl-api state is changed by M1.
+See design.md, Rollback. Rollback below M1 is blocked while any non-terminal request may exist, because a pre-M1 `_deliver` lands a false `Succeeded` and deferred requests cannot be drained by id (reject needs the claimant's `claim_token`, `state=claimed` and an unexpired lease). Use a forward fix, or keep an M1-or-later worker with the dispatcher off. T6 tests the real reject constraints and the pre-M1 replay and decode behaviour; until it passes that compatibility is UNKNOWN, not green. M1 is not released alone (see Release blockers). No flag, release or mctl-api state is changed by M1.
