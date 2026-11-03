@@ -303,14 +303,6 @@ locals {
       name     = "mctl-support-ai-gateway-run (Vault platform/mctl-support/ai-gateway)"
       policies = [{ permission_groups = [local.pg.ai_gateway_run], resources = { (local.account) = "*" } }]
     },
-    # Same for the `mctl-telegram` AI Gateway (managed runtime, gitops#2345).
-    # Canonical value in Vault secret/platform/mctl-telegram/ai-gateway. Scoped
-    # to the whole account like the token above, so it can also send through
-    # mctl-support; run is send-only.
-    {
-      name     = "mctl-telegram-ai-gateway-run (Vault platform/mctl-telegram/ai-gateway)"
-      policies = [{ permission_groups = [local.pg.ai_gateway_run], resources = { (local.account) = "*" } }]
-    },
     {
       name = "pelican-catalog-worker CI deploy"
       policies = [{

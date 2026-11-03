@@ -89,7 +89,11 @@ output "mctl_support_ai_gateway_url" {
 # Cloudflare charge), no cache, rate limiting off. The custom-hetzner and
 # custom-nebius providers are account-wide (ai-gateway-custom-providers.json),
 # so the route /mctl-telegram/custom-hetzner/v1 resolves once this exists.
-# The run token is `mctl-telegram-ai-gateway-run` in ../tokens/manifest.tf.
+# The run token `mctl-telegram-ai-gateway-run (Vault platform/mctl-telegram/ai-gateway)`
+# is NOT declared yet: ../tokens/check.tf fails the plan for a declared token
+# that does not exist live, and creating it is an activation step. It is added
+# to ../tokens/manifest.tf in the activation PR, together with creating it in
+# the dashboard (tokens README: dashboard and manifest change in one PR).
 resource "cloudflare_ai_gateway" "mctl_telegram" {
   account_id = var.account_id
   id         = "mctl-telegram"
