@@ -45,18 +45,19 @@ The solution is option (b) of the issue: an explicit, fail-closed typed `ResumeD
 A new block in `_validate_execution_request` sits after the existing `resume-already-pending` and provenance checks, so existing reasons keep their precedence. It applies only to `kind == resume` deliveries that are not this run's own start request, and only `if self._gates_passed:`.
 
 ```
+pr = self._last_pr
+if pr is not None and pr.merged:                  -> ResumeRefused   "work-merged"   (also on a legacy loop)
 if not self._deferred_resume_contract:            -> ResumeDeferred  "legacy-loop"
 st = self._implement_state
 if st.stage == "implementer" and st.outcome is None: -> ResumeDeferred  "implement-running"
-pr = self._last_pr
-if pr is not None and pr.merged:                  -> ResumeRefused   "work-merged"
-if (st.outcome not in (None, "success")) or (pr is not None and pr.state == "CLOSED")
-   or delivery.intent_id is None:                 -> ResumeRefused   "nothing-to-resume"
+if delivery.intent_id is None:                    -> ResumeRefused   "nothing-to-resume"
+if (st.outcome not in (None, "success")) or (pr is not None and pr.state == "CLOSED"):
+                                                  -> ResumeDeferred  "recovery-not-ready"
 otherwise (intent, PR open or not yet observed):  -> ResumeDeferred  "feedback-not-ready"
 ```
 
 - A rejected Update writes no history event, and the Python SDK does not run validators on replay. The fence is therefore replay-neutral, and the dispatcher never reaches `_fulfil`, so no `we_` is minted.
-- Name the constants: `RESUME_DEFERRAL_REASONS` (in `dev_loop.py`, re-exported to the dispatcher) = `{loop-not-ready, loop-ending, legacy-loop, implement-running, feedback-not-ready}`. Add `work-merged` and `nothing-to-resume` to `xr.RESUME_REFUSAL_REASONS`.
+- Name the constants: `RESUME_DEFERRAL_REASONS` (in `dev_loop.py`, re-exported to the dispatcher) = `{loop-not-ready, loop-ending, legacy-loop, implement-running, recovery-not-ready, feedback-not-ready}`. Add `work-merged` and `nothing-to-resume` to `xr.RESUME_REFUSAL_REASONS`.
 - `TemporalClientPort.deliver` normalises a deferral reason outside `RESUME_DEFERRAL_REASONS` to `unspecified`, mirroring the refusal path. `_defer` audits `resume_deferred:<reason>`.
 - Idempotence is unchanged. A refused or deferred update id is not in Temporal's registry, so a re-send is validated again. Once accepted, `_accepted_request_ids` makes repeats a no-op. There is never a second delivery.
 
@@ -67,7 +68,8 @@ otherwise (intent, PR open or not yet observed):  -> ResumeDeferred  "feedback-n
 | gates passed, legacy history | accept; `Succeeded` at once | `ResumeDeferred(legacy-loop)`, no `we_` |
 | gates passed, implement running | accept; `Succeeded` at once | `ResumeDeferred(implement-running)` |
 | gates passed, PR merged | accept; `Succeeded` at once | `ResumeRefused(work-merged)` |
-| gates passed, implement failed / PR closed / no intent | accept; `Succeeded` at once | `ResumeRefused(nothing-to-resume)` |
+| gates passed, no intent | accept; `Succeeded` at once | `ResumeRefused(nothing-to-resume)` |
+| gates passed, implement failed / PR closed unmerged, intent | accept; `Succeeded` at once | `ResumeDeferred(recovery-not-ready)` (M3 defines recovery) |
 | gates passed, intent, PR open or unknown | accept; `Succeeded` at once | `ResumeDeferred(feedback-not-ready)` |
 
 Defence in depth: `OpenDelivery` gets `accepted_after_gates: bool = False`, set in `accept_execution_request` from `self._gates_passed and self._deferred_resume_contract`. In `_deliver`, after the bind, a delivery with that flag lands `Failed` with refusal `feedback-not-ready` instead of entering the `Succeeded` wait. This uses the existing `_land_delivery` path, so there is no new command type. It is reachable only under the marker. With the validator in place it should be unreachable, and a unit test proves it fails closed if reached anyway.
@@ -91,3 +93,19 @@ M2 will later replace the `feedback-not-ready` arm behind its own new patch id. 
 - **Resource impact:** negligible (one marker per loop, one dataclass reference).
 - **Risk:** the dispatcher re-claims deferred requests on each lease expiry, which is extra polling load. The lease already bounds this. Risk: the existing test that asserts `Succeeded`-at-once is rewritten. The PR must say so explicitly for the merge decision.
 - **Release:** no release, deploy or flag change. The PR is left for an explicit human merge decision.
+
+## Deferred requests: release, operator view and later slices
+- The loop ending is NOT a release, and M1 does not make the closed-loop path safe. A claim after the loop ended starts a new run through the Update-with-Start; with the proposal past `proposed` that run takes the context-only branch (`dev_loop.py` around the `CONTEXT_ONLY_RESUME_PATCH` check, and `run_issue_investigator.py` which does not rewrite such a proposal) and its dispatched execution lands `Succeeded`. This is tracked as a BLOCKER for the M1 release and is owned by M3. M1 deliberately adds no status read to the dispatcher: a proposal past `proposed` is also the normal state of a live loop that M2 must serve, and a read followed by an Update-with-Start races with loop closure. M3 needs an atomic, authoritative fail-closed path.
+- Release paths in M1: the PR merging while the loop runs (the validator refuses `work-merged`, including on a legacy loop, because the merged check precedes the `legacy-loop` arm); a later slice serving the request. There is no operator release in M1: `RejectExecutionRequest` needs `state=claimed`, the same claimant's `claim_token` and an unexpired lease (`internal/workitems/execution_requests.go`), and the token is only in a claim response (`orchestrator/work_context/execution_requests.py`). The lease-aware drain is designed in mctlhq/mctl-api#935.
+- Operator view: the request in `mctl_list_work_item_execution_requests`, the dispatcher audit `resume_deferred:<reason>`, and the dispatcher WARN. `ExecutionRequest` gets a defaulted `created_at: str = ""` parsed from the mctl-api body. The WARN fires for a deferred request older than 24 hours by `created_at`, once per re-claim, and is restart-safe because it reads only the row. It reports request age, not time since first deferral. A missing or unparsable value is reported UNKNOWN.
+- `feedback-not-ready` and `recovery-not-ready` need no row change to be served later: the next claim re-validates against the then-current build. M2 swaps the `feedback-not-ready` arm and M3 the `recovery-not-ready` arm, each behind its own patch id and only for loops with `deferred_resume_contract=True`.
+- `legacy-loop` is permanent for that loop (the flag is carried across continue-as-new and never re-evaluated), so no later slice serves it.
+
+## Release gate
+M1 can be approved, implemented and merged. It cannot be deployed or released alone. Production release requires: a tested M2; an M3 contract that is closed-loop-safe, implemented and tested end to end; and either an approved lease-aware drain (mctlhq/mctl-api#935) or an owner-approved, time-bounded plan for already deferred requests. The mctl-api release PR stays Draft, no flag changes, and `implement-bash` stays `bypass-open`.
+
+## Rollback
+Rollback below M1 is blocked, not procedural. A pre-M1 `_deliver` accepts a re-claimed post-gates resume and lands a false `Succeeded`, and deferred requests cannot be drained by id: reject needs the claimant's `claim_token`, `state=claimed` and an unexpired lease, none of which an ordinary read or a paused dispatcher provides.
+- Supported responses: a forward fix, or keeping an M1-or-later worker image with the dispatcher stopped. Stopping the dispatcher means setting `EXECUTION_REQUEST_DISPATCHER=false` in the worker values (a mctl-gitops PR) and rolling the worker pods so they read it; the setting is not in effect until the new pods are running.
+- Rollback below M1 stays blocked unless a proven exhaustive drain or zero-open-requests proof exists AND Temporal replay and decode compatibility is shown by T6. Reading every work item's request list is not such a proof without a demonstrated complete enumeration.
+- The lease-aware drain is designed separately (mctlhq/mctl-api#935). Mass rejection of requests is never presumed authorized.
