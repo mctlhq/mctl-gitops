@@ -284,6 +284,19 @@ env:
   # A job nobody claimed for this long is routed to the operator
   # (worker_unclaimed). Must exceed AGENT_TURN_MAX_WAIT while coalescing is on.
   AGENT_UNCLAIMED_ROUTE_AFTER: "5m"
+  # Managed runtime (mctlhq/mctl-telegram#1088, ADR 0008 section 6; gitops#2345).
+  # MANAGED_RUNTIME_ENABLED stays "false" until activation step 1, after the
+  # owner's separate activation approval: off, no account can switch to
+  # `managed` and POST /api/agent/pool-token answers 404, so the caps below are
+  # inert. MANAGED_MAX_JOB_COST_USD equals the worker's AGENT_MAX_BUDGET_USD
+  # (agent-worker-managed-preview) so the per-job reservation is what a job can
+  # actually spend. Rollback order: account to runtime "own", worker
+  # replicaCount 0, revoke the pool jti, then this flag back to "false".
+  MANAGED_RUNTIME_ENABLED: "false"
+  MANAGED_RUNTIME_MAX_ACCOUNTS: "1"
+  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
+  MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
+  MANAGED_MAX_JOB_COST_USD: "0.25"
 ingress:
   enabled: true
   hosts:

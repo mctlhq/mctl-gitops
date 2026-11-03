@@ -79,3 +79,40 @@ resource "cloudflare_ai_gateway" "mctl_support" {
 output "mctl_support_ai_gateway_url" {
   value = "https://gateway.ai.cloudflare.com/v1/${var.account_id}/${cloudflare_ai_gateway.mctl_support.id}"
 }
+
+# AI Gateway for the mctl-telegram managed runtime (mctlhq/mctl-telegram#1088,
+# gitops#2345). Separate from `mctl_support` on purpose: its spend view and its
+# run token are independent, and it can be deleted without touching
+# mctl-support. Same settings and the same reasons as the gateway above:
+# collect_logs off (no prompts stored at Cloudflare), authentication on (a
+# leaked URL spends nothing), byok_only on (a missing key is a 400, not a
+# Cloudflare charge), no cache, rate limiting off. The custom-hetzner and
+# custom-nebius providers are account-wide (ai-gateway-custom-providers.json),
+# so the route /mctl-telegram/custom-hetzner/v1 resolves once this exists.
+# The run token is `mctl-telegram-ai-gateway-run` in ../tokens/manifest.tf.
+resource "cloudflare_ai_gateway" "mctl_telegram" {
+  account_id = var.account_id
+  id         = "mctl-telegram"
+
+  collect_logs   = false
+  authentication = true
+  byok_only      = true
+
+  cache_ttl                  = 0
+  cache_invalidate_on_update = true
+
+  rate_limiting_interval  = 0
+  rate_limiting_limit     = 0
+  rate_limiting_technique = "fixed"
+
+  # Pinned server-side defaults, see cloudflare_ai_gateway.mctl_support.
+  log_classification      = false
+  log_management          = 100000
+  log_management_strategy = "DELETE_OLDEST"
+  logpush                 = false
+  zdr                     = false
+}
+
+output "mctl_telegram_ai_gateway_url" {
+  value = "https://gateway.ai.cloudflare.com/v1/${var.account_id}/${cloudflare_ai_gateway.mctl_telegram.id}"
+}
