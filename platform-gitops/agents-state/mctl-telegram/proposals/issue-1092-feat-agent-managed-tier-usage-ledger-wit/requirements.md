@@ -32,7 +32,7 @@ account or runtime is billed.
 
 Ledger
 
-- THE SYSTEM SHALL keep a table `agent_usage` with columns `id`, `job_id`, `attempt`, `user_id`, `runtime`, `runner`, `model`, `input_tokens`, `output_tokens`, `reserved_usd`, `cost_usd`, `status` (`reserved`, `settled` or `released`), `created_at`, `updated_at`, `settled_at`, and a UNIQUE constraint on (`job_id`, `attempt`), on both SQLite and Postgres.
+- THE SYSTEM SHALL keep a table `agent_usage` with columns `id`, `job_id`, `attempt`, `user_id`, `runtime`, `runner`, `model`, `input_tokens`, `output_tokens`, `reserved_usd`, `cost_usd`, `status` (`reserved`, `held` or `settled`), `created_at`, `updated_at`, `settled_at`, and a UNIQUE constraint on (`job_id`, `attempt`), on both SQLite and Postgres.
 - THE SYSTEM SHALL copy `agent_usage.runtime` from `agent_jobs.runtime` of the job row and never from a request body.
 - WHEN an account's agent data is purged THE SYSTEM SHALL delete its `agent_usage` rows in the same transaction as its `agent_jobs` rows.
 
@@ -40,25 +40,32 @@ Reservation
 
 - WHEN the pool claims a managed job THE SYSTEM SHALL insert, in the claim transaction, an `agent_usage` row with status `reserved` and `reserved_usd` equal to the server's per-job cap `MANAGED_MAX_JOB_COST_USD`.
 - WHEN the pool hands out a claimed job THE SYSTEM SHALL include that per-job cap as `max_job_cost_usd` in the claim envelope.
-- THE SYSTEM SHALL compute availability as cap minus settled cost minus outstanding reservations of the window, inside the claim transaction, with the account's `agent_profiles` row locked and the global budget lock held.
+- THE SYSTEM SHALL compute availability as cap minus settled cost minus every unsettled reservation (`reserved` and `held`) of the window, inside the claim transaction, with the global budget lock held.
+- WHEN a managed claim with a configured budget starts THE SYSTEM SHALL take the global budget lock before any per-account lock (`reserveInflight`'s account advisory lock) and before any `agent_profiles` row lock, so that a claim never holds an account or profile lock while it waits for the global lock (owner amendment 2026-11-03, see "Lock order" in design.md).
 - WHILE two claim transactions race for an account whose remaining budget covers exactly one job THE SYSTEM SHALL let exactly one of them claim.
 - WHILE two claim transactions for two different accounts race and the global remaining budget covers exactly one job THE SYSTEM SHALL let exactly one of them claim.
+- WHILE one claim transaction exhausts the global budget and pauses other accounts AND another account's claim is in progress THE SYSTEM SHALL complete both without a deadlock (no Postgres `40P01`).
 - WHEN a cost report arrives for an attempt THE SYSTEM SHALL move its row to `settled` with the reported cost, tokens, runner and model.
-- WHEN the sweeper requeues or dead-letters a stale managed job (`RequeueStaleAgentJobs`) THE SYSTEM SHALL move that attempt's `reserved` row to `released`.
-- WHEN a claim is undone with `ReleaseUnissuedClaim` THE SYSTEM SHALL delete that attempt's `reserved` row, because the attempt number is reused by the next claim.
-- IF a cost report arrives for an attempt whose row is `released` THEN THE SYSTEM SHALL settle it, because the spend happened.
+- WHEN the sweeper requeues, dead-letters or fences a stale managed attempt (`RequeueStaleAgentJobs`) THE SYSTEM SHALL move that attempt's `reserved` row to `held`, and SHALL NOT release it. Its job token has left the server, the run may have spent up to the per-job cap, and a pool job token expires at the same claim deadline the sweeper uses, so its cost report can be refused with 401 (risk accepted in #1090 and assigned to this slice). A `held` row keeps counting at `reserved_usd` until a cost report settles it or its window ends (owner amendment 2026-11-03).
+- WHEN a claim is undone with `ReleaseUnissuedClaim` THE SYSTEM SHALL delete that attempt's `reserved` row, because no token for it ever left the server and the attempt number is reused by the next claim. This is the only path that removes a reservation without a cost report.
+- IF a cost report arrives for an attempt whose row is `held` THEN THE SYSTEM SHALL settle it with the reported cost, because the spend happened.
+- THE SYSTEM SHALL NOT define a `released` status; the statuses are `reserved`, `held` and `settled`.
+- THE SYSTEM SHALL expose the unsettled held reservations as a gauge `mctl_agent_usage_held_usd` (sum of `reserved_usd` over `held` rows of the current UTC day) and `mctl_agent_usage_held_rows`, refreshed by the sweeper, which are the "reservation reconciliation drift" figures for the soak.
+- THE SYSTEM SHALL document that actual spend per attempt can exceed `reserved_usd` by at most one model call, because the runner checks its budget after each call (`openairunner.go`, `totalCost > MaxBudgetUSD`); a settle records the actual cost, and the next claim's availability uses it.
 
 Caps and windows
 
 - THE SYSTEM SHALL enforce `MANAGED_BUDGET_USD_PER_ACCOUNT_DAY` (default 1.00), `MANAGED_BUDGET_USD_PER_ACCOUNT_MONTH` (default 15.00) and `MANAGED_BUDGET_USD_GLOBAL_DAY` (default 20.00), with day and month as UTC calendar windows attributed by the attempt's `created_at`.
 - WHERE an account has `managed_budget_usd_day` or `managed_budget_usd_month` set on its profile THE SYSTEM SHALL use that value instead of the matching default.
 - WHEN an admin calls the admin profile route with `managed_budget_usd_day` or `managed_budget_usd_month` THE SYSTEM SHALL store the override (a non-negative number, or null to clear it) and audit the change.
-- THE SYSTEM SHALL count only `runtime = 'managed'` rows that are not `released` toward any cap.
+- THE SYSTEM SHALL count every `runtime = 'managed'` row (`reserved`, `held` and `settled`) toward the caps: a settled row at its `cost_usd`, an unsettled one at its `reserved_usd`.
 
 Exhaustion
 
-- IF a managed claim finds that a cap would be exceeded THEN THE SYSTEM SHALL claim nothing for that account, leave its jobs pending, set `agent_profiles.budget_paused_until` to the end of the exhausted window, and increment `mctl_agent_budget_exhausted_total{scope}` with scope `account_day`, `account_month` or `global_day`.
-- IF the global cap is exhausted THEN THE SYSTEM SHALL set `budget_paused_until` to the end of the UTC day on every managed account that has pending jobs.
+The amendment of 2026-11-03 separates durable exhaustion from transient exhaustion. Durable usage is settled cost plus `held` reservations: it can only fall when a held row settles lower or the window ends. Transient usage is the `reserved` rows of attempts that are still in flight, which settle within the claim deadline, usually for cents.
+- IF a managed claim finds that a cap leaves no room for one more per-job reservation when counting durable usage alone THEN THE SYSTEM SHALL claim nothing for that account, leave its jobs pending, set `agent_profiles.budget_paused_until` to the end of the exhausted window, and increment `mctl_agent_budget_exhausted_total{scope}` with scope `account_day`, `account_month` or `global_day`.
+- IF a cap has room counting durable usage alone but none once in-flight `reserved` rows are added THEN THE SYSTEM SHALL claim nothing for that account in this transaction, leave its jobs pending, and SHALL NOT set `budget_paused_until`, queue a notification or increment `mctl_agent_budget_exhausted_total`. It increments `mctl_agent_budget_deferred_total{scope}` instead.
+- IF the global cap is durably exhausted THEN THE SYSTEM SHALL set `budget_paused_until` to the end of the UTC day on every managed account that has pending jobs.
 - WHEN `budget_paused_until` moves forward to a new window THE SYSTEM SHALL queue exactly one `owner_notifications` row of kind `NotificationBudget` ("budget") for that account, in the same transaction, and SHALL NOT queue another for the same window.
 - WHILE `budget_paused_until` is in the future THE SYSTEM SHALL exclude the account from `ListManagedClaimCandidates`.
 - WHILE the global day budget has no room for one more per-job reservation THE SYSTEM SHALL return no candidates from `ListManagedClaimCandidates`.
@@ -92,6 +99,6 @@ Metrics
 
 - Name and default of the server-side per-job reservation. The issue says "`max_job_cost_usd` (server-side value)" but names no env var. This proposal uses `MANAGED_MAX_JOB_COST_USD`, default 0.50, matching `AGENT_MAX_BUDGET_USD: "0.50"` in `labs/agent-worker-preview/values.yaml`. In pool mode the worker uses the smaller of its own `AGENT_MAX_BUDGET_USD` and the envelope value.
 - Window boundaries. This proposal uses UTC calendar day and month, and attributes an attempt to the window of its `created_at`, which is the claim time. Rolling 24 h or 30 d windows would need a different `budget_paused_until` computation.
-- A reservation whose cost report never arrives on a completed or retried job (worker crashed after completing) stays `reserved` and counts at the full per-job cap in its window. That is conservative and expires with the window. A sweeper that settles such rows is left for later. The rollout's "reservation reconciliation drift" figure should count these rows.
-- Per-account serialization. `reserveInflight` already takes a per-account `pg_advisory_xact_lock`, so dropping only the profile row lock will not make the same-account race test fail. The mutation for the account subtest is therefore "drop the outstanding-reservation term". The row-lock mutation is exercised by the cross-account global subtest, which drops the global lock. The reviewer should confirm that this split meets "every regression test must fail with the bug reintroduced".
+- RESOLVED (owner amendment 2026-11-03): a reservation whose cost report never arrives stays counted. On a completed job it stays `reserved`; on a requeued, dead-lettered or fenced attempt it becomes `held`. Either way it counts at the full per-job cap until the window ends, and it is reported through `mctl_agent_usage_held_usd` / `_rows` as reconciliation drift. Releasing it, as the first draft did, dropped real spend from the caps exactly in the deadline-crossing case that #1090 left to this slice.
+- RESOLVED (owner amendment 2026-11-03): the `agent_profiles` row lock is removed. With the global lock taken first, every managed claim with a budget is serialized by that one lock, so a profile `FOR UPDATE` protects nothing a test could show. It also created a deadlock cycle with the global pause, which updates other accounts' profile rows while holding the global lock. Each remaining guard has a failing mutation: the global lock (T1 `global`), the unsettled-reservation term (T1 `account`), the lock order (T16) and the durable/transient split (T15).
 - The issue's exact names for the override columns are not given. This proposal uses `agent_profiles.managed_budget_usd_day` and `managed_budget_usd_month`, both nullable.
