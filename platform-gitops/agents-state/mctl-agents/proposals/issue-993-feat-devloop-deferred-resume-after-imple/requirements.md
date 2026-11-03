@@ -3,7 +3,7 @@
 ## Amendment 2026-11-03
 This amendment supersedes the version posted on 2026-11-03 (status `proposed`, never approved). It needs a fresh,
 digest-bound human approval; the earlier grant must not be used. What changed and why (owner decisions on
-mctl-agents#993, 2026-11-03: path A, and the disposition with items 1-7):
+mctl-agents#993, 2026-11-03: path A, the disposition with items 1-7, and the review of gitops#2377):
 - Path A. mctl-agents#991 stays `implemented`, and its proposal is not touched. The changes that were drafted for it
   (mctlhq/mctl-gitops#2375, closed without merge) move here: the merge-watch retry of a pending canonical
   end-advance (now IN scope, was "out of scope, tracked with #991"), the corrected facts about how the loop ends
@@ -216,7 +216,8 @@ is never ended `Succeeded` unless its feedback was processed.
   `we_` held by the hold switch is open (a repeat of the functional check on a fresh item while a held `we_` exists); no
   `defer` repeating for the same request for more than 3 lease periods.
 - IF a state cannot be observed from confirmed reads (a request queued on an item that no running loop names, while the
-  dispatcher is paused) THEN this is an explicit owner decision with a cost, not an assumed capability (below).
+  dispatcher is paused) THEN THE SYSTEM SHALL report it as UNKNOWN, never as zero, and SHALL NOT assume a capability. The aggregate read that would
+  close this gap is mctlhq/mctl-api#933, tracked separately and not a dependency here (Decided item 6).
 
 Tests and documents
 - WHEN this change is merged THE SYSTEM SHALL have mutation-discriminating regression tests and end-to-end tests
@@ -252,9 +253,9 @@ Parts
   `MergeWatchResume`, `_validate_execution_request`, `_deliver`, `_watch_pr`, `_carry_work_context`,
   `_resume_merge_watch`, the marker constants and `run`), the replay scenario registry and the worker's activity
   list. THEREFORE Part S SHALL NOT be pushed until Part M is merged AND released; #992's branch SHALL then be brought up
-  to date with `main` (by merging `main` into it, which needs no force-push; a rebase needs a force-push and is
-  an owner decision), the marker and replay order re-checked, and the full suite and the replay of ALL fixtures (old
-  and new) rerun green BEFORE the Part S commits are pushed. Files likely to conflict:
+  to date by MERGING `main` INTO it (no rebase, no force-push), the marker and replay order re-checked, and the full
+  suite and the replay of ALL fixtures (old and new) rerun green BEFORE the Part S commits are pushed. Part S is never
+  merged or released before these integration gates, and #992 stays a draft through Part M and the Part S integration. Files likely to conflict:
   `orchestrator/temporal/workflows/dev_loop.py`, `orchestrator/temporal/worker.py` (activity registration),
   `tests/replay_scenarios.py`, `tests/test_workflow_replay.py`, `tests/test_dev_loop_workflow.py`,
   `tests/test_execution_request_replay.py`, `tests/test_execution_request_resume.py`,
@@ -266,23 +267,29 @@ Why not one stacked PR
   `orchestrator/run_implementer.py:1787-1794`), creates `feat/agents-<slug>` from it (`:4958-4959`), and opens the PR
   with `--base main` hard-coded (`:3784-3794`). There is no base option, so an implementer run cannot build on
   #992's branch and a PR it opens cannot target it. Adding a base option to the implementer is a separate change
-  needing its own approval. It is recorded as an owner decision, not assumed.
+  needing its own approval. Decided 2026-11-03: no base option; Part S is operator-directed.
 
 Order (each step is a gate; nothing is marked ready, released or deployed before its gate)
 1. Gitops (mctl-gitops PR): the shepherd CWFT declares the additive `intent_id`, `execution_request_id`,
    `feedback_actor` params and the `feedback_outcome` output. Additive; changes no behaviour.
-2. Part M merged and released with `DEVLOOP_DEFERRED_FEEDBACK` off (inert). Optionally set
-   `EXECUTION_REQUEST_DISPATCHER` to `"false"` for the duration of the image roll, so a request cannot reach a
-   pod that still runs the old image (owner decision below). After the roll, wait until every pod runs the new image
-   (`mctl_get_service_pods` image tags and a `ROLLOUT_STATE` line from each pod). After each of steps 2-7 hold the
+2. Part M merged and released with `DEVLOOP_DEFERRED_FEEDBACK` off (inert). Set
+   `EXECUTION_REQUEST_DISPATCHER` to `"false"` for the duration of the mixed-image roll, so a request cannot reach a
+   pod that still runs the old image. The pause is REQUIRED, brief and deliberate (decided 2026-11-03): record its
+   start and end, never leave it indefinite. After the roll, wait until every pod runs the new image
+   (`mctl_get_service_pods` image tags and a `ROLLOUT_STATE` line from each pod). Resume the dispatcher (set it back to
+   `"true"`) once the compatible image, the `legacy-loop` fence and the drain proof (step 3) hold, and BEFORE the mctl-api
+   queue is enabled (step 5). After each of steps 2-7 hold the
    observation window of "Observability of mismatched states" before the next step.
 3. Drain proof: the read-only contract-state command lists no RUNNING post-gates loop without the contract, or each
    listed loop has been drained or abandoned. The `legacy-loop` fence makes a straggler harmless meanwhile.
 4. Turn `DEVLOOP_DEFERRED_FEEDBACK` on (gitops, human), once the CWFT output is live and the T-tests pass.
 5. mctl-api: mctlhq/mctl-api#931 (PR #932) is released and `MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE=on` is set in
    gitops. A human verifies the effective state, below. This proposal does not turn the switch on.
-6. Part S: PR #992 (with Part S) leaves draft and is released with `DEVLOOP_IMPLEMENT_HOLD` off. With the switch off
-   the behaviour equals today's: the `we_` ends at the flip and no `execution_id` is sent.
+6. Part S: after Part M is released, an operator-directed session merges `main` into the draft #992 branch and pushes the
+   Part S commits (S0). #992 stays a draft until the integration evidence (full suite, every replay fixture, and the
+   real observe exchange) exists; making it ready, merging and releasing it with `DEVLOOP_IMPLEMENT_HOLD` off is a later,
+   explicit owner gate. With the switch off the behaviour equals today's: the `we_` ends at the flip and no
+   `execution_id` is sent.
 7. A human release owner sets `DEVLOOP_IMPLEMENT_HOLD=true` in `services/admins/mctl-agents-worker/values.yaml` (the
    main worker only; the exec and implement workers ignore it). Rollback is the same line set back to off.
 The worker image bump is a human step; nothing here deploys autonomously.
@@ -297,52 +304,65 @@ with `no_runnable_target`, and never starts a loop):
 3. `mctl_request_work_item_execution` with `kind=resume`, the `state_version`, and a fresh `idempotency_key`.
    Expected with the switch OFF: 409 `execution_active`, nothing stored. Expected ON: 201 with state `pending`
    and `queued_behind_execution_id` set. Anything else: INCONCLUSIVE, treated as OFF.
-4. Repeat step 3 at least three times per ready mctl-api replica with fresh keys on a fresh item each time if the
-   first leaves an open request (only one open request per item is allowed: 409 `execution_request_open`), and
-   check with `mctl_get_service_pods`/`mctl_get_service_status` that all mctl-api pods are Ready and started after the
-   config change. A mixed 201/409 result means a replica is stale: the check fails.
+4. Repeat step 3 on fresh keys, at least 20 times, and read the replica set. A mixed 201/409 is a FAIL; a read that
+   gives no answer is a FAIL (fails closed); a capability is never inferred from configuration alone. This is AGGREGATE
+   evidence: it shows that the endpoint, as routed to the Service, answered 201 `pending` every time, not that each
+   replica did. It is NOT per-replica proof and SHALL NOT be reported as such. What was checked (code and tooling)
+   and why per-replica proof is not available: the mctl-api responses carry no replica identity (no served-by header or
+   pod name in `internal/api`; `/readyz` reports dependency checks, not the queue switch, `router.go:320-350`);
+   `mctl_get_service_pods`/`mctl_get_service_status` list pods, readiness, image and start time but cannot route a call
+   to one pod; a pod-targeted authenticated call would need cluster-network access or a port-forward outside the MCP
+   tools, which this proposal does not assume; and the mctl-api deployment is not in this repository's `services/`
+   tree, so its replica count is not read here. Record, next to the 201 count: the pod list with Ready state, image and
+   start time after the config change (every pod started after it), and the number of probes. A per-replica attestation
+   becomes possible only with a replica identity in responses or an effective-config read, which would be an mctl-api
+   change (not made here, see Decided item 3).
 5. Cleanup, in this order: end the open execution (same POST with `"phase":"Succeeded"`); the dispatcher then
    claims the pending request and rejects it `no_runnable_target`; confirm with
    `mctl_list_work_item_execution_requests` that no request is left open; cancel the item.
-The worker never runs this check. Residual risk: a replica restarted from an older config after the check makes a
-request fail with the visible 409, as before; it never drops silently.
+The check is idempotent: every probe uses a fresh idempotency key, and a replayed key returns the original request
+(`replayed: true`) rather than a second row. The worker never runs this check. Residual risk (aggregate evidence): a
+replica that still has the switch off and is rarely routed to may not be sampled; it then answers a request with the
+visible 409, as before, and never drops it silently. The observation windows after steps 5 and 7 re-run the probe.
 
 ## Out of scope
 - The mctl-api half: the queue while active, the claim guard, the switch and its sweeper (mctlhq/mctl-api#931).
   This proposal asks for no change to #931 and adds no capability or list endpoint to it.
 - The #991 proposal and its digest. They are not amended here.
-- Orphan reconciliation for `argo` and `a2a` executions. Tracked separately (owner decision 3). The sweep here is
+- Orphan reconciliation for `argo` and `a2a` executions. Tracked separately in mctlhq/mctl-agents#995. The sweep here is
   `temporal` only.
 - Changing the gitops `EXECUTION_REQUEST_DISPATCHER` value permanently. It is already `"true"` in
-  `services/admins/mctl-agents-worker/values.yaml:139`; only the optional temporary pause in step 2 is mentioned.
+  `services/admins/mctl-agents-worker/values.yaml:139`; only the required, brief pause in step 2 is mentioned.
 - Any automatic approval of an amendment or a new WorkItem raised by `scope-expansion`.
 - Holding the approve flip for a request queued before it (decided: it does not hold).
 - Turning the mctl-api switch on, releasing, or deploying. Those are separate human-gated steps.
 
-## Open questions
-Resolved by the owner or by code evidence in this amendment (kept for the record, not open):
-- Whether a request queued before the flip holds the flip: no (owner decision 5).
-- How the worker learns the mctl-api switch is on: it does not; an explicit worker switch plus a human functional
-  check (no capability field exists in #931).
-- Whether the work-item API can list open executions without a request: no complete, paginated source exists (see
-  design); the sweep uses Temporal.
-- Who bumps the worker image: a human release owner.
-
-Still open (owner decisions needed; each has a recommended default in design.md):
-1. Delivery of Part S: commits on #992's branch by an operator-directed session under the approved #993 digest (recommended; the shepherd and review-feedback cannot), or a base option for the
-   implementer (a separate proposal).
-2. Whether a machine-checkable capability field in mctl-api (an amendment of #931) is preferred over the human-gated
-   switch. Cost: an API change, a new #931 digest and approval, and a worker probe that fails closed. Not assumed.
-3. Whether to pause `EXECUTION_REQUEST_DISPATCHER` during the image roll in step 2.
-4. Whether the orphan sweep ships disabled (`EXECUTION_ORPHAN_SWEEP_SECONDS=0`) until the spike passes, and who
-   files the separate tracking issue for argo/a2a orphans.
-5. Whether #992 stays draft until step 6 even though, with the hold switch off, it would be inert.
-6. Part S branch update: merge `main` into #992's branch (recommended, no force) or rebase it (needs a force-push,
-   contrary to the single-writer rule, so an explicit exception).
-7. A queued request on an item that no running loop names (dispatcher paused, or loop gone) cannot be listed
-   without a new aggregate read in mctl-api (a count/oldest-age of open requests, or a metric). Cost: an additive
-   mctl-api change with its own proposal and approval; until then it is covered only by the pause being a human step
-   with a documented window, and by the per-item list for known items. Not assumed.
+## Decided (2026-11-03)
+Owner review of gitops#2377 (comment 6612861915) decided the following; these are no longer open.
+1. Part S is executed by an operator-directed Claude session on #992's existing branch, under this proposal's
+   digest-bound approval, only after Part M is merged to `main` and released, with the single-writer checks. The
+   implementer gets no base option (no scope expansion).
+2. Branch integration is a merge of `main` into #992, never a rebase or force-push. #992 stays a draft through Part M and
+   the Part S integration, with no shepherd competition; readiness, merge and release are a later explicit gate after
+   the tests and the real observe exchange evidence. `implement-bash` stays bypass-open under #181 until independent
+   production evidence.
+3. No mctl-api capability field is added and #931 is not extended now. The hold uses the default-off
+   `DEVLOOP_IMPLEMENT_HOLD`, an explicit operator gate, and the actual durable HTTP 201 `pending` check; an unknown read
+   fails closed.
+4. The dispatcher pause is required: brief and deliberate (`EXECUTION_REQUEST_DISPATCHER=false` during the mixed-image
+   rollout), with start and end recorded, all worker pods and `ROLLOUT_STATE` verified, resumed after the compatible
+   image, the `legacy-loop` fence and the drain, and BEFORE the API queue is enabled; never indefinite. A backlog on an
+   item outside any running loop is unobservable with the current API: it is reported UNKNOWN, never zero.
+5. The orphan sweep ships OFF (`EXECUTION_ORPHAN_SWEEP_SECONDS=0`) until spike C0 proves the closed-run `work_context`
+   source and the end-to-end starvation tests pass. On failure it stays off with `ORPHAN_SOURCE_BLOCKED`; coverage is not
+   faked. argo/a2a is a separately tracked gap: mctlhq/mctl-agents#995 (verified to exist, open).
+6. A global queued-request read (bounded, tenant-scoped, read-only count and oldest age) is separate, tracked as
+   mctlhq/mctl-api#933 (verified to exist, open). It is not a dependency of this proposal and not a change to #931. It
+   should exist before unattended or long production operation; this rollout uses the bounded pause, item-scoped checks
+   and explicit UNKNOWN.
+7. Earlier resolved points: a request queued before the flip does not hold the flip (disposition item 5); the worker
+   does not learn the mctl-api switch from the API; the work-item API has no complete paginated list of open executions
+   (the sweep uses Temporal); a human release owner flips the worker image and switches.
 
 Unknowns that a task must settle (the proposal does not assume an answer):
 - How the shepherd reports "meaningful feedback processing confirmed": assumed a new structured result

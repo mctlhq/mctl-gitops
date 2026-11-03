@@ -256,25 +256,29 @@ The shepherd and `run_implementer --review-feedback` cannot carry Part S:
 Conclusion: no automated mechanism exists. Part S is an operator-directed session (human, or an explicitly started
 Claude session) pushing to #992's branch under the approved #993 digest, with the single-writer rule of requirements.md.
 The commit trailers name the #993 digest and S-task ids, so the authority is auditable from git. The PR's own
-claude-review still reviews each push. If the owner prefers an automated path, the only one is a base option for the
-implementer plus a task-scoped bundle, which is a separate proposal.
+claude-review still reviews each push. An automated path would need a base option for the
+implementer plus a task-scoped bundle; the owner decided against it (2026-11-03).
 
 ## Delivery
-Part M and Part S are developed independently and can merge in either order, because Part S's off state equals `main`
-and Part M needs none of #992's code.
-- Recommended order: Part M first (it rewrites the `main` test that exists there, after its own behaviour tests), then
-  #992 is rebased on `main` and gains Part S. After the rebase some of the 21 tests may change reason; the first Part S
-  task records which still fail with the hold switch off.
-- The 21 failing #992 resume tests: they fail on #992 as it stands because the hold is unconditional (stated by the
-  issue; not re-run in this authoring pass). With the switch off the loop is `main`'s loop, so each test's
-  existing expectation stays valid. Plan, per owner decision 6 (never fit an expectation to a lost request):
-  1. Add the fake `read_rollout_switches` to the test activity registry, default off; run the 21 unchanged. Record the result.
+One ordering, stated identically in requirements.md ("Delivery and rollout order") and tasks.md (S0):
+1. Part M lands on `main` and is RELEASED first. It needs none of #992's code, and it rewrites the `main` test that
+   exists there only after its own behaviour and mutation tests exist.
+2. Then an operator-directed session MERGES `main` INTO the existing draft #992 branch. There is no rebase and no
+   force-push. It reruns the whole suite and every replay fixture, old and new, green.
+3. Only then does it push the Part S commits (without force). #992 stays a draft through Part M and the Part S
+   integration. Part S is never merged or released before the integration gates; readiness of #992 is a later,
+   explicit owner gate.
+Consequence for the 21 failing #992 resume tests: they fail on #992 as it stands because the hold is unconditional
+(stated by the issue; not re-run in this authoring pass). With the hold switch off the loop is `main`'s loop, so each
+test's existing expectation should stay valid. Plan, per owner decision 6 of the 2026-11-03 disposition (never fit an
+expectation to a lost request):
+  1. After the `main` merge, add the fake `read_rollout_switches` to the test activity registry, default off; run the 21
+     unchanged and record which still fail and why.
   2. Parametrise them over `implement_hold in {off, on}`. The off leg keeps today's expectation, untouched.
-  3. Write the on leg last, after the Part M behaviour and the mutation-discriminating tests T-S* exist; each on-leg
+  3. Write the on leg last, after the Part M behaviour and the mutation-discriminating tests TS* exist; each on-leg
      test asserts a delivered or typed-refused request, never a lost one.
   Any of the 21 that still fails with the switch off is a real contract difference and is handled like an on-leg test.
-- If the implementer cannot be pointed at #992's branch (confirmed), the owner decides: Part S by an operator-directed session
-  under the approved #993 digest (recommended; see "Part S authority"), or a separate proposal for a base option.
+Decided: the implementer gets no base option; a separate proposal would be needed for one (see "Part S authority").
 
 ## Desync matrix and observability
 Dimensions: mctl-api queue switch (API), worker image (OLD = without Part M, M = Part M, M+S), `DEVLOOP_DEFERRED_FEEDBACK`
@@ -289,18 +293,18 @@ the worker log lines below via `mctl_get_service_logs`, `mctl_get_service_pods`/
 | 1 | API off, any worker, HOLD off | create during open `we_` -> 409, nothing stored (today) | requester sees 409 | unchanged |
 | 2 | API off, HOLD on (misconfig) | `we_` held through implement; every create 409 for minutes | 409 to requesters; `ROLLOUT_STATE hold=on`; `rollout-status` shows held `we_` age | gate: functional check must precede HOLD; window check "no unexpected 409" |
 | 3 | API on, OLD worker, D on | queued only in investigate-to-approval; after delivery a post-gates old loop ends `Succeeded` with no work (FALSE SUCCESS) | not observable on the old image | PREVENTED by order: Part M released first; step 5 requires `ROLLOUT_STATE` of the new image on every pod and an empty drain check |
-| 4 | API on, rolling update (mixed OLD/M pods) | a validator on an old pod can still no-op a request | `mctl_get_service_pods` image tags differ; start lines differ | pause D during the roll (owner decision 3); gate "all pods new" before step 3 |
+| 4 | API on, rolling update (mixed OLD/M pods) | a validator on an old pod can still no-op a request | `mctl_get_service_pods` image tags differ; start lines differ | pause D during the roll (required, decided 2026-11-03); gate "all pods new" before step 3 |
 | 5 | API on, M, loop without marker (post-gates) | `ResumeDeferred legacy-loop`, request stays claimable | rate-limited `defer reason=legacy-loop`; `rollout-status` lists the loop | typed deferral; never Succeeded; loop upgrades at next hop or ends |
 | 6 | API on, M, FB off, PR open | accepted, `we_` minted, ends `Failed` | `ResumeRejection feedback-disabled` in `work_context`; execution phase Failed; `rollout-status` counts | typed; never Succeeded |
 | 7 | API on, M, FB on, CWFT output missing | tick runs, outcome unreadable | `Failed feedback-unobservable` | typed; never Succeeded |
 | 8 | API on, M, FB on, PR merged | refused before minting | dispatcher `reject resume_refused:work-merged`; request row keeps the intent | typed refusal |
 | 9 | API on, M+S, HOLD on, FB off | queued during implement, delivered after `we_` closes, ends `Failed feedback-disabled` | as 6, plus held `we_` age in `rollout-status` | typed |
-| 10 | API on, M+S, HOLD on, D PAUSED | request stays `pending`/`claimed`, nothing processes it | `ROLLOUT_STATE` line missing >5 min; `rollout-status` shows open requests of held items with age; claim/defer lines absent | window gate: age bound; for items no running loop names: UNKNOWN, owner decision 7 |
+| 10 | API on, M+S, HOLD on, D PAUSED | request stays `pending`/`claimed`, nothing processes it | `ROLLOUT_STATE` line missing >5 min; `rollout-status` shows open requests of held items with age; claim/defer lines absent | window gate: age bound; for items no running loop names: UNKNOWN (never zero), mctlhq/mctl-api#933 |
 | 11 | API on, HOLD on, post-implement end-advance keeps failing | `we_` stays open; request not claimable | `rollout-status` held `we_` age; retried each poll (Part S); audit of failed advances | retry per poll; age bound in the window gate |
 | 12 | API switched OFF after requests were queued | rows stay `pending`; claim guard off so they are claimable | defer lines `implement-running` for contract loops | validator defers while implement runs; never Succeeded |
 | 13 | API on, M+S, HOLD off | `we_` ends at the flip; queued requests only in the early window | `ROLLOUT_STATE hold=off` | equals today's |
 Mismatch states with a possible silent mishandling: 3, 4 (prevented by order and the pod gate, not detectable after
-the fact), 10 for items outside any running loop (needs a new aggregate read, owner decision 7). Every other state
+the fact), 10 for items outside any running loop (unobservable with the current API: reported UNKNOWN; the aggregate read is mctlhq/mctl-api#933, tracked separately, not a dependency). Every other state
 yields a typed ResumeRefused, a typed ResumeDeferred, or `Failed` plus a recorded `ResumeRejection`, and is visible.
 
 Implementation notes (confirmed mechanisms only): the dispatcher already prints structured audit lines with the prefix
@@ -315,8 +319,9 @@ the worker exports Prometheus metrics for Temporal only (`worker.py:645`), and a
   shepherd feedback for an open PR; rewinding would discard a live PR's review state.
 - Validate in `_deliver` only. Dropped: a refusal after fulfil mints a `we_` and loses the request row's intent.
 - A mctl-api capability field (`queue_while_active`) read by a worker probe. Better as a machine proof, but it needs an
-  amendment of the accepted #931 (new digest, release) and a probe that must still fail closed. Not assumed; listed as
-  owner decision 2. If chosen, it replaces the human check, not the switch.
+  amendment of the accepted #931 (new digest, release) and a probe that must still fail closed. Decided against
+  (2026-11-03): #931 is not extended now. The default-off switch, the operator gate and the real durable 201 `pending`
+  check stand, and a read that gives no answer fails closed.
 - Trial request from the worker. Dropped: a write with side effects on a real item.
 - Orphan recovery via a list endpoint of open executions. Dropped: it does not exist in mctl-api and #931 is not to be
   amended speculatively; the only list (`GET /work-items`) has no cursor, so it would starve.

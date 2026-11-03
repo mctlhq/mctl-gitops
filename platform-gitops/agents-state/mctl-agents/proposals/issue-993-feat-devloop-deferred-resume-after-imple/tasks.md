@@ -67,11 +67,13 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
 
 ## Part S (executed on PR #992's branch by an operator-directed session under the approved #993 digest; not by this proposal's implementer)
 
-- [ ] S0. Before any push: verify #993 `.status.yaml` is `accepted` with a named approver and the approved digest equals
-  `scripts/proposal-content-digest.py` of the directory; verify #992 is draft and no shepherd/implement Workflow for
-  the `issue-991-*` slug is running; fetch; bring the branch up to date with `main` AFTER Part M is merged and released
-  (merge `main` into it; no force); re-check marker and replay order; run the full suite and replay ALL fixtures (old
-  and new) green - DoD: the evidence is in the PR body; commits carry the #993 digest and S-task ids; pushes are without force.
+- [ ] S0. Preconditions and order, none optional: Part M is merged to `main` AND released. Verify #993 `.status.yaml` is
+  `accepted` with a named approver and the approved digest equals `scripts/proposal-content-digest.py` of the directory;
+  verify #992 is still a draft and no shepherd/implement Workflow for the `issue-991-*` slug is running; fetch; MERGE
+  `main` INTO the existing draft #992 branch (no rebase, no force-push); re-check marker and replay order; run the full
+  suite and replay EVERY fixture, old and new, green; only then push the Part S commits, without force. Part S is never
+  merged or released before these integration gates - DoD: the evidence is in the PR body; commits carry the #993 digest
+  and S-task ids.
 - [ ] S1. Run the 21 failing tests (`test_execution_request_resume.py` 17, `test_execution_request_dispatch.py` 1,
   `test_execution_request_replay.py` 3) with a fake `read_rollout_switches` defaulted off, unchanged, and record which
   pass - DoD: the list is in the PR body.
@@ -86,7 +88,7 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
 - [ ] S6. Replay fixtures: hold on, hold off, retried advance, retried across a hop (depends on S3, S4) - DoD: TS5 passes.
 - [ ] S7. Parametrise the 21 tests over `implement_hold in {off, on}`; off legs untouched; write the on legs last
   (depends on Part M tasks 4, 6, 12 merged and S2-S6) - DoD: each on leg asserts a delivered or typed-refused request.
-- [ ] S8. Rollout record: keep #992 draft until the gates 1-5 of the rollout order hold; release with
+- [ ] S8. Rollout record: keep #992 draft through Part M and the Part S integration; at the later explicit owner readiness gate (after the full suite, all fixtures and the real observe exchange), release with
   `DEVLOOP_IMPLEMENT_HOLD` off; the human sets it on after the functional check (requirements.md) - DoD: gate evidence
   linked in the release PR.
 
