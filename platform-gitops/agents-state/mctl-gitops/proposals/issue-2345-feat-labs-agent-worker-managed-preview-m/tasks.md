@@ -40,7 +40,11 @@ Git changes (one PR, feature branch):
 - [ ] 9. Add the group `mctl-telegram-managed` to
   `vm-rules/mctl-telegram-ops.yaml` with `MctlAgentManagedGlobalCapHit`,
   `MctlAgentManagedSpendHigh` and `MctlAgentManagedPoolWorkerDown` (global cap
-  rule on `scope="global_day"` exactly), and extend the provenance table. DoD: `scripts/check-vm-rules.sh` passes.
+  rule on `scope="global_day"` exactly), and extend the provenance table.
+  Before writing PoolWorkerDown, read the `up` series of the existing
+  `labs-agent-worker-preview` target in VictoriaMetrics and use the same label
+  set (`namespace`, `service`) for the new worker. DoD:
+  `scripts/check-vm-rules.sh` passes.
 - [ ] 10. (depends on 9) Add promtool tests to
   `vm-rules/tests/mctl-telegram-ops_test.yaml`. DoD: `promtool test rules` passes.
 

@@ -193,6 +193,8 @@ Rollback, at any step, in this order: account back to `runtime: own`, then
 - C1 gate: closed (mctl-telegram#1093, mctlhq/.github#293). Preview runs
   `Qwen/Qwen3.6-35B-A3B` on Hetzner through `custom-hetzner`; production will
   run GLM-5.1 on Nebius. Shadow prices are Nebius GLM-5.1, 1.40/4.40 per MTok.
+  The issue author confirmed all three values in clarification
+  `hir-5339bd17efa7ca5d`.
 - Worker env names: `AGENT_OPENAI_API_KEY` and `AGENT_GATEWAY_TOKEN`, read in
   mctl-telegram `cmd/agent-worker/main.go`.
 - Budget scope label: `global_day`.
@@ -212,3 +214,15 @@ Rollback, at any step, in this order: account back to `runtime: own`, then
   single copy; that is decided at activation step 4 and changes no file here.
 - The hourly spend threshold is not given in the issue. This proposal uses
   $1.00/h (20 % of the $5.00 global daily cap).
+- `MANAGED_RUNTIME_ENABLED`: the issue lists the key without a value. This
+  proposal ships it as "false" and turns it on only in activation step 1, per
+  the owner amendment recorded in the previous revision. If the reviewer wants
+  it on at merge, only that one line and the T2 expectation change.
+- Not observed from this run, so none is assumed absent: the Cloudflare
+  account state (whether a `mctl-telegram` gateway or token already exists),
+  the Vault paths under `secret/platform/labs/agent-worker-managed-preview/`
+  and `secret/platform/mctl-telegram/ai-gateway`, and whether the
+  `mctl_agent_usage_cost_usd_total`, `mctl_agent_managed_accounts` and
+  `mctl_agent_budget_exhausted_total` series are live in VictoriaMetrics. The
+  Cloudflare plan (T5) shows the first. Activation step 3 covers the second.
+  The provenance-table task and activation step 6 cover the third.

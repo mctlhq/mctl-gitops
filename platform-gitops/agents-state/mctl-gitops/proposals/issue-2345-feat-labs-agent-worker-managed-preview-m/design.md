@@ -73,15 +73,22 @@
   - #1089: `MANAGED_RUNTIME_ENABLED` (default false) and
     `MANAGED_RUNTIME_MAX_ACCOUNTS` (default 1).
 
-Deployed state checked:
-- `diff` of `$MCTL_GITOPS_ROOT/services/labs/agent-worker-preview/values.yaml`
-  and `.../mctl-telegram-preview/values.yaml` against the clone: identical.
-- `ls $MCTL_GITOPS_ROOT/services/labs/`: no `agent-worker-managed-preview`
-  exists yet.
-- `grep MANAGED|AGENT_RUNNER|POOL` in `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram{,-preview}/values.yaml`:
+Deployed state checked (re-checked 2026-11-03 for this revision):
+- `diff -q` of `$MCTL_GITOPS_ROOT/services/labs/{agent-worker-preview,mctl-telegram-preview,mctl-telegram}/values.yaml`
+  against the clone: all three identical.
+- `ls $MCTL_GITOPS_ROOT/services/labs/ | grep agent`: only
+  `agent-worker-preview`; `agent-worker-managed-preview` does not exist yet.
+- `grep -E "MANAGED|AGENT_RUNNER|POOL"` in `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram{,-preview}/values.yaml`:
   no matches, so managed runtime is not configured anywhere.
 - `mctl_get_service_status(labs, agent-worker-preview)`: Synced/Healthy, image
   tag `main-a787e97`, componentType base-service.
+- `mctl_get_service_config(labs, mctl-telegram-preview)`: image `main-a787e97`,
+  host `tg-preview.mctl.ai`, port 8080, database yes.
+- `mctl_list_services(labs)` (complete=true): 20 services; no
+  `agent-worker-managed-preview` Application exists in ArgoCD.
+- The C1-gate model and shadow prices were confirmed by the issue author in
+  clarification `hir-5339bd17efa7ca5d`: `Qwen/Qwen3.6-35B-A3B` via
+  `custom-hetzner`, 1.40/4.40 USD per MTok (Nebius GLM-5.1).
 - Not observed: Cloudflare account state (whether a `mctl-telegram` gateway or
   token exists), Vault paths, live VictoriaMetrics series for the new
   `mctl_agent_*` metrics, and whether `main-a787e97` contains the managed-runtime
@@ -230,8 +237,10 @@ mctl-telegram runbook:
   unless on()
   (sum(up{namespace="labs", service="labs-agent-worker-managed-preview-base-service"}) > 0)
   ```
-  `for: 10m`. With 0 replicas there is no `up` series, so `unless` lets the left
-  side through. That is intended: an account switched to managed with no worker
+  `for: 10m`. The `service` label value is the one the existing scrape gives
+  `labs-agent-worker-preview` targets. Task 9 checks it against the live `up`
+  series of that worker before it is written into the rule. With 0 replicas
+  there is no `up` series, so `unless` lets the left side through. That is intended: an account switched to managed with no worker
   means jobs are routed to the operator via `AGENT_UNCLAIMED_ROUTE_AFTER`.
 
 The file header's metric-provenance table gets the four new series. Each is
