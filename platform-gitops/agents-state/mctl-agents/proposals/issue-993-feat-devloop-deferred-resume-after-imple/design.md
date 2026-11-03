@@ -1,191 +1,296 @@
 # Design: issue-993-feat-devloop-deferred-resume-after-imple
 
+Amended 2026-11-03 (see requirements.md, "Amendment 2026-11-03"). Part M = lands on `main` via this proposal's
+implementer. Part S = commits on PR #992's branch by its owner/shepherd. Line numbers are approximate (`~`) and
+refer to `main` (a99c888) for Part M and to `origin/pr992` (6b60a7f) for Part S.
+
 ## Current state
-All paths are in the read-only clone of `mctlhq/mctl-agents` at `main` (a99c888). The clone does NOT contain
-PR #992: `IMPLEMENT_EXECUTION_PATCH` and `_hold_canonical_for_implement` are absent. This design therefore
-builds on the #991 proposal's design (`agents-state/mctl-agents/proposals/issue-991-feat-devloop-pass-execution-id-to-the-im/design.md`,
-status `implemented`, PR #992 open) and assumes that design's mechanics: the hold is decided at the flip site,
-and the end of the hold comes after `_implement`.
+Read-only clone of `mctlhq/mctl-agents`. `main` does NOT contain PR #992: `IMPLEMENT_EXECUTION_PATCH`
+(`"implement-execution-id"`, pr992 `dev_loop.py:475`) and `_hold_canonical_for_implement` (pr992 `:1762`, `:4179`)
+exist only on #992's branch. Mechanics of the #991 design (status `implemented`, untouched) are assumed.
 
 Delivery path (`orchestrator/temporal/workflows/dev_loop.py`):
 - `ResumeDelivery` (~:1032) carries only `execution_request_id`, `work_item_id`, `surface`, `actor_kind`,
-  `actor_id` and `kind` (defaulted `resume`). The request's `intent_id`, `expected_state_version` and
-  `resumed_from_execution_id`, which `ExecutionRequest` (`orchestrator/work_context/execution_requests.py`
-  ~:138-207) does parse, are dropped by `Dispatcher._dispatch` (`orchestrator/temporal/dispatcher.py` ~:434-441).
-- `accept_execution_request` (~:2647) and its validator `_validate_execution_request` (~:2696) refuse with
-  `ResumeRefused` (permanent; the dispatcher rejects `resume_refused:<reason>`, and the reason must be in
-  `xr.RESUME_REFUSAL_REASONS`) or `ResumeDeferred` (transient). Neither validator looks at
-  `_gates_passed` or the PR state.
-- `_deliver` (~:2753) binds the fulfilled `we_`, then waits for
-  `self._abandoned or self._is_approved() or self._gates_passed or ...` (~:2831). It lands `Succeeded` when
-  `decided = (self._is_approved() or self._gates_passed) and not self._abandoned` (~:2833). After the implement
-  step, `_gates_passed` is already True (set at ~:4234 before `_implement`, and at ~:4452 in
-  `_resume_merge_watch`), so the delivery ends `Succeeded` at once and no work is done. That is the silent no-op
-  the issue describes. `tests/test_execution_request_resume.py::test_a_resume_delivered_after_the_implement_step_succeeds_at_once`
-  (~:580) asserts exactly this.
-- `_land_delivery` (~:2838) advances the `we_` with retries and keeps a pending phase across hops.
-  `_end_delivery` (~:2899) records a `ResumeRejection` when there is a refusal string. `OpenDelivery` (~:1053)
-  is carried across continue-as-new.
-- Merge watch: `_watch_pr` (~:6227) runs `_shepherd_tick(service, slug)` (~:4949) on tick boundaries. With
-  `concurrent_ticks` it runs one tick task at a time (~:6571-6593). `_shepherd_tick` submits
-  `mctl-agents-shepherd` with `service`, `slug`, the agent image and `_launch_correlation()` (~:4586). A failed
-  tick is logged, not raised. `orchestrator/run_shepherd.py` already has the `--review-feedback` implementer
-  path (~:21, ~:2967-3173).
-- Closed-loop path: a delivery to a closed loop is an Update-with-Start
-  (`TemporalClientPort.deliver`, dispatcher ~:258-300) of `dev-loop-<owner>-<repo>-<n>`. A resumed investigate
-  on a proposal past `proposed` writes a context-only snapshot and ends (`CONTEXT_ONLY_RESUME_PATCH`, ~:447).
-  The proposal is rewritable only if its status is in `_OVERWRITABLE_PROPOSAL_STATUSES = {"proposed"}`
-  (~:458), which mirrors `run_issue_investigator._OVERWRITABLE_STATUSES` (~:299, used at ~:3528 and the
-  post-agent re-check ~:4199).
-- Orphan reconciliation: `Dispatcher._reconcile_closed_loops` (dispatcher ~:534-604) fails a non-terminal
-  `<loop>#xr_*` or `<loop>#run_*` execution whose loop is not RUNNING, or whose running run does not hold
-  the request. It is called only from `_dispatch` (~:432), i.e. only after a request has been claimed.
-  `_end_if_orphaned` (~:470) covers the fulfil race only. While a `we_` is open, mctl-api refuses to create a
-  request, so after a terminated loop nothing ever triggers the reconciliation.
-- Dispatcher enablement: `dispatcher.enabled()` reads `EXECUTION_REQUEST_DISPATCHER` (~:90, ~:185), default off;
-  it is started from `orchestrator/temporal/worker.py` (~:885).
-- Docstrings: `_await_canonical_reapproval` (~:2462) and `_launch_correlation` (~:4586) describe the
-  pre-#991 shape. #992 makes them inaccurate: the canonical `we_` is now held through implement, and
-  `execution_id` is sent to implement only, not through `_launch_correlation`.
-- Tests: `tests/test_execution_request_resume.py`, `tests/test_execution_request_dispatch.py`,
-  `tests/test_execution_request_replay.py`, the replay harness in `tests/test_workflow_replay.py` /
-  `tests/replay_scenarios.py` with histories in `tests/fixtures/histories/`, and `tests/test_patch_memoization.py`.
-- ADRs: `docs/adr/011-work-item-resume-contract.md` and `011-execution-identity-contract.md` are the contracts
-  this extends; the latest ADR number is 025.
+  `actor_id` and `kind`. The request's `intent_id`, `expected_state_version` and `resumed_from_execution_id`, which
+  `ExecutionRequest` (`orchestrator/work_context/execution_requests.py` ~:138-207) parses, are dropped by
+  `Dispatcher._dispatch` (`orchestrator/temporal/dispatcher.py` ~:434-441).
+- `accept_execution_request` (~:2647) and `_validate_execution_request` (~:2696) refuse with `ResumeRefused`
+  (permanent; reason must be in `xr.RESUME_REFUSAL_REASONS`) or `ResumeDeferred` (transient, the dispatcher keeps the
+  request claimable: `TemporalClientPort.deliver`, dispatcher ~:258-300). Neither looks at `_gates_passed` or the PR.
+- `_deliver` (~:2753) binds the fulfilled `we_`, then waits for `self._abandoned or self._is_approved() or
+  self._gates_passed or ...` (~:2831) and lands `Succeeded` when `(self._is_approved() or self._gates_passed) and
+  not self._abandoned` (~:2833). `_gates_passed` is set before `_implement` (~:4234) and in `_resume_merge_watch`
+  (~:4452), so a resume during implement or the merge watch ends `Succeeded` at once: the silent no-op. Codified by
+  `tests/test_execution_request_resume.py::test_a_resume_delivered_after_the_implement_step_succeeds_at_once` (~:580).
+- Merge watch: `_watch_pr` runs `_shepherd_tick(service, slug)` (~:4949) on tick boundaries; a failed tick is logged,
+  not raised. `orchestrator/run_shepherd.py` already has the `--review-feedback` implementer path (~:21, ~:2967-3173).
+- Closed-loop path: Update-with-Start of `dev-loop-<owner>-<repo>-<n>`. A resumed investigate on a proposal past
+  `proposed` writes a context-only snapshot (`CONTEXT_ONLY_RESUME_PATCH`, ~:447). Rewritable only if status is in
+  `_OVERWRITABLE_PROPOSAL_STATUSES = {"proposed"}` (~:458), mirroring `run_issue_investigator._OVERWRITABLE_STATUSES`.
+- Orphan reconciliation: `Dispatcher._reconcile_closed_loops` (dispatcher ~:534-604) fails a non-terminal `<loop>#xr_*`
+  or `<loop>#run_*` execution whose loop is not RUNNING (or whose RUNNING run does not hold the request, via the
+  `holds_execution_request` query, `holds_request` returning None when it cannot say). It runs only from `_dispatch`
+  (~:432), i.e. after a request was claimed. While a `we_` is open mctl-api refuses to create a request, so after a
+  terminated loop nothing triggers it (switch off). With the #931 switch on a request is queued and the #931 sweeper
+  closes the Temporal-owned execution (below).
 
-Deployed state checked:
-- `$MCTL_GITOPS_ROOT/services/admins/mctl-agents-worker/values.yaml`: image tag `1.117.0` (~:27);
-  `EXECUTION_REQUEST_DISPATCHER: "true"` (~:139). This confirms the issue: the dispatcher is on in production.
-- The `mctl-agents-worker-exec` and `mctl-agents-worker-implement` services exist under `services/admins/`.
-  A grep for `IMPLEMENT_EXECUTION` / `EXECUTION_REQUEST` found nothing in them.
-- `.../proposals/issue-991-.../.status.yaml`: status `implemented`, PR #992, `github.state: open`.
-- Not checked: the shepherd CWFT (`argo-workflows/cluster-templates/cwft-mctl-agents-shepherd.yaml`). That
-  directory is outside the gitops paths available to this run, so I could not observe whether it declares
-  `intent_id` / `execution_request_id` params or an output. The mctl-api #931 source and its capability surface
-  were not readable. No mctl MCP tool calls were made (the gitops checkout covered the worker config). All three
-  gaps are recorded under Open questions.
+Facts verified for this amendment (pr992 unless noted):
+- Phases the loop writes: `_advance_dispatched_execution` is called only with `Succeeded` or `Failed`; `Error` is
+  written only by the #931 sweeper. Under #992 a failed/cancelled/timed-out implement raises out of `_implement`
+  (non-retryable `ApplicationError`, marker `implement-outcome`), `run()`'s `except (Exception, CancelledError)` ends
+  the `we_` with `_canonical_pending_phase or "Failed"` and `FAST_ACTIVITY_RETRY_POLICY` (~:3489), so the line
+  `self._canonical_end_phase = "Succeeded" if implement_result.succeeded else "Failed"` (~:4270-4272) is reachable on
+  success only. mctl-api cannot tell Cancel and Timeout from Failed.
+- `_resume_merge_watch` (~:4422-4520) rehydrates watch state and calls `_rehydrate_work_context`; `_carry_work_context`
+  (~:4324) and `MergeWatchResume` (~:1564) carry NO canonical field. `_canonical_open`, `_canonical_pending_phase`,
+  `_canonical_execution`, `_canonical_end_phase` and `_hold_canonical_for_implement` therefore reset to their
+  `__init__` values (~:1755-1766) in a continued run, and `_end_canonical_execution` returns at once when
+  `_canonical_open` is False (~:3516). A pending end is lost at the first hop; `run`'s exit paths in the continued
+  run cannot retry it; the `work_context` query reports `canonical_open=False` after a hop (~:1993).
+- `after_flip=not self._hold_canonical_for_implement` (~:4257) is already in #992: False under the hold.
+- Docstrings: `_await_canonical_reapproval` (~:2478) still describes the pre-#991 shape (a resume opens a new
+  execution after the flip); `_launch_correlation` (~:4623) does not say `execution_id` is deliberately not part of it
+  (it goes to implement only, `implement_params["execution_id"]` ~:4236).
+- Deployed: `services/admins/mctl-agents-worker/values.yaml:27` image `1.117.0`; `:139` `EXECUTION_REQUEST_DISPATCHER:
+  "true"` (commit f1fc08233, 2026-09-24). The comment above it says only the main worker runs the dispatcher; the
+  exec and implement workers ignore the flag. Short activities are registered on the main worker
+  (`orchestrator/temporal/worker.py` ~:700-790, `short_activities`).
+- How the repo does worker flags: workflow code never reads the environment (grep finds no `os.environ` under
+  `orchestrator/temporal/workflows/`). Runtime flags are read in activity code, with the command sequence identical in
+  every mode (`orchestrator/temporal/activities/lifecycle.py` ~:240-255, `rollout.py`); `dispatcher.enabled()`
+  (~:185) reads `EXECUTION_REQUEST_DISPATCHER` with a `_TRUTHY` set. Code versions use `workflow.patched`, memoised per
+  id (`tests/test_patch_memoization.py`).
+- mctl-api (`origin/main` a11b54d): `GET /api/v1/work-items` (`ListWorkItems`, `handlers_work_items.go:466`) filters
+  `state`, `tenant`, `owner`, `limit<=500` and returns the most recently updated first (`store.go:1132`,
+  `ORDER BY updated_at DESC, id LIMIT n`); there is NO cursor/offset, no engine filter and the item has no execution
+  field. `GET /work-items/{id}` returns the item with `latest_execution`; `GET /work-items/{id}/executions` lists
+  one item's executions (`router.go:910-914`, MCP `mctl_list_work_item_executions`). `AttachExecution` never changes
+  a finished execution's phase (`store.go:846-851`, 409 `invalid_transition`). The accepted #931 proposal adds
+  no capability endpoint/field and no list endpoint; its sweeper (switch on) only examines `engine=temporal`
+  executions with an open request behind them and a minimum age, writes `Error`, and leaves Running, ContinuedAsNew
+  and unreadable runs alone.
+- mctl-agents Temporal reads available: `client.list_workflows(query)` (`activities/visibility.py` ~:118, ~:206;
+  `run_issue_directive_poller.py` ~:394), `TemporalPort.loop_state` / `holds_request`, and the workflow query
+  `work_context` returning `work_item_id`, `canonical_execution_id`, `canonical_open`, `executions` (~:1975).
+  `start.py` memo carries only `requested_by`/`requested_via` (~:95): NO `work_item_id` in the memo, and for a
+  non-dispatched loop the item is resolved inside the run (`ensure_issue_execution`), so the start cannot record it.
+- Implementer base: `run_implementer._clone_target` clones the default branch (`:1787-1794`), `git checkout -b
+  feat/agents-<slug>` (`:4958-4959`), PR `--base main` (`:3784-3794`). No base option.
+- ADRs: latest is `025-independent-review-receipts.md`; this adds `026`.
+- Not checked: the shepherd CWFT (outside the visible gitops paths), the live mctl-api switch state, and Temporal
+  namespace retention.
 
 ## Proposed solution
 
-### 1. Carry the full request identity (dispatcher + `ResumeDelivery`)
-Add defaulted fields to `ResumeDelivery`: `intent_id: int = 0` (0 = none), `expected_state_version: int = 0`,
-`resumed_from_execution_id: str = ""`. `Dispatcher._dispatch` fills them from `ExecutionRequest`. A
-recorded payload without these fields decodes to the defaults. `execution_request_id` is already the Update id and
-the idempotency identity (one surface idempotency key maps to one request in mctl-api). It is kept as the dedupe key.
+### Part M
 
-### 2. New contract marker
-`DEFERRED_RESUME_PATCH = "deferred-resume-contract"`, declared beside `EXECUTION_REQUEST_RESUME_PATCH` with the
-usual migration-by-attrition comment. It is recorded once, where the loop sets `_gates_passed = True` (both
-sites, ~:4234 and ~:4452), into `self._deferred_contract: bool`, and carried in `MergeWatchResume` as a
-defaulted field. Validators must not record commands, so they read only this flag. A history recorded without
-the marker never sets it and keeps today's command sequence, including the at-once `Succeeded`.
+#### M1. Carry the full request identity
+Defaulted `ResumeDelivery` fields `intent_id: int = 0` (0 = none), `expected_state_version: int = 0`,
+`resumed_from_execution_id: str = ""`, filled by `Dispatcher._dispatch`. `execution_request_id` stays the Update id
+and dedupe key.
 
-New loop state, carried across continue-as-new through defaulted `MergeWatchResume` fields:
-`_implement_running: bool`, `_pr_merged: bool` (set when `_watch_pr` observes MERGED),
-`_feedback_done: frozenset[str]` (request ids whose tick has run), and `_pending_feedback: FeedbackRequest | None`.
+#### M2. Contract marker and carried state
+`DEFERRED_RESUME_PATCH = "deferred-resume-contract"`, recorded once where `_gates_passed = True` is set (both sites)
+into `self._deferred_contract`, carried in `MergeWatchResume` as a defaulted field. A continued run evaluates the
+marker afresh, so a pre-marker loop upgrades at its next hop. New state, all defaulted in `MergeWatchResume`:
+`_implement_running`, `_pr_merged`, `_feedback_done: frozenset[str]`, `_pending_feedback`. Validators record no
+command; they read flags only.
 
-### 3. Validator decisions (refuse before a `we_` is minted)
-In `_validate_execution_request`, after the existing checks and only if `self._deferred_contract`:
-- `_implement_running` -> `ResumeDeferred("implement-running")`. With #931 the claim guard should prevent this
-  case. It is kept as defence in depth.
-- `_pr_merged` -> `ResumeRefused("work-merged")`.
-- `kind == resume and intent_id == 0` -> `ResumeRefused("nothing-to-resume")`.
-Add `work-merged`, `nothing-to-resume`, `implement-running` to `xr.RESUME_REFUSAL_REASONS`, so the dispatcher
-forwards them and does not collapse them to `unspecified`.
+#### M3. Validator decisions (refuse before a `we_` is minted)
+In `_validate_execution_request`, after the existing checks:
+- `self._gates_passed and not self._deferred_contract` -> `ResumeDeferred("legacy-loop")` (the fence). Update validators
+  are not run on replay, so an already accepted update is unaffected (T-test asserts a replayed history stays green).
+  A rolling update can still be validated by an old pod; step 2 of the rollout order closes that window.
+- under the contract: `_implement_running` -> `ResumeDeferred("implement-running")` (defence in depth);
+  `_pr_merged` -> `ResumeRefused("work-merged")`; `kind == resume and intent_id == 0` -> `ResumeRefused("nothing-to-resume")`.
+Add `work-merged`, `nothing-to-resume`, `implement-running`, `legacy-loop` to the vocabularies
+(`xr.RESUME_REFUSAL_REASONS`, and the deferred reasons) so the dispatcher forwards them.
+A new read-only workflow query `contract_state` -> `(gates_passed, deferred_contract)` and CLI
+`orchestrator/temporal/cli.py contract-drain-check` list RUNNING DevLoop runs (visibility query
+`ACTIVE_DEV_LOOPS_QUERY`) where `gates_passed and not deferred_contract`. A query on an old pod that lacks it counts
+as listed (unknown). Queries replay old histories on the new code, so old loops answer too.
 
-### 4. `_deliver` after gates: one feedback tick, typed outcome
-In `_deliver`, replace the `_gates_passed` short-circuit for contract loops. When `self._deferred_contract` and
-`self._gates_passed`:
-1. If `rid in self._feedback_done`, do nothing more (redelivery after a hop).
-2. Check the grant binding with `_feedback_authority_valid()`: the `aar_` the flip spent, the approved content
-   digest recorded at the flip, and the approver authority must still match the live proposal. This reuses the
-   grant-freshness reads behind `GRANT_FRESHNESS_PATCH`. If the check fails, land `Failed` with refusal
-   `reapproval-required`. This covers changes to content and authority, not only actor or surface changes.
-3. Otherwise set `self._pending_feedback = FeedbackRequest(rid, intent_id, actor, surface)` and wait for the
-   watch to run it (or for `_exiting` / `_hopping` / `_abandoned`).
-4. `_watch_pr` checks `_pending_feedback` at each poll, in addition to the cadence, and runs one tick under the
-   existing single-tick rule. This tick does not consume the cadence budget. It calls
-   `_shepherd_tick(service, slug, feedback=...)`, which adds `intent_id`, `execution_request_id` and
-   `feedback_actor` to the CWFT params and reads a structured `feedback_outcome` from the result. Before
-   awaiting the tick, the request id is added to `_feedback_done`. A crash after that point fails closed, never
-   twice. Temporal replay is deterministic, so replay adds no second tick.
-5. `run_shepherd` gets a `--feedback-intent` mode. It fetches the intent text through the work-context client
-   (`list_intents`), and runs a scope classification against the approved `requirements.md` / `design.md`:
-   `in-scope` or `scope-expansion`. For `in-scope` it runs the existing `--review-feedback` implementer, under
-   the same lifecycle claim, `--match-head-commit` fencing, independent review and CI gates. It emits one of
-   `processed` (a commit was pushed, or the feedback was shown to be addressed already, with evidence),
-   `scope-expansion`, `failed` or `unobservable`.
-6. `processed` -> land `Succeeded`. Anything else -> land `Failed` with the refusal `scope-expansion`,
-   `feedback-failed` or `feedback-unobservable`, recorded as a `ResumeRejection`. A tick that fails as an
-   activity is `feedback-failed`.
-7. If the watch ends before the tick runs (PR merged or closed, or the deadline passes), land `Failed` with
-   `work-merged` or `feedback-not-run`.
+#### M4. `_deliver` after gates: one feedback tick, typed outcome
+For contract loops with `_gates_passed`:
+1. `rid in _feedback_done` -> nothing more (redelivery after a hop).
+2. Read the switches with the activity `read_rollout_switches` (below). Not on -> land `Failed` with `feedback-disabled`.
+3. `_feedback_authority_valid()`: the `aar_` the flip spent, the approved content digest recorded at the flip, and the
+   approver authority still match the live proposal (reuses `GRANT_FRESHNESS_PATCH` reads). Failure -> `Failed`,
+   `reapproval-required`.
+4. Else set `_pending_feedback = FeedbackRequest(rid, intent_id, actor, surface)`; wait for the watch to run it (or
+   `_exiting` / `_hopping` / `_abandoned`).
+5. `_watch_pr` checks `_pending_feedback` each poll and runs one tick under the single-tick rule, outside the cadence
+   budget, via `_shepherd_tick(service, slug, feedback=...)` adding `intent_id`, `execution_request_id`,
+   `feedback_actor` and reading `feedback_outcome`. The request id is added to `_feedback_done` BEFORE awaiting the
+   tick: a crash after that fails closed, never twice.
+6. `run_shepherd --feedback-intent` fetches the intent text (`list_intents`), classifies scope against the approved
+   `requirements.md`/`design.md` (`in-scope` / `scope-expansion`), runs `--review-feedback` for in-scope under the same
+   lifecycle claim, `--match-head-commit` fencing, review and CI gates, and emits `processed` / `scope-expansion` /
+   `failed` / `unobservable`.
+7. `processed` -> `Succeeded`; anything else -> `Failed` plus `ResumeRejection` (`scope-expansion`, `feedback-failed`,
+   `feedback-unobservable`). A tick that fails as an activity is `feedback-failed`.
+8. Watch ends before the tick (PR merged / closed / deadline) -> `Failed` with `work-merged` or `feedback-not-run`.
+The classification is model-judged; only `in-scope` proceeds and everything else fails closed.
 
-### 5. Implement Failed / Cancelled / TimedOut -> closed-loop path
-A loop whose implement did not succeed skips the merge watch and ends. The canonical `we_` ends `Failed`.
-The queued request is then claimed and Update-with-Start starts a new run. Widen the guard in both mirrors
-(`run_issue_investigator._OVERWRITABLE_STATUSES` usage at ~:3528 / ~:4199, and the loop's
-`_OVERWRITABLE_PROPOSAL_STATUSES`) by adding a predicate, not by changing the set. A dispatched `resume` that
-pins an available intent may rewrite a proposal whose status is `accepted` or `needs-triage`, if both hold:
-`.status.yaml` has no `pr`, and GitHub shows no open or merged canonical `feat/agents-<slug>` PR. The rewrite
-writes `proposed` with the pinned intent recorded. The loop then parks on the normal canonical approval, so
-nothing implements without a fresh human grant. The loop-side decision is guarded by the same
-`DEFERRED_RESUME_PATCH` at the context-only branch. Old histories keep ending context-only.
+#### M5. `read_rollout_switches` activity (shared switch mechanism)
+New short activity on the main worker, `orchestrator/temporal/activities/rollout_switches.py`, returning
+`RolloutSwitches(deferred_feedback: bool = False, implement_hold: bool = False)` (Part S adds the second field, a
+defaulted dataclass field, so a recorded result still decodes). It reads `DEVLOOP_DEFERRED_FEEDBACK` and
+`DEVLOOP_IMPLEMENT_HOLD` in the activity (legal outside the sandbox, as `lifecycle.py` does) and returns true only for an
+explicit on (`true`, `1`, `on`, `yes`, as `dispatcher._TRUTHY`); empty, unknown or malformed is off with a warning.
+It never raises; the workflow also treats an `ActivityError` as off. The call is scheduled unconditionally at its site
+under a marker, so the command sequence is identical whichever way the environment is set; only the payload differs,
+and the payload is replayed from history. Env vars are frozen at pod start: a flip needs a pod roll of the main worker
+only. Alternative considered, a recorded workflow input (a field on `IssueRef` set by the starter): rejected, because
+there are several starters (intake poller, dispatcher, directive scan) and a long-lived loop could not be switched.
 
-### 6. Orphaned-execution sweep (no claim needed)
-Move the per-execution decision in `_reconcile_closed_loops` into a pure helper `_orphan_verdict(execution, loop)`
-that both callers share. Add `Dispatcher.sweep_orphans_once()`, run by `run_dispatcher` every
-`EXECUTION_ORPHAN_SWEEP_SECONDS` (default 300) in the same task. It does not depend on claims:
-- Source A (preferred, if #931 provides it): mctl-api lists the work items that have a non-terminal `temporal`
-  execution with a queued request. The sweep applies `_orphan_verdict` and the same Failed attach.
-- Source B (fallback, mctl-agents-only): Temporal visibility,
-  `WorkflowType='DevLoopWorkflow' AND ExecutionStatus!='Running' AND CloseTime > now-48h`. For each closed run it
-  resolves the work item from the start memo, which gains a `work_item_id` entry for new starts in
-  `orchestrator/temporal/start.py` and the dispatch start op. Then it GETs the item and applies the verdict.
-  Every read error skips. Nothing is treated as gone because a read failed.
-The sweep ends only executions whose engine ref is this dispatcher's own (`#xr_` or `#run_`) and whose owner is
-CLOSED/ABSENT or does not hold them, exactly as today.
+#### M6. Closed-loop path after a failed implement, rewind with proof
+A loop whose implement did not succeed skips the merge watch and ends; the canonical `we_` ends `Failed` (exception
+path). The queued request is then claimed and Update-with-Start starts a new run. Widen the guard in both mirrors by a
+predicate, not by changing the set: a dispatched `resume` that pins an available intent may rewrite a proposal in
+`accepted`/`needs-triage` only when the positive-proof checklist of the requirements holds: no `pr`; no open or merged
+`feat/agents-<slug>` PR and no such branch on origin (GitHub reads); no live implement Workflow for the slug, no live
+attempt lease; no active lifecycle-ownership claim. Each read is an error or unknown on failure; any unknown writes
+`needs-triage`, no `proposed`, no implementer. The rewrite writes only `status: proposed` with the pinned intent
+through the existing path; it never edits or re-binds an earlier approval, and the new run parks on the canonical
+approval for a fresh grant at the then-current digest. Guarded by `DEFERRED_RESUME_PATCH` at the context-only branch;
+old histories keep ending context-only.
 
-### 7. Rollout gate
-Add an activity `probe_execution_queue_capability`, which reads a mctl-api capability flag with the worker
-identity through the policy checkpoint. Add a marker `IMPLEMENT_HOLD_CAPABILITY_PATCH`, consulted immediately
-before #992's `workflow.patched(IMPLEMENT_EXECUTION_PATCH)` at the flip site. Under the marker the loop runs the
-probe (its answer is recorded in history) and holds the `we_` only if the probe says on. A probe that gets no
-answer counts as off. That is today's behaviour, which drops no request. This must land in #992 before #992
-leaves draft, because the probe precedes #992's marker in the command order. Add a read-only CLI subcommand
-(`orchestrator/temporal/cli.py`: `capability execution-queue`) for the release owner to run before the
-`mctl-agents-worker*` image bump. Order: #931 switch on -> CLI reports on -> #992 + this change released -> image bump.
+#### M7. Orphan sweep (no claim needed), `temporal` only
+Move the per-execution decision of `_reconcile_closed_loops` into a pure helper `_orphan_verdict(execution, loop_state,
+holds)` shared by both callers. `Dispatcher.sweep_orphans_once()` runs from `run_dispatcher` every
+`EXECUTION_ORPHAN_SWEEP_SECONDS` (default 0 = off until task C0 passes; 300 afterwards).
 
-### 8. Documents
-ADR `docs/adr/026-deferred-resume-contract.md`: the request-to-outcome table (implement running -> deferred;
-PR open -> feedback tick; merged -> `work-merged`; implement not succeeded -> closed loop with rewind and fresh
-approval; no intent -> `nothing-to-resume`), the authority rule, and orphan recovery. Amend the #991
-requirements/design/tasks to reference it (owner decision 5 stays there). Fix the `_await_canonical_reapproval`
-and `_launch_correlation` docstrings. A new approval digest is needed for the amended #991 spec.
+Sources (all confirmed in code, see Current state):
+1. Candidate runs: `list_workflows("WorkflowType = 'DevLoopWorkflow' AND ExecutionStatus != 'Running' AND
+   ExecutionStatus != 'ContinuedAsNew'")` plus a `CloseTime` bound. A run that continued as new is not closed.
+2. Per candidate run: the `work_context` query (`work_item_id`, `canonical_execution_id`, `canonical_open`,
+   `executions`). It is read from the closed run's replayed history, so it needs a worker that replays the run.
+   A query that fails (not replayable, timeout) is `unobserved`: counted and skipped, never "nothing open".
+3. Per candidate that reports an open `we_` or unfinished delivery: `WorkItemClient.get(work_item_id)` for the
+   authoritative executions (`latest_execution` and the item's executions), then `_orphan_verdict` with `loop_state`
+   re-read immediately before the write, then the same attach-or-advance the loop uses
+   (`attach_execution(..., EngineRun(temporal, ref), "Failed")`) through the policy checkpoint.
+`GET /work-items?state=open` is NOT a source: no cursor, newest-updated 500 only, no execution data. It may only
+be used as a cross-check, never to decide absence.
+
+Division of labour with the #931 sweeper: #931 (switch on) closes Temporal executions that have a queued request
+behind them and are at least the minimum age old, as `Error`. This sweep closes the DevLoop-owned executions found
+from the Temporal side, as `Failed`, with or without a request. Both use "owning run closed or absent, unreadable
+means leave" and mctl-api never changes a finished phase, so whichever writes first wins and the other gets 409
+`invalid_transition`, which is classified as converged. Neither depends on the other, so the sweep does not wait for
+or duplicate #931. With the switch on a waiting request exists as a queued row, which #931 handles: this sweep is
+for the no-request case (hygiene, switch-off periods, items that no request is waiting on).
+
+Starvation (the hazard found reviewing mctl-api#932: sweeping the oldest N forever starves later rows): two lanes.
+- Fresh lane: closes since the last completed cycle start minus an overlap (visibility `CloseTime >` mark), newest
+  first, bounded by `SWEEP_FRESH_MAX` (default 50).
+- Backlog lane: a descending keyset cursor on `CloseTime` (`CloseTime <= cursor`, resume at the oldest examined row),
+  `SWEEP_BATCH` rows per cycle (default 50, hard cap 200), walking back to the namespace retention floor, then wrapping
+  to now. Rows examined and found converged are remembered in a bounded in-process set; unresolvable rows are skipped
+  and counted, they do not hold the cursor. Overlap at equal `CloseTime` is harmless: the write is idempotent.
+- Bounded cost per cycle: at most `batch + fresh` queries (replays) and one item GET per open candidate.
+- Audit: `orphan_sweep` events carry examined / unobserved / ended / converged counts and the wrap age.
+Engine coverage: `temporal` only. argo and a2a executions are never touched and are tracked separately. Only
+executions whose engine ref is this dispatcher's own (`#xr_`, `#run_`) are ended.
+Typed blocker: task C0 is a spike that terminates a real DevLoop in the Temporal test environment and queries
+`work_context` on the closed run, also against a recorded pre-hop history. If it cannot be shown, the sweep ships off
+and the proposal STOPS at the blocker `ORPHAN_SOURCE_BLOCKED`: the minimal API follow-up would be a read of items
+with an open `temporal` execution with a keyset cursor, proposed and approved on its own. Nothing here depends on it.
+
+#### M8. Documents
+ADR `docs/adr/026-deferred-resume-contract.md`: the request-to-outcome table (implement running -> deferred; PR open
+-> feedback tick; merged -> `work-merged`; implement not succeeded -> closed loop with proof-gated rewind and fresh
+approval; no intent -> `nothing-to-resume`; legacy loop -> `legacy-loop`), the authority rule, the two switches, the
+sweep and its division of labour with #931.
+
+### Part S (on PR #992's branch)
+
+#### S1. Hold switch at the flip site
+After `workflow.patched(IMPLEMENT_EXECUTION_PATCH)` (pr992 ~:4179) add the marker `IMPLEMENT_HOLD_SWITCH_PATCH =
+"implement-hold-switch"`. If not patched: `hold = True` (what a history recorded under #992 did, so the fixture
+`dev_loop_implement_execution.patched.json` replays). If patched: `hold = (await read_rollout_switches()).implement_hold`,
+off on `ActivityError`. `self._hold_canonical_for_implement = hold` then drives every existing use unchanged: the end at
+the flip when False (~:4180), `execution_id` in `implement_params` (~:4227), `after_flip` (~:4257), the end after
+implement (~:4270). With the switch off the loop equals `main`: the `we_` ends at the flip, no `execution_id`. That
+leaves the #991 observe-proof unresolved until the switch is on, by design.
+
+#### S2. Merge-watch retry (`IMPLEMENT_END_RETRY_PATCH = "implement-end-retry"`)
+Declared beside `IMPLEMENT_EXECUTION_PATCH`, evaluated once right after the post-implement end, only when the hold is on,
+stored as `self._retry_pending_end`. In `_watch_pr`, at the top of each poll iteration (after the hop check, before
+`get_pr_state`):
+```
+if self._retry_pending_end and self._canonical_open and self._canonical_pending_phase:
+    await self._end_canonical_execution(self._canonical_pending_phase, retry_policy=FAST_ACTIVITY_RETRY_POLICY)
+```
+One attempt per poll, none once landed, so no extra command in the common case; the fast policy keeps a store outage
+from stalling merge detection. Hops: in the hop branch, before the `MergeWatchResume` is built, one more attempt; then
+`_carry_work_context` folds `canonical_execution_id`, `canonical_open`, `canonical_pending_phase`,
+`canonical_end_phase` and `retry_pending_end` into the record (new defaulted `MergeWatchResume` fields; one place, both
+hop sites), and `_resume_merge_watch` rehydrates them before its first await. A record without the fields decodes to
+today's behaviour. It also makes the `work_context` query accurate after a hop, which M7 relies on.
+Evidence that a pending end cannot strand a queued resume for 14 days: with the retry the `we_` closes at the first
+poll at which the store answers (the cadence), tested with a clock-skipped watch of many polls and across a hop (T-S3,
+T-S4); without it the test fails (mutation).
+
+#### S3. Docstrings and other
+Fix `_await_canonical_reapproval` (the hold means no resume opens a new execution; `after_flip=True` is legacy-only) and
+`_launch_correlation` (`execution_id` is deliberately not part of it); `_end_canonical_execution` docstring; add the
+`implement_hold` field to `RolloutSwitches`; record fixtures: pre-switch (existing `.patched.json`), post-switch with
+hold on, post-switch with hold off, and one with a retried advance and one across a hop.
+
+## Delivery
+Part M and Part S are developed independently and can merge in either order, because Part S's off state equals `main`
+and Part M needs none of #992's code.
+- Recommended order: Part M first (it rewrites the `main` test that exists there, after its own behaviour tests), then
+  #992 is rebased on `main` and gains Part S. After the rebase some of the 21 tests may change reason; the first Part S
+  task records which still fail with the hold switch off.
+- The 21 failing #992 resume tests: they fail on #992 as it stands because the hold is unconditional (stated by the
+  issue; not re-run in this authoring pass). With the switch off the loop is `main`'s loop, so each test's
+  existing expectation stays valid. Plan, per owner decision 6 (never fit an expectation to a lost request):
+  1. Add the fake `read_rollout_switches` to the test activity registry, default off; run the 21 unchanged. Record the result.
+  2. Parametrise them over `implement_hold in {off, on}`. The off leg keeps today's expectation, untouched.
+  3. Write the on leg last, after the Part M behaviour and the mutation-discriminating tests T-S* exist; each on-leg
+     test asserts a delivered or typed-refused request, never a lost one.
+  Any of the 21 that still fails with the switch off is a real contract difference and is handled like an on-leg test.
+- If the implementer cannot be pointed at #992's branch (confirmed), the owner decides: Part S by #992's owner
+  (recommended), or a separate proposal for a base option.
 
 ## Alternatives
-- Re-approve every deferred resume (route it all through the closed-loop path, including PR-open cases).
-  Dropped: the owner chose shepherd feedback for an open PR. Rewinding would also discard a live PR's review state.
-- Validate in `_deliver` only, after the bind. Dropped: a refusal after the fulfil mints a `we_` and loses the
-  request row's intent. The validator refuses before minting, which keeps the intent (owner decision 2).
-- Put orphan recovery in a separate cron workflow. Dropped for now: the dispatcher already owns the
-  write path, the policy checkpoint identity and the verdict logic. A second actor would duplicate the fencing.
-  This can move once the owner decides placement.
-- Gate the hold on a worker env var. Dropped: workflow code cannot read env deterministically, and an env var
-  does not prove mctl-api's state. An activity answer is recorded in history and is evidence.
+- Re-approve every deferred resume (route all through the closed-loop path, including PR-open). Dropped: the owner chose
+  shepherd feedback for an open PR; rewinding would discard a live PR's review state.
+- Validate in `_deliver` only. Dropped: a refusal after fulfil mints a `we_` and loses the request row's intent.
+- A mctl-api capability field (`queue_while_active`) read by a worker probe. Better as a machine proof, but it needs an
+  amendment of the accepted #931 (new digest, release) and a probe that must still fail closed. Not assumed; listed as
+  owner decision 2. If chosen, it replaces the human check, not the switch.
+- Trial request from the worker. Dropped: a write with side effects on a real item.
+- Orphan recovery via a list endpoint of open executions. Dropped: it does not exist in mctl-api and #931 is not to be
+  amended speculatively; the only list (`GET /work-items`) has no cursor, so it would starve.
+- A separate cron workflow for the sweep. Dropped for now: the dispatcher already owns the write path and the verdict logic.
+- Gate the hold on a workflow input or a patch marker only. Dropped: a marker is true for every new execution; an input
+  cannot be flipped for a running fleet.
 
 ## Platform impact
-- Replay compatibility: every new behaviour is behind `DEFERRED_RESUME_PATCH` or
-  `IMPLEMENT_HOLD_CAPABILITY_PATCH`, and every new dataclass field is defaulted. New replay fixtures are recorded
-  before and after `implement-execution-id` and the new markers.
-- Gitops: the shepherd CWFT needs `intent_id`, `execution_request_id` and `feedback_actor` params plus a
-  `feedback_outcome` output (a sibling mctl-gitops PR). Until it merges, the tick's outcome is
-  `feedback-unobservable`, which fails closed.
-- mctl-api dependency: the capability flag, the queue (#931) and optionally the open-execution list. Without
-  them the hold stays off and the sweep uses source B.
-- Cost: one extra shepherd run per accepted feedback request (about $1-5). The sweep makes one visibility query
-  plus N item reads every 5 minutes.
-- Risk: the scope classification is model-judged. Mitigation: only `in-scope` proceeds, every other result fails
-  closed, and the independent review gate still guards the merge.
-- Risk: the rewind could revoke an approval in flight. Mitigation: it applies only with no PR and the
-  post-agent re-read at ~:4199 kept, and it needs a fresh grant.
+- Replay: Part M is behind `DEFERRED_RESUME_PATCH` (+ the switch activity's marker); Part S behind
+  `IMPLEMENT_HOLD_SWITCH_PATCH` and `IMPLEMENT_END_RETRY_PATCH`. Every dataclass field is defaulted. New fixtures are
+  recorded before and after each marker.
+- Gitops: the shepherd CWFT needs the additive params and the `feedback_outcome` output (sibling PR); until live, a tick
+  reports `feedback-unobservable` (fails closed). Two env lines on the main worker (`DEVLOOP_DEFERRED_FEEDBACK`,
+  `DEVLOOP_IMPLEMENT_HOLD`), absent = off. `EXECUTION_ORPHAN_SWEEP_SECONDS` default 0.
+- mctl-api: no change. The queue switch (#931) is operated by gitops, verified by the functional check.
+- Cost: one shepherd run per accepted feedback request (about $1-5); the sweep makes at most 100 replays plus
+  a few GETs per cycle, only when enabled.
+- Risks: scope classification is model-judged (fails closed); the rewind could revoke an approval in flight (applies only
+  with the proof checklist, needs a fresh grant); a held `we_` with the mctl-api switch off widens the 409 window to the
+  whole implement run (prevented by the human gate, visible as 409, never silent); a query on a closed run may not replay
+  after a code change (counted unobserved).
+
+## Rollback
+Every behaviour is behind markers and switches. Order when backing out: first the hold (`DEVLOOP_IMPLEMENT_HOLD` off,
+pod roll of the main worker; new loops end the `we_` at the flip; loops already holding finish normally), then
+`DEVLOOP_DEFERRED_FEEDBACK` off (feedback requests then end `feedback-disabled`), and only then the mctl-api queue
+switch; switching the queue off first re-opens the refusal window while the worker still holds the `we_`. Image rollback
+is safe only for loops that never recorded the new markers; histories that recorded `deferred-resume-contract`,
+`implement-hold-switch` or `implement-end-retry` fail non-determinism on an older image, so let them drain or abandon
+them (`mctl_abandon_dev_loop`); the sweep and the exit path end their `we_`. The sweep is disabled on its own with
+`EXECUTION_ORPHAN_SWEEP_SECONDS=0`. The shepherd CWFT params are additive and stay.
