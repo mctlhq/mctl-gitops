@@ -85,26 +85,30 @@ Facts verified for this amendment (pr992 unless noted):
 ### Part M
 
 #### M1. Carry the full request identity
-Defaulted `ResumeDelivery` fields `intent_id: int = 0` (0 = none), `expected_state_version: int = 0`,
+Defaulted `ResumeDelivery` fields `intent_id: int | None = None` (None = none), `expected_state_version: int = 0`,
 `resumed_from_execution_id: str = ""`, filled by `Dispatcher._dispatch`. `execution_request_id` stays the Update id
 and dedupe key.
 
 #### M2. Contract marker and carried state
 `DEFERRED_RESUME_PATCH = "deferred-resume-contract"`, recorded once where `_gates_passed = True` is set (both sites)
-into `self._deferred_contract`, carried in `MergeWatchResume` as a defaulted field. A continued run evaluates the
-marker afresh, so a pre-marker loop upgrades at its next hop. New state, all defaulted in `MergeWatchResume`:
-`_implement_running`, `_pr_merged`, `_feedback_done: frozenset[str]`, `_pending_feedback`. Validators record no
+into `self._deferred_resume_contract`, carried in `MergeWatchResume` as a defaulted field. The flag is never re-evaluated
+after a continue-as-new hop: a pre-marker loop stays `legacy-loop` until it ends. New state, all defaulted in `MergeWatchResume`:
+`_implement_state`, `_last_pr`, `_feedback_done: frozenset[str]`, `_pending_feedback`. Validators record no
 command; they read flags only.
 
 #### M3. Validator decisions (refuse before a `we_` is minted)
-In `_validate_execution_request`, after the existing checks:
-- `self._gates_passed and not self._deferred_contract` -> `ResumeDeferred("legacy-loop")` (the fence). Update validators
+In `_validate_execution_request`, after the existing checks, in this order (first match wins, as in mctl-agents#998):
+- `self._gates_passed and the last PR read is MERGED (`_last_pr`)` -> `ResumeRefused("work_merged")`, even for a legacy loop (merged outranks the fence);
+- `self._gates_passed and not self._deferred_resume_contract` -> `ResumeDeferred("legacy-loop")` (the fence). Update validators
   are not run on replay, so an already accepted update is unaffected (T-test asserts a replayed history stays green).
   A rolling update can still be validated by an old pod; step 2 of the rollout order closes that window.
-- under the contract: `_implement_running` -> `ResumeDeferred("implement-running")` (defence in depth);
-  `_pr_merged` -> `ResumeRefused("work-merged")`; `kind == resume and intent_id == 0` -> `ResumeRefused("nothing-to-resume")`.
-Add `work-merged`, `nothing-to-resume`, `implement-running`, `legacy-loop` to the vocabularies
-(`xr.RESUME_REFUSAL_REASONS`, and the deferred reasons) so the dispatcher forwards them.
+- under the contract: `_implement_state` running -> `ResumeDeferred("implement-running")` (defence in depth);
+  `kind == resume and intent_id is None` -> `ResumeRefused("no_actionable_intent")`.
+Add `work_merged`, `no_actionable_intent`, `implement-running`, `legacy-loop` to the vocabularies
+(`xr.RESUME_REFUSAL_REASONS`; deferral reasons need no vocabulary because the dispatcher passes them through) so the
+dispatcher forwards them. Implementation note: mctl-agents#998 (M1) already carries these fields, the marker, the order
+and the aliases, with names `_deferred_resume_contract`, `_implement_state` and `_last_pr`; this proposal extends #998
+once it is merged and does not re-specify it.
 A new read-only workflow query `contract_state` -> `(gates_passed, deferred_contract)` and CLI
 `orchestrator/temporal/cli.py contract-drain-check` list RUNNING DevLoop runs (visibility query
 `ACTIVE_DEV_LOOPS_QUERY`) where `gates_passed and not deferred_contract`. A query on an old pod that lacks it counts
@@ -129,7 +133,7 @@ For contract loops with `_gates_passed`:
    `failed` / `unobservable`.
 7. `processed` -> `Succeeded`; anything else -> `Failed` plus `ResumeRejection` (`scope-expansion`, `feedback-failed`,
    `feedback-unobservable`). A tick that fails as an activity is `feedback-failed`.
-8. Watch ends before the tick (PR merged / closed / deadline) -> `Failed` with `work-merged` or `feedback-not-run`.
+8. Watch ends before the tick (PR merged / closed / deadline) -> `Failed` with `merged-before-feedback` or `feedback-not-run`.
 The classification is model-judged; only `in-scope` proceeds and everything else fails closed.
 
 #### M5. `read_rollout_switches` activity (shared switch mechanism)
@@ -144,17 +148,29 @@ and the payload is replayed from history. Env vars are frozen at pod start: a fl
 only. Alternative considered, a recorded workflow input (a field on `IssueRef` set by the starter): rejected, because
 there are several starters (intake poller, dispatcher, directive scan) and a long-lived loop could not be switched.
 
-#### M6. Closed-loop path after a failed implement, rewind with proof
+#### M6. Closed-loop path after a failed implement, guarded reinvestigation
 A loop whose implement did not succeed skips the merge watch and ends; the canonical `we_` ends `Failed` (exception
 path). The queued request is then claimed and Update-with-Start starts a new run. Widen the guard in both mirrors by a
 predicate, not by changing the set: a dispatched `resume` that pins an available intent may rewrite a proposal in
-`accepted`/`needs-triage` only when the positive-proof checklist of the requirements holds: no `pr`; no open or merged
-`feat/agents-<slug>` PR and no such branch on origin (GitHub reads); no live implement Workflow for the slug, no live
-attempt lease; no active lifecycle-ownership claim. Each read is an error or unknown on failure; any unknown writes
-`needs-triage`, no `proposed`, no implementer. The rewrite writes only `status: proposed` with the pinned intent
+`accepted`/`needs-triage` only when the guarded-reinvestigation checks (a) to (e) of the requirements all hold: the
+prior execution is terminal (a timeout alone is not proof of termination); no live implement Workflow and no live
+attempt lease; no active lifecycle-ownership claim; no `pr` and no open PR; no merged PR, no pushed
+`feat/agents-<slug>` branch and no pending end-advance. Each read is an error or unknown on failure; any unknown
+writes `needs-triage` carrying a typed evidence record (check name and `proven`/`refuted`/`unknown`), no `proposed`,
+no implementer. The pinned intent (`intent_id`, actor, surface, `request_id`, idempotency) is bound to the new
+investigation and the new run parks for a fresh content-bound approval. The rewrite writes only `status: proposed` with the pinned intent
 through the existing path; it never edits or re-binds an earlier approval, and the new run parks on the canonical
 approval for a fresh grant at the then-current digest. Guarded by `DEFERRED_RESUME_PATCH` at the context-only branch;
 old histories keep ending context-only.
+
+#### M6b. Refusals after the loop has ended
+Once the loop has ended, no validator runs for a resume (Update-with-Start validators cannot make GitHub reads, and the
+fulfil would mint the `we_`). The dispatcher therefore makes the `work_merged` / `no_actionable_intent` decision after
+`loop_state` and BEFORE `deliver()` (Update-with-Start on a closed loop would start a new run), from an injected PR-state
+reader and the request's own `intent_id`; `no_actionable_intent` applies only once the proposal's gates have passed. An
+`unknown` read defers the request; the claim lease sets only the retry cadence and there is no automatic total bound (a human acts on the audit counter). The
+reads for the five checks use only the sources listed in the requirements; the PR and branch reads are new tri-state
+functions, and a pending end-advance is an open canonical `we_`, read through check (a); no spike is needed.
 
 #### M7. Orphan sweep (no claim needed), `temporal` only
 Move the per-execution decision of `_reconcile_closed_loops` into a pure helper `_orphan_verdict(execution, loop_state,
@@ -200,8 +216,8 @@ with an open `temporal` execution with a keyset cursor, proposed and approved on
 
 #### M8. Documents
 ADR `docs/adr/026-deferred-resume-contract.md`: the request-to-outcome table (implement running -> deferred; PR open
--> feedback tick; merged -> `work-merged`; implement not succeeded -> closed loop with proof-gated rewind and fresh
-approval; no intent -> `nothing-to-resume`; legacy loop -> `legacy-loop`), the authority rule, the two switches, the
+-> feedback tick; merged -> `work_merged`; implement not succeeded -> closed loop with guarded reinvestigation and fresh
+approval; no intent -> `no_actionable_intent`; legacy loop -> `legacy-loop`), the authority rule, the two switches, the
 sweep and its division of labour with #931.
 
 ### Part S (on PR #992's branch)
@@ -294,10 +310,10 @@ the worker log lines below via `mctl_get_service_logs`, `mctl_get_service_pods`/
 | 2 | API off, HOLD on (misconfig) | `we_` held through implement; every create 409 for minutes | 409 to requesters; `ROLLOUT_STATE hold=on`; `rollout-status` shows held `we_` age | gate: functional check must precede HOLD; window check "no unexpected 409" |
 | 3 | API on, OLD worker, D on | queued only in investigate-to-approval; after delivery a post-gates old loop ends `Succeeded` with no work (FALSE SUCCESS) | not observable on the old image | PREVENTED by order: Part M released first; step 5 requires `ROLLOUT_STATE` of the new image on every pod and an empty drain check |
 | 4 | API on, rolling update (mixed OLD/M pods) | a validator on an old pod can still no-op a request | `mctl_get_service_pods` image tags differ; start lines differ | pause D during the roll (required, decided 2026-11-03); gate "all pods new" before step 3 |
-| 5 | API on, M, loop without marker (post-gates) | `ResumeDeferred legacy-loop`, request stays claimable | rate-limited `defer reason=legacy-loop`; `rollout-status` lists the loop | typed deferral; never Succeeded; loop upgrades at next hop or ends |
+| 5 | API on, M, loop without marker (post-gates) | `ResumeDeferred legacy-loop`, request stays claimable | rate-limited `defer reason=legacy-loop`; `rollout-status` lists the loop | typed deferral; never Succeeded; a legacy loop never upgrades; it ends |
 | 6 | API on, M, FB off, PR open | accepted, `we_` minted, ends `Failed` | `ResumeRejection feedback-disabled` in `work_context`; execution phase Failed; `rollout-status` counts | typed; never Succeeded |
 | 7 | API on, M, FB on, CWFT output missing | tick runs, outcome unreadable | `Failed feedback-unobservable` | typed; never Succeeded |
-| 8 | API on, M, FB on, PR merged | refused before minting | dispatcher `reject resume_refused:work-merged`; request row keeps the intent | typed refusal |
+| 8 | API on, M, FB on, PR merged | refused before minting | dispatcher `reject resume_refused:work_merged`; request row keeps the intent | typed refusal |
 | 9 | API on, M+S, HOLD on, FB off | queued during implement, delivered after `we_` closes, ends `Failed feedback-disabled` | as 6, plus held `we_` age in `rollout-status` | typed |
 | 10 | API on, M+S, HOLD on, D PAUSED | request stays `pending`/`claimed`, nothing processes it | `ROLLOUT_STATE` line missing >5 min; `rollout-status` shows open requests of held items with age; claim/defer lines absent | window gate: age bound; for items no running loop names: UNKNOWN (never zero), mctlhq/mctl-api#933 |
 | 11 | API on, HOLD on, post-implement end-advance keeps failing | `we_` stays open; request not claimable | `rollout-status` held `we_` age; retried each poll (Part S); audit of failed advances | retry per poll; age bound in the window gate |
@@ -316,7 +332,7 @@ the worker exports Prometheus metrics for Temporal only (`worker.py:645`), and a
 
 ## Alternatives
 - Re-approve every deferred resume (route all through the closed-loop path, including PR-open). Dropped: the owner chose
-  shepherd feedback for an open PR; rewinding would discard a live PR's review state.
+  shepherd feedback for an open PR; moving it to `proposed` would discard a live PR's review state.
 - Validate in `_deliver` only. Dropped: a refusal after fulfil mints a `we_` and loses the request row's intent.
 - A mctl-api capability field (`queue_while_active`) read by a worker probe. Better as a machine proof, but it needs an
   amendment of the accepted #931 (new digest, release) and a probe that must still fail closed. Decided against
@@ -339,7 +355,7 @@ the worker exports Prometheus metrics for Temporal only (`worker.py:645`), and a
 - mctl-api: no change. The queue switch (#931) is operated by gitops, verified by the functional check.
 - Cost: one shepherd run per accepted feedback request (about $1-5); the sweep makes at most 100 replays plus
   a few GETs per cycle, only when enabled.
-- Risks: scope classification is model-judged (fails closed); the rewind could revoke an approval in flight (applies only
+- Risks: scope classification is model-judged (fails closed); the guarded move to `proposed` could revoke an approval in flight (applies only
   with the proof checklist, needs a fresh grant); a held `we_` with the mctl-api switch off widens the 409 window to the
   whole implement run (prevented by the human gate, visible as 409, never silent); a query on a closed run may not replay
   after a code change (counted unobserved).

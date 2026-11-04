@@ -23,7 +23,7 @@ mctl-agents#993, 2026-11-03: path A, the disposition with items 1-7, and the rev
   to be amended for it. The sweep is rebuilt on sources confirmed in code: Temporal visibility plus the loop's own
   `work_context` query, narrow to `temporal`, with a starvation-proof cursor, a spike that gates it, and a typed
   blocker if the spike fails. argo and a2a are out of scope and tracked separately.
-- Rewind. The rewind of a Failed/Cancelled/TimedOut loop's proposal requires positive proof of no live writer, PR,
+- Guarded reinvestigation. Moving a Failed/Cancelled/TimedOut loop's proposal to `proposed` requires positive proof of no live writer, PR,
   pushed branch, or unresolved owner. Uncertainty means `needs-triage` and no new implementer.
 - Rollout order. `#931 switch ON -> old worker -> new worker` is not automatically safe. The order is now: inert
   deferred-resume handling first, a legacy-loop fence, then the mctl-api switch, then the hold.
@@ -57,7 +57,7 @@ that must exist before the 21 failing #992 resume tests are rewritten; and the A
   the PR's shepherd once implement ends SO THAT my feedback is acted on and not silently marked done.
 - AS an approver I WANT any request that would add new work or change the approved content to stop for a fresh
   human approval SO THAT the original approval is never used as authority for new work.
-- AS a surface user I WANT a typed refusal (for example `work-merged`) when there is nothing left to resume
+- AS a surface user I WANT a typed refusal (for example `work_merged`) when there is nothing left to resume
   SO THAT I know my request was not executed and can file a new WorkItem.
 - AS an operator I WANT a `we_` that the loop failed to end, or that a terminated loop left open, to be ended
   SO THAT queued requests for that item are not blocked for up to 14 days.
@@ -76,7 +76,8 @@ Delivery identity (Part M)
   THE SYSTEM SHALL run at most one feedback tick for that `execution_request_id`.
 
 Deferred-resume contract (Part M; applies only to loops that record the new `DEFERRED_RESUME_PATCH` marker)
-- WHILE the implement step of a loop under the new contract is in flight, THE SYSTEM SHALL answer a delivered
+- WHILE the implement step of a loop under the new contract is in flight (gates passed and implement not yet ended, which
+  includes the window between the flip and the implement submit), THE SYSTEM SHALL answer a delivered
   `resume` with `ResumeDeferred` (`implement-running`) and SHALL NOT accept it.
 - WHEN a `resume` with an `intent_id` is delivered to a loop that is in its merge watch with the PR open
   THE SYSTEM SHALL accept it, bind its `we_`, and schedule exactly one shepherd feedback tick for this proposal.
@@ -92,41 +93,119 @@ Deferred-resume contract (Part M; applies only to loops that record the new `DEF
   `Succeeded`.
 - IF the feedback tick fails, is refused, times out or reports an unobservable outcome THEN THE SYSTEM SHALL end
   the delivery's `we_` `Failed` and record a typed `ResumeRejection` reason (`feedback-failed`,
-  `feedback-unobservable`, `scope-expansion`, `reapproval-required`). It SHALL NOT end it `Succeeded`.
+  `feedback-unobservable`, `scope-expansion`, `reapproval-required`, `feedback-disabled`, `feedback-not-run`,
+  `merged-before-feedback`). It SHALL NOT end it `Succeeded`.
 - IF the merge watch ends before an accepted delivery's feedback tick runs THEN THE SYSTEM SHALL end its `we_`
-  `Failed` with `work-merged` (PR merged) or `feedback-not-run` (PR closed or watch deadline).
+  `Failed` with `merged-before-feedback` (PR merged) or `feedback-not-run` (PR closed or watch deadline).
 - IF the fulfil of a deferred request is refused with `state_version_conflict` (stale `expected_state_version`)
   THEN THE SYSTEM SHALL reject the request and SHALL NOT run a feedback tick for it.
-- IF a `resume` is delivered after the loop has observed its PR merged THEN THE SYSTEM SHALL refuse it with
-  `ResumeRefused` and the reason `work-merged` before any `we_` is minted, so the intent stays on the request row.
+- IF a `resume` is delivered after the loop has observed its PR merged THEN THE SYSTEM SHALL refuse it with the typed
+  outcome `ResumeRefused(work_merged)` before any `we_` is minted. The request row keeps the original `intent_id`,
+  actor, surface, `request_id`, `expected_state_version`, `resumed_from` and idempotency identity unchanged. THE SYSTEM
+  SHALL NOT end anything `Succeeded`, SHALL NOT create an issue or WorkItem automatically, and SHALL NOT reopen,
+  push to or otherwise act on the merged PR. Further work on a merged change is a new WorkItem started by a human
+  (owner decision 2, 2026-11-04).
+- WHEN the loop has already ended (merge watch finished, PR merged, loop closed) a later resume takes the closed-loop
+  path, where the Update-with-Start validator cannot make a GitHub read. THE SYSTEM SHALL then refuse in the dispatcher
+  AFTER it has read the loop state (closed) and BEFORE it delivers: in `Dispatcher._dispatch` `deliver()` runs before
+  the fulfil and, on a closed loop, is an Update-with-Start that would start a new run, so a refusal "before the
+  fulfil" would be too late. A merged PR is `ResumeRefused(work_merged)`; a request without intent is
+  `ResumeRefused(no_actionable_intent)` only when the proposal's approval gates have already passed (status past
+  `proposed`; `needs-triage` does NOT count as past `proposed`), because a closed pre-approval loop with no intent keeps its normal path. No delivery, no new run and no
+  `we_` happens on a refusal. The dispatcher gets a PR-state reader port (injected like the Temporal port, a fake in
+  tests) and resolves the proposal slug and service through the existing slug lookup. A failed or `unknown` read
+  defers the request (it stays claimed), neither refusing nor delivering it; the claim lease sets only the retry cadence; a persistent `unknown` has no automatic total bound and is surfaced by an audit counter
+  for a human to act on, and is never turned into a refusal or a delivery.
 - IF a `resume` with no `intent_id` is delivered to a loop whose gates are already passed THEN THE SYSTEM SHALL
-  refuse it with `ResumeRefused` and the reason `nothing-to-resume`, and SHALL NOT end anything `Succeeded`.
+  refuse it with the typed outcome `ResumeRefused(no_actionable_intent)` and SHALL NOT end anything `Succeeded`. The
+  request keeps its identity (actor, surface, `request_id`, idempotency) and the refusal reason is persisted on the
+  request row, which is the record the originating surface reads, so the surface can show why nothing happened. The
+  task verifies that read path for each surface that can send a resume; a surface that cannot read it is recorded as
+  a blocker, never papered over with a success (owner decision 4, 2026-11-04).
 - WHILE a feedback tick for a delivery runs THE SYSTEM SHALL keep PR/head ownership fencing (lifecycle claim,
   `--match-head-commit`), the independent review gate and CI gates exactly as for a scheduled tick.
 - WHEN a request was queued before the approve flip THE SYSTEM SHALL NOT hold the flip because of it. After the
   current execution ends it SHALL follow the same checked contract, and new scope or an authority change SHALL
   require a fresh human approval (owner decision 5, 2026-11-03).
 
-Closed-loop path after a failed implement (Part M)
+Closed-loop path after a failed implement (Part M): guarded reinvestigation (owner decision 3, 2026-11-04)
 - WHEN a `resume` with an intent is delivered after the implement step ended Failed, Cancelled or TimedOut (the
-  loop has closed) THE SYSTEM SHALL take the existing closed-loop path (Update-with-Start of a new run).
-- THE SYSTEM SHALL rewind an `accepted` or `needs-triage` proposal to `proposed`, using the pinned intent, only
-  when ALL of these are positively established: `.status.yaml` carries no PR; GitHub shows no open or merged
-  `feat/agents-<slug>` PR and no pushed `feat/agents-<slug>` branch; no implement Workflow for the slug is live and
-  no attempt lease is live; and no lifecycle-ownership claim for the proposal is active. IF any of these reads
-  fails or is not conclusive THEN THE SYSTEM SHALL set `needs-triage`, SHALL NOT rewind, and SHALL NOT release an
-  implementer.
-- THE SYSTEM SHALL NOT reuse, rewrite or extend an earlier digest-bound approval. The new run SHALL wait for a fresh
-  human approval at the then-current content digest before any implementer is released.
-- IF the proposal has an open or merged PR THEN THE SYSTEM SHALL NOT rewind it to `proposed`.
+  loop has closed) THE SYSTEM SHALL take the existing closed-loop path (Update-with-Start of a new run). mctl-api
+  cannot tell the three apart, and none of them is by itself proof that the prior execution stopped: a timeout in
+  particular only means the caller stopped waiting.
+- THE SYSTEM SHALL move an `accepted` or `needs-triage` proposal to `proposed` with the pinned intent ONLY when ALL of
+  these are positively established, each by a successful read:
+  (a) the prior execution is terminal (its `we_` and its implement Workflow are closed, not merely timed out);
+  (b) no implementer is active: no live implement Workflow for the slug and no live attempt lease;
+  (c) no lifecycle-ownership claim for the proposal is active, and no lifecycle owner remains;
+  (d) no open PR is being handled: `.status.yaml` carries no PR, and GitHub shows no open `feat/agents-<slug>` PR;
+  (e) outstanding side effects are reconciled: no merged `feat/agents-<slug>` PR, no pushed `feat/agents-<slug>`
+      branch, and no other unsettled execution request for the work item (the request being processed is excluded
+      by `request_id`, otherwise it would refute the check forever). The unsettled-request read needs a NEW
+      `WorkItemClient` read of the item's execution requests (the client has only claim, fulfil, reject and the
+      single-request read today); a failed read is `unknown`. A pending end-advance means the canonical `we_` is still
+      open, which check (a) already reads through the `we_` phase, so it needs no `work_context` query and does not
+      depend on spike task 10: an open `we_` refutes (a) and (e).
+  Readable sources, existing code except where marked NEW: the `we_` phase through `list_executions`; ownership through
+  `OwnershipClient.get` (verdicts `UNKNOWN` / `UNOWNED`, and the PR-kind phase when a PR exists); the attempt lease
+  through `attempt_expires_at` of `list_proposal_refs` (an expired lease is not proof of death, so (b) also needs the
+  Temporal visibility read of live implement Workflows); and NEW tri-state reads for the PR state by branch and for
+  branch existence. `find_pr_for_proposal` returns `None` on a failed `gh` call, malformed JSON or a missing body
+  marker, so it must not be used for these checks: a failed read is `unknown`, never `no PR`.
+- Each check has exactly one of three results: `proven` (the safe condition is established by a successful read),
+  `refuted` (a successful read shows the unsafe condition: a live implementer, a live owner, an open PR, a pushed
+  branch, a pending side effect) or `unknown` (the read failed, was partial or malformed, or the result is only
+  inferred). Only all-`proven` permits `proposed`. A `refuted` or `unknown` result on any check blocks it; neither
+  is ever treated as absent. A merged PR is the one refuted case with its own outcome, `ResumeRefused(work_merged)`
+  above, and it is checked first.
+- IF any of (a) to (e) is `refuted` or `unknown`, or ownership or side effects are uncertain, or a result is only
+  inferred from a timeout, THEN THE SYSTEM SHALL write `needs-triage` with a typed evidence record naming each check
+  and its result (`proven`, `refuted` or `unknown`), SHALL NOT move the proposal to `proposed`, and SHALL NOT release
+  an implementer, so a duplicate implementation can never start.
+- THE SYSTEM SHALL make the `proposed` write only from inside the live run that Update-with-Start created, so that run's
+  DevLoop id is in the active set the stranded-accepted scan of `ImplementSweepWorkflow` excludes (that scan reads
+  `pr`, the attempt lease, runnability, authorization, the `updated_at` grace period and the active set; it does not
+  read lifecycle ownership, so an ownership claim would not fence it). The write is a compare-and-swap on the
+  `.status.yaml` content SHA read together with the checks, so a concurrent edit makes it lose and write nothing. The
+  `needs-triage` or `proposed` write and the intent binding are one transition; a redelivery after a partial write
+  re-reads everything and converges to the same state. The writer is the investigator step on the closed-loop path
+  (`run_issue_investigator`) through the existing status-write helper; task 9 names that helper and its test, and if
+  no `needs-triage` writer exists there it adds one, because `run_shepherd` discovers only `implemented` and
+  `review-fixing` proposals.
+- THE SYSTEM SHALL bind the preserved intent (`intent_id`, actor, surface, `request_id`, idempotency) to the new
+  investigation, and SHALL NOT reuse, rewrite or extend an earlier digest-bound approval. The new run SHALL wait for a
+  fresh human approval bound to the then-current content digest before any implementation.
+- IF the proposal has an open PR, or a merged one, THEN THE SYSTEM SHALL NOT move it to `proposed`; a merged PR is
+  `ResumeRefused(work_merged)` above.
+
+Cross-branch invariants (merged, no intent, failed/cancelled/timed out)
+- Every branch preserves actor, surface, `intent_id`, `request_id` and the idempotency key from the dispatcher through
+  the validator, the delivery and the persisted outcome; a redelivery or replay of the same request yields the same
+  terminal outcome and creates no second effect.
+- The terminal outcomes of a resume REQUEST are a closed, stable vocabulary: `ResumeRefused(work_merged)`,
+  `ResumeRefused(no_actionable_intent)`, the existing refusals and deferrals of the validator, and the request being
+  delivered. The `Failed` reason `merged-before-feedback` of a `we_` whose merge watch ended before its feedback tick is a reason
+  on the execution (carried in the loop's own record; mctl-api sees only the phase), not a request outcome. `needs-triage` and `proposed` are states of the PROPOSAL (the investigation), not terminal outcomes of
+  the request: the request that triggered the closed-loop path is delivered, and the proposal's state then says
+  whether the investigation may proceed. New values are added behind `DEFERRED_RESUME_PATCH`; recorded histories keep
+  their old command sequence.
+- The M1 slice (#996, implemented, PR not yet merged) persisted the hyphenated spellings `work-merged` and
+  `nothing-to-resume`. The stable wire values of this contract are `work_merged` and `no_actionable_intent`. Before
+  the M1 PR merges, the spellings are aligned in that PR (mctl-agents#998) with the hyphenated spellings kept as read-side aliases; after any merge a
+  rename needs a compatibility alias so persisted rows keep decoding.
+- Persisted compatibility: every writer, test, document and serialised outcome uses the canonical values. A reader
+  still decodes the hyphenated spellings if a stored row or recorded history already carries one, reads them back as
+  written, and never rewrites or renames a historical result silently. The hyphenated spellings are never minted
+  again. A test proves a legacy spelling decodes unchanged and is not normalised to `unspecified`.
 
 Backward compatibility and fence (Part M)
 - WHILE replaying a history recorded without `DEFERRED_RESUME_PATCH` THE SYSTEM SHALL keep the old command
   sequence.
 - WHEN a `resume` is delivered to a RUNNING loop whose gates are passed and that did not record
   `DEFERRED_RESUME_PATCH` THE SYSTEM SHALL answer `ResumeDeferred` (`legacy-loop`) instead of landing `Succeeded`.
-  The loop upgrades to the contract at its next continue-as-new hop or ends; the request stays claimable
-  meanwhile. The Update validator records no command, so this changes no history.
+  Such a loop keeps `legacy-loop` for its whole life, because the flag is carried in `MergeWatchResume` and never
+  re-evaluated (a mid-flight legacy loop lacks the state the contract needs); it leaves that state only by ending.
+  The request stays claimable meanwhile. The Update validator records no command, so this changes no history.
 - WHEN an operator asks for the contract state of running loops THE SYSTEM SHALL list every RUNNING DevLoop run
   with gates passed and without the contract (a read-only command), so the drain can be proven before the
   mctl-api switch is turned on.
@@ -230,7 +309,7 @@ Tests and documents
 
 Parts
 - Part M lands on `main` through this proposal's implementer: request identity, the contract marker, validators and
-  the legacy-loop fence, the feedback tick (behind `DEVLOOP_DEFERRED_FEEDBACK`), the rewind, the orphan sweep,
+  the legacy-loop fence, the feedback tick (behind `DEVLOOP_DEFERRED_FEEDBACK`), the guarded reinvestigation, the orphan sweep,
   the shepherd outputs, the switch activity and its tests, and the ADR. None of it needs #992's code. The existing
   `main` test `test_a_resume_delivered_after_the_implement_step_succeeds_at_once` is rewritten here, after the
   behaviour and its mutation tests exist.
@@ -285,12 +364,12 @@ Order (each step is a gate; nothing is marked ready, released or deployed before
 4. Turn `DEVLOOP_DEFERRED_FEEDBACK` on (gitops, human), once the CWFT output is live and the T-tests pass.
 5. mctl-api: mctlhq/mctl-api#931 (PR #932) is released and `MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE=on` is set in
    gitops. A human verifies the effective state, below. This proposal does not turn the switch on.
-6. Part S: after Part M is released, an operator-directed session merges `main` into the draft #992 branch and pushes the
+6. Part S: after Part M is released (and not before), an operator-directed session merges `main` into the draft #992 branch and pushes the
    Part S commits (S0). #992 stays a draft until the integration evidence (full suite, every replay fixture, and the
    real observe exchange) exists; making it ready, merging and releasing it with `DEVLOOP_IMPLEMENT_HOLD` off is a later,
    explicit owner gate. With the switch off the behaviour equals today's: the `we_` ends at the flip and no
    `execution_id` is sent.
-7. A human release owner sets `DEVLOOP_IMPLEMENT_HOLD=true` in `services/admins/mctl-agents-worker/values.yaml` (the
+7. Only after the later explicit owner readiness gate of step 6 has released #992 with the switch off, a human release owner sets `DEVLOOP_IMPLEMENT_HOLD=true` in `services/admins/mctl-agents-worker/values.yaml` (the
    main worker only; the exec and implement workers ignore it). Rollback is the same line set back to off.
 The worker image bump is a human step; nothing here deploys autonomously.
 

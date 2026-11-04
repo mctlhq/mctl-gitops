@@ -5,6 +5,12 @@ and fail against the old behaviour; only then is behaviour implemented; existing
 Tests run against real Temporal replay and real Postgres where the existing suites do; every new check is
 mutation-verified (revert the change, watch the test fail).
 
+Precondition (P2 from review 3): mctl-agents#998 (M1) is MERGED FIRST. Tasks 2-4 only EXTEND what #998 already ships
+(request identity fields, marker, carried state, validator order, canonical names, legacy aliases) and use #998's names
+(`_deferred_resume_contract`, `_implement_state`, `_last_pr`); they do not re-specify it. Part M's accept path REPLACES
+#998's trailing `recovery-not-ready` / `feedback-not-ready` deferrals once the feedback tick and the guarded
+reinvestigation exist. If #998 is not merged, the implementer stops.
+
 Scope split: tasks 1-16 and tests T1-T14 are Part M, executed by this proposal's implementer on `main`. Tasks S0-S8
 and tests TS1-TS10 are Part S: they change code that exists only on PR #992's branch and are executed there by an
 operator-directed session under this proposal's approved digest (the shepherd and `--review-feedback` cannot). THE IMPLEMENTER OF THIS PROPOSAL MUST NOT DO S-TASKS (their symbols do not exist on `main`) and must
@@ -13,16 +19,17 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
 
 ## Part M
 
-- [ ] 1. Write the new tests T1-T11 against current `main` and confirm each fails for the right reason - DoD: tests
+- [ ] 1. Write the new tests T1-T14, T2b, T9a, T9b, T9c against current `main` (the parts #998 already ships are extended, not rewritten) and confirm each fails for the right reason - DoD: tests
   are in a commit before any behaviour change; each fails on an assertion about the contract, not an import error.
 - [ ] 2. Request identity: defaulted `intent_id`, `expected_state_version`, `resumed_from_execution_id` on
   `ResumeDelivery`, filled in `Dispatcher._dispatch` (depends on 1) - DoD: T1 passes; old payload fixtures decode.
-- [ ] 3. `DEFERRED_RESUME_PATCH` and carried state (`_deferred_contract`, `_implement_running`, `_pr_merged`,
-  `_feedback_done`, `_pending_feedback`) as defaulted `MergeWatchResume` fields, recorded at both `_gates_passed = True`
-  sites (depends on 2) - DoD: `tests/test_patch_memoization.py` covers the marker; existing replay fixtures pass.
-- [ ] 4. Validator decisions in `_validate_execution_request`: `legacy-loop` and `implement-running` (deferred),
-  `work-merged` and `nothing-to-resume` (refused); add the reasons to the vocabularies; add the `contract_state` query
-  and CLI `contract-drain-check` (depends on 3) - DoD: T2, T3, T4 pass; no `we_` is minted on refusal; a replayed history
+- [ ] 3. `DEFERRED_RESUME_PATCH` and carried state: #998's `_deferred_resume_contract`, `_implement_state`, `_last_pr` already exist; this task adds only
+  `_feedback_done` and `_pending_feedback` as defaulted `MergeWatchResume` fields and verifies the marker is recorded at both
+  `_gates_passed = True` sites (depends on 2) - DoD: `tests/test_patch_memoization.py` covers the marker; existing replay fixtures pass.
+- [ ] 4. Validator decisions in `_validate_execution_request` (extends #998's order; replaces its trailing
+  `recovery-not-ready` / `feedback-not-ready` deferrals with the accept path): `legacy-loop` and `implement-running` (deferred, where `implement-running` = gates passed and implement not yet ended, which includes the flip-to-submit window),
+  `ResumeRefused(work_merged)` and `ResumeRefused(no_actionable_intent)` (refused, request identity preserved, reason persisted on the request row and verified readable by each originating surface); add the reasons to the vocabularies; add the `contract_state` query
+  and CLI `contract-drain-check` (depends on 3) - DoD: T2, T3, T4, T9b pass; no `we_` is minted on refusal; a replayed history
   with an accepted update stays green.
 - [ ] 5. `read_rollout_switches` activity (`DEVLOOP_DEFERRED_FEEDBACK` only in this part), registered in the main
   worker's `short_activities`, fail closed on any non-explicit value; the fake in the test activity registry
@@ -38,10 +45,15 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
 - [ ] 8. Sibling mctl-gitops PR: the shepherd CWFT declares `intent_id`, `execution_request_id`, `feedback_actor` and the
   `feedback_outcome` output (depends on 7). It must be merged and live before the switch is turned on - DoD: PR linked;
   until live the outcome is `feedback-unobservable`.
-- [ ] 9. Closed-loop rewind with proof: the predicate in `run_issue_investigator` (~:3528, ~:4199) and the loop's
-  context-only branch, under `DEFERRED_RESUME_PATCH`; the positive-proof reads (status `pr`, GitHub PR and branch, live
-  implement Workflow and attempt lease, lifecycle ownership); any unknown -> `needs-triage` (depends on 3) - DoD: T9
-  passes; an open or merged PR, a pushed branch, or a failed read never rewinds.
+- [ ] 4b. Closed-loop refusals and the new tri-state reads: the dispatcher refuses `work_merged` and `no_actionable_intent`
+  after `loop_state` and before `deliver()` when the loop has ended (the gates-passed predicate for the intent case; a PR-state reader port injected into the dispatcher; slug resolved by the existing lookup); new tri-state PR-by-branch and branch-existence reads (a failed read is
+  `unknown`, never `no PR`); a NEW `WorkItemClient` read of the item's execution requests; an `unknown` read defers the request, bounded by the claim lease and counted in the audit (depends on 3) - DoD: T2b passes; no `we_` minted.
+- [ ] 9. Guarded reinvestigation: the predicate in `run_issue_investigator` (~:3528, ~:4199) and the loop's
+  context-only branch, under `DEFERRED_RESUME_PATCH`; the positive checks (a) to (e) (prior execution terminal, no live
+  implement Workflow or attempt lease, no lifecycle-ownership claim, no status `pr` or open PR, no merged PR or pushed
+  branch or pending end-advance); a timeout is never accepted as proof; any unknown -> `needs-triage` with the typed
+  evidence record; the preserved intent identity is bound to the new investigation (depends on 3 and 4b) - names the `needs-triage` writer helper (or adds one) - DoD: T9, T9a, T9c pass;
+  an open or merged PR, a pushed branch, a live lease or owner, or a failed read never moves to `proposed`.
 - [ ] 10. Orphan sweep spike C0: in the Temporal test environment terminate a DevLoop that holds an open `we_` and query
   `work_context` on the closed run; also query a pre-hop recorded history - DoD: the result is written into the ADR. If
   it fails, STOP and record the blocker `ORPHAN_SOURCE_BLOCKED`; ship task 11 disabled and open the separate API
@@ -51,14 +63,14 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
   counters, 409-as-converged and fail-closed reads (depends on 10, 1) - DoD: T10, T11 pass; existing
   `_reconcile_closed_loops` tests pass unchanged.
 - [ ] 12. Rewrite the `main` test `test_a_resume_delivered_after_the_implement_step_succeeds_at_once` to the contract
-  (`nothing-to-resume` refusal / feedback tick) (depends on 4, 6) - DoD: it asserts a delivered or typed-refused request,
-  none asserts a lost one; done only after T2-T8 exist and were mutation-checked.
+  (`no_actionable_intent` refusal / feedback tick) (depends on 4, 6) - DoD: it asserts a delivered or typed-refused request,
+  none asserts a lost one; done only after T2-T8 and T12-T13 exist and were mutation-checked.
 - [ ] 13. ADR `docs/adr/026-deferred-resume-contract.md` (table, authority rule, two switches, sweep and division of
-  labour with #931, spike result) (depends on 4-11) - DoD: merged.
+  labour with #931, spike result) (depends on 4-11) - DoD: PR ready for the normal review gate.
 
 - [ ] 14. Observability: the `ROLLOUT_STATE` startup line and 5-minute repeat (switch values, dispatcher interval, contract
   version, unrecognised values), request age at `claim`/`defer` (parse `created_at` as a defaulted field), rate-limited
-  `defer` lines for `legacy-loop` / `implement-running` / `feedback-disabled` (depends on 5) - DoD: T12, T13 pass.
+  `defer` lines for `legacy-loop` / `implement-running` / `feedback-disabled` (depends on 4, 5, 6) - DoD: T12, T13 pass (written in task 1, before task 12's rewrite).
 - [ ] 15. `cli.py rollout-status` (read-only): loops without the contract, held `we_` with age and open requests with age
   (existing per-item request list only), recorded rejection reasons, UNKNOWN for any failed read (depends on 4, 14)
   - DoD: T14 passes; the command writes nothing.
@@ -71,15 +83,15 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
   `accepted` with a named approver and the approved digest equals `scripts/proposal-content-digest.py` of the directory;
   verify #992 is still a draft and no shepherd/implement Workflow for the `issue-991-*` slug is running; fetch; MERGE
   `main` INTO the existing draft #992 branch (no rebase, no force-push); re-check marker and replay order; run the full
-  suite and replay EVERY fixture, old and new, green; only then push the Part S commits, without force. Part S is never
+  suite and replay EVERY fixture, old and new, green (this is TS9); only then push the Part S commits, without force. Part S is never
   merged or released before these integration gates - DoD: the evidence is in the PR body; commits carry the #993 digest
   and S-task ids.
 - [ ] S1. Run the 21 failing tests (`test_execution_request_resume.py` 17, `test_execution_request_dispatch.py` 1,
   `test_execution_request_replay.py` 3) with a fake `read_rollout_switches` defaulted off, unchanged, and record which
   pass - DoD: the list is in the PR body.
-- [ ] S2. Write TS1-TS8 and confirm they fail for the right reason on the branch - DoD: committed before S3-S6.
+- [ ] S2. Write TS1-TS5 and TS8 and confirm they fail for the right reason on the branch - DoD: committed before S3-S6. TS6 is written with S3, TS7 and TS10 with S7 (they need Part M), TS9 is the S0 integration gate.
 - [ ] S3. Hold switch: `IMPLEMENT_HOLD_SWITCH_PATCH`, `implement_hold` on `RolloutSwitches`, the flip-site read; unpatched
-  histories hold (depends on S2) - DoD: TS1, TS2 pass; the existing `.patched.json` fixture still replays.
+  histories hold (depends on S2) - DoD: TS1, TS2, TS6 pass; the existing `.patched.json` fixture still replays.
 - [ ] S4. `IMPLEMENT_END_RETRY_PATCH`: per-poll retry in `_watch_pr`, last attempt before the hop, new defaulted
   `MergeWatchResume` fields folded in `_carry_work_context` and rehydrated in `_resume_merge_watch` (depends on S3) - DoD:
   TS3, TS4, TS5 pass; no retry command for histories without the marker.
@@ -87,7 +99,7 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
   `_implement` documented as success-only (depends on S3) - DoD: no stale text.
 - [ ] S6. Replay fixtures: hold on, hold off, retried advance, retried across a hop (depends on S3, S4) - DoD: TS5 passes.
 - [ ] S7. Parametrise the 21 tests over `implement_hold in {off, on}`; off legs untouched; write the on legs last
-  (depends on Part M tasks 4, 6, 12 merged and S2-S6) - DoD: each on leg asserts a delivered or typed-refused request.
+  (depends on Part M tasks 4, 6, 12 merged and S2-S6) - DoD: TS7, TS8, TS10 pass; each on leg asserts a delivered or typed-refused request.
 - [ ] S8. Rollout record: keep #992 draft through Part M and the Part S integration; at the later explicit owner readiness gate (after the full suite, all fixtures and the real observe exchange), release with
   `DEVLOOP_IMPLEMENT_HOLD` off; the human sets it on after the functional check (requirements.md) - DoD: gate evidence
   linked in the release PR.
@@ -97,9 +109,12 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
 Part M
 - [ ] T1. Dispatcher -> `ResumeDelivery` carries `intent_id`, `expected_state_version`, `resumed_from_execution_id`; a
   pre-change payload decodes to the defaults.
-- [ ] T2. Resume after the merge watch observed MERGED -> `resume_refused:work-merged`, no fulfil, the request row keeps
+- [ ] T2. Resume after the merge watch observed MERGED -> `resume_refused:work_merged` with actor, surface, `intent_id`,
+  `request_id` and idempotency key unchanged; no issue or WorkItem is created and the merged PR is not touched; a
+  redelivery or replay yields the same outcome; no fulfil, the request row keeps
   the intent.
-- [ ] T3. Resume with no intent after the gates passed -> `resume_refused:nothing-to-resume`. Mutation: restore the
+- [ ] T3. Resume with no intent after the gates passed -> `resume_refused:no_actionable_intent`, request identity
+  preserved and the reason readable by the originating surface. Mutation: restore the
   at-once Succeeded -> fails.
 - [ ] T4. Legacy loop: a history recorded without `DEFERRED_RESUME_PATCH`, gates passed, receives a resume -> `legacy-loop`
   deferred, the request is not lost and nothing ends Succeeded; replay of that history with an accepted update is
@@ -114,8 +129,21 @@ Part M
   tick -> `we_` Failed with the typed `ResumeRejection`; never Succeeded.
 - [ ] T8. Grant binding changed (content digest or authority) before the tick -> `reapproval-required`, no tick; stale
   `expected_state_version` -> the fulfil refuses `state_version_conflict`, the request is rejected, no tick.
-- [ ] T9. A resume after implement Failed, Cancelled and TimedOut (loop closed): Update-with-Start runs; the proposal is
-  rewound to `proposed` ONLY when every proof holds; with an open PR, a merged PR, a pushed branch, a live lease, an
+- [ ] T2b. The loop has ended and the PR is merged -> the dispatcher refuses `work_merged` before `deliver()` (no new run started); no intent with gates passed ->
+  `no_actionable_intent`; a failed PR read defers and neither refuses nor delivers; redelivery and replay give the same
+  outcome for T2, T2b and T3.
+- [ ] T9c. The preserved intent is bound to the new investigation; the typed evidence record has the shape
+  {check, result in proven/refuted/unknown}; the `proposed` write is a CAS on the status SHA made from inside the live run, a
+  concurrent edit makes it lose and write nothing, and the stranded scan skips a proposal whose DevLoop is in the active
+  set; a redelivery after a partial write converges. Mutation: write without the CAS -> the concurrent-edit case fails.
+- [ ] T9a. Each of the five checks returns `proven`, `refuted` or `unknown`; `refuted` and `unknown` both block
+  `proposed`; a merged PR yields `ResumeRefused(work_merged)`, not `needs-triage`. Mutation: treat `refuted` as
+  absent -> the case fails.
+- [ ] T9b. A stored `resume_refused:work-merged` or `resume_refused:nothing-to-resume` still decodes unchanged and is
+  never rewritten; the build never mints them.
+- [ ] T9. A resume after implement Failed, Cancelled and TimedOut (loop closed): Update-with-Start runs; a TimedOut
+  prior execution whose termination is not proven stays `needs-triage` with typed evidence; the proposal is
+  moved to `proposed` ONLY when every proof holds; with an open PR, a merged PR, a pushed branch, a live lease, an
   active ownership claim, or any unreadable input it becomes/stays `needs-triage`; no implementer is released without a
   fresh approval. Mutation: skip one proof read -> the matching case fails.
 - [ ] T10. Sweep: a terminated loop with an open `#run_` `we_` and no request is ended Failed within one full pass; a
