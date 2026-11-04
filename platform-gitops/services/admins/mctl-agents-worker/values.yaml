@@ -22,6 +22,21 @@
 # argo-workflows/cluster-templates/ — it does not touch this file, so the
 # worker silently stays behind until someone edits it here.
 replicaCount: 1
+
+# Recreate, not the API server's default RollingUpdate. This control worker
+# is the only process that runs the DevLoop workflows, and the M1 workflow
+# change writes a replay-incompatible patch marker (`deferred-resume-contract`)
+# that an older worker cannot replay (TMPRL1100). At replicas: 1 the default
+# is maxSurge: 1 / maxUnavailable: 0, so old and new pods would poll
+# mctl-dev-loop at the same time during every release and a marker-bearing
+# task could land on the old pod. Recreate removes that overlap; the price is
+# a short polling gap, during which workflow tasks wait on the server and
+# nothing fails (mctlhq/mctl-agents#1007, B4).
+strategy:
+  type: Recreate
+  # Explicit null removes the Deployment's default RollingUpdate settings
+  # when ArgoCD applies this with server-side apply.
+  rollingUpdate: null
 image:
   repository: ghcr.io/mctlhq/mctl-agents
   tag: "1.117.0"
