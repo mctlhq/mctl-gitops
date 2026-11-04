@@ -85,24 +85,25 @@ Facts verified for this amendment (pr992 unless noted):
 ### Part M
 
 #### M1. Carry the full request identity
-Defaulted `ResumeDelivery` fields `intent_id: int = 0` (0 = none), `expected_state_version: int = 0`,
+Defaulted `ResumeDelivery` fields `intent_id: int | None = None` (None = none), `expected_state_version: int = 0`,
 `resumed_from_execution_id: str = ""`, filled by `Dispatcher._dispatch`. `execution_request_id` stays the Update id
 and dedupe key.
 
 #### M2. Contract marker and carried state
 `DEFERRED_RESUME_PATCH = "deferred-resume-contract"`, recorded once where `_gates_passed = True` is set (both sites)
-into `self._deferred_contract`, carried in `MergeWatchResume` as a defaulted field. A continued run evaluates the
-marker afresh, so a pre-marker loop upgrades at its next hop. New state, all defaulted in `MergeWatchResume`:
+into `self._deferred_contract`, carried in `MergeWatchResume` as a defaulted field. The flag is never re-evaluated
+after a continue-as-new hop: a pre-marker loop stays `legacy-loop` until it ends. New state, all defaulted in `MergeWatchResume`:
 `_implement_running`, `_pr_merged`, `_feedback_done: frozenset[str]`, `_pending_feedback`. Validators record no
 command; they read flags only.
 
 #### M3. Validator decisions (refuse before a `we_` is minted)
-In `_validate_execution_request`, after the existing checks:
+In `_validate_execution_request`, after the existing checks, in this order (first match wins, as in mctl-agents#998):
+- `self._gates_passed and _pr_merged` -> `ResumeRefused("work_merged")`, even for a legacy loop (merged outranks the fence);
 - `self._gates_passed and not self._deferred_contract` -> `ResumeDeferred("legacy-loop")` (the fence). Update validators
   are not run on replay, so an already accepted update is unaffected (T-test asserts a replayed history stays green).
   A rolling update can still be validated by an old pod; step 2 of the rollout order closes that window.
 - under the contract: `_implement_running` -> `ResumeDeferred("implement-running")` (defence in depth);
-  `_pr_merged` -> `ResumeRefused("work_merged")`; `kind == resume and intent_id == 0` -> `ResumeRefused("no_actionable_intent")`.
+  `kind == resume and intent_id is None` -> `ResumeRefused("no_actionable_intent")`.
 Add `work_merged`, `no_actionable_intent`, `implement-running`, `legacy-loop` to the vocabularies
 (`xr.RESUME_REFUSAL_REASONS`, and the deferred reasons) so the dispatcher forwards them.
 A new read-only workflow query `contract_state` -> `(gates_passed, deferred_contract)` and CLI
@@ -144,7 +145,7 @@ and the payload is replayed from history. Env vars are frozen at pod start: a fl
 only. Alternative considered, a recorded workflow input (a field on `IssueRef` set by the starter): rejected, because
 there are several starters (intake poller, dispatcher, directive scan) and a long-lived loop could not be switched.
 
-#### M6. Closed-loop path after a failed implement, rewind with proof
+#### M6. Closed-loop path after a failed implement, guarded reinvestigation
 A loop whose implement did not succeed skips the merge watch and ends; the canonical `we_` ends `Failed` (exception
 path). The queued request is then claimed and Update-with-Start starts a new run. Widen the guard in both mirrors by a
 predicate, not by changing the set: a dispatched `resume` that pins an available intent may rewrite a proposal in
@@ -158,6 +159,13 @@ investigation and the new run parks for a fresh content-bound approval. The rewr
 through the existing path; it never edits or re-binds an earlier approval, and the new run parks on the canonical
 approval for a fresh grant at the then-current digest. Guarded by `DEFERRED_RESUME_PATCH` at the context-only branch;
 old histories keep ending context-only.
+
+#### M6b. Refusals after the loop has ended
+Once the loop has ended, no validator runs for a resume (Update-with-Start validators cannot make GitHub reads, and the
+fulfil would mint the `we_`). The dispatcher therefore makes the `work_merged` / `no_actionable_intent` decision before
+the fulfil, from the tri-state PR read and the request's own `intent_id`; an `unknown` read defers the request. The
+reads for the five checks use only the sources listed in the requirements; the PR and branch reads are new tri-state
+functions, and the pending end-advance stays `unknown` until spike task 10 proves the `work_context` read.
 
 #### M7. Orphan sweep (no claim needed), `temporal` only
 Move the per-execution decision of `_reconcile_closed_loops` into a pure helper `_orphan_verdict(execution, loop_state,
@@ -203,7 +211,7 @@ with an open `temporal` execution with a keyset cursor, proposed and approved on
 
 #### M8. Documents
 ADR `docs/adr/026-deferred-resume-contract.md`: the request-to-outcome table (implement running -> deferred; PR open
--> feedback tick; merged -> `work_merged`; implement not succeeded -> closed loop with proof-gated rewind and fresh
+-> feedback tick; merged -> `work_merged`; implement not succeeded -> closed loop with guarded reinvestigation and fresh
 approval; no intent -> `no_actionable_intent`; legacy loop -> `legacy-loop`), the authority rule, the two switches, the
 sweep and its division of labour with #931.
 
@@ -319,7 +327,7 @@ the worker exports Prometheus metrics for Temporal only (`worker.py:645`), and a
 
 ## Alternatives
 - Re-approve every deferred resume (route all through the closed-loop path, including PR-open). Dropped: the owner chose
-  shepherd feedback for an open PR; rewinding would discard a live PR's review state.
+  shepherd feedback for an open PR; moving it to `proposed` would discard a live PR's review state.
 - Validate in `_deliver` only. Dropped: a refusal after fulfil mints a `we_` and loses the request row's intent.
 - A mctl-api capability field (`queue_while_active`) read by a worker probe. Better as a machine proof, but it needs an
   amendment of the accepted #931 (new digest, release) and a probe that must still fail closed. Decided against
@@ -342,7 +350,7 @@ the worker exports Prometheus metrics for Temporal only (`worker.py:645`), and a
 - mctl-api: no change. The queue switch (#931) is operated by gitops, verified by the functional check.
 - Cost: one shepherd run per accepted feedback request (about $1-5); the sweep makes at most 100 replays plus
   a few GETs per cycle, only when enabled.
-- Risks: scope classification is model-judged (fails closed); the rewind could revoke an approval in flight (applies only
+- Risks: scope classification is model-judged (fails closed); the guarded move to `proposed` could revoke an approval in flight (applies only
   with the proof checklist, needs a fresh grant); a held `we_` with the mctl-api switch off widens the 409 window to the
   whole implement run (prevented by the human gate, visible as 409, never silent); a query on a closed run may not replay
   after a code change (counted unobserved).
