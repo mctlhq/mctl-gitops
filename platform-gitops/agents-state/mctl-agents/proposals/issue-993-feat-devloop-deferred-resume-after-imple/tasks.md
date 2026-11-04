@@ -13,7 +13,7 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
 
 ## Part M
 
-- [ ] 1. Write the new tests T1-T11 against current `main` and confirm each fails for the right reason - DoD: tests
+- [ ] 1. Write the new tests T1-T11, T2b, T9a, T9b, T9c against current `main` (the parts #998 already ships are extended, not rewritten) and confirm each fails for the right reason - DoD: tests
   are in a commit before any behaviour change; each fails on an assertion about the contract, not an import error.
 - [ ] 2. Request identity: defaulted `intent_id`, `expected_state_version`, `resumed_from_execution_id` on
   `ResumeDelivery`, filled in `Dispatcher._dispatch` (depends on 1) - DoD: T1 passes; old payload fixtures decode.
@@ -22,7 +22,7 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
   sites (depends on 2) - DoD: `tests/test_patch_memoization.py` covers the marker; existing replay fixtures pass.
 - [ ] 4. Validator decisions in `_validate_execution_request`: `legacy-loop` and `implement-running` (deferred),
   `ResumeRefused(work_merged)` and `ResumeRefused(no_actionable_intent)` (refused, request identity preserved, reason persisted on the request row and verified readable by each originating surface); add the reasons to the vocabularies; add the `contract_state` query
-  and CLI `contract-drain-check` (depends on 3) - DoD: T2, T3, T4 pass; no `we_` is minted on refusal; a replayed history
+  and CLI `contract-drain-check` (depends on 3) - DoD: T2, T3, T4, T9b pass; no `we_` is minted on refusal; a replayed history
   with an accepted update stays green.
 - [ ] 5. `read_rollout_switches` activity (`DEVLOOP_DEFERRED_FEEDBACK` only in this part), registered in the main
   worker's `short_activities`, fail closed on any non-explicit value; the fake in the test activity registry
@@ -39,13 +39,13 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
   `feedback_outcome` output (depends on 7). It must be merged and live before the switch is turned on - DoD: PR linked;
   until live the outcome is `feedback-unobservable`.
 - [ ] 4b. Closed-loop refusals and the new tri-state reads: the dispatcher refuses `work_merged` and `no_actionable_intent`
-  before the fulfil when the loop has ended; new tri-state PR-by-branch and branch-existence reads (a failed read is
-  `unknown`, never `no PR`); an `unknown` read defers the request (depends on 3) - DoD: T2b passes; no `we_` minted.
+  after `loop_state` and before `deliver()` when the loop has ended (the gates-passed predicate for the intent case; a PR-state reader port injected into the dispatcher; slug resolved by the existing lookup); new tri-state PR-by-branch and branch-existence reads (a failed read is
+  `unknown`, never `no PR`); a NEW `WorkItemClient` read of the item's execution requests; an `unknown` read defers the request, bounded by the claim lease and counted in the audit (depends on 3) - DoD: T2b passes; no `we_` minted.
 - [ ] 9. Guarded reinvestigation: the predicate in `run_issue_investigator` (~:3528, ~:4199) and the loop's
   context-only branch, under `DEFERRED_RESUME_PATCH`; the positive checks (a) to (e) (prior execution terminal, no live
   implement Workflow or attempt lease, no lifecycle-ownership claim, no status `pr` or open PR, no merged PR or pushed
   branch or pending end-advance); a timeout is never accepted as proof; any unknown -> `needs-triage` with the typed
-  evidence record; the preserved intent identity is bound to the new investigation (depends on 3 and 4b; the pending end-advance check depends on 10) - DoD: T9, T9a, T9b pass;
+  evidence record; the preserved intent identity is bound to the new investigation (depends on 3 and 4b) - names the `needs-triage` writer helper (or adds one) - DoD: T9, T9a, T9c pass;
   an open or merged PR, a pushed branch, a live lease or owner, or a failed read never moves to `proposed`.
 - [ ] 10. Orphan sweep spike C0: in the Temporal test environment terminate a DevLoop that holds an open `we_` and query
   `work_context` on the closed run; also query a pre-hop recorded history - DoD: the result is written into the ADR. If
@@ -122,12 +122,13 @@ Part M
   tick -> `we_` Failed with the typed `ResumeRejection`; never Succeeded.
 - [ ] T8. Grant binding changed (content digest or authority) before the tick -> `reapproval-required`, no tick; stale
   `expected_state_version` -> the fulfil refuses `state_version_conflict`, the request is rejected, no tick.
-- [ ] T2b. The loop has ended and the PR is merged -> the dispatcher refuses `work_merged` before the fulfil; no intent ->
+- [ ] T2b. The loop has ended and the PR is merged -> the dispatcher refuses `work_merged` before `deliver()` (no new run started); no intent with gates passed ->
   `no_actionable_intent`; a failed PR read defers and neither refuses nor delivers; redelivery and replay give the same
   outcome for T2, T2b and T3.
 - [ ] T9c. The preserved intent is bound to the new investigation; the typed evidence record has the shape
-  {check, result in proven/refuted/unknown}; the ownership claim or CAS is taken before the `proposed` write and a lost
-  race writes nothing; a redelivery after a partial write converges. Mutation: skip the claim -> the race case fails.
+  {check, result in proven/refuted/unknown}; the `proposed` write is a CAS on the status SHA made from inside the live run, a
+  concurrent edit makes it lose and write nothing, and the stranded scan skips a proposal whose DevLoop is in the active
+  set; a redelivery after a partial write converges. Mutation: write without the CAS -> the concurrent-edit case fails.
 - [ ] T9a. Each of the five checks returns `proven`, `refuted` or `unknown`; `refuted` and `unknown` both block
   `proposed`; a merged PR yields `ResumeRefused(work_merged)`, not `needs-triage`. Mutation: treat `refuted` as
   absent -> the case fails.

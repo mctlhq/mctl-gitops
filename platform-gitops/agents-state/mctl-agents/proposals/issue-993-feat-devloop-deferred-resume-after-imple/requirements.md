@@ -94,7 +94,7 @@ Deferred-resume contract (Part M; applies only to loops that record the new `DEF
   the delivery's `we_` `Failed` and record a typed `ResumeRejection` reason (`feedback-failed`,
   `feedback-unobservable`, `scope-expansion`, `reapproval-required`). It SHALL NOT end it `Succeeded`.
 - IF the merge watch ends before an accepted delivery's feedback tick runs THEN THE SYSTEM SHALL end its `we_`
-  `Failed` with `work_merged` (PR merged) or `feedback-not-run` (PR closed or watch deadline).
+  `Failed` with `merged-before-feedback` (PR merged) or `feedback-not-run` (PR closed or watch deadline).
 - IF the fulfil of a deferred request is refused with `state_version_conflict` (stale `expected_state_version`)
   THEN THE SYSTEM SHALL reject the request and SHALL NOT run a feedback tick for it.
 - IF a `resume` is delivered after the loop has observed its PR merged THEN THE SYSTEM SHALL refuse it with the typed
@@ -104,10 +104,16 @@ Deferred-resume contract (Part M; applies only to loops that record the new `DEF
   push to or otherwise act on the merged PR. Further work on a merged change is a new WorkItem started by a human
   (owner decision 2, 2026-11-04).
 - WHEN the loop has already ended (merge watch finished, PR merged, loop closed) a later resume takes the closed-loop
-  path, where the Update-with-Start validator cannot make a GitHub read. THE SYSTEM SHALL then refuse in the dispatcher,
-  before the fulfil, using the tri-state PR read: a merged PR is `ResumeRefused(work_merged)` and a request without
-  intent is `ResumeRefused(no_actionable_intent)`; no `we_` is minted. A failed or `unknown` read defers the request
-  (it stays claimed), and neither refuses nor delivers it.
+  path, where the Update-with-Start validator cannot make a GitHub read. THE SYSTEM SHALL then refuse in the dispatcher
+  AFTER it has read the loop state (closed) and BEFORE it delivers: in `Dispatcher._dispatch` `deliver()` runs before
+  the fulfil and, on a closed loop, is an Update-with-Start that would start a new run, so a refusal "before the
+  fulfil" would be too late. A merged PR is `ResumeRefused(work_merged)`; a request without intent is
+  `ResumeRefused(no_actionable_intent)` only when the proposal's approval gates have already passed (status past
+  `proposed`), because a closed pre-approval loop with no intent keeps its normal path. No delivery, no new run and no
+  `we_` happens on a refusal. The dispatcher gets a PR-state reader port (injected like the Temporal port, a fake in
+  tests) and resolves the proposal slug and service through the existing slug lookup. A failed or `unknown` read
+  defers the request (it stays claimed), neither refusing nor delivering it; a persistent `unknown` is bounded by
+  the existing claim lease and surfaced by an audit counter, and is never turned into a refusal or a delivery.
 - IF a `resume` with no `intent_id` is delivered to a loop whose gates are already passed THEN THE SYSTEM SHALL
   refuse it with the typed outcome `ResumeRefused(no_actionable_intent)` and SHALL NOT end anything `Succeeded`. The
   request keeps its identity (actor, surface, `request_id`, idempotency) and the refusal reason is persisted on the
@@ -133,10 +139,12 @@ Closed-loop path after a failed implement (Part M): guarded reinvestigation (own
   (d) no open PR is being handled: `.status.yaml` carries no PR, and GitHub shows no open `feat/agents-<slug>` PR;
   (e) outstanding side effects are reconciled: no merged `feat/agents-<slug>` PR, no pushed `feat/agents-<slug>`
       branch, and no other unsettled execution request for the work item (the request being processed is excluded
-      by `request_id`, otherwise it would refute the check forever). A pending end-advance exists only inside a
-      running workflow; on a closed run it can be read only through the `work_context` query proven by spike task 10.
-      Until that spike passes it is `unknown` and blocks.
-  Readable sources, using existing code only: the `we_` phase through `list_executions`; ownership through
+      by `request_id`, otherwise it would refute the check forever). The unsettled-request read needs a NEW
+      `WorkItemClient` read of the item's execution requests (the client has only claim, fulfil, reject and the
+      single-request read today); a failed read is `unknown`. A pending end-advance means the canonical `we_` is still
+      open, which check (a) already reads through the `we_` phase, so it needs no `work_context` query and does not
+      depend on spike task 10: an open `we_` refutes (a) and (e).
+  Readable sources, existing code except where marked NEW: the `we_` phase through `list_executions`; ownership through
   `OwnershipClient.get` (verdicts `UNKNOWN` / `UNOWNED`, and the PR-kind phase when a PR exists); the attempt lease
   through `attempt_expires_at` of `list_proposal_refs` (an expired lease is not proof of death, so (b) also needs the
   Temporal visibility read of live implement Workflows); and NEW tri-state reads for the PR state by branch and for
@@ -152,12 +160,16 @@ Closed-loop path after a failed implement (Part M): guarded reinvestigation (own
   inferred from a timeout, THEN THE SYSTEM SHALL write `needs-triage` with a typed evidence record naming each check
   and its result (`proven`, `refuted` or `unknown`), SHALL NOT move the proposal to `proposed`, and SHALL NOT release
   an implementer, so a duplicate implementation can never start.
-- BEFORE writing `proposed` THE SYSTEM SHALL take the proposal's lifecycle ownership (or compare-and-swap on the
-  `.status.yaml` content SHA read with the checks), so the stranded-accepted scan of `ImplementSweepWorkflow` cannot
-  start an implementer between the checks and the write. The `needs-triage` or `proposed` write and the intent
-  binding are one transition; a redelivery after a partial write re-reads everything and converges to the same state,
-  and a lost race writes nothing. The `needs-triage` write lives in the `run_shepherd` path, which owns every such
-  write.
+- THE SYSTEM SHALL make the `proposed` write only from inside the live run that Update-with-Start created, so that run's
+  DevLoop id is in the active set the stranded-accepted scan of `ImplementSweepWorkflow` excludes (that scan reads
+  `pr`, the attempt lease, runnability, authorization, the `updated_at` grace period and the active set; it does not
+  read lifecycle ownership, so an ownership claim would not fence it). The write is a compare-and-swap on the
+  `.status.yaml` content SHA read together with the checks, so a concurrent edit makes it lose and write nothing. The
+  `needs-triage` or `proposed` write and the intent binding are one transition; a redelivery after a partial write
+  re-reads everything and converges to the same state. The writer is the investigator step on the closed-loop path
+  (`run_issue_investigator`) through the existing status-write helper; task 9 names that helper and its test, and if
+  no `needs-triage` writer exists there it adds one, because `run_shepherd` discovers only `implemented` and
+  `review-fixing` proposals.
 - THE SYSTEM SHALL bind the preserved intent (`intent_id`, actor, surface, `request_id`, idempotency) to the new
   investigation, and SHALL NOT reuse, rewrite or extend an earlier digest-bound approval. The new run SHALL wait for a
   fresh human approval bound to the then-current content digest before any implementation.
@@ -170,8 +182,8 @@ Cross-branch invariants (merged, no intent, failed/cancelled/timed out)
   terminal outcome and creates no second effect.
 - The terminal outcomes of a resume REQUEST are a closed, stable vocabulary: `ResumeRefused(work_merged)`,
   `ResumeRefused(no_actionable_intent)`, the existing refusals and deferrals of the validator, and the request being
-  delivered. `work_merged` is also the `Failed` reason of a `we_` whose merge watch ended before its feedback tick;
-  that is a reason on the execution, not a request outcome. `needs-triage` and `proposed` are states of the PROPOSAL (the investigation), not terminal outcomes of
+  delivered. The `Failed` reason `merged-before-feedback` of a `we_` whose merge watch ended before its feedback tick is a reason
+  on the execution (carried in the loop's own record; mctl-api sees only the phase), not a request outcome. `needs-triage` and `proposed` are states of the PROPOSAL (the investigation), not terminal outcomes of
   the request: the request that triggered the closed-loop path is delivered, and the proposal's state then says
   whether the investigation may proceed. New values are added behind `DEFERRED_RESUME_PATCH`; recorded histories keep
   their old command sequence.
