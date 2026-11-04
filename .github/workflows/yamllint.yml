@@ -44,7 +44,9 @@ jobs:
           # templates, the #1280 Tempo datasource (a template
           # comment, so a render with no Tempo emits no document), the
           # permanent Tempo's tracing.yaml (template comment, then its
-          # `{{- if .Values.tracing.enabled }}` gate), the
+          # `{{- if .Values.tracing.enabled }}` gate), the issue-2286 OBI
+          # spike (template comment, then its default-off `obiSpike.enabled`
+          # gate; its render is checked by tests/test_obi_spike_render.py), the
           # .github#50 usage-writer ExternalSecret and the other flag-gated
           # mctl-api ExternalSecrets (e.g. gitops#2168 code scanning), whose
           # entire body sits inside an `{{- if }}` gate, and the argocd chart's
@@ -69,6 +71,7 @@ jobs:
             platform-gitops/bootstrap/templates/observability/loki-datasource.yaml
             platform-gitops/bootstrap/templates/observability/tempo-datasource.yaml
             platform-gitops/bootstrap/templates/observability/tracing.yaml
+            platform-gitops/bootstrap/templates/observability/obi-spike.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-evidence-writer.yaml
             platform-gitops/bootstrap/templates/mctl-platform/mctl-api-registry-publisher.yaml
