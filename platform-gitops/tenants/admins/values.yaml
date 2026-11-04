@@ -42,13 +42,13 @@ tenant:
     # during an outage. Raised 1 -> 2 to keep ~1000m+ headroom for
     # deploy-pipeline / rollback workflow pods and rollout surges.
     requests.cpu: "2"
-    # Bumped 2026-11-04: 2Gi -> 2560Mi. Steady state is 1792Mi, so the
+    # Bumped 2026-11-04: 2Gi -> 3Gi. Steady state is 1792Mi, so the
     # 320Mi surge pod of the mctl-agents-worker rolling update (1792 + 320 =
     # 2112Mi) was refused by the quota. The 1.117.0 rollout sat in
     # ProgressDeadlineExceeded for 34h with the old 1.115.0 pod still serving
-    # and the ArgoCD app Degraded. 2560Mi leaves room for one surge pod plus
+    # and the ArgoCD app Degraded. 3Gi leaves room for one surge pod plus
     # one more.
-    requests.memory: "2560Mi"
+    requests.memory: "3Gi"
     # Bumped 2026-05-13: openclaw sidecar limit increase (s3-sync 2000m +
     # skills-fanout 300m) brings pod limits to 6300m; bumped from 7 to 8
     # to preserve 1000m+ headroom for deploy workflow pods.
