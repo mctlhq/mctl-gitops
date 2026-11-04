@@ -1,5 +1,38 @@
 # Tasks: issue-334-c2-gate-isolate-production-communication
 
+## Reconciliation with the code and the gate plan (2026-11-04)
+
+The tasks below were written on 2026-07-26 for a dedicated Claude credential.
+The worker has since moved to the OpenAI runner on GLM-5.1 through Nebius, and
+much of the code landed under other names. The current work plan is steps W1 to
+W10 of `docs/plans/gate-334-quota-isolation.md` (mctlhq/mctl-telegram#1121). The
+text of the tasks is kept as written; this table is what counts for status.
+Evidence was read on mctl-telegram `origin/main` on 2026-11-04.
+
+This section records status only. It accepts nothing, and `.status.yaml` is not
+changed by it.
+
+| Task | Status | Evidence or plan step |
+|---|---|---|
+| 1 | done, other names | `mctl_agent_credential_domain`, `mctl_agent_job_cost_usd_total`, `mctl_agent_claude_result_errors_total{class}` in `internal/metrics/metrics.go` |
+| 2 | done | `requireEnv("AGENT_CREDENTIAL_DOMAIN_ID")` in `cmd/agent-worker/main.go`, tested in `main_test.go` |
+| 3 | done, other shape | `recordCost` shared through `recordRunCost` in `internal/agentworker/finishrun.go` |
+| 4 | done, other shape | `isUsageLimitSubtype` in `internal/agentworker/worker.go`, including `error_provider_429`; no new error type |
+| 5 | done, other name | `MctlAgentClaudeUsageLimit`. Budget and rate alerts: W2, mctlhq/mctl-gitops#2396 and mctlhq/mctl-telegram#1123, open |
+| 6 | open | W3, mctlhq/mctl-telegram#1122, retargeted to the Nebius key and the AI Gateway token |
+| 7 | open | W10, mctlhq/mctl-telegram#1122 |
+| 8 | open | W10, mctlhq/mctl-telegram#1122 |
+| 9 | open, changed | No production credential exists. W4, W5 and W6; "separate domain" now means a Nebius project and quota scope, still unread |
+| 10 | open, changed | W9, deferred until after 2026-11-11 and only on owner command (D7) |
+| T1 to T5, T7 | superseded | Covered by the tests of the merged code and by CI; the names above replace the proposed ones |
+| T6 | open | W8, needs owner approval (D5) |
+
+Claude-only wording in the tasks does not apply to the managed worker. The
+Rollback section still names `AGENT_KILL_SWITCH`, `autopilot_paused` and zero
+replicas; the current stop procedure is "Managed runtime rollback" in
+`docs/runbook.md`. A Gantt review asked that the approvals contract be verified
+before this proposal moves on: that is not done here.
+
 - [ ] 1. Add `AgentWorkerCredentialDomainInfo`, `AgentWorkerJobCostUSD`, and
       `AgentWorkerQuotaExhaustedTotal` metrics to `internal/metrics/metrics.go`
       (following the existing `AgentDeadLetterTotal`/`AgentActionsExecutingStuck`
