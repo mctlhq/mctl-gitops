@@ -37,7 +37,11 @@ metadata:
   name: vault-auto-unseal
   namespace: vault
 spec:
-  schedule: "*/2 * * * *"
+  # Every 5 min, not 2: each run is a fresh pod, and at */2 the 720 pods a
+  # day were a fixed share of the TooHighChurnRate24h series churn. A sealed
+  # pod (a Vault restart) now waits up to 5 min; the other replicas keep
+  # serving, and the vault PDB stays closed meanwhile (see descheduler.yaml).
+  schedule: "*/5 * * * *"
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
   concurrencyPolicy: Forbid
@@ -56,7 +60,7 @@ spec:
                 - secretRef:
                     name: vault-unseal-keys
               env:
-                # Telegram report (admins chat). Runs every 2 min, so it only
+                # Telegram report (admins chat). Runs every 5 min, so it only
                 # reports when it actually unsealed a pod — an unseal event
                 # means Vault restarted/crashed and a human should know.
                 # Optional: without the secret the job still runs, just
