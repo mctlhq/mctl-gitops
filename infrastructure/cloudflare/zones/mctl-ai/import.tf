@@ -1,7 +1,4 @@
-locals {
-  zone_id    = "86a90fe2fdfe87b9702842218b607f60"
-  account_id = "6a09f637d20e1f66a8e9d45ebe778058"
-}
+locals { zone_id = "86a90fe2fdfe87b9702842218b607f60" }
 
 import {
   to = cloudflare_dns_record.apex

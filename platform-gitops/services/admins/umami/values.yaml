@@ -182,6 +182,9 @@ extraObjects:
             runAsGroup: 70
             seccompProfile:
               type: RuntimeDefault
+          volumes:
+            - name: tmp
+              emptyDir: {}
           containers:
             - name: seed
               image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
@@ -190,6 +193,9 @@ extraObjects:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
               resources:
                 requests: {cpu: 10m, memory: 32Mi}
                 limits: {cpu: 200m, memory: 128Mi}
@@ -204,7 +210,8 @@ extraObjects:
                   BEGIN
                     SELECT user_id INTO v_user_id FROM "user" ORDER BY created_at ASC LIMIT 1;
                     IF v_user_id IS NULL THEN
-                      RAISE EXCEPTION 'Umami user table is empty; cannot seed websites without an owner user';
+                      RAISE NOTICE 'Umami user table is empty, skipping website seed; will run on subsequent sync';
+                      RETURN;
                     END IF;
                     INSERT INTO website (website_id, name, domain, user_id, created_at)
                     VALUES

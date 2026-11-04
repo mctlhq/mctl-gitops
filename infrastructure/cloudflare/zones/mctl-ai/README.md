@@ -6,10 +6,9 @@ Access one — different roots, different blockers.
 
 ## Scope
 
-30 objects: 15 DNS records, the `http_request_firewall_custom` ruleset (two rules), eleven
-Email Routing forward rules, the catch-all, the worker route
-`mctl.ai/api/*` → `mctl-landing-form` (`workers.tf`, #1179), and Cloudflare
-Web Analytics (`analytics.tf`). The route is owned
+29 objects: 15 DNS records, the `http_request_firewall_custom` ruleset (two rules), eleven
+Email Routing forward rules, the catch-all, and the worker route
+`mctl.ai/api/*` → `mctl-landing-form` (`workers.tf`, #1179). The route is owned
 here; the worker script and its secrets stay in Wrangler (`mctlhq/mctl-web`,
 `cloudflare-worker/`), which must not declare the pattern again. See decision 9
 in `../../README.md`.
