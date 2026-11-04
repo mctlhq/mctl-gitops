@@ -357,6 +357,11 @@ metadata:
   namespace: {{ $ns }}
 data:
   config.yaml: |
+    # Probe target only. kubelet probes need no NetworkPolicy rule (k3s'
+    # kube-router accepts node-local traffic, see temporal/networkpolicy.yaml).
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
     receivers:
       otlp:
         protocols:
@@ -497,6 +502,7 @@ data:
         resource_to_telemetry_conversion:
           enabled: true
     service:
+      extensions: [health_check]
       pipelines:
         traces:
           receivers: [otlp]
@@ -551,6 +557,14 @@ spec:
           ports:
             - {name: otlp-grpc, containerPort: 4317}
             - {name: metrics, containerPort: 8889}
+            - {name: health, containerPort: 13133}
+          livenessProbe:
+            httpGet: {path: /, port: health}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 10
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -667,7 +681,14 @@ spec:
             - {name: OTEL_RESOURCE_ATTRIBUTES, value: "mctl.tenant=mctl"}
           {{- end }}
           ports:
-            - {name: http, containerPort: 13133}
+            - {name: health, containerPort: 13133}
+          livenessProbe:
+            httpGet: {path: /, port: health}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: {path: /, port: health}
+            periodSeconds: 10
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

@@ -112,6 +112,24 @@ def main():
     ctx_dep = by[("Deployment", SPIKE_NS, "obi-spike-collector")]
     check("tolerations" not in ctx_dep["spec"]["template"]["spec"], "collector has tolerations")
 
+    # Every spike Deployment probes the health_check extension its config enables.
+    ctx_cfg = yaml.safe_load(by[("ConfigMap", SPIKE_NS, "obi-spike-collector-config")]["data"]["config.yaml"])
+    configs = {("obi-spike-collector", SPIKE_NS): ctx_cfg}
+    configs.update({(name, ns): yaml.safe_load(d["data"]["config.yaml"])
+                    for (k, ns, name), d in by.items() if k == "ConfigMap" and name.startswith("obi-fixture-")})
+    check(len(configs) == 5, f"expected the collector and 4 fixtures, got {sorted(configs)}")
+    for (name, ns), conf in configs.items():
+        check("health_check" in conf.get("service", {}).get("extensions", []), f"{name}: health_check not enabled")
+        dep = by.get(("Deployment", ns, name))
+        if dep is None:
+            check(False, f"{name}: no Deployment")
+            continue
+        c = dep["spec"]["template"]["spec"]["containers"][0]
+        ports = {p["name"]: p["containerPort"] for p in c.get("ports", [])}
+        check(ports.get("health") == 13133, f"{name}: no health port 13133")
+        for kind in ("livenessProbe", "readinessProbe"):
+            check(c.get(kind, {}).get("httpGet", {}).get("port") == "health", f"{name}: {kind} missing")
+
     # No customer namespace beyond the two fixture tenants.
     allowed = {None, SPIKE_NS, "monitoring", values["fixtures"]["tenantA"], values["fixtures"]["tenantB"]}
     new_objs = [d for d in on if d["kind"] != "Application" and is_spike(d) or
