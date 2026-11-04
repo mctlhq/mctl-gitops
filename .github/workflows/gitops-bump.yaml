@@ -153,6 +153,17 @@ jobs:
               print(f"ERROR: file(s) not found: {missing}", file=sys.stderr)
               sys.exit(2)
 
+          # Release gate (mctlhq/mctl-agents#1007): whole file set, before any
+          # write, fail closed (a crash of the gate stops the bump too).
+          import subprocess
+          _gate = subprocess.run(
+              [sys.executable, "scripts/release-gate.py", "check",
+               "--files", *[os.path.normpath(f) for f in files], "--new-tag", new_tag]
+          )
+          if _gate.returncode != 0:
+              print("ERROR: release gate refused this bump", file=sys.stderr)
+              sys.exit(6)
+
           print(f"Files to process ({len(files)}):")
           for f in files:
               print(f"  {f}")
@@ -268,6 +279,8 @@ jobs:
           # Direct commit to main — scoped to exactly the allowlisted,
           # explicitly-staged file(s) above.
           git commit -m "chore: bump ${SERVICE} to ${NEW_TAG}"
+          # Release gate on the tree about to be pushed (see release-deploy).
+          python3 scripts/release-gate.py verify
           git push
 
       - name: Summary

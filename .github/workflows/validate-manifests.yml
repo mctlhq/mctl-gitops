@@ -546,6 +546,17 @@ jobs:
         # of them forever.
         run: python3 tests/test_release_deploy_bump.py
 
+      - name: Release gate (selftest, tree, mutation tests)
+        # mctlhq/mctl-agents#1007: the worker group may not be bumped
+        # partially, below its image floor, or without Recreate on the control
+        # worker. --selftest first as for every detector; the tree check also
+        # stops a manual PR that lowers a tag or drops the strategy.
+        run: |
+          set -euo pipefail
+          python3 scripts/release-gate.py --selftest
+          python3 scripts/release-gate.py verify
+          python3 tests/test_release_gate.py
+
       - name: Unit-test the release-deploy input validation
         # validate-inputs gates build and bump; this runs its bash against
         # valid and hostile inputs and keeps its prefix list equal to the

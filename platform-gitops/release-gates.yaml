@@ -1,0 +1,25 @@
+# Release gates read by scripts/release-gate.py (mctlhq/mctl-agents#1007, B4).
+#
+# A gate guards a GROUP of values files that must move together. release-deploy
+# and the PR validator refuse (exit 6) when:
+#   - the bump names some but not all of a group's paths (partial bump);
+#   - a `requires` condition does not hold in the current file;
+#   - the new tag, or any current tag, is below `min_tag` (image floor);
+#   - this file, a listed file, or a required key cannot be read (an
+#     unreadable gate is a refusal, never a pass).
+# Raising `min_tag` and loosening `requires` are reviewed PRs to this file.
+gates:
+  - name: mctl-agents-workers
+    issue: mctlhq/mctl-agents#1007
+    paths:
+      - platform-gitops/services/admins/mctl-agents-worker/values.yaml
+      - platform-gitops/services/admins/mctl-agents-worker-exec/values.yaml
+      - platform-gitops/services/admins/mctl-agents-worker-implement/values.yaml
+    # Image floor: never below a build that can read the histories the fleet
+    # has already written. Raised to the M1 tag in the PR that deploys M1.
+    min_tag: "1.117.0"
+    requires:
+      # Recreate on the control worker: no old and new build polling together.
+      - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml
+        key: strategy.type
+        equals: Recreate
