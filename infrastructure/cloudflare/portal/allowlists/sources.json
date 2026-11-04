@@ -12,8 +12,8 @@
       "repo": "mctlhq/mctl-api",
       "path": "docs/portal-allowlist.json",
       "ref": "main",
-      "sha": "99f394d20c8f0eacc455a3cb7f2f1f7acf35299d",
-      "vendored_at": "2026-10-30T21:17:42Z"
+      "sha": "2d6d3642eed9980362050a7690b35ecd8159d00c",
+      "vendored_at": "2026-10-31T20:21:49Z"
     },
     "coolify": {
       "repo": "mctlhq/mctl-coolify-mcp",
@@ -40,8 +40,8 @@
       "repo": "mctlhq/mctl-telegram",
       "path": "docs/portal-allowlist.json",
       "ref": "main",
-      "sha": "74dcb1c3025f05337695129e7b9de65c250fb1c9",
-      "vendored_at": "2026-10-21T22:12:59Z"
+      "sha": "c56b57033ff00e4eefe8ff9ee9197c2c567fed83",
+      "vendored_at": "2026-11-01T12:15:01Z"
     }
   }
 }

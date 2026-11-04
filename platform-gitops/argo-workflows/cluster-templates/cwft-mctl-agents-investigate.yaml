@@ -80,7 +80,7 @@ spec:
         # https://github.com/mctlhq/mctl-telegram/issues/123
         # run-investigator fails fast with a clear message if empty.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.112.3
+        value: ghcr.io/mctlhq/mctl-agents:1.117.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -150,6 +150,27 @@ spec:
         # work_item_id. Requires an issue-investigator release containing
         # mctl-agents#686; an earlier pin does not recognise the flag and
         # exits non-zero.
+      - name: surface
+        value: ""
+        # Optional. The surface the dispatched execution request was made on
+        # (github, telegram, web, cli, api, mcp), sent by the DevLoop for a
+        # dispatched run only (mctl-agents#573, #904). Forwarded as
+        # --surface, so the sealed ContextSnapshot records the current
+        # surface and whether this execution moved surfaces. A label only:
+        # it names no client, session or model. Same omit-when-empty rule as
+        # work_item_id; with it absent the investigator seals the transition
+        # as unknown, never false. `mcp` requires an issue-investigator
+        # release containing mctl-agents#904 (1.114.0+); an earlier pin
+        # refuses it and exits non-zero.
+      - name: actor_kind
+        value: ""
+        # Optional. Kind of actor that made that request (human, agent,
+        # system), forwarded as --actor-kind. Same rules as surface.
+      - name: actor_id
+        value: ""
+        # Optional. The authenticated principal that made that request
+        # (mctl-api's requested_by), forwarded as --actor-id. Same rules as
+        # surface; the investigator bounds its length before any clone.
       - name: traceparent
         value: ""
         # Optional. W3C trace context of the Temporal activity that
@@ -199,6 +220,7 @@ spec:
     - name: github-token-file
       secret:
         secretName: mctl-agents-secrets
+        defaultMode: 0440
         items:
           - key: github-token
             path: github-token
@@ -428,7 +450,22 @@ spec:
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
               chmod 600 ~/.ssh/config
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               # PVC-backed scratch dir for run_issue_investigator's
               # `gh repo clone` target — see TMPDIR in run-investigator below.
@@ -477,13 +514,14 @@ spec:
             # for local/offline debugging — fail fast here with a clear
             # message instead of surfacing an opaque `gh` auth error from
             # deep inside Python.
-            if [ -z "$GITHUB_TOKEN" ]; then
-              echo "❌ GITHUB_TOKEN is not set — the investigator needs it to read the issue, clone the repo, and comment" >&2
+            if [ ! -s "$GITHUB_TOKEN_FILE" ]; then
+              echo "❌ GITHUB_TOKEN_FILE is empty or missing — the investigator needs it to read the issue, clone the repo, and comment" >&2
               exit 1
             fi
             # Wire git's HTTPS credential helper to GITHUB_TOKEN so `gh repo
             # clone` and any later git op authenticate non-interactively.
-            gh auth setup-git
+            # setup-git needs a token in its env; scope it to this one command.
+            GITHUB_TOKEN="$(cat "$GITHUB_TOKEN_FILE")" gh auth setup-git
             # issue_url is required. Fail fast with a clear message rather
             # than letting argparse emit a terse usage error deep in logs.
             if [ -z "$WORKFLOW_ISSUE_URL" ]; then
@@ -526,6 +564,17 @@ spec:
             # Owner principal for later-round questions (mctl-agents#684).
             if [ -n "$WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID" ]; then
               set -- "$@" --work-item-owner-principal-id "$WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID"
+            fi
+            # The dispatched request's provenance (mctl-agents#573, #904).
+            # Same omit-when-empty rule; read from env like the rest.
+            if [ -n "$WORKFLOW_SURFACE" ]; then
+              set -- "$@" --surface "$WORKFLOW_SURFACE"
+            fi
+            if [ -n "$WORKFLOW_ACTOR_KIND" ]; then
+              set -- "$@" --actor-kind "$WORKFLOW_ACTOR_KIND"
+            fi
+            if [ -n "$WORKFLOW_ACTOR_ID" ]; then
+              set -- "$@" --actor-id "$WORKFLOW_ACTOR_ID"
             fi
             printf '→'
             printf ' %s' "$@"
@@ -741,8 +790,14 @@ spec:
           # provenance and input only, never authorization. Only this template
           # reads it: the Temporal workers run no context assembly. Roll back by
           # setting "off" (the default, byte-neutral).
+          # OFF since mctl-api#880 (owner decision 2026-10-31): scoped agent
+          # run tokens are refused raw intent reads on MCP and REST, own work
+          # item included, so this scoped-token read must stop BEFORE that
+          # mctl-api release ships, or runs naming an intent_id would fail
+          # `intent-unresolved`. Turning it back on needs a credential the
+          # model cannot reach, decided separately.
           - name: WORK_ITEM_INTENT_SOURCE
-            value: "on"
+            value: "off"
           # Workflow param injected as an env var so the shell layer can
           # quote it safely. Direct workflow.parameters.* interpolation in
           # the script body is a shell-injection vector.
@@ -767,6 +822,12 @@ spec:
             value: "{{workflow.parameters.human_input_responses}}"
           - name: WORKFLOW_WORK_ITEM_OWNER_PRINCIPAL_ID
             value: "{{workflow.parameters.work_item_owner_principal_id}}"
+          - name: WORKFLOW_SURFACE
+            value: "{{workflow.parameters.surface}}"
+          - name: WORKFLOW_ACTOR_KIND
+            value: "{{workflow.parameters.actor_kind}}"
+          - name: WORKFLOW_ACTOR_ID
+            value: "{{workflow.parameters.actor_id}}"
           # The engine run this attempt belongs to (mctl-agents#455): the
           # investigator attaches it to the work item as (argo, workflow name)
           # and takes the store's `we_` id as its execution identity. The
@@ -836,17 +897,11 @@ spec:
           # GitHub PAT for `gh issue view`, `gh repo clone` and
           # `gh issue comment`. Needs repo read on the target repo plus
           # `issues: write` for the closing comment.
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: github-token
-                optional: true
           # Path to the mounted Secret volume (see spec.volumes above).
           # refresh_github_token() re-reads GITHUB_TOKEN from this file
           # before every gh/git subprocess, so a run that outlives the
-          # token's ~60min TTL still authenticates correctly. GITHUB_TOKEN
-          # above only seeds the very first call before any refresh happens.
+          # token's ~60min TTL still authenticates correctly. There is no
+          # GITHUB_TOKEN env seed (#2288): the file is the only delivery.
           - name: GITHUB_TOKEN_FILE
             value: /var/run/gh/github-token
           # No MCTL_TOKEN here (mctlhq/mctl-agents#717, option c): the run's
@@ -1091,7 +1146,22 @@ spec:
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
               chmod 600 ~/.ssh/config
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               echo "✓ gitops cloned (fresh checkout, never touched by the agent)"
           resources:

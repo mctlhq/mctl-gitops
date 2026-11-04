@@ -300,7 +300,9 @@ argo-cd:
         # render + git fetch) spike well above the cap for short windows and
         # get CFS-throttled. 500m→250m (2026-05-07) was too aggressive; 500m
         # still throttled ~50% (7d), so raised 500m→1000m on 2026-06-27.
-        cpu: 1000m
+        # Raised 1000m→2000m on 2026-10-31: bursts were still hitting ~29%
+        # CFS throttling during concurrent manifest rendering.
+        cpu: 2000m
         # Raised 256Mi→512Mi on 2026-09-02 together with the push webhook:
         # steady state was 184Mi (72% of the old cap) and helm/git child
         # processes count against the same cgroup. A child OOM-kill does
@@ -335,7 +337,9 @@ argo-cd:
         cpu: 50m
         memory: 128Mi
       limits:
-        cpu: 300m
+        # Raised 300m->1000m on 2026-10-31: was hitting 27% CFS throttling
+        # on burst reconciliation loops.
+        cpu: 1000m
         memory: 256Mi
 
   notifications:

@@ -40,17 +40,16 @@ spec:
                   # ~1.5-1.7Gi on 2026-10-19.
                   memory: 1600Mi
                 limits:
-                  cpu: 750m
+                  cpu: 1500m
                   # Raised 1536Mi→2Gi on 2026-06-26: working set sat at ~1409Mi
                   # (~92% of the 1536Mi cap), firing recurring ">80% memory used"
                   # warnings and risking OOM. Request stays 1400Mi (no scheduling
                   # change); the bump is pure headroom.
-                  # Raised 2Gi->2560Mi on 2026-10-20: one broad 7-day
-                  # history query from the 2026-10-19 resource audit pushed
-                  # the working set to 2046Mi and OOMKilled vmsingle
-                  # (21:27:40Z). The per-query caps below are the real fix;
-                  # this is headroom so the TSDB itself is not the victim.
-                  memory: 2560Mi
+                  # Raised 2Gi->2560Mi on 2026-10-20.
+                  # Raised 2560Mi->3584Mi on 2026-10-31: vmbackup snapshot creation
+                  # pushed working set past 2560Mi on 2026-10-25 and caused an
+                  # OOMKill (exit code 137). Extra headroom protects TSDB snapshotting.
+                  memory: 3584Mi
               extraArgs:
                 search.maxConcurrentRequests: "16"
                 search.maxQueueDuration: "30s"
@@ -238,6 +237,25 @@ spec:
                 create: false
               kubernetesSystemControllerManager:
                 create: false
+            rules:
+              # Stock rule fires at 3x: new series in 24h vs active series.
+              # Agent workflows (shepherd, run, incidents) start ~2-3k short
+              # pods a day, each a new set of cAdvisor/KSM series, so the
+              # steady-state ratio sits at 3.0-3.7 (14d max 3.73, 2026-11-04)
+              # and the alert fired on normal load. 5x keeps headroom over
+              # that baseline and still catches a real cardinality blow-up.
+              # The override replaces expr for both the vmsingle and the
+              # vmcluster copy of the rule (same name). Stock groups by
+              # job+cluster (vmcluster) and instance+cluster (vmsingle);
+              # job+instance+cluster is their union, and a label absent on
+              # both sides of `>` matches as empty, so either copy works.
+              TooHighChurnRate24h:
+                spec:
+                  annotations:
+                    description: |-
+                      The number of new time series created over the last 24h on "{{`{{ $labels.instance }}`}}" is more than 5x the current number of active series (churn rate).
+                       High churn is tightly connected with database performance and may result in unexpected OOMs or slow queries.
+                  expr: sum(increase(vm_new_timeseries_created_total[24h])) by(job,instance,cluster) > (sum(vm_cache_entries{type="storage/hour_metric_ids"}) by(job,instance,cluster) * 5)
 
           prometheus-node-exporter:
             enabled: true
@@ -543,23 +561,25 @@ spec:
                   # defeating the Internal-folder ACL plan.
                   foldersFromFilesStructure: true
               # Applies to both k8s-sidecar containers (grafana-sc-dashboard,
-              # grafana-sc-datasources), which ran with no requests or
-              # limits. 7d peaks 85Mi / 75Mi (2026-10-20).
+              # grafana-sc-datasources). Raised CPU limit 100m->500m on 2026-10-31:
+              # Python sidecars were experiencing 50% CFS throttling on 100m.
               resources:
                 requests:
                   cpu: 20m
                   memory: 96Mi
                 limits:
-                  cpu: 100m
+                  cpu: 500m
                   memory: 192Mi
             plugins:
               - victoriametrics-metrics-datasource
+            # Raised CPU limits 200m->1000m on 2026-10-31: multi-threaded panel
+            # queries were hitting 25-35% CFS throttling on the tight 200m limit.
             resources:
               requests:
-                cpu: 50m
+                cpu: 100m
                 memory: 384Mi
               limits:
-                cpu: 200m
+                cpu: 1000m
                 memory: 768Mi
 
           alertmanager:
@@ -746,15 +766,6 @@ spec:
                   - receiver: telegram
                     matchers:
                       - alertname =~ "ErpactSite.*"
-                  # claude-remote's Telegram hydration token
-                  # (vm-rules/claude-remote-telegram-token.yaml,
-                  # mctlhq/mctl-claude-remote#82). Telegram only, no ticket:
-                  # the remedy is an admin:users login minting a new worker
-                  # token into Vault, which mctl-agent cannot do. Prefix match
-                  # so the next alert in that file is covered too.
-                  - receiver: telegram
-                    matchers:
-                      - alertname =~ "ClaudeRemoteTelegramToken.*"
                   # The MCP portal health check (vm-rules/cloudflare-portal-health.yaml).
                   # Telegram only, no ticket: every remedy is a human's -- the
                   # dashboard's "Re-authenticate server", a token, or a sync
@@ -1187,7 +1198,7 @@ spec:
                       # that runs several CronJobs reads as "Job failed to
                       # complete. Namespace: vault" and says nothing about
                       # WHICH job — vault runs both the daily backup and the
-                      # 2-minute auto-unseal, and telling them apart meant
+                      # 5-minute auto-unseal, and telling them apart meant
                       # going to the cluster.
                       message: |
                         {{ "{{" }} range .Alerts {{ "}}" }}
@@ -1271,6 +1282,22 @@ spec:
                           - apiserver_flowcontrol_read_vs_write_current_requests_bucket
                           - apiserver_flowcontrol_demand_seats_bucket
                           - etcd_request_duration_seconds_bucket
+
+          # Drop leaked apiserver and etcd metrics from kubelet scrapes.
+          # In K3s, control-plane components share the process on the master
+          # node, so kubelet's /metrics endpoint on port 10250 also exports
+          # apiserver_* and etcd_* metrics under job="kubelet". This leaked
+          # ~80k active series (including duplicates of SLI buckets) into
+          # VictoriaMetrics. Kubelet should only export kubelet/container/node metrics.
+          # Note: chart 0.72.5 uses `vmScrape:` (not `vmNodeScrape:`) to generate VMNodeScrapes.
+          kubelet:
+            enabled: true
+            vmScrape:
+              spec:
+                metricRelabelConfigs:
+                  - action: drop
+                    sourceLabels: [__name__]
+                    regex: (rest_client_request_duration_seconds_bucket|rest_client_request_duration_seconds_sum|rest_client_request_duration_seconds_count|apiserver_.*|etcd_.*)
 
           kubeControllerManager:
             enabled: false

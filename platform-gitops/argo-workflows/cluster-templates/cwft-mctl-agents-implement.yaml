@@ -105,7 +105,7 @@ spec:
         # Bound subscription usage and blast radius. Set explicitly to 0 only
         # for an operator-reviewed manual batch.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.112.3
+        value: ghcr.io/mctlhq/mctl-agents:1.117.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -211,9 +211,25 @@ spec:
     - name: github-token-file
       secret:
         secretName: mctl-agents-secrets
+        defaultMode: 0440
         items:
           - key: github-token
             path: github-token
+    # Least-privilege credentials for the implement run (mctlhq/mctl-agents#717,
+    # mctl-gitops#1980), as on investigate: a pod-bound ServiceAccount token
+    # with an audience only mctl-api's run-token exchange accepts. mctl-api
+    # verifies it with TokenReview, finds the pod and this Workflow, and
+    # issues a run token scoped to the implement surface and this run's
+    # execution_id. It grants nothing in the Kubernetes API (mctl-agents-runner
+    # has no role bindings). Mounted into run-implementer's agent container
+    # only.
+    - name: mctl-api-run-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              audience: mctl-api-agent-run
+              expirationSeconds: 3600
+              path: token
 
   # No `outputs.parameters` anywhere in this file. onExit used to read
   # `/workdir/activity` off the shared PVC precisely to avoid
@@ -422,7 +438,22 @@ spec:
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
               chmod 600 ~/.ssh/config
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               # Scratch dir for run_implementer's `gh repo clone` targets. The
               # orchestrator picks up `tempfile.gettempdir()` which honors
@@ -514,8 +545,8 @@ spec:
             # credential helper, which reads GITHUB_TOKEN from the env at
             # push time. Skip silently if no token (fail-closed at gh clone
             # already; this just keeps the path clean for offline smoke).
-            if [ -n "$GITHUB_TOKEN" ]; then
-              gh auth setup-git
+            if [ -s "$GITHUB_TOKEN_FILE" ]; then
+              GITHUB_TOKEN="$(cat "$GITHUB_TOKEN_FILE")" gh auth setup-git
             fi
             # Read params from env, NOT inline workflow.parameters interpolation
             # (Argo template syntax): a value like `; rm -rf /` would otherwise be
@@ -749,19 +780,27 @@ spec:
           # implementer fails fast at clone-target step. Marked optional:
           # local smoke runs without GITHUB_TOKEN can still exercise the
           # discovery path (--dry-run).
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: github-token
-                optional: true
           # Path to the mounted Secret volume (see spec.volumes above).
           # refresh_github_token() re-reads GITHUB_TOKEN from this file
           # before every gh/git subprocess, so a run that outlives the
-          # token's ~60min TTL still authenticates correctly. GITHUB_TOKEN
-          # above only seeds the very first call before any refresh happens.
+          # token's ~60min TTL still authenticates correctly. There is no
+          # GITHUB_TOKEN env seed (#2288): the file is the only delivery.
           - name: GITHUB_TOKEN_FILE
             value: /var/run/gh/github-token
+          # Scoped run token (mctlhq/mctl-agents#717): off | observe | enforce.
+          # observe exchanges the projected token above (scope `implement`,
+          # bound to WORKFLOW_EXECUTION_ID) and revokes the result at once to
+          # prove the path, keeps every call on MCTL_TOKEN and names the scope
+          # in a shadow header that mctl-api only counts. Nothing changes for
+          # the run: a failed exchange is logged, not fatal. Needs mctl-api
+          # >= 4.154.0 and mctl-agents >= 1.117.0; an older image ignores it.
+          # Rollback: remove these two variables (mode off). Not set on the
+          # shepherd template: it runs run_implementer as a subprocess and
+          # stays off.
+          - name: MCTL_RUN_TOKEN_MODE
+            value: observe
+          - name: MCTL_RUN_TOKEN_SA_TOKEN_FILE
+            value: /var/run/secrets/mctl-api/token
           # Optional MCP token, same convention as run pipeline.
           - name: MCTL_TOKEN
             valueFrom:
@@ -889,6 +928,9 @@ spec:
           - name: github-token-file
             mountPath: /var/run/gh
             readOnly: true
+          - name: mctl-api-run-token
+            mountPath: /var/run/secrets/mctl-api
+            readOnly: true
 
     # ── 2. Commit & push back to mctl-gitops ──────────────────────────────
     # Only .status.yaml files should change in agents-state/ (run_implementer
@@ -993,7 +1035,22 @@ spec:
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
               chmod 600 ~/.ssh/config
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               echo "✓ gitops cloned (fresh checkout, never touched by the agent)"
           resources:

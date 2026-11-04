@@ -1,0 +1,161 @@
+# Worker: agent-worker-managed-preview
+# Team: labs
+# Chart: base-service (ingress disabled)
+
+# Platform-operated pool worker for the `managed` communication-agent runtime
+# (mctlhq/mctl-telegram#1088, ADR 0008 section 6; gitops#2345). It runs an
+# account's jobs on an OpenAI-compatible model reached through the dedicated
+# `mctl-telegram` Cloudflare AI Gateway. The gateway and its run token are
+# declared in infrastructure/cloudflare/ by the activation PR (steps 2-3), not
+# here. Separate from agent-worker-preview, which is the own-runtime
+# worker and the own-runtime rollback target; this deployment never touches it.
+#
+# Staged rollout. It landed inert (replicaCount 0, no ExternalSecret) because
+# base-service renders every extraExternalSecrets entry unconditionally and an
+# ExternalSecret whose Vault path does not exist would leave the Application
+# Degraded. Activation step 4 (2026-11-03, after step 3 wrote the three Vault
+# paths) added the ExternalSecrets and the envFrom below, and all three synced.
+# Step 5 (this PR) starts one replica. No account is on the managed runtime yet,
+# so the worker polls an empty queue until step 6. The exact entries and the order are in
+# platform-gitops/agents-state/mctl-gitops/proposals/
+# issue-2345-feat-labs-agent-worker-managed-preview-m/requirements.md,
+# "Activation". Env names are the ones mctl-telegram cmd/agent-worker/main.go
+# reads: AGENT_API_TOKEN, AGENT_OPENAI_API_KEY, AGENT_GATEWAY_TOKEN.
+#
+# Rollback, in order: account back to runtime "own", replicaCount 0, revoke the
+# pool token jti, MANAGED_RUNTIME_ENABLED "false" in mctl-telegram-preview.
+replicaCount: 1
+image:
+  repository: ghcr.io/mctlhq/agent-worker-preview
+  tag: "main-3cd42d1"
+  # tag is auto-bumped by mctl-telegram's preview-deploy.yml on every push to
+  # main (mctl-telegram#1094: its dispatch skips until this file exists on
+  # main, then bumps it) — do not hand-pin it.
+imagePullSecrets:
+  - name: ghcr-credentials
+ingress:
+  enabled: false
+resources:
+  # No `claude` CLI subprocess in the OpenAI runner, so far smaller than
+  # agent-worker-preview.
+  requests:
+    cpu: 50m
+    memory: 64Mi
+    ephemeral-storage: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+    ephemeral-storage: 256Mi
+automountServiceAccountToken: false
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+probes:
+  startup:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 24
+  readiness:
+    path: /readyz
+    port: http
+    initialDelaySeconds: 15
+    periodSeconds: 5
+  liveness:
+    path: /healthz
+    port: http
+    initialDelaySeconds: 60
+    periodSeconds: 15
+env:
+  # Must be the full /api/agent/v1 root (the client appends paths directly).
+  AGENT_API_BASE_URL: "http://labs-mctl-telegram-preview-base-service:8080/api/agent/v1"
+  AGENT_RUNNER: "openai"
+  # Per-job tokens derived from the aud=agent-pool token; never falls back to
+  # an account token (mctl-telegram#1090). No AGENT_SYSTEM_PROMPT on purpose:
+  # in the managed runtime the prompt comes from the account's assistant
+  # install, not from this deployment.
+  AGENT_POOL_MODE: "true"
+  # GLM-5.1 through Nebius, the production model, for the preview validation
+  # run after A6 (mctl-telegram#1088). Rollback = revert this change: back to
+  # Qwen/Qwen3.6-35B-A3B (C1 dev/eval model, mctl-telegram#1093) on Hetzner.
+  AGENT_MODEL: "zai-org/GLM-5.1"
+  # Account id is the non-secret value already committed in
+  # ai-gateway-custom-providers.json and admins/mctl-support/values.yaml.
+  AGENT_OPENAI_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-telegram/custom-nebius/v1"
+  # Keep equal to MANAGED_MAX_JOB_COST_USD in mctl-telegram-preview.
+  AGENT_MAX_BUDGET_USD: "0.25"
+  AGENT_MAX_TURNS: "12"
+  # Kept from the Hetzner limit of 10 requests per 60 s (ADR 0008): 6s is a
+  # safe floor on Nebius too; its own limit was not measured here.
+  AGENT_OPENAI_MIN_INTERVAL: "6s"
+  AGENT_WORKER_CONCURRENCY: "1"
+  # Shadow prices: Nebius GLM-5.1, the production model (as in
+  # admins/mctl-support/values.yaml), so the preview ledger and caps behave as
+  # production would.
+  MODEL_INPUT_USD_PER_MTOK: "1.40"
+  MODEL_OUTPUT_USD_PER_MTOK: "4.40"
+  # Non-secret quota-domain label (the Vault path of the Nebius key), exported
+  # on mctl_agent_credential_domain. Read through requireEnv: fail-fast if unset.
+  AGENT_CREDENTIAL_DOMAIN_ID: "platform/labs/agent-worker-managed-preview/openai-nebius"
+# Activation step 4. One ExternalSecret per credential, so each can be
+# rotated alone. Vault values are written by hand (step 3), never in git.
+envFrom:
+  - secretRef:
+      name: labs-agent-worker-managed-preview-api
+  - secretRef:
+      name: labs-agent-worker-managed-preview-openai
+  - secretRef:
+      name: labs-agent-worker-managed-preview-gateway
+extraExternalSecrets:
+  # The claim-only aud=agent-pool token (POST /api/agent/pool-token,
+  # pool_name agent-worker-managed-preview). Revoke by jti on rollback.
+  labs-agent-worker-managed-preview-api:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-agent-worker-managed-preview-api
+    data:
+      - secretKey: AGENT_API_TOKEN
+        remoteKey: secret/data/platform/labs/agent-worker-managed-preview/api
+        property: token
+  # Nebius Token Factory key, dedicated to this worker (not shared with
+  # mctl-support), sent through the gateway (byok). Written by hand.
+  labs-agent-worker-managed-preview-openai:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-agent-worker-managed-preview-openai
+    data:
+      - secretKey: AGENT_OPENAI_API_KEY
+        remoteKey: secret/data/platform/labs/agent-worker-managed-preview/openai-nebius
+        property: token
+  # cf-aig-authorization bearer for the mctl-telegram AI Gateway (run only);
+  # canonical copy at secret/platform/mctl-telegram/ai-gateway.
+  labs-agent-worker-managed-preview-gateway:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: labs-agent-worker-managed-preview-gateway
+    data:
+      - secretKey: AGENT_GATEWAY_TOKEN
+        remoteKey: secret/data/platform/labs/agent-worker-managed-preview/gateway
+        property: token
+extraVolumes:
+  - name: agent-tmp
+    emptyDir:
+      sizeLimit: 64Mi
+extraVolumeMounts:
+  - name: agent-tmp
+    mountPath: /tmp
+extraContainers: []

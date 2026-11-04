@@ -1,99 +1,114 @@
 # Tasks: issue-2211-spike-can-stable-ottl-in-the-opentelemet
 
-- [ ] 1. Baseline and syntax check. Record the current collector span
+- [ ] 1. Baseline on the current collector `0.160.0`. Record current span
   throughput (`otelcol_receiver_accepted_spans`,
-  `otelcol_exporter_sent_spans`), the Loki bytes for the collector's stdout
-  over 7 days, and Tempo ingested bytes. Run `otelcol-contrib validate` at
-  `0.160.0` against both statement forms (explicit `trace_statements`
-  contexts, and context-inferred `statements:` with `span.` prefixes). —
-  DoD: numbers and the validate result are recorded in a draft of
-  `docs/spikes/ottl-telemetry-pipeline.md`.
-- [ ] 2. Add `otelCollector.ottl` (`scrub.enabled: false`,
-  `scrub.maxValueLength: 4096`, `tenants: []`) to
-  `platform-gitops/bootstrap/values.yaml`, with comments. — DoD: the default
-  render of `otel-collector.yaml` is unchanged apart from task 4.
-- [ ] 3. In `platform-gitops/bootstrap/templates/observability/otel-collector.yaml`,
-  render `transform/scrub` (`error_mode: ignore`, `truncate_all` plus the two
-  `replace_all_patterns` statements) and one `filter/tenant-<team>` per
-  `ottl.tenants[]` entry, compiling each typed `dropSpans[]` rule
-  (`attribute`/`operator`/`value`, see design.md) into OTTL behind the
-  template-added `resource.attributes["mctl.team"] == "<team>"` guard. An
-  unknown attribute or operator makes the template `fail`. Insert them into
-  `service.pipelines.traces.processors` in the order from design.md
-  (depends on 1, 2). — DoD: `helm template` of `platform-gitops/bootstrap`
-  with an overlay that enables both renders valid YAML, and
-  `otelcol-contrib validate` passes on it.
-- [ ] 4. Render `debug.verbosity: basic` when `otelCollector.backendEndpoint`
-  is set, and `normal` otherwise. — DoD: the default render shows `basic`,
-  and a render with `backendEndpoint: ""` shows `normal`.
-- [ ] 5. Add tenant-rule validation: team is DNS-safe and exists under
+  `otelcol_exporter_sent_spans`), collector stdout/Loki bytes over the previous
+  7 days, and Tempo ingested bytes. Run `otelcol-contrib validate` at `0.160.0`
+  against the existing pipeline and both relevant OTTL statement forms. — DoD:
+  a draft `docs/spikes/ottl-telemetry-pipeline.md` records
+  `FUNCTIONAL_FEASIBILITY: GO|NO_GO`; it does not call this stable suitability.
+
+- [ ] 2. Bump the collector image pin from
+  `otel/opentelemetry-collector-contrib:0.160.0` to **`0.164.0`**. Update the
+  existing real-binary e2e fixtures/tests to use the target binary and run the
+  current collector pipeline before adding any enabled OTTL rule. The Helm
+  chart stays at `0.173.0`. — DoD: current redaction/render/e2e behaviour is
+  green on `0.164.0`; any regression blocks the pilot.
+
+- [ ] 3. Add `otelCollector.ottl` to
+  `platform-gitops/bootstrap/values.yaml` with `scrub.enabled: false`,
+  `scrub.maxValueLength: 4096`, `tenants: []`. — DoD: no transform or tenant
+  filter is enabled by default.
+
+- [ ] 4. In `platform-gitops/bootstrap/templates/observability/otel-collector.yaml`,
+  render `transform/scrub` and one `filter/tenant-<team>` per typed tenant rule.
+  Tenant rules are `{attribute, operator, value}` only; the template compiles
+  them into OTTL behind the structural
+  `resource.attributes["mctl.team"] == "<team>"` guard. Unknown attributes or
+  operators make Helm rendering fail. Processor order is
+  `memory_limiter, k8sattributes, resource, redaction, [transform/scrub],
+  filter/health, [filter/tenant-*], batch`. — DoD: an overlay enabling scrub
+  and two tenant rules renders valid YAML and `otelcol-contrib validate` passes
+  with the real **0.164.0** binary.
+
+- [ ] 5. Render `debug.verbosity: basic` when
+  `otelCollector.backendEndpoint` is set, and `normal` otherwise. — DoD:
+  default render shows `basic`; backend unset shows `normal`.
+
+- [ ] 6. Add tenant-rule validation. Team must be DNS-safe and exist under
   `platform-gitops/tenants/`; each rule has exactly `attribute`, `operator`,
-  `value`; attribute and operator are in the allowlists; value matches
-  `^[A-Za-z0-9._/:-]{1,128}$` via `re.fullmatch`, not `re.match` with `$`. Wire it into
-  `.github/workflows/validate-manifests.yml` next to the existing
-  otel-collector steps (depends on 2). — DoD: CI fails on a bad team name and
-  passes on an empty list.
-- [ ] 6. Update `docs/runbooks/otel-collector.md`: add an "OTTL rules"
-  section (scrub, tenant filters, a commented `admins` example, how to read
-  `otelcol_processor_filter_spans_filtered`), describe the debug verbosity
-  behaviour, and fix the `summary: info` drift (depends on 3, 4). — DoD:
-  every key the runbook documents exists in the template.
-- [ ] 7. Delivery is three PRs. PR A is tasks 1-6 (scrub off, no tenant
-  rules, debug cost cut). PR B, after an explicit owner approval, sets
-  `otelCollector.ottl.scrub.enabled: true`. PR A and PR B say
-  `Refs mctlhq/mctl-gitops#2211`, never a closing keyword. PR C, after 7
-  days, writes before/after numbers and per-signal verdicts
-  (traces go, logs follow-up, metrics no change) into
-  `docs/spikes/ottl-telemetry-pipeline.md` (depends on 3-6). — DoD: the
-  spike document is merged with measured numbers and filed follow-up issue
-  links (logs via collector, tail sampling, and a collector bump if task 1
-  found one needed).
+  `value`; attribute/operator are from closed allowlists; value matches
+  `^[A-Za-z0-9._/:-]{1,128}$` with full-string validation. Wire it into
+  `validate-manifests.yml`. — DoD: all negative/mutation cases below fail CI.
+
+- [ ] 7. Update `docs/runbooks/otel-collector.md`: document the image pin and
+  why `0.164.0` is the stable-OTTL floor for this spike; OTTL scrub and typed
+  tenant rules; debug-exporter behaviour; filter counters; rollback; and fix
+  the existing `summary: info` documentation drift. — DoD: every documented
+  config key exists in the template.
+
+- [ ] 8. In the draft spike report, record a separate
+  `STABLE_OTTL_SUITABILITY: GO|NO_GO` from the **0.164.0** compatibility and
+  OTTL validation. Also state separately the upstream language-stability and
+  transform-processor component-stability levels. — DoD: PR A cannot merge
+  with a predeclared `Traces: go`; stable suitability is evidence-based.
+
+- [ ] 9. Delivery is three PRs. **PR A** is tasks 1-8: baseline, collector
+  image bump to 0.164.0, inert OTTL mechanism (`scrub=false`, no tenant rules),
+  and debug cost cut. **PR B**, only after explicit owner approval and only if
+  `STABLE_OTTL_SUITABILITY: GO`, sets `otelCollector.ottl.scrub.enabled: true`.
+  PR A and PR B say `Refs mctlhq/mctl-gitops#2211` and never use a closing
+  keyword. **PR C**, after 7 days, writes before/after numbers and final
+  `TRACES_PILOT: GO|NO_GO` plus logs/metrics recommendations and may close the
+  issue.
 
 ## Tests
 
-- [ ] T1. `tests/test_otel_collector_ottl_render.py`: a default-values render
-  contains no `transform/` or `filter/tenant-` keys, and its traces processor
-  list equals today's list. Run it in `validate-manifests.yml`.
-- [ ] T2. Same file: with scrub enabled and two tenants, the processor order
-  is `memory_limiter, k8sattributes, resource, redaction, transform/scrub,
-  filter/health, filter/tenant-a, filter/tenant-b, batch`, and every
-  tenant-filter condition starts with the `mctl.team` guard.
-- [ ] T3. `tests/test_otel_collector_ottl_e2e.py`, modelled on
-  `tests/test_otel_collector_redaction_e2e.py` (docker, real `0.160.0`, file
-  exporter). Send spans and check that:
-  - an email inside `url.full` becomes `<email>` while the rest of the URL
-    survives;
-  - `?token=abc` becomes `token=****`;
-  - a 10 000-char attribute is truncated to `maxValueLength`;
-  - a benign attribute is byte-identical;
-  - `gen_ai.usage.input_tokens` keeps its intValue.
-  Include a mutation proof: with the scrub processor removed, the test must
-  fail.
-- [ ] T4. Same e2e: a span with `mctl.team="admins"` that matches an admins
-  drop condition is dropped. An identical span with `mctl.team="labs"` is
-  exported.
+- [ ] T1. Default render after PR A has collector image `0.164.0`, contains no
+  `transform/` or `filter/tenant-` keys, and preserves the current traces
+  processor list. Existing render/redaction tests pass on the target version.
+
+- [ ] T2. With scrub enabled and two tenants, processor order is
+  `memory_limiter, k8sattributes, resource, redaction, transform/scrub,
+  filter/health, filter/tenant-a, filter/tenant-b, batch`, and every tenant
+  filter starts with the `mctl.team` guard.
+
+- [ ] T3. New OTTL e2e test uses the real **0.164.0** binary and file exporter.
+  Send spans and verify: embedded email is scrubbed while surrounding text
+  survives; `?token=abc` is masked; a 10k-character attribute is truncated;
+  benign attributes are byte-identical; `gen_ai.usage.input_tokens` keeps its
+  numeric value. Mutation proof: remove `transform/scrub` and the test fails.
+
+- [ ] T4. Cross-tenant e2e on real **0.164.0**: an `admins` span matching an
+  admins drop rule is dropped; an otherwise identical `labs` span is exported.
+
 - [ ] T5. Existing `tests/test_otel_collector_redaction.py`,
   `tests/test_otel_collector_redaction_e2e.py` and
-  `tests/test_otel_collector_backends_render.py` still pass unchanged.
-- [ ] T6. Validation script (task 5) and the template both reject, each
-  failing CI: `team: "Admins"`, `team: "nosuchtenant"`, a value containing
-  `) or true`, a value with a single quote, a value with a double quote, a
-  value with an embedded newline, a value with only a trailing newline, a template-looking value (`{{ .x }}`), an unknown
-  operator, an unknown attribute, an extra key such as `condition`. Mutation
-  proof: with the value regex removed from the validator, the `) or true`
-  case must make T4's cross-tenant check fail.
-- [ ] T7. `debug` exporter at `basic`: run the real `0.160.0` binary with the
-  rendered exporter config, send a span carrying a sentinel attribute value,
-  and assert the sentinel does not appear in stdout. Mutation proof: at
-  `normal` (or `detailed`) the sentinel does appear.
+  `tests/test_otel_collector_backends_render.py` still pass after their binary
+  pin is moved to `0.164.0` where applicable.
+
+- [ ] T6. Validator and template both reject: `team: "Admins"`, nonexistent
+  team, value containing `) or true`, single quote, double quote, embedded or
+  trailing newline, template-looking input (`{{ .x }}`), unknown operator,
+  unknown attribute, and an extra key. Mutation proof: removing value
+  validation must make the cross-tenant test fail or otherwise be caught by
+  the negative suite.
+
+- [ ] T7. `debug` exporter sentinel test uses the real **0.164.0** binary:
+  `basic` must not print a sentinel span attribute/body; mutation at `normal`
+  or `detailed` must print it.
+
+- [ ] T8. Version-gate mutation: changing the target fixture/image back to
+  `0.160.0` must fail the stable-suitability/version assertion. This prevents
+  a future edit from silently turning a functional-beta test back into the
+  evidence for stable OTTL adoption.
 
 ## Rollback
 
-- Pilot enablement: set `otelCollector.ottl.scrub.enabled: false` and
-  `tenants: []` in `platform-gitops/bootstrap/values.yaml`. Argo CD
-  (selfHeal) restores the previous collector config and rolls the 2 replicas.
-- Full rollback: revert the template PR. The default render returns to today's
-  output, including `debug.verbosity: normal`.
-- Emergency, if the collector crashloops on a bad rule: revert the values PR.
-  Producers keep retrying OTLP export, so the gap is bounded by their own
-  queues. Tempo keeps the data it already has.
+- PR B rollback: set `otelCollector.ottl.scrub.enabled: false`; tenant rules
+  remain empty unless separately approved.
+- PR A rollback: revert the template/values/image-pin change, restoring
+  collector `0.160.0` and `debug.verbosity: normal`. Argo CD rolls the two
+  collector replicas back.
+- If `0.164.0` fails compatibility validation before merge, do not deploy it;
+  record `STABLE_OTTL_SUITABILITY: NO_GO` and stop before PR B.

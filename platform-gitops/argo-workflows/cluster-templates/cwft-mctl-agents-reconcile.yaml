@@ -65,7 +65,7 @@ spec:
         value: "false"
         # When "true", discover + print would-be flips but write nothing.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.112.3
+        value: ghcr.io/mctlhq/mctl-agents:1.117.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -112,6 +112,16 @@ spec:
       secret:
         secretName: mctl-gitops-deploy-key
         defaultMode: 0600
+    # #2288: GITHUB_TOKEN is file-delivered (rotated every 30 min by
+    # rotate-github-app-tokens; kubelet refreshes the volume). 0440 with
+    # fsGroup 1000. Mounted only in the agent container.
+    - name: github-token-file
+      secret:
+        secretName: mctl-agents-secrets
+        defaultMode: 0440
+        items:
+          - key: github-token
+            path: github-token
 
   templates:
     - name: reconcile-proposals
@@ -264,7 +274,22 @@ spec:
               [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               # uid 1000 is the mctl-agents image USER (SOC F8). This init
               # container runs as root in alpine/git; without the handoff the
@@ -410,17 +435,20 @@ spec:
           # NOT optional: a non-dry reconcile run requires the token; a missing
           # secret should fail at pod-scheduling time, not as an opaque runtime
           # `gh api` auth error. The in-cluster secret always carries this key.
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: github-token
+          # #2288: the token is delivered only as a file (no secretKeyRef env
+          # seed); refresh_github_token() reads it before the first and every
+          # later gh/git call. The mounted file is model-readable (mctl-agents#869).
+          - name: GITHUB_TOKEN_FILE
+            value: /var/run/gh/github-token
         resources:
           requests: { cpu: 100m, memory: 256Mi, ephemeral-storage: 2Gi }
           limits:   { cpu: 1000m, memory: 1Gi, ephemeral-storage: 3Gi }
         volumeMounts:
           - name: workdir
             mountPath: /workdir
+          - name: github-token-file
+            mountPath: /var/run/gh
+            readOnly: true
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     # Only .status.yaml files should change in agents-state/ (run_shepherd
@@ -513,7 +541,22 @@ spec:
               [ssh.github.com]:443 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               echo "gitops cloned"
           resources:
             requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 2Gi }

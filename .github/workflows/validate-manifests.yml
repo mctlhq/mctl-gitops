@@ -17,7 +17,15 @@ env:
   KUBECONFORM_VERSION: "0.8.0"
   # Community CRD schema catalog — covers ArgoCD Application, Argo Workflows,
   # ExternalSecrets, CNPG Cluster, etc. that aren't in the core k8s schema set.
-  CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+  #
+  # Pinned to a catalog commit, not `main`: on 2026-11-01 the catalog's main
+  # moved its Argo Workflows schemas to v4.1.5 (datreeio/CRDs-catalog#1000), which
+  # rejects `spec.schedule` and `synchronization.mutex` that our v3.7 controller
+  # (chart argo-workflows 0.47.5) requires, and 11 valid manifests went red at
+  # once. This SHA is the last commit before that bump (schemas regenerated from
+  # Argo Workflows v3.7.7). Move it together with the argo-workflows chart in
+  # platform-gitops/bootstrap/templates/core-infra/argo-workflows.yaml.
+  CRD_SCHEMA_LOCATION: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/522267593c567f301ce7852e00463309fe62fa10/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 
 jobs:
   validate:
@@ -136,6 +144,31 @@ jobs:
           kubeconform -strict -summary -schema-location default \
             -schema-location "$CRD_SCHEMA_LOCATION" \
             "$tmpdir/bootstrap-eval.yaml"
+
+      # issue-2286: obiSpike.enabled is false by default, so this overlay is
+      # the only place obi-spike.yaml renders in CI. teardownAfter is
+      # injected relative to today (a fixed date would go stale), and the
+      # guard runs --selftest first: a detector never seen to fire is not
+      # known to work.
+      - name: Render and validate the OBI spike overlay (issue-2286)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-obi-spike.py --selftest
+          scripts/validate-obi-spike.py
+          printf 'obiSpike:\n  teardownAfter: "%s"\n' "$(date -u -d '+7 days' +%F)" > "$tmpdir/teardown.yaml"
+          scripts/validate-obi-spike.py \
+            --values platform-gitops/bootstrap/values.yaml \
+            --values tests/fixtures/obi-spike.example-values.yaml \
+            --values "$tmpdir/teardown.yaml"
+          helm template test platform-gitops/bootstrap \
+            -f platform-gitops/bootstrap/values.yaml \
+            -f tests/fixtures/obi-spike.example-values.yaml \
+            -f "$tmpdir/teardown.yaml" > "$tmpdir/bootstrap-obi.yaml"
+          kubeconform -strict -summary -schema-location default \
+            -schema-location "$CRD_SCHEMA_LOCATION" \
+            "$tmpdir/bootstrap-obi.yaml"
 
       # .github#50: both flag states are rendered explicitly with --set, so
       # the assertion does not depend on the committed default (enabled
@@ -276,6 +309,15 @@ jobs:
           python3 -m pip install --quiet pyyaml
           scripts/validate-agent-pod-labels.py --selftest
           scripts/validate-agent-pod-labels.py
+
+      # mctl-gitops#2288: github-token is file-delivered; a secretKeyRef env
+      # seed must not come back and every agent secretKeyRef must be classified.
+      - name: Validate agent credential delivery
+        run: |
+          set -euo pipefail
+          scripts/validate-agent-credential-delivery.py --selftest
+          scripts/validate-agent-credential-delivery.py
+          python3 tests/test_agent_credential_delivery.py
 
       # A proposal committed as `accepted` while demanding an approval it does
       # not carry is unrunnable by every supported path, and nothing fails on
@@ -916,6 +958,22 @@ jobs:
             exit 1
           fi
           python3 tests/test_otel_collector_redaction_e2e.py
+
+      - name: Unit-test the OBI spike render and attribution (issue-2286)
+        # The render test pins the privilege set and the default-off
+        # byte-identity. The attribution e2e runs the pinned otelcol-contrib
+        # image; each --mutation reintroduces one forgeable-identity defect
+        # and must fail first, so the detector is seen to fire on every run.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_obi_spike_render.py
+          for m in ip-association read-team keep-incoming; do
+            if python3 tests/test_obi_spike_attribution_e2e.py --mutation "$m"; then
+              echo "::error::attribution e2e passed with mutation $m -- the detector does not detect it"
+              exit 1
+            fi
+          done
+          python3 tests/test_obi_spike_attribution_e2e.py
 
       - name: Validate storage & finops Grafana dashboards
         run: |

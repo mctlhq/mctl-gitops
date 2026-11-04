@@ -1,14 +1,16 @@
 # Tasks: issue-160-test-human-input-pick-the-default-code-b
 
-- [ ] 1. Confirm the requester's chosen pair from the human-input answer (default: option 1, `github-light` / `github-dark`) — DoD: chosen light and dark theme names recorded in the PR description.
-- [ ] 2. Add `theme: { light: '<light>', dark: '<dark>' }` to the `markdown` object in `docs/.vitepress/config.ts`, keeping the existing `config(md)` mermaid fence override unchanged (depends on 1) — DoD: config diff touches only the `markdown` block.
-- [ ] 3. Run `bun run build` (depends on 2) — DoD: test, llms generation and `vitepress build docs` succeed.
-- [ ] 4. Visually check code blocks in `bun run dev` on pages with shell, YAML and TypeScript fences (depends on 2) — DoD: tokens legible against `--vp-code-block-bg`; mermaid diagrams still render.
+- [ ] 0. Confirm the theme pair from the answer to `human-input/draft.json`. If there is no answer, use `github-light` / `github-dark`. Confirm the hold ("Do not implement", test issue) has been lifted before building. — DoD: the chosen pair and approval to build are both recorded on the issue or proposal.
+- [ ] 1. (depends on 0) In `docs/.vitepress/config.ts`, add `theme: { light: <light>, dark: <dark> }` to the existing `markdown` block with a one-line comment that cites issue #160. Leave `config(md)` unchanged. — DoD: the diff touches only that block.
+- [ ] 2. (depends on 1) Run `bun run build` locally. — DoD: the build succeeds, including the existing `bun test` for mermaid links.
+- [ ] 3. (depends on 2) Open a PR from a feature branch. The tag (MAJOR.MINOR.PATCH, no `v`) is cut by release-please after merge. — DoD: PR green on `build.yml`.
 
 ## Tests
-- [ ] T1. `bun run test` (`docs/.vitepress/theme/mermaid-links.test.ts`) passes.
-- [ ] T2. Built HTML for a page with a code block contains `shiki` spans with the chosen dark theme class/name (e.g. grep `docs/.vitepress/dist` for `github-dark` or `one-dark-pro`).
-- [ ] T3. A `mermaid` fence still renders as `<div class="mermaid-diagram" ...>` in the built output.
+- [ ] T1. `bun run build` succeeds, which proves the theme names resolve in shiki 2.5.0.
+- [ ] T2. In `bun run preview`, a page with `ts`/`bash`/`yaml` fences renders with the chosen dark theme's token colours (inspect the inline `--shiki-dark` styles on `pre.shiki` spans), and the block background stays `#15181d` / `--surface-card`.
+- [ ] T3. A `mermaid` fence still renders as `div.mermaid-diagram`, not as a highlighted code block.
 
 ## Rollback
-Revert the single commit adding `markdown.theme` and cut a new patch tag; or roll back the `admins/mctl-docs` service to the previous image tag. With option 1 the revert yields identical output, as it matches the VitePress default.
+Revert the PR (remove the `markdown.theme` key) and cut a patch release. The site
+goes back to the VitePress default themes. There is no data or runtime state to
+restore. As an alternative, roll the `admins/mctl-docs` image back to the previous tag.

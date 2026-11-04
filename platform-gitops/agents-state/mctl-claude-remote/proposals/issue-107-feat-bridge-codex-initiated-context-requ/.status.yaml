@@ -1,0 +1,20 @@
+status: proposed
+updated_at: '2026-11-04T09:21:29Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-cb65cfe8c223ea25
+  trace_id: 9ee5ad0d97d96344d1a03db2df5f1e2c
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-claude-remote
+  issue: 107
+  url: https://github.com/mctlhq/mctl-claude-remote/issues/107
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-aac6631da5dbe9dd
+  content_hash: sha256:aac6631da5dbe9dd57f501677ecb860241ba8fc786bb74e5e8cd3c5d36f8c6fa
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0

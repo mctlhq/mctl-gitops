@@ -96,6 +96,10 @@ For which repos/workflows can read the `mctl-agents` GitHub App's raw
 signing key (`AGENTS_APP_PRIVATE_KEY`), see
 `docs/runbooks/agents-app-secret-exposure.md`.
 
+For how agent pods receive credentials (the `github-token` file delivery,
+the inventory and its CI validator, and rollback), see
+`docs/runbooks/agent-credential-delivery.md`.
+
 For which mctl-agents surfaces run under the ADR 014 policy checkpoint and
 which are known gaps, see `docs/runbooks/policy-checkpoint-coverage.md`.
 
@@ -104,6 +108,9 @@ For the agent egress proxy and its staged rollout, see
 
 For the agent-pod label contract and the ingress isolation of agent pods
 in `argo-workflows`, see `docs/runbooks/agent-pod-isolation.md`.
+
+For the agent compute ResourceQuota in `argo-workflows` (enforcement pending
+#2299), see `docs/runbooks/agent-compute-quota.md`.
 
 For the GitHub Code Scanning webhook receiver (SecurityFinding ingestion),
 its secret, rotation and rollback, see

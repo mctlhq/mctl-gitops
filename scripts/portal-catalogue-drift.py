@@ -466,16 +466,36 @@ def compare(server: str, snapshot: dict, allowlist: dict) -> list[dict]:
 KNOWN_STALE = {
     ("tg", "missing-tool"): {
         "until": "2026-12-31",
-        # Not stale and never will be while the flag is off: mctl-telegram
-        # registers prepare_send_message only with MCP_APPS_ENABLED=true (the
-        # MCP Apps prototype, mctlhq/mctl-telegram#569), which production does
-        # not set. Its allowlist entry is `enabled: false` for that reason.
-        # Confirmed after tg moved to DCR: the catalogue synced on 2026-09-26
-        # 07:19 and the tool is still absent, so re-snapshotting (what this
-        # finding tells the on-call to do) would change nothing.
-        "tools": ["prepare_send_message"],
-        "why": "flag-gated (MCP_APPS_ENABLED) and disabled in the allowlist; "
-               "never registered in production -- mctlhq/mctl-telegram#569",
+        # None of these is stale, and re-snapshotting would change nothing:
+        # tg is a DCR server (since 2026-09-26), the portal re-syncs it on its
+        # own (last_synced moves nightly), and the sync still lacks them.
+        # The server filters tools/list by what the caller may use, and the
+        # portal's admin sync credential is not that caller.
+        #   - prepare_send_message: registered only with MCP_APPS_ENABLED=true
+        #     (the MCP Apps prototype, mctlhq/mctl-telegram#569), which
+        #     production does not set. Disabled in the allowlist. Confirmed
+        #     after tg moved to DCR: synced 2026-09-26 07:19, still absent.
+        #   - draft_reply, send_reply: offered only to a connection whose OAuth
+        #     client is bound to the core-reply tool profile; the shared portal
+        #     carries no profile. Disabled in the allowlist.
+        #   - prepare_broadcast, list_broadcasts, get_broadcast,
+        #     cancel_broadcast: need the admin:broadcast scope
+        #     (mctlhq/mctl-telegram 4f048db, 2026-10-20); the portal's sync
+        #     credential has no such scope, so they dropped out of the
+        #     catalogue on the next sync (mctl-gitops 495ba1d, 2026-10-24).
+        #     They stay `enabled: true` in tg.json, so they are exposed the
+        #     moment a sync can see them. If the portal is ever granted the
+        #     scope they stop firing as missing, this waiver becomes wider
+        #     than what fires, and the nightly asks for it to be narrowed
+        #     (exit 3).
+        "tools": ["prepare_send_message", "draft_reply", "send_reply",
+                  "prepare_broadcast", "list_broadcasts", "get_broadcast",
+                  "cancel_broadcast"],
+        "why": "not visible to the portal's sync credential: flag-gated "
+               "(prepare_send_message, mctlhq/mctl-telegram#569), core-reply "
+               "profile only (draft_reply, send_reply), or needing the "
+               "admin:broadcast scope the sync credential lacks (the four "
+               "*_broadcast tools); a re-snapshot cannot add them",
     },
 }
 
@@ -610,6 +630,14 @@ def expected_missing(servers, applied: set[str] | None = None) -> list[str]:
         "was retired on purpose"
         for missing in sorted(expected - set(servers))
     ]
+
+
+def apply_catalogue_fix(cat_doc: dict, updates: dict[str, list[str]]) -> dict:
+    """Apply live portal tools to a catalogue document."""
+    servers = cat_doc.setdefault("servers", {})
+    for s, tools in updates.items():
+        servers[s] = list(tools)
+    return cat_doc
 
 
 def selftest() -> int:
@@ -1000,6 +1028,13 @@ def selftest() -> int:
     if not ok:
         failures.append("catalogue owners")
 
+    sample_cat = {"servers": {"a": ["old"]}}
+    updated_cat = apply_catalogue_fix(sample_cat, {"a": ["new1", "new2"], "b": ["tool_b"]})
+    ok = updated_cat.get("servers", {}).get("a") == ["new1", "new2"] and updated_cat.get("servers", {}).get("b") == ["tool_b"]
+    print(f"{'ok  ' if ok else 'FAIL'} apply_catalogue_fix updates servers in catalogue doc")
+    if not ok:
+        failures.append("apply_catalogue_fix")
+
     if failures:
         print(f"\n{len(failures)} failing: {', '.join(map(str, failures))}")
         return 1
@@ -1010,6 +1045,7 @@ def selftest() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--account", help="Cloudflare account id (default: $CLOUDFLARE_ACCOUNT_ID)")
+    ap.add_argument("--fix", action="store_true", help="update allowlists/catalogue.json when committed catalogue lags the live portal")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -1075,13 +1111,16 @@ def main() -> int:
     # the real finding waited until someone opened the raw step log.
     compared: set[str] = set()
     lagging: list[str] = []
+    committed_doc: dict | None = None
     committed: dict | None = None
     try:
-        committed = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8"))["servers"]
+        committed_doc = json.loads(CATALOGUE_FILE.read_text(encoding="utf-8"))
+        committed = committed_doc["servers"]
         if not isinstance(committed, dict):
             raise ValueError("'servers' is not an object")
     except Exception as e:  # noqa: BLE001 - the exit code is the point
         undetermined.append(f"{CATALOGUE_FILE.name}: could not be read, so it was not compared: {e!r}")
+    fix_updates: dict[str, list[str]] = {}
     for server in servers:
         try:
             snapshot = live_snapshot(account, server, token)
@@ -1092,6 +1131,11 @@ def main() -> int:
                 lag = catalogue_file_lag(server, snapshot, committed)
                 if lag:
                     lagging.append(lag)
+                    # Replace the catalogue entry wholesale with the portal's live tools in portal order.
+                    # An empty or non-array tool list is left to compare() to report as undetermined.
+                    live_tools = [t.get("name") for t in (snapshot.get("tools") or []) if isinstance(t, dict) and t.get("name")]
+                    if live_tools:
+                        fix_updates[server] = live_tools
             allowlist = owner_allowlist(server)
             findings += compare(server, snapshot, allowlist)
             checked.append(f"{server}={len(snapshot.get('tools') or [])}@{snapshot.get('last_synced')}")
@@ -1100,6 +1144,17 @@ def main() -> int:
             undetermined.append(str(e))
         except Exception as e:  # noqa: BLE001 - the exit code is the point
             undetermined.append(f"{server}: the check failed before it could compare: {e!r}")
+
+    if args.fix and fix_updates and committed_doc is not None:
+        try:
+            apply_catalogue_fix(committed_doc, fix_updates)
+            CATALOGUE_FILE.write_text(json.dumps(committed_doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            for s, tools in fix_updates.items():
+                print(f"[fix] updated {s} in {CATALOGUE_FILE.name} ({len(tools)} tools)")
+            # Retain any lag findings that were not fixed by this run; clear only the fixed servers.
+            lagging = [lag for lag in lagging if not any(lag.startswith(f"{s}:") for s in fix_updates)]
+        except Exception as e:  # noqa: BLE001 - record write failure as undetermined
+            undetermined.append(f"{CATALOGUE_FILE.name}: could not write --fix update: {e!r}")
 
     failing, waived, maintenance = apply_waivers(
         findings, _dt.date.today().isoformat(), compared)

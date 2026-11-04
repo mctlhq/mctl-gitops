@@ -15,7 +15,7 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "main-7d3c2cd"
+  tag: "main-3cd42d1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -51,7 +51,11 @@ env:
   # a ~16 MiB per-message limit; above the cap get_media now returns a clear
   # "exceeds the download cap" error instead of a transport failure.
   # ChatGPT (direct) accepted up to 19.9 MB in the same test.
-  MEDIA_DOWNLOAD_MAX_BYTES: "12000000"
+  # 11 MiB since 2026-10-31: a binary unit like the 20 MiB upload and 8 MiB
+  # bulk caps, so /platforms shows one unit. 12 MiB would encode to exactly
+  # 16 MiB of base64 before the JSON envelope, past the 12.4 MB that tested
+  # fine; 11 MiB encodes to ~15.4M chars, inside the tested range.
+  MEDIA_DOWNLOAD_MAX_BYTES: "11534336"
   APP_ENV: preview
   AUTH_MODE: local-jwt
   AUTH_REQUIRED: "true"
@@ -208,14 +212,23 @@ env:
 
   AGENT_ENABLED: "true"
   AGENT_KILL_SWITCH: "false"
+  # Assistant registry (mctl-telegram#1020, P3.4 of epic #1002). Installs
+  # fetch the materialized definition from mctl-api's assistant catalog
+  # (4.142.0+), check its digest and store it next to the install revision;
+  # claims read that stored copy and never call the registry. A 5-minute
+  # refresh tracks the registry lifecycle; disabled, or no successful check
+  # for 24 h, stops new jobs. Uses the surface:telegram token that workContext
+  # below already provides (the server refuses to start with this on and no
+  # token). Preview only, for the P3 acceptance (mctl-telegram#1022).
+  # Rollback: set "false"; stored copies keep serving claims.
+  ASSISTANT_REGISTRY_ENABLED: "true"
   # Human-input adapter (mctl-telegram#571, 0.79.0+): polls mctl-api for
   # clarification questions addressed to linked operators and posts them to
-  # Saved Messages; /mctl input answers. Enabled on THIS instance only, the
-  # one that serves the owner's Saved Messages (see workContext below);
-  # enabling production too would deliver every question twice. Requires
-  # WORK_CONTEXT_ENABLED, which workContext.featureEnabled sets. Rollback:
-  # set "false" (docs/runbook.md, "Human-input adapter").
-  HUMAN_INPUT_ENABLED: "true"
+  # Saved Messages; /mctl input answers. It must run on exactly one instance
+  # or every question is delivered twice. Moved to production on 2026-11-01
+  # with the agent plane (services/labs/mctl-telegram); off here since then.
+  # Requires WORK_CONTEXT_ENABLED, which workContext.featureEnabled sets.
+  HUMAN_INPUT_ENABLED: "false"
   # Absolute-TTL exemptions (mctl-telegram#410, 0.51.0+). Preview had none,
   # which meant the soak identity acquired expires_at = connected_at + 90d the
   # moment it logged in: 2026-11-25 for the @mctlhq session created on
@@ -271,6 +284,19 @@ env:
   # A job nobody claimed for this long is routed to the operator
   # (worker_unclaimed). Must exceed AGENT_TURN_MAX_WAIT while coalescing is on.
   AGENT_UNCLAIMED_ROUTE_AFTER: "5m"
+  # Managed runtime (mctlhq/mctl-telegram#1088, ADR 0008 section 6; gitops#2345).
+  # MANAGED_RUNTIME_ENABLED is "true" since activation step A1 (owner's
+  # activation approval, 2026-11-03): POST /api/agent/pool-token is mounted
+  # and accounts may switch to `managed` (at most MANAGED_RUNTIME_MAX_ACCOUNTS),
+  # but no pool worker runs until A5, so managed jobs wait until then. MANAGED_MAX_JOB_COST_USD equals the worker's AGENT_MAX_BUDGET_USD
+  # (agent-worker-managed-preview) so the per-job reservation is what a job can
+  # actually spend. Rollback order: account to runtime "own", worker
+  # replicaCount 0, revoke the pool jti, then this flag back to "false".
+  MANAGED_RUNTIME_ENABLED: "true"
+  MANAGED_RUNTIME_MAX_ACCOUNTS: "1"
+  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
+  MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
+  MANAGED_MAX_JOB_COST_USD: "0.25"
 ingress:
   enabled: true
   hosts:

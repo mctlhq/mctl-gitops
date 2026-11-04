@@ -1,0 +1,59 @@
+status: merged
+updated_at: '2026-11-02T09:24:37Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-9a4830798199d677
+  trace_id: 48681ec3e2a4150502f1ddd6a55a9590
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-telegram
+  issue: 1089
+  url: https://github.com/mctlhq/mctl-telegram/issues/1089
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-735481ac73ec3f8f
+  content_hash: sha256:735481ac73ec3f8f8e96378ed0027506844e3b5f9a1d69d49c1b8a25ea8adde9
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-11-01T19:07:10Z'
+  content_digest: sha256:a56f1b08e432cbca7d1b6b6f84cd11e88a6c32c8e12d7af6bd657446cd8e1227
+  digest_binding: reviewed
+  approval_ref: aar_7c71bc8916ab4b04b9223bc7d5cb7c56
+attempt:
+  id: 183014c3cd4c550236f205d325b7ca9b39a5ae668bef634de143f888c6ac98db
+  started_at: '2026-11-01T19:08:52Z'
+  expires_at: '2026-11-01T21:18:52Z'
+  finished_at: '2026-11-01T19:26:05Z'
+pr: https://github.com/mctlhq/mctl-telegram/pull/1098
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-d230e55b
+  authoritative:
+    completion_id: ic-4b3c01c1af52ed70
+    content_hash: sha256:4b3c01c1af52ed701f0abffa14eb41b045756aa630fd8adbd7e140358b458bee
+    proposal_digest: sha256:a56f1b08e432cbca7d1b6b6f84cd11e88a6c32c8e12d7af6bd657446cd8e1227
+    attempt_id: 183014c3cd4c550236f205d325b7ca9b39a5ae668bef634de143f888c6ac98db
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 7401fc9e2954b44d4e1cece4a0b926627646049d
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+github:
+  state: open
+  head_sha: 2546b7f4fbe9a9721ac98a27efe4dbf9e6223251
+  observed_at: '2026-11-01T20:27:43Z'
+notes: 'implementer declined to act: Reviewer text 1 is a round-3 approval on head
+  cf737e7 with 0 P1, 0 P2 and 0 P3 findings; it lists the round-2 findings as already
+  fixed and raises no defect. The only remaining item is the operator hold (do not
+  merge until #1046 is complete), which is a process note, not a code change.'
+merged_at: '2026-11-02T09:24:37Z'
+merge_commit: 33aeab768c5fa70000d1215a129c04b3c112b331

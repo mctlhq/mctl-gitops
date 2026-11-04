@@ -1,24 +1,19 @@
 # Tasks: issue-737-test-work-context-controlled-work-item-f
 
-There are no implementation tasks. This proposal must NOT be approved.
+No code tasks. Do NOT approve this proposal, and do not run the implementer for it.
 
-- [ ] 1. (Owner, manual, outside the implementer) Confirm `/mctl work status`
-  shows the #737 start request as `fulfilled` with this investigation's
-  execution id, and that the portal `/work-items/<id>` shows the same execution
-  and snapshot pointer — DoD: evidence recorded on mctlhq/mctl-telegram#443 and
-  mctlhq/mctl-api#341.
-- [ ] 2. (Owner, manual, depends on 1) End the parked DevLoop for #737 without
-  approving it (e.g. `mctl_abandon_dev_loop`, reason "controlled test item for
-  #443") and leave the proposal un-accepted — DoD: no `feat/agents-issue-737-*`
-  branch or PR exists in `mctlhq/mctl-telegram`.
+- [ ] 1. Owner records the session evidence on mctlhq/mctl-telegram#443 (and the REST evidence on
+  mctlhq/mctl-api#341): WorkItem id, start request id and its `fulfilled` state, execution id,
+  and the portal `/work-items/<id>` view. DoD: comment posted on #443.
+- [ ] 2. (depends on 1) Owner ends the parked DevLoop `dev-loop-mctlhq-mctl-telegram-737` with an
+  abandon, not an approve, with a reason citing #443. DoD: `mctl_get_dev_loop` reports a
+  terminal status, and the proposal remains unapproved.
 
 ## Tests
-- [ ] T1. `git log` / PR list on `mctlhq/mctl-telegram` shows no change
-  attributable to issue #737.
-- [ ] T2. `/mctl work status` in Saved Messages renders the request line via
-  `formatRequestState` in `internal/agent/control/work.go` as `fulfilled`.
+- [ ] T1. `/mctl work status` in the bound Saved Messages thread shows the request as
+  `fulfilled -> <execution id>`, matching the execution the portal shows for the same WorkItem.
+- [ ] T2. No `feat/agents-issue-737-*` branch or PR exists in mctlhq/mctl-telegram.
 
 ## Rollback
-Nothing to roll back: no code, config or docs change is made. If the proposal
-was approved by mistake, abandon the DevLoop, close any resulting PR unmerged,
-and mark the proposal `rejected`.
+Nothing to roll back: no code or config changes. If the proposal was approved by mistake,
+close any implementer PR unmerged and abandon the DevLoop.

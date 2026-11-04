@@ -421,3 +421,41 @@ tests:
             exp_annotations:
               summary: >-
                 Umami retention Job admins/admins-umami-retention-29852500 failed — check its logs for the "past retention" check or a database error
+
+  # Agent compute quota: fires at used=hard, stays quiet below 90%.
+  - interval: 1m
+    input_series:
+      - series: 'kube_resourcequota{namespace="argo-workflows",resourcequota="mctl-agents-compute",resource="requests.memory",type="hard"}'
+        values: '17179869184+0x10'
+      - series: 'kube_resourcequota{namespace="argo-workflows",resourcequota="mctl-agents-compute",resource="requests.memory",type="used"}'
+        values: '17179869184+0x10'
+      - series: 'kube_resourcequota{namespace="argo-workflows",resourcequota="mctl-agents-compute",resource="pods",type="hard"}'
+        values: '20+0x10'
+      - series: 'kube_resourcequota{namespace="argo-workflows",resourcequota="mctl-agents-compute",resource="pods",type="used"}'
+        values: '4+0x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ArgoAgentComputeQuotaExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: argo-workflows
+              resourcequota: mctl-agents-compute
+              resource: requests.memory
+            exp_annotations:
+              summary: >-
+                Agent compute quota mctl-agents-compute is exhausted on
+                requests.memory; agent runs are queueing on quota, not
+                on node capacity
+      - eval_time: 12m
+        alertname: ArgoAgentComputeQuotaHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: argo-workflows
+              resourcequota: mctl-agents-compute
+              resource: requests.memory
+            exp_annotations:
+              summary: >-
+                Agent compute quota mctl-agents-compute is above 90% on
+                requests.memory

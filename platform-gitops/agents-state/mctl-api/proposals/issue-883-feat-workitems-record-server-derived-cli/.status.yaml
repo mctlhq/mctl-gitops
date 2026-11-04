@@ -1,0 +1,59 @@
+status: merged
+updated_at: '2026-10-31T21:35:23Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-a671cf9414cc412e
+  trace_id: d501a570e8c953e376ebcd93a3dd9b90
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-api
+  issue: 883
+  url: https://github.com/mctlhq/mctl-api/issues/883
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-9bab874e968ead8e
+  content_hash: sha256:9bab874e968ead8e615e9a3634529b2666ff91fc3f655350ec07d961d284779a
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-10-31T20:50:31Z'
+  content_digest: sha256:9e0137cefded946f686aff63aba385786aea3a46dde4f2f9712de037f5f029a2
+  digest_binding: reviewed
+  approval_ref: aar_e9eac8beffdb47b1b2b1b1777d93121c
+attempt:
+  id: bd80f996efde824513b36b36f537782c29017698641f4e9f2d8b4317ab5b98c0
+  started_at: '2026-10-31T20:51:56Z'
+  expires_at: '2026-10-31T23:01:56Z'
+  finished_at: '2026-10-31T21:04:08Z'
+pr: https://github.com/mctlhq/mctl-api/pull/884
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-ad6035de
+  authoritative:
+    completion_id: ic-f522cb83dc53ee67
+    content_hash: sha256:f522cb83dc53ee67496a031ebd71653df7cee45e27acb12de6557f4229e120b2
+    proposal_digest: sha256:9e0137cefded946f686aff63aba385786aea3a46dde4f2f9712de037f5f029a2
+    attempt_id: bd80f996efde824513b36b36f537782c29017698641f4e9f2d8b4317ab5b98c0
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: b85ce3543aa62b45321458411fc314d8c549db0a
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+notes: 'implementer declined to act: Reviewer text 1 is a Claude bot status comment,
+  not a defect. It says ''Review of ae37ecf: approved (0 P1, 0 P2, 0 P3)'', lists
+  previous findings as resolved, and its ''Also checked'' items all pass. No actionable
+  finding exists, so no change is needed.'
+github:
+  state: merged
+  head_sha: ae37ecfbcfd07d9f63109f1596fc56c528957109
+  observed_at: '2026-10-31T21:35:23Z'
+merged_at: '2026-10-31T21:35:23Z'
+merge_commit: e894a3e1587e1b442883f3e6eb0fd550f3e51f66

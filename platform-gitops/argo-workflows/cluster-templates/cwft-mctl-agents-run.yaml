@@ -73,7 +73,7 @@ spec:
         # Required only when mode=single-service. Validated by the Python
         # orchestrator against config/settings.py SERVICES (exit 1 on mismatch).
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.112.3
+        value: ghcr.io/mctlhq/mctl-agents:1.117.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -104,6 +104,16 @@ spec:
       secret:
         secretName: mctl-gitops-deploy-key
         defaultMode: 0600
+    # #2288: GITHUB_TOKEN is file-delivered (rotated every 30 min by
+    # rotate-github-app-tokens; kubelet refreshes the volume). 0440 with
+    # fsGroup 1000. Mounted only in the agent container.
+    - name: github-token-file
+      secret:
+        secretName: mctl-agents-secrets
+        defaultMode: 0440
+        items:
+          - key: github-token
+            path: github-token
 
   templates:
     - name: run-agents
@@ -287,7 +297,22 @@ spec:
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
               chmod 600 ~/.ssh/config
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               # uid 1000 is the mctl-agents image USER (SOC F8). This clone step
               # runs as root in alpine/git; without the handoff the next step
@@ -542,12 +567,11 @@ spec:
           # proposals. Same secret + key as the Tier 2 implementer.
           # Marked optional so the cron run still works (degraded) if
           # Vault hasn't been seeded yet.
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: mctl-agents-secrets
-                key: github-token
-                optional: true
+          # #2288: the token is delivered only as a file (no secretKeyRef env
+          # seed); refresh_github_token() reads it before the first and every
+          # later gh/git call. The mounted file is model-readable (mctl-agents#869).
+          - name: GITHUB_TOKEN_FILE
+            value: /var/run/gh/github-token
           - name: SERVICE_AGENT_BUDGET_USD
             value: "5.00"
           - name: MENTOR_BUDGET_USD
@@ -586,6 +610,9 @@ spec:
         volumeMounts:
           - name: workdir
             mountPath: /workdir
+          - name: github-token-file
+            mountPath: /var/run/gh
+            readOnly: true
 
     # ── 3. Commit & push back to mctl-gitops ──────────────────────────────
     - name: commit-and-push
@@ -678,7 +705,22 @@ spec:
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
               chmod 600 ~/.ssh/config
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               echo "✓ gitops cloned (fresh checkout, never touched by the agent)"
           resources:

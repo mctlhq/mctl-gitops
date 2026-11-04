@@ -603,3 +603,99 @@ tests:
               summary: "Communication-agent spend per finished job is high"
               description: "Claude spend per finished communication-agent job over the last hour is above $0.10, with total spend in the window above $1.00. This is dollars per job the agent finished — completed, ignored, failed or dead-lettered — not per attempt, so a retry storm that spends without finishing jobs raises this ratio. May render as +Inf when spend occurred with zero finished jobs in the window; that is intended."
               runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentjobcosthigh"
+
+  # ------------------------------------------------------------ managed runtime
+  - interval: 1m
+    name: managed global cap fires on a global_day increase
+    input_series:
+      - series: 'mctl_agent_budget_exhausted_total{scope="global_day"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MctlAgentManagedGlobalCapHit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: "Managed-runtime global daily budget cap reached"
+              description: "The managed runtime hit its global daily budget cap in the last 15 minutes; managed jobs are paused until the day rolls over."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentmanagedglobalcaphit"
+
+  - interval: 1m
+    name: managed global cap ignores account scopes
+    input_series:
+      - series: 'mctl_agent_budget_exhausted_total{scope="account_day"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'mctl_agent_budget_exhausted_total{scope="account_month"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MctlAgentManagedGlobalCapHit
+        exp_alerts: []
+
+  - interval: 1m
+    name: managed spend high fires at 1.20 per hour
+    input_series:
+      - series: 'mctl_agent_usage_cost_usd_total{runner="openai",model="m"}'
+        values: '0+0.02x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: MctlAgentManagedSpendHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: "Managed-runtime spend over the last hour is high"
+              description: "Managed (openai runner) spend over the last hour is above the $1.00 threshold."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentmanagedspendhigh"
+
+  - interval: 1m
+    name: managed spend high stays silent at 0.80 per hour
+    input_series:
+      - series: 'mctl_agent_usage_cost_usd_total{runner="openai",model="m"}'
+        values: '0+0.0133x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: MctlAgentManagedSpendHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: pool worker down fires with managed accounts and no up series
+    input_series:
+      - series: 'mctl_agent_managed_accounts'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MctlAgentManagedPoolWorkerDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: mctl-telegram
+            exp_annotations:
+              summary: "Managed-runtime pool worker is down while managed accounts exist"
+              description: "Accounts are on the managed runtime but no labs-agent-worker-managed-preview scrape target has been up for 10 minutes. This includes a worker scaled to 0 replicas."
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctlagentmanagedpoolworkerdown"
+
+  - interval: 1m
+    name: pool worker down stays silent while the worker is up
+    input_series:
+      - series: 'mctl_agent_managed_accounts'
+        values: '1x20'
+      - series: 'up{namespace="labs",service="labs-agent-worker-managed-preview-base-service"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MctlAgentManagedPoolWorkerDown
+        exp_alerts: []
+
+  - interval: 1m
+    name: pool worker down stays silent with no managed accounts
+    input_series:
+      - series: 'mctl_agent_managed_accounts'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MctlAgentManagedPoolWorkerDown
+        exp_alerts: []

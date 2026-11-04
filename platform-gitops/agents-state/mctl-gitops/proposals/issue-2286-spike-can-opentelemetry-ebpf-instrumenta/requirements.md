@@ -1,142 +1,171 @@
-# Spike: bounded OBI v1.0.0 experiment with canonical tenant attribution, overhead and privilege measurement
+# Spike step A: default-off OBI v1.0.0 sandbox with a pinned provisional privilege set, canonical tenant attribution and pre-registered thresholds
 
 ## Context
 
 Issue mctlhq/mctl-gitops#2286 asks whether OpenTelemetry eBPF Instrumentation
-(OBI) v1.0.0 can add useful zero-code RED metrics and traces on the MCTL
-cluster. It sets three conditions: tenant attribution must be deterministically
-correct, runtime and API-server overhead must be acceptable, and the
-host-privilege footprint must be acceptable. The spike must end in exactly one
-outcome: `NO_FIT`, `PILOT_SELECTED_WORKLOADS` or `ADOPT_BOUNDED_OBI_LAYER`.
+(OBI) v1.0.0 can add useful zero-code RED metrics and traces on MCTL clusters.
+Three conditions apply: tenant attribution must be deterministically correct,
+runtime and API-server overhead must be acceptable, and the host-privilege
+footprint must be acceptable. The owner's amendment of 2026-10-31 splits the
+spike in two. **This proposal is step A only.** It ships a sandbox that is off
+by default (`obiSpike.enabled: false`), a provisional least-privilege
+capability set pinned by a render test, the canonical tenant-attribution
+contract proven offline on fixture spans, and the evaluation document with
+preconditions and pre-registered numeric thresholds
+(`STATUS: PENDING_EXPERIMENT`). Enabling the sandbox, BPF loading, capability
+trials, every live measurement and the final outcome
+(`NO_FIT | PILOT_SELECTED_WORKLOADS | ADOPT_BOUNDED_OBI_LAYER`) belong to
+step B, mctl-gitops#2303. Step B needs a separate explicit OK from the owner.
 
-This matters because explicit instrumentation covers very little today. Only
-four `admins` services set `otel.enabled` in their `values.yaml`
-(`mctl-agents-worker`, `mctl-agents-worker-exec`,
-`mctl-agents-worker-implement`, `mctl-support`). Tenant workloads such as
-`karabu/draw-with-friends` and the 20 `labs` services emit no traces at all.
-
-There is also a correctness problem in today's tenant identity. The production
-collector (`platform-gitops/bootstrap/templates/observability/otel-collector.yaml`,
-`k8sattributes`) derives `mctl.team` from the pod label `mctl.ai/team`. The
-`base-service` chart does not set that label, and tenants can set arbitrary
-`podLabels` through `update-config`. The spike therefore needs to define an
-attribution contract anchored on platform-controlled data: the namespace label
-`mctl.me/tenant`, written by `helm-charts/tenant`. It must prove that contract
-before deciding whether OBI is worth its privileges: `hostPID`, BPF-class
-capabilities and kernel filesystem mounts.
+Step A matters for two reasons. The first is that today's telemetry tenant
+identity is forgeable. The production collector
+(`platform-gitops/bootstrap/templates/observability/otel-collector.yaml`,
+`k8sattributes`) maps the pod label `mctl.ai/team` to `mctl.team`. That label
+is not set by `base-service`, and tenants can set it themselves through
+`podLabels`. The platform-controlled tenant key is the namespace label
+`mctl.me/tenant`, which `helm-charts/tenant/templates/_helpers.tpl` writes.
+Step A has to fix the attribution contract to that key before any OBI data
+exists. The second reason is that OBI's privileges (`hostPID`, BPF-class
+capabilities, host mounts) must be written explicitly in reviewed manifests
+before step B, rather than inherited from a chart default.
 
 ## User stories
 
-- AS a platform operator I WANT RED metrics and server/client spans for tenant
-  workloads that have no explicit instrumentation SO THAT I can see errors and
-  latency without asking each tenant to change code.
-- AS a tenant owner I WANT telemetry about my workload attributed only to my
-  tenant SO THAT another tenant's label choices can never cause my data to be
-  attributed to them, or theirs to me.
-- AS a security reviewer I WANT the exact host privileges, capabilities and
-  mounts OBI needs written explicitly in reviewed manifests SO THAT I can weigh
-  them against measured value instead of trusting a Helm default.
-- AS the spike owner I WANT a self-expiring, default-off sandbox SO THAT the
-  experiment cannot silently become a cluster-wide privileged rollout.
+- AS the spike owner I WANT the whole OBI sandbox committed but inert SO THAT
+  step B (#2303) is a reviewed values flip and nothing runs before I approve it.
+- AS a security reviewer I WANT every capability, `hostPID` setting and host
+  mount OBI would get written in `bootstrap/values.yaml` and pinned by a test
+  SO THAT no privilege can be widened silently, by a chart default or by an
+  unreviewed edit.
+- AS a tenant owner I WANT OBI telemetry attributed only through the
+  platform-controlled namespace label SO THAT labels or resource attributes
+  set by another workload can never cause cross-tenant attribution.
+- AS a reviewer of the eventual outcome I WANT numeric decision thresholds
+  recorded before any measurement SO THAT step B cannot tune them to fit the
+  results.
 
 ## Acceptance criteria (EARS)
 
-> **Amendment 2026-10-31.** (1) Scope: this proposal is step A, the sandbox
-> shipped with `obiSpike.enabled: false`, plus preconditions, offline tests
-> and pre-registered thresholds. Enabling it, measuring, the report's outcome
-> and teardown are mctl-gitops#2303 (step B). (2) Targets: no customer tenant
-> workload is instrumented. The two-tenant proof uses synthetic HTTP fixture
-> deployments in two owner-controlled tenants chosen in task 1 (`labs` plus one
-> of `mctl`, `admins` or `commerce-proof` that carries `mctl.me/tenant`), and
-> `mctl-api` as the platform workload. (3) Thresholds: the decision rule must
-> also carry numeric thresholds for OBI RSS per node, Kubernetes API list/watch
-> load from OBI service accounts and span/series cardinality delta, written to
-> the report in step A before any measurement.
+### Default-off sandbox
+- WHILE `obiSpike.enabled` is `false` (the committed default in
+  `platform-gitops/bootstrap/values.yaml`) THE SYSTEM SHALL render no
+  OBI-related object: no namespace, DaemonSet, collector, RBAC, fixture or
+  NetworkPolicy peer. Every existing bootstrap template SHALL render
+  byte-identical to its pre-change output.
+- WHEN this proposal's PR merges THE SYSTEM SHALL NOT run any new workload,
+  load any BPF program or grant any new capability on the cluster.
+- WHEN `obiSpike.enabled` is `true` in any rendered overlay THE SYSTEM SHALL
+  render the OBI DaemonSet with required node anti-affinity against
+  `node-role.kubernetes.io/control-plane` and no tolerations.
+- WHEN `obiSpike.enabled` is `true` THE SYSTEM SHALL build OBI's
+  `discovery.instrument` only from the explicit `obiSpike.targets` list of
+  (namespace, deployment) pairs. IF any target is empty or contains a glob
+  metacharacter (`*`, `?`, `[`) THEN CI SHALL fail.
 
-### Sandbox bounds
-- WHILE `obiSpike.enabled` is `false` in `platform-gitops/bootstrap/values.yaml`
-  THE SYSTEM SHALL render no OBI-related object, and every existing bootstrap
-  template shall render byte-identical to its pre-change output.
+### Privilege pinning
+- WHILE the sandbox is defined THE SYSTEM SHALL state the OBI container's
+  `privileged`, `hostPID`, `hostNetwork`, `capabilities.drop`,
+  `capabilities.add` and hostPath mounts explicitly under
+  `obiSpike.securityContext` and `obiSpike.mounts`. Every added capability and
+  every mount SHALL carry a comment naming the OBI feature that needs it and
+  the source (the OBI v1.0.0 security docs or a recorded worker kernel/BTF
+  fact).
+- WHEN the enabled overlay is rendered THE SYSTEM SHALL produce exactly the
+  pinned provisional set: `privileged: false`, `hostPID: true`,
+  `hostNetwork: false`, `drop: [ALL]`, `add` equal to the pinned list, and the
+  pinned mount list. A render test SHALL fail on any difference.
+- IF a rendered OBI pod spec has `privileged: true` or adds `SYS_ADMIN` THEN CI
+  SHALL fail, unless `obiSpike.allowPrivileged` is `true`. Step A commits
+  `allowPrivileged: false`.
 - WHEN `obiSpike.enabled` is `true` THE SYSTEM SHALL require
-  `obiSpike.teardownAfter` to be a `YYYY-MM-DD` date no more than 14 days in the
-  future, and CI (`validate-manifests.yml`) SHALL fail otherwise.
-- WHILE the spike is enabled THE SYSTEM SHALL run OBI only as a DaemonSet in the
-  dedicated namespace `observability-obi-spike`, excluded from the
-  control-plane node, and shall instrument only the processes matched by the
-  explicit `obiSpike.targets` allowlist (namespace plus deployment name). No
-  wildcard discovery is allowed.
-- IF a rendered OBI pod spec sets `privileged: true` THEN CI SHALL fail, unless
-  `obiSpike.allowPrivileged` is explicitly `true` and a comment records the
-  measured reason.
-- WHILE the spike is enabled THE SYSTEM SHALL state every Linux capability,
-  `hostPID`/`hostNetwork` setting and hostPath mount of the OBI container
-  explicitly in `bootstrap/values.yaml`, and a render test SHALL pin that exact
-  set.
+  `obiSpike.teardownAfter` to be a `YYYY-MM-DD` date that is not in the past and
+  is at most 14 days ahead, and SHALL require an image pinned by digest. CI
+  SHALL fail otherwise.
 
-### Tenant attribution contract
-- WHEN a span or metric from OBI reaches the spike collector THE SYSTEM SHALL
-  resolve its tenant only as follows: OBI-reported pod UID, then pod, then
-  namespace, then the namespace's `mctl.me/tenant` label. It shall write the
-  result as `mctl.tenant` with `upsert`, so any producer-supplied value is
-  overwritten.
-- IF the namespace has no `mctl.me/tenant` label, or the pod cannot be resolved,
+### Tenant attribution contract (proven offline)
+- WHEN OBI telemetry reaches the spike collector THE SYSTEM SHALL resolve the
+  tenant only through this chain: OBI-reported `k8s.pod.uid`, then pod, then
+  namespace, then the namespace label `mctl.me/tenant`. It SHALL write the
+  result to `mctl.tenant` and set `mctl.tenant.attribution=namespace-label`.
+- WHEN a resource arrives with a producer-supplied `mctl.tenant` THE SYSTEM
+  SHALL delete it before resolution, so that no application-controlled value
+  survives.
+- IF the pod cannot be resolved, or its namespace has no `mctl.me/tenant` label,
   THEN THE SYSTEM SHALL leave `mctl.tenant` unset and set
-  `mctl.tenant.attribution=unattributed`. It shall never default to another
-  tenant, `admins`, or a value taken from a pod label or resource attribute.
-- WHEN a fixture pod in a non-tenant namespace carries pod label
-  `mctl.ai/team: <tenant A>` and emits `mctl.tenant=<tenant B>` in its own resource
-  attributes THE SYSTEM SHALL attribute its telemetry as `unattributed`.
-- WHILE OBI telemetry is attributed THE SYSTEM SHALL keep `mctl.ai/team` and
-  `mctl.ai/component` only as evidence attributes (`mctl.team`,
-  `mctl.component`) and shall not use them to derive `mctl.tenant`.
+  `mctl.tenant.attribution=unattributed`. It SHALL never default to another
+  tenant, to `admins`, to a synthetic "platform" tenant, or to a value from a
+  pod label or resource attribute.
+- WHILE attributing THE SYSTEM SHALL keep `mctl.ai/team`/`mctl.ai/component` only
+  as evidence (`mctl.team`, `mctl.component`) and SHALL NOT read them to derive
+  `mctl.tenant`.
+- WHEN the offline attribution test runs THE SYSTEM SHALL show these results.
+  The `labs` fixture resolves to `labs`. The `mctl` fixture resolves to `mctl`.
+  The `mctl-api` platform workload resolves to `unattributed`. The forged
+  fixture in `labs` (pod label `mctl.ai/team: mctl`, resource attribute
+  `mctl.tenant=mctl`) resolves to `labs`. The forged fixture in the
+  label-less spike namespace resolves to `unattributed`. An unknown pod UID
+  resolves to `unattributed`. IF the test is run in mutation mode (association
+  by connection IP, attribution read from `mctl.team`, or incoming
+  `mctl.tenant` not deleted) THEN the test SHALL fail.
 
-### Experiment and measurement
-- WHEN the experiment runs THE SYSTEM SHALL exercise at least the synthetic
-  fixture deployments in two owner-controlled tenants and the platform workload
-  `mctl-api`, and no customer tenant workload, and shall record per-workload span and metric coverage next to
-  the existing explicit-instrumentation path.
-- WHEN the experiment completes THE SYSTEM SHALL produce a report at
-  `docs/spikes/2286-obi-evaluation.md`. The report shall contain the
-  overlap map, the attribution evidence (including the negative case), a
-  protocol/runtime coverage matrix, CPU/RSS per node, application latency delta,
-  telemetry volume and series cardinality, Kubernetes API list/watch load,
-  the exact privilege set, failure behaviour with the API server, Collector and
-  metadata unavailable, and exactly one outcome from `NO_FIT`,
-  `PILOT_SELECTED_WORKLOADS` or `ADOPT_BOUNDED_OBI_LAYER`.
-- IF any false or cross-tenant attribution is observed THEN THE SYSTEM SHALL
-  record the outcome as `NO_FIT` unless the cause is fixed in the attribution
-  pipeline and the full attribution test set is re-run clean.
-- WHEN `obiSpike.teardownAfter` is reached or the report is merged, whichever is
-  first, THE SYSTEM SHALL return to `obiSpike.enabled: false`, and ArgoCD
-  pruning SHALL remove the namespace, DaemonSet, spike collector and RBAC.
+### Pre-registered evaluation document
+- WHEN this proposal merges THE SYSTEM SHALL contain
+  `docs/spikes/2286-obi-evaluation.md` with `STATUS: PENDING_EXPERIMENT`. The
+  document SHALL record the preconditions (each with the command used to obtain
+  it, or "not observed") and the numeric thresholds for: attribution (false,
+  cross-tenant, unattributed), privilege, node CPU p95, OBI RSS per node,
+  application latency p95, Kubernetes API list/watch load from OBI service
+  accounts, and span/series cardinality delta. It SHALL also record the
+  decision rule that maps those thresholds to exactly one outcome.
+- WHILE the report status is `PENDING_EXPERIMENT` THE SYSTEM SHALL contain no
+  measured values and no outcome.
 
 ## Out of scope
 
-- A cluster-wide or production rollout of OBI.
-- Changing the production `otel-collector` processor pipeline. A follow-up issue
-  may move `mctl.tenant` resolution there if the spike recommends adoption.
-- Replacing the OTel Collector, Tempo, VictoriaMetrics, Loki, or picking a
-  storage backend.
-- Editing any tenant's `values.yaml` or pod labels.
-- Treating Kubernetes metadata as proof of tenant isolation.
-- A sidecar-mode comparison. It is assessed on paper only (see design.md).
+- Enabling the sandbox, loading BPF, trying capability reductions or a
+  `privileged`/`CAP_SYS_ADMIN` fallback, any live measurement, the load
+  generator, the outcome and teardown. All of these are mctl-gitops#2303.
+- Any customer tenant workload as a target, including `karabu`, `namax66` and
+  `erpact`.
+- Changes to the production `otel-collector` pipeline or to
+  `infra-components/observability/otel-collector/networkpolicy.yaml`. That
+  file is a plain manifest and cannot be gated. The ingress for the spike
+  collector is instead an additive NetworkPolicy in `obi-spike.yaml`, rendered
+  only when the flag is on.
+- Fixing the forgeable `mctl.team` in production. Step A records it as a
+  finding, and a follow-up issue owns it.
+- A sidecar deployment shape. It is assessed on paper only (design.md).
+- Replacing the Collector, Tempo, VictoriaMetrics or Loki.
 
 ## Open questions
 
-- Node kernel version and BTF availability on the kube-hetzner worker nodes
-  (`worker-cx43-fsn1`, MicroOS image) could not be observed from this run. It
-  determines whether OBI's minimal capability set works or
-  `CAP_SYS_ADMIN`/privileged is needed. This becomes Task 1.
-- The deployed namespaces' `mctl.me/tenant` labels could not be read (no
-  kubectl or namespace read tool in this run). If a tenant namespace was created
-  by the ApplicationSet `CreateNamespace=true` fallback without the label, its
-  telemetry is `unattributed`. That fails closed, but it lowers coverage.
-- Whether `labs` should count as an independent "MCTL tenant" for the
-  two-tenant proof, given that it hosts platform-adjacent services. The spike
-  originally used `karabu` and `labs` because both have HTTP ingress workloads
-  deployed. RESOLVED by the 2026-10-31 amendment: synthetic fixtures in two
-  owner-controlled tenants; no customer workload.
-  `namax66/news-factory` has no host and is a fallback only.
-- `mctl-api`'s namespace and whether it already emits spans to the collector
-  (mctl-api proposal issue-285) were not verified. The spike measures overlap
-  rather than assuming it.
+- **Worker kernel and BTF facts were not observed by this run.** No node read
+  tool was available. Whether `/sys/kernel/btf/vmlinux` exists and the kernel is
+  at least 5.11 on the three `worker-cx43-fsn1` nodes (kube-hetzner MicroOS,
+  `automatically_upgrade_os = false` in `infrastructure/k3s-preview/kube.tf`)
+  decides whether `SYS_RESOURCE` belongs in the provisional set. Task 1 records
+  these facts read-only. If they stay unobserved, the pinned set keeps
+  `SYS_RESOURCE` out, the document marks the fact "not observed", and #2303
+  verifies it before enabling.
+- The exact OBI v1.0.0 capability list per feature (application traces/metrics
+  versus network metrics versus TC context propagation) is taken from the
+  upstream security doc, which this run did not fetch. Task 2 transcribes it
+  with the doc's revision. The provisional set in design.md is a starting
+  hypothesis, and the doc wins if they differ.
+- Whether OBI v1.0.0 emits `k8s.pod.uid` on exported resources depends on its
+  own Kubernetes metadata decoration, which needs OBI's own informers and
+  therefore API-server watches. The contract associates on pod UID only. If
+  OBI cannot provide the UID, #2303 must record that every signal is
+  `unattributed` (fails closed), which would push the outcome toward
+  `NO_FIT`.
+- Tenant B is `mctl`. It is owner-controlled and holds no workloads, but its
+  quota is `pods: 1` and `requests.memory: 128Mi`, so the fixture must fit
+  there. `commerce-proof` (`pods: 2`) was not chosen because it is reserved
+  for the Agent Commerce live proof. The owner can swap tenant B by editing
+  `obiSpike.fixtures`.
+- The live `mctl.me/tenant` labels on the `labs` and `mctl` namespaces, and their
+  absence on `mctl-api`, were not observed. The chart guarantees them, and
+  #2303 verifies them live.
+- The pre-registered threshold values in design.md are proposed by this
+  investigation. The owner may adjust them in this PR's review. They freeze at
+  merge.

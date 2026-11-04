@@ -221,6 +221,56 @@ tests:
         alertname: HighToolErrorRate
         exp_alerts: []
 
+  # MctlTelegramCallerErrorShareHigh reads user traffic only (#2294). The
+  # canary's ok calls (2 every 10 minutes, 12 an hour) used to dilute a
+  # partial regression: here a client loops on 15 refused calls an hour next
+  # to 9 good user calls, 62.5% of user traffic, which reads 15/36 = 42% once
+  # the canary is counted and stays quiet.
+  - interval: 1m
+    name: MctlTelegramCallerErrorShareHigh is not diluted by canary traffic
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="caller_error",traffic="user"}'
+        values: '0+0.25x90'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="ok",traffic="user"}'
+        values: '0+0.15x90'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="list_dialogs",status="ok",traffic="canary"}'
+        values: '0+0.1x90'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_unread_messages",status="ok",traffic="canary"}'
+        values: '0+0.1x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramCallerErrorShareHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: mctl-telegram
+            exp_annotations:
+              summary: "mctl-telegram: more than half of tool calls are caller errors"
+              description: >-
+                Over the last hour more than 50% of MCP tool invocations were
+                classified caller_error, which the availability SLI and
+                HighToolErrorRate do not count. Either one client is looping on
+                a bad request, or a server-side regression makes Telegram refuse
+                every call and the SLI cannot see it.
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#mctltelegramcallererrorsharehigh"
+
+  # The >= 20 floor is about user volume too. 15 refused user calls an hour
+  # are below it; the canary's 12 ok calls used to lift the hour to 27 calls
+  # at 56% and fire on traffic the floor exists to ignore.
+  - interval: 1m
+    name: MctlTelegramCallerErrorShareHigh does not count the canary toward the volume floor
+    input_series:
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_messages",status="caller_error",traffic="user"}'
+        values: '0+0.25x90'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="list_dialogs",status="ok",traffic="canary"}'
+        values: '0+0.1x90'
+      - series: 'mctl_tool_invocations_total{job="mctl-telegram",instance="prod",tool="get_unread_messages",status="ok",traffic="canary"}'
+        values: '0+0.1x90'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MctlTelegramCallerErrorShareHigh
+        exp_alerts: []
+
   # Connector login funnel (mctl-telegram#960). Series carry the labels the
   # real scrape adds: job is the service, pod changes on every rollout.
   - interval: 1m

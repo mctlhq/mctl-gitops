@@ -83,6 +83,17 @@ spec:
           # per traffic class once the label ships, and a canary outage alone
           # would read as 100%.
           #
+          # Reading canary traffic here at all is a deliberate choice (#2284),
+          # unlike the SLO and MctlTelegramCallerErrorShareHigh, which filter
+          # traffic!="canary". The rule has no volume floor of its own, and the
+          # canary's steady calls (12 an hour, 3 per window) act as one: drop
+          # them and one or two user errors in a quiet 15m would page. The
+          # cost is dilution — while the canary is about a third of all
+          # calls, user errors must pass about 15% before this reads 10% —
+          # and a canary-only failure fires this next to
+          # MctlTelegramCanaryFailing. Excluding the canary needs an explicit
+          # floor sized from user traffic first (#2294).
+          #
           # Aggregating away `tool` (not by tool) is deliberate: the
           # threshold is about the service's overall health, and a single
           # rarely-used tool failing twice should not read as "10% of tool
@@ -133,19 +144,28 @@ spec:
           # refused calls would never reach the floor. (Preview exports no
           # mctl_tool_* series at all: its VMServiceScrape keeps only
           # mctl_agent_.*.)
+          #
+          # traffic!="canary" on every selector (#2294) makes this the same
+          # population as the SLI it guards. The canary's calls are all ok
+          # when healthy, so counting them diluted a partial regression: a
+          # client looping on 15 refused calls an hour next to 5 good ones
+          # reads 75% on its own and 47% with the canary's 12 ok calls added.
+          # They also counted toward the >= 20 floor, which is about user
+          # volume. Series without the label (before mctl-telegram#974) match
+          # traffic!="canary" too, so nothing goes blind during a rollout.
           expr: |
             (
               sum by (job, namespace) (
-                increase(mctl_tool_invocations_total{status="caller_error"}[1h])
+                increase(mctl_tool_invocations_total{status="caller_error",traffic!="canary"}[1h])
               )
               /
               sum by (job, namespace) (
-                increase(mctl_tool_invocations_total{status=~"ok|error|caller_error"}[1h])
+                increase(mctl_tool_invocations_total{status=~"ok|error|caller_error",traffic!="canary"}[1h])
               )
             ) > 0.5
             and
             sum by (job, namespace) (
-              increase(mctl_tool_invocations_total{status=~"ok|error|caller_error"}[1h])
+              increase(mctl_tool_invocations_total{status=~"ok|error|caller_error",traffic!="canary"}[1h])
             ) >= 20
           for: 15m
           labels:
