@@ -102,8 +102,8 @@ In `_validate_execution_request`, after the existing checks:
   are not run on replay, so an already accepted update is unaffected (T-test asserts a replayed history stays green).
   A rolling update can still be validated by an old pod; step 2 of the rollout order closes that window.
 - under the contract: `_implement_running` -> `ResumeDeferred("implement-running")` (defence in depth);
-  `_pr_merged` -> `ResumeRefused("work-merged")`; `kind == resume and intent_id == 0` -> `ResumeRefused("nothing-to-resume")`.
-Add `work-merged`, `nothing-to-resume`, `implement-running`, `legacy-loop` to the vocabularies
+  `_pr_merged` -> `ResumeRefused("work_merged")`; `kind == resume and intent_id == 0` -> `ResumeRefused("no_actionable_intent")`.
+Add `work_merged`, `no_actionable_intent`, `implement-running`, `legacy-loop` to the vocabularies
 (`xr.RESUME_REFUSAL_REASONS`, and the deferred reasons) so the dispatcher forwards them.
 A new read-only workflow query `contract_state` -> `(gates_passed, deferred_contract)` and CLI
 `orchestrator/temporal/cli.py contract-drain-check` list RUNNING DevLoop runs (visibility query
@@ -129,7 +129,7 @@ For contract loops with `_gates_passed`:
    `failed` / `unobservable`.
 7. `processed` -> `Succeeded`; anything else -> `Failed` plus `ResumeRejection` (`scope-expansion`, `feedback-failed`,
    `feedback-unobservable`). A tick that fails as an activity is `feedback-failed`.
-8. Watch ends before the tick (PR merged / closed / deadline) -> `Failed` with `work-merged` or `feedback-not-run`.
+8. Watch ends before the tick (PR merged / closed / deadline) -> `Failed` with `work_merged` or `feedback-not-run`.
 The classification is model-judged; only `in-scope` proceeds and everything else fails closed.
 
 #### M5. `read_rollout_switches` activity (shared switch mechanism)
@@ -148,10 +148,13 @@ there are several starters (intake poller, dispatcher, directive scan) and a lon
 A loop whose implement did not succeed skips the merge watch and ends; the canonical `we_` ends `Failed` (exception
 path). The queued request is then claimed and Update-with-Start starts a new run. Widen the guard in both mirrors by a
 predicate, not by changing the set: a dispatched `resume` that pins an available intent may rewrite a proposal in
-`accepted`/`needs-triage` only when the positive-proof checklist of the requirements holds: no `pr`; no open or merged
-`feat/agents-<slug>` PR and no such branch on origin (GitHub reads); no live implement Workflow for the slug, no live
-attempt lease; no active lifecycle-ownership claim. Each read is an error or unknown on failure; any unknown writes
-`needs-triage`, no `proposed`, no implementer. The rewrite writes only `status: proposed` with the pinned intent
+`accepted`/`needs-triage` only when the guarded-reinvestigation checks (a) to (e) of the requirements all hold: the
+prior execution is terminal (a timeout alone is not proof of termination); no live implement Workflow and no live
+attempt lease; no active lifecycle-ownership claim; no `pr` and no open PR; no merged PR, no pushed
+`feat/agents-<slug>` branch and no pending end-advance. Each read is an error or unknown on failure; any unknown
+writes `needs-triage` carrying a typed evidence record (check name and `proven`/`refuted`/`unknown`), no `proposed`,
+no implementer. The pinned intent (`intent_id`, actor, surface, `request_id`, idempotency) is bound to the new
+investigation and the new run parks for a fresh content-bound approval. The rewrite writes only `status: proposed` with the pinned intent
 through the existing path; it never edits or re-binds an earlier approval, and the new run parks on the canonical
 approval for a fresh grant at the then-current digest. Guarded by `DEFERRED_RESUME_PATCH` at the context-only branch;
 old histories keep ending context-only.
@@ -200,8 +203,8 @@ with an open `temporal` execution with a keyset cursor, proposed and approved on
 
 #### M8. Documents
 ADR `docs/adr/026-deferred-resume-contract.md`: the request-to-outcome table (implement running -> deferred; PR open
--> feedback tick; merged -> `work-merged`; implement not succeeded -> closed loop with proof-gated rewind and fresh
-approval; no intent -> `nothing-to-resume`; legacy loop -> `legacy-loop`), the authority rule, the two switches, the
+-> feedback tick; merged -> `work_merged`; implement not succeeded -> closed loop with proof-gated rewind and fresh
+approval; no intent -> `no_actionable_intent`; legacy loop -> `legacy-loop`), the authority rule, the two switches, the
 sweep and its division of labour with #931.
 
 ### Part S (on PR #992's branch)
@@ -297,7 +300,7 @@ the worker log lines below via `mctl_get_service_logs`, `mctl_get_service_pods`/
 | 5 | API on, M, loop without marker (post-gates) | `ResumeDeferred legacy-loop`, request stays claimable | rate-limited `defer reason=legacy-loop`; `rollout-status` lists the loop | typed deferral; never Succeeded; loop upgrades at next hop or ends |
 | 6 | API on, M, FB off, PR open | accepted, `we_` minted, ends `Failed` | `ResumeRejection feedback-disabled` in `work_context`; execution phase Failed; `rollout-status` counts | typed; never Succeeded |
 | 7 | API on, M, FB on, CWFT output missing | tick runs, outcome unreadable | `Failed feedback-unobservable` | typed; never Succeeded |
-| 8 | API on, M, FB on, PR merged | refused before minting | dispatcher `reject resume_refused:work-merged`; request row keeps the intent | typed refusal |
+| 8 | API on, M, FB on, PR merged | refused before minting | dispatcher `reject resume_refused:work_merged`; request row keeps the intent | typed refusal |
 | 9 | API on, M+S, HOLD on, FB off | queued during implement, delivered after `we_` closes, ends `Failed feedback-disabled` | as 6, plus held `we_` age in `rollout-status` | typed |
 | 10 | API on, M+S, HOLD on, D PAUSED | request stays `pending`/`claimed`, nothing processes it | `ROLLOUT_STATE` line missing >5 min; `rollout-status` shows open requests of held items with age; claim/defer lines absent | window gate: age bound; for items no running loop names: UNKNOWN (never zero), mctlhq/mctl-api#933 |
 | 11 | API on, HOLD on, post-implement end-advance keeps failing | `we_` stays open; request not claimable | `rollout-status` held `we_` age; retried each poll (Part S); audit of failed advances | retry per poll; age bound in the window gate |

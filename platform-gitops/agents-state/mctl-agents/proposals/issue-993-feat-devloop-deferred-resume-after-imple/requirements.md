@@ -57,7 +57,7 @@ that must exist before the 21 failing #992 resume tests are rewritten; and the A
   the PR's shepherd once implement ends SO THAT my feedback is acted on and not silently marked done.
 - AS an approver I WANT any request that would add new work or change the approved content to stop for a fresh
   human approval SO THAT the original approval is never used as authority for new work.
-- AS a surface user I WANT a typed refusal (for example `work-merged`) when there is nothing left to resume
+- AS a surface user I WANT a typed refusal (for example `work_merged`) when there is nothing left to resume
   SO THAT I know my request was not executed and can file a new WorkItem.
 - AS an operator I WANT a `we_` that the loop failed to end, or that a terminated loop left open, to be ended
   SO THAT queued requests for that item are not blocked for up to 14 days.
@@ -94,31 +94,61 @@ Deferred-resume contract (Part M; applies only to loops that record the new `DEF
   the delivery's `we_` `Failed` and record a typed `ResumeRejection` reason (`feedback-failed`,
   `feedback-unobservable`, `scope-expansion`, `reapproval-required`). It SHALL NOT end it `Succeeded`.
 - IF the merge watch ends before an accepted delivery's feedback tick runs THEN THE SYSTEM SHALL end its `we_`
-  `Failed` with `work-merged` (PR merged) or `feedback-not-run` (PR closed or watch deadline).
+  `Failed` with `work_merged` (PR merged) or `feedback-not-run` (PR closed or watch deadline).
 - IF the fulfil of a deferred request is refused with `state_version_conflict` (stale `expected_state_version`)
   THEN THE SYSTEM SHALL reject the request and SHALL NOT run a feedback tick for it.
-- IF a `resume` is delivered after the loop has observed its PR merged THEN THE SYSTEM SHALL refuse it with
-  `ResumeRefused` and the reason `work-merged` before any `we_` is minted, so the intent stays on the request row.
+- IF a `resume` is delivered after the loop has observed its PR merged THEN THE SYSTEM SHALL refuse it with the typed
+  outcome `ResumeRefused(work_merged)` before any `we_` is minted. The request row keeps the original `intent_id`,
+  actor, surface, `request_id`, `expected_state_version`, `resumed_from` and idempotency identity unchanged. THE SYSTEM
+  SHALL NOT end anything `Succeeded`, SHALL NOT create an issue or WorkItem automatically, and SHALL NOT reopen,
+  push to or otherwise act on the merged PR. Further work on a merged change is a new WorkItem started by a human
+  (owner decision 2, 2026-11-04).
 - IF a `resume` with no `intent_id` is delivered to a loop whose gates are already passed THEN THE SYSTEM SHALL
-  refuse it with `ResumeRefused` and the reason `nothing-to-resume`, and SHALL NOT end anything `Succeeded`.
+  refuse it with the typed outcome `ResumeRefused(no_actionable_intent)` and SHALL NOT end anything `Succeeded`. The
+  request keeps its identity (actor, surface, `request_id`, idempotency) and the refusal reason is persisted on the
+  request row, which is the record the originating surface reads, so the surface can show why nothing happened. The
+  task verifies that read path for each surface that can send a resume; a surface that cannot read it is recorded as
+  a blocker, never papered over with a success (owner decision 4, 2026-11-04).
 - WHILE a feedback tick for a delivery runs THE SYSTEM SHALL keep PR/head ownership fencing (lifecycle claim,
   `--match-head-commit`), the independent review gate and CI gates exactly as for a scheduled tick.
 - WHEN a request was queued before the approve flip THE SYSTEM SHALL NOT hold the flip because of it. After the
   current execution ends it SHALL follow the same checked contract, and new scope or an authority change SHALL
   require a fresh human approval (owner decision 5, 2026-11-03).
 
-Closed-loop path after a failed implement (Part M)
+Closed-loop path after a failed implement (Part M): guarded reinvestigation (owner decision 3, 2026-11-04)
 - WHEN a `resume` with an intent is delivered after the implement step ended Failed, Cancelled or TimedOut (the
-  loop has closed) THE SYSTEM SHALL take the existing closed-loop path (Update-with-Start of a new run).
-- THE SYSTEM SHALL rewind an `accepted` or `needs-triage` proposal to `proposed`, using the pinned intent, only
-  when ALL of these are positively established: `.status.yaml` carries no PR; GitHub shows no open or merged
-  `feat/agents-<slug>` PR and no pushed `feat/agents-<slug>` branch; no implement Workflow for the slug is live and
-  no attempt lease is live; and no lifecycle-ownership claim for the proposal is active. IF any of these reads
-  fails or is not conclusive THEN THE SYSTEM SHALL set `needs-triage`, SHALL NOT rewind, and SHALL NOT release an
-  implementer.
-- THE SYSTEM SHALL NOT reuse, rewrite or extend an earlier digest-bound approval. The new run SHALL wait for a fresh
-  human approval at the then-current content digest before any implementer is released.
-- IF the proposal has an open or merged PR THEN THE SYSTEM SHALL NOT rewind it to `proposed`.
+  loop has closed) THE SYSTEM SHALL take the existing closed-loop path (Update-with-Start of a new run). mctl-api
+  cannot tell the three apart, and none of them is by itself proof that the prior execution stopped: a timeout in
+  particular only means the caller stopped waiting.
+- THE SYSTEM SHALL move an `accepted` or `needs-triage` proposal to `proposed` with the pinned intent ONLY when ALL of
+  these are positively established, each by a successful read:
+  (a) the prior execution is terminal (its `we_` and its implement Workflow are closed, not merely timed out);
+  (b) no implementer is active: no live implement Workflow for the slug and no live attempt lease;
+  (c) no lifecycle-ownership claim for the proposal is active, and no lifecycle owner remains;
+  (d) no open PR is being handled: `.status.yaml` carries no PR, and GitHub shows no open `feat/agents-<slug>` PR;
+  (e) outstanding side effects are reconciled: no merged `feat/agents-<slug>` PR, no pushed `feat/agents-<slug>`
+      branch, and no pending end-advance or unsettled request for the execution.
+- IF any of (a) to (e) is unknown, unreadable, inconclusive or only inferred from a timeout, or ownership or side
+  effects are uncertain THEN THE SYSTEM SHALL write `needs-triage` with a typed evidence record naming each check
+  and its result (`proven`, `refuted` or `unknown`), SHALL NOT move the proposal to `proposed`, and SHALL NOT release
+  an implementer, so a duplicate implementation can never start.
+- THE SYSTEM SHALL bind the preserved intent (`intent_id`, actor, surface, `request_id`, idempotency) to the new
+  investigation, and SHALL NOT reuse, rewrite or extend an earlier digest-bound approval. The new run SHALL wait for a
+  fresh human approval bound to the then-current content digest before any implementation.
+- IF the proposal has an open PR, or a merged one, THEN THE SYSTEM SHALL NOT move it to `proposed`; a merged PR is
+  `ResumeRefused(work_merged)` above.
+
+Cross-branch invariants (merged, no intent, failed/cancelled/timed out)
+- Every branch preserves actor, surface, `intent_id`, `request_id` and the idempotency key from the dispatcher through
+  the validator, the delivery and the persisted outcome; a redelivery or replay of the same request yields the same
+  terminal outcome and creates no second effect.
+- The terminal outcomes are a closed, stable vocabulary (`ResumeRefused(work_merged)`,
+  `ResumeRefused(no_actionable_intent)`, `needs-triage` with typed evidence, `proposed` awaiting fresh approval). New
+  values are added behind `DEFERRED_RESUME_PATCH`; recorded histories keep their old command sequence.
+- The M1 slice (#996, implemented, PR not yet merged) persisted the hyphenated spellings `work-merged` and
+  `nothing-to-resume`. The stable wire values of this contract are `work_merged` and `no_actionable_intent`. Before
+  the M1 PR merges, the spellings are aligned (owner decides how, in the review of that PR); after any merge a
+  rename needs a compatibility alias so persisted rows keep decoding.
 
 Backward compatibility and fence (Part M)
 - WHILE replaying a history recorded without `DEFERRED_RESUME_PATCH` THE SYSTEM SHALL keep the old command

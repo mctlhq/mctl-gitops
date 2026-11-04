@@ -21,7 +21,7 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
   `_feedback_done`, `_pending_feedback`) as defaulted `MergeWatchResume` fields, recorded at both `_gates_passed = True`
   sites (depends on 2) - DoD: `tests/test_patch_memoization.py` covers the marker; existing replay fixtures pass.
 - [ ] 4. Validator decisions in `_validate_execution_request`: `legacy-loop` and `implement-running` (deferred),
-  `work-merged` and `nothing-to-resume` (refused); add the reasons to the vocabularies; add the `contract_state` query
+  `ResumeRefused(work_merged)` and `ResumeRefused(no_actionable_intent)` (refused, request identity preserved, reason persisted on the request row and verified readable by each originating surface); add the reasons to the vocabularies; add the `contract_state` query
   and CLI `contract-drain-check` (depends on 3) - DoD: T2, T3, T4 pass; no `we_` is minted on refusal; a replayed history
   with an accepted update stays green.
 - [ ] 5. `read_rollout_switches` activity (`DEVLOOP_DEFERRED_FEEDBACK` only in this part), registered in the main
@@ -38,10 +38,12 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
 - [ ] 8. Sibling mctl-gitops PR: the shepherd CWFT declares `intent_id`, `execution_request_id`, `feedback_actor` and the
   `feedback_outcome` output (depends on 7). It must be merged and live before the switch is turned on - DoD: PR linked;
   until live the outcome is `feedback-unobservable`.
-- [ ] 9. Closed-loop rewind with proof: the predicate in `run_issue_investigator` (~:3528, ~:4199) and the loop's
-  context-only branch, under `DEFERRED_RESUME_PATCH`; the positive-proof reads (status `pr`, GitHub PR and branch, live
-  implement Workflow and attempt lease, lifecycle ownership); any unknown -> `needs-triage` (depends on 3) - DoD: T9
-  passes; an open or merged PR, a pushed branch, or a failed read never rewinds.
+- [ ] 9. Guarded reinvestigation: the predicate in `run_issue_investigator` (~:3528, ~:4199) and the loop's
+  context-only branch, under `DEFERRED_RESUME_PATCH`; the positive checks (a) to (e) (prior execution terminal, no live
+  implement Workflow or attempt lease, no lifecycle-ownership claim, no status `pr` or open PR, no merged PR or pushed
+  branch or pending end-advance); a timeout is never accepted as proof; any unknown -> `needs-triage` with the typed
+  evidence record; the preserved intent identity is bound to the new investigation (depends on 3) - DoD: T9 passes;
+  an open or merged PR, a pushed branch, a live lease or owner, or a failed read never moves to `proposed`.
 - [ ] 10. Orphan sweep spike C0: in the Temporal test environment terminate a DevLoop that holds an open `we_` and query
   `work_context` on the closed run; also query a pre-hop recorded history - DoD: the result is written into the ADR. If
   it fails, STOP and record the blocker `ORPHAN_SOURCE_BLOCKED`; ship task 11 disabled and open the separate API
@@ -51,7 +53,7 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
   counters, 409-as-converged and fail-closed reads (depends on 10, 1) - DoD: T10, T11 pass; existing
   `_reconcile_closed_loops` tests pass unchanged.
 - [ ] 12. Rewrite the `main` test `test_a_resume_delivered_after_the_implement_step_succeeds_at_once` to the contract
-  (`nothing-to-resume` refusal / feedback tick) (depends on 4, 6) - DoD: it asserts a delivered or typed-refused request,
+  (`no_actionable_intent` refusal / feedback tick) (depends on 4, 6) - DoD: it asserts a delivered or typed-refused request,
   none asserts a lost one; done only after T2-T8 exist and were mutation-checked.
 - [ ] 13. ADR `docs/adr/026-deferred-resume-contract.md` (table, authority rule, two switches, sweep and division of
   labour with #931, spike result) (depends on 4-11) - DoD: merged.
@@ -97,9 +99,12 @@ not edit #991's proposal. Nothing is marked ready, released or deployed before t
 Part M
 - [ ] T1. Dispatcher -> `ResumeDelivery` carries `intent_id`, `expected_state_version`, `resumed_from_execution_id`; a
   pre-change payload decodes to the defaults.
-- [ ] T2. Resume after the merge watch observed MERGED -> `resume_refused:work-merged`, no fulfil, the request row keeps
+- [ ] T2. Resume after the merge watch observed MERGED -> `resume_refused:work_merged` with actor, surface, `intent_id`,
+  `request_id` and idempotency key unchanged; no issue or WorkItem is created and the merged PR is not touched; a
+  redelivery or replay yields the same outcome; no fulfil, the request row keeps
   the intent.
-- [ ] T3. Resume with no intent after the gates passed -> `resume_refused:nothing-to-resume`. Mutation: restore the
+- [ ] T3. Resume with no intent after the gates passed -> `resume_refused:no_actionable_intent`, request identity
+  preserved and the reason readable by the originating surface. Mutation: restore the
   at-once Succeeded -> fails.
 - [ ] T4. Legacy loop: a history recorded without `DEFERRED_RESUME_PATCH`, gates passed, receives a resume -> `legacy-loop`
   deferred, the request is not lost and nothing ends Succeeded; replay of that history with an accepted update is
@@ -114,8 +119,9 @@ Part M
   tick -> `we_` Failed with the typed `ResumeRejection`; never Succeeded.
 - [ ] T8. Grant binding changed (content digest or authority) before the tick -> `reapproval-required`, no tick; stale
   `expected_state_version` -> the fulfil refuses `state_version_conflict`, the request is rejected, no tick.
-- [ ] T9. A resume after implement Failed, Cancelled and TimedOut (loop closed): Update-with-Start runs; the proposal is
-  rewound to `proposed` ONLY when every proof holds; with an open PR, a merged PR, a pushed branch, a live lease, an
+- [ ] T9. A resume after implement Failed, Cancelled and TimedOut (loop closed): Update-with-Start runs; a TimedOut
+  prior execution whose termination is not proven stays `needs-triage` with typed evidence; the proposal is
+  moved to `proposed` ONLY when every proof holds; with an open PR, a merged PR, a pushed branch, a live lease, an
   active ownership claim, or any unreadable input it becomes/stays `needs-triage`; no implementer is released without a
   fresh approval. Mutation: skip one proof read -> the matching case fails.
 - [ ] T10. Sweep: a terminated loop with an open `#run_` `we_` and no request is ended Failed within one full pass; a
