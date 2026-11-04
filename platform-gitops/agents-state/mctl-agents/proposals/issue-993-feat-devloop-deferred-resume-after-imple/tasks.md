@@ -119,6 +119,11 @@ Part M
   tick -> `we_` Failed with the typed `ResumeRejection`; never Succeeded.
 - [ ] T8. Grant binding changed (content digest or authority) before the tick -> `reapproval-required`, no tick; stale
   `expected_state_version` -> the fulfil refuses `state_version_conflict`, the request is rejected, no tick.
+- [ ] T9a. Each of the five checks returns `proven`, `refuted` or `unknown`; `refuted` and `unknown` both block
+  `proposed`; a merged PR yields `ResumeRefused(work_merged)`, not `needs-triage`. Mutation: treat `refuted` as
+  absent -> the case fails.
+- [ ] T9b. A stored `resume_refused:work-merged` or `resume_refused:nothing-to-resume` still decodes unchanged and is
+  never rewritten; the build never mints them.
 - [ ] T9. A resume after implement Failed, Cancelled and TimedOut (loop closed): Update-with-Start runs; a TimedOut
   prior execution whose termination is not proven stays `needs-triage` with typed evidence; the proposal is
   moved to `proposed` ONLY when every proof holds; with an open PR, a merged PR, a pushed branch, a live lease, an

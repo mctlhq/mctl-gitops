@@ -128,8 +128,14 @@ Closed-loop path after a failed implement (Part M): guarded reinvestigation (own
   (d) no open PR is being handled: `.status.yaml` carries no PR, and GitHub shows no open `feat/agents-<slug>` PR;
   (e) outstanding side effects are reconciled: no merged `feat/agents-<slug>` PR, no pushed `feat/agents-<slug>`
       branch, and no pending end-advance or unsettled request for the execution.
-- IF any of (a) to (e) is unknown, unreadable, inconclusive or only inferred from a timeout, or ownership or side
-  effects are uncertain THEN THE SYSTEM SHALL write `needs-triage` with a typed evidence record naming each check
+- Each check has exactly one of three results: `proven` (the safe condition is established by a successful read),
+  `refuted` (a successful read shows the unsafe condition: a live implementer, a live owner, an open PR, a pushed
+  branch, a pending side effect) or `unknown` (the read failed, was partial or malformed, or the result is only
+  inferred). Only all-`proven` permits `proposed`. A `refuted` or `unknown` result on any check blocks it; neither
+  is ever treated as absent. A merged PR is the one refuted case with its own outcome, `ResumeRefused(work_merged)`
+  above, and it is checked first.
+- IF any of (a) to (e) is `refuted` or `unknown`, or ownership or side effects are uncertain, or a result is only
+  inferred from a timeout, THEN THE SYSTEM SHALL write `needs-triage` with a typed evidence record naming each check
   and its result (`proven`, `refuted` or `unknown`), SHALL NOT move the proposal to `proposed`, and SHALL NOT release
   an implementer, so a duplicate implementation can never start.
 - THE SYSTEM SHALL bind the preserved intent (`intent_id`, actor, surface, `request_id`, idempotency) to the new
@@ -142,13 +148,20 @@ Cross-branch invariants (merged, no intent, failed/cancelled/timed out)
 - Every branch preserves actor, surface, `intent_id`, `request_id` and the idempotency key from the dispatcher through
   the validator, the delivery and the persisted outcome; a redelivery or replay of the same request yields the same
   terminal outcome and creates no second effect.
-- The terminal outcomes are a closed, stable vocabulary (`ResumeRefused(work_merged)`,
-  `ResumeRefused(no_actionable_intent)`, `needs-triage` with typed evidence, `proposed` awaiting fresh approval). New
-  values are added behind `DEFERRED_RESUME_PATCH`; recorded histories keep their old command sequence.
+- The terminal outcomes of a resume REQUEST are a closed, stable vocabulary: `ResumeRefused(work_merged)`,
+  `ResumeRefused(no_actionable_intent)`, the existing refusals and deferrals of the validator, and the request being
+  delivered. `needs-triage` and `proposed` are states of the PROPOSAL (the investigation), not terminal outcomes of
+  the request: the request that triggered the closed-loop path is delivered, and the proposal's state then says
+  whether the investigation may proceed. New values are added behind `DEFERRED_RESUME_PATCH`; recorded histories keep
+  their old command sequence.
 - The M1 slice (#996, implemented, PR not yet merged) persisted the hyphenated spellings `work-merged` and
   `nothing-to-resume`. The stable wire values of this contract are `work_merged` and `no_actionable_intent`. Before
   the M1 PR merges, the spellings are aligned (owner decides how, in the review of that PR); after any merge a
   rename needs a compatibility alias so persisted rows keep decoding.
+- Persisted compatibility: every writer, test, document and serialised outcome uses the canonical values. A reader
+  still decodes the hyphenated spellings if a stored row or recorded history already carries one, reads them back as
+  written, and never rewrites or renames a historical result silently. The hyphenated spellings are never minted
+  again. A test proves a legacy spelling decodes unchanged and is not normalised to `unspecified`.
 
 Backward compatibility and fence (Part M)
 - WHILE replaying a history recorded without `DEFERRED_RESUME_PATCH` THE SYSTEM SHALL keep the old command
