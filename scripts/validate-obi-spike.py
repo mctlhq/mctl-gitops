@@ -7,7 +7,8 @@ Only while `obiSpike.enabled` is true, fail when:
   - the image digest is empty or not sha256:<64 hex>;
   - `privileged: true` or SYS_ADMIN in capabilities.add while
     allowPrivileged is not true;
-  - any capability in `add` is outside the pinned list;
+  - any capability in `add` is outside the pinned list (SYS_ADMIN joins it
+    only while allowPrivileged is true);
   - a target is empty or contains a glob character;
   - any toleration is present.
 
@@ -82,7 +83,8 @@ def check_values(doc: dict, today: datetime.date) -> list[str]:
         errors.append("securityContext.privileged is true while allowPrivileged is false")
     if "SYS_ADMIN" in add and not allow:
         errors.append("SYS_ADMIN in capabilities.add while allowPrivileged is false")
-    extra = sorted(set(add) - PINNED_CAPABILITIES)
+    allowed = PINNED_CAPABILITIES | ({"SYS_ADMIN"} if allow else set())
+    extra = sorted(set(add) - allowed)
     if extra:
         errors.append(f"capabilities.add outside the pinned list: {extra}")
 
@@ -147,6 +149,7 @@ def selftest() -> int:
     case("privileged without allow fails", lambda s: s["securityContext"].update(privileged=True), False)
     case("privileged with allow passes", allow_privileged, True)
     case("SYS_ADMIN without allow fails", lambda s: s["securityContext"]["capabilities"]["add"].append("SYS_ADMIN"), False)
+    case("SYS_ADMIN with allow passes", lambda s: (s.update(allowPrivileged=True), s["securityContext"]["capabilities"]["add"].append("SYS_ADMIN")), True)
     case("capability outside pinned list fails", lambda s: s["securityContext"]["capabilities"]["add"].append("NET_RAW"), False)
     case("empty target namespace fails", lambda s: s["targets"].append({"namespace": "", "deployment": "x"}), False)
     case("empty target deployment fails", lambda s: s["targets"].append({"namespace": "labs", "deployment": ""}), False)
