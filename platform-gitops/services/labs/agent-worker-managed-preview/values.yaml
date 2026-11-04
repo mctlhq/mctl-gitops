@@ -86,15 +86,18 @@ env:
   # in the managed runtime the prompt comes from the account's assistant
   # install, not from this deployment.
   AGENT_POOL_MODE: "true"
-  # C1 gate dev/eval model (mctl-telegram#1093, mctlhq/.github#293).
-  AGENT_MODEL: "Qwen/Qwen3.6-35B-A3B"
+  # GLM-5.1 through Nebius, the production model, for the preview validation
+  # run after A6 (mctl-telegram#1088). Rollback = revert this change: back to
+  # Qwen/Qwen3.6-35B-A3B (C1 dev/eval model, mctl-telegram#1093) on Hetzner.
+  AGENT_MODEL: "zai-org/GLM-5.1"
   # Account id is the non-secret value already committed in
   # ai-gateway-custom-providers.json and admins/mctl-support/values.yaml.
-  AGENT_OPENAI_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-telegram/custom-hetzner/v1"
+  AGENT_OPENAI_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-telegram/custom-nebius/v1"
   # Keep equal to MANAGED_MAX_JOB_COST_USD in mctl-telegram-preview.
   AGENT_MAX_BUDGET_USD: "0.25"
   AGENT_MAX_TURNS: "12"
-  # Hetzner allows 10 requests per 60 s (ADR 0008); 6s stays within it.
+  # Kept from the Hetzner limit of 10 requests per 60 s (ADR 0008): 6s is a
+  # safe floor on Nebius too; its own limit was not measured here.
   AGENT_OPENAI_MIN_INTERVAL: "6s"
   AGENT_WORKER_CONCURRENCY: "1"
   # Shadow prices: Nebius GLM-5.1, the production model (as in
@@ -102,9 +105,9 @@ env:
   # production would.
   MODEL_INPUT_USD_PER_MTOK: "1.40"
   MODEL_OUTPUT_USD_PER_MTOK: "4.40"
-  # Non-secret quota-domain label (the Vault path of the Hetzner key), exported
+  # Non-secret quota-domain label (the Vault path of the Nebius key), exported
   # on mctl_agent_credential_domain. Read through requireEnv: fail-fast if unset.
-  AGENT_CREDENTIAL_DOMAIN_ID: "platform/labs/agent-worker-managed-preview/openai"
+  AGENT_CREDENTIAL_DOMAIN_ID: "platform/labs/agent-worker-managed-preview/openai-nebius"
 # Activation step 4. One ExternalSecret per credential, so each can be
 # rotated alone. Vault values are written by hand (step 3), never in git.
 envFrom:
@@ -126,7 +129,8 @@ extraExternalSecrets:
       - secretKey: AGENT_API_TOKEN
         remoteKey: secret/data/platform/labs/agent-worker-managed-preview/api
         property: token
-  # Hetzner inference key, sent through the gateway (byok).
+  # Nebius Token Factory key, dedicated to this worker (not shared with
+  # mctl-support), sent through the gateway (byok). Written by hand.
   labs-agent-worker-managed-preview-openai:
     store: vault-backend
     storeKind: ClusterSecretStore
@@ -134,7 +138,7 @@ extraExternalSecrets:
     targetSecret: labs-agent-worker-managed-preview-openai
     data:
       - secretKey: AGENT_OPENAI_API_KEY
-        remoteKey: secret/data/platform/labs/agent-worker-managed-preview/openai
+        remoteKey: secret/data/platform/labs/agent-worker-managed-preview/openai-nebius
         property: token
   # cf-aig-authorization bearer for the mctl-telegram AI Gateway (run only);
   # canonical copy at secret/platform/mctl-telegram/ai-gateway.
