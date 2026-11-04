@@ -76,7 +76,8 @@ Delivery identity (Part M)
   THE SYSTEM SHALL run at most one feedback tick for that `execution_request_id`.
 
 Deferred-resume contract (Part M; applies only to loops that record the new `DEFERRED_RESUME_PATCH` marker)
-- WHILE the implement step of a loop under the new contract is in flight, THE SYSTEM SHALL answer a delivered
+- WHILE the implement step of a loop under the new contract is in flight (gates passed and implement not yet ended, which
+  includes the window between the flip and the implement submit), THE SYSTEM SHALL answer a delivered
   `resume` with `ResumeDeferred` (`implement-running`) and SHALL NOT accept it.
 - WHEN a `resume` with an `intent_id` is delivered to a loop that is in its merge watch with the PR open
   THE SYSTEM SHALL accept it, bind its `we_`, and schedule exactly one shepherd feedback tick for this proposal.
@@ -92,7 +93,8 @@ Deferred-resume contract (Part M; applies only to loops that record the new `DEF
   `Succeeded`.
 - IF the feedback tick fails, is refused, times out or reports an unobservable outcome THEN THE SYSTEM SHALL end
   the delivery's `we_` `Failed` and record a typed `ResumeRejection` reason (`feedback-failed`,
-  `feedback-unobservable`, `scope-expansion`, `reapproval-required`). It SHALL NOT end it `Succeeded`.
+  `feedback-unobservable`, `scope-expansion`, `reapproval-required`, `feedback-disabled`, `feedback-not-run`,
+  `merged-before-feedback`). It SHALL NOT end it `Succeeded`.
 - IF the merge watch ends before an accepted delivery's feedback tick runs THEN THE SYSTEM SHALL end its `we_`
   `Failed` with `merged-before-feedback` (PR merged) or `feedback-not-run` (PR closed or watch deadline).
 - IF the fulfil of a deferred request is refused with `state_version_conflict` (stale `expected_state_version`)
@@ -109,11 +111,11 @@ Deferred-resume contract (Part M; applies only to loops that record the new `DEF
   the fulfil and, on a closed loop, is an Update-with-Start that would start a new run, so a refusal "before the
   fulfil" would be too late. A merged PR is `ResumeRefused(work_merged)`; a request without intent is
   `ResumeRefused(no_actionable_intent)` only when the proposal's approval gates have already passed (status past
-  `proposed`), because a closed pre-approval loop with no intent keeps its normal path. No delivery, no new run and no
+  `proposed`; `needs-triage` does NOT count as past `proposed`), because a closed pre-approval loop with no intent keeps its normal path. No delivery, no new run and no
   `we_` happens on a refusal. The dispatcher gets a PR-state reader port (injected like the Temporal port, a fake in
   tests) and resolves the proposal slug and service through the existing slug lookup. A failed or `unknown` read
-  defers the request (it stays claimed), neither refusing nor delivering it; a persistent `unknown` is bounded by
-  the existing claim lease and surfaced by an audit counter, and is never turned into a refusal or a delivery.
+  defers the request (it stays claimed), neither refusing nor delivering it; the claim lease sets only the retry cadence; a persistent `unknown` has no automatic total bound and is surfaced by an audit counter
+  for a human to act on, and is never turned into a refusal or a delivery.
 - IF a `resume` with no `intent_id` is delivered to a loop whose gates are already passed THEN THE SYSTEM SHALL
   refuse it with the typed outcome `ResumeRefused(no_actionable_intent)` and SHALL NOT end anything `Succeeded`. The
   request keeps its identity (actor, surface, `request_id`, idempotency) and the refusal reason is persisted on the
@@ -362,12 +364,12 @@ Order (each step is a gate; nothing is marked ready, released or deployed before
 4. Turn `DEVLOOP_DEFERRED_FEEDBACK` on (gitops, human), once the CWFT output is live and the T-tests pass.
 5. mctl-api: mctlhq/mctl-api#931 (PR #932) is released and `MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE=on` is set in
    gitops. A human verifies the effective state, below. This proposal does not turn the switch on.
-6. Part S: after Part M is released, an operator-directed session merges `main` into the draft #992 branch and pushes the
+6. Part S: after Part M is released (and not before), an operator-directed session merges `main` into the draft #992 branch and pushes the
    Part S commits (S0). #992 stays a draft until the integration evidence (full suite, every replay fixture, and the
    real observe exchange) exists; making it ready, merging and releasing it with `DEVLOOP_IMPLEMENT_HOLD` off is a later,
    explicit owner gate. With the switch off the behaviour equals today's: the `we_` ends at the flip and no
    `execution_id` is sent.
-7. A human release owner sets `DEVLOOP_IMPLEMENT_HOLD=true` in `services/admins/mctl-agents-worker/values.yaml` (the
+7. Only after the later explicit owner readiness gate of step 6 has released #992 with the switch off, a human release owner sets `DEVLOOP_IMPLEMENT_HOLD=true` in `services/admins/mctl-agents-worker/values.yaml` (the
    main worker only; the exec and implement workers ignore it). Rollback is the same line set back to off.
 The worker image bump is a human step; nothing here deploys autonomously.
 

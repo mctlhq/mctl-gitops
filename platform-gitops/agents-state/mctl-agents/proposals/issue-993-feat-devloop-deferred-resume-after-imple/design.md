@@ -91,18 +91,18 @@ and dedupe key.
 
 #### M2. Contract marker and carried state
 `DEFERRED_RESUME_PATCH = "deferred-resume-contract"`, recorded once where `_gates_passed = True` is set (both sites)
-into `self._deferred_contract`, carried in `MergeWatchResume` as a defaulted field. The flag is never re-evaluated
+into `self._deferred_resume_contract`, carried in `MergeWatchResume` as a defaulted field. The flag is never re-evaluated
 after a continue-as-new hop: a pre-marker loop stays `legacy-loop` until it ends. New state, all defaulted in `MergeWatchResume`:
-`_implement_running`, `_pr_merged`, `_feedback_done: frozenset[str]`, `_pending_feedback`. Validators record no
+`_implement_state`, `_last_pr`, `_feedback_done: frozenset[str]`, `_pending_feedback`. Validators record no
 command; they read flags only.
 
 #### M3. Validator decisions (refuse before a `we_` is minted)
 In `_validate_execution_request`, after the existing checks, in this order (first match wins, as in mctl-agents#998):
-- `self._gates_passed and _pr_merged` -> `ResumeRefused("work_merged")`, even for a legacy loop (merged outranks the fence);
-- `self._gates_passed and not self._deferred_contract` -> `ResumeDeferred("legacy-loop")` (the fence). Update validators
+- `self._gates_passed and the last PR read is MERGED (`_last_pr`)` -> `ResumeRefused("work_merged")`, even for a legacy loop (merged outranks the fence);
+- `self._gates_passed and not self._deferred_resume_contract` -> `ResumeDeferred("legacy-loop")` (the fence). Update validators
   are not run on replay, so an already accepted update is unaffected (T-test asserts a replayed history stays green).
   A rolling update can still be validated by an old pod; step 2 of the rollout order closes that window.
-- under the contract: `_implement_running` -> `ResumeDeferred("implement-running")` (defence in depth);
+- under the contract: `_implement_state` running -> `ResumeDeferred("implement-running")` (defence in depth);
   `kind == resume and intent_id is None` -> `ResumeRefused("no_actionable_intent")`.
 Add `work_merged`, `no_actionable_intent`, `implement-running`, `legacy-loop` to the vocabularies
 (`xr.RESUME_REFUSAL_REASONS`; deferral reasons need no vocabulary because the dispatcher passes them through) so the
@@ -168,7 +168,7 @@ Once the loop has ended, no validator runs for a resume (Update-with-Start valid
 fulfil would mint the `we_`). The dispatcher therefore makes the `work_merged` / `no_actionable_intent` decision after
 `loop_state` and BEFORE `deliver()` (Update-with-Start on a closed loop would start a new run), from an injected PR-state
 reader and the request's own `intent_id`; `no_actionable_intent` applies only once the proposal's gates have passed. An
-`unknown` read defers the request, bounded by the claim lease. The
+`unknown` read defers the request; the claim lease sets only the retry cadence and there is no automatic total bound (a human acts on the audit counter). The
 reads for the five checks use only the sources listed in the requirements; the PR and branch reads are new tri-state
 functions, and a pending end-advance is an open canonical `we_`, read through check (a); no spike is needed.
 
