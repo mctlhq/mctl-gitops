@@ -96,7 +96,8 @@ env:
   # Keep equal to MANAGED_MAX_JOB_COST_USD in mctl-telegram-preview.
   AGENT_MAX_BUDGET_USD: "0.25"
   AGENT_MAX_TURNS: "12"
-  # Hetzner allows 10 requests per 60 s (ADR 0008); 6s stays within it.
+  # Kept from the Hetzner limit of 10 requests per 60 s (ADR 0008): 6s is a
+  # safe floor on Nebius too; its own limit was not measured here.
   AGENT_OPENAI_MIN_INTERVAL: "6s"
   AGENT_WORKER_CONCURRENCY: "1"
   # Shadow prices: Nebius GLM-5.1, the production model (as in
@@ -104,7 +105,7 @@ env:
   # production would.
   MODEL_INPUT_USD_PER_MTOK: "1.40"
   MODEL_OUTPUT_USD_PER_MTOK: "4.40"
-  # Non-secret quota-domain label (the Vault path of the Hetzner key), exported
+  # Non-secret quota-domain label (the Vault path of the Nebius key), exported
   # on mctl_agent_credential_domain. Read through requireEnv: fail-fast if unset.
   AGENT_CREDENTIAL_DOMAIN_ID: "platform/labs/agent-worker-managed-preview/openai-nebius"
 # Activation step 4. One ExternalSecret per credential, so each can be
