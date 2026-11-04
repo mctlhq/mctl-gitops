@@ -965,6 +965,18 @@ spec:
                   - receiver: mctl-agent-paged
                     matchers:
                       - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
+                  # Managed runtime budget and provider alerts (mctl-telegram#334,
+                  # #889): the operator decides what a spend or quota condition
+                  # means, so a warning here still reaches the owner. Exact names,
+                  # not a prefix: the #889 window's alerts stay a deliberate list.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlAgentManagedAccountMonthCapHit|MctlAgentManagedBudgetDeferredSustained|MctlAgentManagedUsageHeld|MctlAgentProviderRateLimitHigh"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - alertname =~ "MctlAgentManagedAccountMonthCapHit|MctlAgentManagedBudgetDeferredSustained|MctlAgentManagedUsageHeld|MctlAgentProviderRateLimitHigh"
                   # mctl-api availability (vm-rules/mctl-api-alerts.yaml): the
                   # same circularity as the three above, one layer down.
                   # mctl-agent files its incidents through mctl-api, so an
