@@ -245,8 +245,10 @@ spec:
               # and the alert fired on normal load. 5x keeps headroom over
               # that baseline and still catches a real cardinality blow-up.
               # The override replaces expr for both the vmsingle and the
-              # vmcluster copy of the rule (same name), so it groups by
-              # job+instance, which both copies expose.
+              # vmcluster copy of the rule (same name). Stock groups by
+              # job+cluster (vmcluster) and instance+cluster (vmsingle);
+              # job+instance+cluster is their union, and a label absent on
+              # both sides of `>` matches as empty, so either copy works.
               TooHighChurnRate24h:
                 spec:
                   annotations:
