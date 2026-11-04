@@ -147,12 +147,13 @@ extraContainers: []
 # no event still points at it. The final check fails the Job when anything past
 # the cut-off survived, NULL created_at included, so a schema change that adds
 # rows the DELETEs miss shows up as a failed Job instead of silent retention.
-# Configuration, not visitor records, and are left alone.
+# Saved reports, segments, boards, links, pixels and saved replays are
+# configuration, not visitor records, and are left alone.
 #
 # Websites are declared here deterministically so that every site tracked by
 # the platform has a stable website_id known in advance by client builds,
-# without manual Web UI registration. Both the daily retention CronJob and
-# the one-shot sync Job ensure these rows exist.
+# without manual Web UI registration. A PostSync Job ensures these rows exist
+# once Umami has initialized its database schema.
 extraObjects:
   - apiVersion: batch/v1
     kind: Job
@@ -162,7 +163,7 @@ extraObjects:
         app.kubernetes.io/name: umami
         mctl.me/component: seed-websites
       annotations:
-        argocd.argoproj.io/hook: Sync
+        argocd.argoproj.io/hook: PostSync
         argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
     spec:
       backoffLimit: 2
@@ -197,19 +198,25 @@ extraObjects:
                 - |
                   set -e
                   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
-                  INSERT INTO website (website_id, name, domain, user_id, created_at)
-                  SELECT w.id, w.name, w.domain, u.user_id, now()
-                  FROM (VALUES
-                    ('3735c207-d9bb-4968-8394-7a51c13a58d2'::uuid, 'mctl.ai', 'mctl.ai'),
-                    ('d4fa9d69-8b07-4d27-98e6-0b611eeaa707'::uuid, 'tg.mctl.ai', 'tg.mctl.ai'),
-                    ('a28d097d-de76-4beb-9acc-cffdbb85ccbf'::uuid, 'docs.mctl.ai', 'docs.mctl.ai'),
-                    ('b1a11ce0-8b07-4d27-98e6-0b611eeaa707'::uuid, 'alice.mctl.ai', 'alice.mctl.ai'),
-                    ('acade000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'academy.mctl.ai', 'academy.mctl.ai'),
-                    ('5eerr000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'seerrsense.mctl.ai', 'seerrsense.mctl.ai'),
-                    ('d0000000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'dmitriimashkov.com', 'dmitriimashkov.com')
-                  ) AS w(id, name, domain)
-                  CROSS JOIN LATERAL (SELECT user_id FROM "user" ORDER BY created_at ASC LIMIT 1) u
-                  ON CONFLICT (website_id) DO UPDATE SET domain = EXCLUDED.domain, name = EXCLUDED.name;
+                  DO $seed$
+                  DECLARE
+                    v_user_id UUID;
+                  BEGIN
+                    SELECT user_id INTO v_user_id FROM "user" ORDER BY created_at ASC LIMIT 1;
+                    IF v_user_id IS NULL THEN
+                      RAISE EXCEPTION 'Umami user table is empty; cannot seed websites without an owner user';
+                    END IF;
+                    INSERT INTO website (website_id, name, domain, user_id, created_at)
+                    VALUES
+                      ('3735c207-d9bb-4968-8394-7a51c13a58d2'::uuid, 'mctl.ai', 'mctl.ai', v_user_id, now()),
+                      ('d4fa9d69-8b07-4d27-98e6-0b611eeaa707'::uuid, 'tg.mctl.ai', 'tg.mctl.ai', v_user_id, now()),
+                      ('a28d097d-de76-4beb-9acc-cffdbb85ccbf'::uuid, 'docs.mctl.ai', 'docs.mctl.ai', v_user_id, now()),
+                      ('b1a11ce0-8b07-4d27-98e6-0b611eeaa707'::uuid, 'alice.mctl.ai', 'alice.mctl.ai', v_user_id, now()),
+                      ('acade000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'academy.mctl.ai', 'academy.mctl.ai', v_user_id, now()),
+                      ('5ee11000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'seerrsense.mctl.ai', 'seerrsense.mctl.ai', v_user_id, now()),
+                      ('d0000000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'dmitriimashkov.com', 'dmitriimashkov.com', v_user_id, now())
+                    ON CONFLICT (website_id) DO UPDATE SET domain = EXCLUDED.domain, name = EXCLUDED.name;
+                  END $seed$;
                   SQL
               env:
                 - name: DATABASE_URL
@@ -282,19 +289,6 @@ extraObjects:
                       DELETE FROM session s
                        WHERE s.created_at < now() - interval '2 years'
                          AND NOT EXISTS (SELECT 1 FROM website_event e WHERE e.session_id = s.session_id);
-                      INSERT INTO website (website_id, name, domain, user_id, created_at)
-                      SELECT w.id, w.name, w.domain, u.user_id, now()
-                      FROM (VALUES
-                        ('3735c207-d9bb-4968-8394-7a51c13a58d2'::uuid, 'mctl.ai', 'mctl.ai'),
-                        ('d4fa9d69-8b07-4d27-98e6-0b611eeaa707'::uuid, 'tg.mctl.ai', 'tg.mctl.ai'),
-                        ('a28d097d-de76-4beb-9acc-cffdbb85ccbf'::uuid, 'docs.mctl.ai', 'docs.mctl.ai'),
-                        ('b1a11ce0-8b07-4d27-98e6-0b611eeaa707'::uuid, 'alice.mctl.ai', 'alice.mctl.ai'),
-                        ('acade000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'academy.mctl.ai', 'academy.mctl.ai'),
-                        ('5eerr000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'seerrsense.mctl.ai', 'seerrsense.mctl.ai'),
-                        ('d0000000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'dmitriimashkov.com', 'dmitriimashkov.com')
-                      ) AS w(id, name, domain)
-                      CROSS JOIN LATERAL (SELECT user_id FROM "user" ORDER BY created_at ASC LIMIT 1) u
-                      ON CONFLICT (website_id) DO UPDATE SET domain = EXCLUDED.domain, name = EXCLUDED.name;
                       DO $check$
                       DECLARE t text; n bigint;
                       BEGIN
