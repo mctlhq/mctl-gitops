@@ -3,6 +3,7 @@
 # A gate guards a GROUP of values files that must move together. release-deploy
 # and the PR validator refuse (exit 6) when:
 #   - the bump names some but not all of a group's paths (partial bump);
+#   - the group's tags differ, or a file names another image.repository;
 #   - a `requires` condition does not hold in the current file;
 #   - the new tag, or any current tag, is below `min_tag` (image floor);
 #   - this file, a listed file, or a required key cannot be read (an
@@ -18,6 +19,8 @@ gates:
     # Image floor: never below a build that can read the histories the fleet
     # has already written. Raised to the M1 tag in the PR that deploys M1.
     min_tag: "1.117.0"
+    # A different image at a high tag must not satisfy the floor.
+    repository: ghcr.io/mctlhq/mctl-agents
     requires:
       # Recreate on the control worker: no old and new build polling together.
       - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml

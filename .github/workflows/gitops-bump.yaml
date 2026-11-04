@@ -69,6 +69,12 @@ jobs:
           ref: main
           ssh-key: ${{ secrets.GITOPS_BUMP_DEPLOY_KEY }}
 
+      # The release gate imports yaml. Installed explicitly rather than assumed
+      # on the runner image; if this step or the import fails the bump is
+      # refused (the gate fails closed), never skipped.
+      - name: Install PyYAML for the release gate
+        run: python3 -m pip install --quiet pyyaml==6.0.2
+
       - name: Bump image tags
         env:
           IMAGE_NAME: ${{ inputs.image_name }}

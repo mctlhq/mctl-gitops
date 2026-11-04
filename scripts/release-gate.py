@@ -24,7 +24,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 GATE = "platform-gitops/release-gates.yaml"
 REFUSED = 6
-SEMVER = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+# ASCII digits only, no leading zeros: `\d` accepts Unicode digits and "01".
+_N = r"(0|[1-9][0-9]*)"
+SEMVER = re.compile(rf"{_N}\.{_N}\.{_N}", re.ASCII)
 
 
 def _semver(tag: Any) -> tuple[int, int, int] | None:
@@ -82,10 +84,14 @@ def problems(root: Path, files: list[str] | None, new_tag: str | None) -> list[s
                 out.append(f"{g['name']}: new tag {new_tag!r} is not X.Y.Z, cannot compare to the floor")
             elif nt < floor:  # type: ignore[operator]
                 out.append(f"{g['name']}: new tag {new_tag} is below the floor {g['min_tag']}")
+        tags: dict[str, Any] = {}
         for p in touched:
             try:
                 doc = _load(root, p)
                 tag = _dig(doc, "image.tag")
+                if g.get("repository") and _dig(doc, "image.repository") != g["repository"]:
+                    out.append(f"{p}: image.repository is {_dig(doc, 'image.repository')!r}, gate says {g['repository']!r}")
+                tags[p] = tag
             except Exception as exc:  # noqa: BLE001
                 out.append(f"UNKNOWN: {p} image.tag unreadable: {type(exc).__name__}")
                 continue
@@ -94,6 +100,11 @@ def problems(root: Path, files: list[str] | None, new_tag: str | None) -> list[s
                 out.append(f"{p}: current tag {tag!r} is not X.Y.Z")
             elif files is None and cur < _semver(g["min_tag"]):  # type: ignore[operator]
                 out.append(f"{p}: tag {tag} is below the floor {g['min_tag']}")
+        # The group moves together: after a bump, and in the tree, the tags
+        # must be equal. A glob that silently skipped one file (no image
+        # pattern matched) leaves exactly this state.
+        if len({str(t) for t in tags.values()}) > 1:
+            out.append(f"{g['name']}: tags differ across the group: {tags}")
         for r in g.get("requires") or []:
             if r["path"] not in touched:
                 continue
@@ -133,7 +144,7 @@ def _tree(d: Path, *, tags=("1.117.0",) * 3, strategy: str | None = "Recreate", 
         f.parent.mkdir(parents=True, exist_ok=True)
         if p == skip:
             continue
-        body = {"image": {"tag": t}}
+        body = {"image": {"tag": t, "repository": "ghcr.io/x/y"}}
         if p == _P[0] and strategy is not None:
             body["strategy"] = {"type": strategy}
         f.write_text(yaml.safe_dump(body))
@@ -143,7 +154,7 @@ def _tree(d: Path, *, tags=("1.117.0",) * 3, strategy: str | None = "Recreate", 
         gate
         if gate is not None
         else yaml.safe_dump(
-            {"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0",
+            {"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0", "repository": "ghcr.io/x/y",
                         "requires": [{"path": _P[0], "key": "strategy.type", "equals": "Recreate"}]}]}
         )
     )
@@ -158,9 +169,16 @@ def selftest() -> int:
         ("tag below floor", {}, _P, "1.116.0", False),
         ("non-semver new tag", {}, _P, "latest", False),
         ("Recreate removed", {"strategy": "RollingUpdate"}, _P, "1.118.0", False),
+        ("tags differ across the group (verify)", {"tags": ("1.118.0", "1.117.0", "1.118.0")}, None, None, False),
+        ("numeric not string floor", {}, _P, "1.99.0", False),
+        ("leading zero tag", {}, _P, "01.118.0", False),
+        ("unicode digit tag", {}, _P, "1.\u0661\u0661\u0668.0", False),
+        ("prerelease suffix", {}, _P, "1.118.0-rc.1", False),
         ("required key absent", {"strategy": None}, _P, "1.118.0", False),
         ("Recreate removed (verify)", {"strategy": "RollingUpdate"}, None, None, False),
-        ("current tag below floor (verify)", {"tags": ("1.116.0", "1.117.0", "1.117.0")}, None, None, False),
+        ("current tag below floor (verify)", {"tags": ("1.116.0",) * 3}, None, None, False),
+        ("other image at a high tag", {"gate": "REPO"}, _P, "1.118.0", False),
+        ("requires names a file outside the group", {"gate": "OUTSIDE"}, _P, "1.118.0", False),
         ("gate file malformed", {"gate": "gates: nope"}, _P, "1.118.0", False),
         ("gate file not yaml", {"gate": ": : :"}, None, None, False),
         ("listed file missing", {"skip": _P[1]}, _P, "1.118.0", False),
@@ -169,6 +187,12 @@ def selftest() -> int:
     for name, kw, files, tag, want_pass in cases:
         with tempfile.TemporaryDirectory() as t:
             d = Path(t)
+            if kw.get("gate") == "REPO":
+                kw = {"gate": yaml.safe_dump({"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0",
+                                                         "repository": "ghcr.io/other/img"}]})}
+            if kw.get("gate") == "OUTSIDE":
+                kw = {"gate": yaml.safe_dump({"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0",
+                                                         "requires": [{"path": "elsewhere.yaml", "key": "a", "equals": 1}]}]})}
             _tree(d, **kw)
             if name == "gate file missing":
                 (d / GATE).unlink()
