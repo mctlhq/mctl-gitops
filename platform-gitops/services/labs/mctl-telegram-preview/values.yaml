@@ -294,10 +294,7 @@ env:
   # replicaCount 0, revoke the pool jti, then this flag back to "false".
   MANAGED_RUNTIME_ENABLED: "true"
   MANAGED_RUNTIME_MAX_ACCOUNTS: "1"
-  # 3.00 per account-day for the GLM-5.1 / Nebius validation run (owner,
-  # 2026-11-04); the run itself is held to a 2 USD ceiling by the operator.
-  # Back to "1.00" afterwards. The month cap (15.00 default) is unchanged.
-  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "3.00"
+  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
   MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
   MANAGED_MAX_JOB_COST_USD: "0.25"
 ingress:
