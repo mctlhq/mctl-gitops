@@ -19,7 +19,7 @@
 #               because the vault chart mounts an emptyDir `home`; the vault
 #               PDB (maxUnavailable 1) still allows one eviction at a time,
 #               and a re-created vault pod stays unready (sealed) until
-#               vault-auto-unseal runs (every 2 min), which keeps the PDB
+#               vault-auto-unseal runs (every 5 min), which keeps the PDB
 #               closed for the next one.
 #   rebalance - LowNodeUtilization on requests. Pods with a PVC or local
 #               storage are protected (default + PodsWithPVC), so it never
