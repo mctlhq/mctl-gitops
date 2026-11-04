@@ -1,28 +1,40 @@
-# Pick and pin the default code-block syntax theme for docs.mctl.ai
+# Set an explicit default code-block syntax theme for docs.mctl.ai
 
 ## Context
-Issue mctlhq/mctl-docs#160 asks for one explicit default syntax-highlighting theme pair (light + dark) for fenced code blocks on the docs site. Two candidates are offered: `github-light` / `github-dark` (familiar GitHub look) and `one-light` / `one-dark-pro` (higher contrast, closer to MCTL design tokens). The issue states the choice belongs to the requester and cannot be inferred from the repository.
+Issue mctlhq/mctl-docs#160 asks for one default syntax-highlighting theme for
+fenced code blocks on the docs site, covering both light and dark mode. The
+issue names two candidate pairs: `github-light` / `github-dark` (familiar
+GitHub look) and `one-light` / `one-dark-pro` (higher contrast, closer to the
+MCTL design tokens). It says the choice belongs to the requester and cannot be
+inferred from the repository.
 
-Today `docs/.vitepress/config.ts` sets no `markdown.theme`, so VitePress 1.6 falls back to its built-in Shiki default, which is `github-light` / `github-dark`. The site also sets `appearance: 'force-dark'`, so only the dark half of any pair is currently rendered. The issue is explicitly a test issue for the human-input flow (mctlhq/mctl-agents#668) and says "Do not implement"; this proposal is nevertheless complete so the flow can be exercised end to end.
+Today `docs/.vitepress/config.ts` sets no `markdown.theme`, so the site
+silently relies on the VitePress 1.6 built-in default. Pinning the theme
+explicitly makes the look a deliberate, reviewable decision. The issue is
+marked as a test issue for the human-input flow (mctlhq/mctl-agents#668) and
+says "Do not implement". This proposal is complete, but implementing it is
+expected to stay on hold. A clarification question has been filed for the
+choice. Until it is answered, the proposal assumes option 1
+(`github-light` / `github-dark`).
 
 ## User stories
-- AS a docs reader I WANT code blocks highlighted with a deliberate, consistent theme SO THAT code is readable and matches the site.
-- AS a docs maintainer I WANT the theme pinned explicitly in config SO THAT a VitePress upgrade cannot silently change it.
+- AS a docs reader I WANT code blocks highlighted with a consistent, legible theme SO THAT examples are easy to read.
+- AS a docs maintainer I WANT the theme set explicitly in config SO THAT a VitePress upgrade cannot change it without anyone noticing.
 
 ## Acceptance criteria (EARS)
-- WHEN the site is built THE SYSTEM SHALL configure `markdown.theme` in `docs/.vitepress/config.ts` as an object `{ light: <chosen-light>, dark: <chosen-dark> }` using exactly the pair the requester selected.
-- WHILE `appearance` is `'force-dark'` THE SYSTEM SHALL render fenced code blocks with the chosen dark theme.
-- IF the site appearance is later changed to allow light mode THEN THE SYSTEM SHALL render fenced code blocks with the chosen light theme without further config change.
-- WHEN a fence has language `mermaid` THE SYSTEM SHALL continue to render it as a `.mermaid-diagram` div (the custom fence override in `markdown.config` is unchanged).
-- WHEN `bun run build` runs THE SYSTEM SHALL complete successfully, including the existing `mermaid-links.test.ts` test.
+- WHEN the site is built with `bun run build` THE SYSTEM SHALL highlight fenced code blocks with the selected pair: `light` = the chosen light theme, `dark` = the chosen dark theme. Assumed until answered: `github-light` / `github-dark`.
+- WHILE `appearance` is `'force-dark'` in `docs/.vitepress/config.ts` THE SYSTEM SHALL render code blocks with the dark theme of the selected pair.
+- WHEN the light theme of the pair would be used (if `appearance` stops being forced dark) THE SYSTEM SHALL use the light theme of the same pair.
+- WHILE the theme is applied THE SYSTEM SHALL keep the code block background from `--vp-code-block-bg` (`docs/.vitepress/theme/custom.css`, `vitepress-bridge.css`) and leave `mermaid` fences rendered by the custom fence rule.
+- IF the requester picks the other option THEN THE SYSTEM SHALL need only the two theme name strings in `markdown.theme` changed, with no other code changes.
 
 ## Out of scope
-- Changing `appearance: 'force-dark'` or enabling a light-mode toggle.
-- Restyling code-block chrome (border, background, tabs) in `docs/.vitepress/theme/custom.css` or `vitepress-bridge.css`.
-- Custom or token-derived Shiki themes.
-- Any change to deployed config in mctl-gitops.
+- Changing `appearance: 'force-dark'` or adding a light/dark toggle.
+- Restyling inline code (`--vp-code-bg` / `--vp-code-color`) or code-group tabs.
+- Custom or forked Shiki theme JSON files, and per-language overrides.
+- Any change to deployment (`services/admins/mctl-docs/values.yaml`).
 
 ## Open questions
-- BLOCKING: which pair does the requester want - option 1 (`github-light` / `github-dark`) or option 2 (`one-light` / `one-dark-pro`)? A clarification question has been filed. Until answered, this proposal proceeds on option 1, because it is VitePress's current implicit default: pinning it is a zero-visual-change, lowest-risk step, and switching to option 2 is a two-string edit.
-- The site is `force-dark`; the light theme of either pair is currently never shown. Is pinning the light half still wanted (assumed yes, per the issue wording "for both light and dark mode")?
-- The issue says "Close it after the check. Do not implement." The reviewer should decide whether this proposal is ever accepted.
+- BLOCKING (clarification filed in `human-input/draft.json`): which pair should be used, `github-light` / `github-dark` or `one-light` / `one-dark-pro`? Assumed until answered: `github-light` / `github-dark`. It equals the VitePress 1.6 default, so the assumption changes nothing visually.
+- The issue says "Do not implement" (test issue). A reviewer must decide whether this proposal is ever approved for implementation.
+- Because the site is forced dark, only the dark theme of the pair is visible today. Should the light theme still be pinned? The proposal pins both, as the issue asks.
