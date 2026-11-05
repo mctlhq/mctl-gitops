@@ -220,8 +220,7 @@ extraObjects:
                       ('a28d097d-de76-4beb-9acc-cffdbb85ccbf'::uuid, 'docs.mctl.ai', 'docs.mctl.ai', v_user_id, now()),
                       ('b1a11ce0-8b07-4d27-98e6-0b611eeaa707'::uuid, 'alice.mctl.ai', 'alice.mctl.ai', v_user_id, now()),
                       ('acade000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'academy.mctl.ai', 'academy.mctl.ai', v_user_id, now()),
-                      ('5ee11000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'seerrsense.mctl.ai', 'seerrsense.mctl.ai', v_user_id, now()),
-                      ('d0000000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'dmitriimashkov.com', 'dmitriimashkov.com', v_user_id, now())
+                      ('5ee11000-8b07-4d27-98e6-0b611eeaa707'::uuid, 'seerrsense.mctl.ai', 'seerrsense.mctl.ai', v_user_id, now())
                     ON CONFLICT (website_id) DO UPDATE SET domain = EXCLUDED.domain, name = EXCLUDED.name;
                   END $seed$;
                   SQL
