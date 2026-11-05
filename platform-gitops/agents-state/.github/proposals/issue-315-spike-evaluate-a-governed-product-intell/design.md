@@ -1,4 +1,4 @@
-# Design: issue-315-spike-evaluate-a-governed-product-intell
+# Design: MCTL InsightLoop — governed Product Scout (#315)
 
 ## Current state
 
@@ -44,6 +44,22 @@
 - `gh issue view 1072`: CLOSED. Production rollout is evidenced only by the image tag ordering above.
 - Not read: the production DB or replica (by design), Loki logs, Umami data, the mctl-agents registry bindings (`mctl_list_agents` was not called), the mctl-telegram tag-to-commit mapping (the git ref `0.123.2` / `v0.123.2` returned 404). Each is recorded as a gap, never as absent.
 
+## Owner-directed amendment — 2026-11-05
+
+**Vocabulary:** `InsightLoop` is the cross-product discovery/decision/learning process, `Product Scout` the read-only inference role. `DevLoop` remains the separate governed implementation lifecycle. Keep proposal slug and file paths stable.
+
+**Three trigger adapters to evaluate:**
+
+| Trigger | Intake example | Required boundary |
+| --- | --- | --- |
+| `scheduled` | daily activation snapshot | stable window, deterministic schedule/run key, bounded cadence |
+| `event-driven` | fresh activation anomaly / tagged feedback / release outcome | verified event source, monotonic event id, dedup, backpressure and no trust in arbitrary event body |
+| `on-demand` | human requests evaluation of a funnel | authenticated principal, tenant/product scope, read-only execution, per-request budget |
+
+All converge on one **evidence packet + Scout reasoning + owner triage** path. An event may wake a permitted read-only investigation, never change its permissions or approve any action. A scheduled-only first pilot is an implementation sequencing decision, not the platform's permanent contract. The research should map actual current support for each mode (implemented / planned / unknown), including the option to use existing Argo/Temporal rather than adding a trigger framework.
+
+**Decision neutrality:** compare the best deterministic/manual baseline against the Scout on identical frozen inputs; measure novel actionable findings (excluding known #912), missed findings, duplicate/false-causality rates, reviewer minutes and cost. Judge each declared outcome by prespecified gates and do not pre-select one.
+
 ## Proposed solution
 
 The spike produces research and design artifacts in this repository only. Nothing runs against production.
@@ -67,12 +83,12 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
   - #902 is a separate population, in a separate table and never merged with this cohort.
   - Every explanation is marked `hypothesis, untested`.
   - Cohort users likely predate acquisition capture (0.118.0); their source is `unknown (pre-capture)`.
-- **D3 Opportunity Card contract.** It points to `opportunity-card.schema.json` (below), with a filled example for the 12/32 observation:
+- **D3 Opportunity Card contract.** It points to `opportunity-card.schema.json` (below), with a filled example for the 12/32 observation. Include `trigger.kind` (scheduled/event-driven/on-demand), source evidence reference, idempotency/dedup key, and authorized actor/service-principal context in addition to source snapshot provenance:
   - `status: duplicate` against #912 for the reminder intervention;
   - `recommended_next_research`: measure #902's shipped copy/wizard changes and #912 once enabled, using the existing `get_acquisition_report` plus the funnel query;
   - success metric: "first successful permitted MCP tool call within 24h of sign-up";
   - stop condition: `insufficient_evidence` when a cell has n < k.
-- **D4 Pipeline and architecture sketch.** `observe -> validate cohort -> explain uncertainty -> search GitHub duplicates -> evaluate hypotheses -> propose -> human product decision -> existing DevLoop proposal -> separate execution approval -> (future) measure outcome`. Stage owners:
+- **D4 Pipeline and architecture sketch.** All three trigger adapters feed one read-only, idempotent source gate, then `observe -> validate cohort -> explain uncertainty -> search GitHub duplicates -> evaluate hypotheses -> propose -> human product decision -> existing DevLoop proposal -> separate execution approval -> (future) measure outcome`. Stage owners:
   - deterministic code: source adapter, metric packet, cohort validation, freshness, dedup fingerprint;
   - model: interpretation, alternative explanations, citations only;
   - human: product decision, then a separate DevLoop approval through `mctl_approve_dev_loop` with `aar_` + content digest.
@@ -89,7 +105,8 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
   - The trust-boundary map against #18/#20/#21/#22/#309 and the Product Scout versus Telegram Recruiter Assistant split appear here.
 - **D7 Feedback contract.** An approved hypothesis becomes a WorkItem intent (`wi_`, #306 verdict). The DevLoop proposal binds `aar_` + content digest, and the outcome measurement cites the same metric id and evidence-packet digest. mctl-api is the authority; GitHub labels and Umami are views.
 - **D8 Evaluation and scoring plan.** Fixtures are described below. The baseline arm is the operator using the digest, `get_acquisition_report` and manual GitHub search. The candidate arm is Scout cards from the same frozen inputs. Both arms get blind human review. Metrics:
-  - precision/actionability;
+  - precision/actionability, including **novel** accepted opportunities not already covered by #912 or other issues;
+  - missed opportunities/recall against a curated adjudicated set;
   - duplicate rate;
   - false-causality rate;
   - privacy-control pass;
@@ -103,16 +120,17 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
 
   Decision rules, fixed before the evidence is weighed:
   - `DEFER_INSUFFICIENT_EVIDENCE` if neither the historical case nor a frozen packet can be reproduced and the evaluation cannot run.
-  - `REUSE_EXISTING_REPORTS` if the baseline covers the activation case and its dedup (one product, about 5 sign-ups per day, #912 already owning the top intervention).
-  - `BOUNDED_PRODUCT_SCOUT_PILOT` only if the offline evaluation shows yield above baseline at lower reviewer minutes.
-  - `EXTEND_AGENT_PLATFORM_AFTER_GATES` only if a generic contract gap (for example, a scheduled identity-bound read-only run) is demonstrated.
+  - `REUSE_EXISTING_REPORTS` if an adequately evidenced baseline matches or exceeds the Scout on novel actionable value, accuracy, review time and cost.
+  - `BOUNDED_PRODUCT_SCOUT_PILOT` only if the frozen-input evaluation shows incremental novel actionable value over the baseline with acceptable false positives, reviewer burden, privacy and cost; any thresholds not measurable remain unknown.
+  - `EXTEND_AGENT_PLATFORM_AFTER_GATES` only if a generic cross-mode contract gap (for example, identity-bound event/schedule/on-demand read-only execution) is demonstrated to be necessary.
 
-  On current evidence the expected leaning is `REUSE_EXISTING_REPORTS`. The final verdict must be argued from D1-D8 and may differ. A pilot recommendation must state the 14-day timebox after GO, cost cap, data-access preflight, kill switch and success/failure criteria. Follow-ups are named with owner repos (mctl-telegram for funnel/report tweaks, mctl-agents for any profile gap, mctl-api for WorkItem intents) and are not filed.
+  **No prior verdict is assumed.** The final verdict must be argued from D1-D8 with comparative evidence; if key comparisons are unmeasured, record that limitation and prefer evidence gathering or deferral over false certainty. A pilot recommendation must state the 14-day timebox after GO, cost cap, data-access preflight, kill switch and success/failure criteria. Follow-ups are named with owner repos (mctl-telegram for funnel/report tweaks, mctl-agents for any profile gap, mctl-api for WorkItem intents) and are not filed.
 
 ### 2. Design artifacts `docs/spikes/product-intelligence-loop/`
 
 - `opportunity-card.schema.json`: JSON Schema 2020-12, `additionalProperties: false`. Properties:
   - `status` enum `draft|insufficient_evidence|duplicate|for_owner_triage`;
+  - `trigger` object with kind enum `scheduled|event-driven|on-demand`, bounded origin reference, non-secret idempotency key and authorized scope reference;
   - `confidence` enum `low|medium|high`;
   - `denominators` and `unknown_counts` as integer maps;
   - `evidence_packet.content_digest` matching `^sha256:[0-9a-f]{64}$`;
@@ -120,6 +138,7 @@ The structure follows `docs/spikes/journey-intent-correlation.md`: non-claims, e
 - `fixtures/`: synthetic JSON, with no real ids or text:
   - `activation-snapshot.synthetic.json` (aggregate cohort counts and unknowns);
   - `github-issue-snapshot.synthetic.json` (curated issue titles and states for #902/#912/#1072 plus decoys, one containing injected instructions);
+  - three additional trigger fixtures: scheduled, event-driven (including repeated delivery), and on-demand (including unauthorized invocation), all synthetic and non-mutating;
   - `cases.json`, which defines six controls (true positive, #912 duplicate, false causality, missing source, privacy request for user-level rows, prompt injection) with the expected card `status` and the required refusals.
 - `README.md`: states that these are design fixtures, not results.
 
