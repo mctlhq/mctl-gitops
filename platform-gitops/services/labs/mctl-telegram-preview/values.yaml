@@ -302,7 +302,7 @@ env:
   # 2.70 of claims and the month cap is the window cap. Remove both after the
   # window.
   MANAGED_BUDGET_USD_PER_ACCOUNT_MONTH: "5.00"
-  MANAGED_CLAIM_NOT_AFTER: "2026-11-08T11:00:00Z"
+  MANAGED_CLAIM_NOT_AFTER: "2026-11-08T14:00:00Z"
   MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
   MANAGED_MAX_JOB_COST_USD: "0.25"
 ingress:
