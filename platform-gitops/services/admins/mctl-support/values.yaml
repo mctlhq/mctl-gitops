@@ -44,13 +44,17 @@ resources:
     cpu: 500m
     memory: 512Mi
 # SUPPORT_EXECUTOR=agent runs the model loop (S1b/S1c). Provider and model are
-# INTERIM since 2026-10-29: Nebius Token Factory, zai-org/GLM-5.1, by the
-# owner's decision while the Anthropic organization is disabled (every key,
-# including the dedicated one, answers 401 "organization has been disabled").
+# INTERIM since 2026-10-29: Nebius Token Factory, by the owner's decision
+# while the Anthropic organization is disabled (every key, including the
+# dedicated one, answers 401 "organization has been disabled"). The model is
+# zai-org/GLM-5.3-Flash since 2026-11-05, by the owner's decision: GLM-5.1
+# hangs on Nebius and leaves Serverless on 2026-11-09.
 # The reference model stays Anthropic claude-sonnet-5-5 (mctlhq/mctl-support#5,
 # where GLM-5.1 was rejected for the S1e gate); revert this block and the
 # model secret below once the appeal succeeds. S2e pilot answers given on
-# GLM-5.1 are marked as such in the pilot review (mctlhq/.github#270).
+# GLM-5.1 and on Flash are marked as such in the pilot review
+# (mctlhq/.github#270). Flash has not been through this service's own
+# evaluation corpus.
 # NEBIUS_BASE_URL points at the Cloudflare AI Gateway's custom provider for
 # Nebius (mctlhq/mctl-gitops#2262 Phase B, 2026-10-29): same Nebius key on
 # every request (BYOK, the gateway stores nothing), plus the gateway's own
@@ -87,10 +91,10 @@ env:
   # fair prices from the spike report section 7. HETZNER_API_KEY stays in
   # the model secret below so that switch is a values-only change.
   MODEL_PROVIDER: nebius
-  NEBIUS_MODEL: zai-org/GLM-5.1
+  NEBIUS_MODEL: zai-org/GLM-5.3-Flash
   NEBIUS_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-support/custom-nebius/v1"
-  MODEL_INPUT_USD_PER_MTOK: "1.40"
-  MODEL_OUTPUT_USD_PER_MTOK: "4.40"
+  MODEL_INPUT_USD_PER_MTOK: "0.15"
+  MODEL_OUTPUT_USD_PER_MTOK: "0.50"
   SUPPORT_METRICS_PORT: "9090"
   # Refuse (401) any bearer not minted for https://support.mctl.ai. MCP
   # callers reach it through mctl_ask_support, which mints a support-audience
