@@ -27,10 +27,26 @@ including the em dash `—` (U+2014) and `&`.
 
 All changes are source-only and ship through the normal release. To roll
 back, revert the implementation merge commit on a branch and merge it through
-the usual PR gates. release-please then cuts a patch release and the
-release-deploy path redeploys. For an urgent rollback, use
+the usual PR gates. release-please then cuts a patch release and
+the operator deploys the resulting tag with mctl MCP tools only. For an urgent rollback, use
 `mctl_rollback_service(team_name=labs, component_name=portfolio,
 target_tag=<previous tag>)`, per AGENTS.md (mctl tools only). No data,
 schema or infrastructure state needs reverting. Mark the journal entry
 `abandoned` (with a bilingual reason, through the proposal/PR process) only
 if the cycle is explicitly cancelled before merge.
+
+## Detector verification
+
+The new `Person.alternateName` value check extends an existing build-output
+detector. Prove it both ways: the valid built graph passes, and the deliberate
+missing/wrong alias fixtures fail. Then temporarily revert only the new
+alternateName value-check implementation and confirm the wrong-value detector
+test fails. Restore the implementation and confirm the test passes. Do not
+commit the temporary reversion. Keep zero-third-party and CSP checks intact.
+
+## Deployment boundary
+
+Release-please may create the release tag; deploy or roll back the personal site
+only with mctl MCP tools, as AGENTS.md requires. No manual GitHub deployment
+dispatch, kubectl mutation, DNS edit, or hand-edited GitOps values is part of
+this cycle. Do not claim a deployment from a merged implementation PR alone.
