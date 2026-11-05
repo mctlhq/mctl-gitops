@@ -26,8 +26,10 @@ namespace, so the boundary is carried by pod selectors. Egress side:
   `zitadel-login-consolidation` uses the image only as a Python runtime for a
   Vault job and is exempt on purpose: it must NOT carry the label.
 - `scripts/validate-agent-pod-labels.py` (CI) fails when an agent template lacks
-  the label, when a CronWorkflow/Workflow referencing one overrides it, or when a
-  non-agent template carries it.
+  the label, when a CronWorkflow/Workflow referencing one overrides it, when a
+  CronWorkflow/Workflow that runs the agents inline lacks it, or when a non-agent
+  template or run carries it. It scans every `*.yaml` under
+  `platform-gitops/argo-workflows/` recursively and fails on unparseable YAML.
 - Adding an agent CWFT: set the label; CI tells you if you forgot.
 
 ## Selector shapes (used by #2301)

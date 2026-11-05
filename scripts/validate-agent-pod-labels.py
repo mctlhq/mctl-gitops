@@ -11,7 +11,12 @@ Fails when:
   - an agent template lacks the label;
   - a CronWorkflow/Workflow that references an agent template sets
     podMetadata.labels["app.kubernetes.io/name"] to another value;
-  - a non-agent template carries the label (it would lose platform paths).
+  - a CronWorkflow/Workflow that runs the agents inline (no agent template
+    reference) lacks the label;
+  - a non-agent template or run carries the label (it would lose platform paths).
+
+Scans every *.yaml under platform-gitops/argo-workflows/ recursively, so a run
+placed outside cluster-templates/ is not silently skipped.
 
 Run with --selftest to prove the detector still detects.
 """
@@ -29,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from agent_templates import AGENT_LABEL_KEY, AGENT_LABEL_VALUE, is_agent_cwft  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-CWFT_DIR = ROOT / "platform-gitops/argo-workflows/cluster-templates"
+SCAN_DIR = ROOT / "platform-gitops/argo-workflows"
 TEMPLATE_KINDS = ("ClusterWorkflowTemplate", "WorkflowTemplate")
 RUN_KINDS = ("CronWorkflow", "Workflow")
 
@@ -85,24 +90,42 @@ def violations(docs: list[tuple[str, dict]]) -> list[str]:
         wspec = wspec or {}
         ref = (wspec.get("workflowTemplateRef") or {}).get("name")
         label = _label(wspec)
-        inline_agent = is_agent_cwft((doc.get("metadata") or {}).get("name", ""), wspec)
+        name = (doc.get("metadata") or {}).get("name", "")
+        inline_agent = is_agent_cwft(name, wspec)
         if ref in agents or inline_agent:
             for tname, val in _template_labels(wspec):
                 if val != AGENT_LABEL_VALUE:
                     found.append(f"{where}: agent run overrides {AGENT_LABEL_KEY} to {val!r} "
                                  f"in inline template {tname}")
+        else:
+            if label == AGENT_LABEL_VALUE:
+                found.append(f"{where}: non-agent run {name} carries {AGENT_LABEL_KEY}: "
+                             f"{AGENT_LABEL_VALUE}; it would lose platform paths")
+            for tname, val in _template_labels(wspec):
+                if val == AGENT_LABEL_VALUE:
+                    found.append(f"{where}: non-agent run {name} step {tname} carries "
+                                 f"{AGENT_LABEL_KEY}: {AGENT_LABEL_VALUE}; it would lose platform paths")
         if ref in agents and label is not None and label != AGENT_LABEL_VALUE:
             found.append(f"{where}: references agent template {ref} but sets podMetadata "
                          f"{AGENT_LABEL_KEY}: {label}")
+        elif inline_agent and ref not in agents and label != AGENT_LABEL_VALUE:
+            found.append(f"{where}: inline agent run {name} must set podMetadata.labels"
+                         f"[{AGENT_LABEL_KEY}] to {AGENT_LABEL_VALUE} (got {label!r})")
     return found
 
 
 def load(directory: Path) -> list[tuple[str, dict]]:
     docs: list[tuple[str, dict]] = []
-    for path in sorted(directory.glob("*.yaml")):
-        for doc in yaml.safe_load_all(path.read_text()):
+    for path in sorted(directory.rglob("*.yaml")):
+        where = str(path.relative_to(directory))
+        try:
+            parsed = list(yaml.safe_load_all(path.read_text()))
+        except yaml.YAMLError as e:
+            # An unreadable file is not an empty one: its runs would go unchecked.
+            raise SystemExit(f"ERROR: {where}: cannot parse YAML: {e}")
+        for doc in parsed:
             if isinstance(doc, dict):
-                docs.append((path.name, doc))
+                docs.append((where, doc))
     return docs
 
 
@@ -134,13 +157,35 @@ def selftest() -> int:
         d[2][1]["spec"]["workflowSpec"]["templates"] = [
             {"name": "i", "metadata": {"labels": {AGENT_LABEL_KEY: "x"}}}]
 
+    def inline_agent_run(labelled):
+        def mut(d):
+            wspec = {"templates": [{"name": "a", "container": {"image": "ghcr.io/mctlhq/mctl-agents:1"}}]}
+            if labelled:
+                wspec["podMetadata"] = {"labels": {AGENT_LABEL_KEY: AGENT_LABEL_VALUE}}
+            d.append(("run.yaml", {"kind": "Workflow", "metadata": {"name": "w"}, "spec": wspec}))
+        return mut
+
+    def platform_run(where):
+        def mut(d):
+            wspec = {"workflowTemplateRef": {"name": "deploy", "clusterScope": True}}
+            if where == "pod":
+                wspec["podMetadata"] = {"labels": {AGENT_LABEL_KEY: AGENT_LABEL_VALUE}}
+            else:
+                wspec["templates"] = [{"name": "i", "metadata": {"labels": {AGENT_LABEL_KEY: AGENT_LABEL_VALUE}}}]
+            d.append(("run.yaml", {"kind": "Workflow", "metadata": {"name": "p"}, "spec": wspec}))
+        return mut
+
     cases = [("clean", None, False), ("missing label", no_label, True),
              ("wrong label", wrong_label, True), ("cron override", cron_override, True),
              ("platform carries label", platform_labelled, True),
              ("image-detected agent without label", image_only, True),
              ("template-level override", tmpl_override, True),
              ("platform template-level agent label", platform_tmpl_labelled, True),
-             ("cron inline template override", cron_inline_override, True)]
+             ("cron inline template override", cron_inline_override, True),
+             ("inline agent run without label", inline_agent_run(False), True),
+             ("inline agent run with label", inline_agent_run(True), False),
+             ("platform run carries label", platform_run("pod"), True),
+             ("platform run template-level agent label", platform_run("step"), True)]
     ok = True
     for label, mut, should_fail in cases:
         docs = copy.deepcopy(_fixture())
@@ -150,15 +195,35 @@ def selftest() -> int:
         if failed != should_fail:
             print(f"selftest FAIL: {label}: failed={failed}, expected {should_fail}")
             ok = False
+    ok = _selftest_load() and ok
     if ok:
         print("selftest ok")
     return 0 if ok else 1
 
 
+def _selftest_load() -> bool:
+    """The scan must reach nested directories and refuse unparseable YAML."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        nested = Path(tmp) / "a" / "b"
+        nested.mkdir(parents=True)
+        (nested / "run.yaml").write_text("kind: Workflow\nmetadata: {name: w}\n")
+        if [w for w, _ in load(Path(tmp))] != ["a/b/run.yaml"]:
+            print("selftest FAIL: nested directory not scanned")
+            return False
+        (nested / "bad.yaml").write_text("kind: [unclosed\n")
+        try:
+            load(Path(tmp))
+        except SystemExit:
+            return True
+        print("selftest FAIL: unparseable YAML accepted")
+        return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true")
-    ap.add_argument("--dir", type=Path, default=CWFT_DIR)
+    ap.add_argument("--dir", type=Path, default=SCAN_DIR)
     args = ap.parse_args()
     if args.selftest:
         return selftest()
