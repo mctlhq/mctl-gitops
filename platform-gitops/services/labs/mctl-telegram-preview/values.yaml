@@ -295,6 +295,12 @@ env:
   MANAGED_RUNTIME_ENABLED: "true"
   MANAGED_RUNTIME_MAX_ACCOUNTS: "1"
   MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
+  # #889 Part B limit of $3 (mctl-telegram docs/plans/gate-889-managed-soak.md):
+  # the November ledger before the window is 2.3033, so 5.00 leaves at most
+  # 2.70 of claims and the month cap is the window cap. Remove both after the
+  # window.
+  MANAGED_BUDGET_USD_PER_ACCOUNT_MONTH: "5.00"
+  MANAGED_CLAIM_NOT_AFTER: "2026-11-09T00:00:00Z"
   MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
   MANAGED_MAX_JOB_COST_USD: "0.25"
 ingress:
