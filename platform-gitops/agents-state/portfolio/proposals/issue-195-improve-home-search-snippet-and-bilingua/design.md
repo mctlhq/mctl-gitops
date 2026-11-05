@@ -159,10 +159,9 @@ the issue forbids a new Person graph.
 - No migrations, no dependency, Dockerfile, nginx, CSP or gitops change. The
   inline-script hash is unaffected (JSON-LD is not hashed, and the preference
   script is untouched).
-- `dist/index.html` grows by roughly 150-250 bytes (longer title and
-  description in six places, two longer contact spans, one JSON-LD field). It
-  stays under the `MAX_INDEX_BYTES` cap in `scripts/check-dist.mjs`, and
-  check-dist enforces that.
+- The home HTML grows with the more descriptive copy and the alias field.
+  The existing `MAX_INDEX_BYTES` cap in `scripts/check-dist.mjs` remains
+  enforced; verify the built size rather than assuming an unmeasured increase.
 - Backward compatibility: the canonical URL, routes and `og:image` are
   unchanged. Search engines pick up the new snippet on recrawl. No ranking or
   CTR outcome is claimed.
@@ -172,5 +171,8 @@ the issue forbids a new Person graph.
 - Risk: a second `in_progress` journal entry exists by the time of
   implementation. Mitigation: `checkJournalCollection` fails the build, and
   AGENTS.md allows one cycle at a time.
-- Deployment happens through the normal release-please → release-deploy path.
-  Nothing in this cycle triggers a deploy by hand.
+- Release-please manages the release PR and tag. Deployment of this personal
+  site must use mctl MCP tools, as AGENTS.md and README.md require. Do not
+  invoke a GitHub release-deploy dispatch, edit GitOps values, or use kubectl
+  as an alternative deployment mechanism. Release/deploy closure is a later
+  operational step and must not be reported complete before it is observed.
