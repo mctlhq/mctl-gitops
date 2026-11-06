@@ -18,12 +18,17 @@ Merging stays with the review gate and the portal changes only on an approved
 
 It writes nothing for a server unless every one of these holds:
 
-  - every tool the catalogue gains is decided and disabled in the allowlist;
-  - no tool the catalogue loses is enabled there (an enabled tool leaving the
-    portal may be an outage, and a person should read it);
+  - every tool the catalogue gains against main is decided and disabled in the
+    allowlist;
+  - no tool the catalogue loses against main is enabled there (an enabled tool
+    leaving the portal may be an outage, and a person should read it);
   - the allowlist is non-widening against main's baseline.json;
   - a bump PR's own baseline entry still equals main's: a difference is a
-    person's decision in progress, and that PR is theirs.
+    person's decision in progress, and that PR is theirs;
+  - a `portal-catalogue/` branch that already exists holds only this script's
+    own commits to catalogue.json and baseline.json. The branch name is
+    predictable and anyone with push access can create it, and the App's PR
+    would otherwise vouch for whatever else it holds.
 
 Branch content is data. This script reads it through the API and never runs
 anything from it, because it holds a token that can write to the repository.
@@ -53,6 +58,7 @@ ALLOWLISTS = "infrastructure/cloudflare/portal/allowlists"
 # What `gh pr list --json author` returns for a PR opened by the App, read from
 # a real bump PR. REST calls the same account mctl-agents[bot].
 BOT_AUTHOR = "app/mctl-agents"
+BOT_COMMIT_AUTHOR = "mctl-agents[bot]"
 PR_LIMIT = 500
 SERVER_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 TOOL_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
@@ -93,10 +99,14 @@ def check_live(server: str, live) -> None:
         raise Unknown(f"{server}: the live tool list repeats a name")
 
 
-def decide(server: str, live: list[str], catalogue: dict, baseline: dict,
-           allowlist: dict, reference: dict, today: str) -> Refusal | Change:
+def decide(server: str, live: list[str], catalogue: dict, baseline: dict, allowlist: dict,
+           reference: dict, main_catalogue: dict, today: str) -> Refusal | Change:
     """Pure decision. `catalogue`, `baseline` and `allowlist` are the target
-    branch's documents; `reference` is main's baseline.json.
+    branch's documents; `reference` and `main_catalogue` are main's.
+
+    What is added or gone is measured against main, never the branch. A branch
+    whose catalogue already holds the live list would otherwise have nothing
+    added, and every check on an added tool would pass without looking at it.
     """
     check_live(server, live)
     tools = allowlist.get("tools")
@@ -113,15 +123,16 @@ def decide(server: str, live: list[str], catalogue: dict, baseline: dict,
         raise Unknown(f"{server}: an unexpected tool name in the allowlist")
     try:
         current = catalogue["servers"][server]
+        merged = main_catalogue["servers"][server]
         entry = baseline["servers"][server]
         ref = reference["servers"][server]
         allowed = set(ref["enabled_tools"])
         allowed_count = ref["tools_enabled"]
     except (TypeError, KeyError) as e:
         raise Unknown(f"{server}: missing catalogue or baseline entry: {e!r}") from e
-    if not isinstance(current, list) or not isinstance(allowed_count, int):
+    if not isinstance(current, list) or not isinstance(merged, list) or not isinstance(allowed_count, int):
         raise Unknown(f"{server}: malformed catalogue or baseline entry")
-    if not all(isinstance(n, str) and TOOL_RE.fullmatch(n) for n in current):
+    if not all(isinstance(n, str) and TOOL_RE.fullmatch(n) for n in current + merged):
         raise Unknown(f"{server}: an unexpected tool name in the catalogue")
 
     # tools_total and recorded are this script's own writes, so a rerun must
@@ -129,8 +140,8 @@ def decide(server: str, live: list[str], catalogue: dict, baseline: dict,
     if decision_fields(entry) != decision_fields(ref):
         return Refusal("its PR already edits baseline.json, so a person is deciding it")
 
-    added = [n for n in live if n not in current]
-    gone = [n for n in current if n not in live]
+    added = [n for n in live if n not in merged]
+    gone = [n for n in merged if n not in live]
     undecided = [n for n in added if n not in decisions]
     if undecided:
         return Refusal(f"no decision in the allowlist for {names(undecided)}")
@@ -236,6 +247,16 @@ class Gh:
             raise Unknown(f"could not resolve {branch}")
         return sha
 
+    def compare(self, base: str, head: str) -> dict:
+        doc = self._json("api", f"repos/{self.repo}/compare/{base}...{head}")
+        if not isinstance(doc, dict) or not isinstance(doc.get("commits"), list) \
+                or not isinstance(doc.get("files"), list):
+            raise Unknown("unexpected compare response")
+        # The endpoint pages its commits: a shorter list is not all of them.
+        if doc.get("total_commits") != len(doc["commits"]):
+            raise Unknown("the compare response does not list every commit")
+        return doc
+
     def create_branch(self, branch: str, sha: str) -> None:
         self._json("api", "--method", "POST", f"repos/{self.repo}/git/refs",
                    "-f", f"ref=refs/heads/{branch}", "-f", f"sha={sha}")
@@ -256,6 +277,23 @@ def pr_link(pr: dict) -> str:
     # html_url first: a REST pull request also has `url`, which is the API one.
     url = pr.get("html_url") or pr.get("url") or ""
     return f'<a href="{html.escape(url, quote=True)}">#{int(pr["number"])}</a>'
+
+
+def leftover_problem(comparison: dict) -> str | None:
+    """Why a leftover branch is not this script's own work, or None.
+
+    The result reaches the alert, so it names nothing read from the branch.
+    """
+    own = {f"{ALLOWLISTS}/catalogue.json", f"{ALLOWLISTS}/baseline.json"}
+    for f in comparison["files"]:
+        # `modified` only: a rename into one of the two names moves another file.
+        if f["filename"] not in own or f["status"] != "modified":
+            return "it changes files other than catalogue.json and baseline.json"
+    for c in comparison["commits"]:
+        # Signed as well: anyone can put the App's address on a pushed commit.
+        if (c.get("author") or {}).get("login") != BOT_COMMIT_AUTHOR or c["commit"]["verification"]["verified"] is not True:
+            return "it holds a commit this script did not make"
+    return None
 
 
 def write_change(gh, change: Change, server: str, branch: str, blobs: tuple[str, str], current: dict) -> bool:
@@ -286,6 +324,7 @@ def land(gh, server: str, live: list[str], today: str) -> str:
     if not (mapping.get("servers", {}).get(server) or {}).get("vendored"):
         return f"{server}: not a vendored server, so update it by hand."
     reference, _ = gh.read(f"{ALLOWLISTS}/baseline.json", sha)
+    main_catalogue, _ = gh.read(f"{ALLOWLISTS}/catalogue.json", sha)
 
     pattern = re.compile(rf"portal-allowlist/{re.escape(server)}-[0-9a-f]{{7}}")
     matching = [p for p in gh.open_prs() if pattern.fullmatch(p.get("headRefName") or "")]
@@ -294,6 +333,7 @@ def land(gh, server: str, live: list[str], today: str) -> str:
     if len(matching) != len(bot_prs) or len(bot_prs) > 1:
         return f"{server}: more than one candidate bump PR, or one the bot did not open, so nothing was written."
 
+    head = None
     if bot_prs:
         pr = bot_prs[0]
         ref, branch = pr["headRefOid"], pr["headRefName"]
@@ -315,11 +355,16 @@ def land(gh, server: str, live: list[str], today: str) -> str:
         # or the writes below would carry stale blob shas and always answer 409.
         head = gh.branch_head(branch)
         ref = head or sha
+        if head:
+            problem = leftover_problem(gh.compare(sha, head))
+            if problem:
+                return (f"{server}: <b>needs your decision</b>: branch {branch} already exists and {problem}. "
+                        "Nothing was written. Delete the branch if it is not wanted.")
 
     catalogue, cat_blob = gh.read(f"{ALLOWLISTS}/catalogue.json", ref, rewrite=True)
     baseline, base_blob = gh.read(f"{ALLOWLISTS}/baseline.json", ref, rewrite=True)
     allowlist, _ = gh.read(f"{ALLOWLISTS}/{server}.json", ref)
-    outcome = decide(server, live, catalogue, baseline, allowlist, reference, today)
+    outcome = decide(server, live, catalogue, baseline, allowlist, reference, main_catalogue, today)
     if isinstance(outcome, Refusal):
         where = f" in {pr_link(pr)}" if pr else ""
         return f"{server}: <b>needs your decision</b>{where}: {html.escape(outcome.reason)}. Nothing was written."

@@ -2,11 +2,16 @@
 """scripts/portal-catalogue-land.py writes only what cannot widen exposure."""
 import base64
 import copy
+import contextlib
 import importlib.util
+import io
 import json
+import os
 import pathlib
 import sys
+import tempfile
 import unittest
+import unittest.mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("land", ROOT / "scripts" / "portal-catalogue-land.py")
@@ -21,6 +26,15 @@ BUMP = "portal-allowlist/api-1234567"
 BOT = {"is_bot": True, "login": "app/mctl-agents"}
 
 
+def own_commit(**over):
+    # The shape REST returns for a commit by the App, signed by GitHub.
+    return {"author": {"login": "mctl-agents[bot]"}, "commit": {"verification": {"verified": True}}, **over}
+
+
+def changed(name="catalogue.json", status="modified"):
+    return {"filename": f"{A}/{name}", "status": status}
+
+
 def allowlist(**tools):
     return {"tools": [{"name": k, "enabled": v, "reason": "r"} for k, v in tools.items()]}
 
@@ -33,7 +47,7 @@ def baseline(enabled=("on",), total=2):
 class FakeGh:
     """A repository of branches, holding JSON files. Records every write."""
 
-    def __init__(self, files=None, prs=None, by_branch=None, branches=None):
+    def __init__(self, files=None, prs=None, by_branch=None, branches=None, comparison=None):
         main = {
             f"{A}/mapping.json": {"servers": {"api": {"vendored": True}}},
             f"{A}/catalogue.json": {"servers": {"api": ["on", "off"]}},
@@ -45,6 +59,7 @@ class FakeGh:
         self.prs = prs or []
         self.by_branch = by_branch or []
         self.branches = branches or {}
+        self.comparison = comparison or {"files": [changed()], "commits": [own_commit()]}
         self.writes = []
 
     def main_sha(self):
@@ -63,6 +78,9 @@ class FakeGh:
 
     def branch_head(self, branch):
         return self.branches.get(branch)
+
+    def compare(self, base, head):
+        return self.comparison
 
     def create_branch(self, branch, sha):
         self.writes.append(("branch", branch, sha))
@@ -187,6 +205,61 @@ class Land(unittest.TestCase):
         self.assertEqual(puts[0][4], "blob-b-baseline.json", "a main blob sha would answer 409 forever")
         self.assertEqual(gh.writes[-1][0], "pr")
 
+    def leftover(self, **kw):
+        live = ["on", "off", "new"]
+        digest = land.hashlib.sha256("\n".join(live).encode()).hexdigest()[:7]
+        gh = FakeGh(branches={f"portal-catalogue/api-{digest}": "b" * 40}, **kw)
+        gh.refs["b" * 40][f"{A}/catalogue.json"] = {"servers": {"api": live}}
+        return gh
+
+    def test_resumed_pr_reports_what_it_adds_against_main(self):
+        bodies = []
+        gh = self.leftover()
+        create_pr = gh.create_pr
+        gh.create_pr = lambda b, t, body: bodies.append(body) or create_pr(b, t, body)
+        out = land.land(gh, "api", ["on", "off", "new"], TODAY)
+        self.assertIn("- Adds: new\n", bodies[0])
+        self.assertIn("(new)", out)
+
+    def test_leftover_branch_touching_a_third_file_is_refused(self):
+        gh = self.leftover(comparison={"files": [changed(), {"filename": ".github/workflows/x.yml", "status": "modified"}],
+                                       "commits": [own_commit()]})
+        self.assert_refused(gh, ["on", "off", "new"], "changes files other than")
+
+    def test_leftover_branch_renaming_into_an_allowed_name_is_refused(self):
+        gh = self.leftover(comparison={"files": [changed(status="renamed")], "commits": [own_commit()]})
+        self.assert_refused(gh, ["on", "off", "new"], "changes files other than")
+
+    def test_leftover_branch_with_someone_elses_commit_is_refused(self):
+        gh = self.leftover(comparison={"files": [changed()], "commits": [own_commit(author={"login": "someone"})]})
+        self.assert_refused(gh, ["on", "off", "new"], "did not make")
+
+    def test_leftover_branch_with_an_authorless_commit_is_refused(self):
+        gh = self.leftover(comparison={"files": [changed()], "commits": [own_commit(author=None)]})
+        self.assert_refused(gh, ["on", "off", "new"], "did not make")
+
+    def test_leftover_branch_with_a_forged_author_is_refused(self):
+        forged = own_commit(commit={"verification": {"verified": False}})
+        gh = self.leftover(comparison={"files": [changed()], "commits": [forged]})
+        self.assert_refused(gh, ["on", "off", "new"], "did not make")
+
+    def test_a_branch_catalogue_cannot_hide_an_enabled_tool(self):
+        # The branch already lists the tool, so against the branch nothing is added.
+        allowed = baseline(enabled=("on", "new"))
+        gh = self.leftover(files={f"{A}/baseline.json": allowed})
+        gh.refs["b" * 40][f"{A}/api.json"] = allowlist(on=True, off=False, new=True)
+        self.assert_refused(gh, ["on", "off", "new"], "would turn on new")
+
+    def test_a_branch_catalogue_cannot_hide_an_undecided_tool(self):
+        gh = self.leftover()
+        gh.refs["b" * 40][f"{A}/api.json"] = allowlist(on=True, off=False)
+        self.assert_refused(gh, ["on", "off", "new"], "no decision")
+
+    def test_a_branch_catalogue_cannot_hide_an_enabled_tool_leaving(self):
+        gh = FakeGh(prs=[bump_pr()])
+        gh.refs["b" * 40][f"{A}/catalogue.json"] = {"servers": {"api": ["off"]}}
+        self.assert_refused(gh, ["off"], "enabled tools left the portal")
+
     def test_closed_proposal_is_not_reopened(self):
         gh = FakeGh(by_branch=[{"number": 5, "url": "https://github.com/x/y/pull/5", "state": "CLOSED"}])
         self.assert_refused(gh, ["on", "off", "new"], "was closed")
@@ -226,6 +299,14 @@ class Unknowns(unittest.TestCase):
         self.assert_unknown(baseline={"servers": {}})
         self.assert_unknown(api=allowlist(**{"bad\nname": False}))
         self.assert_unknown(catalogue={"servers": {"api": ["on", "bad\nname"]}})
+
+    def test_a_bad_name_in_mains_catalogue_is_unknown(self):
+        # These names can reach the alert as `gone`, and the branch's copy is clean.
+        gh = FakeGh(prs=[bump_pr()])
+        gh.refs["m" * 40][f"{A}/catalogue.json"] = {"servers": {"api": ["on", "bad\nname"]}}
+        with self.assertRaises(land.Unknown):
+            land.land(gh, "api", ["on", "off", "new"], TODAY)
+        self.assertEqual(gh.writes, [])
 
     def test_bad_live_lists(self):
         for live in ([], ["on", "on"], ["<b>x</b>"], [1]):
@@ -279,6 +360,14 @@ class GhClient(unittest.TestCase):
         with self.assertRaises(land.Unknown):
             self.client(rc=1, stderr="HTTP 500").branch_head("b")
 
+    def test_a_compare_that_cuts_commits_short_is_unknown(self):
+        ok = {"commits": [{}], "files": [], "total_commits": 1}
+        self.assertEqual(self.client(json.dumps(ok)).compare("a", "b"), ok)
+        with self.assertRaises(land.Unknown):
+            self.client(json.dumps({**ok, "total_commits": 300})).compare("a", "b")
+        with self.assertRaises(land.Unknown):
+            self.client(json.dumps({"commits": [{}], "total_commits": 1})).compare("a", "b")
+
     def test_read_decodes_contents(self):
         body = {"encoding": "base64", "sha": "s", "content": base64.b64encode(b'{"a": 1}').decode()}
         self.assertEqual(self.client(json.dumps(body)).read("p", "r"), ({"a": 1}, "s"))
@@ -291,6 +380,47 @@ class GhClient(unittest.TestCase):
             self.client(json.dumps(body)).read("p", "r", rewrite=True)
         clean = {**body, "content": base64.b64encode(land.dumps({"a": 1}).encode()).decode()}
         self.assertEqual(self.client(json.dumps(clean)).read("p", "r", rewrite=True), ({"a": 1}, "s"))
+
+
+class Main(unittest.TestCase):
+    """The step's entry point: what reaches the alert, and what stays in the log."""
+
+    def run_main(self, lag_text, stub=None):
+        with tempfile.TemporaryDirectory() as d:
+            lag = pathlib.Path(d) / "lag.json"
+            if lag_text is not None:
+                lag.write_text(lag_text, encoding="utf-8")
+            out = pathlib.Path(d) / "output"
+            env = {"GITHUB_REPOSITORY": "x/y", "GITHUB_OUTPUT": str(out)}
+            argv = ["land", "--lag", str(lag)]
+            orig = land.land
+            if stub:
+                land.land = stub
+            self.addCleanup(setattr, land, "land", orig)
+            with unittest.mock.patch.dict(os.environ, env), unittest.mock.patch.object(sys, "argv", argv), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(land.main(), 0)
+            return out.read_text(encoding="utf-8")
+
+    def test_missing_input_says_nothing_was_written(self):
+        self.assertIn("could not read", self.run_main(None))
+
+    def test_malformed_input_says_nothing_was_written(self):
+        self.assertIn("could not read", self.run_main("[not json"))
+        self.assertIn("could not read", self.run_main("[]"))
+
+    def test_outcome_reaches_the_step_output_on_one_line(self):
+        out = self.run_main('{"api": ["t"]}', stub=lambda gh, s, live, today: f"{s}: fine.")
+        self.assertEqual(out, "summary=api: fine.\n")
+
+    def test_error_detail_stays_out_of_the_alert(self):
+        def boom(gh, s, live, today):
+            raise land.Unknown("<script>secret detail\nextra=1")
+        out = self.run_main('{"bad\\nid": ["t"], "api": ["t"]}', stub=boom)
+        self.assertEqual(out.count("\n"), 1, "one output line, whatever the error held")
+        self.assertIn("state unknown", out)
+        self.assertNotIn("secret detail", out)
+        self.assertNotIn("bad", out)
 
 
 class RealFiles(unittest.TestCase):
