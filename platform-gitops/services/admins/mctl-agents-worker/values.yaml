@@ -24,7 +24,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/mctlhq/mctl-agents
-  tag: "1.115.0"
+  tag: "1.117.0"
 imagePullSecrets:
   - name: ghcr-credentials
 # --role control since the queue split (ADR-008): this process runs every
@@ -67,10 +67,10 @@ resources:
   # accurate again — which is why 256Mi stays.
   requests:
     cpu: 50m
-    memory: 192Mi
+    memory: 320Mi
   limits:
     cpu: 500m
-    memory: 384Mi
+    memory: 576Mi
 automountServiceAccountToken: false
 # 1.28.0 is the first tag with USER app (uid 1000) in the image.
 podSecurityContext:

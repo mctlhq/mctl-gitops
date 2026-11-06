@@ -191,6 +191,12 @@ jobs:
           ref: main
           ssh-key: ${{ secrets.GITOPS_BUMP_DEPLOY_KEY }}
 
+      # The release gate imports yaml. Installed explicitly rather than assumed
+      # on the runner image; if this step or the import fails the bump is
+      # refused (the gate fails closed), never skipped.
+      - name: Install PyYAML for the release gate
+        run: python3 -m pip install --quiet pyyaml==6.0.2
+
       - name: Bump image tag(s)
         env:
           TEAM: ${{ inputs.team_name }}
@@ -302,6 +308,19 @@ jobs:
           if missing:
               print(f"ERROR: file(s) not found: {missing}", file=sys.stderr)
               sys.exit(2)
+
+          # Release gate (mctlhq/mctl-agents#1007): evaluated on the whole file
+          # set BEFORE any file is written, so a refused bump leaves no
+          # partial state. Fail closed: any nonzero exit, including a crash of
+          # the gate itself, stops the release.
+          import subprocess
+          _gate = subprocess.run(
+              [sys.executable, "scripts/release-gate.py", "check",
+               "--files", *[os.path.normpath(f) for f in files], "--new-tag", new_tag]
+          )
+          if _gate.returncode != 0:
+              print("ERROR: release gate refused this bump", file=sys.stderr)
+              sys.exit(6)
 
           print(f"Files to process ({len(files)}):")
           for f in files:
@@ -444,7 +463,18 @@ jobs:
           # rewrites exactly one image.tag line in one file — concurrent bumps
           # for different services never conflict textually, and two for the
           # same service converge on whichever tag pushed last.
+          # Release gate on the exact tree about to be pushed. A push is a
+          # fast-forward or it is rejected, so a successful push means main
+          # was unchanged since this check; after every rebase the check runs
+          # again on the new tree. No path pushes a tree the gate has not seen.
+          release_gate() {
+            python3 scripts/release-gate.py verify || {
+              echo "::error::release gate refused the tree to be pushed"
+              exit 1
+            }
+          }
           for attempt in 1 2 3 4 5; do
+            release_gate
             if git push; then
               exit 0
             fi

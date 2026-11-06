@@ -21,6 +21,14 @@
 #                                (mctlhq/mctl-telegram#580, merged as #583).
 #                                It has never had a scrape of any kind.
 #
+#   labs-agent-worker-managed-preview
+#                                the managed-runtime pool worker (gitops#2345).
+#                                Same binary and endpoints as the one above,
+#                                running the openai runner; it emits
+#                                mctl_agent_usage_cost_usd_total. Deployed at 0
+#                                replicas first, so it has no target until
+#                                activation.
+#
 # The consequence was not merely missing dashboards: MctlAgentDeadLetter and
 # MctlAgentActionsExecutingStuck have been deployed in
 # infra-components/observability/vm-rules/mctl-telegram-ops.yaml since the
@@ -71,6 +79,9 @@ spec:
         values:
           - labs-mctl-telegram-preview
           - labs-agent-worker-preview
+          # Managed-runtime pool worker (gitops#2345). Same port, path and
+          # mctl_agent_.* keep filter; at 0 replicas it simply has no target.
+          - labs-agent-worker-managed-preview
   namespaceSelector:
     matchNames:
       - labs

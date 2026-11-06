@@ -1,0 +1,51 @@
+status: merged
+updated_at: '2026-11-06T17:10:40Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-51e9fb82caa38840
+  trace_id: 73cd77de84e484b6c8835b63273140c2
+  agent: implementer
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/portfolio
+  issue: 200
+  url: https://github.com/mctlhq/portfolio/issues/200
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-7d47ecbe8a836fb3
+  content_hash: sha256:7d47ecbe8a836fb383225d838c994643e1dadf0662e456c7c378b59b2ac50dbe
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
+approval:
+  approved_by: mashkovd
+  approved_at: '2026-11-06T16:20:40Z'
+  content_digest: sha256:76fcf92c6577ec3e65274676be941fa44b10e62760d1158ef139ebbac17f1a39
+  digest_binding: reviewed
+  approval_ref: aar_e0e12ab7ac264e9896111c5d1f5fafd3
+attempt:
+  id: 9c74c76467706fb36c61425840747498bb5ba15b3636a83aad330749f124199b
+  started_at: '2026-11-06T16:22:22Z'
+  expires_at: '2026-11-06T18:32:22Z'
+  finished_at: '2026-11-06T16:23:39Z'
+pr: https://github.com/mctlhq/portfolio/pull/201
+completion:
+  api_version: completion.mctl.ai/v1alpha1
+  run_id: mctl-agents-implement-17fae992
+  authoritative:
+    completion_id: ic-482c015f30d71ee8
+    content_hash: sha256:482c015f30d71ee8704ce816aaf2be002dd32d86a3e176b641f2a05632e7cd3c
+    proposal_digest: sha256:76fcf92c6577ec3e65274676be941fa44b10e62760d1158ef139ebbac17f1a39
+    attempt_id: 9c74c76467706fb36c61425840747498bb5ba15b3636a83aad330749f124199b
+    step: primary
+    outcome: complete
+    stop_reason: gates_passed
+    head_sha: 6a787481ac9d3e1a5a43f9eb7d00a5e33b930b64
+    verification:
+      required_passed: 4
+      required_total: 4
+      optional_total: 2
+  primary_observed: true
+merged_at: '2026-11-06T17:10:40Z'
+merge_commit: 5e8a1d4ba068c462a270dab1cadf2d4af5bd356a

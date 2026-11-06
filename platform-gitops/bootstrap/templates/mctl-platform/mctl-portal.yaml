@@ -291,14 +291,17 @@ spec:
               - ghcr-credentials
           resources:
             requests:
-              cpu: 100m
+              # Observed 166m on 2026-11-03 (was ~26m when the limit below was set).
+              cpu: 200m
               # Observed RSS ~368Mi; 384Mi gives 4% buffer. Raised 256Mi→384Mi
               # on 2026-05-10 (RAM real>requests gap on Global RAM dashboard).
               memory: 384Mi
             limits:
-              # Steady-state ~26m; 300m gives 11x cushion. Trimmed 500m→300m
-              # on 2026-05-07 (CPU-limits cluster headroom).
-              cpu: 300m
+              # Raised 300m->1000m on 2026-11-03: at 300m the container was
+              # CFS-throttled in ~25% of periods (40749 of 164219), probes with a
+              # 1 s timeout then failed, the liveness probe restarted it 5 times in
+              # 5 days and Traefik forward-auth calls to it timed out.
+              cpu: 1000m
               memory: 768Mi
           extraEnvVarsSecrets:
             - backstage-secrets
@@ -342,6 +345,7 @@ spec:
               port: 7007
             initialDelaySeconds: 10
             periodSeconds: 5
+            timeoutSeconds: 3
             failureThreshold: 60
           livenessProbe:
             httpGet:
@@ -349,12 +353,14 @@ spec:
               port: 7007
             initialDelaySeconds: 0
             periodSeconds: 15
+            timeoutSeconds: 5
             failureThreshold: 4
           readinessProbe:
             httpGet:
               path: /.backstage/health/v1/readiness
               port: 7007
             periodSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 2
           appConfig:
             app:

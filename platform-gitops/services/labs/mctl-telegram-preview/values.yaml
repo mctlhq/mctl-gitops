@@ -15,7 +15,7 @@ strategy:
 
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "main-3138bd0"
+  tag: "main-4ccb257"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -284,6 +284,27 @@ env:
   # A job nobody claimed for this long is routed to the operator
   # (worker_unclaimed). Must exceed AGENT_TURN_MAX_WAIT while coalescing is on.
   AGENT_UNCLAIMED_ROUTE_AFTER: "5m"
+  # Managed runtime (mctlhq/mctl-telegram#1088, ADR 0008 section 6; gitops#2345).
+  # MANAGED_RUNTIME_ENABLED is "true" since activation step A1 (owner's
+  # activation approval, 2026-11-03): POST /api/agent/pool-token is mounted
+  # and accounts may switch to `managed` (at most MANAGED_RUNTIME_MAX_ACCOUNTS),
+  # but no pool worker runs until A5, so managed jobs wait until then. MANAGED_MAX_JOB_COST_USD equals the worker's AGENT_MAX_BUDGET_USD
+  # (agent-worker-managed-preview) so the per-job reservation is what a job can
+  # actually spend. Rollback order: account to runtime "own", worker
+  # replicaCount 0, revoke the pool jti, then this flag back to "false".
+  MANAGED_RUNTIME_ENABLED: "true"
+  MANAGED_RUNTIME_MAX_ACCOUNTS: "1"
+  # 2.00 for the #889 Part B window by owner decision (2026-11-05), so that it
+  # can start before the UTC day ends. Back to 1.00 after the window.
+  MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "2.00"
+  # #889 Part B limit of $3 (mctl-telegram docs/plans/gate-889-managed-soak.md):
+  # the November ledger before the window is 2.3033, so 5.00 leaves at most
+  # 2.70 of claims and the month cap is the window cap. Remove both after the
+  # window.
+  MANAGED_BUDGET_USD_PER_ACCOUNT_MONTH: "5.00"
+  MANAGED_CLAIM_NOT_AFTER: "2026-11-08T14:00:00Z"
+  MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
+  MANAGED_MAX_JOB_COST_USD: "0.25"
 ingress:
   enabled: true
   hosts:

@@ -1,0 +1,13 @@
+# Example overlay for the issue-2286 OBI spike.
+#
+# TEST FIXTURE, not a values file anyone applies to the cluster. It opens the
+# default-off obiSpike sandbox so CI can render and validate the manifests
+# (obi-spike.yaml) that mctlhq/mctl-gitops#2303 will enable, before that PR
+# exists. teardownAfter is deliberately empty here: the CI step injects a date
+# relative to "today" (a fixed date would go stale), see
+# .github/workflows/validate-manifests.yml. The digest is a dummy.
+obiSpike:
+  enabled: true
+  teardownAfter: ""
+  image:
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

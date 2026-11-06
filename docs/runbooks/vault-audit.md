@@ -178,7 +178,7 @@ stdout itself fails in two ways, and neither leaves Vault wedged for long:
   (`kubectl -n vault get pods -l vault-active=true`); a standby on another
   node takes the lead with its own stdout, and the audit table (replicated in
   Raft) re-opens the device there. Unseal the restarted pod as usual
-  (vault-auto-unseal runs every two minutes).
+  (vault-auto-unseal runs every five minutes).
 
 ## Operations
 

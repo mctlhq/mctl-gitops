@@ -1,28 +1,52 @@
 # Design: issue-737-test-work-context-controlled-work-item-f
 
 ## Current state
-The Telegram work-context adapter from #443 is already shipped:
-- `internal/agent/control/work.go` — `WorkHandler.Handle` dispatches `/mctl link` (`handleLink` -> `workctx.Client.RedeemLink`), `/mctl work <issue-url>` (`handleOpen`: `CreateWorkItem`, `UpsertWorkItemBinding`, then `RequestExecution` with `Kind: workctx.ExecutionKindStart` and an idempotency key from `workctx.IdempotencyKey(chat, msg, "start", 0)`; a bound item with no recorded start request redoes create + start), and `/mctl work status` (`handleWorkStatus`: `GetWorkItem`, `TouchWorkItemBindingState`, then `renderRequestLine` / `formatRequestState`).
-- `internal/workctx/client.go` — relay client to mctl-api (`CreateWorkItem`, `GetWorkItem`, `RequestExecution`, `GetExecutionRequest`, `ListExecutionRequests`, `AddSurfaceRef`), scoped to one tenant.
-- `internal/db/work_item_bindings.go` — per-user/chat binding store (`LatestWorkItemBinding`, `SetWorkItemBindingRequest`).
-
-Everything the issue asks for is exercising this existing code; nothing in it needs to change.
+The Telegram work-context adapter that the #443 session exercises already ships:
+- `internal/agent/control/work.go`:
+  - `WorkHandler.handleOpen` canonicalises the issue URL (`workctx.CanonicalIssueURL`) and
+    resolves the linked actor (`resolveActor`).
+  - It then creates or opens the WorkItem through `workctx.Client.CreateWorkItem`, using the
+    issue URL as `ExternalKey` and a deterministic `workctx.IdempotencyKey`.
+  - It records the thread binding (`Store.UpsertWorkItemBinding`), registers the surface ref
+    (`AddSurfaceRef`) and submits the `start` execution request (`RequestExecution`,
+    `ExecutionKindStart`). This request is what started the investigation producing this proposal.
+- `WorkHandler.handleWorkStatus` shows the WorkItem's state, latest execution, pending approval
+  and snapshot, plus the last request's state (`renderRequestLine`, `formatRequestState`).
+- `internal/workctx/client.go` holds the mctl-api relay client (create, get, intents, execution
+  requests, surface refs). `internal/db/work_item_bindings.go` stores the bindings.
+- `docs/work-context.md` "Manual cross-surface verification" is the procedure the live session follows.
 
 Deployed state checked:
-- `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml`: `image.tag: "0.119.0"`, hosts `tg.mctl.ai` and `labs-mctl-telegram.mctl.ai`, and `workContext.enabled: true`, `featureEnabled: true`, `tenant: mctl`, token from Vault `platform/mctl-api/surface-tokens` / `telegram-token`. The comment there records all four owner enablement steps done 2026-10-04. So `/mctl work` is live in production.
-- mctl MCP tools were not called. Live pod state, logs and the actual WorkItem/request ids from the session were not observed by this run.
+- `mctl_get_service_status(team=labs, service=mctl-telegram)`: ArgoCD `Healthy`/`Synced`,
+  image `0.123.2`, host `tg.mctl.ai`.
+- `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml`:
+  - `workContext.enabled: true`, `featureEnabled: true`, `tenant: mctl`, token from
+    `platform/mctl-api/surface-tokens` / `telegram-token`.
+  - `HUMAN_INPUT_ENABLED: "true"`.
+  - The `/mctl work` path is live in production.
+  - The comment in that block mentions tenant "admins", but the value is `mctl`. See Open questions.
+- I did not observe the WorkItem id, the execution request or the portal view for #737. They are
+  produced by the owner's session and are outside this run's reach.
 
 ## Proposed solution
-No change. The proposal is intentionally empty of implementation work:
-1. The DevLoop investigation (this run) is the observed `start` execution; once its request reads `fulfilled, execution <id>` in `/mctl work status`, and the same WorkItem renders at the portal `/work-items/<id>`, the session evidence is complete.
-2. The owner records that evidence on #443 (and the REST traces for mctl-api#341).
-3. This proposal is left unapproved and then rejected or its DevLoop abandoned; #737 is already closed.
+No code change. The issue is a controlled fixture: the DevLoop investigation it triggers is the
+observed artifact. The proposal is deliberately empty of implementation work so that:
+1. The DevLoop parks at the approval gate. That is the expected end state for the session.
+2. The owner records the WorkItem id, request id, execution id and portal screenshot or REST
+   response on #443 (and on mctlhq/mctl-api#341 for the REST evidence).
+3. The owner then ends the loop with `mctl_abandon_dev_loop` on
+   `dev-loop-mctlhq-mctl-telegram-737`, giving a reason that cites #443. The proposal is
+   never approved.
 
 ## Alternatives
-- Propose a real improvement found while reading `work.go` (for example richer status output): dropped, the issue explicitly forbids implementation and the item must stay a clean control.
-- Propose additional automated tests for the session flow: dropped for the same reason; `internal/agent/control/work_test.go` and `internal/workctx/client_test.go` already cover the handlers, and any new test work belongs in a separate issue.
-- Skip writing a proposal: dropped, the pipeline requires the triplet and an explicit "do not implement" proposal is the safest artefact.
+- Invent a small change to make the proposal "useful": rejected. The issue explicitly forbids
+  implementation, and a fabricated change would risk being approved and merged.
+- File a clarification question instead: rejected. The issue is unambiguous about its intent,
+  so nothing is blocking.
+- Leave the DevLoop parked forever: possible, but it keeps a live workflow and its ownership
+  row indefinitely. Abandoning after the evidence is recorded is cleaner.
 
 ## Platform impact
-- Migrations: none. Backward compatibility: unaffected. Resources: none beyond the one investigator run already spent.
-- Risk: someone approves the proposal and the implementer opens an empty or invented PR. Mitigation: every file states no-implementation; reviewer should reject or abandon the DevLoop (`dev-loop-mctlhq-mctl-telegram-737`).
+- No migrations, no config change, no resource impact.
+- Risk: an operator approves the proposal by habit. Mitigation: the title and every file say
+  "no implementation". If it does get approved, close any resulting PR unmerged.

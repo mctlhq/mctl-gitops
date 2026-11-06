@@ -80,7 +80,7 @@ spec:
         # https://github.com/mctlhq/mctl-telegram/issues/123
         # run-investigator fails fast with a clear message if empty.
       - name: agent_image
-        value: ghcr.io/mctlhq/mctl-agents:1.115.0
+        value: ghcr.io/mctlhq/mctl-agents:1.117.0
         # Default = today's pin, so submitting without this parameter is a
         # zero-behaviour-change no-op. Overridden by the agent registry's
         # resolved image_ref once a caller starts pinning per-run.
@@ -450,7 +450,22 @@ spec:
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
               chmod 600 ~/.ssh/config
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               # PVC-backed scratch dir for run_issue_investigator's
               # `gh repo clone` target — see TMPDIR in run-investigator below.
@@ -1131,7 +1146,22 @@ spec:
               GITHUB_HOST_KEYS
               chmod 600 ~/.ssh/known_hosts
               chmod 600 ~/.ssh/config
-              git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops
+              # Bounded retry. On 2026-11-04 10:54-11:16Z GitHub dropped SSH
+              # sessions right after the handshake (proxy tunnels were 200), every
+              # clone exited 128 and each failed run fanned out into an incident.
+              # Same key and URL on every try; git prints its own stderr.
+              for attempt in 1 2 3; do
+                if git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /workdir/mctl-gitops; then
+                  break
+                fi
+                rm -rf /workdir/mctl-gitops
+                if [ "$attempt" = 3 ]; then
+                  echo "clone-gitops: git clone failed after 3 attempts" >&2
+                  exit 128
+                fi
+                echo "clone-gitops: attempt $attempt failed, retrying" >&2
+                sleep $((attempt * 15))
+              done
               mkdir -p /workdir/mctl-gitops/platform-gitops/agents-state
               echo "✓ gitops cloned (fresh checkout, never touched by the agent)"
           resources:

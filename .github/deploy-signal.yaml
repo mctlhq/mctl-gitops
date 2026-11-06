@@ -43,6 +43,8 @@ services:
     tracks_main: true
   - path: platform-gitops/services/labs/agent-worker-preview/values.yaml
     tracks_main: true
+  - path: platform-gitops/services/labs/agent-worker-managed-preview/values.yaml
+    tracks_main: true
   - path: platform-gitops/services/admins/mctl-design/values.yaml
     tracks_main: true
     sha_only: true  # bare commit sha, no main- prefix

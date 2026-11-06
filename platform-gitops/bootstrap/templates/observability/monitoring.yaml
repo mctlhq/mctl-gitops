@@ -237,6 +237,25 @@ spec:
                 create: false
               kubernetesSystemControllerManager:
                 create: false
+            rules:
+              # Stock rule fires at 3x: new series in 24h vs active series.
+              # Agent workflows (shepherd, run, incidents) start ~2-3k short
+              # pods a day, each a new set of cAdvisor/KSM series, so the
+              # steady-state ratio sits at 3.0-3.7 (14d max 3.73, 2026-11-04)
+              # and the alert fired on normal load. 5x keeps headroom over
+              # that baseline and still catches a real cardinality blow-up.
+              # The override replaces expr for both the vmsingle and the
+              # vmcluster copy of the rule (same name). Stock groups by
+              # job+cluster (vmcluster) and instance+cluster (vmsingle);
+              # job+instance+cluster is their union, and a label absent on
+              # both sides of `>` matches as empty, so either copy works.
+              TooHighChurnRate24h:
+                spec:
+                  annotations:
+                    description: |-
+                      The number of new time series created over the last 24h on "{{`{{ $labels.instance }}`}}" is more than 5x the current number of active series (churn rate).
+                       High churn is tightly connected with database performance and may result in unexpected OOMs or slow queries.
+                  expr: sum(increase(vm_new_timeseries_created_total[24h])) by(job,instance,cluster) > (sum(vm_cache_entries{type="storage/hour_metric_ids"}) by(job,instance,cluster) * 5)
 
           prometheus-node-exporter:
             enabled: true
@@ -946,6 +965,18 @@ spec:
                   - receiver: mctl-agent-paged
                     matchers:
                       - alertname =~ "MctlAgentDeadLetter|MctlAgentActionsExecutingStuck|MctlAgentClaudeUsageLimit"
+                  # Managed runtime budget and provider alerts (mctl-telegram#334,
+                  # #889): the operator decides what a spend or quota condition
+                  # means, so a warning here still reaches the owner. Exact names,
+                  # not a prefix: the #889 window's alerts stay a deliberate list.
+                  - receiver: telegram
+                    continue: true
+                    matchers:
+                      - alertname =~ "MctlAgentManagedAccountMonthCapHit|MctlAgentManagedBudgetDeferredSustained|MctlAgentManagedUsageHeld|MctlAgentProviderRateLimitHigh"
+                  # paged twin (see the canary route above)
+                  - receiver: mctl-agent-paged
+                    matchers:
+                      - alertname =~ "MctlAgentManagedAccountMonthCapHit|MctlAgentManagedBudgetDeferredSustained|MctlAgentManagedUsageHeld|MctlAgentProviderRateLimitHigh"
                   # mctl-api availability (vm-rules/mctl-api-alerts.yaml): the
                   # same circularity as the three above, one layer down.
                   # mctl-agent files its incidents through mctl-api, so an
@@ -1179,7 +1210,7 @@ spec:
                       # that runs several CronJobs reads as "Job failed to
                       # complete. Namespace: vault" and says nothing about
                       # WHICH job — vault runs both the daily backup and the
-                      # 2-minute auto-unseal, and telling them apart meant
+                      # 5-minute auto-unseal, and telling them apart meant
                       # going to the cluster.
                       message: |
                         {{ "{{" }} range .Alerts {{ "}}" }}
