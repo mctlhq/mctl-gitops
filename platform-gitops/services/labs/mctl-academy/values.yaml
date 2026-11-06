@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-academy
-  tag: "0.1.68"
+  tag: "0.1.70"
 imagePullSecrets:
   - name: ghcr-credentials
 service:

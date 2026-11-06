@@ -6,7 +6,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-support
-  tag: "0.4.0"
+  tag: "0.4.1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -43,15 +43,19 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-# SUPPORT_EXECUTOR=agent runs the model loop (S1b/S1c). Provider and model are
-# INTERIM since 2026-10-29: Nebius Token Factory, zai-org/GLM-5.1, by the
-# owner's decision while the Anthropic organization is disabled (every key,
-# including the dedicated one, answers 401 "organization has been disabled").
-# The reference model stays Anthropic claude-sonnet-5-5 (mctlhq/mctl-support#5,
-# where GLM-5.1 was rejected for the S1e gate); revert this block and the
-# model secret below once the appeal succeeds. S2e pilot answers given on
-# GLM-5.1 are marked as such in the pilot review (mctlhq/.github#270).
-# NEBIUS_BASE_URL points at the Cloudflare AI Gateway's custom provider for
+# SUPPORT_EXECUTOR=agent runs the model loop (S1b/S1c). The provider is
+# Anthropic claude-sonnet-5-5 since 2026-11-05, by the owner's decision after
+# the fresh evaluation in mctlhq/.github#270 (prompt s2-2): acceptance 29/30,
+# adversarial 18/21. The key belongs to a different account from the
+# organization disabled on 2026-10-29. S2e pilot answers given on GLM-5.1, on
+# GLM-5.3-Flash and on Sonnet are marked as such in the pilot review.
+# Rollback to Nebius: MODEL_PROVIDER nebius, the prices 0.15/0.50, and
+# restore MODEL_GATEWAY_TOKEN below. The Nebius settings stay in place for it.
+# The Anthropic provider calls the API directly, so MODEL_GATEWAY_TOKEN must
+# stay out of this pod's environment while it is selected: the service would
+# send that bearer to Anthropic. The gateway does not see this traffic, and
+# the spend caps stay on this service's ledger.
+# When Nebius is selected, NEBIUS_BASE_URL points at the Cloudflare AI Gateway's custom provider for
 # Nebius (mctlhq/mctl-gitops#2262 Phase B, 2026-10-29): same Nebius key on
 # every request (BYOK, the gateway stores nothing), plus the gateway's own
 # bearer in MODEL_GATEWAY_TOKEN (sent as cf-aig-authorization, mctl-support
@@ -60,7 +64,7 @@ resources:
 # service default is Nebius direct) and MODEL_GATEWAY_TOKEN. The value is
 # quoted because the deploy tooling's yq rewrite has been seen stripping
 # colon-bearing env values; check it survives the next image bump.
-# The prices are that model's per-million-token list prices; the spend caps
+# The prices are the selected model's per-million-token list prices; the spend caps
 # keep their service defaults (task 0.50, tenant 10, workspace 50 USD per
 # UTC month).
 # SUPPORT_ALLOWED_TENANTS is the pilot allowlist.
@@ -86,11 +90,12 @@ env:
   # HETZNER_MODEL, HETZNER_BASE_URL = <gateway>/custom-hetzner/v1 and the
   # fair prices from the spike report section 7. HETZNER_API_KEY stays in
   # the model secret below so that switch is a values-only change.
-  MODEL_PROVIDER: nebius
-  NEBIUS_MODEL: zai-org/GLM-5.1
+  MODEL_PROVIDER: anthropic
+  ANTHROPIC_MODEL: claude-sonnet-5-5
+  NEBIUS_MODEL: zai-org/GLM-5.3-Flash
   NEBIUS_BASE_URL: "https://gateway.ai.cloudflare.com/v1/6a09f637d20e1f66a8e9d45ebe778058/mctl-support/custom-nebius/v1"
-  MODEL_INPUT_USD_PER_MTOK: "1.40"
-  MODEL_OUTPUT_USD_PER_MTOK: "4.40"
+  MODEL_INPUT_USD_PER_MTOK: "2"
+  MODEL_OUTPUT_USD_PER_MTOK: "10"
   SUPPORT_METRICS_PORT: "9090"
   # Refuse (401) any bearer not minted for https://support.mctl.ai. MCP
   # callers reach it through mctl_ask_support, which mints a support-audience
@@ -147,24 +152,26 @@ extraContainers: []
 # resolves its own team's prefix. Each ExternalSecret reads single
 # properties, never a whole path.
 extraExternalSecrets:
-  # The model provider API key (MODEL_PROVIDER=nebius, interim; see above).
+  # The model provider API keys (MODEL_PROVIDER=anthropic; see above).
   admins-mctl-support-model:
     store: vault-backend
     storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: admins-mctl-support-model
     data:
+      - secretKey: ANTHROPIC_API_KEY
+        remoteKey: secret/data/platform/mctl-support/model
+        property: anthropic-api-key
       - secretKey: NEBIUS_API_KEY
         remoteKey: secret/data/platform/mctl-support/model
         property: nebius-api-key
       - secretKey: HETZNER_API_KEY
         remoteKey: secret/data/platform/mctl-support/model
         property: hetzner-api-key
-      # AI Gateway bearer (cf-aig-authorization); the run token
-      # mctl-support-ai-gateway-run of infrastructure/cloudflare/tokens.
-      - secretKey: MODEL_GATEWAY_TOKEN
-        remoteKey: secret/data/platform/mctl-support/ai-gateway
-        property: token
+      # AI Gateway bearer for Nebius only, left out while Anthropic is selected.
+      # To roll back, add MODEL_GATEWAY_TOKEN from
+      # secret/data/platform/mctl-support/ai-gateway, property token (the run
+      # token mctl-support-ai-gateway-run of infrastructure/cloudflare/tokens).
   # mctl-api credentials of two single-capability principals:
   # - usage writer (append usage records only): the same value mctl-api and
   #   the agent runner pods read (bootstrap/values.yaml usageWriter);
