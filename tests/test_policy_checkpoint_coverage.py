@@ -17,6 +17,10 @@ against the templates and values files, never restating them:
    `min_image_version`.
 5. `bypass-open` needs `tracked_by`; a summary line keeps the gap visible.
 6. No manifest anywhere sets MCTL_POLICY_APPROVALS to none, empty or valueFrom.
+7. A surface with `fixed_run_mode` sets RUN_MODE to that literal, its execution
+   profile lists no Bash, and the entrypoint steps start its template only on
+   exactly that mode while every other agent template excludes it. A profile
+   that cannot be read is a failure, never a pass.
 
 Run: python3 tests/test_policy_checkpoint_coverage.py
 """
@@ -105,6 +109,45 @@ def discover(root):
     return found
 
 
+def check_fixed_mode(root, surface, found):
+    """The token-holding mode cannot be widened by a parameter or by a tool list."""
+    sid, mode, template = surface.get("id"), surface.get("fixed_run_mode"), surface.get("template")
+    gitops = root / "platform-gitops"
+    info = found.get((surface.get("path"), template))
+    if info is None:
+        return [f"{sid}: fixed_run_mode names no discovered template"]
+    failures = []
+    if (info["env"].get("RUN_MODE") or {}).get("value") != mode:
+        failures.append(f"{sid}: RUN_MODE must be the literal {mode!r}")
+    try:
+        profile = yaml.safe_load((gitops / str(surface.get("execution_profile"))).read_text())
+        tools = profile["spec"]["tools"]
+        if not isinstance(tools, list) or not tools:
+            raise TypeError("spec.tools is not a non-empty list")
+    except (OSError, yaml.YAMLError, KeyError, TypeError) as exc:
+        return failures + [f"{sid}: could not read the execution profile tool list: {exc}"]
+    if "Bash" in tools or "*" in tools:
+        failures.append(f"{sid}: execution profile allows Bash next to MCTL_TOKEN")
+    doc = load_one(gitops / surface["path"]) or {}
+    spec = doc.get("spec") or {}
+    only = f'"{{{{workflow.parameters.mode}}}}" == "{mode}"'
+    never = f'"{{{{workflow.parameters.mode}}}}" != "{mode}"'
+    entry = next((t for t in spec.get("templates") or [] if t.get("name") == spec.get("entrypoint")), {})
+    calls = [step for group in entry.get("steps") or [] for step in group]
+    agent_templates = {key[1] for key in found if key[0] == surface["path"]}
+    mine = [s for s in calls if s.get("template") == template]
+    if not mine:
+        failures.append(f"{sid}: entrypoint never starts {template}")
+    for step in calls:
+        if step.get("template") not in agent_templates:
+            continue
+        when = str(step.get("when") or "")
+        needed = only if step.get("template") == template else never
+        if not (when == needed or when.startswith(needed + " && ")):
+            failures.append(f"{sid}: step {step.get('name')} must be guarded by {needed}, got {when!r}")
+    return failures
+
+
 def analyze(root):
     failures = []
     manifest_path = root / MANIFEST
@@ -140,6 +183,8 @@ def analyze(root):
     staged = 0
     for s in surfaces:
         sid = s.get("id")
+        if s.get("fixed_run_mode") is not None:
+            failures.extend(check_fixed_mode(root, s, found))
         if s.get("kind") == "transport":
             if s.get("of") not in ids:
                 failures.append(f"{sid}: transport 'of' names no surface")
@@ -236,7 +281,8 @@ def make_fixture(tmp, mutate):
     """Copy the real manifest + templates, then apply a mutation."""
     dst = pathlib.Path(tmp)
     src = REPO / "platform-gitops"
-    for sub in ("governance", "argo-workflows/cluster-templates", "services/admins"):
+    for sub in ("governance", "argo-workflows/cluster-templates", "services/admins",
+                "agent-platform/execution-profiles"):
         shutil.copytree(src / sub, dst / "platform-gitops" / sub,
                         ignore=shutil.ignore_patterns("*.tf", "mctl-design", "mctl-docs", "mctl-web", "umami"))
     mutate(dst / "platform-gitops")
@@ -310,6 +356,47 @@ def self_test():
             r"(value: ghcr\.io/mctlhq/mctl-agents:)[0-9.]+", r"\g<1>1.0.0", t, count=1))
     expect("no-mctl-token transport on an older image",
            older_image, "older than min_image_version")
+
+    run_tpl = cwft + "cwft-mctl-agents-run.yaml"
+
+    def run_token_back(gp):
+        edit(gp / run_tpl, lambda t: t.replace(
+            "          - name: RUN_SERVICE\n",
+            "          - name: MCTL_TOKEN\n            valueFrom:\n"
+            "              secretKeyRef: {name: s, key: k}\n"
+            "          - name: RUN_SERVICE\n", 1))
+    expect("run-bash: MCTL_TOKEN back on the template with Bash", run_token_back, "run-bash")
+
+    def responder_mode_param(gp):
+        edit(gp / run_tpl, lambda t: t.replace(
+            "value: incident-responder\n", 'value: "{{workflow.parameters.mode}}"\n', 1))
+    expect("responder RUN_MODE from a parameter", responder_mode_param, "literal")
+
+    profile = "agent-platform/execution-profiles/incident-responder-default/profile.yaml"
+
+    def responder_bash(gp):
+        edit(gp / profile, lambda t: t.replace("    - Glob\n", "    - Glob\n    - Bash\n", 1))
+    expect("responder profile gains Bash", responder_bash, "allows Bash next to MCTL_TOKEN")
+
+    def profile_gone(gp):
+        (gp / profile).unlink()
+    expect("responder profile unreadable", profile_gone, "could not read")
+
+    def responder_any_mode(gp):
+        edit(gp / run_tpl, lambda t: t.replace(
+            'template: run-incident-responder\n            when: "\\"{{workflow.parameters.mode}}\\" == \\"incident-responder\\""',
+            'template: run-incident-responder\n            when: "\\"{{workflow.parameters.mode}}\\" != \\"\\""', 1))
+    expect("responder template started on any mode", responder_any_mode, "must be guarded")
+
+    def responder_never(gp):
+        edit(gp / run_tpl, lambda t: t.replace("template: run-incident-responder\n", "template: run-orchestrator\n"))
+    expect("responder template never started", responder_never, "never starts")
+
+    def tokenless_takes_responder(gp):
+        edit(gp / run_tpl, lambda t: t.replace(
+            'template: run-orchestrator\n            when: "\\"{{workflow.parameters.mode}}\\" != \\"incident-responder\\""',
+            "template: run-orchestrator", 1))
+    expect("tokenless template also started for the responder mode", tokenless_takes_responder, "must be guarded")
     return results
 
 

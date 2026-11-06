@@ -37,8 +37,19 @@ the investigator's MCP and REST calls use its scoped run token
 (mctlhq/mctl-agents#717 option c), so a tool can reach only what the
 `investigate` scope admits.
 
-Known gap, stated plainly: the Bash and `MCTL_TOKEN` path of every other
-model-running template is `bypass-open`. The checkpoint does not gate Bash, so
+`run-bash` is `no-mctl-token` too, by a different route: `mctl-agents-run` is
+split by mode. `run-orchestrator` (full, mentor-only, single-service) maps no
+`MCTL_TOKEN`, so these modes run with no `mcp__mctl__*` tools, and the mentor
+loses its cross-check reads. `run-incident-responder` keeps the token because
+resolving incidents needs mctl-api. It has no Bash, and it sets `RUN_MODE` as a
+literal, so no workflow parameter can start a Bash-bearing mode in that pod. CI
+checks the literal, the routing and the profile's tool list (`fixed_run_mode`,
+`execution_profile`). Its static token is mctlhq/mctl-agents#737, a separate
+gap. A responder pod with no token exits successfully having done nothing, so
+after any change here confirm that a run actually processed an incident.
+
+Known gap, stated plainly: the Bash and `MCTL_TOKEN` path of the remaining
+model-running templates (implement, shepherd) is `bypass-open`. The checkpoint does not gate Bash, so
 "governed transports cannot be bypassed" is NOT achieved by this manifest.
 Tracked by mctlhq/mctl-agents#717 and mctlhq/mctl-api#723 (separate from
 mctlhq/mctl-api#721). The shepherd pod forces `NO_APPROVALS` by design
