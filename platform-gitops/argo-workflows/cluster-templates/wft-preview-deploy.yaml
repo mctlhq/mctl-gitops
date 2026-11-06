@@ -340,8 +340,8 @@ spec:
           # script's text. An Argo placeholder is substituted BEFORE sh
           # parses the line (this comment cannot show one literally —
           # Argo would substitute it here too), so a value containing a
-          # quote and a semicolon runs as a command, in a pod that is
-          # root with the gitops deploy key mounted. gitops#992.
+          # quote and a semicolon runs as a command, in a tenant pod.
+          # gitops#992.
           # The whole block is bound, not just the parameters the
           # operations registry happens to constrain: a reader should not
           # have to cross-check the registry to know which line is safe.

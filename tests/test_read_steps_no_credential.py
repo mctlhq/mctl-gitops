@@ -55,10 +55,13 @@ def read_only_holders(docs):
             c = t.get("script") or t.get("container")
             pairs = [("main", c)] if c else []
             pairs += [(i.get("name", ""), i) for i in t.get("initContainers") or []]
+            pairs += [(i.get("name", ""), i) for i in t.get("sidecars") or []]
             for name, cont in pairs:
                 mounted = any(m["name"] in vols for m in cont.get("volumeMounts") or [])
                 src = cont.get("source") or " ".join(cont.get("args") or []) + " ".join(cont.get("command") or [])
-                if mounted and "git push" not in src:
+                # A comment naming git push does not make a step a writer.
+                code = "\n".join(line for line in src.split("\n") if not line.lstrip().startswith("#"))
+                if mounted and "git push" not in code:
                     found.add((fname, t["name"], name))
     return found
 
@@ -85,8 +88,13 @@ sample = {"spec": {"templates": [
     {"name": "writer", "volumes": [{"name": "k", "secret": {"secretName": KEY}}],
      "script": {"source": "git push", "volumeMounts": [{"name": "k", "mountPath": "/k"}]}},
     {"name": "plain", "script": {"source": "git clone x"}},
+    {"name": "commented", "volumes": [{"name": "k", "secret": {"secretName": KEY}}],
+     "script": {"source": "# git push\ngit clone x", "volumeMounts": [{"name": "k", "mountPath": "/k"}]}},
+    {"name": "side", "volumes": [{"name": "k", "secret": {"secretName": KEY}}],
+     "sidecars": [{"name": "s", "args": ["sleep"], "volumeMounts": [{"name": "k", "mountPath": "/k"}]}]},
 ]}}
-check("the sweep flags only the read-only holder", read_only_holders([("x.yaml", sample)]) == {("x.yaml", "reader", "main")})
+check("the sweep flags the read-only holders and not the writer", read_only_holders([("x.yaml", sample)]) == {
+    ("x.yaml", "reader", "main"), ("x.yaml", "commented", "main"), ("x.yaml", "side", "s")})
 
 print()
 if failures:
