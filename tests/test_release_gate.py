@@ -94,7 +94,7 @@ if m:
             check(f"rollback: {name}", rr.returncode == want, f"rc={rr.returncode} {rr.stderr}")
 
 # 3c. The real gate config still says what the design says; a PR that deletes
-#     the group or empties `requires` must fail here, not pass silently.
+#     the group or drops a declared Recreate requirement must fail here, not pass silently.
 import yaml  # noqa: E402
 
 cfg = yaml.safe_load((ROOT / "platform-gitops/release-gates.yaml").read_text())
@@ -102,9 +102,14 @@ grp = next((g for g in cfg["gates"] if g["name"] == "mctl-agents-workers"), None
 check("gate config: the worker group exists", grp is not None)
 if grp:
     check("gate config: all three worker files", len(grp["paths"]) == 3 and all("mctl-agents-worker" in p for p in grp["paths"]))
-    check("gate config: Recreate on the control worker",
-          {"path": "platform-gitops/services/admins/mctl-agents-worker/values.yaml", "key": "strategy.type", "equals": "Recreate"}
-          in grp["requires"])
+    # #2394 flips the control worker to Recreate after the preview rehearsal.
+    # From that commit on the gate must hold it there, so the two cannot drift:
+    # the flip without the requirement is red.
+    control = "platform-gitops/services/admins/mctl-agents-worker/values.yaml"
+    recreate_rule = {"path": control, "key": "strategy.type", "equals": "Recreate"}
+    declared = (yaml.safe_load((ROOT / control).read_text()).get("strategy") or {}).get("type")
+    check("gate config: a declared Recreate is required by the gate",
+          declared != "Recreate" or recreate_rule in (grp.get("requires") or []))
     check("gate config: floor is at least 1.117.0", tuple(map(int, grp["min_tag"].split("."))) >= (1, 117, 0))
     check("gate config: image repository pinned", grp.get("repository") == "ghcr.io/mctlhq/mctl-agents")
 

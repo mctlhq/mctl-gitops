@@ -21,8 +21,7 @@ gates:
     min_tag: "1.117.0"
     # A different image at a high tag must not satisfy the floor.
     repository: ghcr.io/mctlhq/mctl-agents
-    requires:
-      # Recreate on the control worker: no old and new build polling together.
-      - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml
-        key: strategy.type
-        equals: Recreate
+    # No `requires` yet: Recreate on the control worker (mctl-gitops#2394) lands
+    # only after the preview rehearsal, and that PR adds the requirement here.
+    # tests/test_release_gate.py fails if the values file declares Recreate
+    # while this gate does not require it.
