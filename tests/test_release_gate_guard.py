@@ -476,11 +476,11 @@ def unguarded_writers(docs):
     return found
 
 
-def guard_on_gate(gate, *args):
+def guard_on_gate(gate, *args, guard=GUARD_TEXT):
     with tempfile.TemporaryDirectory() as d:
         w = pathlib.Path(d)
         (w / GUARD_REL).parent.mkdir(parents=True)
-        (w / GUARD_REL).write_text(GUARD_TEXT)
+        (w / GUARD_REL).write_text(guard)
         (w / GATE_REL).write_text(gate)
         for w_name in WORKERS:
             (w / SVC / "admins" / w_name).mkdir(parents=True)
@@ -591,6 +591,9 @@ for label, gate in {
     "a broken file": "gates: [\n",
     "gates as a map": f"gates:\n  paths:\n    - {_G}\n",
     "two documents": f"{_OK}---\n{_OK}",
+    "prepull_paths as a string": f"{_OK}    prepull_paths: {_G}\n",
+    "a merge key list": f"a: &a\n  paths: [{_G}]\nb: &b\n  paths: [{SVC}/labs/z/values.yaml]\ngates:\n  - <<: [*a, *b]\n",
+    "a merge key after paths": f"b: &b\n  paths: [{SVC}/labs/z/values.yaml]\ngates:\n  - paths: [{_G}]\n    <<: *b\n",
 }.items():
     check(f"{label} refuses", guard_on_gate(gate, "target", "labs", "app") == 6)
 real = yaml.safe_load(GATE_TEXT)
@@ -761,6 +764,13 @@ MUTANTS = {
     "guard: gates that are not a list are accepted":
         lambda: bad_gate_refuses("gates: {}\n", guard=guard_mut(
             """[ "$_shape" = '!!seq' ] || refuse "$GATE_FILE has no list of gates\"""", 'exit 0')),
+    "guard: a string prepull_paths is skipped":
+        lambda: guard_on_gate(f"{_OK}    prepull_paths: {SVC}/labs/z/values.yaml\n", "target", "labs", "app", guard=guard_mut(
+            '[ "$_bad" = 0 ] || refuse "$GATE_FILE has prepull_paths that are not a list"', 'true')) == 6,
+    "guard: merge keys are accepted":
+        lambda: guard_on_gate(f"b: &b\n  paths: [{SVC}/labs/z/values.yaml]\ngates:\n  - paths: [{_G}]\n    <<: *b\n",
+                              "target", "labs", "app",
+                              guard=guard_mut('refuse "$GATE_FILE uses a YAML merge key"', 'true')) == 6,
     "guard: unreadable gate no longer refuses":
         lambda: bad_gate_refuses(None, guard=guard_mut(
             '[ -r "$GATE_FILE" ] || refuse "$GATE_FILE cannot be read"', '[ -r "$GATE_FILE" ] || exit 0')),

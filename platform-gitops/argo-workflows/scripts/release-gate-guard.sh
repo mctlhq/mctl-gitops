@@ -57,6 +57,10 @@ valid_name() {
 load_gated() {
   [ ! -L "$GATE_FILE" ] || refuse "$GATE_FILE is a symlink"
   [ -f "$GATE_FILE" ] && [ -r "$GATE_FILE" ] || refuse "$GATE_FILE cannot be read"
+  # yq and PyYAML resolve YAML merge keys differently, so a gate must not use them.
+  if sed -e 's/^[[:space:]]*#.*$//' "$GATE_FILE" | grep -Eq '(^|[[:space:],{-])<<[[:space:]]*:'; then
+    refuse "$GATE_FILE uses a YAML merge key"
+  fi
   _shape=$(yq eval '.gates | tag' "$GATE_FILE" 2>/dev/null) || refuse "$GATE_FILE cannot be parsed"
   [ "$_shape" = '!!seq' ] || refuse "$GATE_FILE has no list of gates"
   # A gate with no list of paths guards nothing, and a non-string entry cannot be
@@ -64,6 +68,9 @@ load_gated() {
   _bad=$(yq eval '[.gates[] | select((.paths | tag) != "!!seq" or (.paths | length) == 0)] | length' "$GATE_FILE" 2>/dev/null) ||
     refuse "$GATE_FILE cannot be parsed"
   [ "$_bad" = 0 ] || refuse "$GATE_FILE has a gate with no paths"
+  _bad=$(yq eval '[.gates[] | select(.prepull_paths != null and (.prepull_paths | tag) != "!!seq")] | length' "$GATE_FILE" 2>/dev/null) ||
+    refuse "$GATE_FILE cannot be parsed"
+  [ "$_bad" = 0 ] || refuse "$GATE_FILE has prepull_paths that are not a list"
   _bad=$(yq eval '[.gates[] | (.paths[], (.prepull_paths // [])[]) | select(tag != "!!str")] | length' "$GATE_FILE" 2>/dev/null) ||
     refuse "$GATE_FILE cannot be parsed"
   [ "$_bad" = 0 ] || refuse "$GATE_FILE lists something that is not a string"
