@@ -523,6 +523,9 @@ check("a service directory symlinked to a gated one is refused", symlinked_dir()
 
 # A word in a note or a key must not stop every workflow for every tenant.
 _G = f"{SVC}/admins/mctl-agents-worker/values.yaml"
+# `name` ends the first list, so the second group is read by the file-wide scan alone.
+QUOTED_HASH_GATE = (f'gates:\n  - paths:\n      - {SVC}/labs/app/values.yaml\n    name: g\n'
+                    f'  - {{note: "a # b", paths: [{_G}]}}\n')
 for label, extra in {
     "a note about values": 'note: "values move together"',
     "an issue URL with services/": "issue: https://example.org/services/1",
@@ -534,8 +537,10 @@ for label, extra in {
     check(f"gate with {label}: the gated worker still is",
           guard_on_gate(gate, "target", "admins", WORKERS[0]) == 6)
 check("a path after a quoted # is still read as gated",
-      guard_on_gate(f'gates:\n  - paths:\n      - {SVC}/labs/app/values.yaml\n  - {{note: "a # b", paths: [{_G}]}}\n',
+      guard_on_gate(QUOTED_HASH_GATE,
                     "target", "admins", WORKERS[0]) == 6)
+check("the same gate does not refuse a service outside it",
+      guard_on_gate(QUOTED_HASH_GATE, "target", "labs", "other") == 0)
 for label, gate in {
     "a bare word in a paths list": f"gates:\n  - paths:\n      - {_G}\n      - oops\n",
     "a yaml alias as the list": "gates:\n  - paths: *common\n",
@@ -683,7 +688,7 @@ MUTANTS = {
             'valid_gated_path "$_t" || refuse "$GATE_FILE lists something',
             'true || refuse "$GATE_FILE lists something')),
     "guard: trailing comments cut again, a quoted # hides a path":
-        lambda: deploy_gated(WORKERS[0], gate=f'gates:\n  - paths:\n      - {SVC}/labs/app/values.yaml\n  - {{note: "a # b", paths: [{_G}]}}\n',
+        lambda: deploy_gated(WORKERS[0], gate=QUOTED_HASH_GATE,
                              guard=guard_mut("""-e 's/^[[:space:]]*#.*$//' "$GATE_FILE\"""",
                                              """-e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$GATE_FILE\""""),
                              wrote_nothing=False),
