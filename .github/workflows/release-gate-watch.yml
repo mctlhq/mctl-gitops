@@ -1,0 +1,80 @@
+name: Release gate watch
+
+# Tells a person when main stops satisfying release-gates.yaml
+# (mctlhq/mctl-agents#1007). validate-manifests.yml runs the same check on main,
+# but a red run there reaches nobody, and deploy keys push to main with no
+# pull request. Argo CD syncs main either way, so this is the only signal.
+#
+# A detector, not enforcement: it reports after the push, it reverts nothing,
+# and it sees only what `release-gate.py verify` checks (tags, repository,
+# `requires`). Other edits to a gated values file pass it. A push can change
+# this file too, so the daily run reads whatever main then holds.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '40 6 * * *'
+  pull_request:
+    paths:
+      - '.github/workflows/release-gate-watch.yml'
+      - 'scripts/release-gate.py'
+      - 'platform-gitops/release-gates.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gate-watch-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: main satisfies the release gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Verify
+        id: verify
+        run: |
+          # Only exit 6, the gate's own refusal, counts as a violation. Anything
+          # else is a check that did not run, which says nothing about main.
+          # `|| rc=$?`: GitHub runs this under bash -e, so a bare call would end the
+          # step before the state is written.
+          rc=0
+          python3 scripts/release-gate.py verify || rc=$?
+          case "$rc" in
+            0) echo "release gates hold" ;;
+            6) echo "state=violated" >> "$GITHUB_OUTPUT"
+               echo "::error::main does not satisfy release-gates.yaml" ;;
+            *) echo "::error::release-gate.py exited $rc, nothing was checked" ;;
+          esac
+          exit "$rc"
+
+      - name: Notify Telegram - gate violated
+        if: failure() && github.event_name != 'pull_request' && steps.verify.outputs.state == 'violated'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            ⚠️ *Release gate violated on main*
+            main no longer satisfies release-gates.yaml, and Argo CD syncs it.
+            Commit: ${{ github.sha }}
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Notify Telegram - the check itself failed
+        if: failure() && github.event_name != 'pull_request' && steps.verify.outputs.state != 'violated'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🔧 *Release gate check could not run*
+            This says nothing about main: checkout, PyYAML or the script failed.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

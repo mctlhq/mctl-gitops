@@ -557,6 +557,8 @@ jobs:
           python3 scripts/release-gate.py verify
           python3 tests/test_release_gate.py
 
+      - name: Release gate watch alerts on a violation
+        run: python3 tests/test_release_gate_watch.py
       - name: Release gate in the shared workflow templates
         # The templates' own scripts run against a local bare repository: every
         # refusal must leave it untouched, other services must still deploy and
