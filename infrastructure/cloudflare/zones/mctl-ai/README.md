@@ -6,7 +6,8 @@ Access one — different roots, different blockers.
 
 ## Scope
 
-29 objects: 15 DNS records, the `http_request_firewall_custom` ruleset (two rules), eleven
+30 objects: 15 DNS records, the `http_request_firewall_custom` ruleset (two rules),
+the `http_request_dynamic_redirect` ruleset (`www.mctl.ai` to the apex), eleven
 Email Routing forward rules, the catch-all, and the worker route
 `mctl.ai/api/*` → `mctl-landing-form` (`workers.tf`, #1179). The route is owned
 here; the worker script and its secrets stay in Wrangler (`mctlhq/mctl-web`,
