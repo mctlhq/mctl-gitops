@@ -26,7 +26,7 @@ jobs:
       roots: ${{ steps.find.outputs.roots }}
       count: ${{ steps.find.outputs.count }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - id: find
         run: |
           set -euo pipefail
@@ -184,7 +184,7 @@ jobs:
       TF_VAR_email_routing_destination_obukhov: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_OBUKHOV || '' }}
       TF_VAR_email_routing_destination_moonqua: ${{ (matrix.root == 'infrastructure/cloudflare/zones/mctl-ai' || matrix.root == 'infrastructure/cloudflare/account') && secrets.CF_MCTL_AI_EMAIL_MOONQUA || '' }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
       # RUNNER_TEMP, exported here rather than declared in the job's env block:
       # the runner context does not exist at that level (only github, needs,
