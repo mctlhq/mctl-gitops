@@ -23,8 +23,8 @@
       "recorded": "2026-09-25"
     },
     "api": {
-      "tools_total": 105,
-      "tools_enabled": 77,
+      "tools_total": 112,
+      "tools_enabled": 78,
       "enabled_tools": [
         "mctl_abandon_dev_loop",
         "mctl_acknowledge_incident",
@@ -48,6 +48,7 @@
         "mctl_get_lifecycle_ownership",
         "mctl_get_operation",
         "mctl_get_resource_usage",
+        "mctl_get_review_gate",
         "mctl_get_service_config",
         "mctl_get_service_logs",
         "mctl_get_service_pods",
@@ -112,7 +113,7 @@
         "platform-skill",
         "troubleshoot_incident"
       ],
-      "recorded": "2026-10-28"
+      "recorded": "2026-11-06"
     },
     "coolify": {
       "tools_total": 45,
