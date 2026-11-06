@@ -278,5 +278,5 @@ digest and the tag is only a label.
 */}}
 {{- define "base-service.imageRef" -}}
 {{- $tag := required "image.tag must be pinned per service (semver or @sha256 digest)" .Values.image.tag -}}
-{{- .Values.image.repository }}:{{ $tag }}{{ with .Values.image.digest }}@{{ . }}{{ end }}
+{{- .Values.image.repository }}:{{ $tag }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ end }}
 {{- end }}
