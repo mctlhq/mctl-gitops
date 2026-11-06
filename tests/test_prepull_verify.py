@@ -99,6 +99,12 @@ check("Deployment body is not JSON", run(deploy="{"), False)
 check("container missing", run(deploy=no_container), False)
 check("target without a digest", run(target="ghcr.io/x/y:2.0.0"), False)
 check("target with a short digest", run(target="ghcr.io/x/y:2.0.0@sha256:abc"), False)
+short = "ghcr.io/x/y:2.0.0@sha256:abc"
+short_ds = copy.deepcopy(DS)
+short_ds["spec"]["template"]["spec"]["containers"][0]["image"] = short
+check("a short digest the cluster agrees with is still not a digest",
+      run(target=short, ds=short_ds, pods=pods_with(*[pod(n, image=short, image_id="ghcr.io/x/y@sha256:abc")
+                                                      for n in ("n1", "n2", "n3")])), False)
 check("DaemonSet unreadable", run(fail=("daemonset",)), False)
 check("DaemonSet body is not JSON", run(ds="{"), False)
 check("DaemonSet has no status", run(ds={"metadata": {}, "spec": DS["spec"]}), False)
@@ -112,6 +118,7 @@ check("pods unreadable", run(fail=("pods",)), False)
 check("pods body is not JSON", run(pods="{"), False)
 check("a pod missing", run(pods=pods_with(pod("n1"), pod("n2"))), False)
 check("two pods on one node", run(pods=pods_with(pod("n1"), pod("n1"), pod("n3"))), False)
+check("an extra live pod on a covered node", run(pods=pods_with(*PODS["items"], pod("n3"))), False)
 check("a pod still pulling", run(pods=pods_with(pod("n1"), pod("n2"), pod("n3", phase="Pending"))), False)
 check("a pod not ready", run(pods=pods_with(pod("n1"), pod("n2"), pod("n3", ready=False))), False)
 check("a pod runs another digest",
