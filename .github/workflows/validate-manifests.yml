@@ -688,6 +688,11 @@ jobs:
           python3 tests/test_cwft_mctl_agents_approve_digest_binding.py
           python3 scripts/proposal-content-digest.py --selftest
 
+      - name: Unit-test the portal catalogue PR guard
+        # It writes to PRs with an App token, so what it refuses is the point:
+        # an enabled tool, a widening, or anything it could not read (#2416).
+        run: python3 tests/test_portal_catalogue_land.py
+
       - name: Unit-test the portal OAuth registration drift detector
         # The MCP server's `auth_credentials` is write-only: the API accepts it
         # and never returns it, so OpenTofu keeps what was last applied in

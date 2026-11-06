@@ -341,6 +341,12 @@ re-snapshot below):
   portal's order. A newly synced tool also needs a decision in the owning
   repo's allowlist first, and `scripts/validate-portal-allowlists.py` refuses
   a catalogue tool that has none.
+- when the change cannot widen exposure, `scripts/portal-catalogue-land.py`
+  writes it for you: into the server's open bump PR, or else a new
+  `portal-catalogue/<server>-<digest>` PR. It also records `tools_total`.
+  Every added tool must be disabled, no enabled tool may leave, and the
+  allowlist must stay within `baseline.json`. Otherwise it writes nothing and
+  the alert says why. Review, merge and `cloudflare-apply` stay with people.
 
 ### Changing what a server exposes: the bump path
 
