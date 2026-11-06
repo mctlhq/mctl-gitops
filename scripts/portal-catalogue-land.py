@@ -50,6 +50,8 @@ import subprocess
 import sys
 
 ALLOWLISTS = "infrastructure/cloudflare/portal/allowlists"
+# What `gh pr list --json author` returns for a PR opened by the App, read from
+# a real bump PR. REST calls the same account mctl-agents[bot].
 BOT_AUTHOR = "app/mctl-agents"
 PR_LIMIT = 500
 SERVER_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
@@ -106,6 +108,9 @@ def decide(server: str, live: list[str], catalogue: dict, baseline: dict,
         raise Unknown(f"{server}: malformed allowlist entry: {e!r}") from e
     if not all(isinstance(v, bool) for v in decisions.values()):
         raise Unknown(f"{server}: a non-boolean enabled in the allowlist")
+    # Branch content, and these names reach the alert in refusal reasons.
+    if not all(isinstance(n, str) and TOOL_RE.fullmatch(n) for n in decisions):
+        raise Unknown(f"{server}: an unexpected tool name in the allowlist")
     try:
         current = catalogue["servers"][server]
         entry = baseline["servers"][server]
@@ -116,8 +121,12 @@ def decide(server: str, live: list[str], catalogue: dict, baseline: dict,
         raise Unknown(f"{server}: missing catalogue or baseline entry: {e!r}") from e
     if not isinstance(current, list) or not isinstance(allowed_count, int):
         raise Unknown(f"{server}: malformed catalogue or baseline entry")
+    if not all(isinstance(n, str) and TOOL_RE.fullmatch(n) for n in current):
+        raise Unknown(f"{server}: an unexpected tool name in the catalogue")
 
-    if entry != ref:
+    # tools_total and recorded are this script's own writes, so a rerun must
+    # not read them as a person's decision. Everything else is one.
+    if decision_fields(entry) != decision_fields(ref):
         return Refusal("its PR already edits baseline.json, so a person is deciding it")
 
     added = [n for n in live if n not in current]
@@ -146,6 +155,10 @@ def decide(server: str, live: list[str], catalogue: dict, baseline: dict,
         new_baseline["servers"][server]["tools_total"] = len(decisions)
         new_baseline["servers"][server]["recorded"] = today
     return Change(new_catalogue, new_baseline, added, gone, baseline_changed)
+
+
+def decision_fields(entry: dict) -> dict:
+    return {k: v for k, v in entry.items() if k not in ("tools_total", "recorded")}
 
 
 def names(items: list[str], limit: int = 5) -> str:
@@ -212,12 +225,16 @@ class Gh:
             raise Unknown("the PR listing is not a list")
         return prs
 
-    def branch_exists(self, branch: str) -> bool:
+    def branch_head(self, branch: str) -> str | None:
+        """The branch's commit, or None when GitHub says it does not exist."""
         try:
-            self._json("api", f"repos/{self.repo}/git/ref/heads/{branch}")
+            doc = self._json("api", f"repos/{self.repo}/git/ref/heads/{branch}")
         except NotFound:
-            return False
-        return True
+            return None
+        sha = doc["object"]["sha"]
+        if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+            raise Unknown(f"could not resolve {branch}")
+        return sha
 
     def create_branch(self, branch: str, sha: str) -> None:
         self._json("api", "--method", "POST", f"repos/{self.repo}/git/refs",
@@ -236,7 +253,8 @@ class Gh:
 
 
 def pr_link(pr: dict) -> str:
-    url = pr.get("url") or pr.get("html_url") or ""
+    # html_url first: a REST pull request also has `url`, which is the API one.
+    url = pr.get("html_url") or pr.get("url") or ""
     return f'<a href="{html.escape(url, quote=True)}">#{int(pr["number"])}</a>'
 
 
@@ -271,17 +289,16 @@ def land(gh, server: str, live: list[str], today: str) -> str:
 
     pattern = re.compile(rf"portal-allowlist/{re.escape(server)}-[0-9a-f]{{7}}")
     matching = [p for p in gh.open_prs() if pattern.fullmatch(p.get("headRefName") or "")]
-    trusted = [p for p in matching
+    bot_prs = [p for p in matching
                if not p.get("isCrossRepository") and (p.get("author") or {}).get("login") == BOT_AUTHOR]
-    if len(matching) != len(trusted) or len(trusted) > 1:
+    if len(matching) != len(bot_prs) or len(bot_prs) > 1:
         return f"{server}: more than one candidate bump PR, or one the bot did not open, so nothing was written."
 
-    if trusted:
-        pr = trusted[0]
+    if bot_prs:
+        pr = bot_prs[0]
         ref, branch = pr["headRefOid"], pr["headRefName"]
     else:
         pr = None
-        ref = sha
         digest = hashlib.sha256("\n".join(live).encode("utf-8")).hexdigest()[:7]
         branch = f"portal-catalogue/{server}-{digest}"
         existing = gh.prs_for(branch)
@@ -289,8 +306,15 @@ def land(gh, server: str, live: list[str], today: str) -> str:
         if open_pr:
             return (f"{server}: already proposed in {pr_link(open_pr[0])}. "
                     "Merge it after review, then approve cloudflare-apply.")
-        if existing:
-            return f"{server}: {pr_link(existing[0])} proposed this and was closed, so it was not reopened."
+        # CLOSED only. A merged proposal rejected nothing: a portal that goes
+        # A, B, A has the same digest and needs proposing again.
+        closed = [p for p in existing if p.get("state") == "CLOSED"]
+        if closed:
+            return f"{server}: {pr_link(closed[0])} proposed this and was closed, so it was not reopened."
+        # A branch left by a run that died part way: continue from its head,
+        # or the writes below would carry stale blob shas and always answer 409.
+        head = gh.branch_head(branch)
+        ref = head or sha
 
     catalogue, cat_blob = gh.read(f"{ALLOWLISTS}/catalogue.json", ref, rewrite=True)
     baseline, base_blob = gh.read(f"{ALLOWLISTS}/baseline.json", ref, rewrite=True)
@@ -301,7 +325,7 @@ def land(gh, server: str, live: list[str], today: str) -> str:
         return f"{server}: <b>needs your decision</b>{where}: {html.escape(outcome.reason)}. Nothing was written."
 
     current = {"catalogue": catalogue}
-    if pr is None and not gh.branch_exists(branch):
+    if pr is None and head is None:
         gh.create_branch(branch, sha)
     wrote = write_change(gh, outcome, server, branch, (cat_blob, base_blob), current)
     if pr is None:

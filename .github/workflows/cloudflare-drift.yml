@@ -622,7 +622,7 @@ jobs:
       # must not get a token that can write here.
       - name: Generate a write token for the catalogue PR
         id: land_token
-        if: failure() && steps.catalogue.outputs.code == '5' && github.ref == 'refs/heads/main'
+        if: failure() && matrix.root == 'infrastructure/cloudflare/portal' && steps.catalogue.outputs.code == '5' && github.ref == 'refs/heads/main'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}

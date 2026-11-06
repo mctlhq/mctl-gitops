@@ -17,7 +17,8 @@ spec.loader.exec_module(land)
 A = land.ALLOWLISTS
 TODAY = "2026-11-07"
 BUMP = "portal-allowlist/api-1234567"
-BOT = {"login": land.BOT_AUTHOR}
+# Literal, as `gh pr list --json author` printed it for bump PR #2420.
+BOT = {"is_bot": True, "login": "app/mctl-agents"}
 
 
 def allowlist(**tools):
@@ -32,7 +33,7 @@ def baseline(enabled=("on",), total=2):
 class FakeGh:
     """A repository of branches, holding JSON files. Records every write."""
 
-    def __init__(self, files=None, prs=None, by_branch=None, branches=()):
+    def __init__(self, files=None, prs=None, by_branch=None, branches=None):
         main = {
             f"{A}/mapping.json": {"servers": {"api": {"vendored": True}}},
             f"{A}/catalogue.json": {"servers": {"api": ["on", "off"]}},
@@ -43,7 +44,7 @@ class FakeGh:
         self.refs = {"m" * 40: main, "b" * 40: copy.deepcopy(main)}
         self.prs = prs or []
         self.by_branch = by_branch or []
-        self.branches = set(branches)
+        self.branches = branches or {}
         self.writes = []
 
     def main_sha(self):
@@ -52,7 +53,7 @@ class FakeGh:
     def read(self, path, ref, rewrite=False):
         if path not in self.refs[ref]:
             raise land.NotFound(path)
-        return self.refs[ref][path], f"blob-{path}"
+        return self.refs[ref][path], f"blob-{ref[0]}-{path.rsplit('/', 1)[-1]}"
 
     def open_prs(self):
         return self.prs
@@ -60,18 +61,20 @@ class FakeGh:
     def prs_for(self, branch):
         return self.by_branch
 
-    def branch_exists(self, branch):
-        return branch in self.branches
+    def branch_head(self, branch):
+        return self.branches.get(branch)
 
     def create_branch(self, branch, sha):
         self.writes.append(("branch", branch, sha))
 
     def put(self, path, text, blob, branch, message):
-        self.writes.append(("put", path.rsplit("/", 1)[-1], branch, json.loads(text)))
+        self.writes.append(("put", path.rsplit("/", 1)[-1], branch, json.loads(text), blob))
 
     def create_pr(self, branch, title, body):
         self.writes.append(("pr", branch))
-        return {"number": 9, "html_url": "https://github.com/x/y/pull/9"}
+        # The REST shape: `url` is the API endpoint.
+        return {"number": 9, "url": "https://api.github.com/repos/x/y/pulls/9",
+                "html_url": "https://github.com/x/y/pull/9"}
 
     def puts(self):
         return [w for w in self.writes if w[0] == "put"]
@@ -86,7 +89,7 @@ class Land(unittest.TestCase):
     def test_disabled_tool_with_no_bump_pr_opens_a_new_pr(self):
         gh = FakeGh()
         out = land.land(gh, "api", ["on", "off", "new"], TODAY)
-        self.assertIn("#9", out)
+        self.assertIn('href="https://github.com/x/y/pull/9"', out)
         self.assertEqual(gh.writes[0][0], "branch")
         self.assertRegex(gh.writes[0][1], r"^portal-catalogue/api-[0-9a-f]{7}$")
         put = {w[1]: w[3] for w in gh.puts()}
@@ -165,6 +168,25 @@ class Land(unittest.TestCase):
         gh = FakeGh(by_branch=[{"number": 5, "url": "https://github.com/x/y/pull/5", "state": "OPEN"}])
         self.assert_refused(gh, ["on", "off", "new"], "already proposed")
 
+    def test_merged_proposal_does_not_block_a_new_one(self):
+        gh = FakeGh(by_branch=[{"number": 5, "url": "https://github.com/x/y/pull/5", "state": "MERGED"}])
+        out = land.land(gh, "api", ["on", "off", "new"], TODAY)
+        self.assertNotIn("was closed", out)
+        self.assertTrue(gh.puts())
+
+    def test_leftover_branch_continues_from_its_head(self):
+        live = ["on", "off", "new"]
+        digest = land.hashlib.sha256("\n".join(live).encode()).hexdigest()[:7]
+        branch = f"portal-catalogue/api-{digest}"
+        gh = FakeGh(branches={branch: "b" * 40})
+        gh.refs["b" * 40][f"{A}/catalogue.json"] = {"servers": {"api": live}}
+        land.land(gh, "api", live, TODAY)
+        self.assertFalse([w for w in gh.writes if w[0] == "branch"])
+        puts = gh.puts()
+        self.assertEqual([w[1] for w in puts], ["baseline.json"], "the catalogue commit is already there")
+        self.assertEqual(puts[0][4], "blob-b-baseline.json", "a main blob sha would answer 409 forever")
+        self.assertEqual(gh.writes[-1][0], "pr")
+
     def test_closed_proposal_is_not_reopened(self):
         gh = FakeGh(by_branch=[{"number": 5, "url": "https://github.com/x/y/pull/5", "state": "CLOSED"}])
         self.assert_refused(gh, ["on", "off", "new"], "was closed")
@@ -176,9 +198,10 @@ class Land(unittest.TestCase):
     def test_rerun_of_a_landed_bump_writes_nothing(self):
         gh = FakeGh(prs=[bump_pr()])
         gh.refs["b" * 40][f"{A}/catalogue.json"] = {"servers": {"api": ["on", "off", "new"]}}
+        # The script's own earlier write: main still records the old total.
         doc = baseline(total=3)
+        doc["servers"]["api"]["recorded"] = TODAY
         gh.refs["b" * 40][f"{A}/baseline.json"] = doc
-        gh.refs["m" * 40][f"{A}/baseline.json"] = copy.deepcopy(doc)
         out = land.land(gh, "api", ["on", "off", "new"], TODAY)
         self.assertEqual(gh.writes, [])
         self.assertIn("already carries", out)
@@ -201,6 +224,8 @@ class Unknowns(unittest.TestCase):
         self.assert_unknown(api={"tools": [{"name": "new", "enabled": "no"}]})
         self.assert_unknown(catalogue={"servers": {}})
         self.assert_unknown(baseline={"servers": {}})
+        self.assert_unknown(api=allowlist(**{"bad\nname": False}))
+        self.assert_unknown(catalogue={"servers": {"api": ["on", "bad\nname"]}})
 
     def test_bad_live_lists(self):
         for live in ([], ["on", "on"], ["<b>x</b>"], [1]):
@@ -250,9 +275,9 @@ class GhClient(unittest.TestCase):
             self.client('{"a":1}').open_prs()
 
     def test_only_404_means_branch_absent(self):
-        self.assertFalse(self.client(rc=1, stderr="gh: Not Found (HTTP 404)").branch_exists("b"))
+        self.assertIsNone(self.client(rc=1, stderr="gh: Not Found (HTTP 404)").branch_head("b"))
         with self.assertRaises(land.Unknown):
-            self.client(rc=1, stderr="HTTP 500").branch_exists("b")
+            self.client(rc=1, stderr="HTTP 500").branch_head("b")
 
     def test_read_decodes_contents(self):
         body = {"encoding": "base64", "sha": "s", "content": base64.b64encode(b'{"a": 1}').decode()}
