@@ -425,16 +425,34 @@ spec:
 
           sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$TEAM" "$COMPONENT" || exit 1
 
-          # Append or update autoscaling block
-          if grep -q "^autoscaling:" "${VALUES}"; then
-            sed -i "s|^\( *enabled: *\).*|\1true|" "${VALUES}"
-            sed -i "s|^\( *minReplicas: *\).*|\1${MIN}|" "${VALUES}"
-            sed -i "s|^\( *maxReplicas: *\).*|\1${MAX}|" "${VALUES}"
-            sed -i "s|^\( *targetCPUUtilizationPercentage: *\).*|\1${CPU}|" "${VALUES}"
-          else
-            printf '\nautoscaling:\n  enabled: true\n  minReplicas: %s\n  maxReplicas: %s\n  targetCPUUtilizationPercentage: %s\n' \
-              "${MIN}" "${MAX}" "${CPU}" >> "${VALUES}"
-          fi
+          # Update the autoscaling block with yq, confined to .autoscaling.
+          # This used to be four `sed -i` substitutions anchored only on the
+          # key name, so they rewrote EVERY `enabled`, `minReplicas`,
+          # `maxReplicas` and `targetCPUUtilizationPercentage` in the file —
+          # an unrelated `enabled: false` (ingress, serviceMonitor, ...) was
+          # switched on and any other block's replica bounds overwritten
+          # (gitops#2413). yq creates the block when it is missing and
+          # leaves the rest of the document alone.
+          #
+          # The values are validated integers, passed through the
+          # environment and tagged !!int so they stay numbers in the YAML.
+          # Leading zeros are dropped first: `08` is not a YAML integer and
+          # would be written back as a float-looking scalar.
+          strip_zeros() {
+            v="$1"
+            while [ "${#v}" -gt 1 ] && [ "${v#0}" != "$v" ]; do v="${v#0}"; done
+            printf '%s' "$v"
+          }
+          MIN="$(strip_zeros "$MIN")"
+          MAX="$(strip_zeros "$MAX")"
+          CPU="$(strip_zeros "$CPU")"
+          export MIN MAX CPU
+          yq eval -i '
+            .autoscaling.enabled = true |
+            .autoscaling.minReplicas = (strenv(MIN) | . tag = "!!int") |
+            .autoscaling.maxReplicas = (strenv(MAX) | . tag = "!!int") |
+            .autoscaling.targetCPUUtilizationPercentage = (strenv(CPU) | . tag = "!!int")
+          ' "${VALUES}"
 
           git config user.email "ci@mctl.ai"
           git config user.name "mctl-deploy"
