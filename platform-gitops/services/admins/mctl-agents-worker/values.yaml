@@ -52,7 +52,7 @@ imagePullSecrets:
 prepull:
   enabled: true
   ref: "ghcr.io/mctlhq/mctl-agents:1.117.0@sha256:6162d8635374efd4d903c5f5b38cb317d05075041d44a0ea6fdf7dbf818ed09a"
-  verifierImage: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0
+  verifierImage: ghcr.io/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
 # --role control since the queue split (ADR-008): this process runs every
 # workflow and every short activity on `mctl-dev-loop`, while
 # mctl-agents-worker-exec serves submit_and_wait on `mctl-dev-loop-exec`.
