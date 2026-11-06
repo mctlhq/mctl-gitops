@@ -5,6 +5,7 @@
 #   - the bump names some but not all of a group's paths (partial bump);
 #   - the group's tags differ, or a file names another image.repository;
 #   - a `requires` condition does not hold in the current file;
+#   - a file in `prepull_paths` is bumped automatically, or its digests are malformed;
 #   - the new tag, or any current tag, is below `min_tag` (image floor);
 #   - this file, a listed file, or a required key cannot be read (an
 #     unreadable gate is a refusal, never a pass).
@@ -28,3 +29,11 @@ gates:
       - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml
         key: strategy.type
         equals: Recreate
+      # The cached rollout is not optional once Recreate is on.
+      - path: platform-gitops/services/admins/mctl-agents-worker/values.yaml
+        key: prepull.enabled
+        equals: true
+    # Deployed through two reviewed PRs (see the values file): refuses automated
+    # bumps of the group and checks the shape of prepull.ref and image.digest.
+    prepull_paths:
+      - platform-gitops/services/admins/mctl-agents-worker/values.yaml

@@ -271,3 +271,12 @@ Volume name for a writablePaths entry: /var/cache/nginx -> writable-var-cache-ng
 {{- define "base-service.writableVolumeName" -}}
 {{- printf "writable-%s" (regexReplaceAll "[^a-z0-9]+" (lower .) "-" | trimAll "-") | trunc 63 | trimSuffix "-" -}}
 {{- end }}
+
+{{/*
+The workload's image reference. With image.digest set, the runtime uses the
+digest and the tag is only a label.
+*/}}
+{{- define "base-service.imageRef" -}}
+{{- $tag := required "image.tag must be pinned per service (semver or @sha256 digest)" .Values.image.tag -}}
+{{- .Values.image.repository }}:{{ $tag }}{{ with .Values.image.digest }}@{{ . }}{{ end }}
+{{- end }}

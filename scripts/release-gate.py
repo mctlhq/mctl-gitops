@@ -27,6 +27,7 @@ REFUSED = 6
 # ASCII digits only, no leading zeros: `\d` accepts Unicode digits and "01".
 _N = r"(0|[1-9][0-9]*)"
 SEMVER = re.compile(rf"{_N}\.{_N}\.{_N}", re.ASCII)
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
 
 
 def _semver(tag: Any) -> tuple[int, int, int] | None:
@@ -59,6 +60,9 @@ def _gates(root: Path) -> list[dict]:
         for r in g.get("requires") or []:
             if not (isinstance(r, dict) and {"path", "key", "equals"} <= set(r) and r["path"] in g["paths"]):
                 raise ValueError(f"gate {g['name']}: malformed requires {r!r}")
+        for p in g.get("prepull_paths") or []:
+            if p not in g["paths"]:
+                raise ValueError(f"gate {g['name']}: prepull_paths entry {p!r} is not in paths")
     return gates
 
 
@@ -115,6 +119,29 @@ def problems(root: Path, files: list[str] | None, new_tag: str | None) -> list[s
                 continue
             if got != r["equals"]:
                 out.append(f"{r['path']}: {r['key']} is {got!r}, requires {r['equals']!r}")
+        for p in g.get("prepull_paths") or []:
+            if p in touched:
+                out.extend(_prepull_problems(root, p, files is not None))
+    return out
+
+
+def _prepull_problems(root: Path, path: str, is_bump: bool) -> list[str]:
+    """A pre-pulled worker moves through two reviewed commits, never one bump."""
+    if is_bump:
+        return [f"{path}: pre-pull rollout, an automated tag bump would be stopped by PreSync: use the reviewed PRs"]
+    try:
+        doc = _load(root, path)
+        repo = _dig(doc, "image.repository")
+        ref = _dig(doc, "prepull.ref")
+        digest = (doc["image"].get("digest") or "")
+    except Exception as exc:  # noqa: BLE001
+        return [f"UNKNOWN: {path} pre-pull settings unreadable: {type(exc).__name__}"]
+    out = []
+    m = re.fullmatch(re.escape(str(repo)) + r":[^@: ]+@(.+)", str(ref))
+    if not (m and DIGEST.fullmatch(m.group(1))):
+        out.append(f"{path}: prepull.ref {ref!r} is not {repo}:tag@sha256:<64 hex>")
+    if digest and not DIGEST.fullmatch(str(digest)):
+        out.append(f"{path}: image.digest {digest!r} is not sha256:<64 hex>")
     return out
 
 
@@ -160,6 +187,37 @@ def _tree(d: Path, *, tags=("1.117.0",) * 3, strategy: str | None = "Recreate", 
     )
 
 
+def _prepull_selftest() -> list[str]:
+    good = "ghcr.io/x/y:1.118.0@sha256:" + "a" * 64
+    cases: list[tuple[str, dict, list[str] | None, bool]] = [
+        ("pre-pull verify", {"prepull": {"ref": good}}, None, True),
+        ("pre-pull digest pinned", {"prepull": {"ref": good}, "digest": "sha256:" + "b" * 64}, None, True),
+        ("pre-pull refuses a bump", {"prepull": {"ref": good}}, _P, False),
+        ("pre-pull ref missing", {}, None, False),
+        ("pre-pull ref is a tag", {"prepull": {"ref": "ghcr.io/x/y:1.118.0"}}, None, False),
+        ("pre-pull ref short digest", {"prepull": {"ref": "ghcr.io/x/y:1.118.0@sha256:abc"}}, None, False),
+        ("pre-pull other repository", {"prepull": {"ref": "ghcr.io/x/z:1.118.0@sha256:" + "a" * 64}}, None, False),
+        ("image digest malformed", {"prepull": {"ref": good}, "digest": "sha256:zz"}, None, False),
+    ]
+    bad = []
+    for name, kw, files, ok in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            gate = yaml.safe_dump({"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0", "repository": "ghcr.io/x/y",
+                                              "prepull_paths": [_P[0]]}]})
+            _tree(d, gate=gate)
+            doc = yaml.safe_load((d / _P[0]).read_text())
+            if "prepull" in kw:
+                doc["prepull"] = kw["prepull"]
+            if "digest" in kw:
+                doc["image"]["digest"] = kw["digest"]
+            (d / _P[0]).write_text(yaml.safe_dump(doc))
+            found = problems(d, files, "1.118.0" if files else None)
+            if bool(found) == ok:
+                bad.append(f"{name}: {found}")
+    return bad
+
+
 def selftest() -> int:
     cases: list[tuple[str, dict, list[str] | None, str | None, bool]] = [
         ("converged bump", {}, _P, "1.118.0", True),
@@ -203,6 +261,7 @@ def selftest() -> int:
         (d / GATE).unlink()
         if not problems(d, _P, "1.118.0"):
             bad.append("gate file missing")
+    bad.extend(_prepull_selftest())
     if bad:
         print(f"selftest FAILED: {bad}", file=sys.stderr)
         return 1
