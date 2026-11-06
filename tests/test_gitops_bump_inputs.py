@@ -193,6 +193,14 @@ check("validation holds no permissions", WF["jobs"]["validate-inputs"]["permissi
 check("validation has no environment or checkout",
       "environment" not in WF["jobs"]["validate-inputs"] and "uses" not in str(WF["jobs"]["validate-inputs"]["steps"]))
 check("no replacement string carries the tag", "subn(r'" not in BUMP)
+# A check that cannot fail is no check.
+bump_job = WF["jobs"]["bump"]
+validate_step = WF["jobs"]["validate-inputs"]["steps"][0]
+check("validation cannot be let through", "continue-on-error" not in validate_step and "|| true" not in VALIDATE)
+check("bump has no condition that skips validation", "if" not in bump_job and "continue-on-error" not in bump_job)
+check("the bump step cannot be let through",
+      "continue-on-error" not in [s for s in bump_job["steps"] if s.get("name") == "Bump image tags"][0])
+check("a gate refusal stops the bump", re.search(r"if _gate\.returncode != 0:\n\s+print\([^\n]*\n\s+sys\.exit\(6\)", BUMP) is not None)
 
 
 # Mutants: remove each layer, the matching behaviour must go.
@@ -213,8 +221,7 @@ rc, changed, contents, _ = bump(tag=INJECT, script=NO_TAG.replace("elif not only
 check("mutant caught: both off, the injection lands (the checks are what stop it)",
       rc == 0 and "fullnameOverride: PROBE" in contents.get(OTHER, ""), rc)
 rc, changed, _, _ = bump(tag="1.0\\1", script=NO_LAMBDA_TAG)
-check("mutant caught: a replacement string reads a group reference",
-      rc != 0 or "1.0\\1" not in changed, rc)
+check("mutant caught: a replacement string reads a group reference", rc != 0, rc)
 rc, changed, _, _ = bump(image="ghcr.io/other/absent", script=NO_IMAGE)
 check("mutant caught: image check off, this image reaches the file scan", rc == 3, rc)
 rc, changed, _, _ = bump(path="platform-gitops/services/labs/link/values.yaml", image="ghcr.io/mctlhq/mctl-agents",
