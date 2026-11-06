@@ -147,14 +147,16 @@ while [ $# -gt 0 ]; do
   case "$1" in -o) out="$2"; shift ;; -w) w="$2"; shift ;; esac
   shift
 done
-J='{"auth":{"client_token":"t"},"verified":true,"method":"txt","domains":[{"domain":"a.example.org","id":"1"}]}'
+J='{"auth":{"client_token":"t"},"verified":true,"method":"txt","domains":[{"domain":"a.example.org","id":"1"},{"domain":"b.example.org","id":"2"}]}'
 if [ -n "$out" ]; then printf '%s' "$J" > "$out"; else printf '%s' "$J"; fi
 [ -n "$w" ] && printf 200
 exit 0
 """)
         apk = self.bin / "apk"
         apk.write_text("#!/bin/sh\nexit 0\n")
-        for p in (curl, apk):
+        openssl = self.bin / "openssl"  # not in every test image; the template only wants random text
+        openssl.write_text("#!/bin/sh\necho fixture-password\n")
+        for p in (curl, apk, openssl):
             p.chmod(0o755)
 
     def race(self, rel, text):
@@ -210,7 +212,11 @@ RACE_EOF
             env["RACE_HOOK"] = race
         script = self.tmp / f"{name}.sh"
         script.write_text(src)
-        r = subprocess.run(["sh", str(script)], env=env, capture_output=True, text=True,
+        # These run under busybox ash in production and use its ${x//a/b} and
+        # pipefail; dash, sh on Ubuntu, has neither. The guard they call still
+        # runs under plain sh.
+        shell = "bash" if name in ("add-domain", "remove-domain", "autoscale") else "sh"
+        r = subprocess.run([shell, str(script)], env=env, capture_output=True, text=True,
                            cwd=self.tmp, timeout=120)
         return r.returncode, r.stdout + r.stderr
 
@@ -423,11 +429,30 @@ def writer_gated(name, mutate=None):
     return boxed(body)
 
 
-def writer_other_passes(name):
+def writer_seed(work):
+    """What these operations expect of an ordinary service that has a custom domain."""
+    p = work / SVC / "labs/app/values.yaml"
+    p.write_text(p.read_text() + "ingress:\n  hosts:\n    - a.example.org\n  tls:\n"
+                 "    - secretName: app-custom-tls\n      hosts:\n        - a.example.org\n")
+    (work / SVC / "labs/app/custom-tls.yaml").write_text("x: y\n")
+    d = work / "platform-gitops/infra-components/data/cnpg/shared"
+    d.mkdir(parents=True)
+    (d / "cluster.yaml").write_text(
+        "spec:\n  postgresql:\n    pg_hba:\n      - local all all trust\n"
+        "  managed:\n    roles:\n      # Team app roles\n")
+    (d / "databases.yaml").write_text("---\n")
+    (d / "secrets.yaml").write_text("---\n")
+
+
+def writer_other_pushes(name):
     def body(b):
-        rc, out = b.run(name, WRITERS[name]("labs", "app"))
-        return "release gate" not in out and "clone" in b.gitlog()
-    return boxed(body)
+        before = b.head()
+        params = WRITERS[name]("labs", "app")
+        if name == "add-domain":
+            params["PARAM_DOMAIN"] = "b.example.org"  # the seed already has a.example.org
+        rc, out = b.run(name, params)
+        return rc == 0 and b.head() != before and "release gate" not in out
+    return boxed(body, seed=writer_seed)
 
 
 # wft-rollback-service refuses gated files with its own inline guard, which
@@ -487,7 +512,11 @@ check("validate refuses a gated worker before any build or Vault step", validate
 
 for name in WRITERS:
     check(f"{name}: a gated worker is refused before any commit", writer_gated(name))
-    check(f"{name}: another service gets past the guard", writer_other_passes(name))
+    # provision-database uses GNU/busybox sed syntax, so it cannot finish on macOS.
+    if name == "database" and sys.platform == "darwin":
+        print(f"SKIP  {name}: another service still pushes (needs Linux sed)")
+    else:
+        check(f"{name}: another service still pushes", writer_other_pushes(name))
 
 ALL_DOCS = [(p.name, d) for p in sorted(TPL.glob("*.yaml")) for d in yaml.safe_load_all(p.read_text()) if d]
 check("every template that pushes and touches services/ carries both checks",
@@ -521,31 +550,47 @@ check("a missing guard script refuses", missing_guard_refuses())
 check("a values file symlinked to a gated one is refused", symlinked())
 check("a service directory symlinked to a gated one is refused", symlinked_dir())
 
-# A word in a note or a key must not stop every workflow for every tenant.
+# Nothing but gates[].paths and prepull_paths may decide, in either direction.
 _G = f"{SVC}/admins/mctl-agents-worker/values.yaml"
-# `name` ends the first list, so the second group is read by the file-wide scan alone.
+_OK = f"gates:\n  - paths:\n      - {_G}\n"
 QUOTED_HASH_GATE = (f'gates:\n  - paths:\n      - {SVC}/labs/app/values.yaml\n    name: g\n'
                     f'  - {{note: "a # b", paths: [{_G}]}}\n')
-for label, extra in {
-    "a note about values": 'note: "values move together"',
-    "an issue URL with services/": "issue: https://example.org/services/1",
-    "a requires key with values": "key: helm.values.strategy",
+for label, gate in {
+    "a note about values": _OK + '    note: "values move together"\n',
+    "a note naming a file": _OK + "    note: bump each values.yaml together\n",
+    "an issue URL with services/": _OK + "    issue: https://example.org/services/1\n",
+    "a requires key with values": _OK + "    key: helm.values.strategy\n",
+    "a trailing comment naming a path": _OK + f'    min_tag: "1.0.0"  # see {SVC}/labs/app/values.yaml\n',
+    "a block scalar line": _OK + "    note: |\n      paths: reviewed by hand\n",
+    "another key ending in paths": _OK + "    docs_paths: [README.md]\n",
+    "a second gate after paths": _OK + f"  - name: b\n    paths:\n      - {SVC}/admins/mctl-agents-worker-exec/values.yaml\n",
+    "a hash in a quoted note": QUOTED_HASH_GATE.replace(f"{SVC}/labs/app/values.yaml", f"{SVC}/labs/z/values.yaml"),
 }.items():
-    gate = f"gates:\n  - paths:\n      - {_G}\n    {extra}\n"
     check(f"gate with {label}: another service is not refused",
           guard_on_gate(gate, "target", "labs", "app") == 0)
     check(f"gate with {label}: the gated worker still is",
           guard_on_gate(gate, "target", "admins", WORKERS[0]) == 6)
-check("a path after a quoted # is still read as gated",
-      guard_on_gate(QUOTED_HASH_GATE,
-                    "target", "admins", WORKERS[0]) == 6)
-check("the same gate does not refuse a service outside it",
-      guard_on_gate(QUOTED_HASH_GATE, "target", "labs", "other") == 0)
+for label, gate in {
+    "quoted key and escapes": f'"gates":\n  - "paths": ["platform-gitop\\x73/services/admins/mctl-agents-worker/values\\x2eyaml"]\n',
+    "a multi-line flow list": f"gates:\n  - paths: [\n      {_G}\n    ]\n",
+    "only prepull_paths naming it": f"gates:\n  - paths:\n      - {SVC}/labs/z/values.yaml\n    prepull_paths:\n      - {_G}\n",
+}.items():
+    check(f"gate with {label}: the worker is gated, as YAML reads it",
+          guard_on_gate(gate, "target", "admins", WORKERS[0]) == 6)
+    check(f"gate with {label}: another service is not refused",
+          guard_on_gate(gate, "target", "labs", "app") == 0)
 for label, gate in {
     "a bare word in a paths list": f"gates:\n  - paths:\n      - {_G}\n      - oops\n",
-    "a yaml alias as the list": "gates:\n  - paths: *common\n",
+    "an undefined alias": "gates:\n  - paths: *common\n",
+    "a defined alias, which yq does not tag as a list": f"x: &p\n  - {_G}\ngates:\n  - paths: *p\n",
     "a bare word in a flow list": f"gates:\n  - paths: [{_G}, oops]\n",
-    "a bare word in prepull_paths": f"gates:\n  - paths:\n      - {_G}\n    prepull_paths:\n      - oops\n",
+    "a bare word in prepull_paths": f"{_OK}    prepull_paths:\n      - oops\n",
+    "a gate with no paths next to a good one": f"{_OK}  - name: b\n",
+    "paths as a string": f"gates:\n  - paths: {_G}\n",
+    "a number in a list": f"{_OK}      - 7\n",
+    "a broken file": "gates: [\n",
+    "gates as a map": f"gates:\n  paths:\n    - {_G}\n",
+    "two documents": f"{_OK}---\n{_OK}",
 }.items():
     check(f"{label} refuses", guard_on_gate(gate, "target", "labs", "app") == 6)
 real = yaml.safe_load(GATE_TEXT)
@@ -554,6 +599,25 @@ for g in real["gates"]:
         team, service = p.split("/")[2:4]
         check(f"guard agrees with YAML: {team}/{service} in the real gate is refused",
               guard_on_gate(GATE_TEXT, "target", team, service) == 6)
+
+
+def yq_stub_refuses(stub):
+    with tempfile.TemporaryDirectory() as d:
+        w = pathlib.Path(d)
+        (w / "bin").mkdir()
+        (w / "bin/yq").write_text(stub)
+        (w / "bin/yq").chmod(0o755)
+        (w / GUARD_REL).parent.mkdir(parents=True)
+        (w / GUARD_REL).write_text(GUARD_TEXT)
+        (w / GATE_REL).write_text(_OK)
+        r = subprocess.run(["sh", str(w / GUARD_REL), "target", "labs", "app"], cwd=w, capture_output=True,
+                           text=True, env={**os.environ, "PATH": f"{w}/bin:{os.environ['PATH']}"})
+        return r.returncode == 6
+
+
+check("a yq that fails refuses", yq_stub_refuses("#!/bin/sh\nexit 1\n"))
+check("a yq that answers nothing refuses", yq_stub_refuses("#!/bin/sh\nexit 0\n"))
+check("a yq of another kind refuses", yq_stub_refuses("#!/bin/sh\necho null\n"))
 
 # The shape the worker group will have once mctl-gitops#2394 lands, and flow style.
 for label, gate in {
@@ -683,24 +747,25 @@ MUTANTS = {
     "validate: target call removed":
         lambda: validate_gated(mutate=no_target),
     **{f"{n}: target call removed": (lambda n=n: writer_gated(n, mutate=no_target)) for n in WRITERS},
-    "guard: a bare word in a paths list is ignored":
-        lambda: bad_gate_refuses(f"gates:\n  - paths:\n      - {_G}\n      - oops\n", guard=guard_mut(
-            'valid_gated_path "$_t" || refuse "$GATE_FILE lists something',
-            'true || refuse "$GATE_FILE lists something')),
-    "guard: trailing comments cut again, a quoted # hides a path":
-        lambda: deploy_gated(WORKERS[0], gate=QUOTED_HASH_GATE,
-                             guard=guard_mut("""-e 's/^[[:space:]]*#.*$//' "$GATE_FILE\"""",
-                                             """-e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$GATE_FILE\""""),
-                             wrote_nothing=False),
     "guard: shape check off, a glob is accepted":
         lambda: bad_gate_refuses(GLOB_GATE, guard=SHAPE_OFF),
     "guard: set -f off, shape check sees expanded files":
         lambda: bad_gate_refuses(GLOB_GATE, guard=guard_mut("set -f\n", "")),
+    "guard: a gate with no paths next to a good one is accepted":
+        lambda: bad_gate_refuses(f"{_OK}  - name: b\n", guard=guard_mut(
+            '[ "$_bad" = 0 ] || refuse "$GATE_FILE has a gate with no paths"', 'true')),
+    "guard: a non-string entry is accepted":
+        lambda: bad_gate_refuses(f"{_OK}      - 7\n", guard=guard_mut(
+            '[ "$_bad" = 0 ] || refuse "$GATE_FILE lists something that is not a string"', 'true').replace(
+            'valid_gated_path "$_t" || refuse', 'true || refuse')),
+    "guard: gates that are not a list are accepted":
+        lambda: bad_gate_refuses("gates: {}\n", guard=guard_mut(
+            """[ "$_shape" = '!!seq' ] || refuse "$GATE_FILE has no list of gates\"""", 'exit 0')),
     "guard: unreadable gate no longer refuses":
         lambda: bad_gate_refuses(None, guard=guard_mut(
             '[ -r "$GATE_FILE" ] || refuse "$GATE_FILE cannot be read"', '[ -r "$GATE_FILE" ] || exit 0')),
     "guard: empty group no longer refuses":
-        lambda: bad_gate_refuses("gates:\n  - paths: []\n", guard=guard_mut(
+        lambda: bad_gate_refuses("gates: []\n", guard=guard_mut(
             '[ -n "$GATED" ] || refuse', '[ -n "$GATED" ] || exit 0; true || refuse')),
     "guard: target compares nothing":
         lambda: deploy_gated(WORKERS[0], guard=guard_mut(

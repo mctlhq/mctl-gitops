@@ -17,10 +17,10 @@
 # that a service is outside it. A caller must treat every non-zero exit, a
 # missing script included, as a refusal.
 #
-# No interpreter and no yq: mctl-workflow-tools has no python, and a value this
-# script must trust should not depend on a parser being present. Portable sh.
+# Portable sh and yq v4, which every image running this has. mctl-workflow-tools
+# has no python. A yq that is missing or answers anything unexpected refuses.
 set -u
-# Tokens from the gate file are split unquoted; a `*` must stay a `*` and refuse.
+# Paths from the gate file are split unquoted; a `*` must stay a `*` and refuse.
 set -f
 
 GATE_FILE=platform-gitops/release-gates.yaml
@@ -52,38 +52,27 @@ valid_name() {
   [ "${#1}" -le 63 ]
 }
 
+# The same fields scripts/release-gate.py reads, through a real YAML parser, so
+# notes, comments and other keys in the file mean nothing here.
 load_gated() {
   [ ! -L "$GATE_FILE" ] || refuse "$GATE_FILE is a symlink"
   [ -f "$GATE_FILE" ] && [ -r "$GATE_FILE" ] || refuse "$GATE_FILE cannot be read"
-  # Whole-line comments only. A trailing `#` may sit inside a quoted string, and
-  # cutting there could hide a path that YAML still reads.
-  _body=$(sed -e 's/^[[:space:]]*#.*$//' "$GATE_FILE") || refuse "$GATE_FILE cannot be read"
-  case "$_body" in
-    *paths:*) ;;
-    *) refuse "$GATE_FILE names no paths" ;;
-  esac
-  _tokens=$(printf '%s\n' "$_body" | tr -s ' \t,"{}'\''' '\n' | tr -d '[]') ||
+  _shape=$(yq eval '.gates | tag' "$GATE_FILE" 2>/dev/null) || refuse "$GATE_FILE cannot be parsed"
+  [ "$_shape" = '!!seq' ] || refuse "$GATE_FILE has no list of gates"
+  # A gate with no list of paths guards nothing, and a non-string entry cannot be
+  # compared: either means the file is not what this script understands.
+  _bad=$(yq eval '[.gates[] | select((.paths | tag) != "!!seq" or (.paths | length) == 0)] | length' "$GATE_FILE" 2>/dev/null) ||
+    refuse "$GATE_FILE cannot be parsed"
+  [ "$_bad" = 0 ] || refuse "$GATE_FILE has a gate with no paths"
+  _bad=$(yq eval '[.gates[] | (.paths[], (.prepull_paths // [])[]) | select(tag != "!!str")] | length' "$GATE_FILE" 2>/dev/null) ||
+    refuse "$GATE_FILE cannot be parsed"
+  [ "$_bad" = 0 ] || refuse "$GATE_FILE lists something that is not a string"
+  _paths=$(yq eval '.gates[] | (.paths[], (.prepull_paths // [])[])' "$GATE_FILE" 2>/dev/null) ||
     refuse "$GATE_FILE cannot be parsed"
   GATED=""
-  # Anywhere in the file, only what is unmistakably a path counts, so a word in a
-  # note or a requires key cannot stop every workflow for every tenant.
-  for _t in $_tokens; do
-    case "$_t" in
-      *platform-gitops/* | services/* | *.yaml | *.yml)
-        valid_gated_path "$_t" || refuse "$GATE_FILE names a path of unknown shape: $_t"
-        GATED="$GATED $_t"
-        ;;
-    esac
-  done
-  # Under a *paths key, everything must be a gated path: nothing there is skipped.
-  _listed=$(printf '%s\n' "$_body" | awk '
-    /^[ \t]*(-[ \t]+)?[a-z_]*paths[ \t]*:/ { inlist = 1; sub(/^[^:]*:/, ""); print; next }
-    inlist && /^[ \t]*-[ \t]/ { sub(/^[ \t]*-[ \t]+/, ""); print; next }
-    inlist && /^[ \t]*$/ { next }
-    { inlist = 0 }' | sed -e 's/[[:space:]]#.*$//' | tr -s ' \t,"{}'\''' '\n' | tr -d '[]') ||
-    refuse "$GATE_FILE cannot be parsed"
-  for _t in $_listed; do
-    valid_gated_path "$_t" || refuse "$GATE_FILE lists something that is not a values path: $_t"
+  for _t in $_paths; do
+    valid_gated_path "$_t" || refuse "$GATE_FILE names a path of unknown shape: $_t"
+    GATED="$GATED $_t"
   done
   [ -n "$GATED" ] || refuse "$GATE_FILE names no values file"
 }
