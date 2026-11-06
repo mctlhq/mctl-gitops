@@ -152,7 +152,7 @@ Watch behaviour (new file `tests/test_merge_watch_final_read.py` unless noted):
   grace-polls site and at the read-error site -> the same result with no final read. Abandon during a final-read backoff
   or the R1a window -> wakes at once, no further attempt, no record. Abandon during a settle -> no `get_pr_state` and no
   `confirm_no_pr` after it. Abandon during `confirm_no_pr` that then confirms -> `abandoned-unverified`, not
-  `no-pr-confirmed`. Abandon during a read that returns OPEN -> `abandoned-unverified`, with the fresh state. Abandon
+  `no-pr-confirmed`. Abandon during a read that returns OPEN, and during that state's `_track_ownership` -> `abandoned-unverified`, with the fresh state. Abandon
   during a read that returns MERGED -> the MERGED is reported. Abandon after the decision point -> the record is still written and `ended` names the exit. The
   #516 terminal-status break does no final read and no record. A MERGED read inside the loop is byte-identical in
   commands.
@@ -175,7 +175,7 @@ Watch behaviour (new file `tests/test_merge_watch_final_read.py` unless noted):
   a gate in flight whose merge lands during the window, the second read reports MERGED with `terminal`. With one still
   OPEN after `GATED_ACTIVITY_TIMEOUT` -> reconcile-required, `last_observed_pr` the fresh OPEN, not a `final-read` OPEN.
   With a gate that reported `ran` at the returned head and a read of OPEN -> the same. With no attempt in flight -> no
-  window timer and a `final-read` OPEN. On a grace-polls and a read-error exit, a found OPEN leaves the tick and gate
+  `workflow.wait`, no window timer and a `final-read` OPEN. On a grace-polls and a read-error exit, a found OPEN leaves the tick and gate
   running; no found state settles them before the proof or record; an unobserved attempt adds the window and a second
   read, and an OPEN then resumes the loop. No double settle in `finally`. `gate_ran_head` survives a hop. After a resume
   from a settle with a tick in flight, no second shepherd is submitted before `tick_blocked_until`, the boundary consumes

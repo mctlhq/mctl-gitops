@@ -148,7 +148,7 @@ async def _decide_watch_end(self, exit_name, watch, deadline) -> _WatchDecision:
 mutable per-run record that holds the settled tasks and the poll counters which are locals today (`last`,
 `polls_without_pr`, `terminal_status_polls`, `saw_open_pr`, `tick_task`, `gate_task`, `track_ownership`, `poll_index`).
 `poll_index` must be the real one, because `_settle_gate` feeds it to the gate-off latch. `read.abandoned` is True when
-the flag is set after an attempt and that attempt did not find a MERGED or CLOSED PR, so a found OPEN with an abandon is
+the flag is set after an attempt, checked after `_apply_found_state` has finished, and that attempt did not find a MERGED or CLOSED PR, so a found OPEN with an abandon is
 abandoned, with `last` holding the fresh state.
 
 `_apply_found_state(state, watch)` is the found branch's bookkeeping (lines 6628-6644) factored out: `last`,
@@ -157,8 +157,8 @@ index, and `_track_ownership(state)`. The in-loop found branch and `_final_pr_re
 by the final read takes a claim before `_terminal_claim` and cannot be finalized later through the #516 break as if no
 PR had ever resolved. The in-loop commands do not change.
 
-`_settle_watch_work(watch)` records whether the tick or the gate is still in flight, calls `cancel()` on those, and then
-`await workflow.wait([...])`. An outer workflow cancel raises from that wait, whereas awaiting a cancelled task inside
+`_settle_watch_work(watch)` records whether the tick or the gate is still in flight, calls `cancel()` on those, and then,
+only if at least one was in flight, `await workflow.wait([...])`, since an empty list raises `ValueError`. An outer workflow cancel raises from that wait, whereas awaiting a cancelled task inside
 `_settle_tick` or `_settle_gate` catches `CancelledError` and would absorb it (lines 5149-5159, 5389-5399). Only then
 does it call `_settle_tick` and `_settle_gate`, which take their `done()` branch and drain, so `MERGE_APPROVED` is still
 logged. It sets both tasks to None so that `finally` finds nothing, and returns the flag. If a tick was in flight it sets
