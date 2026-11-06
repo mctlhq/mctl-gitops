@@ -64,6 +64,16 @@ on:
       build_id:
         required: true
         type: string
+      # The files release-deploy will bump, so the check right before the push
+      # judges the same release its preflight did.
+      values_path:
+        required: false
+        default: ""
+        type: string
+      values_glob:
+        required: false
+        default: ""
+        type: string
     # Declared so the caller can pass exactly what this workflow uses instead
     # of `secrets: inherit`. This job checks out whichever repository
     # `inputs.repo` names and builds its Dockerfile, so every secret in the
@@ -573,6 +583,39 @@ jobs:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
+
+      # The publication boundary. Policy and gate are read again from main, since
+      # both can have changed during the run. A build then takes minutes, so this
+      # narrows the race with another run for the same tag rather than closing it.
+      - name: Check out release policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ github.repository }}
+          ref: main
+          path: .release-policy
+          persist-credentials: false
+
+      - name: Check the release before publishing
+        env:
+          DIRECT: ${{ steps.caller.outputs.direct }}
+          REPO: ${{ inputs.repo }}
+          GIT_REF: ${{ inputs.git_ref }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          TEAM: ${{ inputs.team_name }}
+          SERVICE: ${{ inputs.component_name }}
+          VALUES_PATH: ${{ inputs.values_path }}
+          VALUES_GLOB: ${{ inputs.values_glob }}
+        # Runs from inside the policy checkout: the directory above it is the
+        # source being built, and nothing there may be imported or read.
+        run: |
+          set -euo pipefail
+          cd .release-policy
+          python3 -m pip install --quiet pyyaml==6.0.2
+          if [ "$DIRECT" = "true" ]; then stage=publish-direct; else stage=publish; fi
+          python3 scripts/release-preflight.py "$stage"
+          cd ..
+          rm -rf .release-policy
 
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
