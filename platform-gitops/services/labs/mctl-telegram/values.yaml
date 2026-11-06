@@ -308,6 +308,9 @@ env:
   # require_approval, worker failure, or unclaimed past
   # AGENT_UNCLAIMED_ROUTE_AFTER). Revert to "false" if the worker is retired.
   EVENTS_OPERATOR_ROUTING: "true"
+  # One-off cleanup of sealed sessions left in already revoked rows
+  # (mctl-telegram#1141). Remove once the remaining count reads zero.
+  REVOKED_SESSION_CLEANUP_ENABLED: "true"
 # Downward-API identity for the mctl_telegram_replica_id info gauge. The
 # service resolves replica_id as REPLICA_ID > POD_NAME > "unknown"
 # (internal/config/config.go), so without this the gauge is published with
