@@ -587,10 +587,19 @@ jobs:
       # The publication boundary. Policy and gate are read again from main, since
       # both can have changed during the run. A build then takes minutes, so this
       # narrows the race with another run for the same tag rather than closing it.
+      # The source tree is already checked out here and could hold this path, as
+      # a symlink pointing anywhere.
+      - name: Refuse a release policy path from the source
+        run: |
+          if [ -e .release-policy ] || [ -L .release-policy ]; then
+            echo "::error::the source tree contains .release-policy; refusing to build"
+            exit 1
+          fi
+
       - name: Check out release policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          repository: ${{ github.repository }}
+          repository: mctlhq/mctl-gitops
           ref: main
           path: .release-policy
           persist-credentials: false

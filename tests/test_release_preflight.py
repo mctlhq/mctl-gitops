@@ -130,6 +130,10 @@ for label, kw in {
     "a sha under a release tag": {"GIT_REF": SHA},
     "a sha not in the tag": {"IMAGE_TAG": "main-1234567", "GIT_REF": SHA},
     "a sha-shaped tag from a branch": {"IMAGE_TAG": "main-4ccb257", "GIT_REF": "main"},
+    "a short sha": {"IMAGE_TAG": "main-4ccb257", "GIT_REF": "4ccb257aaa"},
+    "a floating ref as its own tag": {"IMAGE_TAG": "main", "GIT_REF": "main"},
+    "a word as its own tag": {"IMAGE_TAG": "feature-x", "GIT_REF": "feature-x"},
+    "latest as its own tag": {"IMAGE_TAG": "latest", "GIT_REF": "latest"},
     "too short a sha": {"IMAGE_TAG": "main-abc", "GIT_REF": "abc" + "0" * 37},
 }.items():
     check(f"{label} does not fit the tag", rc(**kw) == 9, run(**kw)[1])
@@ -138,6 +142,8 @@ for label, kw in {
 r, out, _ = run(**{**WORKER_RELEASE, "VALUES_PATH": WORKERS[0]})
 check("a partial worker release is refused", r == 6, out)
 check("a worker release below the floor is refused", rc(**{**WORKER_RELEASE, "IMAGE_TAG": "1.0.0", "GIT_REF": "1.0.0"}) == 6)
+check("a v-prefixed version is a release tag", rc(IMAGE_TAG="v1.2.3", GIT_REF="v1.2.3") == 0)
+check("a prerelease version is a release tag", rc(IMAGE_TAG="1.2.3-rc.1", GIT_REF="1.2.3-rc.1") == 0)
 check("no files named falls back to the service's own, also for the gate",
       rc(REPO="mctlhq/mctl-agents", IMAGE_NAME=AGENTS, IMAGE_TAG="1.999.0", GIT_REF="1.999.0", TEAM="admins",
          SERVICE="mctl-agents-worker") == 6)
@@ -177,9 +183,14 @@ def link(tmp):
 check("a symlink to a gated file is refused", rc(prepare=link, VALUES_PATH=f"{SVC}/labs/link/values.yaml") == 4)
 
 # Replacing a tag.
-for stage in ("preflight", "publish"):
+# The images are private, and preflight holds no registry login: it must not ask.
+r, out, called = run(stage="preflight", docker=(1, "unauthorized: authentication required"))
+check("preflight does not call the registry", r == 0 and not called, (r, out))
+for stage in ("publish",):
     r, out, called = run(stage=stage, docker=(0, ""))
     check(f"{stage}: an existing release tag is refused", r == 10 and called, (r, out))
+    r, out, _ = run(stage=stage, docker=(1, "unauthorized: authentication required"))
+    check(f"{stage}: an anonymous answer is not read as absent", r == 11, (r, out))
     r, out, _ = run(stage=stage, docker=(1, "denied: denied"))
     check(f"{stage}: a registry refusal is not read as absent", r == 11, (r, out))
     r, out, _ = run(stage=stage, docker=(1, "toomanyrequests: rate limit"))
@@ -188,15 +199,23 @@ for stage in ("preflight", "publish"):
     check(f"{stage}: silence is not read as absent", r == 11, (r, out))
     r, out, _ = run(stage=stage, docker=(1, "no such manifest: x"))
     check(f"{stage}: the other absent wording is accepted", r == 0, (r, out))
-r, out, called = run(docker=(0, ""), REPO="mctlhq/mctl-telegram", IMAGE_NAME="ghcr.io/mctlhq/agent-worker-preview",
+r, out, called = run(stage="publish", docker=(0, ""), REPO="mctlhq/mctl-telegram", IMAGE_NAME="ghcr.io/mctlhq/agent-worker-preview",
                      IMAGE_TAG="main-4ccb257", GIT_REF=SHA)
 check("a tag carrying the commit's sha may be rebuilt", r == 0 and not called, (r, out))
 
 
 # Direct dispatch.
 check("direct: the gated image is refused", rc(stage="publish-direct", IMAGE_NAME=AGENTS) == 8)
-check("direct: another image passes, unchecked by the release rules",
-      rc(stage="publish-direct", IMAGE_NAME="ghcr.io/mctlhq/grafana-iac", REPO="x/y", GIT_REF="any") == 0)
+r, out, called = run(stage="publish-direct", IMAGE_NAME="ghcr.io/mctlhq/grafana-iac", REPO="x/y", GIT_REF="any", docker=(0, ""))
+check("direct: an image outside the table passes, with no registry call", r == 0 and not called, (r, out))
+r, out, _ = run(stage="publish-direct", GIT_REF="any-branch", docker=(0, ""))
+check("direct: a bound image's existing tag is not replaced", r == 10, (r, out))
+r, out, _ = run(stage="publish-direct", GIT_REF="any-branch", docker=(1, ABSENT))
+check("direct: a bound image's new tag passes", r == 0, (r, out))
+r, out, _ = run(stage="publish-direct", GIT_REF="any-branch", docker=(1, "denied"))
+check("direct: a bound image with no registry answer refuses", r == 11, (r, out))
+r, out, _ = run(stage="publish-direct", IMAGE_TAG="main-4ccb257", GIT_REF=SHA, docker=(0, ""))
+check("direct: a sha tag from its own commit may be rebuilt", r == 0, (r, out))
 check("direct: an unreadable gate refuses", rc(stage="publish-direct", prepare=no_gate) == 2)
 check("no stage refuses", rc(stage="") == 2)
 check("an unknown stage refuses", rc(stage="nonsense") == 2)
@@ -221,6 +240,16 @@ check("the publish check is directly before the push", names[i - 1] == "Check th
 check("the policy checkout is from main", steps[i - 2]["with"]["ref"] == "main" and steps[i - 2]["with"]["persist-credentials"] is False)
 check("the policy is removed before the build context is used", "rm -rf .release-policy" in steps[i - 1]["run"])
 check("the check has no condition", "if" not in steps[i - 1])
+check("the policy checkout names this repository, not the caller's",
+      steps[i - 2]["with"]["repository"] == "mctlhq/mctl-gitops")
+check("a policy path from the source is refused first", names[i - 3] == "Refuse a release policy path from the source")
+# A check that cannot fail is no check.
+for label, step in (("publish check", steps[i - 1]), ("policy path check", steps[i - 3]),
+                    ("preflight", [s for s in jobs["preflight"]["steps"] if s.get("name") == "Release preflight"][0])):
+    check(f"{label}: nothing lets a failure through",
+          "continue-on-error" not in step and "|| true" not in step["run"] and "if" not in step)
+for job in ("preflight", "build", "bump"):
+    check(f"{job}: no job-level condition can skip its dependency", "if" not in jobs[job] and "continue-on-error" not in jobs[job])
 py = re.findall(r'"([^"]+/)"', re.search(r"ALLOWED_PREFIXES = \((.*?)\)", SCRIPT_TEXT, re.S).group(1))
 shell = re.findall(r'"([^"]+)"', re.search(r"ALLOWED_PREFIXES=\((.*?)\)",
                    (ROOT / ".github/workflows/release-deploy.yaml").read_text(), re.S).group(1))
@@ -241,7 +270,14 @@ M = {
     "gate off, a partial worker release passes":
         lambda: rc(script=cut("        check_gate()\n"), **{**WORKER_RELEASE, "VALUES_PATH": WORKERS[0]}) == 0,
     "tag check off, an existing tag is replaced":
-        lambda: rc(script=cut("        check_tag_free()\n"), docker=(0, "")) == 0,
+        lambda: rc(stage="publish", script=cut("            check_tag_free()\n"), docker=(0, "")) == 0,
+    "tag check back in preflight, every private image is refused":
+        lambda: rc(script=SCRIPT_TEXT.replace('        if stage == "publish":\n            check_tag_free()', '        check_tag_free()'),
+                   docker=(1, "unauthorized")) == 11,
+    "direct tag check off, a bound tag is replaced":
+        lambda: rc(stage="publish-direct", script=cut("        check_tag_free()\n"), docker=(0, "")) == 0,
+    "release tag shape off, main stands in for a version":
+        lambda: rc(script=SCRIPT_TEXT.replace(' and re.fullmatch(RELEASE_TAG_RE, env("IMAGE_TAG"))', ""), IMAGE_TAG="main", GIT_REF="main") == 0,
     "any failure read as absent":
         lambda: rc(script=SCRIPT_TEXT.replace("if not ABSENT_RE.search(r.stderr):", "if False:"), docker=(1, "denied")) == 0,
     "symlink check off":

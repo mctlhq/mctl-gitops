@@ -4,8 +4,9 @@
 Run from the root of a checkout of main, so the policy never comes from what a
 dispatch chose:
 
-  release-preflight.py preflight     before the build starts
-  release-preflight.py publish       the same checks again, right before the push
+  release-preflight.py preflight     before the build starts, with no credentials
+  release-preflight.py publish       the same checks plus tag replacement, right
+                                     before the push, where docker is logged in
   release-preflight.py publish-direct   the same point, for a direct dispatch
 
 Inputs arrive as env: REPO, IMAGE_NAME, IMAGE_TAG, GIT_REF, TEAM, SERVICE,
@@ -37,6 +38,9 @@ IMAGE_RE = r"ghcr\.io/mctlhq/[a-z0-9][a-z0-9._-]*"
 REPO_RE = r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+"
 # `main-<sha>` or a bare short sha: the tag names the commit it was built from.
 SHA_TAG_RE = r"(?:main-)?([0-9a-f]{7,40})"
+# A release builds a tag that looks like a version, so a branch name such as
+# `main` cannot stand in for one.
+RELEASE_TAG_RE = r"v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+.][A-Za-z0-9._-]+)?"
 ABSENT_RE = re.compile(r"no such manifest|manifest unknown", re.I)
 
 
@@ -74,15 +78,16 @@ def check_binding():
 
 def tag_names_commit():
     m = re.fullmatch(SHA_TAG_RE, env("IMAGE_TAG"))
-    return bool(m) and re.fullmatch(r"[0-9a-f]{7,40}", env("GIT_REF")) is not None \
+    return bool(m) and re.fullmatch(r"[0-9a-f]{40}", env("GIT_REF")) is not None \
         and env("GIT_REF").startswith(m.group(1))
 
 
 def check_ref():
     """A release builds the tag it names, or a commit whose sha is in the tag."""
-    if env("GIT_REF") != env("IMAGE_TAG") and not tag_names_commit():
+    release = env("GIT_REF") == env("IMAGE_TAG") and re.fullmatch(RELEASE_TAG_RE, env("IMAGE_TAG"))
+    if not release and not tag_names_commit():
         refuse(9, f"git_ref {env('GIT_REF')!r} does not fit image_tag {env('IMAGE_TAG')!r}: "
-                  "use the same tag, or a tag carrying the commit's sha")
+                  "use the same version tag, or a tag carrying the commit's full sha")
 
 
 def allowed(path):
@@ -137,14 +142,21 @@ def check_tag_free():
 
 
 def check_direct():
-    """A direct dispatch skips the release checks, so it may not publish a gated image."""
+    """A direct dispatch skips the release checks. It may not publish a gated image,
+    or replace a tag of any image that release-deploy publishes. A new tag, or an
+    image outside the table, is the tenant build path and stays as it was."""
     try:
         doc = yaml.safe_load(GATES.read_text())
         repos = {g["repository"] for g in doc["gates"] if g.get("repository")}
-    except (OSError, yaml.YAMLError, KeyError, TypeError, AttributeError) as e:
-        refuse(2, f"cannot read {GATES}: {e}")
+        bound = yaml.safe_load(BINDINGS.read_text())["bindings"]
+        if not isinstance(bound, dict) or not bound:
+            raise ValueError("no bindings")
+    except (OSError, yaml.YAMLError, KeyError, TypeError, AttributeError, ValueError) as e:
+        refuse(2, f"cannot read the release policy: {e}")
     if env("IMAGE_NAME") in repos:
         refuse(8, f"{env('IMAGE_NAME')} is release-gated: publish it through release-deploy.yaml")
+    if env("IMAGE_NAME") in bound:
+        check_tag_free()
 
 
 def main():
@@ -156,7 +168,8 @@ def main():
         check_binding()
         check_ref()
         check_gate()
-        check_tag_free()
+        if stage == "publish":
+            check_tag_free()
     else:
         refuse(2, f"unknown stage: {stage!r}")
     print(f"release preflight: {stage} passed")
