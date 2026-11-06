@@ -41,6 +41,16 @@ for every delivery task. An unbound delivery closes as `request-not-fulfilled`. 
 resume, so a delivery is rarely open during a watch, but one can be carried across a hop. The loop's own canonical
 `we_` ends at the approve flip, before the watch.
 
+### What `get_pr_state` can and cannot prove
+
+`activities/pr_state.py` returns `found=False` for all of: a status file answering 404, no `pr:` line, an unusable
+`pr:` line, a PR outside the repo, and a recorded PR answering 404. Its docstring notes that GitHub answers
+unauthorized and missing lookups identically. So `found=False` is not proof of absence, and `proposal_status` alone
+does not separate these cases. The implementer's branch is deterministic, `feat/agents-<slug>`
+(`run_implementer.py:1942`), except when an adopted PR overrides it, and an adopted PR has a recorded link. The typed
+`implementation_completion` outcome, such as `deliberate_no_op`, does not reach the workflow because `WorkflowResult`
+carries no output parameters.
+
 ### Durable-write primitives examined
 
 | Primitive | Why it is or is not the record |
@@ -84,6 +94,9 @@ False, so that watch keeps today's behaviour until it ends (migration by attriti
 ```python
 async def _decide_watch_end(self, service, slug, exit_name, last, deadline, track_ownership) -> _WatchDecision:
     fresh = await self._final_pr_read(service, slug)        # R2
+    if fresh is None and exit_name == "grace-polls" and await self._no_pr_proven(
+        service, slug, final_state, last, saw_open_pr):     # R5a
+        return _WatchDecision(kind="no-pr")
     if fresh is None:
         record = await self._record_reconcile(exit_name, last, deadline, track_ownership)  # R7-R10
         return _WatchDecision(kind="reconcile" if record else "unrecorded", record=record)
@@ -95,11 +108,20 @@ async def _decide_watch_end(self, service, slug, exit_name, last, deadline, trac
 
 The three sites use it as follows, all under `if terminal_reconcile:`, so that an unpatched history takes today's line:
 
-| Site | `final` | `open` | `reconcile` | `unrecorded` |
-|---|---|---|---|---|
-| `while ... else:` (deadline), guarded by `not self._abandoned` | return, `watch_end="final-read"` | `last=fresh`, release in `finally`, `watch_end="final-read"` | release in `finally`, typed end | no release, raise after `finally` |
-| grace-polls | same | `polls_without_pr=0`, `last=fresh`, fall through to the poll sleep | same | same |
-| non-transient read | same | `last=fresh`, sleep and `continue` | same | same |
+| Site | `final` | `open` | `no-pr` | `reconcile` | `unrecorded` |
+|---|---|---|---|---|---|
+| `while ... else:` (deadline), guarded by `not self._abandoned` | return, `watch_end="final-read"` | `last=fresh`, release in `finally`, `watch_end="final-read"` | not reachable | release in `finally`, typed end | no release, raise after `finally` |
+| grace-polls | same | `polls_without_pr=0`, `last=fresh`, fall through to the poll sleep | return `last=None`, `watch_end="no-pr-confirmed"` | same | same |
+| non-transient read | same | `last=fresh`, sleep and `continue` | not reachable | same | same |
+
+`_final_pr_read` keeps the last `found=False` state in `final_state`, so that `_no_pr_proven` can see whether a
+reference was recorded. `_no_pr_proven` returns False without any activity when `final_state` carries a number or URL,
+`last` carries a number, `saw_open_pr` is true, or every attempt failed with an `ActivityError`. Otherwise it runs
+`confirm_no_pr` and returns `result.confirmed`. An `ActivityError` is False.
+
+**Abandon (R16).** The deadline `else:` is guarded by `not self._abandoned`, so an abandon reaches no read and no
+record. The watch sets `watch_end="abandoned-unverified"`, which is a local assignment with no command. It adds no
+delay, and `finally` issues today's `release`.
 
 In Python a `while ... else:` runs only when the condition goes false, never after `break` or `return`. So the hop and
 the #516 break do not reach it. It sits inside the existing `try`, so before the relinquishing write in `finally`. A
@@ -113,7 +135,27 @@ predicate is evaluated only inside the loop, so no hop can occur during the fina
 - `_terminal_claim(state, track_ownership)`: the in-loop MERGED/CLOSED ownership block, factored out so that both
   sites issue the identical `terminal` write (a pure refactor, with the same commands on existing histories).
 
-### 3. The record
+### 3. Proof of absence
+
+New in `orchestrator/temporal/activities/pr_state.py`, registered in `worker.py` `short_activities`:
+
+```python
+@dataclass(frozen=True)
+class NoPrProof:
+    confirmed: bool
+    reason: str   # "no-link-no-pull" or the first thing that blocked the proof
+```
+
+`confirm_no_pr(service, slug)` raises `ProposalListingError` when no token exists, and on a transport error, an
+unexpected status, or a malformed body, so a failure is never read as absence. It returns `confirmed=False` for a 404 on
+the status file, and for a `pr:` line of any shape. It then lists
+`GET /repos/mctlhq/<service>/pulls?head=mctlhq:feat/agents-<slug>&state=all&per_page=100`, following every page. A
+non-200 or non-list page raises, and a later page failing is a failed read, not a shorter list. Any item returns
+`confirmed=False`. `200 []` on every page is the provider's documented absence signal, and only that, with the
+no-link status file, returns `confirmed=True`. The bad-filter case, where GitHub ignores a malformed `head` and returns
+unrelated PRs, fails closed through "any item".
+
+### 4. The record
 
 New in `orchestrator/temporal/activities/issue_state.py`, registered in `worker.py` `short_activities`:
 
@@ -148,6 +190,8 @@ ids, and what to do: read the PR by hand, then re-trigger or close deliberately.
 
 ```python
 started = workflow.now()
+last_refresh = started
+interval = RECONCILE_RECORD_RETRY_MIN                 # 5 minutes
 while True:
     try:
         result = await workflow.execute_activity(record_merge_watch_reconcile, inp,
@@ -159,12 +203,17 @@ while True:
         pass
     if workflow.now() - started >= RECONCILE_RECORD_WAIT:
         return ""                                   # R10
-    await workflow.sleep(RECONCILE_RECORD_RETRY)    # 30 minutes
-    # liveness refresh through the existing `progress` write, every 4th iteration (2 h)
+    await workflow.sleep(min(interval, started + RECONCILE_RECORD_WAIT - workflow.now()))
+    interval = min(interval * 2, RECONCILE_RECORD_RETRY_MAX)  # 5, 10, 20, 30, 30, ...
+    if workflow.now() - last_refresh >= timedelta(hours=2):
+        await self._refresh_claim_liveness()          # the existing `progress` write
+        last_refresh = workflow.now()
 ```
 
-An unparsable `self._issue_url` returns `""` at once. `self._abandoned` is deliberately not in this loop (R9). At 30
-minutes for 7 days the wait is at most 336 iterations, about 1.3k history events.
+An unparsable `self._issue_url` returns `""` at once. `self._abandoned` is deliberately not in this loop (R9). The wait
+is about 50 iterations over 24 hours, about 300 history events including the liveness writes. The liveness bound is
+about 10 h and the refresh runs every 2 h, so four consecutive lost refreshes are tolerated, as on the watch's own
+cadence.
 
 **Fail closed (R10).** On `""` the watch sets `retain_claim = True`. The `finally` then skips the relinquishing write,
 logs `MERGE_WATCH_RECONCILE_UNRECORDED`, and after `finally` the watch raises
@@ -174,8 +223,10 @@ which is the existing behaviour for a dead owner. From then on the trace is the 
 mctl-api answers `already_exists` for it. A Failed run is the signal, because a Completed one would claim a record that
 does not exist.
 
-### 4. Typed result
+### 5. Typed result
 
+- `watch_end` takes the values `final-read`, `reconcile-required`, `no-pr-confirmed`, `abandoned-unverified`, or `""`
+  on the paths this slice leaves alone.
 - `_WatchOutcome` gains `watch_end: str = ""` and `reconcile_record: str = ""`.
 - `DevLoopResult` gains defaulted `watch_end: str = ""`, `last_observed_pr: PRState | None = None` and
   `reconcile_record: str = ""`. Old payloads decode with the defaults, and results are not compared on replay.
@@ -189,12 +240,14 @@ does not exist.
   flag is set only under the marker, so no earlier history changes shape. The reason is added to the refusal vocabulary
   near line 506.
 - The `finally` release reason is `merge watch <exit>: pull-request state unreadable, reconciliation recorded`.
-- The `DevLoopResult.pr` and `_watch_pr` docstrings are corrected.
-- `cli.py` prints `pr: reconcile required (<record>)` before the `not watched` branch.
+- The `DevLoopResult.pr` and `_watch_pr` docstrings are corrected. The `pr` docstring states that on
+  `abandoned-unverified` it is the last observed state and not verified current state.
+- `cli.py` prints `pr: reconcile required (<record>)` before the `not watched` branch, `pr: none (confirmed)` on
+  `no-pr-confirmed`, and adds `(last observed before abandon, not verified current)` on `abandoned-unverified`.
 
-### 5. Redelivery and replay
+### 6. Redelivery and replay
 
-- `get_pr_state` is read-only, and on replay the recorded result is returned.
+- `get_pr_state` and `confirm_no_pr` are read-only, and on replay the recorded result is returned.
 - The record activity is idempotent through its marker, and on replay its recorded result is returned.
 - The `terminal` write goes through the existing idempotent `_ownership` path, and exactly one relinquishing write is
   issued per watch end, either in `_terminal_claim` or in `finally`, never both.
@@ -216,6 +269,10 @@ does not exist.
    record whose first reader is a human.
 7. **Keep the claim instead of releasing after the record.** Rejected: nothing would release it except the reaper, the
    work could not be picked up in the meantime, and the owner accepted release after the record.
+8. **Prove absence from `found=False`, `proposal_status`, or the grace-poll count.** Rejected: all three are consistent
+   with lost token access, and repetition of an unknown answer is not proof.
+9. **Prove absence from the implementer's typed `deliberate_no_op`.** Rejected for this slice: `WorkflowResult` carries
+   no output parameters, and adding one needs a CWFT output, which is a live change.
 
 ## Platform impact
 
@@ -226,19 +283,22 @@ does not exist.
 - **New state.** `MergeWatchResume.terminal_reconcile`; `DevLoopResult.watch_end`, `last_observed_pr`,
   `reconcile_record`. All are defaulted, and old payloads decode. The feedback fields from M2a are untouched.
 - **Resource impact.** A deadline-ending watch makes 1-3 extra `get_pr_state` calls and up to 2 extra timers. A
-  reconcile-required watch adds a few GitHub reads and one comment. The workflow can stay open up to 7 days longer in
-  the worst case.
+  grace-polls exit adds one `confirm_no_pr`, at least 2 GitHub reads. A reconcile-required watch adds a few GitHub reads
+  and one comment. The workflow can stay open up to 24 hours longer in the worst case.
 - **GitHub.** New writes are comments on source issues, using the worker's existing token. A public source issue gets a
   public comment, so the template holds only what the issue and PR already expose.
-- **Behaviour change on grace polls.** See Open questions in `requirements.md`.
+- **Behaviour change on grace polls.** A loop with proven absence ends as it does today, with a typed `watch_end`. A
+  loop whose absence cannot be proven now ends reconcile-required with a comment on its source issue.
 - **Production.** Nothing is deployed by this proposal. The release hold stays ON, #1003 stays Draft, B4 stays FAIL,
   and no environment variable is added to `mctl-agents-worker`.
 - **Risks and mitigations.**
   - *Readers of `DevLoopResult.pr` may treat None as "no PR".* Mitigation: the typed fields, the CLI change, and the
     reader sweep in R15.
   - *Record and read share GitHub as a failure domain.* Mitigation: the patient retry and the claim held meanwhile.
-  - *A record nobody reads.* There is no automated reconciler or alert yet. Mitigation: a visible comment on the issue,
-    a stable log prefix for a later metric, and both listed as out of scope rather than implied.
+  - *A state nobody notices.* This slice has no detector. Mitigation: the separate gate #1022 blocks any release that
+    carries this slice (R17), so these states cannot reach production on logs alone.
+  - *A false proof of absence.* A PR opened by hand from another branch and never linked is outside the proof.
+    Mitigation: it is stated in R5a. Any link or any PR on the loop's branch fails closed.
   - *Mid-flight rollback after release.* See Rollback in `tasks.md`.
 - **Merge governance.** Any PR stays blocked for owner approval by the temporary code-owner rule (#1020). It needs
   independent review, green checks and an explicit owner merge decision, and no admin bypass. The supervising session

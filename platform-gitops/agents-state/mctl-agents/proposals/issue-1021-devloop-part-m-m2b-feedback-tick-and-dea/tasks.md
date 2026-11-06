@@ -13,7 +13,7 @@ the pairs. Umbrella tasks 5-7 are not in this slice; they belong to M2b-2.
   queue and awaits the result; records every activity call and every lifecycle op in order - DoD: helper committed with
   the first tests, which fail on current `main` for the right reason (result `pr.state == "OPEN"`, no post-deadline
   read), not on an import error.
-- [ ] 2. Tests first (commit): T-1..T-16 below, all red on `main` - DoD: one or more `test:` commits, CI log of the red
+- [ ] 2. Tests first (commit): T-1..T-18 below, all red on `main` - DoD: one or more `test:` commits, CI log of the red
   run linked in the PR.
 - [ ] 3. `MERGE_WATCH_RECONCILE_PATCH`, `MergeWatchResume.terminal_reconcile`: evaluated only in `_watch_pr`'s
   fresh-start arm, written into the hop record, read from the record in the resume arm (depends on 2) - DoD: T-10 and
@@ -22,14 +22,17 @@ the pairs. Umbrella tasks 5-7 are not in this slice; they belong to M2b-2.
   existing `_watch_pr` and replay test green with no fixture change.
 - [ ] 5. `record_merge_watch_reconcile` and its dataclasses in `activities/issue_state.py`, registered in `worker.py`
   and in the test activity registry fake (depends on 2) - DoD: T-7 passes; `post_issue_comment` unchanged.
+- [ ] 5a. `confirm_no_pr` and `NoPrProof` in `activities/pr_state.py`, registered the same way (depends on 2) - DoD: T-17
+  passes; `get_pr_state` unchanged.
 - [ ] 6. `_final_pr_read`, `_decide_watch_end`, `_record_reconcile`, wired at the `while ... else:` deadline exit, the
-  grace-polls exit and the non-transient read exit; `retain_claim`; the raise after `finally` (depends on 3, 4, 5) -
-  DoD: T-1..T-6, T-8, T-9 pass.
+  grace-polls exit and the non-transient read exit; `_no_pr_proven`; the bounded backoff and liveness refresh;
+  `retain_claim`; the raise after `finally` (depends on 3, 4, 5, 5a) - DoD: T-1..T-6, T-8, T-9, T-18 pass.
 - [ ] 7. Typed result: `_WatchOutcome` and `DevLoopResult` fields, `outcome`, `ended` precedence, `pr=None`, log lines,
   docstrings; `_reconcile_required` in `_deliver` and the new refusal reason; `cli.py` (depends on 6) - DoD: T-4, T-12,
-  T-13 assert every field; old `DevLoopResult` payloads decode.
+  T-13, T-15 assert every field; old `DevLoopResult` payloads decode.
 - [ ] 8. Replay fixtures: `dev_loop_final_read.json` (deadline, no hop), `dev_loop_final_read_hop.json` (hop then gap),
-  `dev_loop_reconcile_required.json` (record then release) via `tools/record_workflow_history.py` scenarios added to
+  `dev_loop_reconcile_required.json` (record then release), `dev_loop_no_pr_confirmed.json` (grace polls, proven absence)
+  via `tools/record_workflow_history.py` scenarios added to
   `tests/replay_scenarios.py`; no existing fixture re-recorded (depends on 7) - DoD: T-11 green;
   `test_every_recorded_fixture_belongs_to_a_scenario` green.
 - [ ] 9. Mutation proof. Each applied, confirmed red, reverted, output pasted into the PR:
@@ -46,8 +49,16 @@ the pairs. Umbrella tasks 5-7 are not in this slice; they belong to M2b-2.
   (k) treat a failed comment page as "no marker";
   (l) accept the marker from any comment author;
   (m) land an open delivery `Succeeded` on reconcile-required;
-  (n) end a grace-polls or read-error exit on a found OPEN instead of resuming the loop
-  - DoD: fourteen red runs recorded.
+  (n) end a grace-polls or read-error exit on a found OPEN instead of resuming the loop;
+  (o) treat a status-file 404 as proven absence;
+  (p) treat a recorded PR answering 404 as proven absence;
+  (q) treat a failed later `pulls` page as an empty list;
+  (r) skip `confirm_no_pr` and always end a grace-polls exit as a normal no-PR completion;
+  (s) skip `confirm_no_pr` and always end it as reconcile-required;
+  (t) use a fixed retry interval, and separately no upper bound on it;
+  (u) stop refreshing liveness during the record wait;
+  (v) add a final read to the abandon exit
+  - DoD: twenty-two red runs recorded.
 - [ ] 10. PR description: link #993, #1021, the umbrella digest as provenance only, the approved digest of this
   proposal, the test->fix commit pairs, the mutation and replay evidence, and M2b-2 as not started; state that the PR
   is blocked for owner approval by #1020, needs independent review and green checks, and is not merged with an admin
@@ -68,8 +79,10 @@ Watch behaviour (new file `tests/test_merge_watch_final_read.py` unless noted):
   `outcome == "merge_watch_reconcile_required"`, `pr is None`, `last_observed_pr.state == "OPEN"`, `reconcile_record`
   set, `ended` non-empty, no deploy observation; workflow status Completed; never OPEN, CLOSED or success.
 - [ ] T-5. Grace-polls exit, each of: final read MERGED (`terminal`, deploy observed); CLOSED; OPEN (the loop resumes,
-  `polls_without_pr` is 0, a later MERGED is reported normally); unreadable with `last` None, with an unresolved
-  reference, and with a stale OPEN (reconcile-required in all three, `last_observed_pr` as given).
+  `polls_without_pr` is 0, a later MERGED is reported normally); absence proven (`pr is None`,
+  `watch_end == "no-pr-confirmed"`, `ended` and `outcome` empty, no comment); unknown with `last` None, with an
+  unresolved reference, and with a stale OPEN (reconcile-required in all three, `last_observed_pr` as given, and
+  `confirm_no_pr` not even called in the last two).
 - [ ] T-6. Non-transient read exit, each of: final read MERGED; CLOSED; OPEN (the loop resumes, and the deadline still
   bounds it); unreadable (reconcile-required).
 - [ ] T-7. Record activity (`tests/test_issue_state.py` or new): marker absent -> posts once and returns `recorded`;
@@ -81,9 +94,9 @@ Watch behaviour (new file `tests/test_merge_watch_final_read.py` unless noted):
   record is absent on every path that did not reach reconcile-required.
 - [ ] T-9. Fail closed: the record activity fails for all of `RECONCILE_RECORD_WAIT`, and separately answers
   `issue-gone`, and separately `self._issue_url` is unparsable -> no `release` and no `terminal` write; workflow status
-  Failed with type `MergeWatchReconcileUnrecorded`; `MERGE_WATCH_RECONCILE_UNRECORDED` logged; the `progress` write
-  keeps refreshing during the wait; an abandon signal during the wait does not end it early. A record that lands after
-  a failure streak -> the release follows it, and the workflow ends Completed.
+  Failed with type `MergeWatchReconcileUnrecorded`; `MERGE_WATCH_RECONCILE_UNRECORDED` logged; an abandon signal during
+  the wait does not end it early. A record that lands after a failure streak -> the release follows it, and the workflow
+  ends Completed.
 - [ ] T-10. Hop: T-1..T-4 repeated where the watch hopped before the gap (continued run starts after the deadline) and
   where the gap begins after a hop; same outcomes; `MergeWatchResume.deadline` and `terminal_reconcile` carried
   unchanged; marker text in the record identical across a hop.
@@ -99,11 +112,20 @@ Watch behaviour (new file `tests/test_merge_watch_final_read.py` unless noted):
 - [ ] T-14. Duplicates: an activity task redelivered (the fake fails the first delivery after recording) at the final
   read and at the record yields one terminal or release write, one comment, one deploy observation, one security record;
   replay of the recorded history produces no extra command.
-- [ ] T-15. Unchanged exits: abandon during the watch does no final read and no record; the #516 terminal-status break
-  does no final read and no record; a MERGED read inside the loop is byte-identical in commands.
+- [ ] T-15. Abandon and unchanged exits: abandon during the watch does no final read, no `confirm_no_pr` and no record,
+  adds no timer, writes `release`, and reports `watch_end == "abandoned-unverified"` with `ended` as today; `cli.py`
+  states the `pr` is not verified current; an existing abandon fixture replays unchanged. The #516 terminal-status break
+  does no final read and no record. A MERGED read inside the loop is byte-identical in commands.
 - [ ] T-16. Scope pin: `tests/test_execution_request_resume.py:586` stays green unedited, so the validator still defers
   `feedback-not-ready`; an unpatched `accepted_after_gates` delivery still lands `feedback-not-ready`; no
   `DEVLOOP_DEFERRED_FEEDBACK` read exists in the diff.
+- [ ] T-17. `confirm_no_pr` (activity unit test): no `pr:` line plus `200 []` on every page -> confirmed. Each of these
+  -> not confirmed or raises, and never confirmed: status file 404, 500 or undecodable; a `pr:` line of any shape; a
+  non-empty listing, including one whose items do not match the branch; page 2 answering 500 or a malformed body; a
+  transport error; no token.
+- [ ] T-18. Record retry timing: failures produce sleeps of 5, 10, 20, 30, 30 minutes and never above 30; the last sleep
+  is clipped so the total stays within 24 hours; the `progress` write lands at least every 2 hours of the wait, and the
+  claim row is still owned at the end of it; a lost `progress` write does not stop the retries.
 
 ## Rollback
 
