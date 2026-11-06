@@ -49,6 +49,9 @@ TEMPLATES = {
     "delete": template("tpl-git-commit.yaml", "delete-service"),
     "validate": template("tpl-validate-tenant.yaml", "validate"),
     "autoscale": template("wft-deploy-service.yaml", "patch-autoscaling-values"),
+    "add-domain": template("wft-add-custom-domain.yaml", "do-add-domain"),
+    "remove-domain": template("wft-remove-custom-domain.yaml", "do-remove-domain"),
+    "database": template("wft-provision-database.yaml", "do-provision"),
 }
 
 
@@ -99,6 +102,7 @@ class Box:
         self._git("commit", "-q", "-m", "seed", cwd=work)
         self._git("push", "-q", str(self.origin), "main", cwd=work)
         self._stub()
+        self._service_stubs()
         self.key = self.tmp / "key"
         self.key.write_text("fake\n")
 
@@ -133,6 +137,25 @@ exec '{REAL_GIT}' "$@"
 """)
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
         self.bin = bin_dir
+
+    def _service_stubs(self):
+        """apk and the platform's HTTP APIs, for templates that call them before cloning."""
+        curl = self.bin / "curl"
+        curl.write_text(r"""#!/bin/sh
+out=""; w=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2"; shift ;; -w) w="$2"; shift ;; esac
+  shift
+done
+J='{"auth":{"client_token":"t"},"verified":true,"method":"txt","domains":[{"domain":"a.example.org","id":"1"}]}'
+if [ -n "$out" ]; then printf '%s' "$J" > "$out"; else printf '%s' "$J"; fi
+[ -n "$w" ] && printf 200
+exit 0
+""")
+        apk = self.bin / "apk"
+        apk.write_text("#!/bin/sh\nexit 0\n")
+        for p in (curl, apk):
+            p.chmod(0o755)
 
     def race(self, rel, text):
         """Before the template's first push, someone else lands this commit."""
@@ -172,6 +195,11 @@ RACE_EOF
         # /tmp first: on Linux the temporary directory itself lives under /tmp.
         src = src.replace("/tmp/", str(self.tmp) + "/w-")
         src = src.replace("/secrets/deploy-key/ssh-privatekey", str(self.key))
+        sa = self.tmp / "sa"
+        sa.mkdir(exist_ok=True)
+        (sa / "namespace").write_text("admins\n")
+        (sa / "token").write_text("t\n")
+        src = src.replace("/var/run/secrets/kubernetes.io/serviceaccount", str(sa))
         env = {"PATH": f"{self.bin}:{os.environ['PATH']}", "HOME": str(self.home),
                "GITOPS_ORG": "mctlhq", "GITOPS_REPO": "mctl-gitops", "PLATFORM_DOMAIN": "mctl.ai"}
         for e in t["script"].get("env", []):
@@ -373,6 +401,67 @@ def missing_guard_refuses():
     return boxed(body, seed=seed)
 
 
+def domain_params(team, service):
+    return {"MCTL_API_TOKEN": "x", "MCTL_API_URL": "http://api", "BACKSTAGE_URL": "http://b",
+            "PARAM_TEAM": team, "PARAM_SERVICE": service, "PARAM_DOMAIN": "a.example.org",
+            "PARAM_DOMAIN_ID": "1"}
+
+
+def database_params(team, service):
+    return {"PARAM_TEAM_NAME": team, "PARAM_APP_NAME": service, "VAULT_ADDR": "http://v",
+            "VAULT_TOKEN": "t"}
+
+
+WRITERS = {"add-domain": domain_params, "remove-domain": domain_params, "database": database_params}
+
+
+def writer_gated(name, mutate=None):
+    def body(b):
+        before = b.head()
+        rc, out = b.run(name, WRITERS[name]("admins", WORKERS[0]), mutate)
+        return refused(b, before, rc, out)
+    return boxed(body)
+
+
+def writer_other_passes(name):
+    def body(b):
+        rc, out = b.run(name, WRITERS[name]("labs", "app"))
+        return "release gate" not in out and "clone" in b.gitlog()
+    return boxed(body)
+
+
+# wft-rollback-service refuses gated files with its own inline guard, which
+# tests/test_release_gate.py covers.
+EXEMPT_WRITERS = {"wft-rollback-service.yaml"}
+
+
+def unguarded_writers(docs):
+    """Every template that pushes and touches services/ must carry both checks."""
+    found = []
+    for path, doc in docs:
+        for t in (doc.get("spec") or {}).get("templates") or []:
+            c = t.get("script") or t.get("container") or {}
+            src = c.get("source") or " ".join(c.get("args") or [])
+            if "git push" not in src or not ("platform-gitops/services" in src or "services/$" in src):
+                continue
+            if path in EXEMPT_WRITERS:
+                continue
+            if TARGET_CALL not in src or OUTGOING_CALL not in src:
+                found.append(f"{path}:{t['name']}")
+    return found
+
+
+def guard_on_gate(gate, *args):
+    with tempfile.TemporaryDirectory() as d:
+        w = pathlib.Path(d)
+        (w / GUARD_REL).parent.mkdir(parents=True)
+        (w / GUARD_REL).write_text(GUARD_TEXT)
+        (w / GATE_REL).write_text(gate)
+        for w_name in WORKERS:
+            (w / SVC / "admins" / w_name).mkdir(parents=True)
+        return guard_run(w, *args).returncode
+
+
 # ── Normal services still work ───────────────────────────────────────────────
 check("deploy of another service still pushes", deploy_other())
 check("update-config of another service still pushes",
@@ -395,6 +484,17 @@ check("onboard onto a gated worker is refused", deploy_gated(WORKERS[0], "onboar
 check("retire of a gated directory already missing is refused, not exit 0", retire_gated_dir_gone())
 check("autoscaling of a gated worker is refused", scale_gated())
 check("validate refuses a gated worker before any build or Vault step", validate_gated())
+
+for name in WRITERS:
+    check(f"{name}: a gated worker is refused before any commit", writer_gated(name))
+    check(f"{name}: another service gets past the guard", writer_other_passes(name))
+
+ALL_DOCS = [(p.name, d) for p in sorted(TPL.glob("*.yaml")) for d in yaml.safe_load_all(p.read_text()) if d]
+check("every template that pushes and touches services/ carries both checks",
+      unguarded_writers(ALL_DOCS) == [], str(unguarded_writers(ALL_DOCS)))
+check("the sweep flags a new writer with no guard",
+      unguarded_writers([("new.yaml", {"spec": {"templates": [{"name": "n", "script": {
+          "source": "git add platform-gitops/services/x/values.yaml\ngit push"}}]}})]) == ["new.yaml:n"])
 
 # ── After a rebase ───────────────────────────────────────────────────────────
 check("deploy: gate grows during the run, refused after the rebase",
@@ -420,6 +520,35 @@ for label, gate in BAD_GATES.items():
 check("a missing guard script refuses", missing_guard_refuses())
 check("a values file symlinked to a gated one is refused", symlinked())
 check("a service directory symlinked to a gated one is refused", symlinked_dir())
+
+# A word in a note or a key must not stop every workflow for every tenant.
+_G = f"{SVC}/admins/mctl-agents-worker/values.yaml"
+for label, extra in {
+    "a note about values": 'note: "values move together"',
+    "an issue URL with services/": "issue: https://example.org/services/1",
+    "a requires key with values": "key: helm.values.strategy",
+}.items():
+    gate = f"gates:\n  - paths:\n      - {_G}\n    {extra}\n"
+    check(f"gate with {label}: another service is not refused",
+          guard_on_gate(gate, "target", "labs", "app") == 0)
+    check(f"gate with {label}: the gated worker still is",
+          guard_on_gate(gate, "target", "admins", WORKERS[0]) == 6)
+check("a path after a quoted # is still read as gated",
+      guard_on_gate(f'gates:\n  - paths:\n      - {SVC}/labs/app/values.yaml\n  - {{note: "a # b", paths: [{_G}]}}\n',
+                    "target", "admins", WORKERS[0]) == 6)
+for label, gate in {
+    "a bare word in a paths list": f"gates:\n  - paths:\n      - {_G}\n      - oops\n",
+    "a yaml alias as the list": "gates:\n  - paths: *common\n",
+    "a bare word in a flow list": f"gates:\n  - paths: [{_G}, oops]\n",
+    "a bare word in prepull_paths": f"gates:\n  - paths:\n      - {_G}\n    prepull_paths:\n      - oops\n",
+}.items():
+    check(f"{label} refuses", guard_on_gate(gate, "target", "labs", "app") == 6)
+real = yaml.safe_load(GATE_TEXT)
+for g in real["gates"]:
+    for p in g["paths"] + g.get("prepull_paths", []):
+        team, service = p.split("/")[2:4]
+        check(f"guard agrees with YAML: {team}/{service} in the real gate is refused",
+              guard_on_gate(GATE_TEXT, "target", team, service) == 6)
 
 # The shape the worker group will have once mctl-gitops#2394 lands, and flow style.
 for label, gate in {
@@ -548,13 +677,23 @@ MUTANTS = {
         lambda: scale_gated(mutate=no_guard, wrote_nothing=False),
     "validate: target call removed":
         lambda: validate_gated(mutate=no_target),
+    **{f"{n}: target call removed": (lambda n=n: writer_gated(n, mutate=no_target)) for n in WRITERS},
+    "guard: a bare word in a paths list is ignored":
+        lambda: bad_gate_refuses(f"gates:\n  - paths:\n      - {_G}\n      - oops\n", guard=guard_mut(
+            'valid_gated_path "$_t" || refuse "$GATE_FILE lists something',
+            'true || refuse "$GATE_FILE lists something')),
+    "guard: trailing comments cut again, a quoted # hides a path":
+        lambda: deploy_gated(WORKERS[0], gate=f'gates:\n  - paths:\n      - {SVC}/labs/app/values.yaml\n  - {{note: "a # b", paths: [{_G}]}}\n',
+                             guard=guard_mut("""-e 's/^[[:space:]]*#.*$//' "$GATE_FILE\"""",
+                                             """-e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$GATE_FILE\""""),
+                             wrote_nothing=False),
     "guard: shape check off, a glob is accepted":
         lambda: bad_gate_refuses(GLOB_GATE, guard=SHAPE_OFF),
     "guard: set -f off, shape check sees expanded files":
         lambda: bad_gate_refuses(GLOB_GATE, guard=guard_mut("set -f\n", "")),
     "guard: unreadable gate no longer refuses":
         lambda: bad_gate_refuses(None, guard=guard_mut(
-            'refuse "$GATE_FILE cannot be read"\n  _body', 'exit 0\n  _body')),
+            '[ -r "$GATE_FILE" ] || refuse "$GATE_FILE cannot be read"', '[ -r "$GATE_FILE" ] || exit 0')),
     "guard: empty group no longer refuses":
         lambda: bad_gate_refuses("gates:\n  - paths: []\n", guard=guard_mut(
             '[ -n "$GATED" ] || refuse', '[ -n "$GATED" ] || exit 0; true || refuse')),

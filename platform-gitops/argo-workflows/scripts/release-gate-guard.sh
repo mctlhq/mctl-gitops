@@ -55,8 +55,9 @@ valid_name() {
 load_gated() {
   [ ! -L "$GATE_FILE" ] || refuse "$GATE_FILE is a symlink"
   [ -f "$GATE_FILE" ] && [ -r "$GATE_FILE" ] || refuse "$GATE_FILE cannot be read"
-  _body=$(sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$GATE_FILE") ||
-    refuse "$GATE_FILE cannot be read"
+  # Whole-line comments only. A trailing `#` may sit inside a quoted string, and
+  # cutting there could hide a path that YAML still reads.
+  _body=$(sed -e 's/^[[:space:]]*#.*$//' "$GATE_FILE") || refuse "$GATE_FILE cannot be read"
   case "$_body" in
     *paths:*) ;;
     *) refuse "$GATE_FILE names no paths" ;;
@@ -64,13 +65,25 @@ load_gated() {
   _tokens=$(printf '%s\n' "$_body" | tr -s ' \t,"{}'\''' '\n' | tr -d '[]') ||
     refuse "$GATE_FILE cannot be parsed"
   GATED=""
+  # Anywhere in the file, only what is unmistakably a path counts, so a word in a
+  # note or a requires key cannot stop every workflow for every tenant.
   for _t in $_tokens; do
     case "$_t" in
-      *platform-gitops/* | *services/* | *.yaml | *.yml | *values*)
+      *platform-gitops/* | services/* | *.yaml | *.yml)
         valid_gated_path "$_t" || refuse "$GATE_FILE names a path of unknown shape: $_t"
         GATED="$GATED $_t"
         ;;
     esac
+  done
+  # Under a *paths key, everything must be a gated path: nothing there is skipped.
+  _listed=$(printf '%s\n' "$_body" | awk '
+    /^[ \t]*(-[ \t]+)?[a-z_]*paths[ \t]*:/ { inlist = 1; sub(/^[^:]*:/, ""); print; next }
+    inlist && /^[ \t]*-[ \t]/ { sub(/^[ \t]*-[ \t]+/, ""); print; next }
+    inlist && /^[ \t]*$/ { next }
+    { inlist = 0 }' | sed -e 's/[[:space:]]#.*$//' | tr -s ' \t,"{}'\''' '\n' | tr -d '[]') ||
+    refuse "$GATE_FILE cannot be parsed"
+  for _t in $_listed; do
+    valid_gated_path "$_t" || refuse "$GATE_FILE lists something that is not a values path: $_t"
   done
   [ -n "$GATED" ] || refuse "$GATE_FILE names no values file"
 }
