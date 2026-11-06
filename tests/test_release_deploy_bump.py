@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import pathlib
+import shutil
 
 WF = pathlib.Path(".github/workflows/release-deploy.yaml").read_text()
 
@@ -68,6 +69,16 @@ def fixture(tmp, *, exec_values=True, exec_has_image=True):
     cw = tmp / "platform-gitops/argo-workflows/cluster-templates"
     cw.mkdir(parents=True)
     (cw / "cwft-mctl-agents-investigate.yaml").write_text(CWFT)
+    # The bump step now runs the release gate (mctl-agents#1007) from the
+    # checkout, and fails closed without it. These fixtures exercise the
+    # rewriter, not the gate, so they carry the real script and a gate over
+    # an unrelated group; tests/test_release_gate.py covers the gate itself.
+    (tmp / "scripts").mkdir()
+    shutil.copy(pathlib.Path("scripts/release-gate.py"), tmp / "scripts/release-gate.py")
+    (tmp / "platform-gitops/release-gates.yaml").write_text(
+        "gates:\n  - name: unrelated\n    paths: [platform-gitops/services/none/values.yaml]\n"
+        '    min_tag: "0.0.1"\n'
+    )
 
 
 P1 = "platform-gitops/services/admins/mctl-agents-worker/values.yaml"
