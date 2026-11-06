@@ -194,8 +194,6 @@ def selftest() -> int:
                 kw = {"gate": yaml.safe_dump({"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0",
                                                          "requires": [{"path": "elsewhere.yaml", "key": "a", "equals": 1}]}]})}
             _tree(d, **kw)
-            if name == "gate file missing":
-                (d / GATE).unlink()
             rc = 0 if not problems(d, files, tag) else REFUSED
         if (rc == 0) != want_pass:
             bad.append(name)

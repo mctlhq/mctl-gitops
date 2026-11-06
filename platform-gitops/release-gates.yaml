@@ -9,6 +9,8 @@
 #   - this file, a listed file, or a required key cannot be read (an
 #     unreadable gate is a refusal, never a pass).
 # Raising `min_tag` and loosening `requires` are reviewed PRs to this file.
+# If a group's tags have already drifted apart every bump is refused, including
+# one that would reunite them: recover with a reviewed PR that aligns the group.
 gates:
   - name: mctl-agents-workers
     issue: mctlhq/mctl-agents#1007
