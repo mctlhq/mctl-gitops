@@ -252,6 +252,8 @@ class Gh:
         if not isinstance(doc, dict) or not isinstance(doc.get("commits"), list) \
                 or not isinstance(doc.get("files"), list):
             raise Unknown("unexpected compare response")
+        if doc.get("status") not in ("ahead", "behind", "diverged", "identical"):
+            raise Unknown("unexpected compare status")
         # The endpoint pages its commits: a shorter list is not all of them.
         if doc.get("total_commits") != len(doc["commits"]):
             raise Unknown("the compare response does not list every commit")
@@ -260,6 +262,12 @@ class Gh:
     def create_branch(self, branch: str, sha: str) -> None:
         self._json("api", "--method", "POST", f"repos/{self.repo}/git/refs",
                    "-f", f"ref=refs/heads/{branch}", "-f", f"sha={sha}")
+
+    def fast_forward(self, branch: str, sha: str) -> None:
+        # Not forced: GitHub refuses anything but a fast-forward, so this cannot
+        # drop a commit pushed since the compare.
+        self._json("api", "--method", "PATCH", f"repos/{self.repo}/git/refs/heads/{branch}",
+                   "-f", f"sha={sha}", "-F", "force=false")
 
     def put(self, path: str, text: str, blob: str, branch: str, message: str) -> None:
         # `sha` makes this a compare-and-swap: a concurrent change answers 409
@@ -334,6 +342,7 @@ def land(gh, server: str, live: list[str], today: str) -> str:
         return f"{server}: more than one candidate bump PR, or one the bot did not open, so nothing was written."
 
     head = None
+    merged_branch = False
     if bot_prs:
         pr = bot_prs[0]
         ref, branch = pr["headRefOid"], pr["headRefName"]
@@ -356,10 +365,17 @@ def land(gh, server: str, live: list[str], today: str) -> str:
         head = gh.branch_head(branch)
         ref = head or sha
         if head:
-            problem = leftover_problem(gh.compare(sha, head))
+            comparison = gh.compare(sha, head)
+            problem = leftover_problem(comparison)
             if problem:
                 return (f"{server}: <b>needs your decision</b>: branch {branch} already exists and {problem}. "
                         "Nothing was written. Delete the branch if it is not wanted.")
+            # Everything on it is already in main: a merged proposal whose branch
+            # survived, when the portal returns to an earlier list. Its documents
+            # are stale and a PR from it would have no commits, so start from main.
+            if comparison["status"] in ("behind", "identical"):
+                merged_branch = True
+                ref = sha
 
     catalogue, cat_blob = gh.read(f"{ALLOWLISTS}/catalogue.json", ref, rewrite=True)
     baseline, base_blob = gh.read(f"{ALLOWLISTS}/baseline.json", ref, rewrite=True)
@@ -372,6 +388,8 @@ def land(gh, server: str, live: list[str], today: str) -> str:
     current = {"catalogue": catalogue}
     if pr is None and head is None:
         gh.create_branch(branch, sha)
+    elif merged_branch:
+        gh.fast_forward(branch, sha)
     wrote = write_change(gh, outcome, server, branch, (cat_blob, base_blob), current)
     if pr is None:
         pr = gh.create_pr(
