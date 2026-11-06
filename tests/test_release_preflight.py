@@ -216,6 +216,12 @@ r, out, _ = run(stage="publish-direct", GIT_REF="any-branch", docker=(1, "denied
 check("direct: a bound image with no registry answer refuses", r == 11, (r, out))
 r, out, _ = run(stage="publish-direct", IMAGE_TAG="main-4ccb257", GIT_REF=SHA, docker=(0, ""))
 check("direct: a sha tag from its own commit may be rebuilt", r == 0, (r, out))
+for label, kw in {
+    "a comma naming another image": {"IMAGE_NAME": "ghcr.io/mctlhq/grafana-iac", "IMAGE_TAG": f"1.0.0,{AGENTS}:1.117.0"},
+    "a newline naming another image": {"IMAGE_NAME": "ghcr.io/mctlhq/grafana-iac", "IMAGE_TAG": f"1.0.0\n{AGENTS}:1.117.0"},
+    "a comma in the image": {"IMAGE_NAME": f"ghcr.io/mctlhq/grafana-iac,{AGENTS}"},
+}.items():
+    check(f"direct: {label} is refused", rc(stage="publish-direct", **kw) == 5, run(stage="publish-direct", **kw)[1])
 check("direct: an unreadable gate refuses", rc(stage="publish-direct", prepare=no_gate) == 2)
 check("no stage refuses", rc(stage="") == 2)
 check("an unknown stage refuses", rc(stage="nonsense") == 2)
@@ -283,6 +289,10 @@ M = {
     "symlink check off":
         lambda: rc(script=SCRIPT_TEXT.replace("if os.path.relpath(os.path.realpath(f)) != os.path.normpath(f):", "if False:"),
                    prepare=link, VALUES_PATH=f"{SVC}/labs/link/values.yaml") != 4,
+    "direct shape check off, a comma names the gated image":
+        lambda: rc(stage="publish-direct", script=SCRIPT_TEXT.replace(
+            'for name, pattern in (("IMAGE_TAG", TAG_RE), ("IMAGE_NAME", IMAGE_RE)):\n        if not re.fullmatch(pattern, env(name)):\n            refuse(5, f"{name} has an invalid shape: {env(name)!r}")\n    try:',
+            'try:'), IMAGE_NAME="ghcr.io/mctlhq/grafana-iac", IMAGE_TAG=f"1.0.0,{AGENTS}:1.117.0") == 0,
     "direct check off":
         lambda: rc(stage="publish-direct", script=cut("        check_direct()\n"), IMAGE_NAME=AGENTS) == 0,
     "sha rule loose, any sha allowed":

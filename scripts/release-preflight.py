@@ -144,7 +144,13 @@ def check_tag_free():
 def check_direct():
     """A direct dispatch skips the release checks. It may not publish a gated image,
     or replace a tag of any image that release-deploy publishes. A new tag, or an
-    image outside the table, is the tenant build path and stays as it was."""
+    image outside the table, is the tenant build path and stays as it was.
+
+    The shapes come first: the build action splits its tags on commas and newlines,
+    so a tag carrying one names further images, past every other check here."""
+    for name, pattern in (("IMAGE_TAG", TAG_RE), ("IMAGE_NAME", IMAGE_RE)):
+        if not re.fullmatch(pattern, env(name)):
+            refuse(5, f"{name} has an invalid shape: {env(name)!r}")
     try:
         doc = yaml.safe_load(GATES.read_text())
         repos = {g["repository"] for g in doc["gates"] if g.get("repository")}
