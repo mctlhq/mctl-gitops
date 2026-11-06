@@ -90,9 +90,10 @@ spec:
                 - name: mode
                   value: "check"
 
-          # Step 1: delete Vault secrets (parallel with git delete)
+          # Step 1: delete Vault secrets, only after the git step accepted the
+          # retire. Run in parallel, a refusal there would still lose the secrets.
           - name: delete-vault-secrets
-            dependencies: [preflight]
+            dependencies: [delete-from-git]
             when: "\"{{workflow.parameters.delete_vault_secrets}}\" == \"true\""
             templateRef:
               name: tpl-vault-write

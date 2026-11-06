@@ -559,6 +559,11 @@ jobs:
 
       - name: Release gate watch alerts on a violation
         run: python3 tests/test_release_gate_watch.py
+      - name: Release gate in the shared workflow templates
+        # The templates' own scripts run against a local bare repository: every
+        # refusal must leave it untouched, other services must still deploy and
+        # retire, and each guard layer is removed in turn to prove a test fails.
+        run: python3 tests/test_release_gate_guard.py
 
       - name: Unit-test the release-deploy input validation
         # validate-inputs gates build and bump; this runs its bash against
