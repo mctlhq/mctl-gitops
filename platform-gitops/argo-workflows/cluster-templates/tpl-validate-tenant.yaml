@@ -145,6 +145,10 @@ spec:
           git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
+          # ── 3a. Release gate: before any build or Vault write ──────────────
+          # tpl-git-commit checks again before it writes and before it pushes.
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$TEAM" "$SERVICE" || exit 1
+
           # ── 3b. Image name: the component name is the image name ───────────
           # Services run, and builds push, <registry>/<component_name>, so a
           # team may only use a name it owns. Rule and reviewed grants:
