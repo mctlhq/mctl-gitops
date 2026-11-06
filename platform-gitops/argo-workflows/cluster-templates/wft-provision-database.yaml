@@ -161,6 +161,9 @@ spec:
           # ── Clone mctl-gitops ───────────────────────────────────────────────
           git clone --depth=1 "git@github.com:${GITOPS_ORG}/${GITOPS_REPO}.git" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
+
+          # Before anything here is written, in git or elsewhere.
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$TEAM" "$APP" || exit 1
           git config user.name "argo-workflows[bot]"
           git config user.email "argo-workflows[bot]@users.noreply.github.com"
 
@@ -403,6 +406,7 @@ spec:
 
             PUSHED=false
             for i in $(seq 1 5); do
+              sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
               if git push origin HEAD:main; then
                 echo "✅ Pushed — ArgoCD will sync automatically"
                 PUSHED=true

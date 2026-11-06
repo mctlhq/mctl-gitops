@@ -423,6 +423,8 @@ spec:
           git clone --depth=1 "${REPO}" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$TEAM" "$COMPONENT" || exit 1
+
           # Append or update autoscaling block
           if grep -q "^autoscaling:" "${VALUES}"; then
             sed -i "s|^\( *enabled: *\).*|\1true|" "${VALUES}"
@@ -439,6 +441,7 @@ spec:
           git add "${VALUES}"
           git diff --staged --quiet && echo "Autoscaling already configured" && exit 0
           git commit -m "chore: enable autoscaling for ${TEAM}/${COMPONENT} (min=${MIN} max=${MAX} cpu=${CPU}%)"
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
           git push
       volumes:
         - name: deploy-key
