@@ -1,4 +1,4 @@
-# DevLoop Part M, slice M2b: final PR read at the merge-watch deadline, plus the feedback tick (switch OFF)
+# DevLoop Part M, slice M2b-1: terminal reconciliation of the merge watch
 
 ## Context
 
@@ -7,189 +7,166 @@ proposal. The approved umbrella digest `sha256:1e461962bc774bc5ed7f129c6a7837872
 is recorded here as provenance only. This proposal needs its own digest and its own human approval. It does not
 recover or restart the failed #993 DevLoop, and it does not touch the umbrella's files or `.status.yaml`.
 
-The slice has two parts.
+The directory slug keeps its historical `m2b-feedback-tick-and-dea` name because the slug binds this proposal to its
+DevLoop. The slice's content is what this file says, not what the slug says.
 
-**Deadline-in-gap.** This part is first and is a mandatory acceptance gate. It is a new owner requirement dated
-2026-11-06, and the umbrella does not contain it. Today `DevLoopWorkflow._watch_pr`
-(`orchestrator/temporal/workflows/dev_loop.py`) loops on `while workflow.now() < deadline and not self._abandoned`.
-Suppose the worker is down while the PR merges, and the absolute deadline passes before the worker returns. The
-pending `workflow.sleep(cadence.poll_interval)` timer then fires after the deadline. The loop condition is false,
-the loop exits without another `get_pr_state` read, and the `finally` block releases the lifecycle claim. The
-result carries the last observed OPEN, so a merged PR is reported open. Deploy observation and the
-security-landed record, both keyed on `pr_state.merged` in `_finish_after_watch`, are silently lost.
+**Amendment, owner decisions of 2026-11-06.** The earlier text of this proposal, with digest
+`sha256:e0d913dddc0bfe706f011eed7580bf48c6e2849bca6dce70cdb489a5c9e1abe0`, was never approved. The owner decided:
 
-**Feedback tick, from umbrella tasks 5, 6 and 7.** This part adds three things:
-- the `read_rollout_switches` activity, reading `DEVLOOP_DEFERRED_FEEDBACK` only;
-- the feedback tick in `_deliver` / `_watch_pr`, with `_feedback_authority_valid()`, dedupe through
-  `_feedback_done`, and a typed landing;
-- `run_shepherd --feedback-intent`, which emits `feedback_outcome`.
+1. The scope expands to terminal-state safety: deadline expiry, grace-polls exhaustion and unrecoverable PR read
+   errors. The watch never finalizes from a stale OPEN without reconciliation. Unknown state produces a typed
+   reconcile-required, never a false success.
+2. M2b is split. This slice, M2b-1, is deadline-in-gap, terminal reconciliation, Temporal replay, continue-as-new,
+   tests first and mutation evidence. Umbrella tasks 5-7 and the feedback-tick foundation move to M2b-2, with a
+   separate issue, proposal, digest and approval. M2c and M3 stay separate. No investigator runs concurrently.
+3. The workflow may end Completed with a typed reconcile-required and `pr=None`, provided the reconciliation is
+   durably recorded before the claim is released and the request cannot be silently lost. Completed must not imply
+   successful business processing.
 
-The switch stays OFF. The validator's `feedback-not-ready` deferral, owned by umbrella task 4 and slice M2c, is not
-changed. This proposal therefore states exactly how the tick is reached in tests without the accept path. It also
-records the portion of T6 that cannot be proven without that path as STOPPED.
+Authority checks stay fail-closed and the feedback tick stays OFF. The M2c accept path cannot be enabled without
+verified live authority. This slice adds no tick and no switch, and it does not touch the validator.
+
+**The defect.** `DevLoopWorkflow._watch_pr` (`orchestrator/temporal/workflows/dev_loop.py`) has three exits that end
+on a last observed state, none of which establishes what the PR is now:
+
+- **Deadline.** The loop runs `while workflow.now() < deadline and not self._abandoned`. If the worker is down while
+  the PR merges and the absolute deadline passes before it returns, the pending `workflow.sleep` fires past the
+  deadline, the condition is false, and the loop exits with no further read.
+- **Grace polls.** After `pr_lookup_grace_polls` consecutive polls without a resolvable PR, the watch returns the last
+  state, which may be None, an unresolved reference, or a stale OPEN.
+- **Unrecoverable read.** A non-transient `get_pr_state` failure returns the last state.
+
+In each case the `finally` block releases the lifecycle claim and the workflow completes. A merged PR is then
+reported as open, or not at all, and deploy observation and the security-landed record, both keyed on
+`pr_state.merged` in `_finish_after_watch`, are silently lost.
 
 ## User stories
 
-- AS a platform operator I WANT a merge watch whose deadline expired during a worker outage to read the PR once more
-  before it ends SO THAT a merge that happened during the outage is never reported as OPEN, and its deploy
-  observation is never skipped.
-- AS a platform operator I WANT a watch whose final read fails to end in an explicit reconciliation-required state
-  SO THAT unknown is never reported as open, closed or success.
-- AS a DevLoop maintainer I WANT the new read behind its own patch marker, decided once and carried across
+- AS a platform operator I WANT every non-terminal watch exit to establish the PR's current state before the watch
+  ends SO THAT a merge is never reported as OPEN and its deploy observation is never skipped.
+- AS a platform operator I WANT a watch that cannot establish the state to leave a durable, visible record before it
+  lets go of the claim SO THAT unknown is never reported as open, closed or success, and the work is never silently
+  lost.
+- AS a reader of a DevLoop result I WANT Completed with a reconcile-required outcome to be distinguishable from
+  success in every reader SO THAT Completed never implies the work landed.
+- AS a DevLoop maintainer I WANT the new behaviour behind its own patch marker, decided once and carried across
   continue-as-new, SO THAT every history recorded before this change replays unchanged.
-- AS the owner of #993 I WANT the feedback tick built, tested and dark (switch OFF, validator unchanged) SO THAT M2c
-  can later open the accept path onto code that is already proven.
 - AS a reviewer I WANT every behaviour proven by a test committed before its code, with mutation and replay evidence,
   SO THAT the commit order itself is the evidence (#1013 lacked this).
 
 ## Acceptance criteria (EARS)
 
-### Deadline-in-gap (D)
+Requirements R1-R15 apply only to an execution whose watch recorded `MERGE_WATCH_RECONCILE_PATCH`, except R12, which
+pins the histories that did not.
 
-- D1. WHEN `_watch_pr` leaves its poll loop because `workflow.now() >= deadline` (not abandoned, not hopping, not
-  the #516 terminal-status break) in an execution that recorded `MERGE_WATCH_FINAL_READ_PATCH`, THE SYSTEM SHALL
-  read the PR with `get_pr_state` before the watch ends. This holds however far past the deadline the loop woke.
-- D2. WHEN that final read returns a found MERGED PR, THE SYSTEM SHALL take the ordinary merged path:
+### Establishing the state
+
+- R1. WHEN `_watch_pr` reaches any of the following exits, THE SYSTEM SHALL run a final PR read before the watch ends:
+  - `deadline`: the loop left because `workflow.now() >= deadline`, however far past the deadline it woke;
+  - `grace-polls`: `polls_without_pr >= cadence.pr_lookup_grace_polls`;
+  - `read-error`: a non-transient `get_pr_state` failure.
+- R2. THE final read SHALL make at most `FINAL_READ_ATTEMPTS` attempts, each one `get_pr_state` activity under
+  `PR_STATE_RETRY_POLICY`, separated by `FINAL_READ_BACKOFF`. An attempt fails on an `ActivityError` of any kind or on
+  `found=False`. A failed attempt SHALL never be read as OPEN, CLOSED or absent.
+- R3. WHEN the final read returns a found MERGED PR, THE SYSTEM SHALL take the ordinary merged path, exactly as for a
+  MERGED state observed inside the loop:
   - the lifecycle `terminal` write;
-  - `_WatchOutcome(last=<fresh state>)`;
-  - deploy observation, the security-landed record and the incident watch in `_finish_after_watch`, exactly as
-    for a MERGED state observed inside the loop.
-- D3. WHEN the final read returns a found CLOSED PR, THE SYSTEM SHALL report CLOSED with the `terminal` write. WHEN
-  it returns a found OPEN PR, THE SYSTEM SHALL report that freshly read OPEN state with the `release` write.
-  `DevLoopResult.watch_end` SHALL be `final-read` in both cases.
-- D4. IF the final read cannot produce a found PR state within `FINAL_READ_ATTEMPTS` attempts, THEN THE SYSTEM SHALL
-  end the watch in the explicit state `reconcile-required`. Each attempt is one `get_pr_state` activity under
-  `PR_STATE_RETRY_POLICY`, separated by `FINAL_READ_BACKOFF`. An attempt fails on an `ActivityError` of any kind or
-  on `found=False`. In that state:
+  - deploy observation, the security-landed record and the incident watch in `_finish_after_watch`;
+  - `DevLoopResult.watch_end == "final-read"`.
+- R4. WHEN the final read returns a found CLOSED PR, THE SYSTEM SHALL report CLOSED with the `terminal` write and
+  `watch_end == "final-read"`.
+- R5. WHEN the final read returns a found OPEN PR, THE SYSTEM SHALL act by exit:
+  - `deadline`: report that freshly read OPEN state with the `release` write and `watch_end == "final-read"`;
+  - `grace-polls` or `read-error`: resume the poll loop, with `polls_without_pr` reset to 0, because a resolvable OPEN
+    PR before the deadline is not an end. The absolute deadline still bounds the watch.
+
+### Reconcile-required
+
+- R6. IF the final read produces no found PR state, THEN THE SYSTEM SHALL end the watch as reconcile-required. It
+  SHALL durably record the reconciliation (R7) and then release the claim, with this result:
   - `DevLoopResult.watch_end == "reconcile-required"`;
   - `DevLoopResult.outcome == "merge_watch_reconcile_required"`;
-  - `ended` is non-empty;
-  - `pr` is None and `last_observed_pr` carries the last observed state;
-  - deploy observation does not run;
-  - a `MERGE_WATCH_RECONCILE_REQUIRED` log line is emitted.
-- D5. WHILE the watch is ending on the deadline THE SYSTEM SHALL NOT end on the last observed OPEN without a final
-  read. A failed read SHALL never be reported as OPEN, CLOSED or success.
-- D6. WHILE the gap lasts THE SYSTEM SHALL keep the absolute deadline unchanged. The deadline is neither extended nor
-  recomputed. The final read's own bound (D4) runs after the deadline and is not added to it.
-- D7. WHEN a continue-as-new hop occurs THE SYSTEM SHALL carry the absolute `deadline` and the final-read decision
-  (`MergeWatchResume.final_read`). A gap that straddles a hop, including a continued run that starts after the
-  deadline has already passed, SHALL behave exactly as the same gap without a hop.
-- D8. WHERE a history was recorded before this change, THE SYSTEM SHALL replay it unchanged:
+  - `DevLoopResult.ended` non-empty, naming the exit, and taking precedence over any abandon that arrived after the
+    decision;
+  - `DevLoopResult.pr` None, and `DevLoopResult.last_observed_pr` carrying the last observed state, which may be None;
+  - `DevLoopResult.reconcile_record` carrying the URL of the record;
+  - no deploy observation, security-landed record or incident watch;
+  - a `MERGE_WATCH_RECONCILE_REQUIRED` log line naming the repo, the slug, the exit and the record.
+- R7. THE durable record SHALL be a comment on the loop's source issue, written by a new activity
+  `record_merge_watch_reconcile` before any relinquishing write. It SHALL carry a hidden marker built from the
+  workflow id and the watch's absolute deadline, the exit, the last observed PR, and the ids of the requests open at
+  that moment. It carries no other data.
+- R8. THE activity SHALL be idempotent. It lists the issue's comments in full and returns the existing record when the
+  marker is present on a comment authored by a bot or by an owner, member or collaborator. Any other comment carrying
+  the marker text SHALL be ignored, so a third party cannot suppress the record. A failed or malformed page is a failed
+  read, not a shorter list: the activity then raises and posts nothing.
+- R9. WHILE the record has not been confirmed THE SYSTEM SHALL keep the lifecycle claim and SHALL keep retrying, every
+  `RECONCILE_RECORD_RETRY` for at most `RECONCILE_RECORD_WAIT`, refreshing the claim's liveness on its existing
+  cadence so that the claim is not reaped during the wait. An abandon signal SHALL not shorten this wait.
+- R10. IF the record cannot be confirmed within `RECONCILE_RECORD_WAIT`, or the issue answers 404 or 410, or the
+  issue URL cannot be parsed, THEN THE SYSTEM SHALL NOT release the claim and SHALL NOT end Completed. It SHALL log
+  `MERGE_WATCH_RECONCILE_UNRECORDED` and fail the workflow with a non-retryable `MergeWatchReconcileUnrecorded`, so
+  the unknown state is visible as a Failed run.
+- R11. WHEN a watch ends reconcile-required, every delivery still open SHALL land `Failed` with the typed refusal
+  `merge-watch-reconcile-required`, or close through the existing `request-not-fulfilled` path if it never bound. None
+  SHALL land `Succeeded`. Its request id SHALL appear in the record.
+
+### Replay, continue-as-new and duplicates
+
+- R12. WHERE a history was recorded before this change, THE SYSTEM SHALL replay it unchanged:
   - no new command;
-  - `final_read` defaults to False on a pre-change `MergeWatchResume`;
+  - `terminal_reconcile` defaults to False on a pre-change `MergeWatchResume`, and that watch keeps today's behaviour
+    until it ends;
   - `_resume_merge_watch` and the resume arm of `_watch_pr` SHALL NOT call `workflow.patched` for this marker.
-- D9. WHILE the final read is undecided THE SYSTEM SHALL keep the lifecycle-ownership claim. The relinquishing
-  `terminal` or `release` write happens only after the final read has decided the outcome. In the
-  `reconcile-required` case the write is `release`, with the reason
-  `merge watch deadline: pull-request state unreadable, reconciliation required`.
-- D10. WHEN a final-read activity task is redelivered, or the workflow is replayed, THE SYSTEM SHALL produce no
-  duplicate effect:
-  - at most one terminal or release write per watch end;
-  - one deploy observation;
-  - one security-landed record.
+- R13. WHEN a continue-as-new hop occurs THE SYSTEM SHALL carry the absolute `deadline` and the `terminal_reconcile`
+  decision. The deadline SHALL be neither extended nor recomputed, and the final read's own bound runs after it. A gap
+  that straddles a hop, including a continued run that starts after the deadline has passed, SHALL behave exactly as
+  the same gap without a hop.
+- R14. WHEN an activity task is redelivered or the workflow is replayed, THE SYSTEM SHALL produce no duplicate effect:
+  - at most one terminal or release write per watch end, and none before the final read has decided;
+  - one deploy observation and one security-landed record;
+  - one record comment.
 
-### Rollout switch (T5)
+### Readers
 
-- T5-R1. THE SYSTEM SHALL provide a short activity `read_rollout_switches`, registered in the main worker's
-  `short_activities`. It returns `RolloutSwitches(deferred_feedback: bool = False)`, which is true only for an
-  explicit `DEVLOOP_DEFERRED_FEEDBACK` value in `{"1", "true", "yes", "on"}` (case-insensitive, trimmed).
-- T5-R2. IF the variable is unset, empty, malformed or unknown, or the activity fails, THEN THE SYSTEM SHALL treat
-  the switch as off. The activity never raises, and the workflow maps an `ActivityError` to off. The scheduled
-  command sequence SHALL be identical in every case.
+- R15. THE `orchestrator/temporal/cli.py` summary SHALL print reconcile-required with its record, before and instead
+  of the existing `not watched` branch that a None `pr` would otherwise reach.
 
-### Feedback tick (T6-T8)
+The other readers need no change, and the implementer SHALL pin that with tests or cite the code as evidence:
 
-- F1. WHEN a delivery with `accepted_after_gates=True` reaches `_deliver` in a loop that recorded
-  `DEFERRED_FEEDBACK_PATCH` (carried as `MergeWatchResume.feedback_tick`), THE SYSTEM SHALL decide its feedback
-  once. The order is:
-  1. If the request id is already in `_pending_feedback`, wait. The decision has already been taken.
-  2. If the request id is in `_feedback_done` with no pending phase, land `Failed feedback-unobservable`, with no
-     second tick.
-  3. Read the switch. If it is not on, land `Failed feedback-disabled`.
-  4. If `_feedback_authority_valid()` is false, land `Failed reapproval-required`.
-  5. Otherwise append the request id to `_pending_feedback`.
-- F2. WHILE the PR is OPEN and `_pending_feedback` is non-empty, `_watch_pr` SHALL start exactly one feedback tick
-  per request, under the single-tick rule (never while a cadence tick or another feedback tick is in flight). The
-  tick runs outside the cadence budget, and the request id is added to `_feedback_done` BEFORE the tick is
-  awaited.
-- F3. WHEN the tick finishes THE SYSTEM SHALL land the delivery as follows:
-
-  | Tick result | Landing |
-  |---|---|
-  | `processed` | `Succeeded` |
-  | `scope-expansion` | `Failed scope-expansion` |
-  | `failed`, or an `ActivityError` | `Failed feedback-failed` |
-  | `unobservable`, a missing or unknown `feedback_outcome`, or a cancelled in-flight tick | `Failed feedback-unobservable` |
-
-  Every Failed landing records a `ResumeRejection`. Nothing other than `processed` SHALL ever land `Succeeded`.
-- F4. IF the watch ends (merged, closed, deadline, final read, terminal status, give-up) before a pending request's
-  tick has started, THEN THE SYSTEM SHALL land `Failed merged-before-feedback` when the final state is MERGED, and
-  `Failed feedback-not-run` otherwise.
-- F5. WHEN a delivery is redelivered, the run hops, or the workflow is replayed, THE SYSTEM SHALL run no second tick
-  for the same request id. The hop predicate SHALL refuse while a feedback tick is in flight.
-- F6. `_feedback_authority_valid()` SHALL be true only when all of the following hold:
-  - the flip's `aar_`, approved content digest and approver are present on the loop (recorded at the flip and
-    carried across hops);
-  - `check_grant_freshness` confirms the recorded digest still matches the live proposal.
-
-  A missing record, a stale digest or an unreadable read SHALL be `reapproval-required`.
-- F7. WHILE this slice is in effect THE SYSTEM SHALL keep `_validate_execution_request` deferring
-  `feedback-not-ready` for every new post-gates contract resume. No production path SHALL create a delivery with
-  `accepted_after_gates=True`.
-
-### Shepherd feedback mode (task 7)
-
-- S1. WHEN `run_shepherd` is invoked with `--feedback-intent <intent_id>` (requires `--service`, `--slug`,
-  `--execution-request-id` and `--feedback-actor`, and a work item id), THE SYSTEM SHALL do the following:
-  1. Fetch that intent through `WorkItemClient.list_intents`.
-  2. Classify it against the approved `requirements.md` / `design.md` as `in-scope` or `scope-expansion`.
-  3. Run the existing `--review-feedback` path only for `in-scope`, under the existing lifecycle claim,
-     `--match-head-commit` fencing, and review and CI gates.
-  4. Emit exactly one `feedback_outcome` in `{processed, scope-expansion, failed, unobservable}`, as a stdout line
-     `FEEDBACK_OUTCOME=<value>` and in the file `$FEEDBACK_OUTCOME_PATH` (default `/tmp/feedback_outcome`).
-- S2. IF any of the following happens, THEN THE SYSTEM SHALL emit the outcome shown:
-
-  | Condition | `feedback_outcome` |
-  |---|---|
-  | The intent is missing, redacted (`text_redacted`) or unreadable | `unobservable` |
-  | The classifier output is anything other than an exact `in-scope` | `scope-expansion` |
-  | The review-feedback run or a fencing check fails | `failed` |
-  | An unexpected exception | `failed` |
-
-  It SHALL never emit `processed` unless the review-feedback commit was pushed under fencing.
-- S3. WHERE the shepherd CWFT does not yet declare the `feedback_outcome` output (task 8, out of scope),
-  `WorkflowResult.feedback_outcome` SHALL be None, and the workflow SHALL land `feedback-unobservable`.
+- `dispatcher._reconcile_closed_loops` only fails non-terminal executions of a closed loop and never writes
+  `Succeeded`.
+- mctl-api's `restartIfAbandoned` (`internal/api/handlers_dev_loop.go`) reports `already_exists` for a Completed run
+  with any non-abandon `ended`, and for a Failed run. A reconcile-required run is therefore never silently restarted.
+- A `_land_delivery` already decided before the watch ended is not changed.
 
 ## Out of scope
 
-- Task 8, the sibling mctl-gitops CWFT PR (`intent_id`, `feedback_actor`, the `feedback_outcome` output). Merging it
-  is a live change and needs its own approval.
-- Task 4 (validator accept path; M2c) and 4b, task 9 and #1005 (M3), tasks 10-11 (M4), tasks 12-16 (M5), Part S
-  and #992.
-- Any flag activation, release, deployment or production worker change. `DEVLOOP_DEFERRED_FEEDBACK` stays unset on
-  `services/admins/mctl-agents-worker`. #1003 stays Draft and the release hold stays ON.
-- Changing the in-loop non-transient `get_pr_state` failure path, or the grace-polls give-up path. Both still end
-  with the last observed state (see Open questions).
+- Umbrella tasks 5, 6 and 7, moved to M2b-2 and not started: `read_rollout_switches`, the feedback tick,
+  `_feedback_authority_valid()`, `run_shepherd --feedback-intent`, and the `FlipAuthority` record.
+- Task 8 (sibling mctl-gitops CWFT PR), task 4 and 4b (validator accept path; M2c), task 9 and #1005 (M3), tasks 10-11
+  (M4), tasks 12-16 (M5), Part S and #992.
+- `_validate_execution_request`: it still defers `feedback-not-ready`, and no production path creates a delivery with
+  `accepted_after_gates=True`.
+- An automated reconciler that acts on the record. This slice records; a human or a later slice acts.
+- A Promtail metric or alert on `MERGE_WATCH_RECONCILE_REQUIRED`. It would be a live mctl-gitops change with its own
+  approval.
+- Any flag activation, release, deployment or production worker change. #1003 stays Draft, the release hold stays ON
+  and B4 stays FAIL.
 - Any PR merge. A PR, if later authorized, stays blocked for owner approval under the temporary code-owner rule
   (#1020) and is never merged with an admin bypass.
 
 ## Open questions
 
-- **T6 delivery leg, STOPPED.** Umbrella T6 includes "a resume with an intent delivered while the loop is in its
-  merge watch". With the validator still deferring `feedback-not-ready`, no `accept_execution_request` Update can
-  open a post-gates delivery. This slice therefore proves T6-T8 from a real `DevLoopWorkflow` continued run that
-  carries `OpenDelivery(accepted_after_gates=True)` in `MergeWatchResume.open_deliveries`. The dispatcher -> Update
-  -> fulfil leg of T6 is recorded as STOPPED and left to M2c. Redelivery is still proven through a real Update,
-  because the validator returns early for an id already in `_accepted_request_ids`.
-- Should `reconcile-required` end the Temporal workflow as Completed with a typed outcome (proposed, which keeps
-  `DevLoopResult`), or as Failed?
-- Should `pr` be None in `reconcile-required` (proposed; the pointer moves to `last_observed_pr`)? Downstream
-  readers that treat `pr is None` as "no PR watched" must also read `watch_end` / `outcome`.
-- Should the claim be released (proposed) or left held for the store to derive as dead in `reconcile-required`?
-- `_feedback_authority_valid()` re-checks the digest with the existing `check_grant_freshness`. There is no existing
-  activity that re-reads the approver's live authority. Is presence of the recorded approver plus a fresh digest
-  sufficient for this slice, or must a new authority read be added (fail closed until it exists)?
-- The non-transient read-failure path (`_is_transient` false) and the grace-polls give-up path also end on a last
-  observed state without a final read. Should a follow-up apply the same `reconcile-required` rule there?
-- The exact Argo behaviour when the tick passes parameters the current CWFT does not declare is unverified. It is
-  unreachable while the switch is OFF and the validator defers, and task 8 must settle it.
+- **Abandon, proposed unchanged.** An operator abandon during the watch still ends on the last observed state with
+  `ended="abandoned: ..."` and a `release`, with no final read. It is an explicit operator decision and is typed as
+  such, but `pr` can be a stale OPEN. Is that carve-out acceptable, or should abandon also take the final read and
+  delay the abandon by up to the final read's bound?
+- **The #516 terminal-status break, proposed unchanged.** It ends only when no OPEN PR ever resolved and the proposal
+  status stayed loop-terminal over `PROPOSAL_TERMINAL_CONFIRM_POLLS` polls, with a typed `ended`. It reports no PR
+  state, so it is not a stale OPEN.
+- **Grace-polls behaviour change.** A loop whose implementer legitimately produced no PR today ends with `pr=None`
+  and nothing else. After this slice it ends reconcile-required with a comment on the source issue. This follows the
+  owner's scope decision and is stated so that it is approved knowingly.
+- **Bounds.** `RECONCILE_RECORD_WAIT` is proposed at 7 days and `RECONCILE_RECORD_RETRY` at 30 minutes. They cover a
+  GitHub outage that also caused the failed read, because record and read share a failure domain.
