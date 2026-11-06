@@ -36,7 +36,7 @@ All paths are in the `mctlhq/mctl-agents` clone at `2ddcf96` (the merge of #1020
   rehydrates instance state and calls `_watch_pr(resume=...)`, with no `workflow.patched` call of its own.
 - **Tail.** `_finish_after_watch` (line 4611) runs deploy observation, `security-record-landed` and the incident watch
   only when `pr_state.merged`.
-- **Result.** `DevLoopResult` (line 1163): `pr` (line 1175, documented as "OPEN means the watch deadline expired"),
+- **Result.** `DevLoopResult` (line 1163): `pr` (line 1177, documented as "OPEN means the watch deadline expired"),
   `ended` (line 1195), `outcome` (line 1198).
 
 ### Deliveries
@@ -74,7 +74,7 @@ changed.
 
 ### Readers of the result
 
-- `orchestrator/temporal/cli.py:109` prints `not watched` for a None `pr` once implement succeeded. That would be
+- `orchestrator/temporal/cli.py:117` prints `not watched` for a None `pr` once implement succeeded. That would be
   misleading here, so it changes.
 - `dispatcher._reconcile_closed_loops` (line 577) only fails non-terminal executions of a closed loop.
 - mctl-api `restartIfAbandoned` (`internal/api/handlers_dev_loop.go`, read at its default branch) decodes `ended` and
@@ -104,16 +104,21 @@ False, so that watch keeps today's behaviour until it ends (migration by attriti
 ```python
 async def _decide_watch_end(self, exit_name, watch, deadline) -> _WatchDecision:
     self._retain_claim = True                               # R10a: from here to a confirmed outcome
-    settled_at = workflow.now()
+    settled_at = None
     unobserved = False
     if exit_name == "deadline":
         unobserved = await self._settle_watch_work(watch)   # R1a
+        settled_at = workflow.now()
+        if self._abandoned:
+            return self._decided("abandoned")
     read = await self._final_pr_read(watch)                 # R2, wakes on abandon
     if read.abandoned:
         return self._decided("abandoned")
     if read.fresh is None and exit_name != "deadline":
-        settled_at = workflow.now()
         unobserved = await self._settle_watch_work(watch)   # R1a
+        settled_at = workflow.now()
+        if self._abandoned:
+            return self._decided("abandoned")
     if read.fresh is not None and read.fresh.state == "OPEN" and exit_name == "deadline":
         unobserved = unobserved or read.fresh.head_sha == self._gate_ran_head
     if unobserved and (read.fresh is None or read.fresh.state == "OPEN"):
@@ -129,6 +134,8 @@ async def _decide_watch_end(self, exit_name, watch, deadline) -> _WatchDecision:
     if fresh is not None and not (exit_name == "deadline" and unobserved):
         return self._decided("open", last=fresh)
     if fresh is None and exit_name == "grace-polls" and await self._no_pr_proven(read, watch):
+        if self._abandoned:
+            return self._decided("abandoned")               # R16 outranks a proven absence
         return self._decided("no-pr")                       # R5a
     if self._abandoned:
         return self._decided("abandoned")                   # last check before the decision point
@@ -139,7 +146,10 @@ async def _decide_watch_end(self, exit_name, watch, deadline) -> _WatchDecision:
 
 `self._decided` builds the decision and clears `_retain_claim` for every kind except `unrecorded`. `watch` is a small
 mutable per-run record that holds the settled tasks and the poll counters which are locals today (`last`,
-`polls_without_pr`, `terminal_status_polls`, `saw_open_pr`, `tick_task`, `gate_task`, `track_ownership`).
+`polls_without_pr`, `terminal_status_polls`, `saw_open_pr`, `tick_task`, `gate_task`, `track_ownership`, `poll_index`).
+`poll_index` must be the real one, because `_settle_gate` feeds it to the gate-off latch. `read.abandoned` is True when
+the flag is set after an attempt and that attempt did not find a MERGED or CLOSED PR, so a found OPEN with an abandon is
+abandoned, with `last` holding the fresh state.
 
 `_apply_found_state(state, watch)` is the found branch's bookkeeping (lines 6628-6644) factored out: `last`,
 `self._last_pr`, `polls_without_pr = 0`, `terminal_status_polls = 0`, `saw_open_pr` when not terminal, the heartbeat
@@ -147,9 +157,22 @@ index, and `_track_ownership(state)`. The in-loop found branch and `_final_pr_re
 by the final read takes a claim before `_terminal_claim` and cannot be finalized later through the #516 break as if no
 PR had ever resolved. The in-loop commands do not change.
 
-`_settle_watch_work(watch)` records whether the tick or the gate is still in flight, runs the existing `_settle_tick`
-and `_settle_gate`, sets both tasks to None so that `finally` finds nothing, and returns that flag. `_record_gate_result`
-also sets `self._gate_ran_head` when `result.ran`, and `MergeWatchResume` carries it with an empty default.
+`_settle_watch_work(watch)` records whether the tick or the gate is still in flight, calls `cancel()` on those, and then
+`await workflow.wait([...])`. An outer workflow cancel raises from that wait, whereas awaiting a cancelled task inside
+`_settle_tick` or `_settle_gate` catches `CancelledError` and would absorb it (lines 5149-5159, 5389-5399). Only then
+does it call `_settle_tick` and `_settle_gate`, which take their `done()` branch and drain, so `MERGE_APPROVED` is still
+logged. It sets both tasks to None so that `finally` finds nothing, and returns the flag. If a tick was in flight it sets
+`watch.tick_blocked_until = workflow.now() + SDK_STEP_TIMEOUT`, because cancelling the wait does not stop the Argo run
+(line 5135), and setting `tick_task` to None would otherwise clear the guard "Never two shepherds on one proposal"
+(line 6694). The loop's tick boundary treats that time like a running tick: skipped, not queued, and no budget consumed.
+`MergeWatchResume` carries it with an empty default. `_record_gate_result` also sets `self._gate_ran_head` when
+`result.ran`, and `MergeWatchResume` carries that with an empty default too. `_gate_head` is rewritten when an attempt
+starts, and a cancelled attempt sets no latch, so a new attempt on the same head stays allowed after a resume.
+
+`_ownership` swallows cancellation in two branches (lines 5449-5473), which is right in `finally` and wrong while
+deciding. Both branches gain `if self._retain_claim and <the failure is a cancellation>: raise`. `_retain_claim` is True
+only under the marker and only while deciding, and `finally` issues no lifecycle write while it is True, so nothing on
+an existing path changes.
 
 The three sites use it as follows, all under `if terminal_reconcile:`, so that an unpatched history takes today's line:
 
@@ -161,6 +184,8 @@ The three sites use it as follows, all under `if terminal_reconcile:`, so that a
 
 On a deadline exit an `open` decision is reached only when no attempt is unobserved. On the other two sites an `open`
 decision resumes the loop even after a settle, because the loop keeps observing and may start a new attempt.
+
+`_final_pr_read` and the window catch the same timeout exception as `_land_delivery`'s `wait_condition`.
 
 `_no_pr_proven` returns False without any activity when `read.state` carries a number or URL, `watch.last` carries a
 number, `watch.saw_open_pr` is true, or every attempt failed with an `ActivityError`. Otherwise it runs `confirm_no_pr`
@@ -174,9 +199,11 @@ not consulted again.
 
 **Cancellation (R10a).** `_retain_claim` is True from the start of `_decide_watch_end`, so a `CancelledError` raised from
 any sleep or wait leaves through `finally` with no relinquishing write, and `finally` logs
-`MERGE_WATCH_RECONCILE_UNRECORDED`. Every new `except ActivityError`, and the loop's poll under the marker, starts with
-`if is_cancelled_exception(exc): raise` (`temporalio.exceptions`), so a cancelled activity is never a failed read.
-`run`'s existing `except (Exception, asyncio.CancelledError)` ends the deliveries.
+`MERGE_WATCH_RECONCILE_UNRECORDED`. Every new `except ActivityError`, and the `get_pr_state` handler of the loop's poll
+under the marker, starts with `if is_cancelled_exception(exc): raise` (`temporalio.exceptions`), so a cancelled activity
+is never a failed read. The settle and `_ownership` are covered above. Ordinary in-loop lifecycle writes and
+`_merge_gate_identity` (line 5208) keep today's handling, as R10a states. `run`'s existing `except (Exception,
+asyncio.CancelledError)` ends the deliveries.
 
 In Python a `while ... else:` runs only when the condition goes false, never after `break` or `return`. So the hop and
 the #516 break do not reach it. It sits inside the existing `try`, so before the relinquishing write in `finally`. A
@@ -249,7 +276,8 @@ class ReconcileRecordResult:
    visible duplicate and never a suppressed record.
 4. Otherwise posts the fixed template. A 201 with a URL returns `recorded`. A 201 with no URL, a missing token, 401, 403,
    404, 429, 5xx or any other answer raises, so the workflow retries. A post that succeeded but timed out is caught by
-   step 3 on retry.
+   step 3 on retry. A 301 for a transferred issue is not followed, so it raises for the whole wait and ends in the Failed
+   run of R10. That is a stated, visible limit.
 
 The template names the workflow id, the exit, the last observed PR (state, URL, head SHA, or "none"), the open request
 ids, and what to do: read the PR by hand, then re-trigger or close deliberately. It carries no other data.
@@ -274,7 +302,10 @@ while True:
     if workflow.now() - last_refresh >= RECONCILE_LIVENESS_INTERVAL:  # 90 minutes, before the sleep
         await self._reconcile_heartbeat(watch)
         last_refresh = workflow.now()
-    await workflow.sleep(min(interval, started + RECONCILE_RECORD_WAIT - workflow.now()))
+    remaining = started + RECONCILE_RECORD_WAIT - workflow.now()      # after the heartbeat
+    if remaining <= timedelta(0):
+        return ""                                     # a negative sleep is a RuntimeError, which wedges the run
+    await workflow.sleep(min(interval, remaining))
     interval = min(interval * 2, RECONCILE_RECORD_RETRY_MAX)  # 5, 10, 20, 30, 30, ...
 ```
 
@@ -287,7 +318,7 @@ not called, so an outage of the lifecycle store does not drop the claim during t
 
 An unparsable `self._issue_url` returns `""` at once, as a defensive branch: `_target_repo` raises earlier on a real run
 (lines 1318 and 4522), so it is pinned by a method-level unit test. `self._abandoned` is deliberately not in this loop
-(R9). The wait is about 50 iterations over 24 hours, about 300 history events including the heartbeats. The check runs
+(R9). The wait is about 50 iterations over 24 hours, about 550 history events including the heartbeats. The check runs
 before every sleep of at most 30 minutes, so refreshes land at most about 2 hours apart, and the liveness bound is about
 10 hours.
 
@@ -310,14 +341,16 @@ does not exist.
 - On `reconcile-required`, `_finish_after_watch` sets:
   - `pr=None`, `last_observed_pr=last`, `reconcile_record=<url>`;
   - `outcome="merge_watch_reconcile_required"`;
-  - `ended="merge watch <exit>: pull-request state unreadable; reconciliation required"`, ahead of the abandon prefix;
+  - `ended="merge watch <exit>: pull-request state not established; reconciliation required"`, ahead of the abandon
+    prefix;
   - it skips deploy, security and incidents because `pr_state` is None, and logs `MERGE_WATCH_RECONCILE_REQUIRED`.
 - `_reconcile_required` is set at the decision point, before the first record attempt, on both end states (R11). The
   check sits in `_deliver` after the bind and before the existing wait: an undecided delivery then calls
-  `_land_delivery(opened, "Failed", MERGE_WATCH_RECONCILE_REFUSAL, engine_ref)`. A delivery with a `pending_phase` keeps
-  it. The flag is set only under the marker, so no earlier history changes shape. The constant lives beside the delivery
+  `_land_delivery(opened, "Failed", MERGE_WATCH_RECONCILE_REFUSAL, engine_ref)`. The same check runs again after the
+  wait, immediately before the existing landing, because `wait_condition` suspends the delivery task even when its
+  predicate is already true, and the flag can be set in that activation. A delivery with a `pending_phase` keeps it. The flag is set only under the marker, so no earlier history changes shape. The constant lives beside the delivery
   landing code, not in `RESUME_DEFERRAL_REASONS`, which is a validator vocabulary.
-- The `finally` release reason is `merge watch <exit>: pull-request state unreadable, reconciliation recorded`.
+- The `finally` release reason is `merge watch <exit>: pull-request state not established, reconciliation recorded`.
 - The `DevLoopResult.pr` and `_watch_pr` docstrings are corrected. The `pr` docstring states that on
   `abandoned-unverified` it is the last observed state and not verified current state.
 - `cli.py` prints `pr: reconcile required (<record>)` before the `not watched` branch, `pr: none (confirmed)` on
@@ -364,7 +397,7 @@ does not exist.
   default, so every pre-change history (`dev_loop_full.*`, `dev_loop_resumed.json`, `dev_loop_deferred_resume.json`,
   `pre_m1/`) schedules exactly the same commands. New fixtures are recorded post-change. The `*.prepatch` fixtures are
   not re-recorded.
-- **New state.** `MergeWatchResume.terminal_reconcile` and `gate_ran_head`; `DevLoopResult.watch_end`,
+- **New state.** `MergeWatchResume.terminal_reconcile`, `gate_ran_head` and `tick_blocked_until`; `DevLoopResult.watch_end`,
   `last_observed_pr`, `reconcile_record`. All are defaulted, and old payloads decode. The feedback fields from M2a are
   untouched.
 - **Resource impact.** A deadline-ending watch makes 1-3 extra `get_pr_state` calls and up to 2 extra timers, doubled

@@ -29,11 +29,12 @@ the pairs. Umbrella tasks 5-7 are not in this slice; they belong to M2b-2.
   passes; `get_pr_state` unchanged.
 - [ ] 6. `_settle_watch_work`, `_final_pr_read`, `_decide_watch_end`, `_record_reconcile`, wired at the `while ...
   else:` deadline exit, the grace-polls exit and the non-transient read exit; `_gate_ran_head` and its resume field;
-  `_no_pr_proven`; `_wait_unless_abandoned`; the bounded backoff and `_reconcile_heartbeat`; `_retain_claim`; the
-  cancellation re-raises; the raise after `finally` (depends on 3, 4, 5, 5a) - DoD: T-1..T-6, T-8, T-9, T-18..T-22 pass.
+  `tick_blocked_until` and its resume field; `_no_pr_proven`; `_wait_unless_abandoned`; the bounded backoff and
+  `_reconcile_heartbeat`; `_retain_claim`; the cancellation re-raises, including `_ownership`; the raise after `finally`
+  (depends on 3, 4, 5, 5a) - DoD: T-8, T-9, T-18, T-20 and T-21 pass.
 - [ ] 7. Typed result: `_WatchOutcome` and `DevLoopResult` fields, `outcome`, `ended` precedence, `pr=None`, log lines,
   docstrings; `_reconcile_required` in `_deliver` and `MERGE_WATCH_RECONCILE_REFUSAL`; `cli.py` (depends on 6) - DoD:
-  T-4, T-12, T-13, T-15 assert every field; old `DevLoopResult` payloads decode.
+  T-1..T-6, T-10, T-12..T-15, T-19 and T-22 pass, asserting every field; old `DevLoopResult` payloads decode.
 - [ ] 8. Replay fixtures: `dev_loop_final_read.json` (deadline, no hop), `dev_loop_final_read_hop.json` (hop then gap),
   `dev_loop_reconcile_required.json` (record then release), `dev_loop_no_pr_confirmed.json` (grace polls, proven absence)
   via `tools/record_workflow_history.py` scenarios added to
@@ -74,8 +75,15 @@ the pairs. Umbrella tasks 5-7 are not in this slice; they belong to M2b-2.
   (ae) set `_reconcile_required` only after the record;
   (af) accept the marker from any bot;
   (ag) accept a status file with no `status:` line or a non-base64 encoding, and separately an indented or quoted `pr`;
-  (ah) confirm absence while the branch exists
-  - DoD: thirty-nine red runs recorded (the items with "separately" count twice).
+  (ah) confirm absence while the branch exists;
+  (ai) await the cancelled tasks through `_settle_tick` and `_settle_gate` instead of `workflow.wait`;
+  (aj) drop the `_retain_claim` re-raise from `_ownership`;
+  (ak) drop the remainder check before the record sleep;
+  (al) remove the abandon check after a settle, and separately the one after the proof;
+  (am) drop `tick_blocked_until`;
+  (an) drop the delivery check after the wait;
+  (ao) pass `poll_index=0` to the settle
+  - DoD: forty-seven red runs recorded (the items with "separately" count twice).
 - [ ] 10. PR description: link #993, #1021, the umbrella digest as provenance only, the approved digest of this
   proposal, the test->fix commit pairs, the mutation and replay evidence, and M2b-2 as not started; state that the PR
   is blocked for owner approval by #1020, needs independent review and green checks, and is not merged with an admin
@@ -126,7 +134,8 @@ Watch behaviour (new file `tests/test_merge_watch_final_read.py` unless noted):
   with `terminal_reconcile=False` does no final read at any exit and ends with today's result; every existing pre-change
   fixture replays unchanged and contains no such marker; the four new fixtures replay green.
 - [ ] T-12. Deliveries, on both the Completed and the Failed end state: a delivery still polling its bind that binds
-  during the record wait -> `Failed merge-watch-reconcile-required`; one that never binds -> `request-not-fulfilled`;
+  during the record wait -> `Failed merge-watch-reconcile-required`; a delivery that passed the first check and whose
+  wait resolves in the activation that sets the flag -> the same; one that never binds -> `request-not-fulfilled`;
   neither `Succeeded`; a delivery held at the first attempt appears in the record. `_reconcile_required` is set before
   the first record activity is scheduled. A delivery with a `pending_phase` keeps it, an `accepted_after_gates` one keeps
   `feedback-not-ready`, and a deferred request is not in the record. Final-read MERGED with an open delivery -> today's
@@ -141,8 +150,10 @@ Watch behaviour (new file `tests/test_merge_watch_final_read.py` unless noted):
   adds no timer, writes `release`, and reports `watch_end == "abandoned-unverified"` with `ended` as today; `cli.py`
   states the `pr` is not verified current; an existing abandon fixture replays unchanged. Abandon already set at the
   grace-polls site and at the read-error site -> the same result with no final read. Abandon during a final-read backoff
-  or the R1a window -> wakes at once, no further attempt, no record. Abandon during a read that returns MERGED -> the
-  MERGED is reported. Abandon after the decision point -> the record is still written and `ended` names the exit. The
+  or the R1a window -> wakes at once, no further attempt, no record. Abandon during a settle -> no `get_pr_state` and no
+  `confirm_no_pr` after it. Abandon during `confirm_no_pr` that then confirms -> `abandoned-unverified`, not
+  `no-pr-confirmed`. Abandon during a read that returns OPEN -> `abandoned-unverified`, with the fresh state. Abandon
+  during a read that returns MERGED -> the MERGED is reported. Abandon after the decision point -> the record is still written and `ended` names the exit. The
   #516 terminal-status break does no final read and no record. A MERGED read inside the loop is byte-identical in
   commands.
 - [ ] T-16. Scope pin: `tests/test_execution_request_resume.py:586` stays green unedited, so the validator still defers
@@ -154,7 +165,8 @@ Watch behaviour (new file `tests/test_merge_watch_final_read.py` unless noted):
   indented and quoted; a non-empty listing, including one whose items do not match the branch; page 2 answering 500 or a
   malformed body; a branch answering 200 or 500; a transport error; no token.
 - [ ] T-18. Record retry timing: failures produce sleeps of 5, 10, 20, 30, 30 minutes and never above 30; the last sleep
-  is clipped so the total stays within 24 hours; an `acquire` heartbeat lands when the wait starts, no two land more than
+  is clipped so the total stays within 24 hours; a heartbeat that crosses the 24 hour boundary leaves no negative sleep,
+  and the run ends Failed, not stuck Running; an `acquire` heartbeat lands when the wait starts, no two land more than
   2 hours apart, no `progress` write is issued, and the claim row is still owned at the end of it. A heartbeat answering
   unknown or failing does not stop the retries and does not drop the claim. A heartbeat answering owned by another owner
   drops the claim, the retries continue, and no relinquishing write follows. With no claim, and with
@@ -165,11 +177,16 @@ Watch behaviour (new file `tests/test_merge_watch_final_read.py` unless noted):
   With a gate that reported `ran` at the returned head and a read of OPEN -> the same. With no attempt in flight -> no
   window timer and a `final-read` OPEN. On a grace-polls and a read-error exit, a found OPEN leaves the tick and gate
   running; no found state settles them before the proof or record; an unobserved attempt adds the window and a second
-  read, and an OPEN then resumes the loop. No double settle in `finally`. `gate_ran_head` survives a hop.
+  read, and an OPEN then resumes the loop. No double settle in `finally`. `gate_ran_head` survives a hop. After a resume
+  from a settle with a tick in flight, no second shepherd is submitted before `tick_blocked_until`, the boundary consumes
+  no budget, the value survives a hop, and a later tick is allowed. The gate-off latch still counts from the real
+  `poll_index` after that resume.
 - [ ] T-20. Cancellation: a cancel during a final-read backoff, the R1a window, `confirm_no_pr`, a record retry sleep and a
   running record activity -> no `release`, no `terminal`, `MERGE_WATCH_RECONCILE_UNRECORDED` logged, status Cancelled,
   and deliveries ended by `run`'s `except`. A cancelled activity is not counted as a failed attempt. A cancel during an
-  ordinary loop poll -> today's `release`, status Cancelled, not a `read-error` exit and no final read.
+  ordinary loop `get_pr_state` -> today's `release`, status Cancelled, not a `read-error` exit and no final read. A cancel
+  during a settle whose task is closing, and during an `acquire` heartbeat, a `_terminal_claim` and a final-read
+  `_track_ownership` -> the same retained outcome; the run does not continue and does not end Completed.
 - [ ] T-21. Bookkeeping: a final-read OPEN sets `self._last_pr` and `saw_open_pr`, resets `polls_without_pr` and
   `terminal_status_polls`, and takes the claim through `_track_ownership`. After such a resume, a loop-terminal proposal
   status does not reach the #516 break. A MERGED first resolved by the final read takes the claim and then writes

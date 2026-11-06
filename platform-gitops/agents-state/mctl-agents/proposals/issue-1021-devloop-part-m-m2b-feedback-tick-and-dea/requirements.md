@@ -76,7 +76,7 @@ reported as open, or not at all, and deploy observation and the security-landed 
 
 ## Acceptance criteria (EARS)
 
-Requirements R1-R15 apply only to an execution whose watch recorded `MERGE_WATCH_RECONCILE_PATCH`, except R12, which
+Requirements R1-R16 apply only to an execution whose watch recorded `MERGE_WATCH_RECONCILE_PATCH`, except R12, which
 pins the histories that did not.
 
 ### Establishing the state
@@ -95,7 +95,9 @@ pins the histories that did not.
   the head the read returned. WHILE an attempt is unobserved, a found OPEN or a read with no found state is not final:
   THE SYSTEM SHALL read again once `GATED_ACTIVITY_TIMEOUT` (10 minutes) has passed since the settle, and act on that
   read. IF a `deadline` exit still reads OPEN then, THE SYSTEM SHALL end reconcile-required (R6), because the outcome of
-  this loop's own attempt was never observed.
+  this loop's own attempt was never observed. The window bounds a gate attempt, whose gated activity has that timeout. It
+  does not bound a shepherd run, which can last `SDK_STEP_TIMEOUT` (2 hours). So a deadline exit fails closed on it, and
+  a site that resumes the loop SHALL NOT submit another tick before `SDK_STEP_TIMEOUT` has passed since that settle.
 - R2. THE final read SHALL make at most `FINAL_READ_ATTEMPTS` attempts, each one `get_pr_state` activity under
   `PR_STATE_RETRY_POLICY`, separated by `FINAL_READ_BACKOFF`. An attempt fails on an `ActivityError` of any kind or on
   `found=False`. A failed attempt SHALL never be read as OPEN, CLOSED or absent.
@@ -136,8 +138,8 @@ pins the histories that did not.
 
 ### Reconcile-required
 
-- R6. IF the final read produces no found PR state and R5a has not proven absence, THEN THE SYSTEM SHALL end the watch
-  as reconcile-required. It
+- R6. IF the final read produces no found PR state and R5a has not proven absence, or R1a leaves a `deadline` exit on an
+  unobserved OPEN, THEN THE SYSTEM SHALL end the watch as reconcile-required. It
   SHALL durably record the reconciliation (R7) and then release the claim, with this result:
   - `DevLoopResult.watch_end == "reconcile-required"`;
   - `DevLoopResult.outcome == "merge_watch_reconcile_required"`;
@@ -166,7 +168,9 @@ pins the histories that did not.
   wait starts and before any sleep once `RECONCILE_LIVENESS_INTERVAL` (90 minutes) has passed since the last refresh, so
   that refreshes land at most about 2 hours apart. A run with no claim, or with `track_ownership=False`, SHALL write no
   heartbeat. A verdict that this run lost the claim to another owner SHALL drop the claim and keep retrying the record.
-  Any other unanswered or unknown verdict SHALL be logged and SHALL neither drop the claim nor stop the retries.
+  Any other verdict, including `UNOWNED` and an unanswered or unknown one, SHALL be logged and SHALL neither drop the
+  claim nor stop the retries. This holds during the record wait. During a final read the ordinary found-state
+  bookkeeping applies, and it can drop a claim as it does in the loop.
 - R10. IF the record cannot be confirmed within `RECONCILE_RECORD_WAIT`, or the issue answers 410, or the issue URL
   cannot be parsed, THEN THE SYSTEM SHALL NOT release the claim and SHALL NOT end Completed. It SHALL log
   `MERGE_WATCH_RECONCILE_UNRECORDED` and fail the workflow with a non-retryable `MergeWatchReconcileUnrecorded`, so
@@ -174,9 +178,11 @@ pins the histories that did not.
   answers unauthorized and missing lookups identically.
 - R10a. IF workflow cancellation arrives while the watch is deciding, that is, from the settle or final read to a
   confirmed record, THEN THE SYSTEM SHALL NOT release the claim. It SHALL log `MERGE_WATCH_RECONCILE_UNRECORDED` and let
-  the cancellation end the run as Cancelled. A cancelled activity attempt SHALL be re-raised at every new `except
-  ActivityError` and at the loop's poll, and SHALL never count as a failed read. Cancellation during ordinary polling
-  keeps today's release, and ends the run Cancelled rather than as a `read-error` exit.
+  the cancellation end the run as Cancelled. WHILE deciding, a cancellation SHALL NOT be swallowed by a settle of the
+  tick or gate, or by a lifecycle write. A cancelled `get_pr_state` at the loop's poll SHALL be re-raised, never counted
+  as a failed read, and never become a `read-error` exit. Otherwise ordinary polling keeps today's handling: a
+  cancellation delivered to some other watch activity, such as an in-loop lifecycle write, can still be absorbed, as it
+  is on `main`, and is then delivered at the next await or not at all.
 - R11. THE SYSTEM SHALL set `_reconcile_required` at the decision point, before the record is attempted, on both end
   states of R6 and R10. FROM then on, a delivery that this run holds open and has not decided SHALL land `Failed` with
   the typed refusal `merge-watch-reconcile-required`, whether it was already waiting or binds during the record wait.
@@ -226,12 +232,13 @@ unreconciled runs. See Open questions.
 
 ### Abandon and release gate
 
-- R16. WHEN an operator's abandon reaches an exit, or arrives during a final read, before the decision point, THE
-  SYSTEM SHALL do no further read, no `confirm_no_pr` and no record, and SHALL add no delay. A backoff or window wait
-  SHALL wake on the signal. It keeps today's `release` and `ended="abandoned: ..."`, and the result SHALL state
-  `watch_end == "abandoned-unverified"`. This holds at all three exits. The decision point is the moment the final read
-  has ended with no found state and absence is not proven. A found MERGED or CLOSED read that arrives with an abandon is
-  still reported, because it is a verified state. The `DevLoopResult.pr` docstring and the `cli.py` summary SHALL state
+- R16. WHEN an operator's abandon reaches an exit, or arrives during a settle, a final read or a proof of absence, before
+  the decision point, THE SYSTEM SHALL do no further read, no `confirm_no_pr` and no record, and SHALL add no delay. A
+  backoff or window wait SHALL wake on the signal. It keeps today's `release` and `ended="abandoned: ..."`, and the result
+  SHALL state `watch_end == "abandoned-unverified"`. This holds at all three exits. The decision point is the moment the
+  watch has decided on reconcile-required: no usable found state and absence not proven. Abandon outranks a proven
+  absence and a found OPEN. Only a found MERGED or CLOSED read that arrives with an abandon is still reported as
+  `final-read`, because it ends the PR's story and its deploy observation must not be lost. The `DevLoopResult.pr` docstring and the `cli.py` summary SHALL state
   that on `abandoned-unverified` this `pr` is the last observed state and is not verified current state.
 - R17. A release carrying this slice SHALL NOT be cut until #1022 is closed by the owner. This slice implements no
   detector and SHALL NOT present its log lines as operational detection.
