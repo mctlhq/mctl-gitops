@@ -59,7 +59,7 @@ class FakeGh:
         self.prs = prs or []
         self.by_branch = by_branch or []
         self.branches = branches or {}
-        self.comparison = comparison or {"files": [changed()], "commits": [own_commit()]}
+        self.comparison = {"status": "ahead", "files": [changed()], "commits": [own_commit()], **(comparison or {})}
         self.writes = []
 
     def main_sha(self):
@@ -81,6 +81,9 @@ class FakeGh:
 
     def compare(self, base, head):
         return self.comparison
+
+    def fast_forward(self, branch, sha):
+        self.writes.append(("forward", branch, sha))
 
     def create_branch(self, branch, sha):
         self.writes.append(("branch", branch, sha))
@@ -220,6 +223,37 @@ class Land(unittest.TestCase):
         out = land.land(gh, "api", ["on", "off", "new"], TODAY)
         self.assertIn("- Adds: new\n", bodies[0])
         self.assertIn("(new)", out)
+
+    def merged_branch(self, status="behind"):
+        # A merged proposal's branch, on an older list than main now holds.
+        gh = self.leftover(comparison={"status": status, "files": [], "commits": []})
+        gh.refs["b" * 40][f"{A}/catalogue.json"] = {"servers": {"api": ["stale"]}}
+        doc = baseline()
+        doc["servers"]["api"]["tools_enabled"] = 9
+        gh.refs["b" * 40][f"{A}/baseline.json"] = doc
+        return gh
+
+    def test_merged_branch_left_behind_is_proposed_again_from_main(self):
+        for status in ("behind", "identical"):
+            gh = self.merged_branch(status)
+            out = land.land(gh, "api", ["on", "off", "new"], TODAY)
+            self.assertNotIn("a person is deciding", out, "read the stale branch documents")
+            self.assertEqual(gh.writes[0][0], "forward", "a PR from the old head would have no commits")
+            self.assertEqual(gh.writes[0][2], "m" * 40)
+            self.assertEqual({w[4] for w in gh.puts()}, {"blob-m-catalogue.json", "blob-m-baseline.json"})
+            self.assertEqual(gh.writes[-1][0], "pr")
+
+    def test_merged_branch_is_not_moved_on_a_refusal(self):
+        gh = self.merged_branch()
+        gh.refs["m" * 40][f"{A}/api.json"] = allowlist(on=True, off=False)
+        self.assert_refused(gh, ["on", "off", "new"], "no decision")
+
+    def test_leftover_branch_ahead_of_main_is_not_treated_as_merged(self):
+        for status in ("ahead", "diverged"):
+            gh = self.leftover(comparison={"status": status})
+            land.land(gh, "api", ["on", "off", "new"], TODAY)
+            self.assertFalse([w for w in gh.writes if w[0] == "forward"], status)
+            self.assertEqual(gh.puts()[0][4], "blob-b-baseline.json", status)
 
     def test_leftover_branch_touching_a_third_file_is_refused(self):
         gh = self.leftover(comparison={"files": [changed(), {"filename": ".github/workflows/x.yml", "status": "modified"}],
@@ -361,12 +395,26 @@ class GhClient(unittest.TestCase):
             self.client(rc=1, stderr="HTTP 500").branch_head("b")
 
     def test_a_compare_that_cuts_commits_short_is_unknown(self):
-        ok = {"commits": [{}], "files": [], "total_commits": 1}
+        ok = {"status": "ahead", "commits": [{}], "files": [], "total_commits": 1}
         self.assertEqual(self.client(json.dumps(ok)).compare("a", "b"), ok)
         with self.assertRaises(land.Unknown):
             self.client(json.dumps({**ok, "total_commits": 300})).compare("a", "b")
         with self.assertRaises(land.Unknown):
-            self.client(json.dumps({"commits": [{}], "total_commits": 1})).compare("a", "b")
+            self.client(json.dumps({"status": "ahead", "commits": [{}], "total_commits": 1})).compare("a", "b")
+
+    def test_an_unknown_compare_status_is_unknown(self):
+        for doc in ({"status": "weird"}, {}):
+            with self.assertRaises(land.Unknown):
+                self.client(json.dumps({"commits": [], "files": [], "total_commits": 0, **doc})).compare("a", "b")
+
+    def test_fast_forward_is_never_forced(self):
+        calls = []
+        gh = self.client("{}")
+        run = land.subprocess.run
+        land.subprocess.run = lambda args, **k: calls.append(args) or run(args, **k)
+        gh.fast_forward("b", "s")
+        self.assertIn("force=false", calls[0])
+        self.assertIn("sha=s", calls[0])
 
     def test_read_decodes_contents(self):
         body = {"encoding": "base64", "sha": "s", "content": base64.b64encode(b'{"a": 1}').decode()}
