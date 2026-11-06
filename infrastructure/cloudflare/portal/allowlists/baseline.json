@@ -24,7 +24,7 @@
     },
     "api": {
       "tools_total": 112,
-      "tools_enabled": 78,
+      "tools_enabled": 79,
       "enabled_tools": [
         "mctl_abandon_dev_loop",
         "mctl_acknowledge_incident",
@@ -91,6 +91,7 @@
         "mctl_rollback_agent",
         "mctl_rollback_service",
         "mctl_scale_service",
+        "mctl_submit_review_assertion",
         "mctl_sync_repos",
         "mctl_trigger_agents_run",
         "mctl_trigger_approve",
