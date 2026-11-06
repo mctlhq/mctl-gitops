@@ -480,7 +480,7 @@ jobs:
           # -- is held until exit and lands at the bottom of the captured
           # block, detached from the section it qualifies.
           PYTHONUNBUFFERED=1 tofu show -json \
-            | { PYTHONUNBUFFERED=1 "$GITHUB_WORKSPACE/scripts/portal-catalogue-drift.py" 2>&1; } \
+            | { PYTHONUNBUFFERED=1 "$GITHUB_WORKSPACE/scripts/portal-catalogue-drift.py" --lag-out "$RUNNER_TEMP/catalogue-lag.json" 2>&1; } \
             | tee catalogue.txt
           code=${PIPESTATUS[1]}
           set -e
@@ -615,6 +615,30 @@ jobs:
           rm -f vendor.txt
           exit "$code"
 
+      # Exit 5 only: the portal is fine and catalogue.json lags it. The job
+      # stays red. These steps propose the update in a PR when it cannot widen
+      # exposure (#2416), and merging and cloudflare-apply stay with people.
+      # On main only: a dispatch from a branch runs that branch's script, which
+      # must not get a token that can write here.
+      - name: Generate a write token for the catalogue PR
+        id: land_token
+        if: failure() && steps.catalogue.outputs.code == '5' && github.ref == 'refs/heads/main'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Propose the catalogue update when it cannot widen exposure
+        id: land
+        if: failure() && steps.land_token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.land_token.outputs.token }}
+        run: '"$GITHUB_WORKSPACE/scripts/portal-catalogue-land.py" --lag "$RUNNER_TEMP/catalogue-lag.json"'
+
       # A red portal root is often waiting on one person: a bump PR whose
       # widening needs a decision in baseline.json (#2353 sat for days behind an
       # exit code). Name those PRs in the alert. A listing that failed or may be
@@ -675,5 +699,8 @@ jobs:
              && format('<b>Your decision may be what this waits on.</b> Open allowlist bump PR: {0}. Do you accept what it enables on the portal? If yes, record that in baseline.json in the PR, merge it and run cloudflare-apply.', steps.bump_prs.outputs.links) || '' }}
             ${{ steps.bump_prs.outputs.state == 'unknown'
              && 'Could not list open allowlist bump PRs, so one may be waiting on a decision.' || '' }}
+            ${{ steps.land.outputs.summary && format('<b>Catalogue:</b> {0}', steps.land.outputs.summary) || '' }}
+            ${{ steps.catalogue.outputs.code == '5' && !steps.land.outputs.summary
+             && 'The catalogue update was not proposed automatically, so catalogue.json needs a PR by hand.' || '' }}
             Cloudflare no longer matches Git, or a check could not run.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

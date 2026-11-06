@@ -1046,6 +1046,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--account", help="Cloudflare account id (default: $CLOUDFLARE_ACCOUNT_ID)")
     ap.add_argument("--fix", action="store_true", help="update allowlists/catalogue.json when committed catalogue lags the live portal")
+    ap.add_argument("--lag-out", help="write {server: [live tool names]} of the lagging servers here, for portal-catalogue-land.py")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -1144,6 +1145,12 @@ def main() -> int:
             undetermined.append(str(e))
         except Exception as e:  # noqa: BLE001 - the exit code is the point
             undetermined.append(f"{server}: the check failed before it could compare: {e!r}")
+
+    if args.lag_out:
+        try:
+            pathlib.Path(args.lag_out).write_text(json.dumps(fix_updates), encoding="utf-8")
+        except OSError as e:
+            undetermined.append(f"{args.lag_out}: could not write --lag-out: {e!r}")
 
     if args.fix and fix_updates and committed_doc is not None:
         try:
