@@ -91,8 +91,12 @@
 - [ ] T3. Raw Temporal requests produce `automation_server_owned_field` or
   `automation_template_not_allowed`: `workflow_type`, `namespace`, `task_queue`, `signal`, and an
   unknown template id.
-- [ ] T4. Identity failures produce `automation_identity_unlinked` at every checkpoint: an
-  unknown, unlinked, expired or revoked link; a revoked install; and a surface or tenant mismatch.
+- [ ] T4. Authentication failures produce `automation_identity_unlinked` at every
+  checkpoint: an unknown, unlinked, expired or revoked caller identity/link,
+  revoked install, or an invalid presenting surface identity. This is
+  independent of arbitrary `au_` ID. A **validly authenticated**
+  caller's cross-tenant/cross-owner *resource* mismatch instead yields
+  the indistinguishable 404 in T5.
 - [ ] T5. A cross-owner read in the same tenant, a cross-tenant read and an owner-change patch each
   produce `automation_not_found`. The response is byte-identical to the one for a nonexistent
   `au_`, so there is no existence oracle.
