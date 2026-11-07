@@ -188,7 +188,7 @@ jobs:
               normalized = os.path.normpath(path)
               # A symlink could name an allowed path and write somewhere else.
               # Globs have no real path yet; their matches come through here too.
-              if os.path.relpath(os.path.realpath(path)) != normalized:
+              if os.path.realpath(path) != os.path.join(os.path.realpath(os.curdir), normalized):
                   print(f"ERROR: path goes through a symlink: {path}", file=sys.stderr)
                   sys.exit(4)
               if not normalized.startswith(ALLOWED_PREFIXES):
@@ -245,12 +245,12 @@ jobs:
           import yaml
 
           def same_but_tags(a, b):
-              """The parsed documents differ only in strings that now carry new_tag."""
+              """The parsed documents differ only in strings that are new_tag or end in :new_tag."""
               if isinstance(a, dict) and isinstance(b, dict):
                   return a.keys() == b.keys() and all(same_but_tags(a[k], b[k]) for k in a)
               if isinstance(a, list) and isinstance(b, list):
                   return len(a) == len(b) and all(same_but_tags(x, y) for x, y in zip(a, b))
-              return a == b or (isinstance(b, str) and new_tag in b)
+              return a == b or (isinstance(b, str) and (b == new_tag or b.endswith(":" + new_tag)))
 
           def only_tags_changed(before, after):
               """Refuse anything but a tag edit, whatever produced it. Text first, because

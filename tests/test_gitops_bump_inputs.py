@@ -226,7 +226,7 @@ rc, changed, _, _ = bump(image="ghcr.io/other/absent", script=NO_IMAGE)
 check("mutant caught: image check off, this image reaches the file scan", rc == 3, rc)
 rc, changed, _, _ = bump(path="platform-gitops/services/labs/link/values.yaml", image="ghcr.io/mctlhq/mctl-agents",
                          tag="1.999.0", prepare=link,
-                         script=BUMP.replace("if os.path.relpath(os.path.realpath(path)) != normalized:", "if False:"))
+                         script=BUMP.replace("if os.path.realpath(path) != os.path.join(os.path.realpath(os.curdir), normalized):", "if False:"))
 check("mutant caught: symlink check off, the worker file is reached", rc != 4, rc)
 # An edit that adds a key without a newline-bearing tag.
 EVIL = BUMP.replace("n = n1 + n2 + n3 + n4\n", "out = out + 'extra: 1\\n'\n    n = n1 + n2 + n3 + n4\n", 1)
@@ -237,6 +237,11 @@ SWAP = BUMP.replace("n = n1 + n2 + n3 + n4\n", "out = out.replace('A: b', 'A: c'
 assert SWAP != BUMP
 rc, changed, _, _ = bump(script=SWAP)
 check("the edit check catches a changed unrelated value", rc == 7 and not changed, rc)
+# A short tag must not excuse an unrelated value that merely contains it.
+SHORT = BUMP.replace("n = n1 + n2 + n3 + n4\n", "out = out.replace('A: b', 'A: x1y')\n    n = n1 + n2 + n3 + n4\n", 1)
+assert SHORT != BUMP
+rc, changed, _, _ = bump(tag="1", script=SHORT)
+check("a value merely containing a short tag is still refused", rc == 7 and not changed, rc)
 
 print()
 if failures:
