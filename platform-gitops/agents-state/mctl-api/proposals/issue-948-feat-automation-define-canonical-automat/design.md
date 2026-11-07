@@ -101,7 +101,8 @@ The document is written in the style of `work-context-contract.md` and has these
    - The occurrence identity is a domain-separated, length-prefixed hash of
      `(au_id, trigger_kind, canonical_occurrence_identity)`:
      `at`/`schedule` = scheduled UTC instant; `event`/`dependency` =
-     stable authenticated source event ID, **not** transport delivery ID;
+     authenticated producer identity + event type + stable source event ID,
+     **not** a transport attempt/delivery ID;
      `run` = server-bound manual request ID derived from the authenticated
      caller's request idempotency key. **Definition version is excluded.**
      A version/policy snapshot is stored as admitted run provenance.
