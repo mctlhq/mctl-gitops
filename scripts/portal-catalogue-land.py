@@ -55,10 +55,19 @@ import subprocess
 import sys
 
 ALLOWLISTS = "infrastructure/cloudflare/portal/allowlists"
-# What `gh pr list --json author` returns for a PR opened by the App, read from
-# a real bump PR. REST calls the same account mctl-agents[bot].
-BOT_AUTHOR = "app/mctl-agents"
-BOT_COMMIT_AUTHOR = "mctl-agents[bot]"
+# What `gh pr list --json author` returns for a PR opened by an App, read from
+# a real bump PR. REST calls the same account <slug>[bot].
+#
+# Two Apps, on purpose, until mctlhq/mctl-gitops#1033 finishes. Allowlist bump
+# PRs are opened by portal-allowlist-vendor.yml, which now mints from the narrow
+# mctl-gitops-pr App; PRs and branches opened before that merged, and the
+# catalogue branches this script writes while cloudflare-drift still mints from
+# mctl-agents, carry the old identity. Dropping the old one early would read
+# every such PR as "one the bot did not open" and stop the automation; adding
+# the new one widens nothing, since mctl-agents is already trusted here.
+# Remove the mctl-agents entries when cloudflare-drift moves off that App.
+BOT_AUTHORS = frozenset({"app/mctl-gitops-pr", "app/mctl-agents"})
+BOT_COMMIT_AUTHORS = frozenset({"mctl-gitops-pr[bot]", "mctl-agents[bot]"})
 PR_LIMIT = 500
 SERVER_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 TOOL_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
@@ -299,7 +308,7 @@ def leftover_problem(comparison: dict) -> str | None:
             return "it changes files other than catalogue.json and baseline.json"
     for c in comparison["commits"]:
         # Signed as well: anyone can put the App's address on a pushed commit.
-        if (c.get("author") or {}).get("login") != BOT_COMMIT_AUTHOR or c["commit"]["verification"]["verified"] is not True:
+        if (c.get("author") or {}).get("login") not in BOT_COMMIT_AUTHORS or c["commit"]["verification"]["verified"] is not True:
             return "it holds a commit this script did not make"
     return None
 
@@ -337,7 +346,7 @@ def land(gh, server: str, live: list[str], today: str) -> str:
     pattern = re.compile(rf"portal-allowlist/{re.escape(server)}-[0-9a-f]{{7}}")
     matching = [p for p in gh.open_prs() if pattern.fullmatch(p.get("headRefName") or "")]
     bot_prs = [p for p in matching
-               if not p.get("isCrossRepository") and (p.get("author") or {}).get("login") == BOT_AUTHOR]
+               if not p.get("isCrossRepository") and (p.get("author") or {}).get("login") in BOT_AUTHORS]
     if len(matching) != len(bot_prs) or len(bot_prs) > 1:
         return f"{server}: more than one candidate bump PR, or one the bot did not open, so nothing was written."
 

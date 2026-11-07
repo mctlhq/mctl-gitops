@@ -26,6 +26,10 @@ BUMP = "portal-allowlist/api-1234567"
 BOT = {"is_bot": True, "login": "app/mctl-agents"}
 
 
+# The narrow App that portal-allowlist-vendor.yml now mints from (#1033).
+NEW_BOT = {"is_bot": True, "login": "app/mctl-gitops-pr"}
+
+
 def own_commit(**over):
     # The shape REST returns for a commit by the App, signed by GitHub.
     return {"author": {"login": "mctl-agents[bot]"}, "commit": {"verification": {"verified": True}}, **over}
@@ -129,6 +133,17 @@ class Land(unittest.TestCase):
         self.assertIn("#7", out)
         self.assertFalse([w for w in gh.writes if w[0] in ("branch", "pr")])
         self.assertTrue(all(w[2] == BUMP for w in gh.puts()))
+
+    def test_bump_pr_opened_by_the_narrow_app_is_trusted(self):
+        # Opened by the mctl-gitops-pr App after the vendor workflow moved to it.
+        gh = FakeGh(prs=[bump_pr(author=NEW_BOT)])
+        out = land.land(gh, "api", ["on", "off", "new"], TODAY)
+        self.assertIn("#7", out)
+        self.assertTrue(gh.puts(), "a PR the new App opened must be updated, not refused")
+
+    def test_bump_pr_from_an_unlisted_app_is_not_trusted(self):
+        gh = FakeGh(prs=[bump_pr(author={"is_bot": True, "login": "app/mctl-org-read"})])
+        self.assert_refused(gh, ["on", "off", "new"], "nothing was written")
 
     def test_decision_is_read_from_the_bump_branch_not_main(self):
         gh = FakeGh(prs=[bump_pr()])
@@ -263,6 +278,17 @@ class Land(unittest.TestCase):
     def test_leftover_branch_renaming_into_an_allowed_name_is_refused(self):
         gh = self.leftover(comparison={"files": [changed(status="renamed")], "commits": [own_commit()]})
         self.assert_refused(gh, ["on", "off", "new"], "changes files other than")
+
+    def test_leftover_branch_with_the_narrow_apps_commit_is_continued(self):
+        gh = self.leftover(comparison={"files": [changed()],
+                                       "commits": [own_commit(author={"login": "mctl-gitops-pr[bot]"})]})
+        out = land.land(gh, "api", ["on", "off", "new"], TODAY)
+        self.assertNotIn("did not make", out)
+
+    def test_leftover_branch_with_an_unlisted_apps_commit_is_refused(self):
+        gh = self.leftover(comparison={"files": [changed()],
+                                       "commits": [own_commit(author={"login": "mctl-org-read[bot]"})]})
+        self.assert_refused(gh, ["on", "off", "new"], "did not make")
 
     def test_leftover_branch_with_someone_elses_commit_is_refused(self):
         gh = self.leftover(comparison={"files": [changed()], "commits": [own_commit(author={"login": "someone"})]})
