@@ -587,7 +587,7 @@ spec:
           # agents have Bash, and the PreToolUse checkpoint gates mcp__* only.
           # Without the token these modes run with no mcp__mctl__* tools: the
           # service agents and the mentor treat that as a soft degrade. Only
-          # run-incident-responder, which has no Bash, maps it. CI checks both
+          # run-incident-responder maps it. CI checks both
           # (tests/test_policy_checkpoint_coverage.py).
           # Policy checkpoint approvals backend (ADR 014; mctlhq/.github#181,
           # mctl-gitops#1980), as on investigate: a non-read mcp__mctl__* call
@@ -629,9 +629,10 @@ spec:
     # ── 2b. Incident responder: the only mode that holds MCTL_TOKEN ────────
     # A copy of run-orchestrator that differs only in RUN_MODE (a literal),
     # MCTL_TOKEN, and the budget variables. The responder resolves incidents,
-    # so it needs mctl-api, and it has no Bash (mctl-agents#183, profile
-    # incident-responder-default). The literal RUN_MODE means no workflow
-    # parameter can start a Bash-bearing mode in the pod that holds the token.
+    # so it needs mctl-api. Its profile does not list Bash, but the session
+    # still exposes it, limited by the CLI permission mode only: run-bash in
+    # governance/policy-checkpoint-coverage.yaml. The literal RUN_MODE means no
+    # workflow parameter can start a service-agent mode in the pod with the token.
     #
     # Original heading: 2. Run mctl-agents orchestrator with state mounted ────────────────
     - name: run-incident-responder
