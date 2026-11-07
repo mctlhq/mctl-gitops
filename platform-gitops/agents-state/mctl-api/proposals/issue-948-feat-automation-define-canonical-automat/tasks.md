@@ -145,7 +145,9 @@
   execution is refused before the later rollout gate.
 - [ ] T19. `StableProducerEventIDVersusDeliveryAttempts`: different
   webhook delivery IDs carrying the same verified canonical event ID
-  do not create a second occurrence, while truly distinct event IDs do.
+  do not create a second occurrence; the same event ID reused by a
+  different producer or event type DOES create a distinct occurrence,
+  as does a truly distinct source event ID.
 - [ ] T20. `UniformAccessRefusals`: an unlinked caller receives 403
   independent of arbitrary target ID; authenticated cross-tenant,
   cross-owner and nonexistent ID reads have the same 404 response
