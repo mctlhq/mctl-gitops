@@ -12,8 +12,11 @@ comments in `internal/auth`. The records this contract has to stand on already e
     `origin_surface`, `origin_client_id`, `external_key`, `state_version` and `schema_version`.
   - It defines the `we_` WorkItemExecution, with at most one non-terminal execution per item, and
     the `cs_` ContextSnapshot, which is insert-only.
-  - Creation is idempotent by `idempotency_key`. An `external_key` matching an *open* item replays
-    that item.
+  - Creation is idempotent by `idempotency_key`. An `external_key` matching
+    an *open* item replays it, NOT a closed item. The
+    `work_item_create_requests` row has `ON DELETE CASCADE` to WorkItem.
+    Neither is durable enough to enforce permanent occurrence replay protection
+    after WorkItem retention cleanup.
 - **ExecutionRequest `xr_`** (`internal/workitems/execution_requests.go`)
   - `CreateExecutionRequest`, `ClaimExecutionRequest` and fulfil use these errors:
     `ErrExecutionRequestOpen` (one open request per item), `ErrIntentUnavailable`, and
@@ -49,8 +52,11 @@ comments in `internal/auth`. The records this contract has to stand on already e
 
 ### Budget, ingress, Temporal and the schema harness
 
-- **Budget** (`internal/commerce/budget.go`): `GetBudget`, reservations, and
-  `ErrBudgetExhausted` / `ErrBudgetNotFound`.
+- **Budget observed boundary** (`internal/commerce/budget.go`): its
+  payer-account/month and per-request monetary-payment limits and simulated
+  payment reservations are NOT per-day, per-owner, per-run inference usage
+  budgets. The authoritative metered automation/FinOps budget adapter remains
+  `unknown` pending verification. No verified source means deny.
 - **Event ingress** (`docs/github-events-producer.md`): HMAC-verified
   `POST /api/v1/webhooks/github`, then an outbox (`internal/events/outbox.go`), then a Valkey
   relay. It is subscribed to `pull_request` and `pull_request_review` only, so `check_run` and
@@ -89,56 +95,110 @@ The document is written in the style of `work-context-contract.md` and has these
 
 1. **Status and claim classes.** Every statement is tagged `proved-source` (a cited file),
    `isolated-model` (proved only by the harness in this package), `assumed` or `unknown`.
-2. **Identity.**
-   - `au_` + UUID is standing intent only.
-   - `AutomationRun` is a view, not a table: for each `occurrence_key`, it is the WorkItem with
-     `external_key = automation:<au_>:<occ>`, its `xr_` chain and its `we_` executions.
-   - The occurrence key is derived as described in `requirements.md`.
-   - Overlap produces distinct `wi_` ids. The one-open-`we_` invariant per item is the existing
-     index.
-   - Replay key: `idempotency_key = "automation-fire:" + occurrence_key`.
-3. **Operations.** The operations are `create`, `get`, `list`, `update`, `pause`, `resume`,
-   `delete`, `run` and `list_runs`. They have future MCP names `mctl_automation_*` and REST paths
-   `/api/v1/automations[/{id}[/runs|:pause|:resume|:run]]`. These are specified, not registered.
-   For each operation the document gives the request schema, the response schema and the error
-   codes.
-   - Pagination uses an opaque cursor and `limit` 1..100.
-   - Filters are `state` and `template` only.
-   - `delete` is a soft delete with the lifecycle `deleted`. Runs are kept per work-item retention.
-     After the retention window, `get` answers `automation_not_found`.
-   - Definition TTL: an `at` definition becomes `completed` after its fire. Support definitions
-     expire after 24h at most.
-4. **Field ownership table.** Each field is marked client-writable, server-owned or derived.
-   Server-owned fields are set from `auth.User` and the resolved `SurfaceIdentityLink`, never from
-   the body.
-5. **Templates.** `templates/v1` is a server-side map from `template_id` to the capability, the
-   agent scope, the queue and the workflow, the allowed trigger kinds and the side-effect kinds.
-   - `reminder.v1` takes `{text <= 2 KiB}` and has one side effect, `notify.surface`.
-   - `support.diagnostic-followup.v1` takes `{question_ref}`, uses the `support` scope and has no
-     write side effect.
+2. **Identity, per-fire WorkItem and durable claims.**
+   - `au_` + UUID is standing intent only; a run is a derived view of one
+     `wi_ → xr_ → we_` chain, never a second execution-state store.
+   - The occurrence identity is a domain-separated, length-prefixed hash of
+     `(au_id, trigger_kind, canonical_occurrence_identity)`:
+     `at`/`schedule` = scheduled UTC instant; `event`/`dependency` =
+     stable authenticated source event ID, **not** transport delivery ID;
+     `run` = server-bound manual request ID derived from the authenticated
+     caller's request idempotency key. **Definition version is excluded.**
+     A version/policy snapshot is stored as admitted run provenance.
+   - `external_key = automation:<au_>:<occurrence_key>` and
+     `WorkItem Create idempotency_key = automation-fire:<occurrence_key>`
+     are server-generated; distinct overlapping occurrences get different
+     `wi_` and at most one active `we_` per `wi_`.
+   - A future **durable occurrence-claim** uniquely bound to
+     `(tenant, au_id, occurrence_key)` records `wi_id`, admitted version
+     and terminal/tombstone state. Claim retention MUST outlive WorkItem
+     terminal transitions/history sweeps and source replay; cleanup cannot
+     re-enable an old fire while its `au_` is usable. Atomic claim/WorkItem/
+     ExecutionRequest creation or fail-closed reconciliation is mandatory
+     for `automation-api-store`; none is implemented in this slice.
+   - Expected duplicate delivery returns a replay of the original run
+     (`replayed: true`) or a redacted tombstone, never a new effect or
+     a routine 409. Conflicting reuse of an occurrence identity returns
+     `automation_occurrence_conflict` 409; divergent/corrupt internal state
+     may use `automation_occurrence_duplicate` 409.
+3. **Operations.** `create`, `get`, `list`, `update`, `pause`,
+   `resume`, `delete`, `run`, `list_runs`. Future MCP names are
+   `mctl_automation_*` and REST paths
+   `/api/v1/automations[/{id}[/runs|:pause|:resume|:run]]`; **nothing
+   registered in this slice**.
+   - Separate create, definition (response) and patch schemas; future
+     routes expose explicit request/response/error contracts.
+   - Opaque cursor pagination `limit` 1..100; filters `state`/`template`;
+     soft delete, history and retention are specified, not built.
+   - `run` takes a mandatory opaque caller `idempotency_key` scoped
+     to principal, tenant and `au_`; the server binds it to an immutable
+     manual occurrence ID. Same request = replay; changed request under
+     same key = 409; fresh key = deliberate new fire. **Manual run is
+     disabled until separately approved.**
+   - `at` becomes `completed` after fire. Support definition TTL is at
+     most 24h, independent of per-fire run token TTL.
+4. **Field ownership.** Caller-writable fields are explicitly separated
+   from server-owned/derived `au_`, authenticated actor, version,
+   lifecycle, tenant and surface. Neither body nor template may select
+   raw Temporal workflow/namespace/task queue/signal.
+5. **Template registry versus enablement.**
+   - Schema registry names `reminder.v1` (`text` <=2 KiB,
+     gated `notify.surface`) and `support.diagnostic-followup.v1`
+     (`question_ref`, read-only `support` scope).
+   - Enabled-template registry is a **separate server-only decision**:
+     initial gate is **`reminder.v1 + at` only**. Support is structurally
+     valid, but cannot execute until reviewed owner-consent, fresh
+     per-fire support token and delegation checks exist.
+   - Runtime mapping `(template_id, version) -> capability, queue,
+     workflow, allowed trigger kinds, side effects` is server-owned.
 6. **Trigger and policy semantics.**
-   - `at` takes either an `instant` (RFC 3339 with Z or an offset) or `local` (wall time plus an
-     IANA `zone`) with `dst_gap` and `dst_fold`.
-   - `schedule`, `event` and `dependency` are defined but unsupported in the MVP.
-   - Overlap, catch-up, fanout and cancellation semantics are given as stated in
-     `requirements.md`.
-   - The `UNVERIFIED` Temporal list covers: Schedule overlap-policy mapping, catch-up window
-     behaviour after a namespace outage, pause/update atomicity relative to an in-flight action,
-     and schedule-ID uniqueness after deletion.
-7. **Authority.**
-   - Principal resolution covers OAuth subjects (Claude or ChatGPT, using `origin_client_id`) and
-     Telegram, which uses `surfaceid.Resolve` plus an opaque `install_ref` whose meaning is
-     `unknown`.
-   - The document defines possession proof, revocation, principal-versus-tenant scoping, creator
-     versus delegate, and audit attribution, using `audit.Entry` and `work_item_events.request_id`.
-   - It lists the three checkpoints and their inputs.
-   - It states that an `aar_` is per-occurrence only.
-   - It states that a schedule is never approval.
-8. **Support constraints**, as stated in `requirements.md`.
-9. **Transport and failure.** This covers the desired versus observed reconciler and `sync_state`,
-   the rule that orphan schedules are deleted and never adopted, dedupe by `occurrence_key`,
-   exponential backoff with a cap, Telegram delivery outcomes, and signed producer ingress with a
-   replay key per subscriber of `(subscriber au_, producer delivery id)`.
+   - `at` takes an RFC3339 instant or a local time plus IANA zone and
+     explicit `dst_gap`/`dst_fold` resolution.
+   - `schedule`, `event` and `dependency` are schema-defined, not
+     MVP-enabled. Policies overlap/catch-up/fanout/cancellation have
+     closed enums and exact compatibility gates.
+   - `UNVERIFIED` Temporal behaviors include overlap/catch-up under
+     outages, pause/update in-flight races and schedule-ID reuse after
+     delete; isolated fake-clock results never imply server proof.
+7. **Authorization and budget authority.**
+   - OAuth callers (Claude/ChatGPT) are canonical token principals
+     tagged with `origin_client_id`; Telegram resolves a verified,
+     non-expired `SurfaceIdentityLink` and opaque, live `install_ref`.
+   - Authenticate before ID lookup: unlinked/unknown identity gets the
+     same 403 for every `au_` ID; after valid authentication, foreign
+     tenant/owner, mismatching link and nonexistent specific resource
+     all produce the **same 404 response**. `list` excludes unauthorized
+     resources without count leakage. Create in an unauthorized tenant
+     denies before any foreign resource lookup.
+   - Existing possession proof, revocation, principal and delegate
+     attribution are reused. No caller-supplied `delegated_actor`.
+   - At create/update, at every fire, and immediately before every
+     external side effect, use live authorization, install revision,
+     policy and budget checks. Unavailable authority fails closed.
+     A schedule never grants a standing `aar_`; any action approval
+     is bound to one `we_`.
+   - A future verified automation usage authority must enforce per-run,
+     per-day and per-tenant inference limits with idempotent reservation,
+     release and settlement. `internal/commerce/budget.go` does not
+     prove these limits. The isolated decision harness accepts verified
+     headroom/source availability as input only, not a client assertion.
+8. **Support scope and renewal (NOT enabled).**
+   - `support.diagnostic-followup.v1` is a template *definition* with
+     at most 24h life / three read-only fires; current `support` run
+     token is only 10m default / 1h max and minted by a human (direct
+     or registered surface relay).
+   - Each eventual fire needs a **fresh eligible run token** plus
+     independent live tenant-owner consent; no 24h token reuse, no
+     agent/service self-mint, no `auth_ref`-by-presence permission.
+   - Without independently approved renewal/delegation policy and a
+     safe minting path, Support stays disabled with a fail-closed reason.
+     mctl-api#901 is separate/unapproved work, not authorization here.
+9. **Transport and failure.** The future reconciler distinguishes
+   desired/observed schedule state; orphan schedules are not silently
+   adopted; retry/backoff and delivery status must be defined. Event
+   ingress authenticates a stable producer event ID, tenant-hydrates
+   subject and dedupes per `(subscriber au_, source, event ID)`;
+   delivery-attempt IDs cannot bypass replay protection.
 10. **Versioning.** This covers the error-code evolution rules, the `v0`-to-`v1` note (no
     compatibility), the redaction boundary, and the MVP gate.
 11. **Crosswalk.**
@@ -148,7 +208,8 @@ The document is written in the style of `work-context-contract.md` and has these
     | `wi_`, `xr_`, `we_`, `cs_` | mctl-api | consumes | consumes | consumes |
     | `aar_` | mctl-api | consumes | consumes | consumes |
     | `sil_` | mctl-api; created by the surface's redeem | | redeems | |
-    | budget | mctl-api commerce | | | |
+    | automation usage budget | mctl-api (adapter/source of truth **not yet proven**) | consumes verified budget admission | | |
+    | payment budget | mctl-api commerce (payment-only; not general inference spend) | | | |
 
     The table also lists what each consumer must never write.
 12. **Proposed follow-up slices**, for owner review only and not filed:
@@ -190,10 +251,11 @@ The `automation-error.v1` code vocabulary is:
 | `automation_not_found` | 404 | also covers cross-owner and cross-tenant reads |
 | `automation_version_conflict` | 409 | CAS mismatch |
 | `automation_idempotency_key_reused` | 409 | same key, different body |
-| `automation_occurrence_duplicate` | 409 | the `occurrence_key` was already fired, so the delivery is a replay |
+| `automation_occurrence_conflict` | 409 | conflicting canonical intent under a previously claimed occurrence identity, no new fire |
+| `automation_occurrence_duplicate` | 409 | divergent/corrupt internal replay state only; ordinary retry returns success `replayed: true` |
 | `automation_identity_unlinked` | 403 | |
 | `automation_policy_drift` | 409 | |
-| `automation_budget_exhausted` | 402/409 | the status code is decided in the doc |
+| `automation_budget_exhausted` | 409 | verified automation usage budget exhausted (not payment authorization) |
 | `automation_approval_required` | 409 | |
 | `automation_approval_not_reusable` | 409 | |
 | `automation_paused` | 409 | |
@@ -207,12 +269,18 @@ The `automation-error.v1` code vocabulary is:
     `*ContractError{Code}`;
   - a pre-pass reports server-owned keys as `automation_server_owned_field` before the generic
     unknown-field rule.
-- `templates.go` holds the closed allowlist `map[string]Template`. Resolution happens on the
-  server and returns the binding. A client never supplies one.
+- `templates.go` separates a closed template **schema registry** from an
+  explicit enabled-template set. Initial enablement only `reminder.v1 + at`;
+  Support is schema-valid and disabled. Client input selects neither
+  queue/workflow nor enabled status.
 - `trigger.go` provides `ResolveAt(local, zone, gap, fold) (time.Time, error)` using
   `time.LoadLocation`. Gap and fold are detected by round-trip comparison. The package embeds
   `time/tzdata` so the tests are deterministic.
-- `occurrence.go` provides `OccurrenceKey(...)`, `ExternalKey(...)` and `FireIdempotencyKey(...)`.
+- `occurrence.go` provides `OccurrenceKey(auID, triggerKind, sourceID)`,
+  `ExternalKey(...)`, `FireIdempotencyKey(...)` and a pure manual-request
+  binding helper. Use domain-separated canonical length-prefixed hashing,
+  with **no definition version in the deduplication key**. The package
+  models keys and replay decisions, not the future DB claim/tombstone.
 - `authority.go` provides the isolated decision model. It is pure and has no store.
   - The function is `Decide(Checkpoint, Inputs) Decision`.
   - `Inputs` is a struct of already-resolved facts: link state, install state, tenant membership,
@@ -221,7 +289,11 @@ The `automation-error.v1` code vocabulary is:
   - Any source marked unavailable yields `automation_authority_unavailable`.
   - Its doc comment says it models the rules and is not wired to `governance.Revalidate`. Wiring is
     for later slices.
-- `support.go` holds the Support constraint checks.
+- `support.go` checks definition bounds, separate 1h support token TTL,
+  eligible per-fire mint/owner consent and fail-closed unknown authority.
+  It does not mint tokens.
+- A pure `ManualOccurrence(...)` helper models caller-scoped manual
+  request replay/conflict without enabling a production run operation.
 - `testdata/valid/*.json`, `testdata/invalid/*.json` and a `manifest.json` map each fixture to its
   expected code.
 
@@ -254,6 +326,13 @@ The `automation-error.v1` code vocabulary is:
     slices must update the doc in the same PR.
   - *The isolated model is mistaken for enforcement.* It is labelled `isolated-model` in both the
     doc and the code. No production caller exists.
-  - *Durable occurrence dedupe after close is not proved.* It is flagged `assumed` and is a
-    required decision for `automation-api-store`.
+  - *Durable occurrence dedupe after close is NOT proved by WorkItem.* The
+    successor slice MUST implement uniquely claimed occurrence state, a
+    retention-safe tombstone and atomic or fail-closed recovery.
+  - *Automation usage budget authority unresolved.* Payment Commerce
+    monthly/per-request budgets are not a substitute for verified daily
+    inference/LLM caps, reservation and settlement.
+  - *Support authorization lifetime mismatch.* A 24h automation can outlive
+    the 1h maximum support run token. Keep Support disabled until an
+    independently authorized fresh per-fire token/owner-consent path exists.
   - *DST tests depend on host tzdata.* Mitigated by embedding `time/tzdata`.
