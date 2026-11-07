@@ -27,8 +27,12 @@ on:
 permissions:
   contents: read
 
+# A group keeps one pending run and drops older pending ones, so a push that
+# arrives while a run is in progress could be skipped. Each push therefore gets
+# its own group (by commit) and is always judged; the other triggers keep one
+# group per ref.
 concurrency:
-  group: release-gate-watch-${{ github.ref }}
+  group: release-gate-watch-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -66,6 +70,9 @@ jobs:
 
       - name: Verify
         id: verify
+        # Runs even when the comparison step failed, so both results are
+        # reported; a cancelled run still stops here.
+        if: success() || failure()
         run: |
           # Only exit 6, the gate's own refusal, counts as a violation. Anything
           # else is a check that did not run, which says nothing about main.
