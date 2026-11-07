@@ -111,7 +111,7 @@ def resolve_files():
         files.append(f"platform-gitops/services/{env('TEAM')}/{env('SERVICE')}/values.yaml")
     for f in files:
         allowed(f)
-        if os.path.relpath(os.path.realpath(f)) != os.path.normpath(f):
+        if os.path.realpath(f) != os.path.join(os.path.realpath(os.curdir), os.path.normpath(f)):
             refuse(4, f"path goes through a symlink: {f}")
         if not os.path.isfile(f):
             refuse(4, f"file not found: {f}")
@@ -125,8 +125,8 @@ def check_gate():
         refuse(6, "the release gate refused this release")
 
 
-def check_tag_free():
-    if tag_names_commit():
+def check_tag_free(rebuild_allowed=True):
+    if rebuild_allowed and tag_names_commit():
         print("tag carries the commit's sha: a rebuild is the same source")
         return
     ref = f"{env('IMAGE_NAME')}:{env('IMAGE_TAG')}"
@@ -162,7 +162,9 @@ def check_direct():
     if env("IMAGE_NAME") in repos:
         refuse(8, f"{env('IMAGE_NAME')} is release-gated: publish it through release-deploy.yaml")
     if env("IMAGE_NAME") in bound:
-        check_tag_free()
+        # A rebuild is the same source only from the bound repository.
+        same_repo = str(bound[env("IMAGE_NAME")]).lower() == env("REPO").lower()
+        check_tag_free(rebuild_allowed=same_repo)
 
 
 def main():

@@ -174,12 +174,41 @@ for label, kw in {
     check(f"a path that is {label} is refused", rc(**kw) == 4, run(**kw)[1])
 
 
+def run_via_link():
+    """The same ordinary release, entered through a symlink to the checkout."""
+    def go(tmp):
+        (tmp / "via").symlink_to(tmp)
+    with tempfile.TemporaryDirectory() as d:
+        base = pathlib.Path(d)
+        real = base / "real"
+        real.mkdir()
+        (real / "scripts").mkdir()
+        (real / "scripts/release-preflight.py").write_text(SCRIPT_TEXT)
+        shutil.copy(ROOT / "scripts/release-gate.py", real / "scripts/release-gate.py")
+        (real / "platform-gitops").mkdir()
+        shutil.copy(ROOT / GATE, real / GATE)
+        shutil.copy(ROOT / BIND, real / BIND)
+        for w in WORKERS:
+            (real / w).parent.mkdir(parents=True)
+            shutil.copy(ROOT / w, real / w)
+        app = real / SVC / "labs/mctl-alice/values.yaml"
+        app.parent.mkdir(parents=True)
+        app.write_text("image:\n  repository: ghcr.io/mctlhq/mctl-alice\n  tag: \"1.0.0\"\n")
+        (base / "via").symlink_to(real)
+        env = {"REPO": "mctlhq/mctl-alice", "IMAGE_NAME": "ghcr.io/mctlhq/mctl-alice", "IMAGE_TAG": "2.0.0",
+               "GIT_REF": "2.0.0", "TEAM": "labs", "SERVICE": "mctl-alice", "VALUES_PATH": "", "VALUES_GLOB": ""}
+        return subprocess.run([sys.executable, "scripts/release-preflight.py", "preflight"], cwd=base / "via",
+                              capture_output=True, env={**os.environ, **env, "PWD": str(base / "via")}).returncode
+
+
 def link(tmp):
     d = tmp / SVC / "labs/link"
     d.mkdir()
     (d / "values.yaml").symlink_to(tmp / WORKERS[0])
 
 
+check("a real file under a symlinked working directory is not refused",
+      run_via_link() == 0, "see run_via_link")
 check("a symlink to a gated file is refused", rc(prepare=link, VALUES_PATH=f"{SVC}/labs/link/values.yaml") == 4)
 
 # Replacing a tag.
@@ -216,6 +245,10 @@ r, out, _ = run(stage="publish-direct", GIT_REF="any-branch", docker=(1, "denied
 check("direct: a bound image with no registry answer refuses", r == 11, (r, out))
 r, out, _ = run(stage="publish-direct", IMAGE_TAG="main-4ccb257", GIT_REF=SHA, docker=(0, ""))
 check("direct: a sha tag from its own commit may be rebuilt", r == 0, (r, out))
+r, out, called = run(stage="publish-direct", IMAGE_TAG="main-4ccb257", GIT_REF=SHA, REPO="other/repo", docker=(0, ""))
+check("direct: a sha tag from another repository is not a rebuild", r == 10 and called, (r, out))
+r, out, _ = run(stage="publish-direct", IMAGE_TAG="main-4ccb257", GIT_REF=SHA, REPO="other/repo", docker=(1, ABSENT))
+check("direct: a new sha tag from another repository still passes this check", r == 0, (r, out))
 for label, kw in {
     "a comma naming another image": {"IMAGE_NAME": "ghcr.io/mctlhq/grafana-iac", "IMAGE_TAG": f"1.0.0,{AGENTS}:1.117.0"},
     "a newline naming another image": {"IMAGE_NAME": "ghcr.io/mctlhq/grafana-iac", "IMAGE_TAG": f"1.0.0\n{AGENTS}:1.117.0"},
@@ -281,18 +314,21 @@ M = {
         lambda: rc(script=SCRIPT_TEXT.replace('        if stage == "publish":\n            check_tag_free()', '        check_tag_free()'),
                    docker=(1, "unauthorized")) == 11,
     "direct tag check off, a bound tag is replaced":
-        lambda: rc(stage="publish-direct", script=cut("        check_tag_free()\n"), docker=(0, "")) == 0,
+        lambda: rc(stage="publish-direct", script=cut("        check_tag_free(rebuild_allowed=same_repo)\n"), docker=(0, "")) == 0,
     "release tag shape off, main stands in for a version":
         lambda: rc(script=SCRIPT_TEXT.replace(' and re.fullmatch(RELEASE_TAG_RE, env("IMAGE_TAG"))', ""), IMAGE_TAG="main", GIT_REF="main") == 0,
     "any failure read as absent":
         lambda: rc(script=SCRIPT_TEXT.replace("if not ABSENT_RE.search(r.stderr):", "if False:"), docker=(1, "denied")) == 0,
     "symlink check off":
-        lambda: rc(script=SCRIPT_TEXT.replace("if os.path.relpath(os.path.realpath(f)) != os.path.normpath(f):", "if False:"),
+        lambda: rc(script=SCRIPT_TEXT.replace("if os.path.realpath(f) != os.path.join(os.path.realpath(os.curdir), os.path.normpath(f)):", "if False:"),
                    prepare=link, VALUES_PATH=f"{SVC}/labs/link/values.yaml") != 4,
     "direct shape check off, a comma names the gated image":
         lambda: rc(stage="publish-direct", script=SCRIPT_TEXT.replace(
             'for name, pattern in (("IMAGE_TAG", TAG_RE), ("IMAGE_NAME", IMAGE_RE)):\n        if not re.fullmatch(pattern, env(name)):\n            refuse(5, f"{name} has an invalid shape: {env(name)!r}")\n    try:',
             'try:'), IMAGE_NAME="ghcr.io/mctlhq/grafana-iac", IMAGE_TAG=f"1.0.0,{AGENTS}:1.117.0") == 0,
+    "direct rebuild allowed from any repository":
+        lambda: rc(stage="publish-direct", script=SCRIPT_TEXT.replace("check_tag_free(rebuild_allowed=same_repo)", "check_tag_free()"),
+                   IMAGE_TAG="main-4ccb257", GIT_REF=SHA, REPO="other/repo", docker=(0, "")) == 0,
     "direct check off":
         lambda: rc(stage="publish-direct", script=cut("        check_direct()\n"), IMAGE_NAME=AGENTS) == 0,
     "sha rule loose, any sha allowed":
