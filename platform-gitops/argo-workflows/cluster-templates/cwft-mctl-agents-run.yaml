@@ -804,7 +804,12 @@ spec:
           - name: is-fallback
             value: "false"
       container:
-        image: "{{workflow.parameters.agent_image}}"
+        # A literal, never {{workflow.parameters.agent_image}}: this container
+        # holds MCTL_TOKEN, so neither a caller nor a registry rollback may pick
+        # its release (mctlhq/mctl-gitops#1980). The release bump rewrites this
+        # line together with the agent_image default; CI requires the literal
+        # and checks it against the run-bash min_image_version.
+        image: ghcr.io/mctlhq/mctl-agents:1.117.0
         securityContext:
           runAsNonRoot: true
           allowPrivilegeEscalation: false

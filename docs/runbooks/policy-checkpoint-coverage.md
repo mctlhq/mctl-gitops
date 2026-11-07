@@ -30,9 +30,12 @@ Each entry is one execution surface: a worker values file or a template of a
   gap, needs `tracked_by`; CI prints `bypass-open: N` on every run).
 
 Transport entries (`kind: transport`, the agent's Bash and other tool
-subprocesses) are `bypass-open`, or `no-mctl-token` once their surface's
+subprocesses) are `bypass-open`; `no-mctl-token` once their surface's
 container maps no `MCTL_TOKEN` and its image is at least the entry's
-`min_image_version` (both checked). `investigate-bash` is `no-mctl-token`:
+`min_image_version` (both checked); or `no-shell-session` when the surface
+keeps the token but has a `fixed_run_mode`, a literal image and at least the
+entry's `min_image_version`, the first release whose session is built
+without Bash (all checked). `investigate-bash` is `no-mctl-token`:
 the investigator's MCP and REST calls use its scoped run token
 (mctlhq/mctl-agents#717 option c), so a tool can reach only what the
 `investigate` scope admits.
@@ -52,9 +55,27 @@ That split does not close the path. A profile not listing Bash, like the SDK's
 still exposes Bash, and only the CLI permission mode limits what it runs. CI
 cannot see this, because it reads the profile and not the session. The entry
 therefore belongs to the `incident-responder` surface, and it cannot return to
-`no-mctl-token`, because that surface keeps the token. Closing it needs a new
-transport boundary, checked by CI against a `min_image_version` for the image
-that builds the session without Bash. The responder's static token is
+`no-mctl-token`, because that surface keeps the token.
+
+Closing it uses `no-shell-session`. mctlhq/mctl-agents#1024 builds the
+responder session from a tool list without Bash, and lets it write only its
+state directory. The image must be one no caller can choose, so
+`run-incident-responder` takes a literal image instead of
+`{{workflow.parameters.agent_image}}`, and CI requires the literal (check 7).
+The incident loop stops sending an image pin (mctlhq/mctl-agents#1031), and
+mctl-api no longer declares one for the operation (mctlhq/mctl-api#944). The
+release bump rewrites the literal together with the parameter default.
+`run-bash` flips to `no-shell-session`, with `min_image_version` set to the
+release carrying #1024, only once:
+
+1. that release is out, and the literal is at or above it;
+2. a real responder run shows no `Bash` in the session's init tool list,
+   the mctl MCP server connected, and its proposal files written, or an
+   incident acknowledged or resolved.
+
+What it rests on: the CLI's own protected paths (settings and `.git` files
+are not writable from a session without Bash). Re-check that on every
+claude-agent-sdk bump. The responder's static token is
 mctlhq/mctl-agents#737, a separate gap. A responder pod with no token exits
 successfully having done nothing, so after any change here confirm that a run
 actually processed an incident.

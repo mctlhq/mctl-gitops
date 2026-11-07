@@ -29,6 +29,10 @@ ROOT = Path(__file__).resolve().parents[1]
 CWFT_DIR = ROOT / "platform-gitops/argo-workflows/cluster-templates"
 INVENTORY = ROOT / "platform-gitops/governance/agent-credential-delivery.yaml"
 MARKER = "workflow.parameters.agent_image"
+# A template may pin the mctl-agents image as a literal instead of the
+# parameter (run-incident-responder, mctlhq/mctl-gitops#1980); it is still an
+# agent step and must stay inside these checks.
+LITERAL = "ghcr.io/mctlhq/mctl-agents"
 MAX_MODE = 0o440
 
 
@@ -37,7 +41,8 @@ def _body(tpl: dict) -> dict:
 
 
 def _is_agent(tpl: dict) -> bool:
-    return MARKER in str(_body(tpl).get("image", ""))
+    image = str(_body(tpl).get("image", ""))
+    return MARKER in image or image.startswith(LITERAL)
 
 
 def _secret_refs(containers) -> list[tuple[str, str, str]]:
@@ -163,7 +168,13 @@ def selftest() -> int:
     def init(d):
         d["spec"]["templates"][0]["initContainers"] = [
             {"name": "i", "volumeMounts": [{"name": "cred", "mountPath": "/x"}]}]
+    def literal(d):
+        d["spec"]["templates"][0]["container"]["image"] = "ghcr.io/mctlhq/mctl-agents:1.117.0"
+    def literal_seed(d):
+        literal(d)
+        seed(d)
     cases = [("migrated", None, False), ("env seed restored", seed, True),
+             ("literal image", literal, False), ("literal image, env seed restored", literal_seed, True),
              ("unlisted secretKeyRef", unknown, True), ("mode 0644", mode, True),
              ("not readOnly", rw, True), ("init mount", init, True)]
     ok = True

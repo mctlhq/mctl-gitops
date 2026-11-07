@@ -22,6 +22,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CWFT_DIR = ROOT / "platform-gitops/argo-workflows/cluster-templates"
 MARKER = "workflow.parameters.agent_image"
+# A literal mctl-agents image in a cwft-mctl-agents-* template
+# (run-incident-responder, mctlhq/mctl-gitops#1980) is an agent step too.
+# Elsewhere the image is only a runtime for a script with no model session.
+LITERAL = "ghcr.io/mctlhq/mctl-agents"
 
 
 def _image(tpl: dict) -> str:
@@ -77,7 +81,8 @@ def violations(directory: Path) -> list[str]:
                 continue
             spec = doc.get("spec") or {}
             for tpl in spec.get("templates") or []:
-                if MARKER in _image(tpl):
+                literal = path.name.startswith("cwft-mctl-agents-") and _image(tpl).startswith(LITERAL)
+                if MARKER in _image(tpl) or literal:
                     matched += 1
                     found += check_template(f"{path.name}:{tpl.get('name')}", tpl, spec)
     if matched == 0:
@@ -111,7 +116,12 @@ def selftest() -> int:
     def mutate_drop(t): del t["container"]["securityContext"]["capabilities"]
     def mutate_init(t): del t["initContainers"][0]["securityContext"]["capabilities"]["drop"]
 
+    def literal(t): t["container"]["image"] = "ghcr.io/mctlhq/mctl-agents:1.117.0"
+    def literal_pod(t):
+        literal(t)
+        mutate_pod(t)
     cases = [("hardened", None, False), ("no pod block", mutate_pod, True),
+             ("literal image", literal, False), ("literal image, no pod block", literal_pod, True),
              ("no allowPrivilegeEscalation", mutate_ape, True),
              ("no capabilities.drop", mutate_drop, True),
              ("init without drop ALL", mutate_init, True)]
