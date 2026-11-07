@@ -118,6 +118,22 @@
       "reason": "Returns the caller's own dialog list (peer ids, titles, unread counts), no message bodies. Scope-gated upstream per identity."
     },
     {
+      "name": "list_folders",
+      "enabled": true,
+      "upstream_gates": [
+        "telegram:dialogs:read"
+      ],
+      "reason": "Returns the caller's own chat folder titles, rule flags and member counts, no peer ids or message bodies. Same scope as list_dialogs, gated upstream per identity."
+    },
+    {
+      "name": "list_topics",
+      "enabled": true,
+      "upstream_gates": [
+        "telegram:messages:read"
+      ],
+      "reason": "Returns the topic titles and unread counts of a forum supergroup the caller is in, no message bodies. Same scope as get_messages, gated upstream per identity."
+    },
+    {
       "name": "list_telegram_identities",
       "enabled": true,
       "upstream_gates": [
@@ -204,6 +220,15 @@
         "admin:users"
       ],
       "reason": "Admin-only revocation of a minted worker token; containment action, refused upstream without admin:users."
+    },
+    {
+      "name": "save_draft",
+      "enabled": true,
+      "upstream_gates": [
+        "send-gate",
+        "telegram:messages:send"
+      ],
+      "reason": "Leaves an unsent draft in one of the caller's own chats and delivers nothing. Gated by ALLOW_SEND, the send scope and the reviewer rule through evaluateWriteGateBeforeAccount, deliberately without the per-account send_enabled flag (#1175); refuses to replace a draft the user typed unless overwrite=true."
     },
     {
       "name": "search_messages",
