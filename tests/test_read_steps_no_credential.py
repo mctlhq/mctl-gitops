@@ -34,6 +34,7 @@ KNOWN_READ_ONLY = {
     ("cwft-mctl-agents-reconcile.yaml", "commit-and-push", "clone-gitops"),
     ("cwft-mctl-agents-run.yaml", "run-orchestrator", "clone-gitops"),
     ("cwft-mctl-agents-run.yaml", "commit-and-push", "clone-gitops"),
+    ("cwft-mctl-agents-run.yaml", "run-incident-responder", "clone-gitops"),
     ("cwft-mctl-agents-shepherd.yaml", "run-shepherd", "clone-gitops"),
     ("cwft-mctl-agents-shepherd.yaml", "commit-and-push", "clone-gitops"),
     ("wft-delete-tenant-safe.yaml", "retire-tenant-services", "main"),
