@@ -37,8 +37,31 @@ the investigator's MCP and REST calls use its scoped run token
 (mctlhq/mctl-agents#717 option c), so a tool can reach only what the
 `investigate` scope admits.
 
-Known gap, stated plainly: the Bash and `MCTL_TOKEN` path of every other
-model-running template is `bypass-open`. The checkpoint does not gate Bash, so
+`mctl-agents-run` is split by mode. `run-orchestrator` (full, mentor-only,
+single-service) maps no `MCTL_TOKEN`, so these modes run with no `mcp__mctl__*`
+tools, and the mentor loses its cross-check reads. That half is
+`run-orchestrator-bash`, `no-mctl-token`. `run-bash`, `bypass-open`, is the other
+half. `run-incident-responder` keeps the token because resolving
+incidents needs mctl-api, and it sets `RUN_MODE` as a literal, so no workflow
+parameter can start a service-agent mode in that pod. CI checks the literal,
+the routing, that no other template in the file maps `MCTL_TOKEN`, and the
+profile's tool list (`fixed_run_mode`, `execution_profile`).
+
+That split does not close the path. A profile not listing Bash, like the SDK's
+`allowed_tools`, is a permission list and removes nothing: the responder session
+still exposes Bash, and only the CLI permission mode limits what it runs. CI
+cannot see this, because it reads the profile and not the session. The entry
+therefore belongs to the `incident-responder` surface, and it cannot return to
+`no-mctl-token`, because that surface keeps the token. Closing it needs a new
+transport boundary, checked by CI against a `min_image_version` for the image
+that builds the session without Bash. The responder's static token is
+mctlhq/mctl-agents#737, a separate gap. A responder pod with no token exits
+successfully having done nothing, so after any change here confirm that a run
+actually processed an incident.
+
+Known gap, stated plainly: the Bash and `MCTL_TOKEN` path of the remaining
+model-running templates (implement, shepherd, the incident responder) is
+`bypass-open`. The checkpoint does not gate Bash, so
 "governed transports cannot be bypassed" is NOT achieved by this manifest.
 Tracked by mctlhq/mctl-agents#717 and mctlhq/mctl-api#723 (separate from
 mctlhq/mctl-api#721). The shepherd pod forces `NO_APPROVALS` by design
