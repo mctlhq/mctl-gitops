@@ -227,6 +227,7 @@ The schemas are written in JSON Schema draft 2020-12, with `additionalProperties
 everywhere:
 
 - `automation-create-request.schema.json`
+- `automation-manual-run-request.schema.json` (caller-scoped request `idempotency_key`, client input only, no `occurrence_key`/`wi_`/`we_` fields)
 - `automation-patch.schema.json`. This uses `expected_version` with JSON Merge Patch semantics over
   the client-writable fields only.
 - `automation-definition.schema.json`
