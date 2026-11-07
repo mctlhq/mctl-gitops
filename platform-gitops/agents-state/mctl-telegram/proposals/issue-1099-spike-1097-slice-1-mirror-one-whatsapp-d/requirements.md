@@ -27,7 +27,7 @@ replies stay in #1097.
 ## Acceptance criteria (EARS)
 - WHEN the operator runs `go run .` (the single command) in `spikes/whatsapp-forum/` with valid
   configuration and no existing session THE SYSTEM SHALL show a WhatsApp pairing QR code on the
-  operator's terminal only, and store the resulting device session in the configured session
+  operator's terminal only. Before requesting any pairing code it SHALL verify stdout is an interactive terminal, exiting without obtaining or emitting a QR if redirected. On successful pairing it SHALL continue normally and store the resulting device session in the configured session
   directory.
 - IF any required setting (`WAF_SESSION_DIR`, `WAF_WA_PEER`, `WAF_PEER_CONSENT`,
   `WAF_TG_BOT_TOKEN`, `WAF_TG_CHAT_ID`, `WAF_TG_TOPIC_ID`, `WAF_TG_OWNER_ID`) is missing or
@@ -40,7 +40,7 @@ replies stay in #1097.
 - WHEN the system creates the session directory or session database THE SYSTEM SHALL create them
   with mode `0700` and `0600` respectively.
 - WHEN the system starts, and again before each forward, THE SYSTEM SHALL verify through the Telegram Bot API that
-  the destination chat is a forum supergroup, has exactly 2 members, that `WAF_TG_OWNER_ID` is
+  the destination chat is a forum supergroup with no public `username` and no entries in `active_usernames`, has exactly 2 members, that `WAF_TG_OWNER_ID` is
   its creator, and that the bot itself is a member. It SHALL refuse to start, or drop
   the message, if any check fails.
 - WHEN a new incoming WhatsApp message arrives whose chat is the configured DM, which is not sent

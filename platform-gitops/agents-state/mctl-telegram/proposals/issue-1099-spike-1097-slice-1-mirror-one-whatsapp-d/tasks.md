@@ -21,11 +21,11 @@
   (depends on 4). DoD: it only reads event fields.
 - [ ] 6. `telegram.go` and `verify.go`: a `net/http` Bot API client (`getMe`, `getChat`,
   `getChatMemberCount`, `getChatMember`, `sendMessage` without `parse_mode`, with 4096-unit
-  chunking) and token-free error values. Add `VerifyDestination` (forum supergroup, member count
+  chunking) and token-free error values. Add `VerifyDestination` (forum supergroup, no public `username` or `active_usernames`, member count
   2, owner is creator, bot is member/administrator) (depends on 2). DoD: verify_test passes
   against httptest.
 - [ ] 7. `main.go`: load the config, verify the destination (fatal on failure), open the session,
-  pair by QR to stdout if no device id is stored, then connect. The handler runs Route, then
+  if no device id is stored require a terminal on stdout before requesting or rendering any QR, then connect. The handler runs Route, then
   re-verify, then send, and logs only `reason`/`count`/`method`/`status`/`error_code`. Shut down
   gracefully on signals. There are no WhatsApp send calls (depends on 3, 5, 6). DoD: `go build .`
   and `go vet ./...` succeed in the spike dir.
@@ -56,12 +56,13 @@
   a non-supergroup chat id, a malformed token, a relative session dir, a session dir inside the
   repo root and a `0755` session dir are all refused. Error strings never contain the supplied
   value.
-- [ ] T3. `verify_test.go`: a fake Bot API on httptest. The happy path passes. A non-forum chat,
+- [ ] T3. `verify_test.go`: a fake Bot API on httptest. The happy path passes. Add separate refusal cases for an otherwise valid two-member forum with a public `username` and with only an active alias. A non-forum chat,
   a member count of 3, an owner who is not creator, a missing bot and an HTTP 401 all fail. The
   error text never contains the token.
 - [ ] T4. `nosend_test.go`: parse the non-test `.go` files in the package and fail if any
   references `SendMessage` on a whatsmeow client, `MarkRead`, `SendPresence`,
   `SendChatPresence`, `RevokeMessage` or `Upload`.
+- [ ] Pairing gate: with a pipe and with a regular file as stdout, assert the QR supplier is never called and no pairing payload reaches stdout or stderr. Cover the interactive path with a synthetic QR supplier.
 - [ ] T5. Manual: run `CHECKLIST.md`. The result stays PENDING until a human verifies it.
 
 ## Rollback
