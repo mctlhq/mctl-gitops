@@ -27,6 +27,7 @@ GATE_TEXT = (ROOT / GATE_REL).read_text()
 REAL_GIT = shutil.which("git")
 SVC = "platform-gitops/services"
 WORKERS = ["mctl-agents-worker", "mctl-agents-worker-exec", "mctl-agents-worker-implement"]
+READ_ONLY = ("validate", "preview")
 TARGET_CALL = "sh " + GUARD_REL + " target"
 OUTGOING_CALL = "sh " + GUARD_REL + " outgoing origin/main || exit 1"
 
@@ -48,6 +49,7 @@ TEMPLATES = {
     "commit": template("tpl-git-commit.yaml", "commit-service"),
     "delete": template("tpl-git-commit.yaml", "delete-service"),
     "validate": template("tpl-validate-tenant.yaml", "validate"),
+    "preview": template("tpl-validate-tenant.yaml", "image-name"),
     "autoscale": template("wft-deploy-service.yaml", "patch-autoscaling-values"),
     "add-domain": template("wft-add-custom-domain.yaml", "do-add-domain"),
     "remove-domain": template("wft-remove-custom-domain.yaml", "do-remove-domain"),
@@ -193,8 +195,8 @@ RACE_EOF
         src = t["script"]["source"]
         if mutate:
             src = mutate(src)
-        # validate clones anonymously, so it has no key to redirect.
-        assert src.count("/secrets/deploy-key/ssh-privatekey") == (0 if name == "validate" else 1)
+        # validate and preview clone anonymously, so they have no key to redirect.
+        assert src.count("/secrets/deploy-key/ssh-privatekey") == (0 if name in READ_ONLY else 1)
         # /tmp first: on Linux the temporary directory itself lives under /tmp.
         src = src.replace("/tmp/", str(self.tmp) + "/w-")
         src = src.replace("/secrets/deploy-key/ssh-privatekey", str(self.key))
@@ -353,6 +355,24 @@ def validate_gated(mutate=None):
     return boxed(body)
 
 
+def preview_params(team, service):
+    return {"PARAM_TEAM_NAME": team, "PARAM_COMPONENT_NAME": service, "PARAM_GIT_REF": ""}
+
+
+def preview_gated(mutate=None):
+    def body(b):
+        rc, out = b.run("preview", preview_params("admins", WORKERS[0]), mutate)
+        return rc != 0 and "release gate" in out
+    return boxed(body)
+
+
+def preview_other():
+    def body(b):
+        rc, out = b.run("preview", preview_params("labs", "app"))
+        return rc == 0 and "release gate" not in out
+    return boxed(body)
+
+
 def validate_other():
     def body(b):
         rc, out = b.run("validate", validate_params("labs", "app"))
@@ -496,6 +516,7 @@ check("update-config of another service still pushes",
 check("retire of another service still removes it", retire_other())
 check("autoscaling of another service still pushes", scale_other())
 check("validate lets another service through", validate_other())
+check("preview lets another service through", preview_other())
 check("a concurrent worker bump does not refuse another service", race_unrelated())
 check("onboard of a new service still pushes",
       boxed(lambda b: (lambda res: res[0] == 0 and b.read(f"{SVC}/labs/fresh/values.yaml") is not None)(
@@ -510,6 +531,10 @@ check("onboard onto a gated worker is refused", deploy_gated(WORKERS[0], "onboar
 check("retire of a gated directory already missing is refused, not exit 0", retire_gated_dir_gone())
 check("autoscaling of a gated worker is refused", scale_gated())
 check("validate refuses a gated worker before any build or Vault step", validate_gated())
+for w in WORKERS:
+    check(f"preview refuses gated worker {w} before any build",
+          boxed(lambda b, w=w: (lambda res: res[0] != 0 and "release gate" in res[1])(
+              b.run("preview", preview_params("admins", w)))))
 
 for name in WRITERS:
     check(f"{name}: a gated worker is refused before any commit", writer_gated(name))
@@ -690,7 +715,7 @@ check("outgoing does not confuse a name sharing a gated prefix",
 
 # ── Wiring: every push in these templates sits behind the check ──────────────
 for name, tmpl in TEMPLATES.items():
-    if name == "validate":
+    if name in READ_ONLY:
         continue
     lines = tmpl["script"]["source"].split("\n")
     pushes = [i for i, ln in enumerate(lines) if ln.strip().startswith(("git push", "if git push"))]
@@ -704,9 +729,11 @@ tasks = {t["name"]: t for t in
          [x for x in retire["spec"]["templates"] if x["name"] == "retire-pipeline"][0]["dag"]["tasks"]}
 check("retire: Vault secrets wait for the git step that can refuse",
       "delete-from-git" in tasks["delete-vault-secrets"]["dependencies"])
-preview = template("tpl-validate-tenant.yaml", "image-name")
-check("preview's image-name step has no release-gate call",
-      "release-gate-guard" not in yaml.safe_dump(preview))
+check("preview's image-name step carries the target check",
+      TARGET_CALL in TEMPLATES["preview"]["script"]["source"])
+check("preview's target check runs before the image-name check",
+      0 <= TEMPLATES["preview"]["script"]["source"].find(TARGET_CALL)
+      < TEMPLATES["preview"]["script"]["source"].find("check-image-name.sh"))
 
 
 # ── Mutants: remove each layer, the matching scenario must stop holding ──────
@@ -750,6 +777,8 @@ MUTANTS = {
         lambda: scale_gated(mutate=no_guard, wrote_nothing=False),
     "validate: target call removed":
         lambda: validate_gated(mutate=no_target),
+    "preview: target call removed":
+        lambda: preview_gated(mutate=no_target),
     **{f"{n}: target call removed": (lambda n=n: writer_gated(n, mutate=no_target)) for n in WRITERS},
     "guard: shape check off, a glob is accepted":
         lambda: bad_gate_refuses(GLOB_GATE, guard=SHAPE_OFF),
