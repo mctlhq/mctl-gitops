@@ -19,17 +19,11 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from agent_templates import MARKER, image_of as _image  # noqa: E402  (mctl-gitops#2289)
+
 ROOT = Path(__file__).resolve().parents[1]
 CWFT_DIR = ROOT / "platform-gitops/argo-workflows/cluster-templates"
-MARKER = "workflow.parameters.agent_image"
-
-
-def _image(tpl: dict) -> str:
-    for key in ("container", "script"):
-        body = tpl.get(key)
-        if isinstance(body, dict):
-            return str(body.get("image", ""))
-    return ""
 
 
 def _drops_all(sc: dict) -> bool:
