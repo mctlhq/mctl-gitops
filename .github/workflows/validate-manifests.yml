@@ -612,6 +612,11 @@ jobs:
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
 
+      - name: Unit-test patch-autoscaling-values against a values file
+        # The step edits only .autoscaling (#2413). Its own script runs against
+        # fixtures with real yq, with git, ssh, kubectl and argo shimmed to fail.
+        run: python3 tests/test_wft_deploy_service_autoscaling_values.py
+
       - name: Test workflow parameters cannot inject shell
         run: python3 tests/test_shell_param_injection.py
 
