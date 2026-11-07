@@ -375,9 +375,12 @@ def self_test():
         (gp / (cwft + "cwft-mctl-agents-usage-collector.yaml")).unlink()
     expect("stale entry", stale, "usage-collector")
 
+    # Synthetic, so it outlives the last real bypass-open entry: it reopens a
+    # closed transport without a tracker instead of deleting a live tracked_by.
     def no_tracker(gp):
         edit(gp / "governance/policy-checkpoint-coverage.yaml",
-             lambda t: t.replace("    tracked_by: mctlhq/mctl-agents#717\n", "", 1))
+             lambda t: t.replace("    of: investigate\n    governed: false\n    boundary: no-mctl-token\n",
+                                 "    of: investigate\n    governed: false\n    boundary: bypass-open\n", 1))
     expect("bypass-open without tracked_by", no_tracker, "bypass-open needs tracked_by")
 
     def token_leak(gp):
