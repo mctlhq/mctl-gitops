@@ -134,9 +134,9 @@ surfaces:
     reason: PreToolUse gates mcp__* only; Bash can call mctl-api with MCTL_TOKEN
   - id: run-bash
     kind: transport
-    of: run
+    of: incident-responder
     governed: false
     boundary: bypass-open
     tracked_by: mctlhq/mctl-gitops#1980
     related: mctlhq/mctl-agents#717
-    reason: run-orchestrator maps no MCTL_TOKEN, but run-incident-responder does, and its session still exposes Bash; only the CLI permission mode limits what that Bash runs, so no setting of ours removes it until the image builds the session without it
+    reason: run-incident-responder maps MCTL_TOKEN and its session still exposes Bash; only the CLI permission mode limits what that Bash runs, so no setting of ours removes it until the image builds the session without it

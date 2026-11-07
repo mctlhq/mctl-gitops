@@ -50,8 +50,10 @@ That split does not close the path. A profile not listing Bash, like the SDK's
 `allowed_tools`, is a permission list and removes nothing: the responder session
 still exposes Bash, and only the CLI permission mode limits what it runs. CI
 cannot see this, because it reads the profile and not the session. The entry
-returns to `no-mctl-token` once an image builds the session without Bash and
-`min_image_version` requires that image. The responder's static token is
+therefore belongs to the `incident-responder` surface, and it cannot return to
+`no-mctl-token`, because that surface keeps the token. Closing it needs a new
+transport boundary, checked by CI against a `min_image_version` for the image
+that builds the session without Bash. The responder's static token is
 mctlhq/mctl-agents#737, a separate gap. A responder pod with no token exits
 successfully having done nothing, so after any change here confirm that a run
 actually processed an incident.
