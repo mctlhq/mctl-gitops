@@ -123,7 +123,8 @@ The contract adds no second store, ledger, approval engine or authority engine.
   key. A changed request under the same key is 409. Manual `run` is **contracted
   but not enabled** until separately authorized for MVP/production.
 - THE SYSTEM SHALL specify these operations as a closed set, each with typed request, response and
-  error schemas: `create`, `get`, `list` (with cursor pagination, a `limit` of 1 to 100, and
+  error schemas. In particular, the **manual-fire request must have a distinct schema** with
+  required `idempotency_key`, not be confused with the read-only AutomationRun view: `create`, `get`, `list` (with cursor pagination, a `limit` of 1 to 100, and
   filters for `state` and `template` only), `update`, `pause`, `resume`, `delete`, `run` (manual
   fire) and `list_runs`.
 
