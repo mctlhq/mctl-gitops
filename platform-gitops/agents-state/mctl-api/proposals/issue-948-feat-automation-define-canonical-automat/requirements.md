@@ -28,7 +28,7 @@ The contract is grounded in records that already exist and reuses them:
 - `SurfaceIdentityLink` (`sil_`, `internal/surfaceid`).
 - Delegation grant resolution (`internal/delegation`).
 - Agent run scopes, including `support` (`internal/auth/agent_scope.go`).
-- The commerce budget ledger (`internal/commerce/budget.go`).
+- Budget authorities require a specific mapping decision: `internal/commerce/budget.go` enforces payer-account monthly/per-request payment limits, **not** general automation or LLM daily usage limits. Existing usage/FinOps accounting must be compared before choosing the source of truth. An unset or unavailable automation-budget authority is a denial, not unlimited spend.
 
 The contract adds no second store, ledger, approval engine or authority engine.
 
@@ -66,14 +66,35 @@ The contract adds no second store, ledger, approval engine or authority engine.
 - THE SYSTEM SHALL specify `AutomationRun` as a read-only view over one fire's
   `wi_ -> xr_ -> we_` chain, keyed by the fire's `occurrence_key`.
 - WHEN a trigger fires THE SYSTEM SHALL derive
-  `occurrence_key = "occ_" + hex(sha256(au_id | definition_version | trigger_kind | occurrence_instant_utc_or_event_delivery_id))[:32]`.
-  The per-fire WorkItem uses `external_key = "automation:" + au_id + ":" + occurrence_key`. The
-  idempotency key is derived from the `occurrence_key` and is never chosen by a client.
-- WHEN two occurrences of one definition overlap THE SYSTEM SHALL give them two different `wi_`
-  ids. Each `wi_` keeps the existing invariant of at most one open `we_` per item.
-- IF the same occurrence is delivered twice THEN THE SYSTEM SHALL produce the same
-  `occurrence_key`, and the harness SHALL classify the second delivery as a replay
-  (`automation_occurrence_duplicate`). A replay never creates a second `wi_`.
+  `occurrence_key = "occ_" + hex(sha256(domain_separated_length_prefixed(au_id, trigger_kind, canonical_occurrence_identity)))[:32]`.
+  **Definition version MUST NOT affect occurrence identity.** `canonical_occurrence_identity`
+  is: the scheduled occurrence's UTC instant for `at`/`schedule`; the trusted producer's
+  stable event ID (not a transport attempt/delivery retry ID) for `event`/`dependency`;
+  or a server-bound canonical manual-request ID resolved from the caller's `idempotency_key`
+  for `run`. The server snapshots the admitted definition version as **execution provenance**
+  after claiming the occurrence; it is never a deduplication component. Use an unambiguous
+  canonical encoding, not a naive delimiter-concatenated string.
+- The per-fire WorkItem uses `external_key = "automation:" + au_id + ":" + occurrence_key`;
+  its `Create` idempotency key is derived server-side from `occurrence_key`. Clients cannot
+  choose an occurrence key or a WorkItem identity. Two distinct/overlapping occurrence
+  identities create distinct `wi_` records; each `wi_` retains at most one open `we_`.
+- WHEN the same event, schedule fire or manual run is retried across a definition-version
+  change, a completed WorkItem, a process restart or a repeated producer delivery THE SYSTEM
+  SHALL resolve to **one durable occurrence claim** and the original `wi_` (or a
+  retention-aware tombstoned result), without a second execution, delivery or charge.
+  Expected redelivery is idempotent success (`replayed: true`), not a 409.
+  A reused key with conflicting canonical identity is a typed 409
+  (`automation_occurrence_conflict`); it never starts a new fire.
+- WHEN the `automation-api-store` slice is designed THE SYSTEM SHALL specify an atomic,
+  uniquely constrained durable occurrence-claim mapping
+  `(tenant, au_id, occurrence_key) -> wi_id, admitted_definition_version, state`
+  (or a provably equivalent immutable record). It must survive a WorkItem entering
+  terminal state and any normal WorkItem history cleanup; no reliance on open-only
+  `external_key` indexes or cascade-deleted WorkItem idempotency rows. Retain at least
+  while the definition can fire; preserve a minimal dedupe tombstone until the
+  source replay window is over and the `au_` can no longer be used. Define
+  crash-safe claim/WorkItem/ExecutionRequest recovery with no double side effect.
+  This is a **contract and next-slice acceptance gate**, not a DB migration here.
 
 ### Request, definition and patch schemas
 
@@ -91,9 +112,16 @@ The contract adds no second store, ledger, approval engine or authority engine.
 - WHEN a definition is updated, paused, resumed or deleted THE SYSTEM SHALL require
   `expected_version` (optimistic compare-and-set). A mismatch is `automation_version_conflict`
   (409).
-- WHEN a create request repeats an `idempotency_key` with an identical body THE SYSTEM SHALL return
-  the original definition with `replayed: true`. A repeat with a different body is
+- WHEN a create request repeats an `idempotency_key` with an identical canonical request
+  (excluding server-issued fields) THE SYSTEM SHALL return the original definition with
+  `replayed: true`. A repeat with a different canonical request is
   `automation_idempotency_key_reused` (409).
+- WHEN `run` (manual fire) is requested THE SYSTEM SHALL require a caller-supplied,
+  opaque request `idempotency_key` scoped to the authenticated principal, tenant and
+  `au_`. The server resolves it to a canonical manual occurrence ID. Retrying the
+  same manual request replays the same run; deliberately firing again requires a new
+  key. A changed request under the same key is 409. Manual `run` is **contracted
+  but not enabled** until separately authorized for MVP/production.
 - THE SYSTEM SHALL specify these operations as a closed set, each with typed request, response and
   error schemas: `create`, `get`, `list` (with cursor pagination, a `limit` of 1 to 100, and
   filters for `state` and `template` only), `update`, `pause`, `resume`, `delete`, `run` (manual
@@ -101,8 +129,12 @@ The contract adds no second store, ledger, approval engine or authority engine.
 
 ### Templates and triggers
 
-- THE SYSTEM SHALL accept only template ids on a server-side allowlist. Initially that is
-  `reminder.v1`, plus `support.diagnostic-followup.v1` under the Support constraints below.
+- THE SYSTEM SHALL specify a **schema registry** of `reminder.v1` and
+  `support.diagnostic-followup.v1` but a **separately gated enabled-template allowlist**.
+  In the initial MVP only `reminder.v1` with `at` is enabled; the Support
+  template is schema-valid **but not executable**, even with an `auth_ref`,
+  until a separately reviewed delegation/short-lived-token renewal and
+  owner-consent path is proven and activated.
 - The server SHALL map each allowlisted template to its capability, queue and workflow. IF a
   client names an unknown template, a workflow type, a namespace, a task queue, a signal or any
   raw Temporal control THEN the harness SHALL reject it with `automation_template_not_allowed` or
@@ -131,13 +163,17 @@ The contract adds no second store, ledger, approval engine or authority engine.
 - WHEN a request arrives from Claude or ChatGPT over OAuth, or from a Telegram AssistantInstall
   relay, THE SYSTEM SHALL specify that the owner principal is resolved server-side through the
   authenticated token or a live `SurfaceIdentityLink` (`surfaceid.Store.Resolve`).
-- IF the identity is unknown, unlinked, expired or revoked, or the surface or tenant does not match,
-  THEN the contract SHALL require refusal with `automation_identity_unlinked`, which answers 403 on
-  every refusal reason. The decision model SHALL never fall back to a default owner.
-- IF a request tries to change the owner, names a tenant the caller cannot access, or reads another
-  owner's definition in the same tenant THEN the contract SHALL require
-  `automation_not_found` (404). The answer SHALL be identical to the one for a definition that
-  does not exist, so it gives no existence oracle.
+- IF the **authenticated caller identity** is unknown, unlinked, expired or revoked THEN
+  the contract SHALL fail closed with `automation_identity_unlinked` (403) **before
+  resource lookup**, equally for every arbitrary `au_` ID; no default owner.
+- IF a caller is authenticated but a `get/update/pause/resume/delete/run/list_runs`
+  resource is absent, in another tenant, belongs to another principal or has
+  a mismatching owner/surface link THEN the contract SHALL return the **same
+  `automation_not_found` (404) body and timing class** as a nonexistent `au_`.
+  `list` excludes unauthorized definitions without exposing counts.
+  `create` with an unauthorized tenant or impersonation attempt MUST refuse
+  without revealing other users' resources. Explicit test cases SHALL prove
+  error precedence even if the target's tenant differs from the token tenant.
 - THE SYSTEM SHALL distinguish the creator (`created_by`) from any delegate actor. A delegate can
   only be selected through an existing delegation grant (`internal/delegation`). It is never
   asserted by a client.
@@ -158,8 +194,16 @@ The contract adds no second store, ledger, approval engine or authority engine.
   `automation_identity_unlinked`.
 - IF the policy version pinned at create differs from the live one THEN the contract SHALL require
   `automation_policy_drift`.
-- IF a per-run, per-day or per-tenant budget would be exceeded THEN the contract SHALL require
-  `automation_budget_exhausted`, using the existing commerce budget ledger.
+- IF a per-run, per-day or per-tenant automation **usage** budget would be exceeded
+  THEN the contract SHALL refuse with `automation_budget_exhausted`. The
+  authority MUST be mapped to an existing metered inference/usage or FinOps
+  mechanism **only after verifying** its units, billing period, principal/payer
+  scope, reservation idempotency and settlement semantics. The current
+  `internal/commerce/budget.go` payment ledger (monthly tenant/payer and
+  per-request limits) MUST NOT be presented as already enforcing daily LLM
+  spend. No compatible live budget authority = `automation_authority_unavailable`
+  and no fire; identify the adapter/source-of-truth in the contract and carry
+  any missing budget class as a blocking `automation-api-store` decision.
 - WHILE an automation exists THE SYSTEM SHALL never treat its schedule, its creation or its
   `auth_ref` as human approval.
 - IF an occurrence needs an action approval THEN it SHALL request a fresh `aar_` for that
@@ -168,17 +212,28 @@ The contract adds no second store, ledger, approval engine or authority engine.
 
 ### Support constraints
 
-- WHEN a definition uses `support.diagnostic-followup.v1` THE SYSTEM SHALL require all of the
-  following, and any violation is `automation_support_constraint`:
-  - the tenant owner's authorization;
-  - binding to exactly one tenant;
-  - the `support` agent scope (read-only);
-  - a TTL of at most 24 hours;
-  - at most 3 fires.
+- WHEN a definition uses `support.diagnostic-followup.v1` THE SYSTEM SHALL
+  define (but not yet enable) all of the following requirements; any violation
+  is `automation_support_constraint`:
+  - explicit, independently verified **live** tenant-owner authorization at
+    create, every fire and every read-only action;
+  - binding to exactly one tenant and the `support` agent scope (read-only);
+  - an automation-definition TTL of at most 24 hours and at most 3 fires;
+  - a **fresh per-fire support run token**, minted by an eligible human or a
+    separately owner-approved bounded-delegation mechanism, with the existing
+    token maximum TTL of **1 hour**. A 24-hour definition NEVER extends a
+    10-minute/default or 1-hour/max token into a standing 24-hour capability;
+  - when no live owner consent or authorized token-mint path exists, deny
+    `automation_authority_unavailable` / `automation_support_constraint`
+    and leave the template **disabled**, not a silent fallback to service
+    or agent self-minting. Existing delegation policy work (mctl-api#901)
+    is a separate, unapproved dependency and does not convey authority.
 - IF a Support definition names a delegated actor, an impersonated owner or any write capability
   THEN the contract SHALL require `automation_support_constraint`.
-- An `auth_ref` SHALL be validated as an opaque claim that requires independent live authorization
-  at every checkpoint. Its presence alone never authorizes anything.
+- An `auth_ref` SHALL be validated as an opaque claim that requires
+  independent live owner authorization at every checkpoint. Its presence
+  alone never authorizes anything and cannot extend token expiry. A
+  caller-supplied `delegated_actor` is never accepted.
 
 ### Transport, delivery and ingress
 
@@ -193,9 +248,12 @@ The contract adds no second store, ledger, approval engine or authority engine.
   re-fires an occurrence.
 - IF an `event` trigger names `check_run` or `workflow_run` THEN the harness SHALL reject it with
   `automation_trigger_unsupported`.
-- Event ingress SHALL be specified as a signed producer with tenant hydration on the server side,
-  using the existing HMAC-verified webhook outbox (`docs/github-events-producer.md`), with a
-  replay key per subscriber.
+- Event ingress SHALL be specified as a signed producer with tenant hydration
+  on the server side, using the existing HMAC-verified webhook outbox
+  (`docs/github-events-producer.md`). Define **stable producer event ID**
+  separately from transport attempt/delivery ID; use `(subscriber au_, source,
+  canonical_event_id)` for per-subscriber dedupe, with a replay-safe
+  acknowledgement of already processed events.
 
 ### Versioning and errors
 
@@ -233,22 +291,34 @@ The contract adds no second store, ledger, approval engine or authority engine.
 
 ## Open questions
 
-- **Durable occurrence dedupe after close.** The existing WorkItem `external_key` dedupe only
-  matches an *open* item (MCP tool description for `mctl_create_work_item`). A duplicate delivery
-  after the first fire's item has closed would therefore not be caught by `external_key` alone.
-
-  This proposal relies on `idempotency_key` replay instead, with the key derived from
-  `occurrence_key`. It records the retention of work-item idempotency keys as `assumed` and
-  carries it as a required decision for `automation-api-store`. That slice may need a small
-  occurrence-claim table.
+- **Durable occurrence claim: REQUIRED next-slice gate, not an assumption.**
+  WorkItem `external_key` dedupes only an open item, and create idempotency
+  rows reference WorkItems with `ON DELETE CASCADE`. Therefore neither can
+  supply permanent dedupe after terminal state/history cleanup. The next slice
+  MUST implement a uniquely constrained occurrence claim/tombstone with
+  transaction or fail-closed recovery across `au_`, `wi_`, `xr_` and
+  side-effect reservations, as specified above. Definition-version changes
+  MUST preserve the identity of an already observed event; independent
+  new manual requests remain distinct.
 - **Representation of the Telegram AssistantInstall.** No `AssistantInstall` type exists in this
   repository. Only `surfaceid.SurfaceTelegram` links do. The contract treats install revision as
   an opaque, server-resolved `install_ref` and marks it `unknown` until mctl-telegram defines it.
 - **Claude and ChatGPT as surfaces.** `surfaceid.IsSurface` only knows `telegram` and `portal`.
   This proposal treats Claude and ChatGPT callers as direct OAuth principals with
   `origin_client_id`. Neither gets a `SurfaceIdentityLink`. The reviewer should confirm this.
-- **Budget owner.** Whether per-day and per-tenant automation budgets reuse commerce `budgets`
-  rows or need a new budget class is marked `assumed: commerce ledger` pending owner decision.
+- **Usage budget owner: BLOCKING decision.** The commerce budget rows
+  represent simulated payment liability (monthly tenant/payer, per-request
+  max), not daily inference costs. Find the authoritative metered
+  inference/FinOps usage path and prove compatible per-run/day/tenant
+  reservations, releases and settlement before enabling any paid automation.
+  Do not invent a second ledger in this contract slice.
+- **Support renewal: BLOCKING dependency.** `support` tokens are capped
+  at one hour; a 24-hour follow-up requires freshly issued tokens and live
+  consent. Without an independently reviewed owner-delegation and
+  authorized mint path, Support automation remains disabled.
+- **Manual-run caller key: schema-only.** Specify
+  `run.idempotency_key` and actor/tenant scoping, but do not enable manual
+  execution in this contract slice.
 - **Spike sources.** The spike schemas in mctlhq/.github could not be fetched in this read-only
   run. The crosswalk to `v0` is described by intent, and the implementer must diff against
   `docs/spikes/automation-control-plane/schemas` when writing the migration note.
