@@ -156,6 +156,9 @@
   independent of arbitrary target ID; authenticated cross-tenant,
   cross-owner and nonexistent ID reads have the same 404 response
   shape with no existence oracle; list counts exclude hidden objects.
+  Create idempotency replay is principal/tenant-bound: another caller
+  cannot retrieve the first caller's definition using an identical
+  `idempotency_key` and body.
 - [ ] T21. `SupportFreshTokenAndOwnerConsent`: a 24h definition
   cannot reuse an expired 1h token; only an eligible, independently
   authorized future mint path can issue a fresh per-fire token. With
