@@ -24,9 +24,11 @@
     and every `unknown` or `assumed` future integration is a follow-up
     gate, not an assertion of current enforcement.
 - [ ] 2. (depends on 1) Add the JSON Schemas under `internal/automation/contract/schema/v1/`:
-  create-request, patch, definition, trigger, policies, `template-reminder.v1`,
-  `template-support-followup.v1`, run (including manual-fire
-  `idempotency_key` request contract) and error.
+  create-request, **manual-run-request** (with required caller-scoped
+  `idempotency_key`), patch, definition, trigger, policies,
+  `template-reminder.v1`, `template-support-followup.v1`, read-only
+  run view and error. The manual request schema must not accept
+  server-issued `occurrence_key`, `wi_`, `we_` or actor fields.
   - DoD: each uses draft 2020-12, has a `$id` under `https://mctl.ai/schemas/automation/v1/`, and
     sets `additionalProperties: false`.
   - DoD: create and patch contain no server-owned property.
