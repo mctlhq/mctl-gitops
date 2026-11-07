@@ -360,7 +360,7 @@ spec:
         # window is dropped (gitops#2164). Hold the pod until the proxy
         # accepts a TCP connect, at most ~90s.
         - name: wait-egress-proxy
-          image: alpine:3.19
+          image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
           command: [sh, -c]
           args:
             - |
@@ -382,7 +382,7 @@ spec:
             requests: {cpu: 10m, memory: 8Mi}
             limits: {cpu: 50m, memory: 16Mi}
         - name: clone-gitops
-          image: alpine/git:2.43.0
+          image: alpine/git:2.43.0@sha256:76fdb7210689fc26c6ff101c4adacf9d12d3d25a919a7d8ff42ebaef5bedba65 # alpine/git:2.43.0
           env:
             - name: HTTPS_PROXY
               value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
@@ -968,7 +968,7 @@ spec:
         # window is dropped (gitops#2164). Hold the pod until the proxy
         # accepts a TCP connect, at most ~90s.
         - name: wait-egress-proxy
-          image: alpine:3.19
+          image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
           command: [sh, -c]
           args:
             - |
@@ -990,7 +990,7 @@ spec:
             requests: {cpu: 10m, memory: 8Mi}
             limits: {cpu: 50m, memory: 16Mi}
         - name: clone-gitops
-          image: alpine/git:2.43.0
+          image: alpine/git:2.43.0@sha256:76fdb7210689fc26c6ff101c4adacf9d12d3d25a919a7d8ff42ebaef5bedba65 # alpine/git:2.43.0
           env:
             - name: HTTPS_PROXY
               value: "http://agent-egress-proxy.mctl-agents-egress.svc.cluster.local:3128"
@@ -1087,7 +1087,7 @@ spec:
           factor: "2"
           maxDuration: "5m"
       script:
-        image: alpine/git:2.43.0
+        image: alpine/git:2.43.0@sha256:76fdb7210689fc26c6ff101c4adacf9d12d3d25a919a7d8ff42ebaef5bedba65 # alpine/git:2.43.0
         command: [sh]
         env:
           - name: HTTPS_PROXY
@@ -1286,7 +1286,7 @@ spec:
           - name: primary
           - name: fallback
       script:
-        image: alpine:3.19
+        image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
         command: [sh]
         env:
           - name: PARAM_PRIMARY
@@ -1314,7 +1314,7 @@ spec:
         # window is dropped (gitops#2164). Hold the pod until the proxy
         # accepts a TCP connect, at most ~90s.
         - name: wait-egress-proxy
-          image: alpine:3.19
+          image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
           command: [sh, -c]
           args:
             - |
@@ -1353,7 +1353,7 @@ spec:
             s3:
               key: "{{workflow.name}}/onexit-activity.tgz"
       script:
-        image: alpine:3.19
+        image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
         command: [sh]
         env:
           - name: HTTPS_PROXY

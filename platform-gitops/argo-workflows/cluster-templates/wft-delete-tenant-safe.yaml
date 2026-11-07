@@ -145,7 +145,7 @@ spec:
           factor: "1"
           maxDuration: "15m"
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: TENANT
@@ -184,7 +184,7 @@ spec:
     - name: customer-account-guard
       activeDeadlineSeconds: 30
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: TENANT
@@ -226,7 +226,7 @@ spec:
           factor: "1"
           maxDuration: "15m"
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: TENANT
@@ -254,7 +254,7 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: PARAM_TENANT_NAME
@@ -389,7 +389,7 @@ spec:
             secretName: mctl-gitops-deploy-key
             defaultMode: 0600
       script:
-        image: alpine:3.19
+        image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
         command: [sh]
         envFrom:
           - configMapRef:
@@ -525,7 +525,7 @@ spec:
             secretName: mctl-gitops-deploy-key
             defaultMode: 0600
       script:
-        image: alpine:3.19
+        image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
         command: [sh]
         envFrom:
           - configMapRef:
@@ -822,7 +822,7 @@ spec:
             secretName: mctl-gitops-deploy-key
             defaultMode: 0600
       script:
-        image: alpine:3.19
+        image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
         command: [sh]
         envFrom:
           - configMapRef:
@@ -977,7 +977,7 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: PARAM_TENANT_NAME

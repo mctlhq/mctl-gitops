@@ -263,7 +263,7 @@ spec:
             default: ""
             # non-empty: preview-deploy will build, so the check is --build
       script:
-        image: alpine/git:2.43.0
+        image: alpine/git:2.43.0@sha256:76fdb7210689fc26c6ff101c4adacf9d12d3d25a919a7d8ff42ebaef5bedba65 # alpine/git:2.43.0
         command: [sh]
         envFrom:
           - configMapRef:
