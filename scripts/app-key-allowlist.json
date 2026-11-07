@@ -71,6 +71,9 @@
       ]
     },
     "mctl-gitops": {
+      ".github/workflows/app-key-ratchet.yml": [
+        "AGENTS_APP_PRIVATE_KEY"
+      ],
       ".github/workflows/build-image.yaml": [
         "APP_PRIVATE_KEY"
       ],

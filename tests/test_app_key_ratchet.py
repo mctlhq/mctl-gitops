@@ -54,8 +54,7 @@ class World:
 
     def __call__(self, path, token):
         # The real client follows absolute "next" links from the Link header.
-        if path.startswith("https://api.github.com"):
-            path = path[len("https://api.github.com"):]
+        path = path.removeprefix("https://api.github.com")
         if self.fail and self.fail in path:
             raise R.ReadError(f"{path}: injected failure")
         if path.startswith("/orgs/"):
@@ -107,6 +106,15 @@ check("MUTATION `secrets: inherit` -> findings", code == 10 and "inherit" in f[0
 w = World(files={"alpha": {".github/workflows/rp.yml": WF_OK, ".github/workflows/b.yml": "x: ${{ secrets['AGENTS_APP_PRIVATE_KEY'] }}\n"}, "beta": {}})
 code, f, *_ = run(w)
 check("MUTATION bracket-form reference -> findings", code == 10 and "b.yml" in f[0], f"{code} {f}")
+
+w = World(files={"alpha": {".github/workflows/rp.yml": WF_OK, ".github/workflows/l.yml": "x: ${{ secrets.agents_app_private_key }}\ny: ${{ secrets['App_Private_Key'] }}\n"}, "beta": {}})
+code, f, *_ = run(w)
+check("MUTATION lower/mixed-case reference -> findings", code == 10 and len(f) == 2, f"{code} {f}")
+
+for variant in ("secrets: inherit  # why", 'secrets: "inherit"', "secrets: 'inherit'"):
+    w = World(files={"alpha": {".github/workflows/rp.yml": WF_OK, ".github/workflows/c.yml": "jobs:\n  a:\n    " + variant + "\n"}, "beta": {}})
+    code, f, *_ = run(w)
+    check(f"MUTATION inherit variant {variant!r} -> findings", code == 10 and "inherit" in f[0], f"{code} {f}")
 
 # 3. Unreadable is unknown, never clean.
 code, f, u, *_ = run(World(truncated=True))

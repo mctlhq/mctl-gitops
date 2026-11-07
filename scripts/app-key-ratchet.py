@@ -77,13 +77,14 @@ def fetch_list(path, token, fetcher=fetch):
 
 
 REF = re.compile(
-    r"""secrets\s*(?:\.\s*|\[\s*['"])(AGENTS_APP_PRIVATE_KEY|APP_PRIVATE_KEY)\b""")
-INHERIT = re.compile(r"^\s*secrets:\s*inherit\s*$", re.M)
+    r"""secrets\s*(?:\.\s*|\[\s*['"])(AGENTS_APP_PRIVATE_KEY|APP_PRIVATE_KEY)\b""",
+    re.I)  # context property names are case-insensitive in Actions
+INHERIT = re.compile(r"""^\s*secrets:\s*['"]?inherit['"]?\s*(?:#.*)?$""", re.M)
 
 
 def refs_in(text):
     """(key names referenced, uses `secrets: inherit`)."""
-    return set(REF.findall(text)), bool(INHERIT.search(text))
+    return {k.upper() for k in REF.findall(text)}, bool(INHERIT.search(text))
 
 
 def scan(token, allowlist, fetcher=fetch):
