@@ -68,8 +68,9 @@ The contract adds no second store, ledger, approval engine or authority engine.
 - WHEN a trigger fires THE SYSTEM SHALL derive
   `occurrence_key = "occ_" + hex(sha256(domain_separated_length_prefixed(au_id, trigger_kind, canonical_occurrence_identity)))[:32]`.
   **Definition version MUST NOT affect occurrence identity.** `canonical_occurrence_identity`
-  is: the scheduled occurrence's UTC instant for `at`/`schedule`; the trusted producer's
-  stable event ID (not a transport attempt/delivery retry ID) for `event`/`dependency`;
+  is: the scheduled occurrence's UTC instant for `at`/`schedule`; the
+  **(authenticated producer identity, canonical event type, stable source event ID)**
+  tuple (not a transport attempt/delivery retry ID) for `event`/`dependency`;
   or a server-bound canonical manual-request ID resolved from the caller's `idempotency_key`
   for `run`. The server snapshots the admitted definition version as **execution provenance**
   after claiming the occurrence; it is never a deduplication component. Use an unambiguous
