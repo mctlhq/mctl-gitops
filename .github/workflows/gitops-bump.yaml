@@ -293,7 +293,8 @@ jobs:
                       r'\n\s+repository:\s*' + re.escape(repo) +
                       r'\n\s+tag:)[^\n]+'
                   )
-                  out, n3 = p_split.subn(lambda m: m.group(1) + ' ' + new_tag, out)
+                  # Quoted like pattern 1: a tag such as 1042 must stay a string.
+                  out, n3 = p_split.subn(lambda m: m.group(1) + ' "' + new_tag + '"', out)
 
               # Pattern 3: inline image: <image>:<tag>  (CWFT style, quoted or unquoted)
               p3 = re.compile(r'(image:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')

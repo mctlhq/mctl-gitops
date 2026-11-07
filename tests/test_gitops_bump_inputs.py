@@ -25,6 +25,7 @@ OTHER = "platform-gitops/services/labs/app/values.yaml"
 WORKER = "platform-gitops/services/admins/mctl-agents-worker/values.yaml"
 CWFT = "platform-gitops/argo-workflows/cluster-templates/cwft-x.yaml"
 TEMPLATE = "platform-gitops/bootstrap/templates/mctl-platform/mctl-x.yaml"
+SPLIT = "platform-gitops/services/labs/split/values.yaml"
 OTHER_IMAGE = "ghcr.io/mctlhq/app"
 VALUES = f'replicaCount: 1\nimage:\n  repository: {OTHER_IMAGE}\n  tag: "1.0.0"\nenv:\n  A: b\n'
 failures = []
@@ -41,6 +42,7 @@ def fixture(tmp):
         (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp / rel).write_text(text)
     w(OTHER, VALUES)
+    w(SPLIT, "image:\n  registry: ghcr.io\n  repository: mctlhq/app\n  tag: 1.0.0\n")
     w(CWFT, f"      - name: agent_image\n        value: {OTHER_IMAGE}:1.0.0\n      - image: {OTHER_IMAGE}:1.0.0\n")
     w(TEMPLATE, "{{- if .Values.x }}\n" + f"image: {OTHER_IMAGE}:1.0.0\n" + "{{- end }}\n")
     (tmp / "scripts").mkdir()
@@ -178,6 +180,14 @@ rc, changed, contents, out = bump(path="", glob="platform-gitops/argo-workflows/
 check("a CWFT glob bumps both forms", rc == 0 and contents[CWFT].count(":1.2.3") == 2, out)
 rc, changed, contents, out = bump(path=TEMPLATE)
 check("a Helm template that is not YAML bumps", rc == 0 and f"{OTHER_IMAGE}:1.2.3" in contents[TEMPLATE], out)
+for tag in ("1042", "1234567", "1e5", "1.0", "1.10", "2.0.0"):
+    rc, changed, contents, out = bump(path=SPLIT, tag=tag)
+    parsed = yaml.safe_load(contents.get(SPLIT, "{}")) or {}
+    check(f"a split-style file takes tag {tag} as a string",
+          rc == 0 and parsed.get("image", {}).get("tag") == tag, (rc, out))
+    rc, changed, contents, out = bump(tag=tag)
+    check(f"a values file takes tag {tag} as a string",
+          rc == 0 and yaml.safe_load(contents[OTHER])["image"]["tag"] == tag, (rc, out))
 for good in ("1.35.0", "1.35.0-rc.1", "main-4ccb257", "0.1.0-r2", "staging-110", "v1.2.3", "a" * 128):
     check(f"an ordinary tag ({good[:20]}) is accepted", bump(tag=good)[0] == 0 and validate(image_tag=good) == 0)
 check("validate accepts a glob alone", validate(values_path="", values_glob="platform-gitops/argo-workflows/cluster-templates/cwft-*.yaml") == 0)
