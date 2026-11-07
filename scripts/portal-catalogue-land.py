@@ -58,14 +58,13 @@ ALLOWLISTS = "infrastructure/cloudflare/portal/allowlists"
 # What `gh pr list --json author` returns for a PR opened by an App, read from
 # a real bump PR. REST calls the same account <slug>[bot].
 #
-# Two Apps, on purpose, until mctlhq/mctl-gitops#1033 finishes. Allowlist bump
-# PRs are opened by portal-allowlist-vendor.yml, which now mints from the narrow
-# mctl-gitops-pr App; PRs and branches opened before that merged, and the
-# catalogue branches this script writes while cloudflare-drift still mints from
-# mctl-agents, carry the old identity. Dropping the old one early would read
-# every such PR as "one the bot did not open" and stop the automation; adding
-# the new one widens nothing, since mctl-agents is already trusted here.
-# Remove the mctl-agents entries when cloudflare-drift moves off that App.
+# Two Apps, on purpose. Allowlist bump PRs (portal-allowlist-vendor.yml) and
+# catalogue PRs (the land job in cloudflare-drift.yml) are opened by the narrow
+# mctl-gitops-pr App; the drift read mints from mctl-org-read. The mctl-agents
+# entries stay only for PRs and catalogue branches opened before
+# mctlhq/mctl-gitops#1033 landed, which carry the old identity. Dropping them
+# early would read every such PR as "one the bot did not open" and stop the
+# automation; keeping them widens nothing, since mctl-agents is already trusted.
 BOT_AUTHORS = frozenset({"app/mctl-gitops-pr", "app/mctl-agents"})
 BOT_COMMIT_AUTHORS = frozenset({"mctl-gitops-pr[bot]", "mctl-agents[bot]"})
 PR_LIMIT = 500

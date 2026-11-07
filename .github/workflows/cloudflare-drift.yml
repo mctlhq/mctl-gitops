@@ -93,6 +93,10 @@ jobs:
     needs: discover
     if: needs.discover.outputs.count != '0'
     runs-on: ubuntu-latest
+    # Only the portal leg on main reads the private upstream, so only it names
+    # the main-only environment that holds the mctl-org-read key (#1033). Every
+    # other leg, and every non-main run, names no environment (empty string).
+    environment: ${{ matrix.root == 'infrastructure/cloudflare/portal' && github.ref == 'refs/heads/main' && 'app-org-read' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -440,11 +444,11 @@ jobs:
       # GITHUB_TOKEN would not do, being scoped to this repository.
       - name: Generate a read token for the private upstreams
         id: allowlist_token
-        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled()
+        if: matrix.root == 'infrastructure/cloudflare/portal' && steps.plan.conclusion == 'success' && !cancelled() && github.ref == 'refs/heads/main'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.ORG_READ_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ORG_READ_APP_PRIVATE_KEY }}
           owner: mctlhq
           # The one private upstream in PRIVATE_OWNERS, named rather than
           # left open. Without `repositories:` the token carries contents
@@ -616,28 +620,33 @@ jobs:
           exit "$code"
 
       # Exit 5 only: the portal is fine and catalogue.json lags it. The job
-      # stays red. These steps propose the update in a PR when it cannot widen
-      # exposure (#2416), and merging and cloudflare-apply stay with people.
-      # On main only: a dispatch from a branch runs that branch's script, which
-      # must not get a token that can write here.
-      - name: Generate a write token for the catalogue PR
-        id: land_token
-        if: failure() && matrix.root == 'infrastructure/cloudflare/portal' && steps.catalogue.outputs.code == '5' && github.ref == 'refs/heads/main'
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
-          owner: mctlhq
-          repositories: mctl-gitops
-          permission-contents: write
-          permission-pull-requests: write
-
-      - name: Propose the catalogue update when it cannot widen exposure
-        id: land
-        if: failure() && steps.land_token.outcome == 'success'
+      # stays red. The `land` job below proposes the update in a PR when it
+      # cannot widen exposure (#2416); merging and cloudflare-apply stay with
+      # people. The write token lives in that job's own environment, so this
+      # step only hands over what the catalogue check found. It runs for every
+      # main run of the portal leg, even a clean one, so that a missing
+      # artifact downstream means "could not observe", never "nothing to land".
+      - name: Stage the catalogue result for the land job
+        id: stage
+        if: always() && !cancelled() && matrix.root == 'infrastructure/cloudflare/portal' && github.ref == 'refs/heads/main'
         env:
-          GH_TOKEN: ${{ steps.land_token.outputs.token }}
-        run: '"$GITHUB_WORKSPACE/scripts/portal-catalogue-land.py" --lag "$RUNNER_TEMP/catalogue-lag.json"'
+          CATALOGUE_CODE: ${{ steps.catalogue.outputs.code }}
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/landing"
+          printf '%s\n' "${CATALOGUE_CODE:-none}" > "$RUNNER_TEMP/landing/code"
+          if [ "${CATALOGUE_CODE:-}" = 5 ]; then
+            cp "$RUNNER_TEMP/catalogue-lag.json" "$RUNNER_TEMP/landing/catalogue-lag.json"
+          fi
+
+      - name: Upload the catalogue result
+        if: always() && !cancelled() && steps.stage.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: catalogue-landing
+          path: ${{ runner.temp }}/landing
+          if-no-files-found: error
+          retention-days: 1
 
       # A red portal root is often waiting on one person: a bump PR whose
       # widening needs a decision in baseline.json (#2353 sat for days behind an
@@ -699,8 +708,104 @@ jobs:
              && format('<b>Your decision may be what this waits on.</b> Open allowlist bump PR: {0}. Do you accept what it enables on the portal? If yes, record that in baseline.json in the PR, merge it and run cloudflare-apply.', steps.bump_prs.outputs.links) || '' }}
             ${{ steps.bump_prs.outputs.state == 'unknown'
              && 'Could not list open allowlist bump PRs, so one may be waiting on a decision.' || '' }}
-            ${{ steps.land.outputs.summary && format('<b>Catalogue:</b> {0}', steps.land.outputs.summary) || '' }}
-            ${{ steps.catalogue.outputs.code == '5' && !steps.land.outputs.summary
-             && 'The catalogue update was not proposed automatically, so catalogue.json needs a PR by hand.' || '' }}
+            ${{ steps.catalogue.outputs.code == '5' && github.ref == 'refs/heads/main'
+             && 'A follow-up job (land) tries to propose the catalogue update in a PR and posts its own message with the outcome. If that message does not arrive, catalogue.json needs a PR by hand.' || '' }}
+            ${{ steps.catalogue.outputs.code == '5' && github.ref != 'refs/heads/main'
+             && 'Not a main run, so no catalogue update is proposed; catalogue.json needs a PR by hand.' || '' }}
             Cloudflare no longer matches Git, or a check could not run.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  # Proposes the catalogue.json update that the portal leg found lagging (exit
+  # 5). Its own job because the write token's key lives in the main-only
+  # app-gitops-pr environment and a job can name only one environment. Runs on
+  # main only: a dispatch from a branch runs that branch's script, which must
+  # not get a token that can write here.
+  land:
+    name: land catalogue update
+    needs: drift
+    if: ${{ always() && github.ref == 'refs/heads/main' && needs.drift.result == 'failure' }}
+    runs-on: ubuntu-latest
+    environment: app-gitops-pr
+    # Its own group, not cloudflare-tofu-<root>: two overlapping portal runs
+    # must not both land a catalogue PR, and queueing (no cancel) keeps the
+    # later one from being dropped.
+    concurrency:
+      group: cloudflare-drift-land
+      cancel-in-progress: false
+    # pull-requests: read (workflow level) is deliberately not repeated: this
+    # job never lists PRs with GITHUB_TOKEN. Checkout and the artifact download
+    # need contents only; PR writes use the mctl-gitops-pr App token below.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Download the catalogue result
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: catalogue-landing
+          path: ${{ runner.temp }}/landing
+
+      # "Could not observe" is never "observed absent": a failed download, a
+      # missing or odd code, or code 5 without its lag file is `unobserved`
+      # and fails this job. Only an explicit code other than 5 is `skip`.
+      - name: Decide what to land
+        id: decide
+        env:
+          DOWNLOAD: ${{ steps.download.outcome }}
+        run: |
+          set -u
+          dir="$RUNNER_TEMP/landing"
+          state=unobserved
+          if [ "$DOWNLOAD" = success ] && [ -s "$dir/code" ]; then
+            code=$(tr -d '[:space:]' < "$dir/code")
+            case "$code" in
+              5) if [ -s "$dir/catalogue-lag.json" ]; then state=land; fi ;;
+              none|[0-9]|[0-9][0-9]) state=skip ;;
+            esac
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "decision: $state"
+          if [ "$state" = unobserved ]; then
+            echo "::error::could not read the portal leg's catalogue result, so whether catalogue.json lags is unknown"
+            exit 1
+          fi
+
+      - name: Generate a write token for the catalogue PR
+        id: land_token
+        if: steps.decide.outputs.state == 'land'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.GITOPS_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_PR_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          repositories: mctl-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Propose the catalogue update when it cannot widen exposure
+        id: land
+        if: steps.land_token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.land_token.outputs.token }}
+        run: '"$GITHUB_WORKSPACE/scripts/portal-catalogue-land.py" --lag "$RUNNER_TEMP/landing/catalogue-lag.json"'
+
+      - name: Notify Telegram
+        if: always() && !cancelled() && steps.decide.outputs.state != 'skip'
+        uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: html
+          message: |
+            <b>Cloudflare drift</b> — <code>portal</code> catalogue update
+            ${{ steps.land.outcome == 'success' && steps.land.outputs.summary && format('<b>Catalogue:</b> {0}', steps.land.outputs.summary) || '' }}
+            ${{ steps.land.outcome == 'success' && !steps.land.outputs.summary
+             && 'The land step ran but reported no outcome, so whether a PR was opened is unknown; catalogue.json may need a PR by hand.' || '' }}
+            ${{ steps.decide.outputs.state != 'land'
+             && 'Could not observe whether catalogue.json lags the portal (the portal leg result was not available to the follow-up job). Nothing was proposed; check the drift run.' || '' }}
+            ${{ steps.decide.outputs.state == 'land' && steps.land.outcome != 'success'
+             && 'The catalogue update could not be proposed (token or land step failed), so catalogue.json needs a PR by hand.' || '' }}
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
