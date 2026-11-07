@@ -163,3 +163,21 @@ done
   workflow (issue option 1), explicitly noting `release-drift.yml`'s
   no-`repositories:`, multi-permission, cross-repo-read shape as a
   requirement the design must support.
+
+## Ratchet (report-only, #1033)
+
+`.github/workflows/app-key-ratchet.yml` runs daily. It reads the git tree of
+every non-archived org repository and lists each workflow file that references
+`AGENTS_APP_PRIVATE_KEY` or `APP_PRIVATE_KEY`, or uses `secrets: inherit`,
+against `scripts/app-key-allowlist.json`.
+
+- A reference outside the allowlist is a **warning** for now (report-only).
+- A read that fails, truncates or returns a malformed body fails the run: an
+  unobserved repository is unknown, never clean. So does an allowlisted
+  repository the token cannot see.
+- Adding a consumer means adding it to the allowlist in the same PR; removing
+  one leaves a "stale entry" line in the report.
+- Run locally (read-only): `GH_TOKEN=$(gh auth token) python3 -I scripts/app-key-ratchet.py`.
+  Exit 0 clean, 10 findings, 20 unknown. Enforcing mode is a later stage.
+- Not covered yet: org secret visibility and App installation permissions
+  (the reader token may lack the permission; see the containment plan).

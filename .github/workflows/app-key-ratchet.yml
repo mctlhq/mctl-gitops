@@ -1,0 +1,79 @@
+name: app-key-ratchet
+
+# Once a day, list every workflow file in the org that references the GitHub
+# App signing keys and compare with scripts/app-key-allowlist.json (#1033).
+# It walks git trees, not code search (search found 12 of 18 consumers).
+#
+# REPORT-ONLY: a reference outside the allowlist is a warning, not a failure.
+# A read that fails, truncates or comes back malformed IS a failure: an
+# unobserved repository is not a clean one. Enforcing mode (findings fail the
+# run) is a later stage and needs its own review.
+#
+# The self-test runs on every change to the script, so the detector is proven
+# red on deliberate mutations as well as green on the converged input.
+
+on:
+  schedule:
+    - cron: "47 7 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/app-key-ratchet.py
+      - scripts/app-key-allowlist.json
+      - tests/test_app_key_ratchet.py
+      - .github/workflows/app-key-ratchet.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-key-ratchet-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Self-test the detector
+        run: python3 -I tests/test_app_key_ratchet.py
+
+  scan:
+    if: github.event_name != 'pull_request'
+    needs: selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Read-only across every repository the mctl-agents App is installed on.
+      - name: Generate read token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          owner: mctlhq
+          permission-contents: read
+          permission-metadata: read
+
+      - name: Scan workflow references
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set +e
+          python3 -I scripts/app-key-ratchet.py | tee report.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "### app-key ratchet (report-only)"
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$code" in
+            0) echo "clean" ;;
+            10) echo "::warning::App key references outside the allowlist (report-only, not failing)" ;;
+            *) echo "::error::a read failed or the token could not see an expected repository: result is unknown"; exit 1 ;;
+          esac
