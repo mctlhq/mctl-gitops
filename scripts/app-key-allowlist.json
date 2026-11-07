@@ -77,9 +77,6 @@
       ".github/workflows/build-image.yaml": [
         "APP_PRIVATE_KEY"
       ],
-      ".github/workflows/cloudflare-drift.yml": [
-        "AGENTS_APP_PRIVATE_KEY"
-      ],
       ".github/workflows/release-deploy.yaml": [
         "APP_PRIVATE_KEY"
       ]
