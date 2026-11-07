@@ -13,8 +13,9 @@ name: OpenTofu State Backup
 #   mctl-terraform-state   R2_ACCESS_KEY_ID          (k3s-preview)
 #   mctl-cloudflare-state  R2_CF_STATE_ACCESS_KEY_ID (Cloudflare roots)
 #
-# Each credential is scoped to its own bucket, so neither leg can read or
-# damage the other's state. That split exists because R2 tokens scope to a
+# Both are environment secrets of `state-backup` (main only), never repository
+# secrets (#1118). Each credential is scoped to its own bucket, so neither
+# leg can read or damage the other's state. That split exists because R2 tokens scope to a
 # bucket rather than a prefix, and the k3s state contains an OpenSSH private
 # key and kubeconfig credentials that Cloudflare CI must not be able to read.
 #

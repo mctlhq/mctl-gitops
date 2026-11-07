@@ -66,8 +66,9 @@ jobs:
     runs-on: ubuntu-latest
 
     # Environment k3s-plan: deployment branch policy `main` only, NO reviewer.
-    # It exists to hold the etcd snapshot credential outside repository
-    # secrets (#1118): a repository secret is readable by any workflow a
+    # It exists to hold credentials outside repository secrets (#1118): the
+    # etcd snapshot credential, and since 2026-11-07 HCLOUD_TOKEN and the R2
+    # state pair too. A repository secret is readable by any workflow a
     # branch adds, an environment secret only by a job on an allowed branch.
     # Plans need that credential because it is part of local.k3s-config; a
     # plan without it proposes rewriting the control-plane k3s config.
