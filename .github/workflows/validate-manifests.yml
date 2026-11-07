@@ -546,6 +546,9 @@ jobs:
         # of them forever.
         run: python3 tests/test_release_deploy_bump.py
 
+      - name: Pre-pull PreSync verifier
+        run: python3 tests/test_prepull_verify.py
+
       - name: Release gate (selftest, tree, mutation tests)
         # mctlhq/mctl-agents#1007: the worker group may not be bumped
         # partially, below its image floor, or without Recreate on the control

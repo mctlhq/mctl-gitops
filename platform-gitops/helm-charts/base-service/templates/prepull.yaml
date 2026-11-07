@@ -1,0 +1,124 @@
+{{- /*
+Pre-pull for a Recreate rollout (mctlhq/mctl-agents#1007). The DaemonSet holds
+prepull.ref on every node the service can land on, and a running pod also keeps
+the image from garbage collection. The PreSync Job refuses a sync that changes
+the image to anything the DaemonSet has not proven (files/prepull-verify.sh).
+
+Rollout is two commits: set prepull.ref and let it become Ready, then move
+image.tag and image.digest to the same reference. Deployment and DaemonSet must
+use the same digest reference: an image pulled by digest only is NOT a cache hit
+for a tag reference (measured in kind with the registry stopped).
+
+The DaemonSet has its own labels, because the Deployment and Service selectors
+would otherwise capture its pods. The verifier's ServiceAccount and Role come
+from the tenant chart (tenant.prepullVerifier): the `apps` project does not
+allow RBAC objects. Without them the Job fails, which is a STOP.
+*/ -}}
+{{- if .Values.prepull.enabled }}
+{{- $ref := required "prepull.ref is required when prepull.enabled" .Values.prepull.ref }}
+{{- if not (regexMatch "^[^@ ]+:[^@: ]+@sha256:[0-9a-f]{64}$" $ref) }}
+{{- fail "prepull.ref must be repository:tag@sha256:<64 hex>" }}
+{{- end }}
+{{- $name := printf "%s-prepull" (include "base-service.fullname" .) }}
+{{- $podLabels := dict "app.kubernetes.io/name" "base-service-prepull" "app.kubernetes.io/instance" .Release.Name }}
+{{- $security := dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) }}
+{{- $podSecurity := dict "runAsNonRoot" true "runAsUser" 65534 "runAsGroup" 65534 "seccompProfile" (dict "type" "RuntimeDefault") }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "base-service.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml $podLabels | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 100%
+  template:
+    metadata:
+      labels:
+        {{- toYaml $podLabels | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 0
+      securityContext:
+        {{- toYaml $podSecurity | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: hold
+          image: {{ $ref | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["sleep", "infinity"]
+          securityContext:
+            {{- toYaml $security | nindent 12 }}
+          resources:
+            {{- toYaml .Values.prepull.resources | nindent 12 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-verify
+  labels:
+    {{- include "base-service.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.prepull.verifyDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: base-service-prepull-verify
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.prepull.verifierServiceAccount }}
+      securityContext:
+        {{- toYaml $podSecurity | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: verify
+          image: {{ required "prepull.verifierImage is required when prepull.enabled" .Values.prepull.verifierImage | quote }}
+          command: ["sh", "-c", {{ .Files.Get "files/prepull-verify.sh" | quote }}]
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DEPLOYMENT
+              value: {{ include "base-service.fullname" . | quote }}
+            - name: CONTAINER
+              value: {{ .Chart.Name | quote }}
+            - name: DAEMONSET
+              value: {{ $name | quote }}
+            - name: POD_SELECTOR
+              value: "app.kubernetes.io/name=base-service-prepull,app.kubernetes.io/instance={{ .Release.Name }}"
+            - name: TARGET_REF
+              value: {{ include "base-service.imageRef" . | quote }}
+          securityContext:
+            {{- toYaml $security | nindent 12 }}
+          resources:
+            {{- toYaml .Values.prepull.resources | nindent 12 }}
+{{- end }}

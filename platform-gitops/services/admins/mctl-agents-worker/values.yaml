@@ -22,11 +22,37 @@
 # argo-workflows/cluster-templates/ — it does not touch this file, so the
 # worker silently stays behind until someone edits it here.
 replicaCount: 1
+
+# Recreate, not the API server's default RollingUpdate. This control worker
+# is the only process that runs the DevLoop workflows, and the M1 workflow
+# change writes a replay-incompatible patch marker (`deferred-resume-contract`)
+# that an older worker cannot replay (TMPRL1100). At replicas: 1 the default
+# is maxSurge: 1 / maxUnavailable: 0, so old and new pods would poll
+# mctl-dev-loop at the same time during every release and a marker-bearing
+# task could land on the old pod. Recreate removes that overlap; the price is
+# a short polling gap, during which workflow tasks wait on the server and
+# nothing fails (mctlhq/mctl-agents#1007, B4).
+strategy:
+  type: Recreate
+  # Explicit null removes the Deployment's default RollingUpdate settings
+  # when ArgoCD applies this with server-side apply.
+  rollingUpdate: null
 image:
   repository: ghcr.io/mctlhq/mctl-agents
   tag: "1.117.0"
 imagePullSecrets:
   - name: ghcr-credentials
+# Pulled on every eligible node before Recreate stops the old pod: a kubelet
+# pull of this size took up to 6 minutes in this cluster over 30 days, and under
+# Recreate that time would be outage. A deploy is two reviewed commits: set
+# prepull.ref, wait until the DaemonSet is Ready, then set image.tag and
+# image.digest to the same reference. The PreSync Job fails the sync, and leaves
+# the old pod running, if the target digest is not on every node. release-gate
+# refuses an automated bump of this file (mctlhq/mctl-agents#1007).
+prepull:
+  enabled: true
+  ref: "ghcr.io/mctlhq/mctl-agents:1.117.0@sha256:6162d8635374efd4d903c5f5b38cb317d05075041d44a0ea6fdf7dbf818ed09a"
+  verifierImage: ghcr.io/mctlhq/mctl-workflow-tools:1.0.0@sha256:5e367f737d4bffaa1b6ea04a29681dc760fd476790f80bf93cbc4571d4ccfe6b
 # --role control since the queue split (ADR-008): this process runs every
 # workflow and every short activity on `mctl-dev-loop`, while
 # mctl-agents-worker-exec serves submit_and_wait on `mctl-dev-loop-exec`.
