@@ -37,10 +37,11 @@ the investigator's MCP and REST calls use its scoped run token
 (mctlhq/mctl-agents#717 option c), so a tool can reach only what the
 `investigate` scope admits.
 
-`run-bash` is `bypass-open`. `mctl-agents-run` is split by mode:
-`run-orchestrator` (full, mentor-only, single-service) maps no `MCTL_TOKEN`, so
-these modes run with no `mcp__mctl__*` tools, and the mentor loses its
-cross-check reads. `run-incident-responder` keeps the token because resolving
+`mctl-agents-run` is split by mode. `run-orchestrator` (full, mentor-only,
+single-service) maps no `MCTL_TOKEN`, so these modes run with no `mcp__mctl__*`
+tools, and the mentor loses its cross-check reads. That half is
+`run-orchestrator-bash`, `no-mctl-token`. `run-bash`, `bypass-open`, is the other
+half. `run-incident-responder` keeps the token because resolving
 incidents needs mctl-api, and it sets `RUN_MODE` as a literal, so no workflow
 parameter can start a service-agent mode in that pod. CI checks the literal,
 the routing, that no other template in the file maps `MCTL_TOKEN`, and the

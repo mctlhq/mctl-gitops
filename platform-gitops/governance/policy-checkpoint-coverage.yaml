@@ -132,6 +132,16 @@ surfaces:
     tracked_by: mctlhq/mctl-agents#717
     related: mctlhq/mctl-api#723
     reason: PreToolUse gates mcp__* only; Bash can call mctl-api with MCTL_TOKEN
+  - id: run-orchestrator-bash
+    kind: transport
+    of: run
+    governed: false
+    boundary: no-mctl-token
+    # The mctl-agents release these modes were checked against without a
+    # token (service agents and mentor degrade softly). mctlhq/mctl-gitops#1980.
+    min_image_version: 1.117.0
+    related: mctlhq/mctl-agents#717
+    reason: run-orchestrator maps no MCTL_TOKEN, so Bash in the service-agent modes reaches no mctl-api credential
   - id: run-bash
     kind: transport
     of: incident-responder

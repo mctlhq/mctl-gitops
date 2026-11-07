@@ -374,6 +374,24 @@ def self_test():
             "          - name: RUN_SERVICE\n", 1))
     expect("MCTL_TOKEN back on the tokenless template", run_token_back, "only run-incident-responder may map")
 
+    def run_token_in_string(gp):
+        edit(gp / run_tpl, lambda t: t.replace(
+            "          - name: RUN_SERVICE\n",
+            "          - name: LEAK\n            value: MCTL_TOKEN\n"
+            "          - name: RUN_SERVICE\n", 1))
+    expect("MCTL_TOKEN in a string on the tokenless template", run_token_in_string,
+           "only run-incident-responder may map")
+
+    def run_older_image(gp):
+        edit(gp / "governance/policy-checkpoint-coverage.yaml", lambda t: t.replace(
+            "    of: run\n    governed: false\n    boundary: no-mctl-token\n"
+            "    # The mctl-agents release these modes were checked against without a\n"
+            "    # token (service agents and mentor degrade softly). mctlhq/mctl-gitops#1980.\n"
+            "    min_image_version: 1.117.0\n",
+            "    of: run\n    governed: false\n    boundary: no-mctl-token\n"
+            "    min_image_version: 9999.0.0\n", 1))
+    expect("tokenless template below its min_image_version", run_older_image, "run-orchestrator-bash")
+
     def responder_mode_param(gp):
         edit(gp / run_tpl, lambda t: t.replace(
             "value: incident-responder\n", 'value: "{{workflow.parameters.mode}}"\n', 1))
