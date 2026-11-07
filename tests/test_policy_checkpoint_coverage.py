@@ -14,13 +14,16 @@ against the templates and values files, never restating them:
    CLAUDE_CODE_OAUTH_TOKEN and no agent entry point; `no-mctl-token` has no
    MCTL_TOKEN. A transport entry is `bypass-open`, or `no-mctl-token` when
    the surface it belongs to maps no MCTL_TOKEN and runs at least the entry's
-   `min_image_version`.
+   `min_image_version`, or `no-shell-session` when its surface has a
+   `fixed_run_mode`, a literal image and at least the entry's
+   `min_image_version` (the first release whose session is built without Bash).
 5. `bypass-open` needs `tracked_by`; a summary line keeps the gap visible.
 6. No manifest anywhere sets MCTL_POLICY_APPROVALS to none, empty or valueFrom.
 7. A surface with `fixed_run_mode` sets RUN_MODE to that literal, its execution
    profile lists no Bash, no other agent template in its file maps MCTL_TOKEN,
    and the entrypoint steps start its template only on exactly that mode while
-   every other agent template excludes it. A profile that cannot be read is a
+   every other agent template excludes it. Its image is a literal, never a
+   workflow parameter, so no caller picks the release. A profile that cannot be read is a
    failure, never a pass. The profile check reads a declaration, not what the
    session exposes, so passing it does not mean the session has no Bash.
 
@@ -36,7 +39,7 @@ import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 BOUNDARIES = ("no-model-session", "no-mctl-token", "operator-operation", "bypass-open")
-TRANSPORT_BOUNDARIES = ("bypass-open", "no-mctl-token")
+TRANSPORT_BOUNDARIES = ("bypass-open", "no-mctl-token", "no-shell-session")
 ENV = "MCTL_POLICY_APPROVALS"
 AGENT_ENTRY = re.compile(r"run_issue_investigator|run_implementer|run_shepherd|run_all")
 MANIFEST = "platform-gitops/governance/policy-checkpoint-coverage.yaml"
@@ -92,9 +95,13 @@ def discover(root):
                 image = str(c.get("image", ""))
                 if "agent_image" in image or image.startswith("ghcr.io/mctlhq/mctl-agents"):
                     rel = path.relative_to(gitops).as_posix()
+                    templated = "{{" in image
                     found[(rel, t.get("name"))] = {
                         "env": {n: e for n, e in env_list(c).items()},
-                        "image": str(params.get("agent_image", image)),
+                        # A templated image runs the parameter default unless a
+                        # caller overrides it; a literal runs exactly itself.
+                        "image": str(params.get("agent_image", image)) if templated else image,
+                        "image_literal": not templated,
                         "text": list(scalars(c.get("command"))) + list(scalars(c.get("args"))),
                         "strings": set(scalars(c.get("env"))),
                     }
@@ -105,6 +112,7 @@ def discover(root):
         found[(path.relative_to(gitops).as_posix(), None)] = {
             "env": env,
             "image": f"{image.get('repository')}:{image.get('tag')}",
+            "image_literal": True,
             "text": [],
             "strings": set(scalars(doc)),
         }
@@ -121,6 +129,8 @@ def check_fixed_mode(root, surface, found):
     failures = []
     if (info["env"].get("RUN_MODE") or {}).get("value") != mode:
         failures.append(f"{sid}: RUN_MODE must be the literal {mode!r}")
+    if not info["image_literal"]:
+        failures.append(f"{sid}: image must be a literal, not a workflow parameter")
     for (path, other), other_info in found.items():
         if path == surface.get("path") and other != template and (
             "MCTL_TOKEN" in other_info["env"] or "MCTL_TOKEN" in other_info["strings"]
@@ -219,6 +229,30 @@ def analyze(root):
                 if need is not None and (got is None or got < need):
                     failures.append(f"{sid}: image {of_info['image']} is older than min_image_version")
                 continue
+            elif boundary == "no-shell-session":
+                # The surface keeps MCTL_TOKEN, but its session is built
+                # without Bash from min_image_version on (mctlhq/mctl-agents#1024).
+                # That holds only for an image no caller can choose: a fixed
+                # mode (check 7 also requires the literal image) at or above
+                # the floor. A release that cannot be read fails.
+                of = next((o for o in surfaces if o.get("id") == s.get("of") and o.get("kind") != "transport"), None)
+                of_info = found.get((of.get("path"), of.get("template"))) if of else None
+                need = version_of(s.get("min_image_version"))
+                if not s.get("reason"):
+                    failures.append(f"{sid}: non-governed entry needs a reason")
+                if need is None:
+                    failures.append(f"{sid}: no-shell-session transport needs a valid min_image_version")
+                if of_info is None:
+                    failures.append(f"{sid}: no-shell-session transport names no discovered surface")
+                    continue
+                if of.get("fixed_run_mode") is None:
+                    failures.append(f"{sid}: no-shell-session transport needs a surface with fixed_run_mode")
+                if not of_info["image_literal"]:
+                    failures.append(f"{sid}: no-shell-session transport, but {s.get('of')} takes its image from a parameter")
+                got = version_of(of_info["image"].rpartition(":")[2])
+                if need is not None and (got is None or got < need):
+                    failures.append(f"{sid}: image {of_info['image']} is older than min_image_version")
+                continue
         info = found.get((s.get("path"), s.get("template")))
         if s.get("governed"):
             if info is None:
@@ -311,6 +345,12 @@ def self_test():
             fails, _, _ = analyze(root)
             ok = any(needle in f for f in fails)
             results.append((f"fixture: {name}", ok, str(fails)))
+
+    def expect_clean(name, mutate):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_fixture(tmp, mutate)
+            fails, _, _ = analyze(root)
+            results.append((f"fixture: {name}", not fails, str(fails)))
 
     def new_template(gp):
         edit(gp / (cwft + "cwft-mctl-agents-reconcile.yaml"), lambda t: t)
@@ -422,6 +462,45 @@ def self_test():
             'template: run-orchestrator\n            when: "\\"{{workflow.parameters.mode}}\\" != \\"incident-responder\\""',
             "template: run-orchestrator", 1))
     expect("tokenless template also started for the responder mode", tokenless_takes_responder, "must be guarded")
+
+    responder_image = "        image: ghcr.io/mctlhq/mctl-agents:"
+
+    def responder_image_param(gp):
+        edit(gp / run_tpl, lambda t: re.sub(
+            r"        image: ghcr\.io/mctlhq/mctl-agents:[0-9.]+\n",
+            '        image: "{{workflow.parameters.agent_image}}"\n', t, count=1))
+    expect("responder image from a parameter", responder_image_param, "image must be a literal")
+
+    # run-bash as no-shell-session. The floor here is a stand-in for the
+    # release that carries mctlhq/mctl-agents#1024; the real entry stays
+    # bypass-open until the literal reaches that release.
+    def no_shell(floor):
+        def mutate(gp):
+            edit(gp / "governance/policy-checkpoint-coverage.yaml", lambda t: t.replace(
+                "    of: incident-responder\n    governed: false\n    boundary: bypass-open\n"
+                "    tracked_by: mctlhq/mctl-gitops#1980\n",
+                "    of: incident-responder\n    governed: false\n    boundary: no-shell-session\n"
+                f"    min_image_version: {floor}\n", 1))
+        return mutate
+
+    def current_floor():
+        t = (REPO / "platform-gitops" / run_tpl).read_text()
+        return re.search(re.escape(responder_image) + r"([0-9.]+)\n", t).group(1)
+
+    expect_clean("run-bash as no-shell-session at its floor", no_shell(current_floor()))
+    expect("no-shell-session below its floor", no_shell("9999.0.0"), "older than min_image_version")
+    expect("no-shell-session without a floor", no_shell("latest"), "needs a valid min_image_version")
+
+    def no_shell_param_image(gp):
+        no_shell(current_floor())(gp)
+        responder_image_param(gp)
+    expect("no-shell-session on a parameter image", no_shell_param_image, "takes its image from a parameter")
+
+    def no_shell_unfixed(gp):
+        no_shell(current_floor())(gp)
+        edit(gp / "governance/policy-checkpoint-coverage.yaml",
+             lambda t: t.replace("    fixed_run_mode: incident-responder\n", "", 1))
+    expect("no-shell-session on a surface without fixed_run_mode", no_shell_unfixed, "needs a surface with fixed_run_mode")
     return results
 
 
