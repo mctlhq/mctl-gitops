@@ -65,12 +65,42 @@ ends on a stale `OPEN` with no final read.
 - WHEN `tests/test_merge_watch_worker_gap.py` runs THE SYSTEM SHALL pass with the file unchanged. Scenario A still ends
   on the pre-gap `OPEN` with no read after the gap.
 - WHEN `tests/test_patch_memoization.py` runs THE SYSTEM SHALL pass.
-- IF making any of the above true would require editing an existing test or fixture, a non-command-identical refactor,
-  a change to the gap harness, or any M2b-1c/1d behaviour (final read, new activity, typed result) THEN THE SYSTEM
-  change SHALL NOT be made, and the implementer SHALL stop and report on #1036.
+- WHEN the new `MergeWatchResume.terminal_reconcile` field is added THE SYSTEM SHALL make exactly these three edits, and
+  no others, to the existing file `tests/test_pre_m1_compat.py`. They extend that file's own pin table for a carried
+  dataclass and change no assertion (amendment v2, see "Amendment v2" below):
+  1. add `"terminal_reconcile"` to `M1_ADDED["MergeWatchResume"]`;
+  2. add `"terminal_reconcile": False` to `M1_DEFAULTS`;
+  3. add `terminal_reconcile=True` to the `MergeWatchResume(...)` sample in `_m1_values()`, next to
+     `deferred_resume_contract=True`, because `test_unsupported_direction_pre_m1_decoder_silently_drops_m1_fields`
+     asserts that every `M1_ADDED` field changes on the pre-M1 round trip.
+  `tests/fixtures/pre_m1/dataclass_fields.json` SHALL NOT be edited or regenerated: it is the recorded pre-M1 truth.
+- IF making any of the above true would require editing any other existing test or fixture, a non-command-identical
+  refactor, a change to the gap harness, or any M2b-1c/1d behaviour (final read, new activity, typed result) THEN THE
+  SYSTEM change SHALL NOT be made, and the implementer SHALL stop and report on #1036. The three sanctioned edits above
+  are the only exception, and the PR body SHALL list them explicitly.
 - WHEN the implementer PR is opened THE SYSTEM SHALL be verified as blocked by GitHub (the code-owner hold from #1020).
   If it is not blocked, the implementer SHALL stop. No autonomous merge, admin bypass, release, deployment or flag
   change.
+
+## Amendment v2 (2026-11-07)
+
+The first implementer attempt (run `mctl-agents-implement-5b5707bc`) stopped without commits, correctly. Adding the
+field breaks four existing tests in `tests/test_pre_m1_compat.py`, which pins the field set of every carried dataclass,
+and the first version of this proposal forbade any test edit. A sweep of the whole suite on `bd3f51a` (all 209 test
+files, in batches under `timeout 300`, no batch timed out) with the change applied found exactly these four tests and
+nothing else, all fixed by the three edits above, with `tests/test_pre_m1_compat.py` at 109 passed and the complete
+suite green afterwards. No history fixture needs re-recording. This amendment sanctions those three edits and nothing
+more, and records the B4 coupling raised by the B4 owner:
+
+- WHEN the PR is prepared THE SYSTEM SHALL state that `merge-watch-terminal-reconcile` is a new Temporal marker that the
+  B4 marker classification (MS-1) must classify as MARKER_PRESENT, MARKER_ABSENT or MARKER_UNKNOWN before the build
+  carrying it ships.
+- WHEN the PR is prepared THE SYSTEM SHALL state that the forward-only rollback boundary moves up to the first build
+  that carries the marker: a rollback below that build is unsafe for fresh watches, and the B4 scenario "the fixed
+  worker does not start" must cover this marker.
+- WHEN the PR is prepared THE SYSTEM SHALL state the observed old-worker decode result (see design.md, Platform impact)
+  and SHALL NOT claim that an old worker can replay a history containing the new marker; that is unverified.
+- Worker Versioning (B4 option A) does not block shipping this slice under the forward-only baseline.
 
 ## Out of scope
 
