@@ -726,6 +726,15 @@ jobs:
     if: ${{ always() && github.ref == 'refs/heads/main' && needs.drift.result == 'failure' }}
     runs-on: ubuntu-latest
     environment: app-gitops-pr
+    # Its own group, not cloudflare-tofu-<root>: two overlapping portal runs
+    # must not both land a catalogue PR, and queueing (no cancel) keeps the
+    # later one from being dropped.
+    concurrency:
+      group: cloudflare-drift-land
+      cancel-in-progress: false
+    # pull-requests: read (workflow level) is deliberately not repeated: this
+    # job never lists PRs with GITHUB_TOKEN. Checkout and the artifact download
+    # need contents only; PR writes use the mctl-gitops-pr App token below.
     permissions:
       contents: read
     steps:
