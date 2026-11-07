@@ -75,7 +75,7 @@ check("release-deploy: verify runs every push attempt, after the rebase, and is 
 check("gitops-bump: verify is the line right before git push",
       re.search(r"release-gate\.py verify\n\s+git push", gb) is not None)
 
-# 3b. The rollback workflow pushes one values file with the bypass key. It calls
+# 3b. The rollback workflow pushes one values file with the deploy key. It calls
 #     the shared guard script like every other writer; its behaviour (gated file,
 #     missing or unparseable gate, rebased push) is exercised in
 #     tests/test_release_gate_guard.py. Here: no reader of its own is left.

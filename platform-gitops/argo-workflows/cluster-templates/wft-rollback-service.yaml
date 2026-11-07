@@ -159,7 +159,7 @@ spec:
 
           # Release gate (mctlhq/mctl-agents#1007). A values file in a gated
           # group moves only with its whole group, so this path, which rewrites
-          # ONE file and pushes with the bypass deploy key, refuses it through
+          # ONE file and pushes with the deploy key, refuses it through
           # the same shared script every other writer calls. Anything that
           # script cannot read or decide is a refusal, and so is a missing
           # script: every non-zero exit stops here.
