@@ -18,9 +18,11 @@ against the templates and values files, never restating them:
 5. `bypass-open` needs `tracked_by`; a summary line keeps the gap visible.
 6. No manifest anywhere sets MCTL_POLICY_APPROVALS to none, empty or valueFrom.
 7. A surface with `fixed_run_mode` sets RUN_MODE to that literal, its execution
-   profile lists no Bash, and the entrypoint steps start its template only on
-   exactly that mode while every other agent template excludes it. A profile
-   that cannot be read is a failure, never a pass.
+   profile lists no Bash, no other agent template in its file maps MCTL_TOKEN,
+   and the entrypoint steps start its template only on exactly that mode while
+   every other agent template excludes it. A profile that cannot be read is a
+   failure, never a pass. The profile check reads a declaration, not what the
+   session exposes, so passing it does not mean the session has no Bash.
 
 Run: python3 tests/test_policy_checkpoint_coverage.py
 """
@@ -119,6 +121,11 @@ def check_fixed_mode(root, surface, found):
     failures = []
     if (info["env"].get("RUN_MODE") or {}).get("value") != mode:
         failures.append(f"{sid}: RUN_MODE must be the literal {mode!r}")
+    for (path, other), other_info in found.items():
+        if path == surface.get("path") and other != template and (
+            "MCTL_TOKEN" in other_info["env"] or "MCTL_TOKEN" in other_info["strings"]
+        ):
+            failures.append(f"{sid}: only {template} may map MCTL_TOKEN, but {other} does")
     try:
         profile = yaml.safe_load((gitops / str(surface.get("execution_profile"))).read_text())
         tools = profile["spec"]["tools"]
@@ -365,7 +372,7 @@ def self_test():
             "          - name: MCTL_TOKEN\n            valueFrom:\n"
             "              secretKeyRef: {name: s, key: k}\n"
             "          - name: RUN_SERVICE\n", 1))
-    expect("run-bash: MCTL_TOKEN back on the template with Bash", run_token_back, "run-bash")
+    expect("MCTL_TOKEN back on the tokenless template", run_token_back, "only run-incident-responder may map")
 
     def responder_mode_param(gp):
         edit(gp / run_tpl, lambda t: t.replace(
