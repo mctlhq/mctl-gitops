@@ -125,8 +125,8 @@ def check_gate():
         refuse(6, "the release gate refused this release")
 
 
-def check_tag_free(rebuild_allowed=True):
-    if rebuild_allowed and tag_names_commit():
+def check_tag_free():
+    if tag_names_commit():
         print("tag carries the commit's sha: a rebuild is the same source")
         return
     ref = f"{env('IMAGE_NAME')}:{env('IMAGE_TAG')}"
@@ -142,9 +142,9 @@ def check_tag_free(rebuild_allowed=True):
 
 
 def check_direct():
-    """A direct dispatch skips the release checks. It may not publish a gated image,
-    or replace a tag of any image that release-deploy publishes. A new tag, or an
-    image outside the table, is the tenant build path and stays as it was.
+    """A direct dispatch skips the release checks. It may not publish a gated image.
+    An image in the table comes only from its bound repository and keeps its existing
+    tags. An image outside the table is the tenant build path and stays as it was.
 
     The shapes come first: the build action splits its tags on commas and newlines,
     so a tag carrying one names further images, past every other check here."""
@@ -162,9 +162,9 @@ def check_direct():
     if env("IMAGE_NAME") in repos:
         refuse(8, f"{env('IMAGE_NAME')} is release-gated: publish it through release-deploy.yaml")
     if env("IMAGE_NAME") in bound:
-        # A rebuild is the same source only from the bound repository.
-        same_repo = str(bound[env("IMAGE_NAME")]).lower() == env("REPO").lower()
-        check_tag_free(rebuild_allowed=same_repo)
+        if str(bound[env("IMAGE_NAME")]).lower() != env("REPO").lower():
+            refuse(8, f"{env('IMAGE_NAME')} is bound to {bound[env('IMAGE_NAME')]}, got {env('REPO')!r}")
+        check_tag_free()
 
 
 def main():

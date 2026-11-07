@@ -246,9 +246,9 @@ check("direct: a bound image with no registry answer refuses", r == 11, (r, out)
 r, out, _ = run(stage="publish-direct", IMAGE_TAG="main-4ccb257", GIT_REF=SHA, docker=(0, ""))
 check("direct: a sha tag from its own commit may be rebuilt", r == 0, (r, out))
 r, out, called = run(stage="publish-direct", IMAGE_TAG="main-4ccb257", GIT_REF=SHA, REPO="other/repo", docker=(0, ""))
-check("direct: a sha tag from another repository is not a rebuild", r == 10 and called, (r, out))
-r, out, _ = run(stage="publish-direct", IMAGE_TAG="main-4ccb257", GIT_REF=SHA, REPO="other/repo", docker=(1, ABSENT))
-check("direct: a new sha tag from another repository still passes this check", r == 0, (r, out))
+check("direct: a sha tag from another repository is refused", r == 8 and not called, (r, out))
+r, out, called = run(stage="publish-direct", GIT_REF="any", REPO="other/repo", docker=(1, ABSENT))
+check("direct: a new tag from another repository is refused", r == 8 and not called, (r, out))
 for label, kw in {
     "a comma naming another image": {"IMAGE_NAME": "ghcr.io/mctlhq/grafana-iac", "IMAGE_TAG": f"1.0.0,{AGENTS}:1.117.0"},
     "a newline naming another image": {"IMAGE_NAME": "ghcr.io/mctlhq/grafana-iac", "IMAGE_TAG": f"1.0.0\n{AGENTS}:1.117.0"},
@@ -314,7 +314,7 @@ M = {
         lambda: rc(script=SCRIPT_TEXT.replace('        if stage == "publish":\n            check_tag_free()', '        check_tag_free()'),
                    docker=(1, "unauthorized")) == 11,
     "direct tag check off, a bound tag is replaced":
-        lambda: rc(stage="publish-direct", script=cut("        check_tag_free(rebuild_allowed=same_repo)\n"), docker=(0, "")) == 0,
+        lambda: rc(stage="publish-direct", script=cut("        check_tag_free()\n"), docker=(0, "")) == 0,
     "release tag shape off, main stands in for a version":
         lambda: rc(script=SCRIPT_TEXT.replace(' and re.fullmatch(RELEASE_TAG_RE, env("IMAGE_TAG"))', ""), IMAGE_TAG="main", GIT_REF="main") == 0,
     "any failure read as absent":
@@ -326,9 +326,10 @@ M = {
         lambda: rc(stage="publish-direct", script=SCRIPT_TEXT.replace(
             'for name, pattern in (("IMAGE_TAG", TAG_RE), ("IMAGE_NAME", IMAGE_RE)):\n        if not re.fullmatch(pattern, env(name)):\n            refuse(5, f"{name} has an invalid shape: {env(name)!r}")\n    try:',
             'try:'), IMAGE_NAME="ghcr.io/mctlhq/grafana-iac", IMAGE_TAG=f"1.0.0,{AGENTS}:1.117.0") == 0,
-    "direct rebuild allowed from any repository":
-        lambda: rc(stage="publish-direct", script=SCRIPT_TEXT.replace("check_tag_free(rebuild_allowed=same_repo)", "check_tag_free()"),
-                   IMAGE_TAG="main-4ccb257", GIT_REF=SHA, REPO="other/repo", docker=(0, "")) == 0,
+    "direct binding off, another repository publishes a new tag":
+        lambda: rc(stage="publish-direct", script=SCRIPT_TEXT.replace(
+            """if str(bound[env("IMAGE_NAME")]).lower() != env("REPO").lower():""", "if False:"),
+            REPO="other/repo", GIT_REF="any") == 0,
     "direct check off":
         lambda: rc(stage="publish-direct", script=cut("        check_direct()\n"), IMAGE_NAME=AGENTS) == 0,
     "sha rule loose, any sha allowed":
