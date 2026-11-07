@@ -107,6 +107,7 @@ production.
 3. `docs/spikes/automation-control-plane/`, a stdlib-only Go reference model
    (`module mctl.ai/spikes/automationcp`, `go 1.22`), plus a CI step in
    `.github/workflows/workflow-tests.yml` and an `AGENTS.md` index entry.
+4. `docs/spikes/automation-control-plane/temporal-integration/`, an **isolated real Temporal dev-server integration harness** with a pinned Temporal CLI/server and pinned SDK, a dedicated CI job/check that fails on skip/unavailability, synthetic workflows, loopback-only network binding and cleanup. No production namespace, tokens or credentials.
 
 ### Architecture the spike tests (hypothesis B, to be confirmed or refuted)
 
@@ -119,7 +120,7 @@ mctl-support (tenant-bound) --MCP-->      template registry)
                                    v
                        Temporal  --> mctl-agents worker: AgentAutomationWorkflow
                                    |   fire-time checkpoint -> budget reserve ->
-                                   |   WorkItem execution (we_) -> agent run ->
+                                   |   per-fire WorkItem (wi_) -> xr_ -> we_ -> agent run ->
                                    |   settle -> delivery adapter (Telegram first)
 events/ ingress (Valkey Streams, verified producers) --> mctl-api event router
           (allowlist type+subject, dedupe by envelope id) --> Start or Signal
@@ -127,11 +128,18 @@ events/ ingress (Valkey Streams, verified producers) --> mctl-api event router
 
 Key decisions to evidence:
 
-- **Definition vs run.** `AutomationDefinition` (`au_`, versioned, lifecycle
-  `enabled|paused|deleted`) is the standing intent. Each fire creates an
-  `AutomationRun` that is a WorkItem execution (`we_`) under a WorkItem bound
-  to the automation, so there is no separate run store. MCP Tasks (#41) can
-  expose a single run, while the automation itself is never a Task.
+- **Definition vs run — WorkItem conflict resolved.** `AutomationDefinition`
+  (`au_`, versioned, lifecycle `enabled|paused|deleted`) is the standing
+  intent. **Every occurrence gets its own WorkItem (`wi_`)**, correlated via
+  `automation_id` and a deterministic external/idempotency key derived from
+  `(au_, occurrence_id)` or `(au_, verified_event_id)`. Use existing `xr_`
+  execution requests and `we_` executions; `AutomationRun` is a query/view
+  across those records, **not** a second execution store. `workitem/v1`
+  permits at most one non-terminal `we_` per `wi_`; different occurrences
+  have different `wi_` and may overlap without violating that invariant.
+  Re-delivery of one occurrence resolves to the same `wi_` and at most one
+  budget reservation. MCP Tasks (#41) can expose a specific `we_`; the
+  standing automation itself is never a Task.
 - **Templates, not raw Temporal.** The contract accepts `template:
   {name, version}` from a registry (for example `reminder.v1`,
   `agent.investigate-ci-failure.v1`, `support.diagnostic-followup.v1`). The
@@ -140,8 +148,9 @@ Key decisions to evidence:
   `namespace` or `signal` field is refused with `raw_temporal_forbidden`.
 - **Triggers.** `at` maps to a Schedule with one action and a fixed calendar
   spec plus `remaining_actions = 1`, or to a delayed start. The spike compares
-  both. Nonexistent DST local times shift forward, and ambiguous ones take the
-  first occurrence; both are stated in the contract. `schedule` maps to a
+  both. **Do not assume a DST normalization rule:** probe the real Temporal
+  server for gap/overlap behavior and either expose the observed semantics
+  or explicitly implement/test a product-layer policy. `schedule` maps to a
   Temporal Schedule with timezone, start/end, a catch-up window and an overlap
   policy (default skip). `event` and `dependency` never create Temporal
   Schedules. The router dedupes by `(automation_id, envelope.id)` and uses
@@ -149,11 +158,15 @@ Key decisions to evidence:
   duplicate delivery reuses the same run. The rule for Signal versus a new
   workflow: Signal only when the template declares a long-running "await
   dependency" workflow, otherwise start a new run.
-- **Fire-time checkpoint.** On every fire, before any spend, the workflow
-  re-reads the owner principal, tenant membership, install revision (not
-  revoked, matches the pin or the resolution policy) and policy snapshot. A
-  failure records the run as `refused:<reason>` and, after N consecutive
-  refusals, auto-pauses the definition.
+- **Fire-time and action-time checkpoints.** On every fire, before any spend,
+  the workflow re-reads owner principal, tenant membership, install revision
+  (not revoked, matches the pin or resolution policy) and policy snapshot.
+  **Every external action** (including Telegram send) must independently
+  re-evaluate current authorization at the existing server-side policy
+  checkpoint; revocation during a run blocks future side effects. A failure
+  records `refused:<reason>` and may auto-pause after N consecutive refusals.
+  Never treat a stale approval or the original fire-time grant as ongoing
+  authority.
 - **Budget.** Reserve per run before the agent activity, idempotent on
   `we_`; settle on completion or release on failure. This follows the
   reservation-cap pattern of mctl-telegram#1092 and the agent-finops ledger.
@@ -166,13 +179,33 @@ Key decisions to evidence:
   are refused for this actor.
 - **Delete and revoke.** These stop future fires (delete or pause the
   Schedule, unsubscribe from events) and mark the definition. In-flight runs
-  are allowed to finish their current activity and then skip delivery, or are
-  cancelled only by an explicit `cancel_in_flight: true`. Nothing is silently
-  terminated.
+  are not silently terminated; they may complete read-only computation, but
+  **must be denied further external side effects after revocation**, unless
+  re-authorized at action time. Explicit `cancel_in_flight: true` requests
+  cancellation and preserves an audit trail.
 - **Delivery.** Telegram is the first adapter. Delivery failure retries with
   backoff and then records `delivered: failed`, while the result stays
   readable from any surface through `mctl_get_automation` run history.
   ChatGPT same-chat push is `unknown`, see #300.
+
+- **Dual-store reconciliation.** Persist a desired automation state and
+  version before touching Temporal, then apply an idempotent Schedule operation
+  keyed by a deterministic schedule ID and version. Reconcile observed
+  Temporal Schedules against desired state after crashes, timeouts, partial
+  creates, pauses, updates and deletes; never run a schedule whose owner or
+  definition cannot pass authorization. Inject the failure after Temporal
+  accepted `create_schedule` but before MCTL committed success, then prove
+  recovery without a duplicate fire. Explicitly model bounded drift alarms,
+  orphan cleanup rules and distinction between unknown/unobserved state and
+  observed absence.
+- **Events are not all CI signals.** The current `events/README.md` covers
+  Telegram message and GitHub PR/review streams, not GitHub check/run failure
+  events. A CI-failure trigger requires an authenticated ingress producer,
+  canonical subject hydration, dedupe, tenant scoping and producer coverage.
+  No claim of CI event support before that proof.
+- **Cross-surface identity.** A Telegram user id and an MCP OAuth subject
+  are only the same principal when the `SurfaceIdentityLink` possession proof
+  resolves them. Unknown/revoked links deny automation lookup and mutation.
 
 ### Reference model (D4)
 
@@ -185,7 +218,14 @@ Fixtures sit in `fixtures/*.json` (principals, tenants, installs, templates,
 events). `harness_test.go` covers the four positive demos. `negative_test.go`
 covers each negative fixture listed in requirements. `bench_test.go` covers
 schedule-storm and fanout throughput with the fake clock. The report presents
-the measured numbers as model evidence only.
+the measured numbers as model evidence only. **A separate required real-server
+integration suite** launches a pinned Temporal dev-server, connects through a
+pinned official SDK, runs an inert registered Worker, creates and describes a
+real Schedule, observes the workflow execution, and verifies the result and
+Schedule state. A skipped/unavailable check is a failure, not a success;
+record the real CLI/server and SDK versions and keep this evidence distinct
+from simulated results. The Temporal integration check runs only against
+localhost with disposable state; never against the production cluster.
 
 ## Alternatives
 
@@ -216,13 +256,16 @@ the measured numbers as model evidence only.
 - Backward compatibility: the new `SpikeDefinition` must pass
   `roadmap/scripts/validate.py` and `lifecycle_guard.py`. Publication
   (`roadmap-publish.yml`) will list a new proposed spike, which is benign.
-- Resource impact: one extra Go test step in `workflow-tests.yml`, on the
-  order of seconds with a fake clock and no network.
+- Resource impact: one extra fast Go model-test step plus a distinct CI job
+  for a real Temporal dev-server and SDK integration test. The real-server
+  job may need pinned binary acquisition and takes longer; its result must be
+  required for completion of the research PR, never silently skipped.
 - Risks and mitigations:
   - The model diverges from real Temporal Schedule semantics (catch-up,
-    overlap, DST). Mitigation: label all D4 numbers as model evidence and list
-    the exact behaviours an optional `temporal server start-dev` proof must
-    confirm.
+    overlap, DST). Mitigation: label model results distinctly and run the
+    mandatory real `temporal server start-dev` integration check; if CI
+    cannot run it, D4 stays blocked until an equivalent reproducible,
+    evidence-backed non-production test is a required check.
   - The spike is mistaken for approval. Mitigation: `lifecycle: proposed`, no
     `decision` and no `epic` block, follow-ups listed unfiled, and an explicit
     non-claims section.
