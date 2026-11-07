@@ -43,7 +43,7 @@ jobs:
     name: committed ranges vs api.cloudflare.com
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
       - name: Fetch Cloudflare's published ranges
         run: |
@@ -129,7 +129,7 @@ jobs:
     name: the entrypoint actually gets the middleware
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
       # The failure this guards against is silence. If the values path in
       # traefik-helmchartconfig.yaml.tpl stops producing
