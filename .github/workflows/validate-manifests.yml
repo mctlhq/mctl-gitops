@@ -565,6 +565,9 @@ jobs:
         # retire, and each guard layer is removed in turn to prove a test fails.
         run: python3 tests/test_release_gate_guard.py
 
+      - name: Auto-merge protected paths
+        run: python3 tests/test_auto_merge_protected_paths.py
+
       - name: Read-only workflow steps hold no write credential
         run: python3 tests/test_read_steps_no_credential.py
       - name: Unit-test gitops-bump inputs and its edit check
