@@ -49,6 +49,7 @@ TEMPLATES = {
     "commit": template("tpl-git-commit.yaml", "commit-service"),
     "delete": template("tpl-git-commit.yaml", "delete-service"),
     "validate": template("tpl-validate-tenant.yaml", "validate"),
+    "rollback": template("wft-rollback-service.yaml", "patch-values"),
     "preview": template("tpl-validate-tenant.yaml", "image-name"),
     "autoscale": template("wft-deploy-service.yaml", "patch-autoscaling-values"),
     "add-domain": template("wft-add-custom-domain.yaml", "do-add-domain"),
@@ -218,7 +219,7 @@ RACE_EOF
         # These run under busybox ash in production and use its ${x//a/b} and
         # pipefail; dash, sh on Ubuntu, has neither. The guard they call still
         # runs under plain sh.
-        shell = "bash" if name in ("add-domain", "remove-domain", "autoscale") else "sh"
+        shell = "bash" if name in ("add-domain", "remove-domain", "autoscale", "rollback") else "sh"
         r = subprocess.run([shell, str(script)], env=env, capture_output=True, text=True,
                            cwd=self.tmp, timeout=120)
         return r.returncode, r.stdout + r.stderr
@@ -439,7 +440,12 @@ def database_params(team, service):
             "VAULT_TOKEN": "t"}
 
 
-WRITERS = {"add-domain": domain_params, "remove-domain": domain_params, "database": database_params}
+def rollback_params(team, service):
+    return {"PARAM_TEAM_NAME": team, "PARAM_COMPONENT_NAME": service, "PARAM_TARGET_TAG": "1.100.0"}
+
+
+WRITERS = {"add-domain": domain_params, "remove-domain": domain_params, "database": database_params,
+           "rollback": rollback_params}
 
 
 def writer_gated(name, mutate=None):
@@ -476,9 +482,8 @@ def writer_other_pushes(name):
     return boxed(body, seed=writer_seed)
 
 
-# wft-rollback-service refuses gated files with its own inline guard, which
-# tests/test_release_gate.py covers.
-EXEMPT_WRITERS = {"wft-rollback-service.yaml"}
+# wft-rollback-service calls the shared guard like the others; nothing is exempt.
+EXEMPT_WRITERS = set()
 
 
 def unguarded_writers(docs):
@@ -539,7 +544,7 @@ for w in WORKERS:
 for name in WRITERS:
     check(f"{name}: a gated worker is refused before any commit", writer_gated(name))
     # provision-database uses GNU/busybox sed syntax, so it cannot finish on macOS.
-    if name == "database" and sys.platform == "darwin":
+    if name in ("database", "rollback") and sys.platform == "darwin":
         print(f"SKIP  {name}: another service still pushes (needs Linux sed)")
     else:
         check(f"{name}: another service still pushes", writer_other_pushes(name))
@@ -729,6 +734,37 @@ tasks = {t["name"]: t for t in
          [x for x in retire["spec"]["templates"] if x["name"] == "retire-pipeline"][0]["dag"]["tasks"]}
 check("retire: Vault secrets wait for the git step that can refuse",
       "delete-from-git" in tasks["delete-vault-secrets"]["dependencies"])
+_rb = TEMPLATES["rollback"]["script"]["source"]
+check("rollback calls the shared guard before and after the edit",
+      TARGET_CALL in _rb and OUTGOING_CALL in _rb and _rb.find(TARGET_CALL) < _rb.find("sed -i") < _rb.find(OUTGOING_CALL))
+check("rollback has no reader of the gate file of its own",
+      "release-gates.yaml" not in _rb and "GATED_PATHS" not in _rb)
+
+
+def rollback_with_gate(gate, mutate=None):
+    """Rollback of an ordinary service: True when it finishes with a push."""
+    def body(b):
+        before = b.head()
+        rc, out = b.run("rollback", rollback_params("labs", "app"), mutate)
+        return rc == 0 and b.head() != before
+    return boxed(body, gate=gate)
+
+
+def rollback_refuses_unreadable_gate(gate, mutate=None):
+    def body(b):
+        before = b.head()
+        rc, out = b.run("rollback", rollback_params("labs", "app"), mutate)
+        return rc != 0 and b.head() == before and "release gate" in out
+    return boxed(body, gate=gate)
+
+
+if sys.platform == "darwin":
+    print("SKIP  rollback of another service still pushes (needs GNU/busybox sed -i)")
+else:
+    check("rollback of another service still pushes", rollback_with_gate(GATE_TEXT))
+check("rollback refuses when the gate file is missing", rollback_refuses_unreadable_gate(None))
+check("rollback refuses when the gate names no values file", rollback_refuses_unreadable_gate("gates: []\n"))
+check("rollback refuses when the gate file cannot be parsed", rollback_refuses_unreadable_gate("gates: [\n"))
 check("preview's image-name step carries the target check",
       TARGET_CALL in TEMPLATES["preview"]["script"]["source"])
 check("preview's target check runs before the image-name check",
@@ -777,6 +813,8 @@ MUTANTS = {
         lambda: scale_gated(mutate=no_guard, wrote_nothing=False),
     "validate: target call removed":
         lambda: validate_gated(mutate=no_target),
+    "rollback: unreadable gate no longer refuses (guard exits 0 on a missing file)":
+        lambda: rollback_refuses_unreadable_gate(None, mutate=no_guard),
     "preview: target call removed":
         lambda: preview_gated(mutate=no_target),
     **{f"{n}: target call removed": (lambda n=n: writer_gated(n, mutate=no_target)) for n in WRITERS},
