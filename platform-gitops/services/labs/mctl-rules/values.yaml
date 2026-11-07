@@ -30,6 +30,7 @@ resources:
     cpu: "1"
     memory: 1Gi
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   APP_BASE_URL: https://rules.mctl.ai
   OIDC_ISSUER: https://app.mctl.ai/api/oidc-provider
   OIDC_CLIENT_ID: mctl-rules

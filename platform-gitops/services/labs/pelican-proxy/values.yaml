@@ -36,6 +36,7 @@ resources:
     cpu: 1000m
     memory: 512Mi
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   APP_ENV: production
   CATALOG_INGEST_URL: https://pelican-catalog-worker.pelican-libertex.workers.dev/__ingest
 ingress:

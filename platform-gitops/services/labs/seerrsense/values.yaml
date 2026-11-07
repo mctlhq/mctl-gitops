@@ -20,6 +20,7 @@ resources:
     cpu: 500m
     memory: 512Mi
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   APP_ENV: production
   SEERR_URL: https://media.mctl.ai
   SEERRSENSE_LOCALE: ru-RU

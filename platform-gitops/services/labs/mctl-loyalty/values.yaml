@@ -33,6 +33,7 @@ resources:
     cpu: 150m
     memory: 256Mi
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   APP_ENV: production
   SERVICE_VERSION: 0.1.0
   SUPER_ADMIN_TELEGRAM_IDS: "210408407,7334138909"
