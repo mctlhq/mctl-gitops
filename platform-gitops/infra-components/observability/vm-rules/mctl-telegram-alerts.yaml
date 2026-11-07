@@ -343,15 +343,18 @@ spec:
           # decided grants, so a single user who connects and walks away
           # does not page. `unknown` outcomes are left out of both sides:
           # they are the funnel being blind, covered by
-          # MctlTelegramConnectFunnelStoreErrors below.
+          # MctlTelegramConnectFunnelStoreErrors below. portal and local_agent
+          # are left out too: the portal grants on a user's behalf and a local
+          # agent connects on a schedule, so neither has to call within five
+          # minutes (mctl-telegram#1165).
           expr: |
             (
-              sum by (job, client) (increase(mctl_connect_first_call_total{outcome="none_within_window"}[6h]))
+              sum by (job, client) (increase(mctl_connect_first_call_total{outcome="none_within_window",client!~"portal|local_agent"}[6h]))
               /
-              sum by (job, client) (increase(mctl_connect_first_call_total{outcome=~"ok|none_within_window"}[6h]))
+              sum by (job, client) (increase(mctl_connect_first_call_total{outcome=~"ok|none_within_window",client!~"portal|local_agent"}[6h]))
             ) >= 0.5
             and
-            sum by (job, client) (increase(mctl_connect_first_call_total{outcome="none_within_window"}[6h])) > 1
+            sum by (job, client) (increase(mctl_connect_first_call_total{outcome="none_within_window",client!~"portal|local_agent"}[6h])) > 1
           for: 5m
           labels:
             severity: warning
