@@ -114,8 +114,12 @@ The contract adds no second store, ledger, approval engine or authority engine.
   `expected_version` (optimistic compare-and-set). A mismatch is `automation_version_conflict`
   (409).
 - WHEN a create request repeats an `idempotency_key` with an identical canonical request
-  (excluding server-issued fields) THE SYSTEM SHALL return the original definition with
-  `replayed: true`. A repeat with a different canonical request is
+  (excluding server-issued fields) **by the same authenticated principal and tenant**
+  THE SYSTEM SHALL return the original definition with `replayed: true`.
+  The idempotency namespace is bound to `(tenant, authenticated_principal, key)`;
+  another principal MUST NOT receive the first principal's definition, even
+  with an identical body and key. A repeat with a different canonical
+  request under the same authenticated principal/key is
   `automation_idempotency_key_reused` (409).
 - WHEN `run` (manual fire) is requested THE SYSTEM SHALL require a caller-supplied,
   opaque request `idempotency_key` scoped to the authenticated principal, tenant and
