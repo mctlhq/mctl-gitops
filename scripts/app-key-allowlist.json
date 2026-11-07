@@ -80,14 +80,8 @@
       ".github/workflows/cloudflare-drift.yml": [
         "AGENTS_APP_PRIVATE_KEY"
       ],
-      ".github/workflows/portal-allowlist-vendor.yml": [
-        "AGENTS_APP_PRIVATE_KEY"
-      ],
       ".github/workflows/release-deploy.yaml": [
         "APP_PRIVATE_KEY"
-      ],
-      ".github/workflows/release-drift.yml": [
-        "AGENTS_APP_PRIVATE_KEY"
       ]
     },
     "mctl-portal": {
