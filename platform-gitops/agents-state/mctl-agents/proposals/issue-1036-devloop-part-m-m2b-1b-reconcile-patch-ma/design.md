@@ -216,9 +216,28 @@ tick tasks and gate tasks.
     here.
   - **Not covered by the scanner.** `tools/temporal_marker_scan.py` scans only for `deferred-resume-contract`, so it
     will not see the new marker. Extending it is B4's call and not part of this slice.
-  - **Hopped records.** A hopped run carries the flag only in its input, not as a marker. Whether an older
-    `MergeWatchResume` decodes a record with the extra key depends on the data converter. The PR verifies this and
-    states the result; see Open questions.
+  - **Hopped records.** A hopped run carries the flag only in its input, not as a marker. Observed during the
+    amendment sweep (temporalio 1.34.0, the project's default data converter, baseline `bd3f51a` whose
+    `MergeWatchResume` has no such field; script under the session scratchpad):
+    - a payload carrying `"terminal_reconcile": true` decodes on the old class without an exception and the key is
+      silently dropped, with the other fields intact; the same holds nested as `IssueRef.resume`, which is how the
+      record travels across continue-as-new;
+    - the reverse (an old payload decoded by the class with the new defaulted field) gives `terminal_reconcile ==
+      False`;
+    - the precedent `deferred_resume_contract` behaves identically (already pinned by
+      `test_unsupported_direction_pre_m1_decoder_silently_drops_m1_fields`).
+    So payload decoding is not a blocking B4 finding. Semantic consequence (reasoned from these observations, not run):
+    an old worker that handles a hop re-encodes the record without the key, so the next new-code hop reads False, a
+    safe-direction downgrade to the legacy behaviour. The B4 rollback notes should record it.
+  - **Unverified.** An old worker replaying a history that already contains the new marker has not been reproduced with
+    the SDK Replayer, because no history recorded from the new code exists yet. Forward-replay safety rests on the
+    refactor being command-identical, which the mutation proofs must show. Rollback below the first build carrying the
+    marker stays unsupported until a Replayer test with such a history is run.
+  - **B4 coupling (from the B4 owner).** (i) The B4 marker classification MS-1 must classify
+    `merge-watch-terminal-reconcile` (MARKER_PRESENT, MARKER_ABSENT or MARKER_UNKNOWN) before the first build carrying
+    it ships. (ii) Under the forward-only baseline the rollback boundary moves up to that build: rolling back below it
+    is unsafe for fresh watches, and the B4 scenario "the fixed worker does not start" must cover this marker. Worker
+    Versioning does not block shipping this slice.
 - **Resources.** One marker event per fresh watch. This is negligible against `MERGE_WATCH_HISTORY_FLOOR` and the hop
   predicate.
 - **Release.** No image bump, no change under `services/admins/mctl-agents-worker*`, no flag. The implementer PR must
@@ -226,16 +245,19 @@ tick tasks and gate tasks.
 - **Risks and mitigations.**
   - *A refactor that silently reorders an await.* Mitigated by replay of the five fixtures containing a fresh watch,
     and by M-d1/M-d2.
-  - *An existing test needing an edit.* That is a STOP condition: the implementer reports on #1036 instead of adapting
-    the test.
+  - *An existing test needing an edit.* Exactly three edits in `tests/test_pre_m1_compat.py` are sanctioned (the pin
+    table entries and the silent-drop sample, see requirements.md). Any other existing test or fixture needing an edit
+    is a STOP condition: the implementer reports on #1036 instead of adapting the test. The amendment sweep found no
+    other one in the whole suite.
+  - *Test environment.* A worktree outside the workspace has no sibling `mctl-gitops` checkout, so `test_manifest.py`,
+    `test_human_input_producer.py`, `test_human_input_e2e.py` and `test_b4_update_outage_e2e.py` fail on the untouched
+    baseline too. Those reds are not regressions; the sweep ran them green with a symlink to the real checkout.
   - *The gap harness turning green by accident.* That would mean a final read was introduced. It is a STOP condition,
     and T5 asserts the harness file is unchanged and green, with scenario A still ending on `OPEN`.
 
 ## Open questions
 
-- **Forward/backward decode of an unknown `MergeWatchResume` key.** If an older worker receives a hop record written
-  by new code that carries `terminal_reconcile`, the outcome depends on the Temporal Python dataclass converter's
-  handling of unknown keys. The implementer should verify this with a one-line local check and state the result in
-  the PR for B4. This slice does not change it either way, and `proposal_terminal_end` and `deferred_resume_contract`
-  set the same precedent.
+- **Forward/backward decode of an unknown `MergeWatchResume` key.** Answered by the amendment sweep: accepted, key
+  dropped, no exception (see Platform impact, Hopped records). The implementer repeats the one-line check in the PR so
+  the result is reproducible on the PR head, and states it for B4.
 - The two `_terminal_claim` signatures in #1021 and the exact set of locals moved: see requirements.md Open questions.

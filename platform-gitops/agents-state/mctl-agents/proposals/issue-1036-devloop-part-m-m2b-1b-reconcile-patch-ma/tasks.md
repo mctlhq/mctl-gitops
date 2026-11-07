@@ -1,7 +1,10 @@
 # Tasks: issue-1036-devloop-part-m-m2b-1b-reconcile-patch-ma
 
 All code changes are in `orchestrator/temporal/workflows/dev_loop.py`. New tests go in `tests/test_patch_memoization.py`
-(T1) and `tests/test_dev_loop_workflow.py` (T2-T4); no existing test or fixture is edited. Base: `bd3f51a`.
+(T1) and `tests/test_dev_loop_workflow.py` (T2-T4). No existing fixture is edited. The only sanctioned edits to an
+existing test are the three pin-table edits in `tests/test_pre_m1_compat.py` listed in task 2a (amendment v2). Base:
+`bd3f51a`. To run the suite in a worktree outside the workspace, symlink a sibling `mctl-gitops` checkout first, or
+four test files fail on the baseline as well (see design.md, Risks).
 
 - [ ] 1. Write the new tests T1-T4 first and run them against `bd3f51a`. Capture red output (`timeout 300 uv run pytest
   <ids> -q`) for the PR - DoD: each new test fails for the stated reason (missing constant/field/helper/record), output
@@ -14,6 +17,14 @@ All code changes are in `orchestrator/temporal/workflows/dev_loop.py`. New tests
   - consumed by nothing until M2b-1d.
   Add `terminal_reconcile: bool = False` to `MergeWatchResume` after `proposal_terminal_end` (depends on 1) - DoD:
   module imports; an old-shape `MergeWatchResume(...)` without the key decodes `False`.
+- [ ] 2a. Make the three sanctioned edits in `tests/test_pre_m1_compat.py` and nothing else in that file (depends on 2):
+  - add `"terminal_reconcile"` to `M1_ADDED["MergeWatchResume"]`;
+  - add `"terminal_reconcile": False` to `M1_DEFAULTS`;
+  - add `terminal_reconcile=True` to the `MergeWatchResume(...)` sample in `_m1_values()`.
+  Do not touch `tests/fixtures/pre_m1/dataclass_fields.json`. DoD: `timeout 300 uv run --locked pytest
+  tests/test_pre_m1_compat.py -q` shows 109 passed; the diff of that file is exactly these three hunks; the red output
+  of the four affected tests before the edits (3 on adding the field, plus the silent-drop test after the first two
+  edits) is pasted in the PR.
 - [ ] 3. Wire the marker in `_watch_pr` (depends on 2):
   - fresh arm: `terminal_reconcile = workflow.patched(MERGE_WATCH_RECONCILE_PATCH)` immediately after the
     `PROPOSAL_TERMINAL_PATCH` line;
@@ -32,7 +43,7 @@ All code changes are in `orchestrator/temporal/workflows/dev_loop.py`. New tests
   the statements, guards, arguments and order verbatim, and move the existing comments with them. The found branch
   becomes three steps: apply, then terminal-claim-and-return for MERGED/CLOSED, then the unchanged tick and gate
   blocks (depends on 4) - DoD: T3 green; replay suite green with `git diff --stat tests/` showing only additions of new
-  tests.
+  tests plus the three sanctioned hunks in `tests/test_pre_m1_compat.py`.
 - [ ] 6. Run the full evidence batches, each under `timeout 300`, and record the exact commands and outputs (depends
   on 5):
   - `tests/test_patch_memoization.py`;
@@ -73,7 +84,8 @@ All code changes are in `orchestrator/temporal/workflows/dev_loop.py`. New tests
   No merge, bypass, release, deploy or flag change - DoD: PR open, blocked, evidence complete.
 
 STOP and report on #1036, with no workaround, if:
-- any existing test or fixture needs editing or re-recording;
+- any existing test other than the three sanctioned `tests/test_pre_m1_compat.py` edits, or any fixture, needs editing
+  or re-recording;
 - the refactor cannot be made command-identical;
 - the gap harness needs a change;
 - any 1c/1d behaviour (final read, new activity, typed result) turns out to be needed.
@@ -98,7 +110,7 @@ STOP and report on #1036, with no workaround, if:
     _owned_entity_id`.
 - [ ] T4. `tests/test_dev_loop_workflow.py`, structural check: `_MergeWatchRun` exists, is not frozen, and has
   exactly the fields listed in task 4. `MergeWatchResume` does not contain it (the record is never serialized).
-- [ ] T5. Unchanged and green, as pins: `tests/test_merge_watch_worker_gap.py` (scenario A still ends on `OPEN` with no
+- [ ] T5. Unchanged (apart from the sanctioned edits to `tests/test_pre_m1_compat.py`) and green, as pins: `tests/test_merge_watch_worker_gap.py` (scenario A still ends on `OPEN` with no
   read after the gap), all of `tests/test_workflow_replay.py`, `tests/test_pre_m1_compat.py`,
   `tests/test_execution_request_replay.py`, `tests/test_patch_memoization.py`, `tests/test_temporal_marker_scan.py`,
   and every existing `_watch_pr` test in `tests/test_dev_loop_workflow.py`.

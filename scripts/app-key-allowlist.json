@@ -90,9 +90,6 @@
       ".github/workflows/portal-allowlist-dispatch.yml": [
         "AGENTS_APP_PRIVATE_KEY"
       ],
-      ".github/workflows/preview-deploy.yml": [
-        "AGENTS_APP_PRIVATE_KEY"
-      ],
       ".github/workflows/release-please.yml": [
         "AGENTS_APP_PRIVATE_KEY"
       ]
