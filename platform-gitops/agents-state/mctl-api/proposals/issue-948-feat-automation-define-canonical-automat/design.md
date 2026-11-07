@@ -129,6 +129,9 @@ The document is written in the style of `work-context-contract.md` and has these
    registered in this slice**.
    - Separate create, definition (response) and patch schemas; future
      routes expose explicit request/response/error contracts.
+     Definition creation idempotency is scoped by
+     `(tenant, authenticated principal, caller key)`; a different
+     principal's same key/body never returns another owner's definition.
    - Opaque cursor pagination `limit` 1..100; filters `state`/`template`;
      soft delete, history and retention are specified, not built.
    - `run` takes a mandatory opaque caller `idempotency_key` scoped
