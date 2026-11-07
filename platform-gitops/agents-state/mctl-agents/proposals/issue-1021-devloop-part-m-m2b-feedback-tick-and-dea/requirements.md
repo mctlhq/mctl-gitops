@@ -23,6 +23,24 @@ DevLoop. The slice's content is what this file says, not what the slug says.
    durably recorded before the claim is released and the request cannot be silently lost. Completed must not imply
    successful business processing.
 
+**Second amendment, owner decisions of 2026-11-06.** The text with digest
+`sha256:bd54c567ed51e42f15bfee2a1376f6b642bc1adc038bb0bfebcf3a7d0e278924` was not approved either. The owner decided:
+
+4. Abandon stays an explicit operator-controlled exception, with no mandatory final read and no delay. The result
+   documents that its last observed OPEN is not verified current state (R16).
+5. Grace polls distinguish an authoritatively confirmed no-PR outcome from an unknown PR state. Normal no-PR completion
+   stays only when absence is proven. Everything else is reconcile-required, fail-closed (R5a).
+6. `RECONCILE_RECORD_WAIT` is 24 hours. Retries start every 5 minutes and rise to at most 30 minutes, with claim
+   liveness preserved and fail-closed if the record cannot be confirmed (R9, R10).
+7. Operational detection and human handling of both end states is a separate pre-release gate, #1022, with no silent
+   reliance on logs alone (R17).
+
+**Review corrections of 2026-11-06.** The text with digest
+`sha256:f837e0b3ed17b5422d561cc2c06c59c5942919a625c22a87e77acd2b370da4e1` was not approved either. An independent review
+against the code found that a final read could run while this loop's own merge attempt was still live, that cancellation
+could release the claim with no record, and that several statements about claim liveness, deliveries and restarts were
+false. R1a, R5a, R8-R11, R10a, R15 and R16 carry the corrections. The owner's decisions above are unchanged.
+
 Authority checks stay fail-closed and the feedback tick stays OFF. The M2c accept path cannot be enabled without
 verified live authority. This slice adds no tick and no switch, and it does not touch the validator.
 
@@ -33,7 +51,9 @@ on a last observed state, none of which establishes what the PR is now:
   the PR merges and the absolute deadline passes before it returns, the pending `workflow.sleep` fires past the
   deadline, the condition is false, and the loop exits with no further read.
 - **Grace polls.** After `pr_lookup_grace_polls` consecutive polls without a resolvable PR, the watch returns the last
-  state, which may be None, an unresolved reference, or a stale OPEN.
+  state, which may be None, an unresolved reference, or a stale OPEN. `found=False` covers both "no link yet" and "the
+  file or PR is gone or unreachable", because GitHub answers unauthorized and missing lookups identically. So it does
+  not prove absence, although today's result reads as if it did.
 - **Unrecoverable read.** A non-transient `get_pr_state` failure returns the last state.
 
 In each case the `finally` block releases the lifecycle claim and the workflow completes. A merged PR is then
@@ -56,7 +76,7 @@ reported as open, or not at all, and deploy observation and the security-landed 
 
 ## Acceptance criteria (EARS)
 
-Requirements R1-R15 apply only to an execution whose watch recorded `MERGE_WATCH_RECONCILE_PATCH`, except R12, which
+Requirements R1-R16 apply only to an execution whose watch recorded `MERGE_WATCH_RECONCILE_PATCH`, except R12, which
 pins the histories that did not.
 
 ### Establishing the state
@@ -65,6 +85,19 @@ pins the histories that did not.
   - `deadline`: the loop left because `workflow.now() >= deadline`, however far past the deadline it woke;
   - `grace-polls`: `polls_without_pr >= cadence.pr_lookup_grace_polls`;
   - `read-error`: a non-transient `get_pr_state` failure.
+- R1a. THE SYSTEM SHALL settle the watch's shepherd tick and merge gate before it decides, because either can merge this
+  PR, and cancelling one does not recall a merge already running:
+  - on a `deadline` exit, before the final read;
+  - on a `grace-polls` or `read-error` exit, as soon as the final read produces no found state, before any proof of
+    absence and before any record. A found state on those exits needs no settle here.
+
+  An attempt is *unobserved* if it was still in flight when it was settled, or if a merge-gate attempt reported `ran` for
+  the head the read returned. WHILE an attempt is unobserved, a found OPEN or a read with no found state is not final:
+  THE SYSTEM SHALL read again once `GATED_ACTIVITY_TIMEOUT` (10 minutes) has passed since the settle, and act on that
+  read. IF a `deadline` exit still reads OPEN then, THE SYSTEM SHALL end reconcile-required (R6), because the outcome of
+  this loop's own attempt was never observed. The window bounds a gate attempt, whose gated activity has that timeout. It
+  does not bound a shepherd run, which can last `SDK_STEP_TIMEOUT` (2 hours). So a deadline exit fails closed on it, and
+  a site that resumes the loop SHALL NOT submit another tick before `SDK_STEP_TIMEOUT` has passed since that settle.
 - R2. THE final read SHALL make at most `FINAL_READ_ATTEMPTS` attempts, each one `get_pr_state` activity under
   `PR_STATE_RETRY_POLICY`, separated by `FINAL_READ_BACKOFF`. An attempt fails on an `ActivityError` of any kind or on
   `found=False`. A failed attempt SHALL never be read as OPEN, CLOSED or absent.
@@ -80,9 +113,33 @@ pins the histories that did not.
   - `grace-polls` or `read-error`: resume the poll loop, with `polls_without_pr` reset to 0, because a resolvable OPEN
     PR before the deadline is not an end. The absolute deadline still bounds the watch.
 
+- R5a. WHEN a `grace-polls` exit's final read returns `found=False` with no recorded PR reference, and no PR has
+  resolved earlier in this watch (`saw_open_pr` is false and `last` carries no PR number), THE SYSTEM SHALL run the
+  activity `confirm_no_pr`. Absence is proven only when one attempt of that activity observes all of:
+  - the proposal's `.status.yaml` answering 200 with `encoding == "base64"` and non-empty content that decodes, a parsed
+    `status:` line, and no line that sets a `pr` key in any form (indented, quoted, or with a blank value);
+  - every page of `GET /repos/mctlhq/<service>/pulls?head=mctlhq:feat/agents-<slug>&state=all` answering 200 with a
+    well-formed list, and no pull request in any of them;
+  - `GET /repos/mctlhq/<service>/branches/feat/agents-<slug>` answering 404 after the listing above proved repository
+    access. A pushed branch with no PR is undecided, not absent.
+
+  Then THE SYSTEM SHALL end as a normal no-PR completion: `pr` None, `watch_end == "no-pr-confirmed"`, `ended` and
+  `outcome` empty, no record, and no deploy observation. Each of the following is unknown, not absence, and SHALL end
+  reconcile-required (R6):
+  - the status file answering 404, or any non-200, malformed or undecodable answer, or content with no `status:` line;
+  - a `pr` key of any shape, including a `pr:` line that names a PR outside the repo or one answering 404;
+  - a non-empty listing, a failed or malformed page after earlier pages succeeded, or a missing token;
+  - the branch existing, or the branch lookup answering anything other than 200 or 404;
+  - a final read with no PR state because every attempt failed;
+  - an activity failure, or any PR that resolved earlier in this watch.
+
+  The proof covers the loop's deterministic branch and the recorded link. A PR opened by hand from another branch and
+  never linked is outside it, and this limit is stated rather than implied.
+
 ### Reconcile-required
 
-- R6. IF the final read produces no found PR state, THEN THE SYSTEM SHALL end the watch as reconcile-required. It
+- R6. IF the final read produces no found PR state and R5a has not proven absence, or R1a leaves a `deadline` exit on an
+  unobserved OPEN, THEN THE SYSTEM SHALL end the watch as reconcile-required. It
   SHALL durably record the reconciliation (R7) and then release the claim, with this result:
   - `DevLoopResult.watch_end == "reconcile-required"`;
   - `DevLoopResult.outcome == "merge_watch_reconcile_required"`;
@@ -94,22 +151,46 @@ pins the histories that did not.
   - a `MERGE_WATCH_RECONCILE_REQUIRED` log line naming the repo, the slug, the exit and the record.
 - R7. THE durable record SHALL be a comment on the loop's source issue, written by a new activity
   `record_merge_watch_reconcile` before any relinquishing write. It SHALL carry a hidden marker built from the
-  workflow id and the watch's absolute deadline, the exit, the last observed PR, and the ids of the requests open at
-  that moment. It carries no other data.
+  workflow id and the watch's absolute deadline, the exit, the last observed PR, and the ids of the deliveries this run
+  holds open at that moment. It carries no other data. A request the dispatcher has deferred is not held by this run and
+  is not listed; it stays in its own store row and a later claim picks it up.
 - R8. THE activity SHALL be idempotent. It lists the issue's comments in full and returns the existing record when the
-  marker is present on a comment authored by a bot or by an owner, member or collaborator. Any other comment carrying
-  the marker text SHALL be ignored, so a third party cannot suppress the record. A failed or malformed page is a failed
-  read, not a shorter list: the activity then raises and posts nothing.
-- R9. WHILE the record has not been confirmed THE SYSTEM SHALL keep the lifecycle claim and SHALL keep retrying, every
-  `RECONCILE_RECORD_RETRY` for at most `RECONCILE_RECORD_WAIT`, refreshing the claim's liveness on its existing
-  cadence so that the claim is not reaped during the wait. An abandon signal SHALL not shorten this wait.
-- R10. IF the record cannot be confirmed within `RECONCILE_RECORD_WAIT`, or the issue answers 404 or 410, or the
-  issue URL cannot be parsed, THEN THE SYSTEM SHALL NOT release the claim and SHALL NOT end Completed. It SHALL log
+  marker is present on a comment authored by the writer login `mctl-agents[bot]` or by an owner, member or collaborator.
+  Any other comment carrying the marker text, including one from another bot, SHALL be ignored, so a third party cannot
+  suppress the record. A failed or malformed page is a failed read, not a shorter list: the activity then raises and
+  posts nothing. A 201 answer with no comment URL SHALL raise.
+- R9. WHILE the record has not been confirmed THE SYSTEM SHALL keep the lifecycle claim and SHALL keep retrying for at
+  most `RECONCILE_RECORD_WAIT` (24 hours). The interval starts at `RECONCILE_RECORD_RETRY_MIN` (5 minutes), doubles
+  after each failed attempt, and never exceeds `RECONCILE_RECORD_RETRY_MAX` (30 minutes). An abandon signal that arrives
+  after the decision point (R16) SHALL not shorten this wait.
+
+  WHERE this run holds a claim, THE SYSTEM SHALL refresh its liveness with the idempotent `acquire` heartbeat when the
+  wait starts and before any sleep once `RECONCILE_LIVENESS_INTERVAL` (90 minutes) has passed since the last refresh, so
+  that refreshes land at most about 2 hours apart. A run with no claim, or with `track_ownership=False`, SHALL write no
+  heartbeat. A verdict that this run lost the claim to another owner SHALL drop the claim and keep retrying the record.
+  Any other verdict, including `UNOWNED` and an unanswered or unknown one, SHALL be logged and SHALL neither drop the
+  claim nor stop the retries. This holds during the record wait. During a final read the ordinary found-state
+  bookkeeping applies, and it can drop a claim as it does in the loop.
+- R10. IF the record cannot be confirmed within `RECONCILE_RECORD_WAIT`, or the issue answers 410, or the issue URL
+  cannot be parsed, THEN THE SYSTEM SHALL NOT release the claim and SHALL NOT end Completed. It SHALL log
   `MERGE_WATCH_RECONCILE_UNRECORDED` and fail the workflow with a non-retryable `MergeWatchReconcileUnrecorded`, so
-  the unknown state is visible as a Failed run.
-- R11. WHEN a watch ends reconcile-required, every delivery still open SHALL land `Failed` with the typed refusal
-  `merge-watch-reconcile-required`, or close through the existing `request-not-fulfilled` path if it never bound. None
-  SHALL land `Succeeded`. Its request id SHALL appear in the record.
+  the unknown state is visible as a Failed run. A 404 on the issue is retried like any other failure, because GitHub
+  answers unauthorized and missing lookups identically.
+- R10a. IF workflow cancellation arrives while the watch is deciding, that is, from the settle or final read to a
+  confirmed record, THEN THE SYSTEM SHALL NOT release the claim. It SHALL log `MERGE_WATCH_RECONCILE_UNRECORDED` and let
+  the cancellation end the run as Cancelled. WHILE deciding, a cancellation SHALL NOT be swallowed by a settle of the
+  tick or gate, or by a lifecycle write. A cancelled `get_pr_state` at the loop's poll SHALL be re-raised, never counted
+  as a failed read, and never become a `read-error` exit. Otherwise ordinary polling keeps today's handling: a
+  cancellation delivered to some other watch activity, such as an in-loop lifecycle write, can still be absorbed, as it
+  is on `main`, and is then delivered at the next await or not at all.
+- R11. THE SYSTEM SHALL set `_reconcile_required` at the decision point, before the record is attempted, on both end
+  states of R6 and R10. FROM then on, a delivery that this run holds open and has not decided SHALL land `Failed` with
+  the typed refusal `merge-watch-reconcile-required`, whether it was already waiting or binds during the record wait.
+  Its request id SHALL appear in the record if it was held at the first attempt. These stay as they are, and none of
+  them lands a new `Succeeded`:
+  - a delivery already landed, and a delivery whose decided phase is already pending when the decision point is reached;
+  - a delivery that never bound, which closes through the existing `request-not-fulfilled` path;
+  - a delivery with `accepted_after_gates`, which keeps `feedback-not-ready` (T-16).
 
 ### Replay, continue-as-new and duplicates
 
@@ -132,13 +213,35 @@ pins the histories that did not.
 - R15. THE `orchestrator/temporal/cli.py` summary SHALL print reconcile-required with its record, before and instead
   of the existing `not watched` branch that a None `pr` would otherwise reach.
 
-The other readers need no change, and the implementer SHALL pin that with tests or cite the code as evidence:
+The other readers keep their code, and the implementer SHALL pin each of these statements with a test or cite the code
+as evidence:
 
 - `dispatcher._reconcile_closed_loops` only fails non-terminal executions of a closed loop and never writes
   `Succeeded`.
 - mctl-api's `restartIfAbandoned` (`internal/api/handlers_dev_loop.go`) reports `already_exists` for a Completed run
-  with any non-abandon `ended`, and for a Failed run. A reconcile-required run is therefore never silently restarted.
+  with any non-abandon `ended`, and for a Failed run.
+- Intake starts with `ALLOW_DUPLICATE_FAILED_ONLY` (`orchestrator/temporal/start.py:33`). A Completed reconcile-required
+  run is treated as handled, and a Failed or Cancelled run may be restarted by a later event.
+- The dispatcher starts with `ALLOW_DUPLICATE` (`start.py:42`). A later claim may start a continuation after any closed
+  run, reconcile-required included.
 - A `_land_delivery` already decided before the watch ended is not changed.
+
+A restart is therefore possible and is not silent loss. A new run re-reads the PR from live state through its own watch,
+never inherits the old result, and the record stays on the issue. This slice does not add a dispatcher refusal for
+unreconciled runs. See Open questions.
+
+### Abandon and release gate
+
+- R16. WHEN an operator's abandon reaches an exit, or arrives during a settle, a final read or a proof of absence, before
+  the decision point, THE SYSTEM SHALL do no further read, no `confirm_no_pr` and no record, and SHALL add no delay. A
+  backoff or window wait SHALL wake on the signal. It keeps today's `release` and `ended="abandoned: ..."`, and the result
+  SHALL state `watch_end == "abandoned-unverified"`. This holds at all three exits. The decision point is the moment the
+  watch has decided on reconcile-required: no usable found state and absence not proven. Abandon outranks a proven
+  absence and a found OPEN. Only a found MERGED or CLOSED read that arrives with an abandon is still reported as
+  `final-read`, because it ends the PR's story and its deploy observation must not be lost. The `DevLoopResult.pr` docstring and the `cli.py` summary SHALL state
+  that on `abandoned-unverified` this `pr` is the last observed state and is not verified current state.
+- R17. A release carrying this slice SHALL NOT be cut until #1022 is closed by the owner. This slice implements no
+  detector and SHALL NOT present its log lines as operational detection.
 
 ## Out of scope
 
@@ -149,24 +252,26 @@ The other readers need no change, and the implementer SHALL pin that with tests 
 - `_validate_execution_request`: it still defers `feedback-not-ready`, and no production path creates a delivery with
   `accepted_after_gates=True`.
 - An automated reconciler that acts on the record. This slice records; a human or a later slice acts.
-- A Promtail metric or alert on `MERGE_WATCH_RECONCILE_REQUIRED`. It would be a live mctl-gitops change with its own
-  approval.
+- Operational detection and human handling of reconcile-required and failed-to-record runs. That is the separate
+  pre-release gate #1022, whose live changes have their own approval.
 - Any flag activation, release, deployment or production worker change. #1003 stays Draft, the release hold stays ON
   and B4 stays FAIL.
 - Any PR merge. A PR, if later authorized, stays blocked for owner approval under the temporary code-owner rule
   (#1020) and is never merged with an admin bypass.
 
+## Decisions recorded
+
+- **The #516 terminal-status break is unchanged.** It ends only when no OPEN PR ever resolved and the proposal status
+  stayed loop-terminal over `PROPOSAL_TERMINAL_CONFIRM_POLLS` polls, with a typed `ended`. It reports no PR state, so it
+  is not a stale OPEN.
+- **Record and read share GitHub as a failure domain.** A GitHub outage longer than 24 hours therefore ends in the
+  fail-closed Failed run of R10, which #1022 must detect, along with a Cancelled run that holds its claim (R10a).
+- **A read is a moment, not a guarantee.** A verified OPEN says what GitHub answered at that moment. A human can still
+  merge afterwards. R1a covers only this loop's own in-flight attempts.
+
 ## Open questions
 
-- **Abandon, proposed unchanged.** An operator abandon during the watch still ends on the last observed state with
-  `ended="abandoned: ..."` and a `release`, with no final read. It is an explicit operator decision and is typed as
-  such, but `pr` can be a stale OPEN. Is that carve-out acceptable, or should abandon also take the final read and
-  delay the abandon by up to the final read's bound?
-- **The #516 terminal-status break, proposed unchanged.** It ends only when no OPEN PR ever resolved and the proposal
-  status stayed loop-terminal over `PROPOSAL_TERMINAL_CONFIRM_POLLS` polls, with a typed `ended`. It reports no PR
-  state, so it is not a stale OPEN.
-- **Grace-polls behaviour change.** A loop whose implementer legitimately produced no PR today ends with `pr=None`
-  and nothing else. After this slice it ends reconcile-required with a comment on the source issue. This follows the
-  owner's scope decision and is stated so that it is approved knowingly.
-- **Bounds.** `RECONCILE_RECORD_WAIT` is proposed at 7 days and `RECONCILE_RECORD_RETRY` at 30 minutes. They cover a
-  GitHub outage that also caused the failed read, because record and read share a failure domain.
+1. **Restart of an unreconciled run (owner).** This text keeps today's reuse policies and documents them (R15), pinned by
+   T-23 and covered by #1022. The alternative is a dispatcher deferral with a typed reason while the last run is
+   unreconciled, which needs cross-run state and widens this slice. Approving this digest accepts the documented
+   behaviour.

@@ -74,7 +74,7 @@ the App's settings page.
 ## In-repo consumers (verified from this clone)
 
 Grep for `AGENTS_APP_PRIVATE_KEY` across
-`.github/workflows/` in this clone finds exactly four call sites.
+`.github/workflows/` in this clone finds exactly five call sites.
 
 | Consumer | Mints for | `repositories:` | `permission-*` scoping (after this proposal) |
 |---|---|---|---|
@@ -82,6 +82,7 @@ Grep for `AGENTS_APP_PRIVATE_KEY` across
 | `.github/workflows/release-deploy.yaml`, `bump` job — **removed** (mctlhq/mctl-agents#470) | Used to mint an App token to push a tag bump to `main`; now pushes with the `gitops-bump` environment deploy key | n/a | n/a |
 | `.github/workflows/release-drift.yml:43-52` (`Generate read token` step, `check` job) | Reads release/tag/compare state across every mctlhq source repository via `.github/scripts/release-drift.sh` | none (deliberately unset — needs org-wide read) | `permission-contents: read`, `permission-actions: read`, `permission-metadata: read` — already correctly scoped before this proposal; left untouched |
 | `.github/workflows/cloudflare-drift.yml:375-391` (`Generate a read token for the private upstreams` step, `plan` job, portal root only) | Reads `docs/portal-allowlist.json` from the one private upstream in `PRIVATE_OWNERS` (`mctlhq/projects-mcp`), which `raw.githubusercontent.com` cannot serve without a token | `projects-mcp` | `permission-contents: read`, `permission-metadata: read` |
+| `.github/workflows/cloudflare-drift.yml` (`Generate a write token for the catalogue PR` step, `drift` job, portal root, exit 5 on `main` only) | Lets `scripts/portal-catalogue-land.py` put a `catalogue.json` update that cannot widen exposure into a PR (#2416). It does not merge | `mctl-gitops` | `permission-contents: write`, `permission-pull-requests: write` |
 
 `release-drift.yml`'s no-`repositories:`, multi-permission, cross-repo-read
 shape is the one call site in this repo that a future single-repo-scoped
@@ -162,3 +163,21 @@ done
   workflow (issue option 1), explicitly noting `release-drift.yml`'s
   no-`repositories:`, multi-permission, cross-repo-read shape as a
   requirement the design must support.
+
+## Ratchet (report-only, #1033)
+
+`.github/workflows/app-key-ratchet.yml` runs daily. It reads the git tree of
+every non-archived org repository and lists each workflow file that references
+`AGENTS_APP_PRIVATE_KEY` or `APP_PRIVATE_KEY`, or uses `secrets: inherit`,
+against `scripts/app-key-allowlist.json`.
+
+- A reference outside the allowlist is a **warning** for now (report-only).
+- A read that fails, truncates or returns a malformed body fails the run: an
+  unobserved repository is unknown, never clean. So does an allowlisted
+  repository the token cannot see.
+- Adding a consumer means adding it to the allowlist in the same PR; removing
+  one leaves a "stale entry" line in the report.
+- Run locally (read-only): `GH_TOKEN=$(gh auth token) python3 -I scripts/app-key-ratchet.py`.
+  Exit 0 clean, 10 findings, 20 unknown. Enforcing mode is a later stage.
+- Not covered yet: org secret visibility and App installation permissions
+  (the reader token may lack the permission; see the containment plan).

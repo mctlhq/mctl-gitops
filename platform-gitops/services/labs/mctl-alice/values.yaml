@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-alice
-  tag: "2.11.3"
+  tag: "2.12.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -50,6 +50,7 @@ resources:
     cpu: 250m
     memory: 384Mi
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   PORT: "8080"
   NODE_ENV: production
   PUBLIC_BASE_URL: https://alice.mctl.ai

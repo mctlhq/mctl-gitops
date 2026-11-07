@@ -12,8 +12,9 @@
 # the `run` surface) run no mctl-agents image and need no entry.
 #
 # boundary (closed set), for governed: false entries (a transport entry is
-# bypass-open, or no-mctl-token with min_image_version when its surface maps
-# no MCTL_TOKEN):
+# bypass-open; no-mctl-token with min_image_version when its surface maps
+# no MCTL_TOKEN; or no-shell-session with min_image_version when its surface
+# has fixed_run_mode and a literal image):
 #   no-model-session  no SDK session, so no model-selected actions
 #   no-mctl-token     cannot call mctl-api as the admin principal
 #   operator-operation deterministic step behind an admin-only mctl-api operation
@@ -77,7 +78,20 @@ surfaces:
     path: argo-workflows/cluster-templates/cwft-mctl-agents-run.yaml
     template: run-orchestrator
     governed: true
-    note: covers RUN_MODE full, mentor-only and single-service
+    note: covers RUN_MODE full, mentor-only and single-service; maps no MCTL_TOKEN, so these modes have no mcp__mctl__* tools
+  - id: incident-responder
+    kind: cwft
+    path: argo-workflows/cluster-templates/cwft-mctl-agents-run.yaml
+    template: run-incident-responder
+    governed: true
+    # The one mctl-agents-run template holding MCTL_TOKEN. CI requires the
+    # literal RUN_MODE and a profile that does not list Bash. The profile is a
+    # declaration: the session still exposes Bash, which is the run-bash entry
+    # below. CI also requires a literal image, so no caller picks the release.
+    # Its static admin token is mctlhq/mctl-agents#737, a separate gap.
+    fixed_run_mode: incident-responder
+    execution_profile: agent-platform/execution-profiles/incident-responder-default/profile.yaml
+    note: RUN_MODE incident-responder only; resolving incidents needs mctl-api
   - id: usage-collector
     kind: cwft
     path: argo-workflows/cluster-templates/cwft-mctl-agents-usage-collector.yaml
@@ -120,11 +134,24 @@ surfaces:
     tracked_by: mctlhq/mctl-agents#717
     related: mctlhq/mctl-api#723
     reason: PreToolUse gates mcp__* only; Bash can call mctl-api with MCTL_TOKEN
-  - id: run-bash
+  - id: run-orchestrator-bash
     kind: transport
     of: run
     governed: false
+    boundary: no-mctl-token
+    # The mctl-agents release these modes were checked against without a
+    # token (service agents and mentor degrade softly). mctlhq/mctl-gitops#1980.
+    min_image_version: 1.117.0
+    related: mctlhq/mctl-agents#717
+    reason: run-orchestrator maps no MCTL_TOKEN, so Bash in the service-agent modes reaches no mctl-api credential
+  - id: run-bash
+    kind: transport
+    of: incident-responder
+    governed: false
     boundary: bypass-open
-    tracked_by: mctlhq/mctl-agents#717
-    related: mctlhq/mctl-api#723
-    reason: PreToolUse gates mcp__* only; Bash can call mctl-api with MCTL_TOKEN
+    tracked_by: mctlhq/mctl-gitops#1980
+    related: mctlhq/mctl-agents#717
+    # Flips to no-shell-session once the literal image is at or above the
+    # release carrying mctlhq/mctl-agents#1024 and a real run shows no Bash
+    # (runbook: policy-checkpoint-coverage.md).
+    reason: run-incident-responder maps MCTL_TOKEN and its session still exposes Bash; only the CLI permission mode limits what that Bash runs, so no setting of ours removes it until the image builds the session without it

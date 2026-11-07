@@ -31,6 +31,7 @@ resources:
     cpu: 500m
     memory: 512Mi
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   APP_ENV: staging
   # Seed catalog from Cloudflare Worker on cold start (fast startup, ~2s)
   CATALOG_INGEST_URL: https://pelican-catalog-worker.pelican-libertex.workers.dev/__ingest

@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/mctlhq/mctl-claude-remote
-  tag: "0.18.0"
+  tag: "0.23.1"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -64,6 +64,7 @@ containerSecurityContext:
 serviceAccount:
   create: true
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   PORT: "8080"
   # No RESUME_SESSION_ID pin: as of image 0.9.0 the entrypoint manages its own
   # session id in a state file, resuming it across restarts and rotating to a

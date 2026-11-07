@@ -33,6 +33,7 @@ resources:
     cpu: 200m
     memory: 256Mi
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   APP_ENV: production
   # Advertised version string (/readyz, /__status, API index). The app's code
   # default is a stale hardcoded literal, so set it here to match image.tag.

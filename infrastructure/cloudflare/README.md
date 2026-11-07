@@ -377,21 +377,20 @@ all. The last three user-owned CI tokens (`CLOUDFLARE_API_TOKEN`,
 `CF_PORTAL_READ_TOKEN`, `CF_APPLY_TOKEN_PORTAL`) were re-issued as account
 tokens on 2026-10-16.
 
-Everything above is a **repository** secret. `R2_CF_STATE_*` should not be:
-it has exactly one consumer, `opentofu-state-backup.yml`, whose `state-backup`
-environment currently protects the workflow file rather than the credential —
-because a repository secret is readable by any workflow in the repository.
-#1118 tracks moving it.
+Everything above is a **repository** secret except the two state
+credentials, which are **environment secrets** since 2026-11-07 (#1118):
 
-`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` is **not** part of that move, however
-similar it looks. `terraform.yml` reads the same pair with no `environment:` at
-all, so scoping it to `state-backup` and dropping it from repository scope —
-which is what the paragraph below prescribes for the apply credentials — would
-leave that workflow with an empty `AWS_ACCESS_KEY_ID`, break `terraform init`
-against R2, and fail every push touching `infrastructure/k3s-preview/**`.
-Loudly rather than dangerously, but it is a different subsystem's deploy path,
-broken by following this page. Moving it means giving `terraform.yml` an
-environment first.
+- `R2_CF_STATE_*` lives on `state-backup` only; its one consumer is
+  `opentofu-state-backup.yml`.
+- `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` lives on `k3s-plan`, `k3s-apply`
+  and `state-backup`, the three environments whose jobs read it
+  (`terraform.yml` plan and apply, and the backup).
+
+All three environments allow deployments from `main` alone. Neither pair may
+come back at repository scope: a repository secret is readable by any workflow
+in the repository, an environment secret only by a job its policy admits.
+Verify with `gh api repos/mctlhq/mctl-gitops/environments/<env>/secrets`;
+they must not appear in `gh secret list`.
 
 The apply credentials below are **environment secrets on `cloudflare-apply`,
 not repository secrets**, for exactly that reason — storing them at repository

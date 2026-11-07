@@ -216,6 +216,81 @@ data:
             }
           },
           "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "mean"] }, "tooltip": { "mode": "multi" } }
+        },
+        {
+          "type": "row",
+          "id": 3,
+          "title": "Connect funnel and first call (production, 7d)",
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+        },
+        {
+          "type": "stat",
+          "id": 30,
+          "title": "Logins started (7d)",
+          "description": "MTProto logins started, QR and code. The decisive #1157 measure (OIDC callback to login started) comes from audit_logs, see the runbook; this panel is the metric-side companion.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 15 },
+          "targets": [{ "expr": "sum(increase(mctl_login_flow_started_total{job=\"labs-mctl-telegram-base-service\"}[7d]))", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "id": 31,
+          "title": "Logins completed (7d)",
+          "description": "MTProto logins that ended with a session.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 15 },
+          "targets": [{ "expr": "sum(increase(mctl_login_flow_total{job=\"labs-mctl-telegram-base-service\",result=\"ok\"}[7d]))", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "id": 32,
+          "title": "Completion rate (7d)",
+          "description": "Completed over started in the same 7 days. Logins that span the window edge make this approximate.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 15 },
+          "targets": [{ "expr": "sum(increase(mctl_login_flow_total{job=\"labs-mctl-telegram-base-service\",result=\"ok\"}[7d])) / clamp_min(sum(increase(mctl_login_flow_started_total{job=\"labs-mctl-telegram-base-service\"}[7d])), 1)", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 1 } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "id": 33,
+          "title": "Grant without first call (7d)",
+          "description": "Share of client grants with no tool call inside the window, excluding portal and local_agent (they connect without calling, same filter as MctlTelegramConnectorNoFirstCall).",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 15 },
+          "targets": [{ "expr": "sum(increase(mctl_connect_first_call_total{job=\"labs-mctl-telegram-base-service\",outcome=\"none_within_window\",client!~\"portal|local_agent\"}[7d])) / clamp_min(sum(increase(mctl_connect_first_call_total{job=\"labs-mctl-telegram-base-service\",outcome=~\"ok|none_within_window\",client!~\"portal|local_agent\"}[7d])), 1)", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 1 } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "timeseries",
+          "id": 34,
+          "title": "First call by client and outcome",
+          "description": "Daily grants by client label (split in mctl-telegram 0.127.0) and whether a first tool call followed.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "interval": "1d",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+          "targets": [{ "expr": "sum by (client, outcome) (increase(mctl_connect_first_call_total{job=\"labs-mctl-telegram-base-service\"}[$__interval]))", "legendFormat": "{{client}} {{outcome}}", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" } } } },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } }
+        },
+        {
+          "type": "timeseries",
+          "id": 35,
+          "title": "Login outcomes by method",
+          "description": "Daily MTProto login endings. qr is desktop, code is phone plus code.",
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "interval": "1d",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+          "targets": [{ "expr": "sum by (method, result) (increase(mctl_login_flow_total{job=\"labs-mctl-telegram-base-service\"}[$__interval]))", "legendFormat": "{{method}} {{result}}", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" } } } },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } }
         }
       ]
     }

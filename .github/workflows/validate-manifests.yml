@@ -567,6 +567,10 @@ jobs:
 
       - name: Unit-test the release preflight
         run: python3 tests/test_release_preflight.py
+      - name: Read-only workflow steps hold no write credential
+        run: python3 tests/test_read_steps_no_credential.py
+      - name: Unit-test gitops-bump inputs and its edit check
+        run: python3 tests/test_gitops_bump_inputs.py
 
       - name: Unit-test the release-deploy input validation
         # validate-inputs gates build and bump; this runs its bash against
@@ -609,6 +613,11 @@ jobs:
         # that closes the string literal — by running the template's own
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
+
+      - name: Unit-test patch-autoscaling-values against a values file
+        # The step edits only .autoscaling (#2413). Its own script runs against
+        # fixtures with real yq, with git, ssh, kubectl and argo shimmed to fail.
+        run: python3 tests/test_wft_deploy_service_autoscaling_values.py
 
       - name: Test workflow parameters cannot inject shell
         run: python3 tests/test_shell_param_injection.py
@@ -690,6 +699,11 @@ jobs:
         run: |
           python3 tests/test_cwft_mctl_agents_approve_digest_binding.py
           python3 scripts/proposal-content-digest.py --selftest
+
+      - name: Unit-test the portal catalogue PR guard
+        # It writes to PRs with an App token, so what it refuses is the point:
+        # an enabled tool, a widening, or anything it could not read (#2416).
+        run: python3 tests/test_portal_catalogue_land.py
 
       - name: Unit-test the portal OAuth registration drift detector
         # The MCP server's `auth_credentials` is write-only: the API accepts it

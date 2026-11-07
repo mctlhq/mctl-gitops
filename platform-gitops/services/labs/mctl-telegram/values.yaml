@@ -12,7 +12,7 @@ strategy:
   rollingUpdate: null
 image:
   repository: ghcr.io/mctlhq/mctl-telegram
-  tag: "0.125.3"
+  tag: "0.134.0"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
@@ -203,6 +203,14 @@ env:
   # Admin-tool success is demonstrated separately with operator credentials.
   # (Reverts the temporary reviewer-admin grant; submission docs reframed to match.)
   TG_LOGIN_ADMINS: "210408407"
+  # Operators of the client broadcast workflow (mctl-telegram issue-439).
+  # Empty or absent turns the whole workflow off, delivery worker included:
+  # prepare_broadcast is not even listed and every broadcast surface refuses.
+  # An id here only gets the admin:broadcast scope if it is ALSO in
+  # TG_LOGIN_ADMINS (ResolveScopes ignores a non-admin operator), and a
+  # campaign is only ever sent after a human approves it in a browser signed
+  # in with Telegram. 210408407 = operator (@MashkovD) ONLY.
+  BROADCAST_OPERATORS: "210408407"
   # Identities exempt from the 90-day absolute session TTL (mctl-telegram#409,
   # implemented in #410). Only the absolute ceiling is lifted — the 30-day idle
   # TTL still retires an identity nobody uses. Takes effect from the release

@@ -30,6 +30,7 @@ resources:
     cpu: 500m
     memory: 384Mi
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   PORT: "8787"
   # Baked into every metadata document this server publishes, so it cannot move
   # without invalidating what clients have already fetched.

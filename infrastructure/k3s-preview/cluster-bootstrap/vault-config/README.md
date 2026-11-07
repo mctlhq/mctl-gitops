@@ -8,6 +8,11 @@ Apply after Vault is initialized and unsealed.
 Used by the ExternalSecrets Operator (ESO) service account.
 Grants read access to all platform and team secrets.
 
+The policy file also carries an explicit `deny` on `platform/github-app-agents*`
+(data and metadata). A deny overrides the `platform/*` read grant, so the
+GitHub App signing key is not readable through the ClusterSecretStore. Apply
+with the command below and verify with a canary secret first (#1033).
+
 ```bash
 vault policy write external-secrets-read vault-policy-external-secrets-read.hcl
 ```

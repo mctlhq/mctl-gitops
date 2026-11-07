@@ -193,7 +193,8 @@ RACE_EOF
         src = t["script"]["source"]
         if mutate:
             src = mutate(src)
-        assert src.count("/secrets/deploy-key/ssh-privatekey") == 1
+        # validate clones anonymously, so it has no key to redirect.
+        assert src.count("/secrets/deploy-key/ssh-privatekey") == (0 if name == "validate" else 1)
         # /tmp first: on Linux the temporary directory itself lives under /tmp.
         src = src.replace("/tmp/", str(self.tmp) + "/w-")
         src = src.replace("/secrets/deploy-key/ssh-privatekey", str(self.key))

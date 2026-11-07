@@ -302,6 +302,45 @@ tests:
         exp_alerts: []
 
   - interval: 1m
+    name: MctlTelegramConnectorNoFirstCall ignores the portal and local agents
+    # Every grant ends with no call in five minutes, which is normal for both.
+    input_series:
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="portal",outcome="none_within_window",reason=""}'
+        values: '0x10 1x10 2x10 3x90'
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="local_agent",outcome="none_within_window",reason=""}'
+        values: '0x10 1x10 2x10 3x90'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: MctlTelegramConnectorNoFirstCall
+        exp_alerts: []
+
+  - interval: 1m
+    name: MctlTelegramConnectorNoFirstCall still fires for a coding agent
+    # The same shape on codex is a broken connector, so the new labels must
+    # not all fall out of the alert.
+    input_series:
+      - series: 'mctl_connect_first_call_total{job="labs-mctl-telegram-base-service",pod="a",client="codex",outcome="none_within_window",reason=""}'
+        values: '0x10 1x10 2x10 3x90'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: MctlTelegramConnectorNoFirstCall
+        exp_alerts:
+          - exp_labels:
+              job: labs-mctl-telegram-base-service
+              client: codex
+              severity: warning
+            exp_annotations:
+              summary: "mctl-telegram: codex connectors get tokens but never make a call"
+              description: >-
+                At least half of the codex authorization_code
+                grants in the last 6h were followed by no successful MCP call
+                within 5 minutes. The connector is authenticating and then
+                failing on its first request: check the connector URL (it must
+                end in /mcp), mctl_root_mcp_requests_total, and the
+                connect_first_call table.
+              runbook_url: "https://github.com/mctlhq/mctl-telegram/blob/main/docs/runbook.md#connectfirstcall"
+
+  - interval: 1m
     name: MctlTelegramConnectorNoFirstCall fires on the 2026-10-30 shape, across a rollout
     # A chatgpt user retries three times; every grant ends with no call.
     # The third lands on a new pod after a rollout, so the counter is a
