@@ -53,8 +53,7 @@ exception is optional task 7, which needs its own explicit approval.
   (depends on 3, 4).
   - Checks: render plus kubeconform; the provider has no
     Ingress/LoadBalancer/NodePort; the facade host and paths are exact; the
-    fail-closed defaults hold; provenance is checked in P0 or P1 mode
-    according to `gate.yaml`.
+    fail-closed defaults hold; P0 validates staged provenance only. P1 digest requirements are separate and cannot be enabled by `gate.yaml`.
   - Leak guard: in P0, no `glovo.mctl.ai`, `mctl-assistants`, provider workloads or provenance images may appear in reconciled `platform-gitops/**` (excluding `agents-state/`) **regardless of `gate.yaml` claims**. Later P1/P2 has a separate owner grant and externally verified gate.
   - Exit codes 0/6/7, as in `scripts/release-gate.py`.
   - DoD: the selftest covers each refusal, and the script passes on the P0
@@ -107,8 +106,7 @@ exception is optional task 7, which needs its own explicit approval.
 - [ ] T3. A provider render with an added Ingress or a NodePort Service exits 6.
 - [ ] T4. A facade with `GLOVO_ENABLED: "true"`, a non-empty allowlist or team
   fallback on while `gate.yaml` has `p2: blocked` exits 6.
-- [ ] T5. Provenance: `<digest-pending>` passes with `p1: blocked` and fails
-  with `p1: approved`. A semver tag in place of a digest fails in both modes.
+- [ ] T5. Provenance: `<digest-pending>` is allowed only for non-reconciled P0 staging, irrespective of `gate.yaml` claims. A reconciled deployment with any image tag fails P0 even if `gate.yaml` has `p1: approved`. P1 immutable digest + SBOM checks require their own later approved policy.
 - [ ] T6. A missing or unreadable `gate.yaml` exits 7 (refusal, not pass).
 - [ ] T7. The reserved-hosts check on the `ingress.enabled=true` render: with
   task 7 applied, `glovo.mctl.ai` in labs is refused until the owner becomes
