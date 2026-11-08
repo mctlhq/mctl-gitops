@@ -21,7 +21,15 @@ contract with golden fixtures, and a harness that runs against the real mctl-api
 Nothing touches a real Glovo API, session, payment or production activation. The proposal
 must not claim deploy-readiness until M1a and M1b are independently reviewed and merged.
 
-## User stories
+## AMEND 2026-11-08 — refusal code + real transactional prepare consistency
+
+**Independent review P2/contract correctness:** #957 introduces `tenant_selection_required`, which is **not** in the closed Glovo M0 refusal enum and conflicts with the already prepared M1a #953 AMEND (`ambiguous_tenant` for a user who has not explicitly selected a team, including the case of one eligible team). The public MCP contract must not drift silently. For v1alpha1, use the **existing `ambiguous_tenant`** refusal for absence/invalidity of a human-selected-team OAuth grant, even when a sole eligible team exists, unless a **separately reviewed version bump** changes M0, #953 and the facade together. `tenant_mismatch` may be retained as an internal wire-only refusal if mapped to a closed public error; no new public tool enum without schema update.
+
+**Cross-store atomicity:** the proposed `POST /orders:prepare` calls M1b to create `pord_`, `we_` and pending `aar_` "in one transaction", but current WorkItem/approval store has its own persistence/transactions. The proposal MUST name actual shared `pgx.Tx` interfaces and database topology for this operation, or define a recoverable, idempotent saga with no orphan `we_`, `aar_` or wrongly authorized order. Tests inject crashes before/after each stage and prove exactly one active pending request or explicit terminal compensation, **zero fake-provider writes**. Do not claim deploy-ready on an unproven atomic assumption.
+
+The OAuth selected team must be human-chosen, server-owned, bound to access+refresh grant and rechecked each call. Per-principal pilot allowlist only (no wildcard), no `labs` fallback. All cross-repo fixtures MUST match the exact same v1alpha1 schema and refusal mapping.
+
+
 
 - AS the Glovo MCP facade operator I WANT one frozen, versioned mctl-api route/schema matrix SO THAT the facade built against fixtures works unchanged against the deployed mctl-api.
 - AS a human team member I WANT my Glovo session bound to the tenant I explicitly selected at consent SO THAT no facade, header or tool argument can move my orders into another tenant.
@@ -37,7 +45,7 @@ must not claim deploy-readiness until M1a and M1b are independently reviewed and
 - WHEN a request reaches a join route THE SYSTEM SHALL accept it only if the bearer token is the Glovo facade workload identity (`MCTL_GLOVO_FACADE_TOKEN`, compared in constant time). Any other principal, including admins, the service token, support, agent, surface and Glovo-worker principals, SHALL get 401 `not_facade_identity`.
 - WHEN the facade workload identity calls any route outside the join prefix (including `/mcp`) THE SYSTEM SHALL refuse it with 401.
 - WHEN a join request arrives THE SYSTEM SHALL re-verify `X-Mctl-Subject-Token` with mctl-api's own OAuth verifier. The token must be RS-signed by mctl-api, with `iss` equal to the mctl-api base URL, `aud` containing exactly the configured Glovo resource (`GLOVO_MCP_RESOURCE`, from M1a) and no other mctl audience, and it must be unexpired and not revoked. If any check fails THE SYSTEM SHALL return 401 `subject_token_invalid` and SHALL NOT log, echo or store the raw token. Only its SHA-256 may appear in audit records.
-- IF the subject token carries no server-signed `mctl_tenant` claim THEN THE SYSTEM SHALL return 403 `tenant_selection_required`. It SHALL NOT fall back to a sole membership, a pilot row or a default tenant such as `labs`.
+- IF the subject token lacks a **valid human-selected-team, grant-bound** claim THEN THE SYSTEM SHALL return 403 `ambiguous_tenant` (the M0 closed refusal code) even when exactly one tenant would be eligible. It SHALL NOT use membership count, pilot rows or hosting default `labs` as a substitute; the same code must appear in #953/#1235 and shared fixtures.
 - IF `X-Mctl-Selected-Tenant` is present and differs from the verified `mctl_tenant` claim THEN THE SYSTEM SHALL return 403 `tenant_mismatch`. The header SHALL never be used as a source of the tenant.
 - WHEN the verified claim names a tenant THE SYSTEM SHALL still run the M1a resolver (principal-mode membership, the pilot allowlist and a current installation) and return that resolver's refusal codes unchanged. The claim narrows the tenant and never widens access.
 - WHEN a human completes `/oauth/consent` for the Glovo resource THE SYSTEM SHALL require the human to pick exactly one eligible tenant. It SHALL mint that tenant as `mctl_tenant` into the access and refresh tokens. A tenant not in the eligible set SHALL be refused, and no selection SHALL be preselected.
