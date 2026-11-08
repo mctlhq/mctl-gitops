@@ -116,7 +116,7 @@ changes.
      - Each account keeps its own currency. FX rates are pinned with `{rate, source, as_of}`.
      - Arithmetic uses `Decimal`, quantized to the ISO 4217 minor unit with ROUND_HALF_EVEN.
      - Any result can carry `uncertain` with a reason.
-   - **D8 Experiment results.** `[MODEL]` results, plus `not-run` entries with reasons.
+   - **D8 Experiment results.** `[MODEL]` results scoped strictly to the synthetic reference model, plus explicit `not-run` entries and gates for L2 integration, L3 preview, L4 production and any LLM calls. No model test result is presented as verification of live Telegram identity or data flow.
    - **D9 Cost, privacy, retention and incident matrix.** Observed and estimated values in separate
      columns, with the managed-runtime caps from the #1088 epic as the budget frame.
    - **D10 Proactivity.** On-demand first. Weekly digests only under the #322 automation control
@@ -164,25 +164,22 @@ changes.
      `paths:` lists, and add a step:
      `python3 -m unittest discover -s docs/spikes/finance-assistant/tests -v`.
 
-**Verdict decision rules (the report applies them; it does not assume them):**
-- **REUSE_CATALOG_CSV_MVP** requires all of:
-  - a `[CODE]` read shows that AssistantInstall plus the observe profile can express owner-only
-    invocation with no auto-reply and a private destination;
-  - all model tests pass;
-  - no new runtime or identity is needed.
-- **EXTEND_AFTER_CONNECTOR_GATES**: the product is viable, but owner-only delivery, the private
-  store, or connector authority needs #1048/#1088 gates first.
-- **RESEARCH_ONLY_DEFER**: provider or region coverage, compliance or privacy cannot be established.
-- **NO_ADOPTION**: viability requires a parallel platform.
+**Verdict decision rules (decision-neutral; no preferred outcome before evidence):**
+- **REUSE_CATALOG_CSV_MVP** can be *recommended for a separately gated design/pilot* only when pinned `[CODE]` evidence demonstrates expressible owner-only invocation, no auto-reply and an approved private destination without a new runtime/identity; the offline model and negative controls pass; and the remaining production/integration gaps are explicitly named. This verdict does **not** mean a CSV upload or owner-only protection is live or safe to enable.
+- **EXTEND_AFTER_CONNECTOR_GATES** is appropriate if a viable user workflow is supported by evidence but owner-only delivery, financial data storage, provider egress/authority or privacy gates require bounded additions under the existing #1048/#1088 owners before any pilot.
+- **RESEARCH_ONLY_DEFER** is appropriate when product value, provider coverage, correctness, regional compliance, data-protection feasibility or the necessary security evidence remain too uncertain to justify implementation planning. A missing source is `unknown`, never proof of a passed or failed gate.
+- **NO_ADOPTION** is appropriate when the credible approach demands an unjustified parallel platform or presents disproportionate cost, privacy or security risk.
 
-Based on what was observed so far, the expected outcome is **EXTEND_AFTER_CONNECTOR_GATES**:
-- production is observe-only;
-- the managed runtime is preview-only with 1 account;
-- the #1048 gates are not passed (status unknown);
-- no private finance data store exists.
+**Do not preselect an outcome.** Evaluate the minimal rules-only CSV baseline and all three candidate surfaces against the same evidence and rejection criteria; describe contradictory findings explicitly. Present *one* proposed verdict in D11 **only after** D1–D10 are completed. If required evidence is missing, use `RESEARCH_ONLY_DEFER` or document why a strictly bounded next discovery step is justified; never infer connector-gate failure solely from `unknown`.
 
-The report must confirm or overturn this expectation with pinned evidence.
+### Evidence ladder: model != integration != production
+- **L0 — contract/design inspection:** pinned source and configurations establish intended capabilities, *not* a tested security guarantee.
+- **L1 — synthetic offline reference model:** stdlib `unittest` proves only the modeled Decimal arithmetic, fixture behavior, abstract authorization and deny-by-default dispatch. A PASS must be labeled `[MODEL]` and scoped to the exact fixture/oracle. It does not prove OAuth principal binding, Telegram routing, queue replay, data deletion, network egress, actual model-provider retention, or real bank correctness.
+- **L2 — component/integration security tests:** only a separate reviewed execution with real application code, test identities/tenants, explicit output sinks, transport/connector stubs and failure injection can supply integration evidence. Not run or authorized by this research proposal; record `not-run` and the blocking gates.
+- **L3 — isolated preview with non-sensitive data and explicit owner consent:** requires provider/connector and runtime gates and separately approved deployment. Not run or authorized here.
+- **L4 — production evidence:** privacy/security review, operational soak and release controls under the existing owners. Never infer L4 from L1, GitOps configuration or a green research CI.
 
+**Approval separation:** approving this research-only proposal authorizes the report, synthetic reference model, tests, SpikeDefinition and an independently reviewed PR in `mctlhq/.github`—nothing in `mctl-telegram`/`mctl-api`, no real financial data, no bank integration, no activation. Human approval of later implementation is a *new* exact-artifact decision. The research PR must not auto-close #325; the owner records the spike verdict.
 ## Alternatives
 
 - **Build a prototype finance assistant definition in mctl-telegram now.** Dropped. The issue
@@ -209,8 +206,9 @@ The report must confirm or overturn this expectation with pinned evidence.
     check digits.
   - *The report overstates provider coverage.* Every country cell is cited `[PRIMARY]` or marked
     `unknown`.
-  - *Model results are read as a production guarantee.* Every result is tagged `[MODEL]`, and D0
-    lists the non-claims.
+  - *Model results are read as a production guarantee.* Every result is tagged `[MODEL]` with
+    fixture/oracle scope. The explicit L0-L4 evidence ladder forbids promotion to an
+    integration, privacy or production guarantee without separate reviewed tests and gates.
   - *Someone treats the proposed verdict as an approval.* The manifest stays `proposed`, with no
     decision block. The verdict is a recommendation, and owner review is required.
   - *Manifest validation fails.* Run `roadmap/scripts/validate.py` locally and through
