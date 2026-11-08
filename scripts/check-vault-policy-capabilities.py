@@ -114,9 +114,12 @@ def parse_policy(text, label):
         if bad:
             raise Unknown(f"{label}: unknown capability {sorted(bad)} on {pattern!r}")
         # HCL decodes string escapes and interpolation; this checker compares
-        # raw text, so any such spelling is unknown rather than evaluated.
+        # raw text, so any such spelling is unknown rather than evaluated. Vault
+        # treats "*" as a glob only as the last character of a path; elsewhere it
+        # is a literal, which this checker does not model, so it is unknown too.
         if ("+" in pattern or "{{" in pattern or "%" in pattern
-                or "\\" in pattern or "${" in pattern):
+                or "\\" in pattern or "${" in pattern
+                or "*" in pattern[:-1]):
             raise Unknown(f"{label}: wildcard/template/escape syntax in {pattern!r} is not supported")
         rules.append((pattern, set(caps)))
         pos = end + 1

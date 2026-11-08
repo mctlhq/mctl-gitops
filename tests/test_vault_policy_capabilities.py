@@ -356,15 +356,20 @@ TEMPLATE_PATTERNS = {
     "percent": "secret/data/%/x",
     "hcl escape": "secret/data/\\u0077riters/x",
     "interpolation": "secret/data/${var.x}/x",
+    "non-terminal star segment": "secret/*/foo",
+    "non-terminal star before trailing star": "secret/data/*/*",
 }
 TEMPLATE_OLD = '''if ("+" in pattern or "{{" in pattern or "%" in pattern
-                or "\\\\" in pattern or "${" in pattern):'''
+                or "\\\\" in pattern or "${" in pattern
+                or "*" in pattern[:-1]):'''
 TEMPLATE_MUTANTS = {
-    "plus segment wildcard": 'if (False or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern):',
-    "template braces": 'if ("+" in pattern or False or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern):',
-    "percent": 'if ("+" in pattern or "{{" in pattern or False\n                or "\\\\" in pattern or "${" in pattern):',
-    "hcl escape": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or False or "${" in pattern):',
-    "interpolation": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or False):',
+    "plus segment wildcard": 'if (False or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern\n                or "*" in pattern[:-1]):',
+    "template braces": 'if ("+" in pattern or False or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern\n                or "*" in pattern[:-1]):',
+    "percent": 'if ("+" in pattern or "{{" in pattern or False\n                or "\\\\" in pattern or "${" in pattern\n                or "*" in pattern[:-1]):',
+    "hcl escape": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or False or "${" in pattern\n                or "*" in pattern[:-1]):',
+    "interpolation": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or False\n                or "*" in pattern[:-1]):',
+    "non-terminal star segment": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern\n                or False):',
+    "non-terminal star before trailing star": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern\n                or False):',
 }
 for label, pat in TEMPLATE_PATTERNS.items():
     pol = 'path "%s" { capabilities = ["read"] }' % pat
@@ -384,6 +389,10 @@ for label, pat in TEMPLATE_PATTERNS.items():
     except Exception:
         loose = "unknown"
     check(f"mutation without the ({label}) condition silently accepts it", loose == "parsed")
+check("a trailing-star path still parses and evaluates (positive control)",
+      C.parse_policy('path "secret/data/x/*" { capabilities = ["read"] }', "t") == [("secret/data/x/*", {"read"})])
+_d = fixture({"shared.hcl": 'path "secret/data/x/*" { capabilities = ["read"] }', "scoped.hcl": FIX_WRITER})
+check("a trailing-star path does not exit 2 via main", C.main(["--root", str(_d), "--config", str(_d / "cfg.json")]) != 2)
 check("a plain literal path with no template syntax still parses",
       C.parse_policy('path "secret/data/x/y" { capabilities = ["read"] }', "t") == [("secret/data/x/y", {"read"})])
 
