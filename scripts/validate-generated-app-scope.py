@@ -307,7 +307,11 @@ def reserved_patterns(text: str) -> list[list[str]]:
     for m in _CASE.finditer(text):
         body = m.group(1).replace("\\\n", " ")
         pats = []
-        for arm in re.split(r"\)\s*return 0 ;;", body):
+        # Every pattern list ends in ")  return 0 ;;". Text after the last such
+        # terminator is not a pattern list, so the final piece is dropped; a
+        # body with no terminator yields no patterns (and fails the caller's
+        # "has no patterns" check) rather than parsing the whole body.
+        for arm in re.split(r"\)\s*return 0 ;;", body)[:-1]:
             arm = arm.strip()
             if arm:
                 pats.extend(p for p in arm.split("|") if p.strip())

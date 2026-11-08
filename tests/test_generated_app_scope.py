@@ -80,6 +80,23 @@ class Converged(unittest.TestCase):
         self.assertTrue(all(a.name == "tenant-" + a.path.split("/")[-1] for a in tenants))
 
 
+class ReservedPatternParser(unittest.TestCase):
+    @staticmethod
+    def shell(arms: str) -> str:
+        return 'tenant_name_reserved() {\n  case "$1" in\n' + arms + "\n  esac\n  return 1\n}\n"
+
+    def test_text_after_final_return_zero_is_not_a_pattern(self):
+        text = self.shell("    a|b|\\\n    c-*)\n      return 0 ;;\n    stray|other)\n      return 1 ;;")
+        self.assertEqual(gas.reserved_patterns(text), [["a", "b", "c-*"]])
+
+    def test_every_return_zero_arm_is_kept(self):
+        text = self.shell("    a|b)\n      return 0 ;;\n    c|d)\n      return 0 ;;")
+        self.assertEqual(gas.reserved_patterns(text), [["a", "b", "c", "d"]])
+
+    def test_body_without_terminator_has_no_patterns(self):
+        self.assertEqual(gas.reserved_patterns(self.shell("    a|b) return 1 ;;")), [[]])
+
+
 class Mutations(unittest.TestCase):
     def assertRed(self, found, needle):
         self.assertTrue(any(needle in f for f in found), f"{needle!r} not in {found}")
@@ -96,9 +113,14 @@ class Mutations(unittest.TestCase):
         docs = bootstrap_docs()
         for d in docs:
             if d.get("kind") == "AppProject" and d["metadata"]["name"] == "apps":
-                d["spec"]["destinations"] = [{"server": "https://kubernetes.default.svc?", "namespace": "*"}]
+                d["spec"]["destinations"] = [{"server": "https://kubernetes.default.sv?", "namespace": "*"}]
         with Tree() as t:
-            self.assertTrue(run(t.root, docs))
+            found = run(t.root, docs)
+        # The glob matches the real server string but is not equal to it, so the
+        # "not permitted" branch must stay silent and only this one may fire.
+        self.assertFalse(any("is not permitted by AppProject" in f for f in found), found)
+        needle = "server string 'https://kubernetes.default.svc' differs from the one written in AppProject apps"
+        self.assertTrue(any(f.endswith(needle) for f in found), found)
 
     def test_source_repo_not_permitted(self):
         docs = bootstrap_docs()
