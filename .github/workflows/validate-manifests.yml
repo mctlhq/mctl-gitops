@@ -124,6 +124,21 @@ jobs:
           scripts/validate-argocd-project-scope.py --strict default \
             "$tmpdir/bootstrap-eval.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
 
+      # Validate project scope for generated applications: expand the `apps`
+      # and `tenants` ApplicationSets over the real directories, render
+      # base-service per service and check each object against the resolved
+      # project, check directory and reserved-name consistency and the
+      # inventory of places that spell the project name `apps`. The unit tests
+      # prove each check green on this tree and red on a mutation.
+      - name: Validate project scope for generated applications
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_generated_app_scope.py
+          scripts/validate-generated-app-scope.py --bootstrap "$tmpdir/bootstrap.yaml"
+
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
       # templates and a multi-backend fan-out ever render in CI. Proves the

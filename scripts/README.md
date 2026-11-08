@@ -9,3 +9,5 @@ design — re-running on a healthy cluster is a no-op.
 | `validate-gha-expression-injection.py` | CI detector (run by validate-manifests, not a recovery helper): fails when a `.github` workflow `run:` or github-script step interpolates `${{ inputs.* }}`, `github.event.*` or `github.head_ref` instead of binding it via `env:` (gitops#1809). `--selftest` proves it detects. |
 
 Always set `KUBECONFIG` to the target cluster before running.
+
+| `validate-generated-app-scope.py` | CI detector (validate-manifests): expands the `apps` and `tenants` ApplicationSets over the real directories, renders base-service per service and checks each object against the resolved AppProject; also checks directory/reserved-name consistency and the inventory in `app-project-consumers.json` of files that spell the project name `apps`. Regenerate the inventory with `--print-consumers` after an intended change. Tests: `tests/test_generated_app_scope.py`. |

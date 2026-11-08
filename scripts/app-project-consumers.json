@@ -1,0 +1,22 @@
+{
+  "consumers": {
+    "platform-gitops/argo-workflows/cluster-templates/wft-create-tenant.yaml": 6,
+    "platform-gitops/argo-workflows/cluster-templates/wft-retire-service.yaml": 4,
+    "platform-gitops/argocd/rbac/tenants/commerce-proof.csv": 6,
+    "platform-gitops/argocd/rbac/tenants/erpact.csv": 6,
+    "platform-gitops/argocd/rbac/tenants/karabu.csv": 6,
+    "platform-gitops/argocd/rbac/tenants/labs.csv": 6,
+    "platform-gitops/argocd/rbac/tenants/mctl.csv": 6,
+    "platform-gitops/argocd/rbac/tenants/namax66.csv": 6,
+    "platform-gitops/bootstrap/templates/bootstrap/applicationset-apps.yaml": 1,
+    "platform-gitops/bootstrap/templates/observability/monitoring.yaml": 2,
+    "platform-gitops/bootstrap/templates/system/admission-policies.yaml": 8,
+    "scripts/check-alertmanager-routes.py": 1,
+    "scripts/test-tenant-workflow-sa-argocd-policy.sh": 3,
+    "scripts/validate-argocd-tenant-rbac.py": 3,
+    "scripts/validate-tenant-workflow-shared-writes.py": 2,
+    "tests/fixtures/argocd-rbac-policy.baseline.csv": 30,
+    "tests/fixtures/tenant-workflow-sa-argocd/setup.yaml": 7,
+    "tests/test_wft_retire_service_guard.py": 2
+  }
+}
