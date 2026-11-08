@@ -40,6 +40,14 @@
   open-questions section copied from requirements.md. — DoD: every link is present and
   no status is upgraded.
 
+## AMEND 2026-11-08 — mandatory extra review checks
+
+- [ ] A1. Report specifies **separate** Temporal control and provider namespaces, not queue-level authorization. Include denial test: provider identity cannot start, signal, describe, list or terminate a control/DevLoop workflow.
+- [ ] A2. Choose and validate a cross-namespace bridge (Temporal Nexus or authenticated mctl-api message/results channel); document SDK/version support, authorization at both ends, deduplication, retries, timeout/cancel, payload limits, revocation and compensating errors. If unsupported, mark implementation blocked.
+- [ ] A3. Reconsider option C now that `glovo.mctl.ai/mcp` serves Claude/ChatGPT outside Telegram. The option-A verdict stays a **proposal** to #324; avoid implying it is owner-approved.
+- [ ] A4. Separate merged mctl-api Automation contract PR #950 from the yet-unimplemented Glovo tenant/connection/order and `aar_` enforcement endpoints. Require own mctl-api implementation issue.
+- [ ] A5. All code/repo/deploy slices stay in separate later approvals; this approval may add the single report only.
+
 ## Tests
 
 - [ ] T1. `go test ./docs/...` passes unchanged.
