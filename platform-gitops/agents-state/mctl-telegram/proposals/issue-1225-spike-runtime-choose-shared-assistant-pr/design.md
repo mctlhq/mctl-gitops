@@ -72,6 +72,18 @@
 
 ## Proposed solution
 
+### AMEND 2026-11-08 — supersedes the original shared-namespace provider sketch
+
+The correct trust boundary is **two Temporal namespaces**, not merely two queues in one namespace. Trusted control is `mctl-assistants` / `assistants-control`. Low-trust provider is `mctl-assistants-provider-glovo` / provider task queue, separately admitted by Temporal #2456. The provider worker has no access to the control namespace or to DevLoop `mctl-agents`. Per-user and per-tenant checks remain exclusively with mctl-api; Kubernetes namespace alone does not enforce Temporal namespace access.
+
+The report MUST compare Nexus cross-namespace endpoint (only if exact self-hosted Temporal/SDK version and endpoint auth are proven) versus an authenticated mctl-api outbox/command-results bridge. A normal Activity is a task in the workflow's namespace and cannot silently execute in another. Require negative privilege tests, bounded opaque payloads, signed issuer, idempotency/replay protection, cancellation, timeout, compensating failure and consent revalidation. **Without verified bridge: hold runtime activation.**
+
+Product input changed: `glovo.mctl.ai/mcp` is a non-Telegram first-class multi-tenant surface. Consequently the previous option-C trigger "second surface" is already relevant; compare provider-only repo before adopting `REUSE_EXISTING` for any real credentials. For the fake PoC the existing repo is a provisional low-friction option; #324 still decides. Public facade is separately packaged and delegates OAuth subject/tenant/install/order and `aar_` checks to mctl-api; it does not reuse `tg.mctl.ai` Telegram-token identity. #948/#950 merged only the AutomationDefinition contract, not Glovo connection/authorization APIs.
+
+**Scope unchanged:** report/documentation only, no code, new repo, GitOps write or deployment.
+
+
+
 Documentation only. One new file: `docs/reports/assistant-runtime-boundary-spike.md`.
 
 ### Recommended verdict: `REUSE_EXISTING` (option A), with a hard gate and a promotion trigger
@@ -128,8 +140,7 @@ needed to settle it.
 4. A/B/C comparison table on these axes: queue topology, worker image lifecycle, release
    governance, runtime security, build/release CI, secrets, kill switch, failure modes, cost.
    Each cell is labelled source-backed or model-only.
-5. Queue topology: shared `mctl-assistants` namespace; `assistants-control` (trusted
-   worker); `assistants-provider-<provider>` (low-trust worker); per-tenant semaphore and
+5. Queue topology: shared `mctl-assistants` namespace; `assistants-control` (trusted control namespace); `assistants-provider-<provider>` (separate provider namespace); per-tenant semaphore and
    per-provider circuit breaker; per-tenant queues only on measured noisy-neighbour
    impact. This is the same as #1184 D2 and is repo-independent.
 6. Kill switches by layer: install `runtime` back to `own`; `AGENT_KILL_SWITCH` /
@@ -159,9 +170,9 @@ needed to settle it.
 
 - S0 (this proposal): the report and the draft decision. mctl-telegram, docs only.
 - S1: owner decision recorded on .github#324. Depends on S0.
-- S2: Temporal client authorization plus per-identity namespace/queue scoping
+- S2: Temporal client authorization plus per-identity namespace scoping (not task-queue RBAC)
   (mctl-gitops#2456). Depends on S1.
-- S3: mctl-api#948 contract accepted and its control-plane endpoints. Depends on S1.
+- S3: mctl-api#948/#950 merged **contract only** and separately approved Glovo-scoped control-plane endpoints. Depends on S1.
 - S4: #1048 connector threat model accepted. Depends on S1.
 - S5: provider-adapter module and image in mctl-telegram, mock provider only. Depends on
   S1 and S4, with separate runtime-coding approval.
