@@ -12,11 +12,12 @@ executed only after a separate research-artifact approval.
 
 The parent spike mctlhq/.github#325 stays owner-decided RESEARCH_ONLY_DEFER. This
 proposal produces research artifacts only. It approves no Finance Assistant, connects
-no bank, and changes no production code, flag or deployment. Its preliminary verdict
-from the code read for this proposal (pinned at mctl-telegram
-`8ab82c8245dea3a286c062a0666fe8d35076d684`) is **BOUNDED_EXTENSION_REQUIRED**. The
-private transport is reusable. An owner-initiated invocation, a source/consent grant
-and a CSV source store do not exist (see design.md).
+no bank, and changes no production code, flag or deployment. The initial code inventory is pinned to mctl-telegram
+`8ab82c8245dea3a286c062a0666fe8d35076d684`. It identifies a reusable
+`InputPeerSelf` transport but **does not predetermine the verdict**. Whether a
+safe owner-invoked workflow, source/consent grants and CSV lifecycle can be
+composed without a product extension must be assessed from the full report
+evidence; unchecked integrations and deployed behavior remain `unknown`.
 
 ## User stories
 - AS the platform owner I WANT a pinned evidence map of the owner-only Telegram path SO THAT a later pilot decision rests on code, not assumptions.
@@ -35,6 +36,9 @@ and a CSV source store do not exist (see design.md).
 - THE SYSTEM SHALL compare three private surfaces (Saved Messages, owner DM via bot, separate owner workspace launcher) and a CSV-only approach against a no-ingestion educational alternative.
 - THE SYSTEM SHALL include a CSV/privacy risk matrix covering encryption, size/quotas, parsing safety, merchant/memo prompt injection, debug logs/traces and backup deletion.
 - WHEN vendor claims (Anthropic Personal Finance, Plaid coverage) are cited THE SYSTEM SHALL cite the primary-source URL with an access date, and SHALL mark Montenegro/EEA/UK coverage "unknown" wherever it is not verified.
+- WHEN the investigator recommends a verdict THE SYSTEM SHALL assess **all four** options against evidence collected during the research, list strongest counter-evidence and unresolved checks, and SHALL NOT preselect BOUNDED_EXTENSION_REQUIRED merely from an initial code sketch.
+- THE SYSTEM SHALL prepare a **documentation-only PR in mctlhq/mctl-telegram** (its DevLoop target), using `docs/reports/finance-assistant-owner-private-discovery.md` or an equivalent path already in this repo; it SHALL NOT attempt a cross-repository write into `mctlhq/.github`. A later cross-link to #325 can be a separate owner-reviewed documentation change.
+- WHEN this proposal is approved, the allowed implementer output SHALL be research documentation, a static L2 test **plan** and source-pinned recommendations only. It SHALL NOT add Go tests, execute new L2 integration tests, write product code, or use production users/data. Running an actual L2 test artifact requires a **second, independently reviewed, exact-artifact human approval** and is not granted by approving this proposal.
 - THE SYSTEM SHALL end with exactly one verdict from the four outcomes, the smallest next owner decision, associated repos, dependency gates (#1048, #1088, #309), and explicit stop reasons.
 - IF any step would require a code change, a flag change, a deployment, a real Telegram send or real financial data THEN THE SYSTEM SHALL stop and record it as a gated follow-up instead.
 
@@ -46,8 +50,8 @@ and a CSV source store do not exist (see design.md).
 - Creating downstream implementation issues or starting the implementer.
 
 ## Open questions
-- Where should the research report live: `mctlhq/.github/docs/spikes/finance-assistant-private-delivery.md` (next to the #325 report) or `docs/research/` in this repo? Assumed: `.github` next to #325.
-- Who records the separate "research-artifact approval" that gates L2 execution, and in what form (a PR approval on the test-artifact PR or a gitops status flip)? Assumed: a human approval on a dedicated test-only PR.
+- The research report will be authored **in the target repository**, at `mctl-telegram/docs/reports/finance-assistant-owner-private-discovery.md` (or a documented existing local reports path). This prevents the mctl-telegram implementer from trying to write to `mctlhq/.github`. The parent #325 report links to this research from its issue/decision record; an optional later cross-repo docs link is a separate reviewed change.
+- **Two separate gates:** approval of this proposal permits *documentation only*; a future L2 test-only PR and execution request require a separately specified approval bound to exact content/commit. Code review on that PR alone is not authorization to execute integration tests. No automatic approval or test execution follows this research PR.
 - Is a separate owner workspace launcher (mctl-portal/mctl-web) in scope for evidence, or only for comparison? Assumed: comparison only, no code read beyond public routes.
 - I did not read mctl-api's upload, retention and deletion code, I did not check the live service status or logs, and I did not confirm that gitops image tag `0.135.0` maps to the pinned SHA. All three remain unknown until tasks 1 and 5 are done.
 - Account-level revocation (`telegram_accounts.revoked_at`) is not checked in `policy.Evaluate`. Whether revoking during a pending send blocks delivery is unverified (test T8).

@@ -11,11 +11,11 @@ gitops, flags or deployments.
 - [ ] 6. Vendor/region benchmark from the three primary URLs in the issue, plus a separate search for Montenegro open-banking providers (no credential linking). — DoD: every claim has a URL and access date. Montenegro/EEA/UK matrix with "unknown" where unverified.
 - [ ] 7. Governance/cost: #1048 connector trust, #1088 managed runtime/soak, #309 shared-memory limits; budget, retention and incident assumptions. — DoD: a section listing gates as unchanged and naming no production authorization.
 - [ ] 8. L2 test plan (depends on 3, 4). — DoD: each test below specified with setup, stimulus, expected deny/allow and audit row, using fake SelfSender, fake MTProto updates, in-memory SQLite and personas Alice/Bob/Carol/Dana. Marked "not executed".
-- [ ] 9. Final report and verdict (depends on 2-8): exactly one outcome (preliminary BOUNDED_EXTENSION_REQUIRED), the smallest next owner decision, repos, dependency gates, and stop reasons. Published as a PR to mctlhq/.github docs/spikes/. — DoD: the PR is open for independent review. #325 remains RESEARCH_ONLY_DEFER. No implementer started.
-- [ ] 10. (Gated: only after separate human approval of a test-only PR) Execute L2 tests and append the results. — DoD: results attached with commit SHA. A test that did not run is reported as not run, never as PASS.
+- [ ] 9. Final report and evidence-derived verdict (depends on 2-8): consider all four outcomes without a preselected winner; include strongest counter-evidence, unknowns, smallest next owner decision, repos, dependency gates and stop reasons. Publish a **documentation-only PR in mctlhq/mctl-telegram** at `docs/reports/finance-assistant-owner-private-discovery.md` (or a reviewed equivalent local path). — DoD: the PR is open for independent review. Parent #325 stays RESEARCH_ONLY_DEFER. No downstream product implementation or automatic approval.
+- [ ] 10. Gate the next stage (documentation only): explicitly mark every L2 test as `not executed` and specify a *separate exact-artifact human approval* for any future test-only PR and CI execution. — DoD: no Go test code, no new integration test execution, no runtime code changes and no deployment occur under this proposal. Running L2 tests is a **future separately approved work item**, not a step of this implementer.
 
 ## Tests
-L2 plan cases (specified in task 8, executed only under task 10):
+L2 **plan-only** cases (specified in task 8; no execution under this proposal):
 - [ ] T1. Legitimate owner `/mctl` command in Saved Messages (Alice): only InputPeerSelf is called. The fake sender records zero peer sends.
 - [ ] T2. Same-tenant non-owner (Bob) sends a finance-looking command in a DM: no job, no owner summary with finance content, no reply.
 - [ ] T3. Other-tenant account (Carol) state is never read for Alice's digest: user-mismatch fence.
