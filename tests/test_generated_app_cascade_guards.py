@@ -21,7 +21,10 @@ that is not a mapping with apiVersion and kind, a render with no
 ApplicationSet, an ApplicationSet / Application / AppProject without a string
 name.
 
-RENDER INPUTS. Argo CD renders root-app as `helm template root-app` into namespace
+RENDER INPUTS. Every render passes --include-crds, as Argo CD does, so an object under
+crds/ is inspected like any other. The default values are rendered twice and the two
+outputs must be identical (a time, random or lookup input fails the run as "not
+deterministic"). Argo CD renders root-app as `helm template root-app` into namespace
 argocd with the cluster's API versions in .Capabilities, so the guard does too
 (RELEASE, NAMESPACE, API_VERSIONS, plus every literal that a template passes to
 `.Capabilities.APIVersions.Has`; any other use of APIVersions is an error). A gate
@@ -30,10 +33,20 @@ on `.Release.Name`, `.Release.Namespace`, `.Capabilities.APIVersions` or
 namespace or API versions, another release name and namespace, and kube versions
 below and above any plausible gate (KUBE_VERSIONS).
 
-G6. Declared values. The matrix flips what values.yaml declares and nothing else, so
-every `.Values.a.b` path that a template reads must be declared in values.yaml
-(below an empty mapping or a scalar it is free-form and counts as declared), and
-`.Values` used as a whole is a finding. A gate on a key nobody declared is red.
+G6. Template inputs the matrix cannot switch. It flips what values.yaml declares and nothing else,
+so every `.Values.a.b` path that a template reads (also `(default dict .Values.a).b`) must be declared in
+values.yaml (below an empty mapping or a scalar it is free-form and counts as declared), and `.Values`
+used as a whole is a finding. Fail closed, a finding unless the action is listed in TEMPLATE_ALLOW with a
+reason (keyed by file and exact action text; an entry that matches nothing is a finding too):
+  - `with`, `range` or `$v :=` whose operand reads .Values (a key read through the name, `.hidden` or
+    `$v.hidden`, is invisible); a binding of declared scalars only is exempt; a .Values operand of
+    include, template or tpl; the string "Values" (reaching it by name);
+  - now/date functions, rand*, uuidv4, lookup, key generation, env;
+  - `.Capabilities` other than `APIVersions.Has "literal"` and `semverCompare "<single comparator>"
+    .Capabilities.KubeVersion.Version` that the two KUBE_VERSIONS answer differently; `.Release` other than
+    Name, Namespace, Service (IsUpgrade, Revision ...);
+  - a comparison (eq, ne, lt, gt, regexMatch, hasPrefix, contains, hasKey ...) of a .Values path that is
+    not a declared boolean in an if/else if/with condition.
 G7. Finalizers and projects. metadata.finalizers of EVERY Application and AppProject
 (hand-written ones included) in every render, and the complete spec of the `apps`
 and `platform` AppProjects, equal the `finalizers` and `projects` tables of the
@@ -50,7 +63,7 @@ every boolean false. The number of renders is capped (MAX_RENDERS = 64, 39 used:
 boolean added to values.yaml costs one render here and in every mutation pass, and
 about 25 more would hit the cap, which fails an unrelated values edit on purpose
 rather than truncating); needing more is an error that says so. Budget: a full run
-takes about 2 to 3 minutes locally (the mutation pass re-renders the matrix per
+takes about 2 to 3 minutes locally (134 to 174 s measured, about 60 mutants) (the mutation pass re-renders the matrix per
 mutant; the elapsed time is printed) and the CI step has a 20 minute timeout, so
 a timeout is a CI setup problem, not a pass or a silent skip. The run prints what was
 covered and what was not. NOT covered: gates that are not booleans (a string or
@@ -152,7 +165,9 @@ helper, behind `{{ if }}` on a non-default flag, through indented emitters with
 trim markers, an Application whose name collides with a generated one, a
 duplicate generated name, swapped repoURL / revision, a narrowed or widened
 project, a changed finalizer, a gate on the release name, namespace, API version or
-kube version, an ApplicationSet inside a List, a gate on an undeclared value; each
+kube version, an ApplicationSet inside a List, one under crds/, a gate on an undeclared value, a gate read
+through `with`, `$v :=` or `range` of .Values, a handover to include, now, randInt, uuidv4, lookup, KubeVersion.Minor,
+HelmVersion, a kube gate that never splits KUBE_VERSIONS, targetRevision equality, Release.IsUpgrade; each
 must be red, and the unmutated copy must be green. The mutations find their place in
 the chart with whitespace- and filter-tolerant patterns (`_edit_re`), so an edit that
 changes only how a line is spelled does not break the self-test; a change of what
@@ -162,10 +177,16 @@ that exits non-zero, prints nothing, hangs past the timeout or prints garbage
 must make the guard fail, and so must a PATH without helm.
 
 KNOWN LIMITS, stated plainly: the guard sees what `helm template` renders for
-the matrix above and nothing else. A gate that is not a boolean (or a string or
-number compared in an `if` on a declared value), a combination
-of flags outside the matrix, a value that only Argo CD supplies, and anything a
-generated Application deploys at run time are invisible. The local helm and the
+the matrix above and nothing else. Still invisible: a plain truthiness `if` on a non-boolean
+declared value (a string, number or list; only COMPARISONS of one are findings); a combination
+of flags outside the matrix; a value that only Argo CD supplies; anything a generated
+Application deploys at run time; the element fields read inside allow-listed ranges and aliases
+(TEMPLATE_ALLOW states what was reviewed, it is a human claim, not a proof); a gate reached through a
+helper whose operand hides .Values behind a plain function (`dict`, `merge`, `fromYaml` of a value)
+without a binding or include/tpl on the same action; a `.Values` path assembled at run time
+(`index .Values.a $k`); helm functions not in the lists above. The analysis reads template ACTIONS by
+regular expression, not a Go template parse, so an exotic spelling can slip past it; the render-twice and
+matrix checks are the backstop. Template text in crds/ is not templated by Helm and is not scanned. The local helm and the
 CI helm should be the same major version (CI pins v3.16.4); the run prints the
 version and refuses anything that is not v3.
 
@@ -370,7 +391,8 @@ PLAIN_ENV = RenderEnv("root", None, (), None)    # for charts that are not root-
 def helm_render(chart: Path, value_files: list[Path], helm: str, timeout: float, label: str,
                 env: RenderEnv | None = None) -> list[dict]:
     env = env or ARGO_ENV
-    cmd = [helm, "template", env.release, str(chart)]
+    # --include-crds: Argo CD renders Helm charts with it, so an object under crds/ is deployed too
+    cmd = [helm, "template", env.release, str(chart), "--include-crds"]
     if env.namespace:
         cmd += ["--namespace", env.namespace]
     if env.kube_version:
@@ -471,17 +493,195 @@ def chart_api_versions(chart: Path) -> tuple[str, ...]:
     return tuple(sorted(set(found) - set(API_VERSIONS)))
 
 
+_STRING = re.compile(r'"(?:[^"\\]|\\.)*"|`[^`]*`')
+_NAME = r"[A-Za-z_][A-Za-z0-9_-]*"
+_PATH = rf"\.Values\b(?:\.{_NAME})*"
+# `(default dict .Values.x).k`, `(.Values.x | default dict).k` and `(.Values.x).k` read the key k below x.
+_PAREN_PATH = re.compile(rf"\(\s*(?:default\s+(?:\(dict\)|dict)\s+)?({_PATH})\s*"
+                         rf"(?:\|\s*default\s+(?:\(dict\)|dict)\s*)?\)((?:\.{_NAME})+)")
+_HEAD = re.compile(r"^\s*(?:else\s+)?(if|with|range)\b(.*)$", re.S)
+_BIND = re.compile(r"\$[A-Za-z0-9_]*(?:\s*,\s*\$[A-Za-z0-9_]*)?\s*:?=\s*(.*)$", re.S)
+# a binding of plain declared scalars: `.Values.a.b`, `list .Values.a "lit"`, `append $x .Values.a`
+_SCALAR_RHS = re.compile(rf"^\s*(?:(?:list|append\s+\$\w+)\s+)?(?:(?:{_PATH}|\"\")\s*)+$")
+NONDETERMINISTIC = re.compile(
+    r"(?<![\w.$])(now|date|dateInZone|date_in_zone|dateModify|date_modify|mustDateModify|must_date_modify|"
+    r"ago|unixEpoch|htmlDate|htmlDateInZone|randInt|randAlpha|randAlphaNum|randAscii|randNumeric|randBytes|"
+    r"uuidv4|shuffle|lookup|genPrivateKey|genCA|genCAWithKey|genSelfSignedCert|genSelfSignedCertWithKey|"
+    r"genSignedCert|genSignedCertWithKey|derivePassword|bcrypt|htpasswd|env|expandenv|getHostByName)\b")
+COMPARISON = re.compile(
+    r"(?<![\w.$])(eq|ne|lt|le|gt|ge|regexMatch|mustRegexMatch|hasPrefix|hasSuffix|contains|has|mustHas|"
+    r"hasKey|semverCompare)\b")
+_KUBE_GATE = re.compile(r'semverCompare\s+"([^"]*)"\s+\.Capabilities\.KubeVersion\.Version')
+_SINGLE_COMPARATOR = re.compile(r"^\s*(>=|<=|>|<)\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?\s*$")
+
+# Template actions that read .Values through a binding (with, range, `$v :=`) or hand it to include/tpl are
+# a finding unless listed here with the reason, keyed by file and the exact action text (whitespace
+# collapsed), so an edit of the action revokes the entry and an entry that matches nothing is a finding too.
+_R_CANDIDATES = ("ranges over the declared list otelCollector.eval.candidates. The matrix flips the declared "
+                 "boolean `enabled` of each element (bool_flags recurses into lists); the other element fields "
+                 "the body reads are not checked against values.yaml here. Reviewed 2026-11-08: none of them "
+                 "adds or hides a whole object, they only fill fields of the objects `enabled` emits")
+TEMPLATE_ALLOW: dict[tuple[str, str], str] = {
+    **{(f, "range .Values.otelCollector.eval.candidates"): _R_CANDIDATES for f in (
+        "templates/observability/eval-candidates.yaml", "templates/observability/loki-datasource.yaml",
+        "templates/observability/otel-collector.yaml", "templates/observability/tempo-datasource.yaml",
+        "templates/projects/project-default.yaml")},
+    ("templates/observability/otel-collector.yaml", "range .Values.otelCollector.backends"):
+        "ranges over the declared list otelCollector.backends and renders one exporter entry per element "
+        "inside one ConfigMap; element fields only fill that entry, no object is emitted or hidden by them",
+    ("templates/observability/eval-namespace.yaml", "range $key, $val := .Values.otelCollector.eval.quota"):
+        "ranges over the declared quota map and prints each pair into one ResourceQuota; keys and values are "
+        "data, nothing is emitted conditionally",
+    ("templates/observability/obi-spike.yaml", "$o := .Values.obiSpike"):
+        "alias of the declared obiSpike map inside `if .Values.obiSpike.enabled` (a declared boolean, flipped by "
+        "the matrix). Reviewed 2026-11-08: every `$o.` read in the file fills a field or picks a branch inside "
+        "the objects that flag emits (features.* booleans are declared and flipped), none emits a separate object",
+    **{("templates/system/admission-policies.yaml", a):
+       "ranges over a declared map (reservedPlatformHosts, reservedDomains, externalManifestNamespaces) and "
+       "prints entries into the CEL text of ValidatingAdmissionPolicies that exist unconditionally; the "
+       "entries are data, nothing is emitted conditionally" for a in (
+        "range $host, $owners := .Values.reservedPlatformHosts",
+        "range $domain, $owners := (.Values.reservedDomains | default dict)",
+        "range $n, $v := (.Values.externalManifestNamespaces | default dict)")},
+}
+
+
+def _normal(a: str) -> str:
+    return " ".join(a.split())
+
+
+class _Sentinel:
+    pass
+
+
+_FREE, _MISSING = _Sentinel(), _Sentinel()
+
+
+def _declared_node(values: dict, keys: list[str]):
+    """The value at keys, `_FREE` below an empty mapping or a scalar, `_MISSING` when undeclared."""
+    node = values
+    for k in keys:
+        if not isinstance(node, dict) or not node:
+            return _FREE
+        if k not in node:
+            return _MISSING
+        node = node[k]
+    return node
+
+
+
+
+def _values_paths(code: str) -> list[list[str]]:
+    """Every .Values key path in an action (strings already removed), `.Values` alone as []. The parenthesised
+    forms that read a key below a path are returned as the longer path too."""
+    def keys(dotted: str) -> list[str]:
+        return [k for k in dotted.split(".")[2:] if k]          # drop the empty head and `Values`
+
+    out = [keys(m.group(1)) for m in re.finditer(rf"({_PATH})", code)]
+    out += [keys(m.group(1) + m.group(2)) for m in _PAREN_PATH.finditer(code)]
+    return out
+
+
+def _kube_gate_problem(literal: str) -> str | None:
+    m = _SINGLE_COMPARATOR.match(literal)
+    if not m:
+        return (f"semverCompare \"{literal}\" on the kube version is not a single >=, <=, > or < comparator, so "
+                f"the renders at {', '.join(KUBE_VERSIONS)} cannot be assumed to reach both branches")
+    op, bound = m.group(1), tuple(int(x or 0) for x in m.groups()[1:])
+    outcomes = set()
+    for kv in KUBE_VERSIONS:
+        v = tuple(int(x) for x in kv.lstrip("v").split("."))
+        outcomes.add({">=": v >= bound, "<=": v <= bound, ">": v > bound, "<": v < bound}[op])
+    if outcomes != {True, False}:
+        return (f"semverCompare \"{literal}\" on the kube version gives the same answer at every one of "
+                f"{', '.join(KUBE_VERSIONS)}, so the other branch is never rendered")
+    return None
+
+
+def action_findings(rel, a: str, values: dict) -> tuple[list[str], list[tuple[str, str]]]:
+    """Findings of ONE template action, and the (file, action) keys it needed an allow-list entry for."""
+    code = _STRING.sub('""', a)
+    shown = _normal(a)[:90]
+    problems: list[str] = []
+    needs: list[tuple[str, str]] = []
+    paths = _values_paths(code)
+
+    # inputs that are not values: they can hide an object from every render
+    if m := NONDETERMINISTIC.search(code):
+        problems.append(f"{rel}: `{m.group(1)}` in `{shown}` is not a function of the values, so the render matrix "
+                        "may never see what it gates (time, randomness, cluster lookup, key generation)")
+    rest = _KUBE_GATE.sub("", a)
+    for m in _KUBE_GATE.finditer(a):
+        if (why := _kube_gate_problem(m.group(1))):
+            problems.append(f"{rel}: {why}")
+    rest = _STRING.sub('""', rest)
+    if re.search(r"\.Capabilities\b(?!\.APIVersions\.Has\s+\"\")", rest):
+        problems.append(f"{rel}: `.Capabilities` is used in `{shown}` other than as `.APIVersions.Has \"literal\"` "
+                        "or `semverCompare \"<single comparator>\" .Capabilities.KubeVersion.Version`: HelmVersion, "
+                        "KubeVersion.Major/Minor/GitVersion and the like are not modelled by the render matrix")
+    if re.search(r"\.Release\b(?!\.(?:Name|Namespace|Service)\b)", code):
+        problems.append(f"{rel}: `.Release` field other than Name, Namespace or Service in `{shown}` "
+                        "(IsUpgrade, IsInstall, Revision): the render matrix renders a fresh install only")
+    if '"Values"' in a or "`Values`" in a:
+        problems.append(f"{rel}: the string \"Values\" in `{shown}`: .Values is reached by name, so the keys it "
+                        "reads cannot be enumerated")
+
+    # comparisons of a non-boolean .Values path in a condition
+    head = _HEAD.match(code)
+    if head and head.group(1) in ("if", "with") and COMPARISON.search(code):
+        for keys in _values_paths(head.group(2)):
+            if not keys:
+                continue                       # `.Values` as a whole is reported below
+            node = _declared_node(values, keys)
+            if not isinstance(node, bool):
+                problems.append(f"{rel}: `.Values.{'.'.join(keys)}` is compared in the condition `{shown}` but is "
+                                "not a declared boolean, so the matrix (which flips booleans) cannot reach both outcomes")
+
+    # a binding of .Values (with, range, `$v :=`) or a hand-over to include/template/tpl hides later reads
+    operand = None
+    if head and head.group(1) in ("with", "range"):
+        operand = head.group(2).split(":=", 1)[-1] if ":=" in head.group(2) else head.group(2)
+    elif (b := _BIND.search(code)):
+        operand = b.group(1)
+    elif head and head.group(1) == "if" and ":=" in head.group(2):
+        operand = head.group(2).split(":=", 1)[1]
+    handover = re.search(r"(?<![\w.$])(include|template|tpl|mustTpl)\b", code)
+    for what, text in (("binds", operand), ("hands to " + (handover.group(1) if handover else ""),
+                                            code if handover else None)):
+        if text is None or ".Values" not in text:
+            continue
+        if what == "binds" and _SCALAR_RHS.match(text) and all(
+                keys and not isinstance(_declared_node(values, keys), (dict, list, _Sentinel))
+                for keys in _values_paths(text)):
+            continue                           # only declared scalars: no key below it can be read
+        needs.append((str(rel), _normal(a)))
+        if (str(rel), _normal(a)) not in TEMPLATE_ALLOW:
+            problems.append(f"{rel}: `{shown}` {what} .Values below a name, so the keys read through "
+                            "it (`with` then `.hidden`, `$v := .Values.x` then `$v.hidden`, `range`, an include "
+                            "context) are not checked against values.yaml: read each key as `.Values.a.b`, or "
+                            "add the action to TEMPLATE_ALLOW with the reason it cannot hide an object")
+    return problems, needs
+
+
 def values_findings(chart: Path) -> list[str]:
-    """Every `.Values.a.b` path a template reads must be declared in values.yaml (the render matrix flips
-    what values.yaml declares and nothing else, so a gate on an undeclared key would never be switched on).
-    A path below an empty mapping or a scalar is a free-form value and counts as declared. A use of `.Values`
-    as a whole (`$v := .Values`, `index .Values "k"`, `toYaml .Values`) cannot be enumerated and is a finding."""
+    """G6. What the render matrix cannot switch, found in the template actions (the Go template text, not the
+    render). Every `.Values.a.b` path a template reads must be declared in values.yaml (the matrix flips what
+    values.yaml declares and nothing else); a path below an empty mapping or a scalar is free-form and counts
+    as declared; `.Values` as a whole is a finding. Fail closed on everything else that can hide an object from
+    every render, each a finding unless allow-listed in TEMPLATE_ALLOW with a reason: a `with`, a `range` or a
+    `$v :=` whose operand reads .Values (the keys read through the name are invisible), a hand-over of .Values
+    to include/template/tpl, time and random functions, lookup and key generation, `.Capabilities` and
+    `.Release` fields beyond the modelled ones, and a comparison of a non-boolean .Values path in an if/with
+    condition."""
     values = _load_values(chart / "values.yaml")
     problems = []
+    needed: set[tuple[str, str]] = set()
     for f, a in template_actions(chart):
         rel = f.relative_to(chart)
-        for m in re.finditer(r"\.Values\b((?:\.[A-Za-z_][A-Za-z0-9_-]*)*)", a):
-            keys = [k for k in m.group(1).split(".") if k]
+        found, needs = action_findings(rel, a, values)
+        problems += found
+        needed.update(needs)
+        for keys in _values_paths(_STRING.sub('""', a)):
             if not keys:
                 problems.append(f"{rel}: `.Values` is used as a whole in `{a.strip()[:60]}`: the keys it reaches "
                                 "cannot be enumerated, name each one as `.Values.key`")
@@ -495,6 +695,9 @@ def values_findings(chart: Path) -> list[str]:
                                     "declared in values.yaml, so no render of the matrix sets it")
                     break
                 node = node[k]
+    for key in sorted(set(TEMPLATE_ALLOW) - needed):
+        problems.append(f"TEMPLATE_ALLOW entry {key[0]} `{key[1]}` matches no template action any more: remove "
+                        "it (an allow-list entry that outlives its action would silently cover a new one)")
     return sorted(set(problems))
 
 
@@ -553,6 +756,13 @@ def render_matrix(chart: Path, root: Path, helm: str, timeout: float = HELM_TIME
         plan, log = plan_matrix(chart, root, Path(tmp))
         # The default render goes first and alone: when it cannot be had there is nothing to compare with.
         first = Render(plan[0][0], helm_render(chart, plan[0][1], helm, timeout, plan[0][0], plan[0][2]))
+        # A render that is not a function of its inputs (time, randomness, a lookup) cannot be proven
+        # converged by any matrix: the second render of the same input must be identical to the first.
+        again = helm_render(chart, plan[0][1], helm, timeout, plan[0][0] + " (second render)", plan[0][2])
+        if again != first.docs:
+            raise Unreadable("the default values render differently on a second helm template of the same input: "
+                             "the chart is not deterministic (time, randomness or lookup in a template), so the "
+                             "render matrix cannot show what it hides")
         renders = [first]
         errors = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as pool:
@@ -1631,9 +1841,89 @@ def raises_unreadable(fn) -> bool:
     return False
 
 
+def template_action_selftests(root: Path) -> None:
+    """action_findings on single actions: what stays green, what is red, and that an allow-list entry is bound to
+    the exact action text."""
+    values = _load_values(root / CHART / "values.yaml")
+    rel = Path("templates/x.yaml")
+
+    def red(action: str, want: str) -> bool:
+        return any(want in f for f in action_findings(rel, action, values)[0])
+
+    def green(action: str) -> bool:
+        return not action_findings(rel, action, values)[0]
+
+    check("G6 unit green: a boolean gate, a scalar binding, a modelled kube gate and Release.Name pass",
+          all(green(a) for a in (
+              " if .Values.tracing.enabled ", " $r := .Values.spec.source.repoURL ",
+              ' $l := list .Values.spec.source.repoURL "x" ', ' semverCompare ">=1.30.0" .Capabilities.KubeVersion.Version ',
+              ' eq .Release.Name "root-app" ', ' .Capabilities.APIVersions.Has "argoproj.io/v1alpha1" ',
+              " eq .Values.tracing.enabled true ", " if (default dict .Values.evidenceWriter).enabled ")))
+    check("G6 unit red: a parenthesised read of an undeclared key below a declared path is not a path the matrix sets",
+          values_paths_text(" if (default dict .Values.evidenceWriter).hidden ", values) == ["evidenceWriter.hidden"]
+          and values_paths_text(" if (.Values.evidenceWriter | default dict).hidden ", values) == ["evidenceWriter.hidden"]
+          and not values_paths_text(" if (default dict .Values.evidenceWriter).enabled ", values))
+    check("G6 unit red: a binding of a declared map is a finding without an allow-list entry",
+          red(" $v := .Values.obiSpike ", "binds .Values") and red(" with .Values.tracing ", "binds .Values")
+          and red(" range .Values.otelCollector.backends ", "binds .Values"))
+    check("G6 unit red: a binding of a free-form or undeclared path is a finding",
+          red(" $v := .Values.reservedDomains ", "binds .Values") and red(" with .Values.nope ", "binds .Values"))
+    needs = action_findings(Path("templates/observability/eval-namespace.yaml"),
+                            "range $key,   $val := .Values.otelCollector.eval.quota", values)
+    check("G6 unit green: an allow-listed action passes whatever its whitespace",
+          not needs[0] and bool(needs[1]))
+    check("G6 unit red: the same action with one more pipe is no longer allowed",
+          bool(action_findings(Path("templates/observability/eval-namespace.yaml"),
+                               "range $key, $val := (.Values.otelCollector.eval.quota | default dict)", values)[0]))
+    check("G6 unit red: the same action in another file is no longer allowed",
+          bool(action_findings(Path("templates/observability/other.yaml"),
+                               "range $key, $val := .Values.otelCollector.eval.quota", values)[0]))
+    check("G6 unit: every TEMPLATE_ALLOW entry carries a reason",
+          all(isinstance(r, str) and len(r) > 40 for r in TEMPLATE_ALLOW.values()))
+    check("G6 unit red: a field name is not a function (`.date`, `$now`) but the function is",
+          green(" .Values.tracing.enabled ") and green(" $now := .Values.spec.source.repoURL ")
+          and red(' date "2006" now ', "`date`"))
+    check("G6 unit red: time, random, lookup and key generation functions",
+          all(red(a, "not a function of the values") for a in (
+              " now ", ' dateModify "-1h" now ', " randAlphaNum 8 ", " randInt 1 9 ", " uuidv4 ", ' lookup "v1" "Secret" "a" "b" ',
+              " genPrivateKey \"rsa\" ", ' ago now ')))
+    check("G6 unit red: Capabilities and Release fields the matrix does not model",
+          all(red(a, w) for a, w in (
+              (" .Capabilities.KubeVersion.Minor ", "`.Capabilities`"), (" .Capabilities.HelmVersion ", "`.Capabilities`"),
+              (" .Capabilities.KubeVersion.GitVersion ", "`.Capabilities`"), (" .Release.IsUpgrade ", "`.Release`"),
+              (" .Release.IsInstall ", "`.Release`"), (" .Release.Revision ", "`.Release`"))))
+    check("G6 unit red: a kube version gate that never splits the modelled versions",
+          red(' semverCompare ">=1.20.0" .Capabilities.KubeVersion.Version ', "same answer")
+          and red(' semverCompare "<1.20.0" .Capabilities.KubeVersion.Version ', "same answer")
+          and red(' semverCompare "^1.30.0" .Capabilities.KubeVersion.Version ', "single"))
+    check("G6 unit red: comparisons of a non-boolean value in a condition, green on a boolean",
+          all(red(a, "is compared") for a in (
+              ' if eq .Values.spec.source.targetRevision "main" ', ' if ne .Values.spec.source.repoURL "x" ',
+              ' else if hasPrefix "a" .Values.spec.source.repoURL ', ' with regexMatch "a" .Values.spec.source.repoURL ',
+              " if gt .Values.nope 1 ")) and green(" if eq .Values.tracing.enabled false "))
+    check("G6 unit red: the string \"Values\" reaches .Values by name",
+          red(' index . "Values" ', "string"))
+
+
+def values_paths_text(action: str, values: dict) -> list[str]:
+    """Undeclared path findings of one action, the way values_findings reports them (for the unit test)."""
+    out = []
+    for keys in _values_paths(_STRING.sub('""', action)):
+        node = values
+        for k in keys:
+            if not isinstance(node, dict) or not node:
+                break
+            if k not in node:
+                out.append(".".join(keys))
+                break
+            node = node[k]
+    return out
+
+
 def selftests(root: Path, helm: str, analysis: Analysis) -> None:
     global ROOT_FOR_TESTS
     ROOT_FOR_TESTS = root
+    template_action_selftests(root)
     base = appsets_of(analysis.renders[0])
     golden = load_golden(root)
     APPS_APPSET = str(CHART / "templates/bootstrap/applicationset-apps.yaml")
@@ -2203,6 +2493,22 @@ def mutation_selftests(root: Path, helm: str) -> None:
     def m_values_whole(c: Path) -> None:
         tmpl(c, "mut-whole.yaml", "{{- $v := .Values }}\n{{- if $v.hiddenFlag }}\n---\n" + EVIL_SET + "{{- end }}\n")
 
+    def m_in_crds(c: Path) -> None:
+        (c / "crds").mkdir()
+        (c / "crds/evil.yaml").write_text(EVIL_SET, encoding="utf-8")
+
+    def m_hidden_read(binding: str, read: str):
+        """An object gated on a key read THROUGH a binding of .Values: `.hidden` is declared nowhere."""
+        def mutate(c: Path) -> None:
+            tmpl(c, "mut-bound.yaml", "{{- " + binding + " }}\n{{- if " + read + " }}\n---\n" + EVIL_SET
+                 + "{{- end }}\n" + ("" if ":=" in binding and not binding.startswith("range") else "{{- end }}\n"))
+        return mutate
+
+    def m_allowed_action_edited(c: Path) -> None:
+        _edit_re(c / "templates/observability/eval-namespace.yaml",
+                 r"range \$key, \$val := \.Values\.otelCollector\.eval\.quota",
+                 "range $key, $val := (.Values.otelCollector.eval.quota | default dict)")
+
     pa = lambda c: c / "templates/projects/project-apps.yaml"
     root_app = lambda c: c / "templates/bootstrap/root-app.yaml"
 
@@ -2244,6 +2550,34 @@ def mutation_selftests(root: Path, helm: str) -> None:
         ("a List whose item is not an object", m_bad_list, "not a Kubernetes object"),
         ("a gate on a value that values.yaml does not declare", m_undeclared, "not declared"),
         ("a template that reads .Values as a whole", m_values_whole, "as a whole"),
+        ("a new ApplicationSet in crds/ (Argo CD renders with --include-crds)", m_in_crds, "evil"),
+        ("a gate read through `with .Values.x` then `.hidden`",
+         m_hidden_read("with .Values.obiSpike", ".hidden"), "binds .Values"),
+        ("a gate read through `$v := .Values.x` then `$v.hidden`",
+         m_hidden_read("$v := .Values.obiSpike", "$v.hidden"), "binds .Values"),
+        ("a gate read through `range .Values.x` then `.hidden`",
+         m_hidden_read("range .Values.otelCollector.backends", ".hidden"), "binds .Values"),
+        ("a gate read through `range $i, $e := .Values.x` then `$e.hidden`",
+         m_hidden_read("range $i, $e := .Values.otelCollector.backends", "$e.hidden"), "binds .Values"),
+        ("a .Values key handed to include as a context",
+         lambda c: (tmpl(c, "_mut.tpl", '{{- define "mut.gate" -}}{{ if .hidden }}x{{ end }}{{- end -}}\n'),
+                    tmpl(c, "mut-inc.yaml", '{{- if include "mut.gate" .Values.obiSpike }}\n---\n' + EVIL_SET + "{{- end }}\n")),
+         "hands to include"),
+        ("an edited allow-listed range loses its allowance", m_allowed_action_edited, "binds .Values"),
+        ("a gate on now", m_gate('gt (now | date "2006" | int) 2100'), "`now`"),
+        ("a gate on randInt with a high threshold", m_gate("gt (randInt 0 1000000) 999999"), "`randInt`"),
+        ("a gate on uuidv4", m_gate('hasPrefix "ff" uuidv4'), "`uuidv4`"),
+        ("a gate on lookup", m_gate('lookup "v1" "Namespace" "" "mut"'), "`lookup`"),
+        ("a gate on KubeVersion.Minor equality", m_gate('eq .Capabilities.KubeVersion.Minor "31"'), "`.Capabilities`"),
+        ("a gate on HelmVersion", m_gate('eq .Capabilities.HelmVersion.Version "v3.99.0"'), "`.Capabilities`"),
+        ("a kube version gate that every modelled version answers the same",
+         m_gate('semverCompare ">=1.20.0" .Capabilities.KubeVersion.Version'), "same answer"),
+        ("a kube version gate that is not a single comparator",
+         m_gate('semverCompare ">=1.30.0 <1.31.0" .Capabilities.KubeVersion.Version'), "single"),
+        ("a gate on targetRevision equality", m_gate('eq .Values.spec.source.targetRevision "mut-branch"'), "is compared"),
+        ("a gate on a string prefix of a non-boolean value", m_gate('hasPrefix "x" .Values.spec.source.repoURL'), "is compared"),
+        ("a gate on .Release.IsUpgrade", m_gate(".Release.IsUpgrade"), "`.Release` field"),
+        ("a gate on .Release.Revision", m_gate("gt .Release.Revision 1"), "`.Release` field"),
         ("an Application named like a generated one, behind a non-default flag", m_name_behind_flag,
          "equals hand-written"),
         ("a render that fails under a flipped flag", m_fail_behind_flag, "boom"),
@@ -2307,7 +2641,7 @@ def fake_helm_selftests(root: Path, helm: str) -> None:
     """A helm that fails, is silent, hangs or prints garbage must fail the guard, never skip it."""
     ok_doc = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"
     try:
-        valid = subprocess.run([helm, "template", RELEASE, str(root / CHART), "-f", str(root / CHART / "values.yaml")],
+        valid = subprocess.run([helm, "template", RELEASE, str(root / CHART), "--include-crds", "-f", str(root / CHART / "values.yaml")],
                                capture_output=True, text=True, timeout=HELM_TIMEOUT, check=True).stdout
     except (OSError, subprocess.SubprocessError) as exc:
         raise Unreadable(f"fake helm fixture: the real render failed ({exc})") from exc
@@ -2328,6 +2662,20 @@ def fake_helm_selftests(root: Path, helm: str) -> None:
             "renders no ApplicationSet": f"#!/bin/sh\ncat {ok}\n",
         }
         _fake_helm_checks(root, t, scripts)
+        # A helm whose output differs between two renders of the SAME input, both valid. Only the
+        # render-twice comparison can catch it.
+        counter = shlex.quote(str(t / "counter"))
+        flip = t / "helm-flipping"
+        flip.write_text(f"#!/bin/sh\nn=$(cat {counter} 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > {counter}\n"
+                        f"cat {v}\nif [ $((n % 2)) -eq 0 ]; then echo '---'; cat {ok}; fi\n", encoding="utf-8")
+        flip.chmod(0o755)
+        try:
+            analyze(root / CHART, root, str(flip), timeout=30.0)
+            check("fake helm red: a helm that renders differently on the second call fails the guard", False,
+                  "no error")
+        except Unreadable as exc:
+            check("fake helm red: a helm that renders differently on the second call fails the guard",
+                  "not deterministic" in str(exc), str(exc)[:200])
 
 
 def _fake_helm_checks(root: Path, t: Path, scripts: dict) -> None:
