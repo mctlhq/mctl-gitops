@@ -132,7 +132,9 @@ Harness (`l2NewAPIHarness(t)`)
 - Marker: `L2SYNTH-TXN-7f3a`. Finance-looking text is `"L2SYNTH-TXN-7f3a total 12.34 card ending 0000"`,
   with no real merchant data.
 - `l2PeerSink` is a counter that no production path can reach, because `Server` has no sender.
-  Every case asserts it is 0, and the evidence states that the API has no sender.
+  Every runnable case asserts it is 0 to detect inadvertent direct API sends,
+  but this cannot prove that the separate executor will not later send;
+  `T9.executor_peer_send` remains CANNOT-OBSERVE.
 - `l2CaptureSlog(t, handler)` installs `slog.SetDefault(slog.New(handler))` and restores it in
   `t.Cleanup`. Production capture uses `audit.NewRedactingHandler(slog.NewJSONHandler(&buf, nil))`.
   These cases do not use `t.Parallel`.
@@ -144,7 +146,8 @@ observed. Gap rows use `expectGap`.)
 
 | id | stimulus | assertion / classification |
 | --- | --- | --- |
-| T2.bob_job_owner_summary | Alice job-bound identity (Bob conversation) posts `/notify/summary` with marker text, intent `lead` | 200, status `executed`, one `owner_notifications` row -> `FAIL/GAP` vs finance contract; peer sink 0 |
+| T2.bob_job_owner_summary | Alice job-bound identity (Bob conversation) posts `/notify/summary` with synthetic marker, intent `lead` | One notification belongs to Alice and routes only to her owner channel; no cross-user row or peer send -> PASS for ordinary owner routing. A Bob-conversation job is not finance-source authorization evidence |
+| T2.finance_origin_authorization | Same request with finance-looking synthetic text, no recognized finance-source or consent model | NOT-IMPLEMENTED for financial-source authorization; record absent enforcement. An actual wrong-user/peer disclosure is a separate FAIL/GAP with sink evidence |
 | T3.account_foreign_conversation | Alice account identity, `conversation_id`=Carol's conversation, on `/notify/summary` and `/actions/propose_reply` | 404; zero action and notification rows for both users -> PASS |
 | T3.account_foreign_context | `GET /conversations/{carolConv}/context` as Alice | 404 -> PASS |
 | T3.job_foreign_conversation | Alice job-bound identity naming Carol's conversation | 403 plus `audit_logs` `denied` row under Alice; no rows under Carol -> PASS |
@@ -154,13 +157,14 @@ observed. Gap rows use `expectGap`.)
 | T7.3.omit_job_id | same identity and state, `job_id` omitted | executed and queued; persisted `job_id=0`, current `install_revision` -> `FAIL/GAP` |
 | T7.1, T7.2 | not re-run | cited from #1247 report unchanged |
 | T9.observe_no_peer_send | observe mode, Bob conversation job, `propose_reply` marker text | status `pending_approval`; no `approved`/`executed`; peer sink 0 -> PASS |
-| T9.guarded_allowlisted | guarded mode, `IntentAllowlist: "discovery"`, intent `discovery`, marker text | observed. `approved` -> `FAIL/GAP` (executor would send without a human); else PASS |
+| T9.guarded_allowlisted | guarded mode, `IntentAllowlist: "discovery"`, intent `discovery`, marker text | Record actual policy result and persisted status; if allowlisted -> `approved`, zero synchronous peer sends: PASS for API behaviour, NOT proof of later executor send or non-send. FAIL/GAP only for an actual API policy violation |
+| T9.executor_peer_send | Delivery after API `approved` occurs in executor, outside this offline agentapi harness | CANNOT-OBSERVE; no no-peer-send claim from API having no sender or an inert peer sink |
 | T9.finance_tier | body with extra field `tier: "finance"` | 400; `NOT-IMPLEMENTED` |
 | T10.action_rows | every action row from T2/T3/T7.3/T9 | non-empty status and decision; denied rows have reasons -> PASS |
-| T10.denycode_persisted | inspect `agent_actions` columns; read `AgentPolicyDenialsTotal` | code only in the metric -> `FAIL/GAP` |
+| T10.denycode_persisted | inspect persisted action/audit denial records and `AgentPolicyDenialsTotal` independently | FAIL/GAP when structured deny code is present only in transient metrics but absent from the durable audit record required by #1244. This is not a missing finance feature; no production schema edits |
 | T10.redaction_text | redacting slog capture plus raw SELECTs of `audit_logs.*`, `agent_actions.intent/policy_reasons/payload_encrypted`, `owner_notifications` stored body | `l2AssertNoMarker` returns nil -> PASS |
 | T10.intent_channel | marker placed in `intent` (also on the intent-never path) | observed. Marker in `audit_logs` or plaintext column -> `FAIL/GAP`; else PASS |
-| T10.traces | test-local `trace.TracerProvider` (only `go.opentelemetry.io/otel/trace` + `embedded`, already a dependency) set via `otel.SetTracerProvider` | spans recorded = N; marker absent -> PASS with `spans=N`; N=0 is stated explicitly as vacuous |
+| T10.traces | inspect spans emitted by the actually exercised agent API instrumentation without adding fake spans or an exporter | No real spans or no accessible production instrumentation -> CANNOT-OBSERVE, record `spans=0`; never claim trace redaction PASS from an empty test-local provider |
 | M4 | harness-only handler that logs `slog.Info("l2 m4", "text", marker)` through `slog.NewJSONHandler` (no redaction) | `l2AssertNoMarker` must return an error -> `PASS (detected)`; otherwise `t.Fatal` |
 | M4.redacted_twin | same handler, production redacting handler | helper returns nil (shows the detection comes from missing redaction) |
 | OFFLINE.default_paths | dial TEST-NET-1 `192.0.2.1:443` via default transport; `net.LookupHost("example.invalid")` | both refused with `errL2ExternalDial`; loopback `httptest.NewServer` reachable -> PASS |
