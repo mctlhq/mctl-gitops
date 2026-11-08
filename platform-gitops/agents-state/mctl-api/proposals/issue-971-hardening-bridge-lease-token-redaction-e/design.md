@@ -89,10 +89,15 @@ Deployed state checked:
   and request the AMEND, as the issue requires.
 - `ReadOutcome` defensively scrubs on read: `SELECT ... result - 'lease_token'`
   in SQL. Old and new rows read back identically.
-- Historical rows: append an idempotent statement to `bridgeSchema`, which
-  `NewStore` applies on every start:
-  `UPDATE bridge_commands SET result = result - 'lease_token' WHERE result ? 'lease_token';`.
-  It is a no-op once clean. The table is small and dark.
+- Historical rows: do **not** append a bulk UPDATE to `bridgeSchema` or run a scrub from `NewStore`.
+  Introduce a bounded `Store.ScrubLegacyResultBatch(ctx, limit)` maintenance operation, invoked only by
+  a separately authorized operator before activation. Per-batch: select at most `limit` rows with
+  `result ? 'lease_token'` under `FOR UPDATE SKIP LOCKED`, update using `result - 'lease_token'` in short
+  transactions, apply bounded statement/lock timeouts, and report processed/remaining/errors.
+  Retries are idempotent and resumable, with independently verified zero remaining before provider activation;
+  read-time `ReadOutcome` redaction works *even before* the scrub. New stored results are always redacted.
+  This avoids unbounded startup locks, WAL bursts and stalled rolling deployments. Explicitly consider any
+  token copies already present in backups/retention.
 - Document the private stored-result shape in `docs/bridge.md`: the stored
   result is the v1alpha1 result minus `lease_token`, and the digest is over the
   submitted projection.
@@ -119,9 +124,13 @@ Deployed state checked:
     outbox row (`ON CONFLICT DO NOTHING`) exactly as today.
 - Add `Store.ExpireDue(ctx, limit) (int, error)`, one transaction per batch,
   actor `system:expiry-sweep`. Add an `Expirer` struct (`expiry.go`) with
-  `RunOnce` and `Run(ctx)` that mirror `Dispatcher`: a ticker, default 30s
-  interval and 100 batch, and it loops while a batch was full, up to a small
-  cap per tick. It logs only counts and errors, never row contents.
+  `RunOnce` and `Run(ctx)`: a ticker (default 30s), batch of 100 and explicit finite batch cap/tick.
+  Full batches continue up to the cap and residual backlog resumes next tick. Prefer oldest unlocked due
+  commands with `ORDER BY expires_at`; SKIP LOCKED rows remain eligible later. Do **not** promise one-interval
+  completion when capacity or locks prevent it. Expose redacted metrics for processed count, due backlog,
+  oldest overdue age, failures and last successful sweep; alert on sustained age/backlog/error thresholds.
+  Tests exercise more than one batch, locked rows, delayed progress and multiple replicas; logs contain only
+  counts/errors without token or row content.
 - `cmd/api/main.go`: when `bridgeStore` is non-nil, `go (&bridge.Expirer{...}).Run(rootCtx)`.
   This does not depend on Temporal. Read `MCTL_BRIDGE_EXPIRY_SWEEP_INTERVAL`
   (Go duration) as an optional override. Nothing starts when the bridge is off.
@@ -170,9 +179,10 @@ Deployed state checked:
 
 ## Platform impact
 
-- **Migrations:** one additive, idempotent `UPDATE` appended to
-  `bridgeSchema`. No DDL change, no column change. Safe to re-run on every
-  start.
+- **Migrations:** no unbounded historical UPDATE in `bridgeSchema` or application startup. A separately
+  authorized bounded/restartable maintenance scrub removes legacy JSONB token fields and reports verified
+  completion before activation. Failure does not block dark-code startup (redaction on read is immediate),
+  but nonzero remaining tokens block activation. Optional expiry index is additive DDL only.
 - **Backward compatibility:**
   - Wire schemas, `PROVENANCE`, HTTP routes, error codes, the digest and the
     signal payload are all unchanged.
@@ -181,8 +191,8 @@ Deployed state checked:
   - Transition rows now say `leased`/`pending` where they said `pending`/
     `open`. Historical rows are not rewritten, because audit history is
     append-only.
-- **Resources:** one extra goroutine and one indexed-ish query every 30s when
-  the bridge is enabled. The query filters `status` and `expires_at`. An
+- **Resources:** one extra goroutine plus bounded, measured expiry queries every 30s when the bridge
+  is enabled; backlog/lock/error metrics are required to assess actual latency. The query filters `status` and `expires_at`. An
   optional partial index
   `CREATE INDEX IF NOT EXISTS bridge_commands_expiry ON bridge_commands (expires_at) WHERE status IN ('pending','leased')`
   keeps it cheap and is added the same additive way. Zero cost when the bridge
@@ -201,6 +211,10 @@ Deployed state checked:
   1. Redaction: FIXED by this proposal.
   2. Expiry sweep: FIXED.
   3. Transition audit: FIXED.
-  4. Lease-token column at rest: DEFERRED (owner: mctl-api maintainers;
-     dependency: mctl-gitops#2457; criterion: decided before the first provider
-     credential is issued).
+  4. Plaintext token column at rest and backups: SECURITY DECISION REQUIRED (owner: mctl-api security
+     maintainers; dependency: mctl-gitops#2457; criterion: separately reviewed hashing/encryption/expiry
+     treatment or explicit scoped risk acceptance **before first provider credential issuance**).
+
+## AMEND 2026-11-08 — bounded migration and realistic expiry contract
+
+Read/write paths redact `Result.lease_token` immediately. Historical cleanup is a separately operated bounded migration, never a full-table update in `NewStore`, with progress, timeout and verified zero remaining before activation. Expiry sweep backlog/lock contention can push latency beyond one tick, so metrics, alerts and >batch/lock/restart tests are required. Plaintext lease-token column and backups remain an independent security-owner credential-issuance gate; JSONB redaction does not make them safe by itself.
