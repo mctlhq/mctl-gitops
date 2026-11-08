@@ -56,11 +56,13 @@
 
 ### Selected design (to be ratified by the ADR, task 2)
 
-**Identity:** short-lived JWTs (TTL 1h) signed by Vault's identity secrets engine (`identity/oidc/key/temporal`, `identity/oidc/role/temporal-<client>`). Each role's template emits `permissions` and `aud: temporal-frontend`.
+**AMEND boundary:** this proposal can only research and document the decisions below. All Vault, ESO, SDK, frontend TLS/auth, monitoring and cluster operations are future independently approved slices. No phase 1-5 rollout follows automatically from approving this ADR. The role names below are *candidate claims*, pending a source-backed Temporal 1.31.0 RPC-per-role negative-test matrix.
+
+**Identity (candidate; unverified until live inventory):** short-lived JWTs (TTL <=1h) signed by Vault's identity engine (`identity/oidc/key/temporal`, `identity/oidc/role/temporal-<client>`). Each role template emits `permissions`, a stable expected `iss`, and exactly pinned `aud: temporal-frontend`. Confirm that the stock server 1.31.0 **actually enforces** the chosen non-empty audience/issuer setting and that the Vault token endpoint+ESO generator emit these fields, with canary negative tests; otherwise STOP, no enablement. Do not treat setting `aud` on a token as proof that the server validates it.
 - Each client has its own Vault Kubernetes-auth role, bound to its own ServiceAccount. Each role maps to its own entity, whose metadata holds the permission list. The template reads `{{identity.entity.metadata.temporal_permissions}}`, so the permission list is Vault config, not something the client asserts.
 - Delivery uses an ESO `VaultDynamicSecret` generator (`GET identity/oidc/token/temporal-<client>`, authenticated with the client's SA through `kubernetes` auth). An `ExternalSecret` in the client's namespace uses `refreshInterval: 20m` and `dataFrom.sourceRef.generatorRef`. The token is mounted as a file at `/var/run/secrets/temporal/token`, following the `GITHUB_TOKEN_FILE` pattern in `services/admins/mctl-agents-worker/values.yaml`.
 - Clients re-read the file at least every 5 minutes. The Go SDK uses a `HeadersProvider`/`Credentials` that rereads the file; the Python SDK updates `client.api_key` or `rpc_metadata` from a background task. These are code changes in mctl-api, mctl-agents and kuptsi-app, landed first behind env `TEMPORAL_TOKEN_FILE` (unset means no header), so they are safe to ship before the server enforces anything.
-- The frontend verifies tokens through `jwtKeyProvider.keySourceURIs: [http://vault-active.vault.svc.cluster.local:8200/v1/identity/oidc/.well-known/keys]` with `refreshInterval: 1m`. This needs one Vault NetworkPolicy peer: the `temporal` frontend pods, on JWKS only. JWKS is public key material.
+- The frontend must verify JWTs against **authentically delivered JWKS**: prefer an HTTPS issuer/JWKS endpoint with explicit CA verification, or a separately reviewed pinned-key distribution. The previous proposed `http://vault-active.vault.svc.cluster.local:8200/...` URI is **NOT APPROVED**: unsigned/unauthenticated JWKS transport allows trust-key substitution despite the key material itself being public. Task 1/ADR must prove Vault HTTPS support, issuer/JWKS URL, trust roots and refresh/rotation behaviour in the deployed chart before choosing the exact URL; restrict Vault NetworkPolicy ingress to the minimum required path/workloads.
 - Vault rotates the signing key on a schedule (`rotation_period: 24h`, `verification_ttl` at least 2x token TTL), so old tokens validate until they expire.
 - Revocation: delete or disable the client's Vault role or entity. ESO then cannot mint new tokens, and access ends within at most one TTL (1h). For an emergency stop, rotate the key with `verification_ttl` shortened, which invalidates every token. Document this as a break-glass step.
 
@@ -74,13 +76,13 @@
 
 | Identity (Vault role / K8s SA) | permissions claim |
 |---|---|
-| `temporal-mctl-api` (mctl-api SA) | `["mctl-agents:writer"]` |
-| `temporal-mctl-agents-control` / `-exec` / `-implement` (one SA each) | `["mctl-agents:writer"]` (narrowed to `worker` if task 1 proves the role restricts start/terminate) |
-| `temporal-kuptsi` (kuptsi-app SA, shared by both containers) | `["kuptsi:writer"]` |
-| `temporal-web` | `["kuptsi:reader","mctl-agents:reader"]`, plus `TEMPORAL_DISABLE_WRITE_ACTIONS: "true"` |
-| `temporal-bootstrap` (the Job's SA in `temporal`) | `["system:admin"]`, mounted only into `temporal-namespaces-bootstrap` |
-| Future `temporal-assistants-control` | `["mctl-assistants:writer"]` |
-| Future `temporal-provider-<name>` (e.g. Glovo) | `["mctl-assistants-provider-<name>:writer"]` only. It never gets a role on `mctl-assistants` or `mctl-agents`. Control-to-provider handoff crosses namespaces through mctl-api or Nexus, as the ADR decides. |
+| `temporal-mctl-api` (mctl-api SA) | `["mctl-agents:write"]` |
+| `temporal-mctl-agents-control` / `-exec` / `-implement` (one SA each) | `["mctl-agents:write"]` (narrowed to `worker` if task 1 proves the role restricts start/terminate) |
+| `temporal-kuptsi` (kuptsi-app SA, shared by both containers) | `["kuptsi:write"]` |
+| `temporal-web` | **DEFER / no assumed token in M0.** Stock UI requests cluster read APIs requiring `temporal-system:read` (grants read across **all** namespaces). Either accept an explicitly admin-only read-all UI or separately review a narrower authorizer/proxy; disabling write buttons is NOT sufficient to prove API-side read-only. |
+| `temporal-bootstrap` (the Job's SA in `temporal`) | `["temporal-system:admin"]`, mounted only into `temporal-namespaces-bootstrap` |
+| Future `temporal-assistants-control` | `["mctl-assistants:write"]` |
+| Future `temporal-provider-<name>` (e.g. Glovo) | `["mctl-assistants-provider-<name>:write"]` only. It never gets a role on `mctl-assistants` or `mctl-agents`. Control-to-provider handoff crosses namespaces through mctl-api or Nexus, as the ADR decides. |
 
 Unknown issuer, missing token, expired token, wrong `aud`, or no matching namespace permission: the default authorizer denies.
 
@@ -93,12 +95,14 @@ Unknown issuer, missing token, expired token, wrong `aud`, or no matching namesp
   - `TemporalTokenStale`: the ESO `externalsecret_status_condition{condition="Ready",status="False"}` for the `temporal-token-*` ExternalSecrets for 15m;
   - `TemporalFrontendCertExpiring`: cert-manager `certmanager_certificate_expiration_timestamp_seconds` within 14d.
 
-### Phases (each a separate PR, each separately approved)
+### Phases (each a separate DevLoop proposal, approval and PR; only phase 0 in this proposal)
+
+**Stop condition:** never enable TLS cutover or authorizer based solely on this proposal's approval. Require independently approved per-phase work items; review the actual chart-rendered config, Vault token semantics and SDK client support; fail closed when issuer, audience, role mapping or authenticated JWKS cannot be demonstrated. A disposable canary with actual negative authorization tests is mandatory before phase 3. A written maintenance window alone is not an adequate substitute.
 
 0. **ADR and live inventory.** No runtime change.
-1. **Credential plumbing in shadow.** Vault roles and the JWKS key, ESO generators, token files mounted, clients send tokens through `TEMPORAL_TOKEN_FILE`. The server still has no authorizer, so tokens are ignored. Shadow evidence: each client logs a hash of its token's `sub` and expiry (never the token itself), and a one-off `temporal` CLI check with a token validates against JWKS offline.
+1. **Credential plumbing in shadow.** Vault roles and the JWKS key, ESO generators, token files mounted, clients send tokens through `TEMPORAL_TOKEN_FILE`. The server still has no authorizer, so tokens are ignored. Shadow evidence: each client logs a hash of its token's `sub` and expiry (never the token itself), and a one-off `temporal` CLI check with a token validates against **TLS-authenticated JWKS** offline and checks issuer/audience/role mappings.
 2. **Frontend TLS cut-over.** Every client and the bootstrap Job switch to TLS in the same sync window as the server values. Plaintext and TLS cannot share 7233, so a short reconnect is expected. Workers and SDK clients retry, and workflows are durable.
-3. **Authorizer on.** Set `server.config.global.authorization` with `jwtKeyProvider`, `permissionsClaimName: permissions`, `authorizer: default`, `claimMapper: default`, and `internalFrontend` enabled. This flip is preceded by validation on a disposable canary Temporal release, or a scheduled window (an ADR decision; see Open questions).
+3. **Authorizer on (AFTER successful disposable canary).** Set `server.config.global.authorization` with `jwtKeyProvider`, `permissionsClaimName: permissions`, `authorizer: default`, `claimMapper: default`, and `internalFrontend` enabled. This flip is preceded by validation on a disposable canary Temporal release, or a scheduled window (an ADR decision; see Open questions).
 4. **Negative proof.** Run the test matrix (tasks.md T-series) against production, store the evidence in the ADR, and close the activation gates.
 5. **Later, separately approved, out of this proposal.** Register the `mctl-assistants*` namespaces and identities.
 
@@ -112,13 +116,13 @@ Unknown issuer, missing token, expired token, wrong `aud`, or no matching namesp
 
 ## Platform impact
 
-- **Backward compatibility:** phases 1 and 2 are additive or brief-reconnect. Phase 3 is breaking for any client without a valid token, including clients not in the inventory. Task 1 checks frontend connection metrics and logs for unexpected callers before phase 3.
+- **Backward compatibility:** phases 1 and 2 are NOT automatically additive: plaintext-to-TLS cutover at the single frontend port is a coordinated breaking change. It needs verified client image versions, no-unknown-client inventory, observed continuity, a canary and a rollback drill before separate approval. Phase 3 is breaking for any client without a valid token, including clients not in the inventory. Task 1 checks frontend connection metrics and logs for unexpected callers before phase 3.
 - **Cross-repo dependencies:** mctl-api (Go: token file, TLS CA), mctl-agents (Python: token refresh, TLS), kuptsi-app (Python, both containers). Each must release with `TEMPORAL_TOKEN_FILE`/`TEMPORAL_TLS_CA_FILE` support before phase 1 and 2 values are set. Setting the env on an image that ignores it is a no-op, which is safe.
 - **Resources:** negligible. ESO refreshes add a few Vault calls per client per hour, the CA and certificates are tiny, and the frontend fetches JWKS every minute. An optional canary Temporal release would add about 1.5Gi memory requests temporarily.
 - **Risks and mitigations:**
   - Vault outage. JWKS is cached in the frontend and tokens live 1h with a 20m refresh, so there is about 40m of tolerance. `TemporalTokenStale` alerts.
   - System worker broken by the authorizer. Mitigated by `internalFrontend`, validated in the canary or window first.
   - temporal-web loses write actions. This is intended. Operators use the `temporal` CLI with a short-lived admin token minted on demand from Vault by a human (Vault human auth).
-  - Bootstrap Job holds `system:admin`. The token is scoped to the Job's SA in the `temporal` namespace and lives 1h.
+  - Bootstrap Job holds `temporal-system:admin`. The token is scoped to the Job's SA in the `temporal` namespace and lives 1h.
   - Role semantics differ from expectation. The negative matrix (T1–T10) is the gate. Nothing is declared isolated without a recorded denial.
 - **Rollback:** each phase is one revertible commit. Reverting the authorizer values restores the current behaviour, and the NetworkPolicy remains as the floor. See tasks.md.

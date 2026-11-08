@@ -9,7 +9,7 @@ Issue #2456 asks for three things before any shared multi-tenant assistant runti
 - a server-side authorizer that limits each identity to its own Temporal namespaces and operations;
 - a phased rollout with evidence: inventory, an ADR, negative tests, rotation, alarms and rollback.
 
-This proposal is design and staged GitOps work only. Every phase that changes live behaviour (TLS cut-over, authorizer enablement, new assistant namespaces) needs its own separate human approval. The initial state is `proposed / blocked for deployment`.
+**Approval boundary (AMEND 2026-11-08): only live read-only inventory, a reviewed security ADR, permission/issuer/audience proof and a *plan* for follow-up issues are authorized by this proposal. Tasks 3-10 are specifications for distinct future DevLoop issues/PRs, not executable work under this approval. No Vault, ESO, SDK, TLS, authorizer, namespace or deployed-config writes, and no in-cluster test that alters behaviour.** Every phase that changes live behaviour needs an independently reviewed proposal, human approval, immutable image pin, verified canary evidence and rollback gate. Initial state remains `proposed / blocked for deployment`.
 
 ## User stories
 
@@ -29,9 +29,9 @@ Design and decision:
 
 Identity and least privilege:
 - WHILE the authorizer is enabled THE SYSTEM SHALL map each client identity to exactly these Temporal permissions:
-  - mctl-api: `mctl-agents:writer`;
-  - the mctl-agents control/exec/implement workers: `mctl-agents:writer`;
-  - kuptsi-app (API and temporal-worker): `kuptsi:writer`;
+  - mctl-api: `mctl-agents:write`;
+  - the mctl-agents control/exec/implement workers: `mctl-agents:write`;
+  - kuptsi-app (API and temporal-worker): `kuptsi:write`;
   - temporal-web: read-only on the namespaces the ADR names;
   - the namespace bootstrap Job: system admin, delivered only to that Job.
 - IF a request carries no credential, an expired credential, a credential from an unknown issuer, or a credential with no permission for the target namespace THEN THE SYSTEM SHALL reject it with PermissionDenied/Unauthenticated. This SHALL cover start, signal, query, describe, list, terminate, reset, poll, and namespace or schedule operations.
@@ -45,7 +45,7 @@ Credentials and lifecycle:
 - WHEN the frontend TLS phase is enabled THE SYSTEM SHALL serve TLS on 7233 with a certificate from an in-cluster CA issued by cert-manager and rotated by cert-manager. Clients SHALL verify the certificate against the distributed CA bundle.
 
 Rollout, observability, continuity:
-- THE SYSTEM SHALL roll out in independently approved phases:
+- In later separately approved issues (NOT this proposal), THE SYSTEM SHALL roll out in independently approved phases:
   0. ADR and inventory;
   1. credential issuance, with clients sending tokens that the server ignores;
   2. frontend TLS cut-over;
@@ -56,6 +56,9 @@ Rollout, observability, continuity:
 - WHEN the authorizer is enabled THE SYSTEM SHALL scrape Temporal frontend metrics and alert on a sustained rate of authorization failures per namespace. It SHALL also alert when a client token file is older than its refresh deadline.
 - IF the authorizer phase causes legitimate client failures THEN THE SYSTEM SHALL be revertible by reverting a single commit to `bootstrap/templates/data/temporal.yaml`, which restores the previous unauthenticated behaviour while the NetworkPolicy allowlist stays in place.
 - THE SYSTEM SHALL keep the NetworkPolicy `allow-temporal-ingress` as defense in depth after authorization is enabled.
+- BEFORE any JWT/authorizer change THE SYSTEM SHALL verify in Temporal **server 1.31.0** the exact JWT syntax, role-to-RPC matrix, configured accepted issuer and non-empty exact JWT audience, plus negative cases (wrong `aud`, `iss`, `exp`, missing token). The stock role values MUST be `read`, `write`, `worker`, `admin`, and system scope MUST be `temporal-system:<role>`; `reader`, `writer` and `system:admin` are not accepted spellings. Source: https://docs.temporal.io/production-deployment/self-hosted-guide/security .
+- BEFORE a frontend reads Vault JWKS THE SYSTEM SHALL validate that its issuer key set is obtained over authenticated TLS (or an independently pinned trusted key distribution); plain `http://` JWKS from another pod is not acceptable, even if it returns public material.
+- Temporal Web UI requires cluster-level list/get-cluster calls: `temporal-system:read` grants **read to every namespace**, not just the named `kuptsi`/`mctl-agents` namespaces. The ADR MUST decide explicitly whether privileged admin-only UI read-all is acceptable; otherwise keep the UI disabled until a restricted authorizer/UI proxy is separately approved. Hiding write buttons never substitutes for a server-side denial.
 
 Separation of concerns:
 - THE SYSTEM SHALL document that Temporal authorization is machine and namespace authorization only. Per-user, per-tenant and per-order authorization inside a shared namespace remains the responsibility of mctl-api and SHALL be enforced there separately. Both layers are required.
