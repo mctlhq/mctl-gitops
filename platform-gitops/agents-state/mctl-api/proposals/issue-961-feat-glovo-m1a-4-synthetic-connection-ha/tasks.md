@@ -1,8 +1,8 @@
 # Tasks: issue-961-feat-glovo-m1a-4-synthetic-connection-ha
 
-- [ ] 0. Reconcile with merged slices #958, #959 and #960. Confirm the actual names of
+- [ ] 0. STOP if #958, #959 or #960 are not merged. Reconcile the actual names of
   `IsGlovoAudience`, `IsGlovoWorker`, `glovoAudienceGate`, `glovoWorkerGate`,
-  `glovo.Resolver`, `glovo.Store`, the refusal enum, connection states and the limit counters.
+  `glovo.Resolver`, `glovo.Store`, the refusal enum, connection states and the #961-owned limit counters (not in #959).
   DoD: a short mapping note is added to `docs/glovo-connections.md`. If any slice is unmerged or
   a primitive is missing, stop and report it, and add nothing that duplicates it.
 - [ ] 1. Add the feature gate (depends on 0): `GLOVO_ENABLED` in `cmd/api/main.go`,
@@ -20,11 +20,11 @@
   installation PUT/DELETE behind the principal-mode `requireTenantRole` owner check, and the
   admin-only per-principal pilot allowlist PUT/DELETE. DoD: a reinstall revokes live
   connections atomically, and admins are not auto-admitted to installation routes.
-- [ ] 5. Add the worker handlers (depends on 1, 2) in `internal/api/handlers_glovo_worker.go`:
+- [ ] 5. Implement or prove a default-OFF dedicated worker machine identity (not minted in #958); then add the worker handlers (depends on 1, 2) in `internal/api/handlers_glovo_worker.go`:
   check, activate, expire, with per-call re-derivation of membership, allowlist, install
   revision and expiry, and the explicit `IsGlovoWorker` check. DoD: the worker reaches only
   these routes, and no other identity reaches them.
-- [ ] 6. Add audit and logging (depends on 3, 4, 5): an audit event for every mutation and every
+- [ ] 6. Add the additive handoff and quota DB schema with negative concurrency tests, then add audit and logging (depends on 3, 4, 5): an audit event for every mutation and every
   refusal on a mutating route, and `slog` fields limited to ids, states and codes. DoD: covered
   by T5.
 - [ ] 7. Add the end-to-end test harness (depends on 3, 4, 5) in
@@ -37,6 +37,14 @@
   READY until #957 and mctl-telegram#1235) and the `internal/openapi` entries. DoD: the OpenAPI
   tests pass, and the MCP tool count is unchanged.
 - [ ] 9. Run `go fmt`, `go vet`, `golangci-lint` and `go test ./...`. DoD: all are clean.
+
+## AMEND 2026-11-08 — additional acceptance
+
+- [ ] A1. Add a default-OFF Glovo-only worker machine identity and gate, or keep worker routes `not_ready`; never use a general admin/service token as substitute. #958 reserves ID but does not issue a token.
+- [ ] A2. Add additive, idempotent, hash-only handoff table and cross-replica PostgreSQL quota counters. Demonstrate **one** handoff consume even under concurrent worker requests, and zero activation if revoke or expiry wins.
+- [ ] A3. Two API instances racing at the final hourly/tenant quota slot cannot exceed the rate limit.
+- [ ] A4. Block if #958/#959/#960 are not merged and their actual interfaces do not match. No duplicated shims or unreviewed prerequisite implementation.
+- [ ] A5. No live credentials, DNS, P1/P2 rollout, Temporal client auth change or real Glovo provider.
 
 ## Tests
 

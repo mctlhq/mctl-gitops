@@ -46,6 +46,14 @@ Deployed state checked:
 - mctl MCP read tools were not called. The gitops checkout and the issues were enough for this
   code-only, default-off change.
 
+## AMEND 2026-11-08 — worker auth and DB effect contracts
+
+#958 only reserves the Glovo worker ID, not a live token or `glovoWorkerGate`. #961 must add a genuine fail-closed workload identity gate behind an explicit **default-OFF** configuration, narrowly confined to versioned worker routes and never granting access to MCP, DevLoop or admin APIs. Local integration tests may use synthetic credentials; production issuance is subject to separately approved P1 GitOps secrets. If a compatible credential cannot be built safely in-scope, mark worker routes `not_ready` rather than interpreting generic service/admin token as worker.
+
+The #959 schema provides **neither** `glovo_handoff_refs` nor `glovo_rate_counters`. #961 owns their additive, tested schema: hash-only single-use reference and expiry, connection/install revision; row-locked or CAS-fenced atomic consume and revoke; a row-locked per-hour owner counter and transactionally enforced tenant active limit across both API replicas. Include indexes, TTL cleanup restricted to these synthetic-only tables and a migration rollback. Tests race two workers consuming one handoff, token expiry, revoked revision and two replicas at the limit: at most one successful activation, no quota overrun.
+
+Old statements that the slice has *no new migration*, that *#959 supplies counters* or that *#958 issues the worker token* are superseded. #958/#959/#960 are hard **merged prerequisites**. The user may explicitly select the `labs` team when individually allowlisted, but no implicit `labs` default.
+
 ## Proposed solution
 
 This slice is integration only. It adds handlers, gates wiring, schemas and tests, and it
@@ -139,7 +147,7 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
 
 ### 5. Limits, idempotency, audit
 
-- Rate and count limits use slice 2's DB counters, checked inside the mutation transaction:
+- Rate and count limits use #961-owned additive Postgres counters, checked inside the mutation transaction:
   10 connect or reconnect requests per hour per (tenant, principal), and 50 non-terminal
   connections per tenant.
 - Idempotency uses slice 2's `glovo_connection_requests` table. `request_hash` is the SHA-256 of
@@ -204,8 +212,7 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
 
 ## Platform impact
 
-- Migrations: none new. The tables come from slice 2, and this slice adds at most an index if
-  the reconcile in task 0 finds one missing. Any such change must be additive and idempotent.
+- Migrations: #961 adds versioned, additive and idempotent handoff-reference and quota-counter tables to the #959 data model. Existing tables remain unchanged. Missing #958/#959/#960 primitives are hard dependency blockers, not an excuse to add duplicate migrations.
 - Backward compatibility: with `GLOVO_ENABLED` unset (the deployed state), every Glovo route
   answers 503 `not_ready`, and token issuance and verification are unchanged. Regression tests
   cover support, DevLoop, MCP and Telegram routes.
