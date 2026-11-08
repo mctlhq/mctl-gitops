@@ -387,7 +387,16 @@ CONSUMER_SKIP = ("platform-gitops/agents-state/", ALLOWLIST, "scripts/validate-g
                  "tests/test_generated_app_scope.py", "docs/")
 
 
-def consumer_counts(root: pathlib.Path) -> dict[str, int]:
+def consumer_counts(root: pathlib.Path, patterns=()) -> dict[str, int]:
+    """Count lines spelling the project name per tracked file.
+
+    Files matching one of `patterns` are always reported, including with a
+    count of 0, and must decode as UTF-8 (a decode error is a CheckError, not
+    a skipped file). Every other file is scanned with undecodable bytes
+    replaced, so no tracked file is silently left unread; only files with a
+    non-zero count are reported.
+    """
+    must = [_glob_re(p) for p in patterns]
     try:
         files = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], check=True,
                                capture_output=True).stdout.decode().split("\0")
@@ -397,14 +406,15 @@ def consumer_counts(root: pathlib.Path) -> dict[str, int]:
     for rel in filter(None, files):
         if rel.endswith(".md") or any(rel.startswith(s) or rel == s for s in CONSUMER_SKIP):
             continue
+        listed = any(rx.match(rel) for rx in must)
         try:
-            text = (root / rel).read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
+            text = (root / rel).read_text(encoding="utf-8", errors="strict" if listed else "replace")
+        except UnicodeDecodeError as exc:
+            raise CheckError(f"cannot decode {rel} as UTF-8: {exc}") from exc
         except OSError as exc:
             raise CheckError(f"cannot read {rel}: {exc}") from exc
         n = sum(1 for line in text.splitlines() if any(p.search(line) for p in CONSUMER_PATTERNS))
-        if n:
+        if n or listed:
             counts[rel] = n
     return counts
 
@@ -432,7 +442,7 @@ def check_consumers(counts: dict[str, int], allow: dict[str, int],
             found.append(f"{f}: {n} line(s) spell the project name `apps` and the file is not in {ALLOWLIST}")
         elif allow[f] != n:
             found.append(f"{f}: {n} line(s) spell the project name `apps`, allowlist has {allow[f]}")
-    for f in sorted(set(allow) - set(counts)):
+    for f in sorted(set(allow) - {f for f, n in counts.items() if n}):
         found.append(f"{f}: listed in {ALLOWLIST} but no longer spells the project name `apps`")
     return found
 
@@ -497,7 +507,7 @@ def run_all(root: pathlib.Path, docs: list[dict], strict_prefix: str, render=hel
             found += check_rendered(projects[a.project], a, r)
     if consumers:
         inv = _load_inventory(root) if allow is None else {"consumers": allow, "patterns": patterns or {}}
-        found += check_consumers(consumer_counts(root), inv["consumers"], inv["patterns"])
+        found += check_consumers(consumer_counts(root, inv["patterns"]), inv["consumers"], inv["patterns"])
     return found
 
 
@@ -516,10 +526,16 @@ def main(argv: list[str]) -> int:
     root = pathlib.Path(args.root).resolve()
     try:
         if args.print_consumers:
-            counts = consumer_counts(root)
             pats = load_patterns(root)
-            rxs = [_glob_re(p) for p in pats]
-            exact = {f: n for f, n in counts.items() if not any(r.match(f) for r in rxs)}
+            counts = consumer_counts(root, pats)
+            pat_rx = [(p, _glob_re(p), n) for p, n in pats.items()]
+            exact = {}
+            for f, n in counts.items():
+                hit = next(((p, want) for p, rx, want in pat_rx if rx.match(f)), None)
+                if hit is None:
+                    exact[f] = n
+                elif n != hit[1]:
+                    print(f"WARNING: {f}: {n} line(s), pattern {hit[0]} requires {hit[1]}", file=sys.stderr)
             print(json.dumps({"consumers": exact, "patterns": pats}, indent=2, sort_keys=True))
             return 0
         docs = scope.load(args.bootstrap)

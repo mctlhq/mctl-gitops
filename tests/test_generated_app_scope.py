@@ -310,7 +310,7 @@ class ConsumerSweep(unittest.TestCase):
                 gas.consumer_counts(pathlib.Path(d))
 
     def test_real_allowlist_matches_tree(self):
-        self.assertEqual(gas.check_consumers(gas.consumer_counts(REPO), gas.load_allowlist(REPO),
+        self.assertEqual(gas.check_consumers(gas.consumer_counts(REPO, gas.load_patterns(REPO)), gas.load_allowlist(REPO),
                                              gas.load_patterns(REPO)), [])
 
     def test_real_inventory_has_no_per_tenant_entries(self):
@@ -345,7 +345,7 @@ class TenantFragmentPattern(unittest.TestCase):
         return root
 
     def check(self, root):
-        return gas.check_consumers(gas.consumer_counts(root), self.ALLOW, self.PATS)
+        return gas.check_consumers(gas.consumer_counts(root, self.PATS), self.ALLOW, self.PATS)
 
     def test_converged(self):
         self.assertEqual(self.check(self.tree(["a", "b"])), [])
@@ -369,6 +369,30 @@ class TenantFragmentPattern(unittest.TestCase):
         f.write_text("".join(f.read_text().splitlines(True)[:-1]))
         self.assertTrue(self.check(root))
 
+    def test_zero_line_fragment_fails(self):
+        root = self.tree(["a"])
+        (root / "platform-gitops/argocd/rbac/tenants/a.csv").write_text("# empty\n")
+        out = self.check(root)
+        self.assertTrue(any("a.csv" in m and "requires 6" in m for m in out), out)
+
+    def test_empty_fragment_fails(self):
+        root = self.tree(["a"])
+        (root / "platform-gitops/argocd/rbac/tenants/a.csv").write_text("")
+        self.assertTrue(self.check(root))
+
+    def test_non_utf8_fragment_is_an_error(self):
+        root = self.tree(["a"])
+        (root / "platform-gitops/argocd/rbac/tenants/a.csv").write_bytes(b"\xff\xfe\x00bad\n")
+        with self.assertRaises(gas.CheckError):
+            self.check(root)
+
+    def test_non_utf8_file_outside_pattern_is_still_scanned(self):
+        root = self.tree(["a"], {"scripts/latin.sh": 'x=$a.spec.project != "apps" # \xe9\n'})
+        (root / "scripts/latin.sh").write_bytes(b'x=$a.spec.project != "apps" # \xe9\n')
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        out = self.check(root)
+        self.assertTrue(any("latin.sh" in m for m in out), out)
+
     def test_handwritten_file_outside_pattern_fails(self):
         root = self.tree(["a"], {"platform-gitops/argocd/rbac/extra.csv": FRAGMENT.format(t="x"),
                                  "platform-gitops/argocd/rbac/tenants/sub/y.csv": FRAGMENT.format(t="y")})
@@ -378,7 +402,7 @@ class TenantFragmentPattern(unittest.TestCase):
 
     def test_name_and_pattern_overlap_is_rejected(self):
         root = self.tree(["a"])
-        out = gas.check_consumers(gas.consumer_counts(root),
+        out = gas.check_consumers(gas.consumer_counts(root, self.PATS),
                                   {**self.ALLOW, "platform-gitops/argocd/rbac/tenants/a.csv": 6}, self.PATS)
         self.assertTrue(out)
 
@@ -389,12 +413,44 @@ class Cli(unittest.TestCase):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, "-I", self.SCRIPT, *args], capture_output=True, text=True)
 
-    def test_print_consumers_without_bootstrap(self):
-        r = self.run_cli("--root", str(REPO), "--print-consumers")
+    def test_print_consumers_reflects_the_tree(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = pathlib.Path(tmp.name)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        frag = "platform-gitops/argocd/rbac/tenants/"
+        files = {
+            gas.ALLOWLIST: json.dumps({"consumers": {"listed.sh": 1}, "patterns": {FRAGMENT_GLOB: 2}}),
+            "listed.sh": 'a\nx=$a.spec.project != "apps"\nx=$a.spec.project != "apps"\n',
+            "unlisted.sh": 'x=$a.spec.project != "apps"\n',
+            frag + "ok.csv": "p, r, applications, get, apps/ok-*, allow\n" * 2,
+            frag + "bad.csv": "p, r, applications, get, apps/bad-*, allow\n",
+        }
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        r = self.run_cli("--root", str(root), "--print-consumers")
         self.assertEqual(r.returncode, 0, r.stderr)
         data = json.loads(r.stdout)
-        self.assertEqual(data["consumers"], gas.load_allowlist(REPO))
-        self.assertEqual(data["patterns"], gas.load_patterns(REPO))
+        self.assertEqual(data["consumers"], {"listed.sh": 2, "unlisted.sh": 1})
+        self.assertEqual(data["patterns"], {FRAGMENT_GLOB: 2})
+        self.assertIn("bad.csv", r.stderr)
+        self.assertNotIn("ok.csv", r.stderr)
+
+    def test_print_consumers_zero_fragment_warns(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = pathlib.Path(tmp.name)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        (root / gas.ALLOWLIST).parent.mkdir(parents=True, exist_ok=True)
+        (root / gas.ALLOWLIST).write_text(json.dumps({"consumers": {}, "patterns": {FRAGMENT_GLOB: 2}}))
+        (root / FRAGMENT_GLOB.replace("*", "z")).parent.mkdir(parents=True)
+        (root / FRAGMENT_GLOB.replace("*", "z")).write_text("# none\n")
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        r = self.run_cli("--root", str(root), "--print-consumers")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("z.csv", r.stderr)
 
     def test_neither_flag_is_rejected(self):
         r = self.run_cli("--root", str(REPO))
