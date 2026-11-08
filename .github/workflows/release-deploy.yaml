@@ -124,7 +124,7 @@ jobs:
           persist-credentials: false
 
       - name: Install PyYAML
-        run: python3 -m pip install --quiet pyyaml==6.0.2
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
 
       - name: Release preflight
         env:
