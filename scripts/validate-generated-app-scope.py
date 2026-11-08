@@ -24,7 +24,8 @@ checks the result, offline:
      starts with PREFIX must have exactly one repository, exactly one literal
      destination whose namespace is the name after the prefix, no wildcard, and
      an empty cluster-scoped list; a hand-written AppProject with that prefix
-     in the bootstrap render is rejected.
+     in the bootstrap render is rejected. Names the generator is known to
+     produce are passed with --generated-project; the default is none.
   5. directory names: every services/<team> has a tenants/<team>, no team or
      tenant directory name matches the reserved tenant-name matcher, and the
      matcher is identical in all four shell copies in the workflow templates.
@@ -33,14 +34,20 @@ checks the result, offline:
   7. consumer inventory: every place that spells the literal project name
      `apps` (project comparisons, project fields, RBAC object prefixes) is
      listed in an allowlist with its line count; an unlisted or changed
-     consumer fails, so a rename of the project cannot miss one.
+     consumer fails, so a rename of the project cannot miss one. Files that
+     the platform workflows create or delete at runtime (per-tenant RBAC
+     fragments) are matched by a path pattern with a fixed per-file line
+     count instead of being listed by name, so adding or removing one never
+     changes the inventory, while a fragment whose count differs, or a file
+     outside every pattern, still fails.
   8. `apps` ApplicationSet keeps preserveResourcesOnDeletion: false.
 
 Something that cannot be read is an error (exit 2), never a pass.
 
 Usage:
-  validate-generated-app-scope.py [--selftest] [--root DIR]
-      [--strict-generated PREFIX] --bootstrap RENDER.yaml
+  validate-generated-app-scope.py [--root DIR] [--strict-generated PREFIX]
+      [--generated-project NAME ...] --bootstrap RENDER.yaml
+  validate-generated-app-scope.py [--root DIR] --print-consumers
 """
 
 from __future__ import annotations
@@ -391,7 +398,7 @@ def consumer_counts(root: pathlib.Path) -> dict[str, int]:
         if rel.endswith(".md") or any(rel.startswith(s) or rel == s for s in CONSUMER_SKIP):
             continue
         try:
-            text = (root / rel).read_text()
+            text = (root / rel).read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
         except OSError as exc:
@@ -402,9 +409,25 @@ def consumer_counts(root: pathlib.Path) -> dict[str, int]:
     return counts
 
 
-def check_consumers(counts: dict[str, int], allow: dict[str, int]) -> list[str]:
+def _glob_re(pattern: str) -> re.Pattern:
+    """Path glob where `*` matches within one path segment only."""
+    return re.compile("".join("[^/]*" if c == "*" else re.escape(c) for c in pattern) + r"\Z")
+
+
+def check_consumers(counts: dict[str, int], allow: dict[str, int],
+                    patterns: dict[str, int] | None = None) -> list[str]:
     found = []
+    pats = [(p, _glob_re(p), n) for p, n in sorted((patterns or {}).items())]
+    for f in sorted(allow):
+        for p, rx, _ in pats:
+            if rx.match(f):
+                found.append(f"{f}: listed by name in {ALLOWLIST} but also covered by pattern {p}")
     for f, n in sorted(counts.items()):
+        hit = next(((p, want) for p, rx, want in pats if rx.match(f)), None)
+        if hit is not None:
+            if n != hit[1] and f not in allow:
+                found.append(f"{f}: {n} line(s) spell the project name `apps`, pattern {hit[0]} requires {hit[1]}")
+            continue
         if f not in allow:
             found.append(f"{f}: {n} line(s) spell the project name `apps` and the file is not in {ALLOWLIST}")
         elif allow[f] != n:
@@ -414,12 +437,21 @@ def check_consumers(counts: dict[str, int], allow: dict[str, int]) -> list[str]:
     return found
 
 
-def load_allowlist(root: pathlib.Path) -> dict[str, int]:
+def _load_inventory(root: pathlib.Path) -> dict:
     try:
-        data = json.loads((root / ALLOWLIST).read_text())
-        return {str(k): int(v) for k, v in data["consumers"].items()}
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+        data = json.loads((root / ALLOWLIST).read_text(encoding="utf-8"))
+        return {"consumers": {str(k): int(v) for k, v in data["consumers"].items()},
+                "patterns": {str(k): int(v) for k, v in (data.get("patterns") or {}).items()}}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise CheckError(f"cannot read {ALLOWLIST}: {exc}") from exc
+
+
+def load_allowlist(root: pathlib.Path) -> dict[str, int]:
+    return _load_inventory(root)["consumers"]
+
+
+def load_patterns(root: pathlib.Path) -> dict[str, int]:
+    return _load_inventory(root)["patterns"]
 
 
 # ----------------------------------------------------------------- rendering
@@ -438,7 +470,9 @@ def helm_render(root: pathlib.Path, app: Generated) -> list[dict]:
 
 
 def run_all(root: pathlib.Path, docs: list[dict], strict_prefix: str, render=helm_render,
-            allow: dict[str, int] | None = None, consumers: bool = True) -> list[str]:
+            allow: dict[str, int] | None = None, consumers: bool = True,
+            generated_names: set[str] | None = None,
+            patterns: dict[str, int] | None = None) -> list[str]:
     projects = project_specs(docs)
     appsets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "ApplicationSet"}
     apps: list[Generated] = []
@@ -447,7 +481,7 @@ def run_all(root: pathlib.Path, docs: list[dict], strict_prefix: str, render=hel
             raise CheckError(f"ApplicationSet {n} is not in the render")
         apps.extend(expand(root, appsets[n]))
     found = check_scope(projects, apps)
-    found += check_handwritten_prefix(docs, strict_prefix, set())
+    found += check_handwritten_prefix(docs, strict_prefix, set(generated_names or ()))
     found += check_strict_generated(projects, apps, strict_prefix)
     found += check_unique_names(apps, docs)
     found += check_preserve_flag(docs)
@@ -462,26 +496,36 @@ def run_all(root: pathlib.Path, docs: list[dict], strict_prefix: str, render=hel
         if a.project in projects:
             found += check_rendered(projects[a.project], a, r)
     if consumers:
-        found += check_consumers(consumer_counts(root), allow if allow is not None else load_allowlist(root))
+        inv = _load_inventory(root) if allow is None else {"consumers": allow, "patterns": patterns or {}}
+        found += check_consumers(consumer_counts(root), inv["consumers"], inv["patterns"])
     return found
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", default=".")
-    ap.add_argument("--bootstrap", required=True, help="helm template output of platform-gitops/bootstrap")
+    ap.add_argument("--bootstrap", help="helm template output of platform-gitops/bootstrap (required unless "
+                    "--print-consumers)")
+    ap.add_argument("--generated-project", action="append", default=[], metavar="NAME",
+                    help="AppProject name the generator produces (repeatable)")
     ap.add_argument("--strict-generated", default="tenant-", metavar="PREFIX")
     ap.add_argument("--print-consumers", action="store_true", help="print the current consumer counts as JSON")
     args = ap.parse_args(argv)
+    if not args.print_consumers and not args.bootstrap:
+        ap.error("the following arguments are required: --bootstrap")
     root = pathlib.Path(args.root).resolve()
     try:
         if args.print_consumers:
-            print(json.dumps({"consumers": consumer_counts(root)}, indent=2, sort_keys=True))
+            counts = consumer_counts(root)
+            pats = load_patterns(root)
+            rxs = [_glob_re(p) for p in pats]
+            exact = {f: n for f, n in counts.items() if not any(r.match(f) for r in rxs)}
+            print(json.dumps({"consumers": exact, "patterns": pats}, indent=2, sort_keys=True))
             return 0
         docs = scope.load(args.bootstrap)
         if not docs:
             raise CheckError(f"{args.bootstrap}: empty render")
-        found = run_all(root, docs, args.strict_generated)
+        found = run_all(root, docs, args.strict_generated, generated_names=set(args.generated_project))
     except CheckError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
