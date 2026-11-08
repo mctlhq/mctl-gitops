@@ -21,6 +21,14 @@ good their auth gates are. Everything stays synthetic. No real Glovo
 session, cookie or `session.json` exists. Secrets appear only as an opaque
 reference abstraction.
 
+## AMEND 2026-11-08 — DB test cleanup and immutable audit security (P1/P2)
+
+This proposal must **not** use `SET LOCAL session_replication_role = replica` in tests: that bypasses triggers/constraints, typically requires database superuser privileges, and is unsuitable for MCTL's ordinary CI/RDS role. Each test must isolate its fixtures in a disposable, separately named schema/database (with a dedicated connection/search_path) or use deterministic transaction rollbacks with no trigger bypass. Cleanup is allowed only in that test-owned schema/database, never on shared production tables.
+
+The proposed `glovo.retention_sweep` user-defined GUC is **not an authorization boundary**: an application DB role can normally `SET LOCAL` a custom GUC and forge the exception to the audit DELETE trigger. For M1, audit rows must be append-only: deny UPDATE/DELETE unconditionally for the application role, with no custom-GUC bypass. Defer physical retention deletion to a separate security-reviewed, privileged maintenance design with a distinct DB role or tightly controlled SECURITY DEFINER, explicit ownership and retention gate. `SweepAudit` must not be exposed to the API role in M1.
+
+Prove tests with a **non-superuser** DB role that attempts arbitrary `SET LOCAL glovo.retention_sweep=on`, UPDATE/DELETE and fake role changes and confirms they cannot tamper with audit rows. No broadening of identity or real Glovo scope; implementation needs independent digest approval.
+
 ## User stories
 
 - AS a later-slice handler author I WANT a Go store API where the owner
