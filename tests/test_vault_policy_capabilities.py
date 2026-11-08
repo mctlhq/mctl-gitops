@@ -349,6 +349,39 @@ d = fixture({"shared.hcl": _caps_policy('["read", list]'), "scoped.hcl": FIX_WRI
 check("a bad capability list exits 2 via main, not a pass",
       C.main(["--root", str(d), "--config", str(d / "cfg.json")]) == 2)
 
+# ---- Wildcard/template syntax in a path pattern is UNKNOWN, never evaluated ----
+TEMPLATE_PATTERNS = {
+    "plus segment wildcard": "secret/data/+/x",
+    "template braces": "secret/data/{{identity.entity.name}}/x",
+    "percent": "secret/data/%/x",
+}
+TEMPLATE_OLD = 'if "+" in pattern or "{{" in pattern or "%" in pattern:'
+TEMPLATE_MUTANTS = {
+    "plus segment wildcard": 'if False or "{{" in pattern or "%" in pattern:',
+    "template braces": 'if "+" in pattern or False or "%" in pattern:',
+    "percent": 'if "+" in pattern or "{{" in pattern or False:',
+}
+for label, pat in TEMPLATE_PATTERNS.items():
+    pol = 'path "%s" { capabilities = ["read"] }' % pat
+    try:
+        C.parse_policy(pol, "t")
+        got = "parsed"
+    except C.Unknown:
+        got = "unknown"
+    check(f"path pattern ({label}) is UNKNOWN", got == "unknown")
+    d = fixture({"shared.hcl": pol, "scoped.hcl": FIX_WRITER})
+    check(f"path pattern ({label}) exits 2 via main, not a pass",
+          C.main(["--root", str(d), "--config", str(d / "cfg.json")]) == 2)
+    M_COND = mutant(TEMPLATE_OLD, TEMPLATE_MUTANTS[label])
+    try:
+        M_COND.parse_policy(pol, "t")
+        loose = "parsed"
+    except Exception:
+        loose = "unknown"
+    check(f"mutation without the ({label}) condition silently accepts it", loose == "parsed")
+check("a plain literal path with no template syntax still parses",
+      C.parse_policy('path "secret/data/x/y" { capabilities = ["read"] }', "t") == [("secret/data/x/y", {"read"})])
+
 # ---- Explicit UTF-8 decoding: independent of the process locale ----
 LATIN1_ONLY = b'path "secret/data/x/*" { capabilities = ["read"] }\n# caf\xe9\n'  # valid Latin-1, invalid UTF-8
 LATIN1_CFG = {"base_dir": "p", "identities": {"i": {"policies": ["a.hcl"]}},
