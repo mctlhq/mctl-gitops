@@ -358,6 +358,7 @@ TEMPLATE_PATTERNS = {
     "interpolation": "secret/data/${var.x}/x",
     "non-terminal star segment": "secret/*/foo",
     "non-terminal star before trailing star": "secret/data/*/*",
+    "double trailing star": "secret/data/x**",
 }
 TEMPLATE_OLD = '''if ("+" in pattern or "{{" in pattern or "%" in pattern
                 or "\\\\" in pattern or "${" in pattern
@@ -370,6 +371,7 @@ TEMPLATE_MUTANTS = {
     "interpolation": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or False\n                or "*" in pattern[:-1]):',
     "non-terminal star segment": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern\n                or False):',
     "non-terminal star before trailing star": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern\n                or False):',
+    "double trailing star": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern\n                or "*" in pattern[:-2]):',
 }
 for label, pat in TEMPLATE_PATTERNS.items():
     pol = 'path "%s" { capabilities = ["read"] }' % pat
@@ -392,7 +394,10 @@ for label, pat in TEMPLATE_PATTERNS.items():
 check("a trailing-star path still parses and evaluates (positive control)",
       C.parse_policy('path "secret/data/x/*" { capabilities = ["read"] }', "t") == [("secret/data/x/*", {"read"})])
 _d = fixture({"shared.hcl": 'path "secret/data/x/*" { capabilities = ["read"] }', "scoped.hcl": FIX_WRITER})
-check("a trailing-star path does not exit 2 via main", C.main(["--root", str(_d), "--config", str(_d / "cfg.json")]) != 2)
+_rc = C.main(["--root", str(_d), "--config", str(_d / "cfg.json")])
+# this fixture lacks the required deny, so the evaluated outcome is exactly FINDING (1):
+# reached evaluation (not UNKNOWN 2) and not a clean pass (OK 0).
+check("a trailing-star path is evaluated via main: exactly FINDING (1)", _rc == C.FINDING)
 check("a plain literal path with no template syntax still parses",
       C.parse_policy('path "secret/data/x/y" { capabilities = ["read"] }', "t") == [("secret/data/x/y", {"read"})])
 
