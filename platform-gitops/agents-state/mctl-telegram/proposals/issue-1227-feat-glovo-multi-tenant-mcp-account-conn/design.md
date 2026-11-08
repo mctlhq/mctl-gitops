@@ -177,8 +177,7 @@ active|expired|pending_* --revoke | uninstall | membership removed--> revoked   
 - A reconnect always mints a new `gcn_` and a new secret. A `revoked` connection is never
   reactivated, and a reinstall never revives it. Consents are bound to `connection_id`,
   so old consents die with the connection.
-- Revocation is fail-closed session and connection deletion. It may be called crypto-shredding ONLY if an independently random per-connection DEK and all recoverable wrappers/backups are destroyed with evidence; HKDF from surviving master key does not meet this condition. Provider-side session invalidation remains UNVERIFIED. It is
-  recorded in the audit log with IDs only.
+- Revocation is fail-closed session and connection deletion. It may be called crypto-shredding ONLY if an independently random per-connection DEK and all recoverable wrappers/backups are destroyed with evidence; HKDF from surviving master key does not meet this condition. Provider-side session invalidation remains UNVERIFIED. The revocation is recorded in audit with IDs only.
 - Secret key: a random per-connection DEK sealed/wrapped by a provider-only Vault KEK (AES-256-GCM with authenticated associated data for tenant/principal/connection). The DEK wrapper and caches must be destroyed or denied on revocation, with bounded backup retention; otherwise treat it as best-effort data deletion, never guaranteed cryptographic erasure. The provider-only KEK is unavailable to the facade or control worker. The facade and the control worker never see it.
 - In M1 the fake provider issues synthetic sessions (canary strings), so the leak checks
   have something to search for.
@@ -251,7 +250,7 @@ type Adapter interface {
   image never gain Temporal or provider dependencies. It has these packages:
   - `adapter/` (interface, fake);
   - `conn/` (connection state machine, sealed secret store with Postgres and SQLite
-    implementations, crypto-shredding);
+    implementations, wrapped random per-connection DEKs and proven revocation semantics);
   - `authz/` (the `ScopeResolver` interface for the mctl-api contract and an in-memory
     implementation for tests);
   - `mcpfacade/` (the seven tools, built with `mark3labs/mcp-go` as in `internal/mcp`);
