@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-11-08T19:30:37Z'
+updated_at: '2026-11-08T19:47:45Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-7a9662845324a9e8
@@ -47,3 +47,4 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
+merge_owner: human-codeowner
