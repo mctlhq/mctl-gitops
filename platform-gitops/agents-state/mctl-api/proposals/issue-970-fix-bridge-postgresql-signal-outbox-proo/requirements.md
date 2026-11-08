@@ -28,7 +28,7 @@ activated or deployed.
   of `Store.LeaseSignals`, `Store.MarkSignalSent`, `Store.MarkSignalUnknown` and `Store.RetrySignal`.
 - WHEN `TEST_DATABASE_URL` is unset THE SYSTEM SHALL skip those tests with a message that names the missing variable.
 - WHEN `LeaseSignals(limit, visibility)` runs and pending rows with `next_attempt_at <= now()` exist THE SYSTEM SHALL
-  return at most `limit` rows, oldest `next_attempt_at` first, and move each returned row's `next_attempt_at` to about
+  select at most `limit` eligible rows using oldest `next_attempt_at` as *selection priority* (ties may be arbitrary). The returned `[]Signal` is unordered because SQL `UPDATE ... RETURNING` does not guarantee row order. Move every selected row's `next_attempt_at` to about
   `now() + visibility`.
 - WHILE a row has `next_attempt_at > now()` or a status other than `pending` THE SYSTEM SHALL NOT return it from
   `LeaseSignals`.
@@ -75,12 +75,22 @@ activated or deployed.
   so the answer is `lease_stale`; only the token holder learns `command_expired`. That matches how `submitTx` and
   `permitTx` already call `tokenEqual` before `leaseLive`. The owner should confirm.
 - "TEST_DATABASE_URL confirmed in logs, not skipped": `validate.yml` already sets `TEST_DATABASE_URL` and runs
-  `go test -p 1 ./...` without `-v`, so skipped tests are not visible. Proposed: a `t.Logf` that names the PG server
-  version, plus a dedicated `go test -v -count=1 -run 'TestPG' ./internal/bridge/` step that fails if any test
-  skips. The owner may prefer that no workflow change be made.
-- Isolation: `bridge_signal_outbox` is a single, tenant-agnostic table, and `LeaseSignals` has no filter. The tests
-  will run in a throwaway PostgreSQL schema created per test (via `search_path`) so they cannot lease or disturb other
-  tests' rows. If `pgshared.Open` does not pass through `search_path`, the fallback is per-test unique ids plus
-  scoped assertions and cleanup.
+  `go test -p 1 ./...` without `-v`, so skipped tests are not visible. Required additional `shell: bash` step:
+  `set -euo pipefail`, then `go test -p 1 -count=1 -v -run 'TestPG' ./internal/bridge/ | tee bridge-pg.log`.
+  Reject any `--- SKIP` and assert explicit `--- PASS` lines for the named required `TestPGOutbox*`
+  tests (at least lease, concurrency, terminal transitions, and real submit result). A zero-test pass and a failed
+  `go test` behind a successful `tee` must both fail CI. Log PostgreSQL server version. No broad workflow changes.
+- Isolation: `bridge_signal_outbox` is tenant-agnostic and `LeaseSignals` scans the entire table. The tests
+  MUST run in an isolated throwaway PostgreSQL schema/database with an effective `search_path`; verify this by
+  reading `current_schema()` and confirming the expected test schema. If isolation cannot be established, fail the
+  test setup. Unique-ID filtering against a shared outbox is **not** an acceptable fallback because it cannot prove
+  global limit/disjointness and may lease other tests' rows.
 - The P1 outcome could not be decided in this investigation: the investigation sandbox had no PostgreSQL server.
   The implementer's CI run decides it.
+
+## AMEND 2026-11-08 — independent review corrections
+
+- CI evidence gate is fail-closed: use Bash `set -euo pipefail`, fail on test error, any skipped bridge PG test, or missing named PASS evidence. Never accept a vacuous zero-test success.
+- `ORDER BY` guarantees selection priority inside the lease subquery, **not the ordering of rows returned from `UPDATE ... RETURNING`**. Tests assert the eligible selected set and fair priority, not array order.
+- Abort PG test setup when disposable schema isolation is not proven. No fallback to shared global outbox.
+- These documentation changes grant **no implementation approval** and do not lift the #240/#1040 review gate or #2457 release hold.

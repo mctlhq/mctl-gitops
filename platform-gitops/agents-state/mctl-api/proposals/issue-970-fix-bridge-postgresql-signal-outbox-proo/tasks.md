@@ -1,11 +1,11 @@
 # Tasks: issue-970-fix-bridge-postgresql-signal-outbox-proo
 
 - [ ] 1. Add an isolated PG test helper `pgIsolatedStore(t)` in `internal/bridge/outbox_pg_test.go`. It creates a
-  per-test schema, opens the store with `search_path`, logs `SELECT version()` and drops the schema in
-  `t.Cleanup`. — DoD: skips cleanly without `TEST_DATABASE_URL`; with it, `bridge_signal_outbox` exists only in the
+  per-test schema, opens the store with `search_path`, **asserts `SELECT current_schema()` matches it**, logs `SELECT version()` and drops the schema in
+  `t.Cleanup`. Fail the setup if isolation is unavailable; do not fall back to a shared global outbox. — DoD: skips cleanly without `TEST_DATABASE_URL`; with it, `bridge_signal_outbox` exists only in the
   test schema and is dropped afterwards.
 - [ ] 2. (depends on 1) Write `TestPGOutbox*` tests against the unchanged `LeaseSignals` SQL: lease basics
-  (limit, order, due filter, terminal exclusion, visibility push); visibility expiry and re-lease; deterministic
+  (limit, oldest-first **selection priority**, due filter, terminal exclusion, visibility push; `UPDATE ... RETURNING` output order is unspecified); visibility expiry and re-lease; deterministic
   SKIP LOCKED with a lock-holding tx under a context deadline; a repeated N-goroutine race proving disjoint sets;
   real-path fixture via `enqueue` -> `claimOne` -> `SubmitResult`. — DoD: tests pass on PostgreSQL 16 in CI, or fail
   with the exact SQLSTATE logged.
@@ -27,15 +27,16 @@
   locally without a DB (unit) and in CI with PG.
 - [ ] 7. (depends on 5) Add `bridge.ErrCommandExpired: 409` to the error-mapping table in
   `internal/api/handlers_bridge_test.go`. — DoD: test passes; `bridgeStatus` is unchanged.
-- [ ] 8. (depends on 2, 4, 6) Add a `validate.yml` step that runs `go test -p 1 -count=1 -v -run 'TestPG'
-  ./internal/bridge/` and fails on any `--- SKIP`. — DoD: CI log shows the PG version line and the bridge PG tests
-  as PASS, not SKIP.
+- [ ] 8. (depends on 2, 4, 6) Add a `validate.yml` `shell: bash` step with `set -euo pipefail`,
+  run `go test -p 1 -count=1 -v -run 'TestPG' ./internal/bridge/ | tee bridge-pg.log`, and fail on any
+  `--- SKIP` **or missing named `--- PASS`** for the key `TestPGOutbox*` tests. — DoD: failed Go tests propagate
+  through `tee`; CI logs PostgreSQL version and positive PASS evidence (zero-test runs cannot pass).
 - [ ] 9. Open the PR against `main` with `MCTL_BRIDGE_ENABLED` default and `refusingFence` untouched, and no
   P3 cleanups. — DoD: lint, CodeQL, Trivy and govulncheck are green, and fresh Claude APPROVED plus agy PASS on the
   same head SHA (or an explicit owner hold) before merge.
 
 ## Tests
-- [ ] T1. `TestPGOutboxLeaseDueOrderLimit`: limit, order, due/terminal filtering, visibility push.
+- [ ] T1. `TestPGOutboxLeaseDueOrderLimit`: limit, oldest-first selection priority (unordered RETURNING), due/terminal filtering, visibility push.
 - [ ] T2. `TestPGOutboxVisibilityTimeoutReleases`: a leased row becomes leasable after the visibility timeout.
 - [ ] T3. `TestPGOutboxSkipLockedDoesNotBlock`: rows locked by another tx are skipped; returns within the deadline.
 - [ ] T4. `TestPGOutboxConcurrentLeasersDisjoint`: N parallel leasers, repeated runs, pairwise disjoint sets.
@@ -55,3 +56,8 @@ Revert the PR. There are no schema or data migrations, and the bridge is disable
 (`MCTL_BRIDGE_ENABLED=false`), so a revert only restores the old `lease_stale` code for unswept expired commands
 and, if task 3 applied, the original `LeaseSignals` SQL. Test schemas are dropped per test. Any left in the CI test
 database by a crashed run can be removed with `DROP SCHEMA bridge_t_* CASCADE`.
+
+## AMEND 2026-11-08 review gate
+
+- [ ] Confirm `TEST_DATABASE_URL` points to disposable PostgreSQL 16, and no outbox test silently falls back to the shared schema.
+- [ ] Separate new-head Claude APPROVED and agy PASS (semantic verdict, not merely Actions success), with explicit owner hold until both are verified. No auto merge/deployment.
