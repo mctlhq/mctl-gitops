@@ -324,7 +324,7 @@ spec:
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
               root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
-              tenant-*|otel-*|sync)
+              tenant-*|otel-*|sync|tenantproject|tenantproject-*)
                 return 0 ;;
             esac
             return 1
@@ -1021,7 +1021,7 @@ spec:
                 return 0 ;;
               tenant|root|shared|cloudnative|external|grafana|loki|otel|reflector|valkey|\
               root-app|shared-pg|cloudnative-pg|loki-stack|grafana-iac|temporal-web|\
-              tenant-*|otel-*|sync)
+              tenant-*|otel-*|sync|tenantproject|tenantproject-*)
                 return 0 ;;
             esac
             return 1
