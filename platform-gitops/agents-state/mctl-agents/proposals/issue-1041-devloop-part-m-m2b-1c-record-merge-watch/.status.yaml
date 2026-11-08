@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-11-08T14:36:34Z'
+updated_at: '2026-11-08T14:50:03Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-c081d8ce96df8763
@@ -47,7 +47,4 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
-ci_blockers_head: 20233a635ed1522638fa5671bb8b3889d17d0879
-ci_blockers:
-- Claude PR review / claude-review / review
 review_attempts: 1
