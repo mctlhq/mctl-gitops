@@ -1,0 +1,21 @@
+# Where each staged file goes when its phase is activated. Listing a path here
+# does not authorize it. Every staged values file must be listed.
+files:
+  facade/values.yaml:
+    phase: p2
+    target: platform-gitops/services/labs/glovo-mcp/values.yaml
+  control-worker/values.yaml:
+    phase: p1
+    target: platform-gitops/services/admins/assistants-control/values.yaml
+  provider-worker/values.yaml:
+    phase: p1
+    target: platform-gitops/services/mctl-assistants-provider-glovo/provider-worker/values.yaml
+  provider-tenant/values.yaml:
+    phase: p1
+    target: platform-gitops/tenants/mctl-assistants-provider-glovo/values.yaml
+  netpol/facade-to-control.yaml:
+    phase: p1
+    target: decided in P1
+  netpol/worker-to-temporal.yaml:
+    phase: p1
+    target: decided in P1

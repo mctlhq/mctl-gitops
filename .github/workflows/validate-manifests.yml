@@ -1058,6 +1058,36 @@ jobs:
           set -euo pipefail
           scripts/test-tenant-workflow-sa-argocd-policy.sh
 
+  # Glovo M1 P0 (#2470): the staged package under deploy/staged/glovo-m1 must
+  # render and keep its fail-closed defaults, and no Glovo host, workload,
+  # image or assistant namespace may reach a reconciled path. The leak guard
+  # ignores deploy/staged/glovo-m1/gate.yaml on purpose. --selftest first: a
+  # detector never seen to fire is not known to work.
+  glovo-m1:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate the staged Glovo M1 package
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-glovo-m1-staging.py --selftest
+          scripts/validate-glovo-m1-staging.py
+
   # The declarative ZITADEL root (#1520). The in-cluster Job applies it after
   # merge, so formatting, provider schema errors and a lock file that does not
   # match the pinned provider must fail here instead.
