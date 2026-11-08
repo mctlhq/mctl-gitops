@@ -6,9 +6,6 @@
 # template_reach: tenant-class workflow templates (those not submitted into the
 #   argo-workflows namespace) and the credential Secrets each can reach, through
 #   its own mounts and env references and through templateRef targets.
-# readers: [subject, Role, way] for the subjects that can read the credential
-#   Secrets (read), exec into pods (exec) or create pods (pod-create) in a tenant
-#   namespace that holds them. The same rows are expected in every tenant.
 template_reach:
   deploy-service: [github-actions-pat, mctl-gitops-deploy-key]
   preview-deploy: [github-actions-pat]
@@ -16,10 +13,35 @@ template_reach:
   retire-service: [mctl-gitops-deploy-key]
   rollback-service: [mctl-gitops-deploy-key]
   tpl-git-commit: [mctl-gitops-deploy-key]
+# readers: [subject, Role, way] for the subjects that can read the credential
+#   Secrets (read), exec or attach into pods (exec) or start a pod some other
+#   way (workload-create: pods, Deployments, StatefulSets, ReplicaSets,
+#   DaemonSets, Jobs, CronJobs, Argo Workflows, CronWorkflows and
+#   WorkflowTemplates; see WORKLOAD_RESOURCES in the test) in a tenant
+#   namespace that holds them. These rows are expected in every tenant.
+#   ServiceAccount subjects are namespace-qualified: `{ns}` stands for the
+#   tenant's own namespace, any other namespace is written out. Users and
+#   Groups are kind/name.
+# readers_by_tenant: extra rows for one tenant, keyed by tenant directory name
+#   (platform-gitops/tenants/<name>). A tenant not listed gets the rows above only,
+#   so a new tenant that turns on a grant beyond them fails until a reviewer
+#   adds the row. An entry for a tenant that no longer exists is allowed.
 readers:
-  - [ServiceAccount/argo-workflow-sa, argo-workflow-helm-deploy, pod-create]
-  - [ServiceAccount/argo-workflow-sa, argo-workflow-helm-deploy, read]
-  - [ServiceAccount/argo-workflow-sa, argo-workflow-runner, read]
-  - [ServiceAccount/argo-workflow-sa, argo-workflow-smoke-verify, exec]
-  - [ServiceAccount/argo-workflow-sa, argo-workflow-smoke-verify, pod-create]
-  - [ServiceAccount/argo-workflow-sa, argo-workflow-smoke-verify, read]
+  - [ServiceAccount/mctl-api/mctl-api, mctl-api-workflows, workload-create]
+  - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-helm-deploy, read]
+  - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-helm-deploy, workload-create]
+  - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-runner, read]
+  - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-runner, workload-create]
+  - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-smoke-verify, exec]
+  - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-smoke-verify, read]
+  - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-smoke-verify, workload-create]
+readers_by_tenant:
+  admins:
+    - [ServiceAccount/argo-workflows/argo-workflow-sa, argo-workflow-smoke-verify, exec]
+    - [ServiceAccount/argo-workflows/argo-workflow-sa, argo-workflow-smoke-verify, read]
+    - [ServiceAccount/argo-workflows/argo-workflow-sa, argo-workflow-smoke-verify, workload-create]
+  labs:
+    - [ServiceAccount/argo-workflows/argo-workflow-sa, argo-workflow-central-restart, workload-create]
+    - [ServiceAccount/argo-workflows/argo-workflow-sa, argo-workflow-smoke-verify, exec]
+    - [ServiceAccount/argo-workflows/argo-workflow-sa, argo-workflow-smoke-verify, read]
+    - [ServiceAccount/argo-workflows/argo-workflow-sa, argo-workflow-smoke-verify, workload-create]

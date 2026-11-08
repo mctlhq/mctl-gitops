@@ -42,6 +42,19 @@ def mentions(text, names=ALL_NAMES):
     return {n for n in names if n in code}
 
 
+def mention_counts(text, names=ALL_NAMES):
+    """{name: number of non-comment lines of `text` that contain it}, for the
+    names that occur at all. A second reference in a file that already has one
+    changes the count, which is what the holder ledger ratchets on."""
+    lines = strip_comment_lines(text).split("\n")
+    out = {}
+    for n in names:
+        c = sum(1 for ln in lines if n in ln)
+        if c:
+            out[n] = c
+    return out
+
+
 def _keys(path):
     return [p for p in path if isinstance(p, str)]
 
@@ -54,7 +67,8 @@ def sites_in_doc(doc, names=ALL_NAMES):
     `secret.secretName` for a volume, `secretKeyRef.name` for an env var,
     `secretRef.name` for envFrom, `secret.name` for a projected source,
     `metadata.name` for an ExternalSecret), or `text:<key>` when the name occurs
-    inside a longer string such as a script body (comment lines ignored).
+    inside a longer string such as a script body (comment lines ignored); such a
+    row is repeated once per line that contains the name.
     Nothing is selected by mechanism: any occurrence counts, so a mechanism this
     function has never seen is still reported.
     """
@@ -85,8 +99,8 @@ def sites_in_doc(doc, names=ALL_NAMES):
             if node in names:
                 out.append((label, template, ".".join(ks[-2:]), node))
             else:
-                for n in sorted(mentions(node, names)):
-                    out.append((label, template, f"text:{ks[-1] if ks else '-'}", n))
+                for n, c in sorted(mention_counts(node, names).items()):
+                    out.extend([(label, template, f"text:{ks[-1] if ks else '-'}", n)] * c)
 
     walk(doc, [], "-")
     return sorted(out)
@@ -99,11 +113,11 @@ def load_docs(path):
         raise ReadError(f"{path}: {e}") from e
 
 
-def helm_render(chart, values_file, release, namespace):
+def helm_render(chart, values_file, release, namespace, extra_args=()):
     try:
         proc = subprocess.run(
             ["helm", "template", release, str(chart), "-f", str(values_file),
-             "--namespace", namespace],
+             "--namespace", namespace, *extra_args],
             capture_output=True, text=True, cwd=ROOT)
     except OSError as e:
         raise ReadError(f"helm not runnable: {e}") from e
@@ -138,15 +152,24 @@ def yaml_files(path):
     return out
 
 
-def tenant_values():
-    base = ROOT / "platform-gitops/tenants"
+def tenant_values(base=None):
+    """values.yaml of every tenant directory under platform-gitops/tenants. Entries
+    that are not directories (a README, .DS_Store) are skipped; a directory that
+    cannot be entered or a values.yaml that cannot be statted is a ReadError."""
+    base = pathlib.Path(base) if base else ROOT / "platform-gitops/tenants"
     files = []
     for name in list_dir(base):
+        try:
+            is_dir = stat.S_ISDIR(os.stat(base / name).st_mode)
+        except OSError as e:
+            raise ReadError(f"{base / name}: {e}") from e
+        if not is_dir:
+            continue
         vf = base / name / "values.yaml"
         try:
             st = os.stat(vf)
         except FileNotFoundError:
-            # Listed fine but has no values.yaml: not a tenant. A directory that
+            # A directory without values.yaml is not a tenant. A directory that
             # cannot be entered fails the stat with EACCES instead (ReadError below).
             continue
         except OSError as e:

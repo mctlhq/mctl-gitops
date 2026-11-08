@@ -14,7 +14,9 @@ Observation covers every file outside the repository-root tests/ and agents-stat
 (nested directories with those names are scanned; not only the
 Argo templates), with no selection by mechanism: volumes, projected sources, env
 secretKeyRef, envFrom, ExternalSecret names and remote keys, and any other
-mention on a non-comment line all count. An unreadable file, a file that does
+mention on a non-comment line all count. A text mention counts once per
+non-comment line that contains the name (repeated ledger rows), so a second
+reference in a file already on the ledger is detected. An unreadable file, a file that does
 not parse, or a failed render is an error, never an empty result.
 
 Run: python3 tests/test_gitops_write_credential_holders.py
@@ -74,19 +76,19 @@ def observe_tree(root, names=W.ALL_NAMES):
                 raise W.ReadError(f"{rel}: not text: {e}") from e
             except OSError as e:
                 raise W.ReadError(f"{rel}: {e}") from e
-            found = W.mentions(text, names)
+            found = W.mention_counts(text, names)
             if not found:
                 continue
             if p.suffix in (".yaml", ".yml") and not TEMPLATED.search(rel):
                 sites = [s for d in W.load_docs(p) for s in W.sites_in_doc(d, names)]
                 for doc, tpl, mech, name in sites:
                     rows.append((rel, doc, tpl, mech, name))
-                for name in sorted(found - {s[3] for s in sites}):
-                    rows.append((rel, "-", "-", "text-only", name))
+                for name in sorted(set(found) - {s[3] for s in sites}):
+                    rows.extend([(rel, "-", "-", "text-only", name)] * found[name])
             else:
                 kind = "(chart template)" if TEMPLATED.search(rel) else "-"
                 for name in sorted(found):
-                    rows.append((rel, kind, "-", "text", name))
+                    rows.extend([(rel, kind, "-", "text", name)] * found[name])
     return sorted(rows)
 
 
@@ -194,6 +196,17 @@ with tempfile.TemporaryDirectory() as td:
         shutil.rmtree(root / "platform-gitops/x" / d)
     (root / "scripts/a.sh").write_text(f"kubectl get secret {SYNTH_NAME}\n")
     check("a script mention is observed", [r[3:] for r in observe_tree(root, SYNTH)] == [("text", SYNTH_NAME)])
+    two = sorted(r for r in observe_tree(root, SYNTH) if r[0] == "scripts/a.sh")
+    (root / "scripts/a.sh").write_text(f"kubectl get secret {SYNTH_NAME}\necho x\nkubectl delete secret {SYNTH_NAME}\n")
+    after = sorted(r for r in observe_tree(root, SYNTH) if r[0] == "scripts/a.sh")
+    check("a second mention in a file that is already listed adds a row", len(after) == len(two) + 1
+          and compare(after, two) == ([after[0]], []), (two, after))
+    (root / "scripts/a.sh").write_text(f"kubectl get secret {SYNTH_NAME}\n")
+    (root / "scripts/two.yaml").write_text(f"kind: Workflow\nmetadata: {{name: w}}\nspec:\n  templates:\n  - name: t\n"
+                                           f"    script:\n      source: |\n        a {SYNTH_NAME}\n        b {SYNTH_NAME}\n")
+    check("two mentions in one script body are two rows",
+          sum(1 for r in observe_tree(root, SYNTH) if r[0] == "scripts/two.yaml") == 2)
+    (root / "scripts/two.yaml").unlink()
     (root / "platform-gitops/helm-charts/c/templates").mkdir(parents=True)
     (root / "platform-gitops/helm-charts/c/templates/es.yaml").write_text(
         f"{{{{- if x }}}}\nname: {SYNTH_NAME}\n{{{{- end }}}}\n")
