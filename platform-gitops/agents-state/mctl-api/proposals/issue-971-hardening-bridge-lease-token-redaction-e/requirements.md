@@ -53,9 +53,12 @@ wire schemas or any unrelated API semantics.
   `result_conflict`.
 - WHEN `ReadOutcome` returns a result THE SYSTEM SHALL return a document with
   no `lease_token` key. This includes rows written before this change.
-- WHEN the bridge store starts (`NewStore` applies `bridgeSchema`) THE SYSTEM
-  SHALL idempotently remove the `lease_token` key from every historical
-  `bridge_commands.result` that still has one.
+- WHEN the bridge store starts (`NewStore` applies `bridgeSchema`) THE SYSTEM SHALL **not** run an unbounded
+  historical result scrub. THE SYSTEM SHALL defensively redact `lease_token` from `ReadOutcome` immediately,
+  irrespective of migration progress. A separately invoked, bounded, idempotent maintenance operation SHALL
+  remove legacy token-bearing JSONB results in short locked batches without holding startup or critical-path
+  transactions. THE SYSTEM SHALL report remaining unsafe rows and SHALL block provider activation until
+  migration reaches verified zero remaining rows; failures remain visible and retryable.
 - THE SYSTEM SHALL NOT write a raw `lease_token` to slog, to audit parameters
   (`auditBridge`), to error messages or to the signal outbox.
 - IF the redaction would require changing the v1alpha1 result schema, the
@@ -68,18 +71,20 @@ wire schemas or any unrelated API semantics.
 - WHILE the bridge is enabled (`MCTL_BRIDGE_ENABLED=true` and a store is
   configured) THE SYSTEM SHALL run a background expiry sweep. The sweep is
   independent of any provider poll and of `TEMPORAL_ADDRESS`.
-- WHEN a command has `status IN ('pending','leased')` and
-  `expires_at <= now()` THE SYSTEM SHALL, within one sweep interval, move it to
-  `expired`, append a transition row and insert one `expired` signal-outbox
-  row (`ON CONFLICT DO NOTHING`). This holds whatever the command's provider
-  and tenant.
+- WHEN a command has `status IN ('pending','leased')` and `expires_at <= now()` THE SYSTEM SHALL become
+  eligible for a bounded unscoped sweep that moves it to `expired`, appends one terminal transition and
+  inserts one `expired` signal-outbox row (`ON CONFLICT DO NOTHING`), across provider and tenant scopes.
+  Under low backlog it SHOULD progress by the next tick; there is **no deterministic one-interval SLA** under
+  large backlog, long row locks, replica contention or database failures. THE SYSTEM SHALL expose oldest-due age,
+  remaining-due count, processed counts and errors, alert on sustained overdue age/backlog, and safely retry.
 - WHEN the sweep expires a command whose `effect_state` is `permitted` THE
   SYSTEM SHALL set `effect_state='unknown'`.
 - THE SYSTEM SHALL NOT overwrite an `effect_state` that is already `unknown`,
   `succeeded`, `failed` or `not_performed`.
-- THE SYSTEM SHALL process at most a bounded batch per pass (default 100) and
-  skip rows locked by a concurrent claim, result, permit or cancel
-  (`FOR UPDATE SKIP LOCKED`). Each transition happens at most once.
+- THE SYSTEM SHALL process at most a bounded batch per pass (default 100), impose a finite number of batches
+  per tick and skip rows locked by a concurrent claim, result, permit or cancel (`FOR UPDATE SKIP LOCKED`).
+  Backlog resumes on subsequent ticks without starving oldest unlocked rows, and persistent errors/lock skips
+  remain observable. Each transition happens at most once.
 - WHEN a result submission and the sweep race on the same command THE SYSTEM
   SHALL end in exactly one terminal state (`completed` or `expired`), with
   exactly one outbox row and one terminal transition.
@@ -103,7 +108,9 @@ wire schemas or any unrelated API semantics.
 - Each finding SHALL be marked FIXED (linked PR and test) in the implementing
   PR description, or DEFERRED with a reason, an owner, an activation
   dependency and an expiry criterion. Finding 1 SHALL NOT be deferred past
-  activation.
+  activation. A verified complete historical scrub and an explicit security decision on the plaintext
+  `bridge_commands.lease_token` column, backup retention and replay risk are required **before first
+  provider credential issuance**; redacted JSONB alone is not complete credential-at-rest protection.
 - Regression tests SHALL run against real PostgreSQL (`TEST_DATABASE_URL`)
   wherever row locking or SQL is involved.
 
@@ -124,14 +131,21 @@ wire schemas or any unrelated API semantics.
 
 - The `bridge_commands.lease_token` column still holds the live plaintext token
   at rest, including after completion, because the replay check needs it.
-  Storing only `sha256(token)` and comparing digests would remove this, but it
-  changes the column semantics. This proposal records it as DEFERRED: owner
-  mctl-api maintainers, activation dependency mctl-gitops#2457, criterion
-  "decide before the first provider credential is issued". The reviewer may
-  instead ask for it to be folded in.
+  Storing only `sha256(token)` and comparing digests would eliminate this plaintext copy but changes
+  column/replay semantics. This remains a **separate mandatory security decision** (owner: mctl-api security
+  maintainers; blocked by mctl-gitops#2457): approve and verify hashing/encryption/expiry controls or
+  explicitly sign narrowly scoped risk acceptance with sufficient compensating controls **before the first
+  provider credential is issued**. Historical backups and retention must be included.
 - The sweep runs whenever the bridge is enabled. A separate opt-out switch
   (for example `MCTL_BRIDGE_EXPIRY_SWEEP=false`) is not proposed. The default
   interval is 30s, overridable with `MCTL_BRIDGE_EXPIRY_SWEEP_INTERVAL`.
 - No caller of `ReadOutcome` exists in this repo today. The "subscriber outcome
   contract" is taken to be the `Outcome` Go struct and the signal payload
   (`command_id`, `result_digest`), and neither changes.
+
+## AMEND 2026-11-08 — independent review corrections
+
+- Do not run bulk historical JSONB cleanup in `NewStore`, `bridgeSchema`, or pod boot. Use operator-owned bounded, restartable maintenance batches with timeouts, metrics, read-time redaction and zero-remaining verification before activation.
+- A periodic sweep's expiry latency depends on capacity, lock contention and backlog: specify thresholds, alerts and tests for >batch workload, blocked rows and concurrent replicas; never claim a one-interval hard guarantee.
+- JSONB redaction does not sanitize plaintext token columns or backups; provider credential issuance awaits an explicit security-owner decision and activation gate.
+- This AMEND is docs-only; no implementation approval, code merge, deployment, or bridge activation.
