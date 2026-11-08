@@ -10,7 +10,8 @@ every tenant. The test compares it with what the repository contains, both ways:
 - a ledger row with no matching reference fails (the ledger is stale: remove it
   in the same change that removed the holder, so the list can only shrink).
 
-Observation covers every file outside tests/ and agents-state/ (not only the
+Observation covers every file outside the repository-root tests/ and agents-state/
+(nested directories with those names are scanned; not only the
 Argo templates), with no selection by mechanism: volumes, projected sources, env
 secretKeyRef, envFrom, ExternalSecret names and remote keys, and any other
 mention on a non-comment line all count. An unreadable file, a file that does
@@ -22,6 +23,7 @@ import collections
 import os
 import pathlib
 import re
+import shutil
 import sys
 import tempfile
 
@@ -31,10 +33,13 @@ import gitops_write_set as W
 
 ROOT = W.ROOT
 LEDGER = ROOT / "tests/fixtures/gitops-write-credential-holders.yaml"
+# Directories skipped, by path relative to the repository root only. A nested
+# directory with the same name is scanned.
 PRUNE = {".git", "tests", "agents-state", "node_modules", ".worktrees"}
 BINARY = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".woff", ".woff2", ".gz",
-          ".tgz", ".zip", ".pdf"}
+          ".tgz", ".zip", ".pdf", ".pyc"}
 TEMPLATED = re.compile(r"(^|/)helm-charts/[^/]+/templates/|^platform-gitops/(bootstrap|argocd)/templates/")
+ROOT_PRUNED = ("tests", "agents-state", "node_modules", ".worktrees")
 failures = []
 
 
@@ -48,7 +53,8 @@ def observe_tree(root):
     """Rows (file, document, template, mechanism, name) for every reference under root."""
     rows = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in PRUNE)
+        at_root = pathlib.Path(dirpath) == pathlib.Path(root)
+        dirnames[:] = sorted(d for d in dirnames if not (at_root and d in PRUNE))
         for fn in sorted(filenames):
             p = pathlib.Path(dirpath) / fn
             rel = p.relative_to(root).as_posix()
@@ -119,7 +125,7 @@ except W.ReadError as e:
     check("the repository could be observed", False, e)
 
 # ---- mutations: the detector goes red on each deliberate change -----------------------
-SEC = W.SECRET_NAMES[0]
+REF = W.SECRET_NAMES[0]
 
 
 def doc_with(**fields):
@@ -129,54 +135,73 @@ def doc_with(**fields):
 
 
 cases = {
-    "volume": {"volumes": [{"name": "k", "secret": {"secretName": SEC}}]},
-    "projected source": {"volumes": [{"name": "k", "projected": {"sources": [{"secret": {"name": SEC}}]}}]},
-    "env secretKeyRef": {"script": {"env": [{"name": "A", "valueFrom": {"secretKeyRef": {"name": SEC, "key": "k"}}}]}},
-    "envFrom": {"script": {"envFrom": [{"secretRef": {"name": SEC}}]}},
+    "volume": {"volumes": [{"name": "k", "secret": {"secretName": REF}}]},
+    "projected source": {"volumes": [{"name": "k", "projected": {"sources": [{"secret": {"name": REF}}]}}]},
+    "env secretKeyRef": {"script": {"env": [{"name": "A", "valueFrom": {"secretKeyRef": {"name": REF, "key": "k"}}}]}},
+    "envFrom": {"script": {"envFrom": [{"secretRef": {"name": REF}}]}},
     "init container env": {"initContainers": [{"name": "i", "env": [
-        {"name": "A", "valueFrom": {"secretKeyRef": {"name": SEC, "key": "k"}}}]}]},
-    "mention inside a script": {"script": {"source": f"kubectl get secret {SEC} -o yaml"}},
-    "a mechanism not seen before": {"artifactRepositoryRef": {"accessKeySecret": {"name": SEC, "key": "k"}}},
+        {"name": "A", "valueFrom": {"secretKeyRef": {"name": REF, "key": "k"}}}]}]},
+    "mention inside a script": {"script": {"source": f"kubectl get secret {REF} -o yaml"}},
+    "a mechanism not seen before": {"artifactRepositoryRef": {"accessKeySecret": {"name": REF, "key": "k"}}},
 }
 for label, fields in cases.items():
     got = W.sites_in_doc(doc_with(**fields))
     check(f"detector sees: {label}", len(got) >= 1 and all(s[1] == "t" for s in got), got)
 check("a name only in a comment line is not a reference",
-      W.sites_in_doc(doc_with(script={"source": f"# {SEC}\necho hi"})) == [])
+      W.sites_in_doc(doc_with(script={"source": f"# {REF}\necho hi"})) == [])
 check("an unrelated secret is not a reference",
       W.sites_in_doc(doc_with(script={"env": [{"name": "A", "valueFrom": {"secretKeyRef": {"name": "other", "key": "k"}}}]})) == [])
 
-observed = [("a.yaml", "Kind/x", "t", "secret.secretName", SEC)]
+observed = [("a.yaml", "Kind/x", "t", "secret.secretName", REF)]
 check("ledger comparison: a new reference is reported", compare(observed, [])[0] == observed)
 check("ledger comparison: a removed reference leaves a stale row", compare([], observed)[1] == observed)
 check("ledger comparison: equal input is clean", compare(observed, observed) == ([], []))
 
 with tempfile.TemporaryDirectory() as td:
     root = pathlib.Path(td)
-    (root / "tests").mkdir()
-    (root / "tests/ignored.yaml").write_text(f"x: {SEC}\n")
+    for d in ROOT_PRUNED:
+        (root / d).mkdir()
+        (root / d / "ignored.yaml").write_text(f"x: {REF}\n")
     (root / "scripts").mkdir()
-    (root / "scripts/a.sh").write_text(f"# {SEC}\necho ok\n")
-    check("a tree with only comment mentions and ignored paths observes nothing", observe_tree(root) == [])
-    (root / "scripts/a.sh").write_text(f"kubectl get secret {SEC}\n")
-    check("a script mention is observed", [r[3:] for r in observe_tree(root)] == [("text", SEC)])
+    (root / "scripts/a.sh").write_text(f"# {REF}\necho ok\n")
+    check("root-level excluded directories (tests, agents-state, node_modules, .worktrees) are not scanned "
+          "and comment-only mentions observe nothing", observe_tree(root) == [])
+    for d in ROOT_PRUNED:
+        # Mutation-discriminating: with an any-depth prune these go red.
+        (root / "platform-gitops/x" / d).mkdir(parents=True)
+        (root / "platform-gitops/x" / d / "nested.yaml").write_text(f"x: {REF}\n")
+        check(f"a nested directory named {d} is still scanned",
+              any(r[0] == f"platform-gitops/x/{d}/nested.yaml" for r in observe_tree(root)), observe_tree(root))
+    (root / "scripts/__pycache__").mkdir()
+    (root / "scripts/__pycache__/m.cpython-314.pyc").write_bytes(b"\x00\x8b\xff")
+    try:
+        observe_tree(root)
+        check("a compiled .pyc is not an unreadable-file error", True)
+    except W.ReadError as e:
+        check("a compiled .pyc is not an unreadable-file error", False, e)
+    (root / "scripts/__pycache__/m.cpython-314.pyc").unlink()
+    (root / "scripts/__pycache__").rmdir()
+    for d in ROOT_PRUNED:
+        shutil.rmtree(root / "platform-gitops/x" / d)
+    (root / "scripts/a.sh").write_text(f"kubectl get secret {REF}\n")
+    check("a script mention is observed", [r[3:] for r in observe_tree(root)] == [("text", REF)])
     (root / "platform-gitops/helm-charts/c/templates").mkdir(parents=True)
     (root / "platform-gitops/helm-charts/c/templates/es.yaml").write_text(
-        f"{{{{- if x }}}}\nname: {SEC}\n{{{{- end }}}}\n")
+        f"{{{{- if x }}}}\nname: {REF}\n{{{{- end }}}}\n")
     check("a templated chart file (not parseable YAML) is observed by text",
           any(r[1] == "(chart template)" for r in observe_tree(root)))
     (root / "wf.yaml").write_text(
         f"kind: Workflow\nmetadata: {{name: w}}\nspec:\n  templates:\n  - name: t\n    volumes:\n"
-        f"    - name: k\n      secret: {{secretName: {SEC}}}\n")
+        f"    - name: k\n      secret: {{secretName: {REF}}}\n")
     check("a new workflow volume is observed with its template",
-          ("wf.yaml", "Workflow/w", "t", "secret.secretName", SEC) in observe_tree(root))
+          ("wf.yaml", "Workflow/w", "t", "secret.secretName", REF) in observe_tree(root))
     (root / "wf.yaml").write_text("kind: [unclosed\n")
     try:
         observe_tree(root)
         check("an unparsable file that mentions nothing is not an error", True)
     except W.ReadError:
         check("an unparsable file that mentions nothing is not an error", False)
-    (root / "bad.yaml").write_text(f"a: [{SEC}\n")
+    (root / "bad.yaml").write_text(f"a: [{REF}\n")
     try:
         observe_tree(root)
         check("an unparsable file that mentions a credential is an error, not an empty result", False)

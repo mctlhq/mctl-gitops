@@ -581,11 +581,11 @@ jobs:
         # gone, fails (tracker: mctlhq/mctl-gitops#1033). Renders the tenant
         # chart, so it needs the Helm install above.
         run: |
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
           python3 tests/test_gitops_write_credential_holders.py
       - name: Tenant-class templates and Secret readers, by credential name
         run: |
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
           python3 tests/test_gitops_tenant_template_write_set.py
       - name: Unit-test gitops-bump inputs and its edit check
         run: python3 tests/test_gitops_bump_inputs.py

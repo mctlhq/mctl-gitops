@@ -120,7 +120,7 @@ sample = {"spec": {"templates": [
 check("the sweep flags the read-only holders and not the writer", read_only_holders([("x.yaml", sample)]) == {
     ("x.yaml", "reader", "main"), ("x.yaml", "commented", "main"), ("x.yaml", "side", "s")})
 
-# Blind spots closed (#1033): references other than a volume mount, and pushes
+# Other reference forms (#1033): references other than a volume mount, and pushes
 # that are not the literal text "git push". Each case is a step that holds the
 # key; the read-only ones must be reported, the writers must not.
 KREF = {"valueFrom": {"secretKeyRef": {"name": KEY, "key": "ssh-privatekey"}}}
@@ -132,7 +132,7 @@ def step(name, **c):
     return {"name": name, "volumes": VOLK, "script": dict({"volumeMounts": MNT}, **c)}
 
 
-blind = {"spec": {"templates": [
+other_forms = {"spec": {"templates": [
     {"name": "env-reader", "script": {"source": "git clone x", "env": [dict({"name": "K"}, **KREF)]}},
     {"name": "envfrom-reader", "container": {"args": ["sleep"], "envFrom": [{"secretRef": {"name": KEY}}]}},
     {"name": "proj-reader", "volumes": [{"name": "p", "projected": {"sources": [{"secret": {"name": KEY}}]}}],
@@ -150,12 +150,12 @@ blind = {"spec": {"templates": [
 ]}}
 cron = {"spec": {"workflowSpec": {"volumes": VOLK, "templates": [
     {"name": "cron-reader", "script": {"source": "git clone x", "volumeMounts": MNT}}]}}}
-got = read_only_holders([("b.yaml", blind), ("c.yaml", cron)])
-check("blind spots: env, envFrom, projected, init env, echo, cron workflowSpec readers are reported",
+got = read_only_holders([("b.yaml", other_forms), ("c.yaml", cron)])
+check("read-only steps: env, envFrom, projected, init env, echo, cron workflowSpec readers are reported",
       got == {("b.yaml", "env-reader", "main"), ("b.yaml", "envfrom-reader", "main"),
               ("b.yaml", "proj-reader", "main"), ("b.yaml", "init-env-reader", "i"),
               ("b.yaml", "echo-reader", "main"), ("c.yaml", "cron-reader", "main")}, got)
-check("blind spots: -C, extra spaces, if !, env prefix, continuation and argv pushes are writers",
+check("writer steps: -C, extra spaces, if !, env prefix, continuation and argv pushes are writers",
       not any(n.endswith("writer") for _, n, _ in got), got)
 
 print()
