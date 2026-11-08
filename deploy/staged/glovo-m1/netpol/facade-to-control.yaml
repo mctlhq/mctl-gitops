@@ -1,0 +1,24 @@
+# Staged, NOT applied. Control worker accepts traffic only from the facade.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: glovo-control-from-facade
+  namespace: admins
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: base-service
+      app.kubernetes.io/instance: assistants-control
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: labs
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: labs-glovo-mcp
+      ports:
+        - protocol: TCP
+          port: 8080

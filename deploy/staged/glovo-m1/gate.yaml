@@ -1,0 +1,16 @@
+# Informational phase state. NOT an approval record: CI never reads this file
+# as an unlock, and a PR author can edit it. P1/P2 need a trusted grant bound
+# to phase, environment, manifest digest and image digest (see the runbook).
+phases:
+  p0:
+    state: approved
+    approval: https://github.com/mctlhq/mctl-gitops/issues/2470
+  p1:
+    state: blocked
+    approval: pending-separate-p1-issue
+  p2:
+    state: blocked
+    approval: pending-separate-p2-activation-go
+  p3:
+    state: out-of-scope
+    approval: none

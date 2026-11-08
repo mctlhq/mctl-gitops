@@ -1,0 +1,14 @@
+# Staged, NOT reconciled. Chart: tenant. Target: tenants/mctl-assistants-provider-glovo (P1).
+tenant:
+  name: mctl-assistants-provider-glovo
+  displayName: "Glovo provider (fake)"
+  description: "Private fake Glovo provider worker host"
+  contactEmail: ""
+  members: []
+  ghcrCredentials:
+    enabled: true
+  networking:
+    allowIntraNamespace: true
+    allowClusterEgress: true
+    # Provider is a fake: it must not reach the internet.
+    allowInternetEgress: false

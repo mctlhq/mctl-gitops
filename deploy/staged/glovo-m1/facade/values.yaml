@@ -1,0 +1,64 @@
+# Staged, NOT reconciled. Target: services/labs/glovo-mcp (P2).
+# Chart: base-service
+image:
+  repository: ghcr.io/mctlhq/glovo-mcp-facade
+  # P1 replaces this with an @sha256 digest from provenance.yaml.
+  tag: "0.0.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  port: 8080
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+ingress:
+  # P2 flips this. The host also needs glovo.mctl.ai: [labs] in
+  # reservedPlatformHosts in the same PR.
+  enabled: false
+  className: traefik
+  hosts:
+    - glovo.mctl.ai
+  # Only /mcp is routed here; the protected-resource metadata path is
+  # added through extraIngresses below.
+  path: /mcp
+  pathType: Prefix
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: glovo-mcp-tls
+      hosts:
+        - glovo.mctl.ai
+extraIngresses:
+  - name: glovo-mcp-oauth-metadata
+    hosts:
+      - glovo.mctl.ai
+    path: /.well-known/oauth-protected-resource
+    pathType: Prefix
+    tls:
+      - secretName: glovo-mcp-tls
+        hosts:
+          - glovo.mctl.ai
+env:
+  APP_ENV: production
+  LOG_LEVEL: info
+  AUTH_REQUIRED: "true"
+  # Env key names are placeholders until the facade issue fixes them
+  # (compatibility.yaml). Colon-bearing values: mctl_deploy_service yq
+  # rewrites strip them, so verify after any rewrite.
+  OAUTH_ISSUER_URL: https://api.mctl.ai
+  OAUTH_RESOURCE: https://glovo.mctl.ai/mcp
+  # Kill switch, fail closed. Empty allowlist denies everyone. Personal
+  # scope is unsupported: an explicit team tenant is required.
+  GLOVO_ENABLED: "false"
+  GLOVO_ALLOWLIST: ""
+  GLOVO_TEAM_FALLBACK: "false"

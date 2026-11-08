@@ -1,0 +1,43 @@
+# Staged, NOT reconciled. Target: its own tenant namespace (P1).
+# Chart: base-service. Private worker: no Ingress, never exposed.
+image:
+  repository: ghcr.io/mctlhq/glovo-provider-worker
+  tag: "0.0.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  # ClusterIP only; the worker dials Temporal and listens for nothing public.
+  type: ClusterIP
+  port: 8080
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+ingress:
+  enabled: false
+env:
+  APP_ENV: production
+  # Provider identity: mctl-assistants-provider-glovo:write only.
+  TEMPORAL_NAMESPACE: mctl-assistants-provider-glovo
+envFrom:
+  - secretRef:
+      name: glovo-provider-temporal
+extraExternalSecrets:
+  glovo-provider-temporal:
+    store: vault-backend
+    storeKind: ClusterSecretStore
+    refreshInterval: 1h
+    targetSecret: glovo-provider-temporal
+    data:
+      - secretKey: TEMPORAL_CLIENT_CREDENTIAL
+        remoteKey: secret/data/teams/mctl-assistants-provider-glovo/provider-worker/temporal
+        property: credential
