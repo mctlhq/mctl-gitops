@@ -173,6 +173,13 @@ GUARD = next(iter(guards.values()), "")
 check("every tenant-ns-guard copy is byte-identical",
       len(set(guards.values())) == 1, ", ".join(f"{f}/{n}" for f, n in guards))
 
+check("exactly four tenant-ns-guard copies exist (two templates in each workflow)",
+      len(guards) == 4, str(sorted(guards)))
+for _n in ("tenantproject", "tenantproject-*"):
+    check(f"every tenant-ns-guard copy lists {_n}",
+          all(re.search(r"[|(\s]" + re.escape(_n) + r"[|)\s]", g) for g in guards.values()),
+          _n)
+
 TENANTS = sorted(p.name for p in pathlib.Path("platform-gitops/tenants").iterdir()
                  if p.is_dir())
 
@@ -204,13 +211,17 @@ MUST_REJECT = [
     "otel-eval-tempo", "argocd-self-managed", "argo-workflows-config",
     # The tenant chart's argocd pair would be argo-workflow-argocd-sync.
     "sync",
+    # Names reserved for the planned per-tenant project Applications
+    # (tenantproject-<tenant>), which must not collide with tenant names.
+    "tenantproject", "tenantproject-a", "tenantproject-a-b",
 ]
 # Existing tenants must stay accepted: the guard also runs when create-tenant
 # re-provisions them and when delete-tenant removes them.
 LIVE_TENANTS = ["admins", "erpact", "karabu", "labs", "mctl", "ovk"]
 MUST_ACCEPT = sorted(set(TENANTS + LIVE_TENANTS)) + [
     "team1", "my-team", "dev-platform", "fresh", "rooted", "sharedx", "lokis",
-    "external2", "my-tenant", "otelx", "reflectors"]
+    "external2", "my-tenant", "otelx", "reflectors",
+    "tenantprojects", "tenantprojec", "my-tenantproject", "project-x"]
 # Every platform Application in mctl-api's platformApplicationNames snapshot
 # (2026-10-11), and every hyphen-prefix of one, must be refused: a tenant with
 # such a name could spell that Application as <tenant>-<service>.
