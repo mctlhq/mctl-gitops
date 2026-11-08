@@ -54,7 +54,9 @@ proven safe for finance.
 - `onlySenders` scopes **which inbound peers create jobs**. It does not scope where
   output goes, and it is not an owner-invocation mechanism.
 
-**CSV / ingestion.** No CSV parser or upload store for user data exists.
+**CSV / ingestion.** No private-finance CSV ingestion or upload store was located in the
+**inspected mctl-telegram code**; mctl-api upload, retention and deletion were
+not read, so cross-component presence remains `unknown`, not proven absent.
 `internal/mcp/media_tools.go` has an outbound media upload with a byte cap
 (`MediaUploadMaxBytes`, `file_base64`/`file_url`), which is a send path and not
 ingestion. No source/consent grant table exists.
@@ -74,9 +76,9 @@ private, but the invocation is not owner-initiated. This is why
 - `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram/values.yaml`: tenant `labs`, image
   tag `0.135.0`, `AGENT_ENABLED: "true"`, `AGENT_KILL_SWITCH: "false"`,
   `ASSISTANT_REGISTRY_ENABLED: "true"`, `HUMAN_INPUT_ENABLED: "true"`, work context
-  feature gated separately. So the Saved Messages command and notifier paths are
-  configured in production. Whether image 0.135.0 contains the pinned SHA's code was
-  **not verified**.
+  feature gated separately. These values show the **labs GitOps configuration**, not production runtime
+  behavior. Whether image 0.135.0 contains the pinned SHA's code, or the
+  effective live configuration behaves this way, was **not verified**.
 - `$MCTL_GITOPS_ROOT/services/labs/mctl-telegram-preview/values.yaml` exists (preview
   service). Not read in detail.
 - mctl MCP read tools (`mctl_get_service_status`, logs) were **not called** in this run.
@@ -85,8 +87,12 @@ private, but the invocation is not owner-initiated. This is why
   run). Recorded under Open questions.
 
 ## Proposed solution
-A research-only deliverable in four artifacts, produced in order. No product code
-changes.
+A **documentation-only research deliverable** in the `mctl-telegram` repository,
+recorded at `docs/reports/finance-assistant-owner-private-discovery.md` (or a
+reviewed equivalent local report path). No cross-repo writes, product code,
+new L2 Go tests, test execution, flags or deployment. The report contains four
+sections, produced in order. After independent review a separate owner
+decision may authorize an exact test-only artifact; this proposal does not.
 
 1. **Evidence matrix** (report section): each mechanism above listed with file:symbol
    at the pinned SHA and four columns: implemented / configured (gitops path) / tested
@@ -117,10 +123,25 @@ changes.
    and fake MTProto updates, in-memory SQLite and synthetic personas. It is written as a
    plan; execution happens only on a separately approved test-only PR.
 
-Preliminary verdict: **BOUNDED_EXTENSION_REQUIRED**. Smallest next owner decision:
-approve or reject the research-artifact PR that would add L2 tests (test-only, no
-runtime change). Stop reasons: any need for real data, real sends, managed runtime
-(#1088), connector trust changes (#1048), or shared memory beyond #309 restrictions.
+**Verdict rules (no preselected outcome):**
+- **REUSE_EXISTING_OWNER_PATH:** only if source-pinned evidence proves an
+  owner-invoked job and private output can be composed without a new permission
+  or product runtime; testability and remaining unknowns explicitly stated.
+- **BOUNDED_EXTENSION_REQUIRED:** only if evidence establishes a viable,
+  small additive owner-invocation/consent contract under existing identity
+  and policy, with independently gated L2 tests before a pilot.
+- **DEFER_UNSAFE:** if principal binding, data custody, deletion or
+  destination authorization cannot be established from current evidence.
+- **NO_TELEGRAM_SURFACE:** if the only defensible user-facing approach is a
+  separate owner workspace and Telegram should remain out of the finance path.
+
+Recommend exactly one outcome *after* completing evidence, threat model,
+alternatives and privacy analysis, and include strongest contrary evidence.
+The smallest next owner decision is whether to authorize a separately
+specified **L2 test-only artifact**; approval of this proposal permits only
+the report and test **plan**, never L2 execution. Stop if real data, live
+sends, managed runtime (#1088), connector trust changes (#1048) or shared
+memory beyond #309 is needed.
 
 ## Alternatives
 - **REUSE_EXISTING_OWNER_PATH**: dropped because no owner-initiated invocation exists.
