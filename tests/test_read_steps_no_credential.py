@@ -26,10 +26,6 @@ def check(name, cond, detail=""):
 KNOWN_READ_ONLY = {
     ("cwft-mctl-agents-approve.yaml", "flip-status", "clone-gitops"),
     ("cwft-mctl-agents-approve.yaml", "commit-and-push", "clone-gitops"),
-    ("cwft-mctl-agents-implement.yaml", "run-implementer", "clone-gitops"),
-    ("cwft-mctl-agents-implement.yaml", "commit-and-push", "clone-gitops"),
-    ("cwft-mctl-agents-investigate.yaml", "run-investigator", "clone-gitops"),
-    ("cwft-mctl-agents-investigate.yaml", "commit-and-push", "clone-gitops"),
     ("cwft-mctl-agents-reconcile.yaml", "run-reconcile", "clone-gitops"),
     ("cwft-mctl-agents-reconcile.yaml", "commit-and-push", "clone-gitops"),
     ("cwft-mctl-agents-run.yaml", "run-orchestrator", "clone-gitops"),
@@ -81,6 +77,29 @@ for fname, tname in (("tpl-validate-tenant.yaml", "validate"), ("tpl-validate-te
     check(f"{fname} {tname}: no ssh setup", ".ssh" not in text and "git@github.com" not in text)
     check(f"{fname} {tname}: clones over anonymous https",
           'git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"' in t["script"]["source"])
+
+# Implement and investigate templates: the clone step is anonymous and mounts no
+# credential; the step that pushes sets its own SSH remote before pushing.
+for fname, tname in (("cwft-mctl-agents-implement.yaml", "run-implementer"),
+                     ("cwft-mctl-agents-implement.yaml", "commit-and-push"),
+                     ("cwft-mctl-agents-investigate.yaml", "run-investigator"),
+                     ("cwft-mctl-agents-investigate.yaml", "commit-and-push")):
+    t = [x for x in dict(DOCS)[fname]["spec"]["templates"] if x["name"] == tname][0]
+    clone = [i for i in t.get("initContainers") or [] if i.get("name") == "clone-gitops"]
+    check(f"{fname} {tname}: one clone-gitops init container", len(clone) == 1, len(clone))
+    if len(clone) != 1:
+        continue
+    text = yaml.safe_dump(clone[0])
+    check(f"{fname} {tname}: clone step has no key and no ssh setup",
+          KEY not in text and "deploy-key" not in text and ".ssh" not in text and "git@github.com" not in text)
+    check(f"{fname} {tname}: clone step uses anonymous https",
+          "git clone --depth=1 https://github.com/mctlhq/mctl-gitops.git /workdir/mctl-gitops" in " ".join(clone[0]["args"]))
+    if tname == "commit-and-push":
+        src = t["script"]["source"]
+        pos_set = src.find("git remote set-url origin git@github.com:mctlhq/mctl-gitops.git")
+        pos_push = src.find("git push origin HEAD:main")
+        check(f"{fname} {tname}: push step sets the ssh remote before it pushes",
+              0 <= pos_set < pos_push, (pos_set, pos_push))
 
 # Proven both ways: the sweep flags a read-only step with the key, and not a writer.
 sample = {"spec": {"templates": [
