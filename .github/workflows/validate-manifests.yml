@@ -516,12 +516,22 @@ jobs:
         run: python3 tests/test_k3s_kured_single_owner.py
 
       - name: Check cascade and ownership guards for generated applications
-        # Finalizer outcome per ApplicationSet, distinct generated names, the
-        # retire-service delete order and a model of which live objects a
-        # cascade delete reaches. Each detector is proven red by a mutation.
+        # Finalizer outcome per ApplicationSet, generated names derived from
+        # the ApplicationSets, the retire-service delete order (text and a
+        # stub-kubectl run), a model of which live objects a cascade delete
+        # reaches, and the pinned generators. Each detector is proven red by
+        # a mutation. On a pull request the diff is also checked: touching
+        # the tenants ApplicationSet requires editing
+        # tests/fixtures/generated-appsets.golden.json in the same diff.
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           python3 -m pip install --quiet pyyaml
           python3 tests/test_generated_app_cascade_guards.py
+          if [ "$EVENT" = pull_request ]; then
+            python3 tests/test_generated_app_cascade_guards.py --diff-guard "origin/${BASE_REF}"
+          fi
 
       - name: Check the in-cluster Access login probe against its sources
         # The CronJob in infra-components/observability/blackbox carries two

@@ -1,0 +1,57 @@
+{
+  "_note": "Pinned view of the apps and tenants ApplicationSets. Edit only together with the ApplicationSet change it describes.",
+  "sets": {
+    "apps": {
+      "generators": [
+        {
+          "git": {
+            "directories": [
+              {
+                "path": "platform-gitops/services/*/*"
+              }
+            ],
+            "repoURL": "__TPL__",
+            "requeueAfterSeconds": 30,
+            "revision": "__TPL__"
+          }
+        }
+      ],
+      "goTemplate": true,
+      "goTemplateOptions": [
+        "missingkey=error"
+      ],
+      "name": "apps",
+      "syncPolicy": {
+        "preserveResourcesOnDeletion": false
+      },
+      "templateName": "{{ index .path.segments 2 }}-{{ index .path.segments 3 }}",
+      "templateProject": "apps"
+    },
+    "tenants": {
+      "generators": [
+        {
+          "git": {
+            "directories": [
+              {
+                "path": "platform-gitops/tenants/*"
+              }
+            ],
+            "repoURL": "__TPL__",
+            "requeueAfterSeconds": 30,
+            "revision": "__TPL__"
+          }
+        }
+      ],
+      "goTemplate": true,
+      "goTemplateOptions": [
+        "missingkey=error"
+      ],
+      "name": "tenants",
+      "syncPolicy": {
+        "preserveResourcesOnDeletion": false
+      },
+      "templateName": "tenant-{{ .path.basename }}",
+      "templateProject": "platform"
+    }
+  }
+}
