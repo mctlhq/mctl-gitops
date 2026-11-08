@@ -60,6 +60,16 @@ Deployed state checked:
 
 ## Proposed solution
 
+### AMEND 2026-11-08 — physical provider write authority, beyond dispatch signature
+
+The original `Boundary.Dispatch` sequence stops its live check **before signing** `EffectAuthorization`. It is not enough for revocation after signing but before the private provider's synthetic basket mutation. The worker MUST call a narrow, machine-authenticated `mctl-api` `AuthorizeFakeEffectAtWrite` / final fence with the exact order/effect/operation key, `we_`, `aar_`, intent, owner, explicitly selected team grant, install and connection revision, and bound dispatch deadline; deny on any stale/unavailable input. Never trust a signed dispatch authorization alone as consent. The provider's fake write and revocation must be serialized or use an atomic revision/epoch CAS whose semantics are backed by a deterministic interleaving test: revocation wins before effect -> 0 writes; effect wins before revocation -> 1 audited write and no further writes.
+
+This does NOT pretend an external HTTP call can participate in a database transaction; G3 real provider remains blocked. Keep outcome `unknown` after network ambiguity, read-back on stable operation key, no redrive. A duplicate dispatch may reuse the same signed bytes **only if** all live authorization is revalidated and the original deadline is unexpired; it must not bypass revocation with cached authorization. The private fake worker has its own scoped machine identity and zero control/DevLoop workflow permissions, and MUST NOT log the authorization or raw cookies.
+
+Wire the selected-team OAuth binding from #953 into every checkpoint, not only tenant membership. If the team selection was absent, expired, switched or revoked, fail closed regardless of a previously approved `aar_`.
+
+
+
 ### 1. New package `internal/providerorders`
 
 Postgres store following the `workitems` pattern (`CREATE TABLE IF NOT EXISTS` at store
@@ -159,16 +169,12 @@ Checkpoints run at: order creation (`CheckpointCreateUpdate`), effect request
    is the single-use fence; a second dispatcher gets `ErrApprovalInFlight` /
    `ErrApprovalExecuted`. (Reserve uses `s.pool`; add a `ReserveActionApprovalTx`
    variant taking a `pgx.Tx` — additive, same SQL.)
-5. Write `dispatch_deadline` once (CAS on NULL) and sign an `EffectAuthorization`
+5. Write `dispatch_deadline` once (CAS on NULL) and sign a short-lived `EffectAuthorization`
    with an Ed25519 signer modelled on `commerce.DispatchSigner` (own key id, own
    version tag `mctl-provider-effect/v1`) over: effect id, operation key, order id,
    connection/install/revision, fingerprint, mutation intent hash, `aar_` id, `we_`,
    deadline. Deterministic: a retry gets the identical bytes.
-6. Return the authorization to the worker. The worker verifies it at its ingress with
-   the public key and dedupes on the operation key; it never receives user tokens from
-   mctl-api and never writes them into Temporal history: workflows pass ids only, and
-   the activity fetches the authorization and uses it in-process, never returning it
-   as an activity result or passing it as an input.
+6. Return the authorization to the worker only after a refreshed live check. The worker verifies signature/deadline/dedupe and MUST then obtain a current **physical-write fence** from mctl-api immediately before fake basket mutation (team grant + membership + connection/revision + `aar_` + `we_` + operation key). The synthetic fake write is serialized/CAS-fenced against connection revocation. Signature alone NEVER grants a lasting right to write. It never receives user tokens and never puts the signature or credentials into Temporal history; workflows pass opaque ids and worker fetches authorization in-process. A revoked pre-write state = zero writes even if a signed authorization had already been issued.
 
 `Boundary.Report(ctx, caller, effectID, outcome)` (worker callback):
 
