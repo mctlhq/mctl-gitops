@@ -16,13 +16,19 @@ G0. Discovery. Every .yaml and .yml file below the bootstrap templates is
     Helm actions are read by ONE tokenizer (`tokenize_actions`) shared by
     `neutral`, `drop_standalone_actions` and `template_control_findings`: a raw
     string is exactly one backtick string, with or without trim markers and on
-    one line or several, and is kept as its literal content; every other
-    standalone action line is a control finding; an action that cannot be
+    one line or several, and is kept as its literal content; a
+    standalone control line (if, else, end, range, with, define) or variable
+    assignment is dropped and its trim markers are applied; every other
+    standalone action line is a finding unless it is a data pipeline over a
+    short allow-list of functions that ends in `nindent N` or `indent N` with a
+    literal N > 0, and in an ApplicationSet file nothing but comments, raw
+    strings and inline `.Values` lookups is accepted; an action that cannot be
     tokenized is Unreadable. Every file below templates/ must be a manifest
     (.yaml, .yml), a helper (.tpl) or NOTES.txt, any other file is Unreadable,
     a .tpl helper that mentions ApplicationSet is Unreadable, and so is a
-    manifest document that is not a mapping or a line made only of
-    include/template/tpl/block (it may render whole documents). Known limit:
+    manifest document that is not a mapping or a line made only of an
+    unmodelled action (include, template, tpl, block, lookup, fromYaml, printf,
+    a value at column 0, ...: it may render whole documents). Known limit:
     a helper that assembles the word at render time is not seen.
 G1. Finalizer. The ApplicationSet controller (Argo CD v3.3.8,
     applicationset/utils/utils.go, Render.RenderTemplateParams, condition at
@@ -283,20 +289,59 @@ def _standalone_spans(text: str, acts: list[Action]) -> list[tuple[int, int, lis
     return spans
 
 
-_WHOLE_LINE_CALLS = ("include", "template", "tpl", "block")
+# Standalone action lines a bootstrap template may carry without being read as
+# an emitter of whole keys or documents: pure control flow, and a variable
+# assignment (neither writes anything into the output).
+_CONTROL_WORDS = ("if", "else", "end", "range", "with", "define", "break", "continue")
+_ASSIGNMENT = re.compile(r"\$\w*\s*:?=")
+# A standalone value-emitting line is tolerated only as a data pipeline: bare
+# function names from this list, no method other than `.Files.Get`, and a last
+# stage `nindent N` / `indent N` with a literal N > 0, so every emitted line
+# is indented and cannot start a document or a top-level key.
+_EMIT_FUNCS = frozenset({"toYaml", "toJson", "nindent", "indent", "quote", "default", "trim", "b64enc",
+                         "dict", "list", "true", "false", "nil"})
+_QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"|`[^`]*`|\'(?:[^\'\\]|\\.)*\'')
+_INDENTED_TAIL = re.compile(r"\|\s*n?indent\s+[1-9][0-9]*\s*$")
+_WORD = re.compile(r"[A-Za-z_$.][\w.$]*")
 
 
-def whole_line_calls(text: str, path: Path | str = "<text>") -> list[str]:
-    """Lines made only of an include, template, tpl or block action. Such a line
-    can render whole keys or documents, so a manifest that has one is not
-    modelled: callers treat a finding here as Unreadable."""
+def _emitter_ok(body: str) -> bool:
+    s = _QUOTED.sub('""', body)
+    if not _INDENTED_TAIL.search(s):
+        return False
+    for w in _WORD.findall(s):
+        if w[0] in ".$":
+            if w.startswith(".Files.") and w != ".Files.Get":
+                return False
+        elif w not in _EMIT_FUNCS:
+            return False
+    return True
+
+
+def standalone_findings(text: str, path: Path | str = "<text>") -> list[str]:
+    """Lines made only of Helm actions that this script cannot model.
+
+    Control flow (if, else, end, range, with, define) and variable assignment
+    write nothing and are dropped by neutral(). Any other standalone action
+    can write whole keys or documents (include, template, tpl, block, lookup,
+    fromYaml, printf, toYaml at column 0, ...), so it is a finding unless it is
+    a data pipeline ending in an `nindent`/`indent` of a literal N > 0 over the
+    allow-listed functions: an unmodelled emitter is never skipped silently.
+    Callers treat a finding as Unreadable."""
     acts = tokenize_actions(text, path)
     out = []
     for ls, _, grp in _standalone_spans(text, acts):
         for g in grp:
-            if g.kind == "other" and g.body.split(None, 1)[:1] and g.body.split(None, 1)[0] in _WHOLE_LINE_CALLS:
-                out.append(f"{path}:{_line_of(text, g.start)}: a line made only of {g.body.split(None, 1)[0]!r} "
-                           "may render whole keys or documents and is not modelled")
+            if g.kind not in ("other", "value"):
+                continue
+            words = g.body.split(None, 1)
+            if (words and words[0] in _CONTROL_WORDS) or _ASSIGNMENT.match(g.body):
+                continue
+            if g.kind == "other" and _emitter_ok(g.body):
+                continue
+            out.append(f"{path}:{_line_of(text, g.start)}: a line made only of an action "
+                       f"({' '.join(g.body.split())[:40]!r}) may render whole keys or documents "
+                       "and is not modelled")
     return out
 
 
@@ -321,7 +366,7 @@ def neutral(text: str, keep_literals: bool = False) -> str:
     acts = tokenize_actions(text)
     spans = _standalone_spans(text, acts)
     dropped = {id(g) for _, _, grp in spans for g in grp}
-    items = [(ls, end, None) for ls, end, _ in spans] + [(a.start, a.end, a) for a in acts if id(a) not in dropped]
+    items = [(ls, end, grp) for ls, end, grp in spans] + [(a.start, a.end, a) for a in acts if id(a) not in dropped]
     items.sort(key=lambda t: t[0])
     out: list[str] = []
     pos, rtrim = 0, False
@@ -330,6 +375,22 @@ def neutral(text: str, keep_literals: bool = False) -> str:
         out.append(seg.lstrip(_WS) if rtrim else seg)
         rtrim = False
         pos = end
+        if isinstance(act, list):
+            # A dropped control line takes its own line break with it. Trim
+            # markers still apply: a left trim also removes the whitespace
+            # before the line (the break that follows it stays), a right trim
+            # removes the whitespace after it, so an indented key can reach
+            # column 0 exactly as Helm renders it.
+            first, last = act[0], act[-1]
+            if first.trim_left:
+                while out and not out[-1].strip(_WS):
+                    out.pop()
+                if out:
+                    out[-1] = out[-1].rstrip(_WS)
+                if not last.trim_right and text[end - 1:end] == "\n":
+                    out.append("\n")
+            rtrim = last.trim_right
+            continue
         if act is None:
             continue
         if act.trim_left:
@@ -408,7 +469,7 @@ def parse_docs(text: str, path: Path, keep_literals: bool = False) -> list[dict]
     action renders whole documents this guard cannot see, so it fails closed
     instead of being skipped as "no kind".
     """
-    calls = whole_line_calls(text, path)
+    calls = standalone_findings(text, path)
     if calls:
         raise Unreadable("; ".join(calls))
     try:
@@ -420,6 +481,30 @@ def parse_docs(text: str, path: Path, keep_literals: bool = False) -> list[dict]
             raise Unreadable(f"{path}: a document is not a mapping, so it may be rendered by an "
                              "action that is not modelled (include, template, bare value)")
     return [d for d in docs if isinstance(d, dict)]
+
+
+def helper_text(text: str, path: Path | str = "<text>") -> str:
+    """The literal text of a helper with its Helm actions folded in: raw strings
+    and plain double-quoted strings are spliced in as their content, other
+    actions vanish, and trim markers remove the neighbouring whitespace, so a
+    word split by an action is whole again. An action that cannot be tokenized
+    is Unreadable."""
+    out: list[str] = []
+    pos, rtrim = 0, False
+    for a in tokenize_actions(text, path):
+        seg = text[pos:a.start]
+        out.append(seg.lstrip(_WS) if rtrim else seg)
+        if a.trim_left:
+            out[-1] = out[-1].rstrip(_WS)
+        pos, rtrim = a.end, a.trim_right
+        if a.kind == "raw":
+            out.append(a.literal)
+        elif a.kind == "other" and len(a.body) >= 2 and a.body[0] == '"' and a.body[-1] == '"' \
+                and '"' not in a.body[1:-1] and "\\" not in a.body:
+            out.append(a.body[1:-1])
+    seg = text[pos:]
+    out.append(seg.lstrip(_WS) if rtrim else seg)
+    return "".join(out)
 
 
 def yaml_files(base: Path) -> list[Path]:
@@ -442,7 +527,8 @@ def yaml_files(base: Path) -> list[Path]:
         if p.suffix.lower() in (".yaml", ".yml"):
             out.append(p)
         elif p.suffix.lower() == ".tpl":
-            if "applicationset" in read_text(p).lower():
+            src = read_text(p)
+            if "applicationset" in src.lower() or "applicationset" in helper_text(src, p).lower():
                 raise Unreadable(f"{p}: a template helper that mentions ApplicationSet is not modelled")
         elif p.name != "NOTES.txt":
             raise Unreadable(f"{p}: not a recognised template file kind (.yaml, .yml, .tpl, NOTES.txt)")
@@ -1677,6 +1763,81 @@ def selftests(root: Path) -> None:
     tokenizer_selftests(root)
 
 
+def rule_selftests() -> None:
+    """Rules of the Helm reading code on small inline texts. Nothing here reads
+    the repository, and every probe is wrapped, so a broken rule fails by its
+    own name instead of making the whole run unreadable."""
+    def probe(fn):
+        try:
+            return fn()
+        except Unreadable as exc:
+            return f"UNREADABLE {exc}"
+
+    one = tokenize_actions("{{ `x: 1` }}")
+    check("rule: a backtick string is classified as a raw string holding its content",
+          probe(lambda: (one[0].kind, one[0].literal)) == ("raw", "x: 1"))
+    check("rule: a raw string line is kept by neutral, not dropped as a control line",
+          probe(lambda: neutral("a:\n  {{ `b: 1` }}\n", True)) == "a:\n  b: 1\n"
+          and probe(lambda: drop_standalone_actions("a:\n  {{ `b: 1` }}\n")) == "a:\n  {{ `b: 1` }}\n")
+    lt = probe(lambda: tokenize_actions("{{- a -}}")[0])
+    check("rule: a dash followed by whitespace is a left trim marker and a trailing one a right trim marker",
+          not isinstance(lt, str) and lt.trim_left and lt.trim_right and lt.body == "a")
+    check("rule: a left trim marker removes the whitespace before a kept action",
+          probe(lambda: neutral("a: 1\n  {{- `b` }}\n", True)) == "a: 1b\n")
+    check("rule: a left trim on a dropped control line removes the break before it, not the one after it",
+          probe(lambda: neutral("a:\n{{- if x }}\n  b: 1\n{{- end }}\nc: 2\n")) == "a:\n  b: 1\nc: 2\n")
+    check("rule: a left trim on a dropped control line removes the blank lines before it",
+          probe(lambda: neutral("a: |+\n  x\n\n\n{{- if y }}\nb: 2\n")) == "a: |+\n  x\nb: 2\n")
+    check("rule: a left trim on a dropped control line changes a kept block scalar",
+          probe(lambda: parse_docs("a: |+\n  x\n\n\n{{- if y }}\nb: 2\n", Path("x")))
+          == [{"a": "x\n", "b": 2}])
+    check("rule: a control line without a trim marker keeps the blank lines before it",
+          probe(lambda: parse_docs("a: |+\n  x\n\n\n{{ if y }}\nb: 2\n", Path("x")))
+          == [{"a": "x\n\n\n", "b": 2}])
+    check("rule: a right trim on a dropped control line pulls an indented key to column 0",
+          probe(lambda: neutral("a:\n  {{ if x -}}\n  b: 1\n  {{ end }}\n")) == "a:\nb: 1\n")
+    check("rule: a right trim on a dropped control line changes the parsed structure",
+          probe(lambda: parse_docs("a:\n  p: 1\n  {{ if x -}}\n  b: 1\n  {{ end }}\n", Path("x")))
+          == [{"a": {"p": 1}, "b": 1}])
+
+    refused = ("{{ toYaml .Values.x }}", "{{ toYaml .Values.x | nindent 0 }}", "{{ .Values.extra | nindent 0 }}",
+               "{{- .Values.extra | toYaml | nindent 0 }}", "{{ .Values.extra | indent 0 }}",
+               '{{ printf "kind: ApplicationSet" }}', '{{ printf "kind: %s" "ApplicationSet" | nindent 4 }}',
+               "{{ tpl .Values.x . }}", "{{ tpl .Values.x . | nindent 4 }}", '{{ lookup "v1" "ConfigMap" "a" "b" }}',
+               "{{ fromYaml .Values.x }}", "{{ toYaml (fromYaml .Values.x) | nindent 4 }}",
+               '{{ include "x" . | nindent 4 }}', '{{ include "x" . }}', '{{ template "x" . }}',
+               '{{ block "x" . }}', "{{ .Values.x | nindent $n }}", '{{ .Files.Glob "*" | nindent 4 }}',
+               "{{ .Values.x | upper | nindent 4 }}", "{{ toYaml .Values.x | nindent 0 }}{{ toYaml .Values.y | nindent 4 }}",
+               "{{ if .Values.a }}{{ toYaml .Values.x }}")
+    for act in refused:
+        got = probe(lambda: standalone_findings(f"a:\n  b: 1\n{act}\n", "x"))
+        check(f"rule: a standalone {act} line is a finding", isinstance(got, list) and len(got) >= 1, str(got))
+    accepted = ("{{ if .Values.a }}", "{{- else if .Values.b }}", "{{- else }}", "{{- end }}", "{{ range .Values.x }}",
+                "{{- with .Values.x }}", '{{- define "x" }}', "{{ $x := list 1 2 }}", '{{- $y = "a" }}',
+                "{{ toYaml .Values.x | nindent 4 }}", "{{- .Values.x | toYaml | nindent 2 }}",
+                '{{ .Files.Get "files/a.json" | nindent 4 }}', "{{ toYaml (default dict .Values.x) | indent 6 }}")
+    for act in accepted:
+        got = probe(lambda: standalone_findings(f"a:\n  b: 1\n{act}\n", "x"))
+        check(f"rule: a standalone {act} line is a known-safe construct", got == [], str(got))
+    check("rule: an emitter inside a line (a value position) is not a standalone finding",
+          probe(lambda: standalone_findings("a: {{ include \"x\" . }}\n", "x")) == [])
+    check("rule: a line carrying a raw string or only a comment is content, not a finding",
+          probe(lambda: standalone_findings("a:\n  {{ `b: 1` }}\n  {{/* c */}}\n", "x")) == [])
+    check("rule: the finding names the file and the line",
+          probe(lambda: standalone_findings("a: 1\n{{ toYaml .Values.x }}\n", "f.yaml"))[0].startswith("f.yaml:2:"))
+
+    split = ("Applic{{ `ation` }}Set", 'Applic{{ "ation" }}Set', "Applic{{/* c */}}ationSet",
+             "Applic \n{{- `ation` -}}\n Set", "Application{{ `S` }}et", "{{ `Application` }}{{ `Set` }}")
+    for text in split:
+        got = probe(lambda: helper_text(text, "x").lower())
+        check(f"rule: a helper word split by an action is whole again: {text!r}",
+              got == "applicationset", str(got))
+    check("rule: a helper without the word stays without it",
+          "applicationset" not in probe(lambda: helper_text('{{- define "x" }}{{ `a` }}b{{- end }}', "x")).lower())
+    check("rule: an unterminated action in a helper is Unreadable",
+          str(probe(lambda: helper_text("a {{ `x", "x"))).startswith("UNREADABLE"))
+
+
 def tokenizer_selftests(root: Path) -> None:
     """The shared Helm action tokenizer: one classification for every consumer."""
     LIT = "LIT123"
@@ -1949,6 +2110,22 @@ def discovery_selftests(root: Path) -> None:
     check("G0 unreadable: a document that is a bare list",
           unreadable_tree({"l.yaml": "- a\n- b\n"}))
     check("G0 control: an empty template file is accepted", not unreadable_tree({"e.yaml": "# nothing\n"}))
+    for label, body in (
+        ("a whole-document toYaml", "{{ toYaml .Values.extra }}\n"),
+        ("a nindent 0 value", "{{ .Values.extra | nindent 0 }}\n"),
+        ("a printf that builds a document", '{{ printf "kind: ApplicationSet\\nmetadata:\\n  name: z" }}\n'),
+        ("a lookup", '{{ lookup "v1" "ConfigMap" "a" "b" }}\n'),
+        ("a fromYaml", "{{ fromYaml .Values.x }}\n"),
+        ("a tpl after a key", "a:\n  b: 1\n{{ tpl .Values.x . }}\n"),
+    ):
+        check(f"G0 unreadable: a template whose only content is {label}", unreadable_tree({"emit.yaml": body}))
+    check("G0 control: an indented data pipeline and control flow in another manifest are accepted",
+          not unreadable_tree({"ok.yaml": "kind: ConfigMap\ndata:\n  {{- if .Values.a }}\n  k: v\n  {{- end }}\n"
+                               "  x: |-\n  {{- toYaml .Values.b | nindent 4 }}\n"}))
+    check("G0 unreadable: a helper whose word is split by a raw string",
+          unreadable_tree({"_h.tpl": "kind: Applic{{ `ation` }}Set\n"}))
+    check("G0 unreadable: a helper whose word is split by a comment",
+          unreadable_tree({"_h.tpl": "kind: Applic{{/* x */}}ationSet\n"}))
 
     # Helm control flow inside an ApplicationSet file
     cond = ("    {{- if .Values.keep }}\n    preserveResourcesOnDeletion: true\n    {{- else }}\n"
@@ -2058,10 +2235,13 @@ def main(argv: list[str]) -> int:
         print(f"unknown arguments: {args}", file=sys.stderr)
         return 2
     try:
+        rule_selftests()
         repo_checks(root)
         selftests(root)
     except Unreadable as exc:
         print(f"UNREADABLE: {exc}", file=sys.stderr)
+        for f in failures:
+            print(f"  - {f}", file=sys.stderr)
         return 2
     if failures:
         print(f"\n{len(failures)} failure(s):")
