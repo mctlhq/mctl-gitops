@@ -157,33 +157,13 @@ spec:
             exit 1
           fi
 
-          # release-gate guard begin (mctlhq/mctl-agents#1007). A values file in
-          # a gated group (release-gates.yaml) moves only with its whole group
-          # and never below the image floor; this path rewrites ONE file and
-          # pushes with the bypass deploy key, so it refuses those outright and
-          # points at the reviewed-PR path. No interpreter: if the gate file
-          # cannot be read, or names no path, the rollback is refused. Paths are
-          # compared by file identity (-ef), not as strings, because VALUES comes
-          # from inputs and `admins//x` or `x/.` name the same gated file. They
-          # are collected by shape, not by indentation, so reformatting the gate
-          # file cannot turn this into a silent pass.
-          GATE_FILE=platform-gitops/release-gates.yaml
-          if [ ! -f "${GATE_FILE}" ]; then
-            echo "ERROR: ${GATE_FILE} missing, cannot tell whether ${VALUES} is gated; refusing" >&2
-            exit 1
-          fi
-          GATED_PATHS=$(grep -oE 'platform-gitops/[A-Za-z0-9._/-]*values\.yaml' "${GATE_FILE}" || true)
-          if [ -z "${GATED_PATHS}" ]; then
-            echo "ERROR: ${GATE_FILE} names no values file, cannot tell whether ${VALUES} is gated; refusing" >&2
-            exit 1
-          fi
-          for GATED in ${GATED_PATHS}; do
-            if [ "${VALUES}" -ef "${GATED}" ]; then
-              echo "ERROR: ${VALUES} belongs to a release-gated group; roll it back with a reviewed PR that moves the whole group" >&2
-              exit 1
-            fi
-          done
-          # release-gate guard end
+          # Release gate (mctlhq/mctl-agents#1007). A values file in a gated
+          # group moves only with its whole group, so this path, which rewrites
+          # ONE file and pushes with the deploy key, refuses it through
+          # the same shared script every other writer calls. Anything that
+          # script cannot read or decide is a refusal, and so is a missing
+          # script: every non-zero exit stops here.
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$TEAM" "$COMPONENT" || exit 1
 
           # Patch image.tag using sed. Safe because the guard above
           # already rejected anything outside the OCI tag grammar — the
@@ -195,6 +175,7 @@ spec:
           git add "${VALUES}"
           git diff --staged --quiet && echo "No changes needed (already at ${TAG})" && exit 0
           git commit -m "chore: rollback ${TEAM}/${COMPONENT} to ${TAG}"
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
           git push
           echo "Rolled back ${TEAM}/${COMPONENT} to tag ${TAG}"
       volumes:
