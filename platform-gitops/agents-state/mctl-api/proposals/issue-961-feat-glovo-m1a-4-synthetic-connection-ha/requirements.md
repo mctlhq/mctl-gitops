@@ -27,6 +27,14 @@ until those separately approved dependencies merge. This slice only keeps its sc
 codes compatible with them. The parent #953 approval grant does not authorize this slice. A new
 human approval of this proposal's own digest is required.
 
+## AMEND 2026-11-08 — missing persistence and worker credentials (P1)
+
+**Dependency mismatch:** #958 reserves `service:mctl-glovo-worker` but deliberately does NOT issue a worker token, constructor or worker auth gate. #961 must implement a dedicated strictly scoped worker identity **default OFF**, with no secrets/credentials configured by code merge, or return `worker_api=not_ready` until a separately approved credential slice. No admin, general service or header-based identity may stand in for it. Issuing a live worker secret is a separate P1 deployment approval.
+
+**Persistence gap:** #959 provides only installation, connection, idempotency-request and audit tables; it does **not** provide hashed single-use handoff references or PostgreSQL rate counters. #961 must own explicit additive, idempotent DDL for (connection, hash, expires_at, consumed_at, install_revision), and durable per-(tenant,principal,time bucket) rate counters. A worker must verify and consume the handoff atomically under revocation/reinstall locking; no raw handoff string stored. Two API replicas must not accept a quota-violating concurrent final request.
+
+**Integration gate:** code cannot begin until #958/#959/#960 have merged and real API interfaces match. No silent stub/duplicate auth/store. All fake-only. Default `GLOVO_ENABLED=false`; no DNS, public OAuth activation, Temporal or real Glovo.
+
 ## User stories
 
 - AS a team member who explicitly selected a team at OAuth consent I WANT to start, hand off, inspect and revoke my own synthetic Glovo connection SO THAT the connection lifecycle can be proven end to end without real credentials.
