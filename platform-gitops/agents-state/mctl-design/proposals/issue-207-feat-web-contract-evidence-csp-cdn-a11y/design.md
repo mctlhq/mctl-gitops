@@ -36,9 +36,11 @@ Clone of `mctlhq/mctl-design` at `7e1fbb0634d57a9d371e01f487785cd187b362c7` (202
 
 Deployed state checked:
 
-- `$MCTL_GITOPS_ROOT/services/admins/mctl-design/values.yaml`: `image.repository
-  ghcr.io/mctlhq/mctl-design`, `tag "7e1fbb0634d5"` (equals clone HEAD); hosts `ui.mctl.ai`,
-  `admins-mctl-design.mctl.ai`.
+- `[CONFIG]` `$MCTL_GITOPS_ROOT/services/admins/mctl-design/values.yaml`: `image.repository
+  ghcr.io/mctlhq/mctl-design`, `tag "7e1fbb0634d5"` (string equals the inspected clone
+  HEAD prefix); hosts `ui.mctl.ai`, `admins-mctl-design.mctl.ai`. This name match is NOT an
+  attestation that the deployed image was built from that commit; the image digest/release-to-source
+  provenance join was not checked.
 - `services/admins/mctl-web/values.yaml`: tag `7.21.1`; hosts `mctl.ru`, `mctl.ai`;
   `catalog-info.yaml` source-repo `mctlhq/mctl-web`.
 - `services/admins/mctl-docs/values.yaml`: tag `0.1.66`; hosts `docs.mctl.ai`, `admins-mctl-docs.mctl.ai`.
@@ -48,11 +50,13 @@ Deployed state checked:
 - `services/labs/mctl-academy/values.yaml`: tag `0.1.76`; hosts `academy.mctl.ai`, `labs-mctl-academy.mctl.ai`.
 - `services/labs/mctl-alice/values.yaml`: tag `2.13.1`; host `alice.mctl.ai`.
 - `services/labs/seerrsense/values.yaml`: tag `1.14.1`; hosts `seerrsense.mctl.ai`, `labs-seerrsense.mctl.ai`.
-- `mctl_list_services(team=admins)` and `mctl_list_services(team=labs)` (argocd ok, complete true):
-  all seven apps `Synced`, observed images equal GitOps tags (mctl-design `7e1fbb0634d5`, mctl-web
-  `7.21.1`, mctl-docs `0.1.66`, mctl-telegram `0.137.1`, mctl-academy `0.1.76`, mctl-alice `2.13.1`,
-  seerrsense `1.14.1`). A preview app `labs/mctl-telegram-preview` (`tg-preview.mctl.ai`, image
-  `mctl-telegram:main-5fb1de8`) exists. Health status was not returned by this call.
+- `[LIVE]` Authenticated `mctl_list_services(team=admins)` and `mctl_list_services(team=labs)`
+  (ArgoCD ok, complete true): all seven apps `Synced`, observed images equal GitOps **tag strings**
+  (mctl-design `7e1fbb0634d5`, mctl-web `7.21.1`, mctl-docs `0.1.66`, mctl-telegram `0.137.1`,
+  mctl-academy `0.1.76`, mctl-alice `2.13.1`, seerrsense `1.14.1`). This proves desired-vs-observed
+  tag parity, NOT that the running image matches the inspected source `main` revision. A preview
+  app `labs/mctl-telegram-preview` (`tg-preview.mctl.ai`, image `mctl-telegram:main-5fb1de8`)
+  exists. Health status was not returned by this call.
 - Not checked in this run: source repositories of the six consumers (not cloned), any public HTTP
   response, any CDN/edge configuration. These are gaps, not absences.
 
@@ -66,11 +70,15 @@ Report structure:
 1. **Header block**: date (UTC), mctl-design SHA, run identity, tool availability (HTTP client,
    headless browser: available / `not-run` with reason), and the provenance tag legend
    (`[CODE]`, `[CONFIG]`, `[LIVE]`, `[PREVIEW]`, `unknown (not observed)`).
-2. **Parity table** (one row per site + `ui.mctl.ai`): source repo and SHA of the deployed tag
-   `[CODE]`; GitOps desired tag `[CONFIG]`; ArgoCD observed image/sync `[CONFIG]` (via
-   `mctl_list_services`/`mctl_get_service_status`); public response build marker if any `[LIVE]`;
-   design usage — exact `ui.mctl.ai` URLs and/or `@mctlhq/*` versions found in source, and whether
-   it is `0.20.2`, floating, or another pin `[CODE]`.
+2. **Parity table** (one row per site + `ui.mctl.ai`): inspected source revision SHA/tag `[CODE]`
+   (never label it the deployed revision unless provenance is proved); GitOps desired image tag
+   `[CONFIG]`; ArgoCD **observed** image/sync/health `[LIVE]` (authenticated
+   `mctl_list_services` / `mctl_get_service_status`); public response build marker, when safely
+   observed, `[LIVE]`; and an explicit deployed image-tag-to-source mapping or
+   `unknown (not observed)` when build digest, CI attestation or immutable release mapping is not
+   available. Record exact `ui.mctl.ai` URLs and/or `@mctlhq/*` versions found in pinned source,
+   classified as `0.20.2`, floating or another pin `[CODE]`. Never join source and deployment
+   solely by a common-looking tag or a matching short SHA prefix.
 3. **HTTP header evidence** `[LIVE]`: for each site's public landing page and for
    `https://ui.mctl.ai/{mctl,global,prose,site}.css` plus `https://ui.mctl.ai/0.20.2/{...}.css`:
    status, redirect chain, CSP / CSP-Report-Only verbatim, Cache-Control, ETag, Last-Modified, Age
@@ -88,16 +96,25 @@ Report structure:
    stories built from the pinned SHA, (b) `tg-preview.mctl.ai` public anonymous page, and (c) where
    permitted, the anonymous public landing page of each site at 768px and 981px, read-only. Checks:
    toggle, Enter/Space/Escape, outside pointer, `aria-expanded`, focus return, tab order,
-   reduced-motion emulation, JS-disabled context. Each check has two columns: observed result and
-   proposed acceptance criterion. Anything not executed is `not-run`. The test script itself is
-   quoted in the report as reproduction instructions, not committed as CI.
-6. **Evidence/unknown/owner matrix** mapping each claim to tag, value, owner repo and existing
-   issue (design#34, design#78, telegram#599, academy#210, gitops#500).
-7. **Next gates**: `web-header-a11y-contract` (entry: header behaviour rows observed for all six
-   sites or owner-accepted `not-run`; contract text derived from the `site.css` comment) and
-   `web-asset-integrity-contract` (entry: every site's stylesheet pin known, versioned body hashes
-   match committed files, CSP `style-src` for `ui.mctl.ai` observed per site). Both gates are
-   proposals for human decision; nothing is started.
+   reduced-motion emulation, JS-disabled context. Each check has observed result, proposed
+   acceptance criterion and test status: `observed`, `not-run` (applicable but unexecuted, with
+   reason) or `not-applicable` (inapplicable mechanism with pinned source justification). For
+   Telegram's CSS-only public navigation, a JS-specific drawer-handler check may be
+   `not-applicable`, but user-visible keyboard/focus/no-JS outcomes remain applicable. For Docs'
+   VitePress-native menu, mark JS adapter implementation details `not-applicable` only with source
+   proof; keep keyboard and focus checks applicable. Do not mask missing tests as N/A. The test
+   script itself is quoted as reproduction instructions, not committed as CI.
+6. **Evidence/unknown/owner matrix** mapping each claim to provenance tag, observed value or
+   unknown, test status (`observed`, `not-run`, or justified `not-applicable`), owner repo and
+   existing issue (design#34, design#78, telegram#599, academy#210, gitops#500).
+7. **Next gates**: `web-header-a11y-contract` (entry: applicable user-facing header checks
+   observed for all six sites or explicit owner-accepted `not-run`, with justified N/A limited to
+   inapplicable implementation mechanisms; contract based on `site.css`) and
+   `web-asset-integrity-contract` (entry: source CSS pin and supply method known per site; versioned
+   body hashes and effective CSP `style-src` verified on CDN-consuming public routes **where HTTP
+   was permitted**, otherwise documented `not-run` and a follow-up evidence gate; strict local-
+   vendored auth/consent routes remain source/preview-only). Both are proposed for separate human
+   decisions; no implementation is started. Missing live proof does not become PASS.
 
 Why here: `mctl-design` owns the CDN contract (`nginx.conf`) and the header CSS contract
 (`site.css`), so the evidence sits next to the code it measures; the epic can link it.
@@ -124,7 +141,8 @@ Why here: `mctl-design` owns the CDN contract (`nginx.conf`) and the header CSS 
     requests, no loops, record `not-run` on any block.
   - Leaking sensitive data into the report: no cookies or credentials are sent; response headers like
     `Set-Cookie` are redacted to their names only; no auth routes are requested live.
-  - Treating unknowns as passes: every row requires a tag; the matrix has an explicit `unknown` column.
+  - Treating unknowns as passes: every row requires provenance or an explicit unknown, test
+    status and reason. N/A cannot disguise unavailable browser/HTTP execution.
   - Evidence going stale: every row is dated and pinned; the report states it is a point-in-time baseline.
   - Recommending CSP relaxation: forbidden by requirements; findings that would need a looser policy
     are recorded as open questions for the owner, not recommendations.
