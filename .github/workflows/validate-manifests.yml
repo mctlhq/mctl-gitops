@@ -515,6 +515,42 @@ jobs:
         # keep ours winning and on the same versions (#2036).
         run: python3 tests/test_k3s_kured_single_owner.py
 
+      - name: Check cascade and ownership guards for generated applications
+        # Every guard reads the output of a real `helm template` of
+        # platform-gitops/bootstrap (the helm installed by the step above, v3.16.4,
+        # found on PATH; a missing or failing helm fails the step, it is never
+        # skipped), over a bounded render matrix: default values, the two example
+        # overlays and every boolean flag flipped. Finalizer outcome per
+        # ApplicationSet, generated names derived from the rendered
+        # ApplicationSets, the retire-service delete order (text and a
+        # stub-kubectl run), a model of which objects a cascade delete reaches,
+        # and the pinned generators. Each detector is proven red by mutating a
+        # copy of the chart source. On a pull request the diff is also checked:
+        # a change to a pinned field of the rendered apps or tenants
+        # ApplicationSet requires a real change of that set in
+        # tests/fixtures/generated-appsets.golden.json in the same diff (the
+        # base is rendered from the full-history checkout with git archive).
+        # The G6 template-text scan is a best-effort heuristic with documented
+        # unresolved limits (see the test module docstring); it is not a proof of
+        # coverage of Helm template conditions. The render-based checks, the matrix
+        # are the real controls. Review of the bootstrap chart is not enforced by the
+        # repository settings and is not counted as a control.
+        # A full run takes 2 to 3 minutes (134 to 174 s measured) and prints its elapsed time; the
+        # timeout leaves room for a slow runner.
+        timeout-minutes: 20
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          command -v helm
+          helm version --short
+          python3 -m pip install --quiet pyyaml==6.0.2
+          python3 tests/test_generated_app_cascade_guards.py
+          if [ "$EVENT" = pull_request ]; then
+            python3 tests/test_generated_app_cascade_guards.py --diff-guard "origin/${BASE_REF}"
+          fi
+
       - name: Check the in-cluster Access login probe against its sources
         # The CronJob in infra-components/observability/blackbox carries two
         # copies it cannot read at run time: scripts/access-login-probe.py as
