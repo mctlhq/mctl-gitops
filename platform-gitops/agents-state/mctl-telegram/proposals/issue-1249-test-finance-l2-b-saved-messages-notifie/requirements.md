@@ -27,6 +27,38 @@ This is application-security evidence, not a product capability. The parent verd
 - THE SYSTEM SHALL use only synthetic identities (Alice, Bob, Carol, Dana) and ids already used by the package tests (`selfTG=100` as the owner Alice's account). Bob is the new constant `l2BobTG=600`, which has no hits in `git grep` under `internal/agent`. `recruit=555` is not reused, because it is labelled Alice in `listener` tests and Bob in `control` tests.
 - THE SYSTEM SHALL state in the addendum `FINANCE_SECURITY_GATE=BLOCKED`, that #325 remains `RESEARCH_ONLY_DEFER`, and that slice B is not L2 completion.
 
+## AMEND: owner and evidence gates (required before implementation)
+
+- **Dependency/ownership:** before any `#1249` implementation, prove PR
+  `mctl-telegram#1247` is actually merged or explicitly closed with a
+  reviewed partial-evidence disposition, and that the original DevLoop's
+  PR lifecycle has been reconciled/released. An `APPROVED` review or
+  `CLEAN` PR alone is not sufficient. Record the final #1247 commit
+  and current `mctl-telegram/main` SHA in the slice B report.
+- **Independent exact-content review:** require independent review of
+  this amended `requirements.md`, `design.md` and `tasks.md`
+  followed by a **fresh, separately bound owner approval** on the
+  reviewed proposal digest for #1249. Do not reuse #1244's grant,
+  authorise an implementer via a plain issue comment, or hand-edit
+  `.status.yaml` while its Temporal workflow is running.
+- **No-egress evidence:** replacing `net.DefaultResolver` or
+  `http.DefaultTransport` in a tagged test process proves only that
+  these *default* paths are guarded. It does **not** block every custom
+  dialer or direct MTProto client. Run all cases using fake adapters,
+  prohibit construction of live Telegram clients, and explicitly
+  test refusal of non-loopback and DNS through reachable paths. If
+  a stronger external egress boundary cannot be demonstrated, label
+  the relevant *whole-process* assurance `CANNOT-OBSERVE`; never
+  assert a blanket network prohibition merely because the default
+  transport self-test passed. No live external dial is authorised.
+- **Per-case evidence:** `L2FINANCE_SOURCE_REV` must be the exact 40-hex
+  source commit tested, obtained from the current checkout and echoed
+  in every `L2RESULT` and the final addendum. The slice may report
+  reproduced `FAIL/GAP` as a harness execution success, but must
+  explicitly keep `FINANCE_SECURITY_GATE=BLOCKED` with IDs and counts.
+  Full T1–T10 aggregation remains dependent slice D, never inferred
+  from slice B's green Go command.
+
 ## Out of scope
 - Agent API and wire-layer cases T7, T9 and T10, mutation M4, and the global result aggregator across slices.
 - Any runtime fix, including the delivery-time mode/revocation fence and the kill-switch gate on `Reply`, even though this slice is expected to record them as FAIL/GAP.
