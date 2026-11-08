@@ -13,6 +13,17 @@ G0. Discovery. Every .yaml and .yml file below the bootstrap templates is
     file, any Helm action other than a comment, a raw string or a plain
     `.Values` lookup (a conditional keeps both branches in the text) are
     Unreadable, which is a failure, never a skipped file.
+    Helm actions are read by ONE tokenizer (`tokenize_actions`) shared by
+    `neutral`, `drop_standalone_actions` and `template_control_findings`: a raw
+    string is exactly one backtick string, with or without trim markers and on
+    one line or several, and is kept as its literal content; every other
+    standalone action line is a control finding; an action that cannot be
+    tokenized is Unreadable. Every file below templates/ must be a manifest
+    (.yaml, .yml), a helper (.tpl) or NOTES.txt, any other file is Unreadable,
+    a .tpl helper that mentions ApplicationSet is Unreadable, and so is a
+    manifest document that is not a mapping or a line made only of
+    include/template/tpl/block (it may render whole documents). Known limit:
+    a helper that assembles the word at render time is not seen.
 G1. Finalizer. The ApplicationSet controller (Argo CD v3.3.8,
     applicationset/utils/utils.go, Render.RenderTemplateParams, condition at
     lines 285-288, verified against the v3.3.8 tag) adds
@@ -108,6 +119,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import typing
 from pathlib import Path
 
 import yaml
@@ -158,79 +170,200 @@ def read_text(path: Path) -> str:
 # Template-tolerant YAML loading
 # --------------------------------------------------------------------------
 
-_COMMENT_ACTION = r"\{\{-?\s*/\*.*?\*/\s*-?\}\}"
-_RAW_ACTION = r"\{\{-?\s*`.*?`\s*-?\}\}"
-_PLAIN_ACTION = r"\{\{-?(?:(?!\}\}).)*\}\}"
-# Standalone action lines (control flow, variable assignment, multi-line
-# declarations) are removed so the rest of the file still parses.
-_ACTION_OPEN = re.compile(r"\{\{-?(?!\s*`)")
-_LINE_START = re.compile(r"^[ \t]*\{\{-?(?!\s*`)", flags=re.M)
+# One tokenizer for Helm actions. neutral(), drop_standalone_actions() and
+# template_control_findings() all classify through it, so they cannot
+# disagree about what an action is. It is a single left-to-right scan with no
+# optional-trim regex: `{{`, an optional `-` that is immediately followed by
+# whitespace (left trim), the body, an optional whitespace + `-` (right trim)
+# and `}}`. A `}}` inside a backtick, double-quoted or single-quoted string, or
+# inside a leading comment, does not close the action. An action that cannot
+# be tokenized (no closing `}}`, an unterminated string or comment) is
+# Unreadable.
+_WS = " \t\r\n"
+_VALUE_BODY = re.compile(r"\.Values(?:\.[A-Za-z_]\w*)+")
+
+
+class Action(typing.NamedTuple):
+    start: int
+    end: int
+    trim_left: bool
+    trim_right: bool
+    kind: str      # "comment" | "raw" | "value" | "other"
+    literal: str   # the content of a raw string, else ""
+    body: str
+
+
+def _line_of(text: str, pos: int) -> int:
+    return text.count("\n", 0, pos) + 1
+
+
+def _classify(body: str) -> tuple[str, str]:
+    s = body.strip(_WS)
+    if s.startswith("/*") and s.endswith("*/") and s.find("*/") == len(s) - 2 and len(s) >= 4:
+        return "comment", ""
+    if len(s) >= 2 and s[0] == "`" and s.find("`", 1) == len(s) - 1:
+        return "raw", s[1:-1]
+    if _VALUE_BODY.fullmatch(s):
+        return "value", ""
+    return "other", ""
+
+
+def tokenize_actions(text: str, path: Path | str = "<text>") -> list[Action]:
+    out: list[Action] = []
+    n, pos = len(text), 0
+    while True:
+        s = text.find("{{", pos)
+        if s < 0:
+            return out
+        i = s + 2
+        trim_left = i + 1 < n and text[i] == "-" and text[i + 1] in _WS
+        if trim_left:
+            i += 1
+        body_start = i
+        while True:
+            if i >= n:
+                raise Unreadable(f"{path}:{_line_of(text, s)}: Helm action is never closed")
+            c = text[i]
+            if c in "`\"'":
+                j = i + 1
+                while j < n and text[j] != c:
+                    j += 2 if (c != "`" and text[j] == "\\") else 1
+                if j >= n:
+                    raise Unreadable(f"{path}:{_line_of(text, s)}: unterminated {c} string in a Helm action")
+                i = j + 1
+            elif text.startswith("/*", i) and not text[body_start:i].strip(_WS):
+                j = text.find("*/", i + 2)
+                if j < 0:
+                    raise Unreadable(f"{path}:{_line_of(text, s)}: unterminated comment in a Helm action")
+                i = j + 2
+            elif text.startswith("}}", i):
+                break
+            else:
+                i += 1
+        body = text[body_start:i]
+        trim_right = len(body) >= 2 and body[-1] == "-" and body[-2] in _WS
+        if trim_right:
+            body = body[:-1]
+        kind, literal = _classify(body)
+        out.append(Action(s, i + 2, trim_left, trim_right, kind, literal, body.strip(_WS)))
+        pos = i + 2
+
+
+def _standalone_spans(text: str, acts: list[Action]) -> list[tuple[int, int, list[Action]]]:
+    """Lines made only of Helm actions (and blanks) where no action is a raw
+    string and at least one is not a comment: control flow, variable
+    assignment, a bare lookup. Such a line is removed whole. A line that
+    carries a raw string, or a comment alone, is content and is kept."""
+    spans, i, n = [], 0, len(text)
+    while i < len(acts):
+        a = acts[i]
+        ls = text.rfind("\n", 0, a.start) + 1
+        if text[ls:a.start].strip(" \t\r"):
+            i += 1
+            continue
+        group, j, end = [a], i, a.end
+        while True:
+            k = end
+            while k < n and text[k] in " \t\r":
+                k += 1
+            if k >= n or text[k] == "\n":
+                break
+            if j + 1 < len(acts) and acts[j + 1].start == k:
+                j += 1
+                group.append(acts[j])
+                end = acts[j].end
+                continue
+            group = []
+            break
+        if group and all(g.kind != "raw" for g in group) and any(g.kind != "comment" for g in group):
+            spans.append((ls, min(k + 1, n), group))
+            i = j + 1
+        else:
+            i += 1
+    return spans
+
+
+_WHOLE_LINE_CALLS = ("include", "template", "tpl", "block")
+
+
+def whole_line_calls(text: str, path: Path | str = "<text>") -> list[str]:
+    """Lines made only of an include, template, tpl or block action. Such a line
+    can render whole keys or documents, so a manifest that has one is not
+    modelled: callers treat a finding here as Unreadable."""
+    acts = tokenize_actions(text, path)
+    out = []
+    for ls, _, grp in _standalone_spans(text, acts):
+        for g in grp:
+            if g.kind == "other" and g.body.split(None, 1)[:1] and g.body.split(None, 1)[0] in _WHOLE_LINE_CALLS:
+                out.append(f"{path}:{_line_of(text, g.start)}: a line made only of {g.body.split(None, 1)[0]!r} "
+                           "may render whole keys or documents and is not modelled")
+    return out
 
 
 def drop_standalone_actions(text: str) -> str:
-    """Remove lines that consist only of non-raw Helm actions (linear scan)."""
+    """Remove the lines that consist only of non-raw Helm actions."""
     out, pos = [], 0
-    for m in _LINE_START.finditer(text):
-        if m.start() < pos:
-            continue
-        end = m.end()
-        while True:
-            close = text.find("}}", end)
-            if close < 0:
-                break
-            end = close + 2
-            while end < len(text) and text[end] in " \t":
-                end += 1
-            if text.startswith("{{", end):
-                if _ACTION_OPEN.match(text, end) is None:
-                    break  # a raw string follows: the line carries content
-                end += 2
-                continue
-            if end < len(text) and text[end] == "\n":
-                out.append(text[pos:m.start()])
-                pos = end + 1
-            break
+    for ls, end, _ in _standalone_spans(text, tokenize_actions(text)):
+        out.append(text[pos:ls])
+        pos = end
     out.append(text[pos:])
     return "".join(out)
-
-
-_ANY_ACTION = re.compile(rf"{_COMMENT_ACTION}|{_RAW_ACTION}|{_PLAIN_ACTION}", flags=re.S)
-# The only Helm actions an ApplicationSet file may carry: comments, raw
-# strings (kept literally for the controller) and plain `.Values` lookups.
-_VALUE_REF = re.compile(r"\{\{-?\s*\.Values(?:\.[A-Za-z_]\w*)+\s*-?\}\}")
 
 
 def neutral(text: str, keep_literals: bool = False) -> str:
     """Replace Helm actions with a marker so the file parses as YAML.
 
-    With keep_literals, a Helm raw string that wraps a Go-template action
-    keeps its content (with sentinel brackets) instead of becoming a marker.
+    A raw string (with or without trim markers, on one line or several) is
+    replaced by its literal content, with sentinel brackets for the braces,
+    when keep_literals is set, otherwise by a marker. Comments render as
+    nothing. Trim markers remove the adjacent whitespace as Helm does.
     """
-    text = re.sub(rf"{_COMMENT_ACTION}[ \t]*\n?", "", text, flags=re.S)
-    text = drop_standalone_actions(text)
-    if keep_literals:
-        def keep(m: re.Match) -> str:
-            return m.group(1).replace("{{", LB).replace("}}", RB)
-        text = re.sub(r"\{\{\s*`(.*?)`\s*\}\}", keep, text, flags=re.S)
-    text = re.sub(r"\{\{\s*`.*?`\s*\}\}", "__TPL__", text, flags=re.S)
-    text = re.sub(r"\{\{-?.*?-?\}\}", "__TPL__", text, flags=re.S)
-    return text
+    acts = tokenize_actions(text)
+    spans = _standalone_spans(text, acts)
+    dropped = {id(g) for _, _, grp in spans for g in grp}
+    items = [(ls, end, None) for ls, end, _ in spans] + [(a.start, a.end, a) for a in acts if id(a) not in dropped]
+    items.sort(key=lambda t: t[0])
+    out: list[str] = []
+    pos, rtrim = 0, False
+    for start, end, act in items:
+        seg = text[pos:start]
+        out.append(seg.lstrip(_WS) if rtrim else seg)
+        rtrim = False
+        pos = end
+        if act is None:
+            continue
+        if act.trim_left:
+            while out and not out[-1].strip(_WS):
+                out.pop()
+            if out:
+                out[-1] = out[-1].rstrip(_WS)
+        if act.kind == "comment":
+            out.append("")
+        elif act.kind == "raw" and keep_literals:
+            out.append(act.literal.replace("{{", LB).replace("}}", RB))
+        else:
+            out.append("__TPL__")
+        rtrim = act.trim_right
+    seg = text[pos:]
+    out.append(seg.lstrip(_WS) if rtrim else seg)
+    return "".join(out)
 
 
 def template_control_findings(text: str, path: Path) -> list[str]:
     """Helm actions in an ApplicationSet file other than comments, raw strings
-    and `.Values` lookups. A conditional keeps both branches in the text, so a
-    duplicate key could hide the value the chart renders; any other action may
-    change a key, a name or a path. Not modelled, therefore a finding."""
+    and `.Values` lookups, plus a lookup that stands alone on its line (it may
+    expand to whole lines). A conditional keeps both branches in the text, so
+    a duplicate key could hide the value the chart renders; any other action
+    may change a key, a name or a path. Not modelled, therefore a finding."""
+    acts = tokenize_actions(text, path)
+    bare = {id(g) for _, _, grp in _standalone_spans(text, acts) for g in grp if g.kind == "value"}
     out = []
-    for m in _ANY_ACTION.finditer(text):
-        tok = m.group(0)
-        if re.fullmatch(_COMMENT_ACTION, tok, flags=re.S) or re.fullmatch(_RAW_ACTION, tok, flags=re.S) \
-                or _VALUE_REF.fullmatch(tok):
+    for a in acts:
+        if a.kind in ("comment", "raw") or (a.kind == "value" and id(a) not in bare):
             continue
-        line = text.count("\n", 0, m.start()) + 1
-        out.append(f"{path}:{line}: Helm action {' '.join(tok.split())[:60]!r} is not modelled in an "
-                   "ApplicationSet file (only comments, raw strings and .Values lookups are)")
+        out.append(f"{path}:{_line_of(text, a.start)}: Helm action {' '.join(text[a.start:a.end].split())[:60]!r} "
+                   "is not modelled in an ApplicationSet file (only comments, raw strings and "
+                   ".Values lookups inside a line are)")
     return out
 
 
@@ -268,20 +401,52 @@ def unlit(value):
 
 
 def parse_docs(text: str, path: Path, keep_literals: bool = False) -> list[dict]:
-    """Parse every YAML document; a duplicate key or a syntax error is Unreadable."""
+    """Parse every YAML document; a duplicate key or a syntax error is Unreadable.
+
+    A document that is not a mapping (an empty document aside) is Unreadable
+    as well: a template that consists only of an `include` or `template`
+    action renders whole documents this guard cannot see, so it fails closed
+    instead of being skipped as "no kind".
+    """
+    calls = whole_line_calls(text, path)
+    if calls:
+        raise Unreadable("; ".join(calls))
     try:
         docs = list(yaml.load_all(neutral(text, keep_literals), Loader=_StrictLoader))
     except yaml.YAMLError as exc:
         raise Unreadable(f"{path}: {exc}") from exc
+    for d in docs:
+        if d is not None and not isinstance(d, dict):
+            raise Unreadable(f"{path}: a document is not a mapping, so it may be rendered by an "
+                             "action that is not modelled (include, template, bare value)")
     return [d for d in docs if isinstance(d, dict)]
 
 
 def yaml_files(base: Path) -> list[Path]:
-    """Every .yaml/.yml file below base, whatever its content."""
+    """Every manifest template below base, whatever its content.
+
+    Helm renders more than .yaml/.yml below templates/, so every file there
+    must be a recognised kind: a manifest (.yaml, .yml), a named-template
+    helper (.tpl) or NOTES.txt. Any other file is Unreadable. A helper is only
+    reachable through `include`, so when its text mentions ApplicationSet at
+    all it is Unreadable too (a helper that can build an ApplicationSet is not
+    modelled). A helper that hides the word, for example by assembling it with
+    printf, is a known limit of this textual rule.
+    """
     try:
-        return sorted(p for p in base.rglob("*") if p.suffix.lower() in (".yaml", ".yml") and p.is_file())
+        files = sorted(p for p in base.rglob("*") if p.is_file())
     except OSError as exc:
         raise Unreadable(f"{base}: {exc}") from exc
+    out = []
+    for p in files:
+        if p.suffix.lower() in (".yaml", ".yml"):
+            out.append(p)
+        elif p.suffix.lower() == ".tpl":
+            if "applicationset" in read_text(p).lower():
+                raise Unreadable(f"{p}: a template helper that mentions ApplicationSet is not modelled")
+        elif p.name != "NOTES.txt":
+            raise Unreadable(f"{p}: not a recognised template file kind (.yaml, .yml, .tpl, NOTES.txt)")
+    return out
 
 
 def docs_of_kind(root: Path, kind: str, keep_literals: bool = False) -> list[tuple[Path, dict]]:
@@ -816,6 +981,36 @@ exit 3
 """
 
 
+TIMEOUT_RC = -1000
+SCENARIO_TIMEOUT = 60
+
+
+def run_bounded(cmd: list[str], env: dict, timeout: float) -> tuple[int, str]:
+    """Run a command in its own process group with an overall deadline.
+
+    subprocess.run(timeout=...) kills only the direct child and then waits for
+    the pipes to close, which a surviving grandchild can hold open forever. The
+    whole group is killed instead and the wait is itself bounded; a run that
+    did not finish returns TIMEOUT_RC, which the scenario checks report as a
+    failure, never as a pass.
+    """
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                            start_new_session=True)
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+        return proc.returncode, out
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, 9)
+        except OSError:
+            pass
+        try:
+            proc.communicate(timeout=10)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        return TIMEOUT_RC, ""
+
+
 def _run_scenario(source: str, mode: str) -> tuple[int, list[str], bool, str]:
     """Run the guard in delete mode. Returns (rc, events, app left, stdout)."""
     with tempfile.TemporaryDirectory() as d:
@@ -835,9 +1030,9 @@ def _run_scenario(source: str, mode: str) -> tuple[int, list[str], bool, str]:
         env = {"PATH": f"{tmp / 'bin'}:{os.environ['PATH']}", "KSTATE": str(tmp),
                "PARAM_TEAM_NAME": TEAM, "PARAM_COMPONENT_NAME": SVC, "PARAM_MODE": "delete",
                "WORKFLOW_NAMESPACE": TEAM}
-        r = subprocess.run(["sh", "-c", source], env=env, capture_output=True, text=True, timeout=120)
+        rc, out = run_bounded(["sh", "-c", source], env, SCENARIO_TIMEOUT)
         events = (tmp / "log").read_text().splitlines()
-        return r.returncode, events, (tmp / "app.json").exists(), r.stdout
+        return rc, events, (tmp / "app.json").exists(), out
 
 
 def _first(events: list[str], prefix: str) -> int:
@@ -854,6 +1049,8 @@ def _after(ev: list[str], first: str, what: str) -> int:
 
 
 def _scenario_findings(mode: str, rc: int, ev: list[str], left: bool, out: str) -> list[str]:
+    if rc == TIMEOUT_RC:
+        return [f"{mode}: the guard did not finish within {SCENARIO_TIMEOUT}s (killed)"]
     problems = []
     other = sorted({e.split()[1] for e in ev if e.startswith("kubectl ")} - {"get", "delete", "patch"})
     if other:
@@ -1064,7 +1261,7 @@ def mutated_set(base: dict[str, dict], name: str, **policy) -> dict[str, dict]:
 
 def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
-                    "-c", "commit.gpgsign=false", *args], check=True, capture_output=True)
+                    "-c", "commit.gpgsign=false", *args], check=True, capture_output=True, timeout=120)
 
 
 def selftests(root: Path) -> None:
@@ -1477,6 +1674,156 @@ def selftests(root: Path) -> None:
         check("Unreadable: a missing bootstrap directory", raises(lambda: load_appsets(t / "none")))
 
     discovery_selftests(root)
+    tokenizer_selftests(root)
+
+
+def tokenizer_selftests(root: Path) -> None:
+    """The shared Helm action tokenizer: one classification for every consumer."""
+    LIT = "LIT123"
+
+    def raises(fn) -> bool:
+        try:
+            fn()
+        except Unreadable:
+            return True
+        return False
+
+    # -- property-style grid: every consumer must agree on every spelling ----
+    lefts = ("{{", "{{- ", "{{-\t", "{{-\n", "{{  ", "{{- \n ")
+    rights = ("}}", " }}", " -}}", "\n-}}", "  -}}", "\t}}")
+    bodies = {
+        "raw": (f"`{LIT}: x`", f"  `{LIT}: x`", f"`{LIT}:\n  x: 1\n  y: 2`", f"\n`{LIT}`\n", f"`a }} b {LIT} {{{{ c`"),
+        "comment": ("/* c */", "/*\n multi\n line }} */", "/**/"),
+        "value": (".Values.a", ".Values.a.b.c"),
+        "other": ("if .Values.a", "else", "end", "range .Values.x", "with .Values.x", 'define "x"',
+                  'include "x" .', 'template "x"', 'block "x" .', '"quoted"', "'q'", ".Values.x | default 1",
+                  "$x := 1", f"`{LIT}` | upper", f"`{LIT}` `b`", "/* c */ x", "printf \"%s\" .Values.a"),
+    }
+    standalone_ctx = "a:\n  b: 1\n  @@\n  c: 2\n"
+    inline_ctx = "a: @@\nb: 2\n"
+    n = bad = 0
+    for kind, forms in bodies.items():
+        for left in lefts:
+            for right in rights:
+                for body in forms:
+                    action = f"{left}{body}{right}"
+                    # the grid must only contain spellings Helm treats as that kind
+                    toks = tokenize_actions(action)
+                    for ctx_name, ctx in (("standalone", standalone_ctx), ("inline", inline_ctx)):
+                        text = ctx.replace("@@", action)
+                        acts = tokenize_actions(text)
+                        stand = ctx_name == "standalone"
+                        got_kind = acts[0].kind
+                        dropped = drop_standalone_actions(text) != text
+                        literal = LIT in neutral(text, keep_literals=True)
+                        flagged = bool(template_control_findings(text, Path("x")))
+                        want_drop = stand and kind in ("other", "value")
+                        want_flag = kind == "other" or (kind == "value" and stand)
+                        n += 1
+                        if not (len(toks) == 1 and got_kind == kind and dropped == want_drop
+                                and literal == (kind == "raw") and flagged == want_flag):
+                            bad += 1
+                            if bad <= 5:
+                                print(f"  disagreement: {action!r} in {ctx_name}: kind={got_kind} (want {kind}) "
+                                      f"dropped={dropped} (want {want_drop}) literal={literal} flagged={flagged} "
+                                      f"(want {want_flag})")
+    check(f"tokenizer grid: neutral, drop_standalone_actions and the control findings agree on {n} spellings",
+          bad == 0, f"{bad} disagreements")
+
+    # -- trim markers are applied as Helm applies them ------------------------
+    check("tokenizer: a left-trim raw string joins the preceding line, keeping its content",
+          neutral("a:\n  {{- `\n  b: true` }}\nc: 1\n", True) == "a:\n  b: true\nc: 1\n")
+    check("tokenizer: a right-trim raw string consumes the whitespace after it",
+          neutral("a: {{ `x` -}}\n\n  y\n", True) == "a: xy\n")
+    check("tokenizer: a comment with trim markers trims like any action",
+          neutral("a: 1\n  {{- /* c */ -}}\nb: 2\n") == "a: 1b: 2\n")
+    check("tokenizer: a comment without trim markers leaves the line break",
+          neutral("a: 1 {{/* c */}}\nb: 2\n") == "a: 1 \nb: 2\n")
+    check("tokenizer: a dash not followed by whitespace is not a trim marker",
+          tokenize_actions("{{-5}}")[0].trim_left is False and tokenize_actions("{{-5}}")[0].kind == "other")
+    check("tokenizer: braces inside a raw string do not close the action",
+          len(tokenize_actions("{{ `a }} b` }} x {{ .Values.a }}")) == 2)
+    check("tokenizer: a multi-line standalone control action is one removed block",
+          drop_standalone_actions("a: 1\n{{- define \"x\" }}\nline\n{{- end }}\nb: 2\n") == "a: 1\nline\nb: 2\n")
+    check("tokenizer: a multi-line raw string on its own line is kept",
+          "b: true" in drop_standalone_actions("a:\n  {{- `\n  b: true` }}\n"))
+    for label, text in (("an action that is never closed", "a: {{ .Values.x\n"),
+                        ("an unterminated raw string", "a: {{ `x }}\n"),
+                        ("an unterminated quoted string", 'a: {{ "x }}\n'),
+                        ("an unterminated comment", "a: {{/* x }}\n")):
+        check(f"tokenizer unreadable: {label} (neutral, drop and findings all refuse)",
+              raises(lambda: neutral(text)) and raises(lambda: drop_standalone_actions(text))
+              and raises(lambda: template_control_findings(text, Path("x"))))
+
+    # -- the originally reported spellings, end to end through G1 -------------
+    apps_text = read_text(root / APPS_APPSET)
+    tenants_text = read_text(root / TENANTS_APPSET)
+    flag = "    preserveResourcesOnDeletion: false\n"
+
+    def outcome3(text: str) -> str:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / BOOTSTRAP / "bootstrap"
+            base.mkdir(parents=True)
+            (base / "a.yaml").write_text(text, encoding="utf-8")
+            (base / "t.yaml").write_text(tenants_text, encoding="utf-8")
+            try:
+                sets = load_appsets(Path(d))
+            except Unreadable:
+                return "unreadable"
+            if any("would NOT cascade" in f for f in appset_findings(sets)):
+                return "red"
+            return "green" if not appset_findings(sets) and not golden_findings(sets, load_golden(root)) \
+                else "pinned"
+
+    def red(text: str) -> bool:
+        return outcome3(text) == "red"
+    for label, repl in (
+        ("left trim, one line of content", "    {{- `\n    preserveResourcesOnDeletion: true\n` }}\n"),
+        ("left trim, multi-line raw string", "    {{- `\n    preserveResourcesOnDeletion: true` }}\n"),
+        ("both trims", "    {{- `\n    preserveResourcesOnDeletion: true\n  ` -}}\n"),
+        ("right trim only", "    preserveResourcesOnDeletion: {{ `true\n  ` -}}\n"),
+        ("no trim, multi-line raw string", "    {{ `\n    preserveResourcesOnDeletion: true\n` }}\n"),
+    ):
+        text = apps_text.replace(flag, repl)
+        check(f"G1 red: a raw string with {label} that sets the flag to true is not skipped",
+              text != apps_text and red(text), outcome3(text))
+    for label, repl in (
+        ("left trim that joins the key onto the previous line", "    {{- `preserveResourcesOnDeletion: true` }}\n"),
+        ("right trim that joins the next key onto the value", "    preserveResourcesOnDeletion: {{ `true` -}}\n"),
+    ):
+        check(f"G1 refused: a raw string with {label} is red, pinned or unreadable, never green",
+              outcome3(apps_text.replace(flag, repl)) != "green")
+    check("G1 control: the unmodified file is not red", not red(apps_text))
+
+    # -- subprocess deadline ---------------------------------------------------
+    import time
+    with tempfile.TemporaryDirectory() as d:
+        pidfile = Path(d) / "pid"
+        t0 = time.monotonic()
+        rc, _ = run_bounded(["sh", "-c", f'sleep 20 & echo $! > "{pidfile}"; wait'], dict(os.environ), 1.5)
+        took = time.monotonic() - t0
+        grandchild = int(pidfile.read_text().strip()) if pidfile.exists() else 0
+        alive = False
+        for _ in range(20):
+            try:
+                os.kill(grandchild, 0)
+                alive = True
+                time.sleep(0.1)
+            except OSError:
+                alive = False
+                break
+        if alive:
+            try:
+                os.kill(grandchild, 9)  # do not leak it when the check fails
+            except OSError:
+                pass
+    check("run_bounded: a hung command is stopped at the deadline together with its child processes",
+          rc == TIMEOUT_RC and took < 12 and grandchild > 0 and not alive,
+          f"rc={rc} took={took:.1f}s grandchild={grandchild} alive={alive}")
+    check("run_bounded: a normal command returns its status and output",
+          run_bounded(["sh", "-c", "echo hi; exit 3"], dict(os.environ), 10) == (3, "hi\n"))
+    check("G3 red: a scenario that hit the deadline is a finding, never a pass",
+          bool(_scenario_findings("clears", TIMEOUT_RC, [], False, "")))
 
 
 def discovery_selftests(root: Path) -> None:
@@ -1567,6 +1914,41 @@ def discovery_selftests(root: Path) -> None:
     check("G0 unreadable: a duplicate kind key",
           outcome({"a.yaml": apps_text.replace("kind: ApplicationSet\n", "kind: ApplicationSet\nkind: Other\n"),
                    "t.yaml": tenants_text}) == "unreadable")
+
+    # -- every file below templates/ is recognised or refused -----------------
+    def unreadable_tree(files: dict[str, str]) -> bool:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / BOOTSTRAP / "bootstrap"
+            base.mkdir(parents=True)
+            (base / "a.yaml").write_text(apps_text, encoding="utf-8")
+            (base / "t.yaml").write_text(tenants_text, encoding="utf-8")
+            for name, content in files.items():
+                (base / name).write_text(content, encoding="utf-8")
+            try:
+                load_appsets(Path(d))
+            except Unreadable:
+                return True
+            return False
+    check("G0 control: harmless helper and NOTES.txt files are accepted",
+          not unreadable_tree({"_helpers.tpl": '{{- define "x" }}a{{- end }}\n', "NOTES.txt": "see ApplicationSet docs\n"}))
+    check("G0 unreadable: a .json file below templates/", unreadable_tree({"x.json": "{}"}))
+    check("G0 unreadable: a .yaml.tpl file that mentions ApplicationSet",
+          unreadable_tree({"x.yaml.tpl": "kind: ApplicationSet\n"}))
+    check("G0 unreadable: a helper that defines an ApplicationSet",
+          unreadable_tree({"_helpers.tpl": '{{- define "x" }}\nkind: ApplicationSet\n{{- end }}\n'}))
+    check("G0 unreadable: a helper whose mention differs only in case",
+          unreadable_tree({"_h.tpl": "kind: applicationset\n"}))
+    check("G0 unreadable: a file with another extension",
+          unreadable_tree({"x.txt": "x", "y": "y"}))
+    check("G0 unreadable: a template that consists only of an include",
+          unreadable_tree({"inc.yaml": '{{ include "x" . }}\n'}))
+    check("G0 unreadable: a template that consists only of an include with a trim marker",
+          unreadable_tree({"inc.yaml": '{{- include "x" . | nindent 0 }}\n'}))
+    check("G0 unreadable: a template that consists only of a named-template call",
+          unreadable_tree({"inc.yaml": '{{ template "x" . }}\n'}))
+    check("G0 unreadable: a document that is a bare list",
+          unreadable_tree({"l.yaml": "- a\n- b\n"}))
+    check("G0 control: an empty template file is accepted", not unreadable_tree({"e.yaml": "# nothing\n"}))
 
     # Helm control flow inside an ApplicationSet file
     cond = ("    {{- if .Values.keep }}\n    preserveResourcesOnDeletion: true\n    {{- else }}\n"
