@@ -91,6 +91,29 @@ go vet -tags l2finance ./internal/agent/listener/ ./internal/agent/control/
 go test ./...   # unchanged; the tagged files are excluded
 ```
 
+## AMEND: evidence provenance and boundary limitations
+
+**Two-layer offline proof:** the listener/control test harness must
+construct no network-enabled Telegram clients and use only fake
+`SelfSender`, fake saved history and synthetic identities. Its
+`TestMain` hooks for `http.DefaultTransport` and
+`net.DefaultResolver` are useful negative controls, but do not
+intercept arbitrary `net.Dialer`, custom transports or gotd internals.
+Document the tested dial paths and their limitations; record
+`CANNOT-OBSERVE` wherever a system-wide no-egress guarantee is
+unavailable. Do not initiate external traffic to test the limitation.
+A loopback `httptest` server remains allowed.
+
+**Source and stage binding:** after #1247's partial merge and lifecycle
+release, pin `main` again, then feed its actual SHA into
+`L2FINANCE_SOURCE_REV` at test execution and put it on every row of
+the addendum. Include #1247's final merge SHA, the fresh #1249
+proposal digest/approval reference, exact `-race -count=1` tagged
+commands and negative-control outcomes. Record `harness_status` as
+distinct from the perpetual `FINANCE_SECURITY_GATE=BLOCKED` for this
+incomplete suite; this is a report-only bridge to #1251, not a
+production permission.
+
 ## Alternatives
 - **Extend #1247's branch or helpers.** Rejected: that branch is owned by another DevLoop, and the issue forbids concurrent edits of the canonical report. Adding a shared non-test helper package would be production source.
 - **Run the listener through a real `updates.Manager` against a fake MTProto server (`gotd/td` `tgtest`).** This would make T6.gap observable, but it adds a large, fragile harness and pulls in crypto handshakes. Deferred: T6.gap is recorded CANNOT-OBSERVE.

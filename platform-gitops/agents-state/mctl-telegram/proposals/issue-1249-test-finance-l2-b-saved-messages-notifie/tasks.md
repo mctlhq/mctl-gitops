@@ -8,6 +8,28 @@
 - [ ] 5. (depends on 2, 4) Run the offline command from design.md with `L2FINANCE_SOURCE_REV=$(git rev-parse HEAD)`, and also run plain `go test ./internal/agent/...` (must be unchanged and green). Write `docs/reports/finance-assistant-l2-slice-b.md`. It contains the command, the pinned SHA, Go version, the case table with observed outcomes (copied from `L2RESULT` lines; any deviation from design.md's expected column is explained), and the text `FINANCE_SECURITY_GATE=BLOCKED`, `#325 RESEARCH_ONLY_DEFER`, "slice B only; not L2 completion; no aggregation". — DoD: the report lists every case id from design.md exactly once, and nothing in `docs/reports/finance-assistant-l2-results.md` is touched.
 - [ ] 6. (depends on 5) Open a test-only PR referencing #1249, #1244 and #1247. Run `git diff --stat origin/main` and confirm it shows only the 4 `*_test.go` files plus the addendum. Request independent review. Merge only after CI, review and human approval, using a merge commit. — DoD: the PR is approved by a human; no production path is in the diff.
 
+## AMEND tasks: sequencing, hermetic evidence and reviewer gate
+
+- [ ] A. Resolve #1247 as explicitly partial test evidence and confirm
+  the previous `dev-loop-mctlhq-mctl-telegram-1244` PR owner has
+  released/reconciled; record final PR disposition and commit SHA
+  before coding B. Re-pin `mctl-telegram/main` after that transition.
+- [ ] B. Obtain independent review of the final #1249 spec and a
+  distinct **reviewed-digest** owner grant through its existing
+  Temporal workflow. Never reuse the #1244 approval; no implementer
+  start before the grant is reflected in `.status.yaml`.
+- [ ] C. Prove that every test adapter is a fake and non-loopback
+  external dials/DNS are refused by the tested paths. Explicitly
+  document that a `DefaultTransport`/`DefaultResolver` hook does
+  not constitute a universal egress firewall; record any whole-process
+  assurance not observable in this slice as `CANNOT-OBSERVE`.
+  No network-enabled gotd client or real credentials are allowed.
+- [ ] D. Pass current HEAD as `L2FINANCE_SOURCE_REV`, emit source SHA
+  for each case, and publish a slice-only report with case IDs,
+  outcomes, negative-control detections, `harness_status`, and
+  `FINANCE_SECURITY_GATE=BLOCKED` regardless of green test exit.
+  Do not alter the canonical partial A report or claim full L2 PASS.
+
 ## Tests
 - [ ] T1. `TestL2Finance_T1_ListenerStatus` and `TestL2Finance_T1_NotifierSelfOnly`: a real `/mctl status` via the dispatcher yields one Alice reply, and the peer sink stays empty.
 - [ ] T2. `TestL2Finance_T2_BobDM` and `TestL2Finance_T2_SpoofFrom`: never routed and no `saved_command` event.
