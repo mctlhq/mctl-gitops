@@ -1,5 +1,5 @@
 {
-  "_note": "Complete normalised spec of the apps and tenants ApplicationSets, except the paths in ALLOWED_TO_CHANGE. Edit only together with the ApplicationSet change it describes; regenerate with: python3 tests/test_generated_app_cascade_guards.py --print-golden",
+  "_note": "Complete normalised spec of the apps and tenants ApplicationSets, except the template annotations other than PINNED_ANNOTATIONS. Edit only together with the ApplicationSet change it describes; regenerate with: python3 tests/test_generated_app_cascade_guards.py --print-golden",
   "sets": {
     "apps": {
       "metadata": {
@@ -30,6 +30,9 @@
         },
         "template": {
           "metadata": {
+            "annotations": {
+              "argocd.argoproj.io/manifest-generate-paths": "/{{ .path.path }};/platform-gitops/helm-charts/base-service"
+            },
             "labels": {
               "backstage.io/kubernetes-id": "{{ index .path.segments 3 }}",
               "env": "apps",
@@ -132,6 +135,9 @@
         },
         "template": {
           "metadata": {
+            "annotations": {
+              "argocd.argoproj.io/manifest-generate-paths": "/{{ .path.path }};/platform-gitops/helm-charts/tenant"
+            },
             "labels": {
               "env": "platform",
               "mctl.me/tenant": "{{ .path.basename }}"

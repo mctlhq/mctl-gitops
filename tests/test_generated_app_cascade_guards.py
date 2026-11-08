@@ -5,6 +5,14 @@ to the workloads behind them when the Application is deleted depends on things
 that live in different places, and each one can be changed by an
 unrelated-looking edit.
 
+G0. Discovery. Every .yaml and .yml file below the bootstrap templates is
+    parsed as YAML and documents are selected by their PARSED kind, so quoting,
+    a trailing comment, a multi-document file or the .yml suffix cannot hide
+    an ApplicationSet. A file that cannot be decoded or parsed, a duplicate
+    mapping key (PyYAML would keep the last one) and, in an ApplicationSet
+    file, any Helm action other than a comment, a raw string or a plain
+    `.Values` lookup (a conditional keeps both branches in the text) are
+    Unreadable, which is a failure, never a skipped file.
 G1. Finalizer. The ApplicationSet controller (Argo CD v3.3.8,
     applicationset/utils/utils.go, Render.RenderTemplateParams, condition at
     lines 285-288, verified against the v3.3.8 tag) adds
@@ -14,8 +22,9 @@ G1. Finalizer. The ApplicationSet controller (Argo CD v3.3.8,
     replaces the Application's finalizers with the generated set, keeping only
     the pre/post-delete hook finalizers (applicationset/controllers/
     applicationset_controller.go, defaultPreservedFinalizers at lines 81-84,
-    used in createOrUpdateInCluster at lines 754-760), so flipping the flag
-    to true strips the finalizer from every live Application, and deleting
+    carried over in createOrUpdateInCluster at lines 754-762, and the update
+    assigns `found.Finalizers = generatedApp.Finalizers` at line 766), so
+    flipping the flag to true strips the finalizer from every live Application, and deleting
     such an Application then leaves its Deployments, Services and
     ExternalSecrets running. Every ApplicationSet in the bootstrap chart is
     listed here with the finalizer outcome it is expected to have; a new
@@ -66,11 +75,15 @@ G5. Pinned generators. The `apps` and `tenants` ApplicationSets are compared
     with `tests/fixtures/generated-appsets.golden.json`, which holds the
     COMPLETE normalised spec of each set (generators, template, sources,
     destination, syncPolicy, retry, ignoreDifferences) and its metadata name
-    and namespace. Only the paths in ALLOWED_TO_CHANGE (the template
-    annotations) are left out, so every other edit turns the check red, and a
-    key that the golden does not list is red as well. Helm actions that are not
-    raw strings are compared as one marker, so a swap between two Helm values
-    is not seen by this check. `--diff-guard BASE` looks at the diff against
+    and namespace. Of the template annotations only the keys in
+    PINNED_ANNOTATIONS (`argocd.argoproj.io/manifest-generate-paths`) are
+    pinned, the other annotations are left out; every other edit turns the
+    check red, and a key that the golden does not list is red as well.
+    KNOWN LIMIT: a Helm action that is not a raw string (`{{ .Values.x }}`) is
+    compared as one marker, so swapping two Helm values (for example the
+    repoURL and the targetRevision of the generator) is not seen by this
+    check; the self-test "G5 known limit" asserts that the limit exists, so
+    removing it is noticed. `--diff-guard BASE` looks at the diff against
     the merge base: when an ApplicationSet file changed in a pinned field, the
     golden entry of that set must differ from the base golden (comparing the
     parsed content, so a whitespace or `_note` edit does not count) and must
@@ -116,7 +129,9 @@ TEMPLATE_KEYS = {"metadata", "spec"}
 TEMPLATE_META_KEYS = {"name", "labels", "annotations", "finalizers"}
 SYNC_POLICY_KEYS = {"preserveResourcesOnDeletion", "applicationsSync"}
 # Paths (inside spec) that the golden does not pin.
-ALLOWED_TO_CHANGE = [("template", "metadata", "annotations")]
+ALLOWED_TO_CHANGE: list[tuple[str, ...]] = []
+# Template annotations the golden pins; every other annotation is left out.
+PINNED_ANNOTATIONS = ("argocd.argoproj.io/manifest-generate-paths",)
 
 # ApplicationSet name -> does a delete of one of its Applications cascade to
 # the workloads? Both existing sets are `preserveResourcesOnDeletion: false`.
@@ -143,15 +158,27 @@ def read_text(path: Path) -> str:
 # Template-tolerant YAML loading
 # --------------------------------------------------------------------------
 
+_COMMENT_ACTION = r"\{\{-?\s*/\*.*?\*/\s*-?\}\}"
+_RAW_ACTION = r"\{\{-?\s*`.*?`\s*-?\}\}"
+_PLAIN_ACTION = r"\{\{-?(?:(?!\}\}).)*\}\}"
+# Standalone action lines (control flow, variable assignment, multi-line
+# declarations) are removed so the rest of the file still parses.
+_STANDALONE = re.compile(
+    rf"^[ \t]*(?:\{{\{{-?(?!\s*`)(?:(?!\}}\}}).)*\}}\}}[ \t]*)+\n", flags=re.M | re.S)
+_ANY_ACTION = re.compile(rf"{_COMMENT_ACTION}|{_RAW_ACTION}|{_PLAIN_ACTION}", flags=re.S)
+# The only Helm actions an ApplicationSet file may carry: comments, raw
+# strings (kept literally for the controller) and plain `.Values` lookups.
+_VALUE_REF = re.compile(r"\{\{-?\s*\.Values(?:\.[A-Za-z_]\w*)+\s*-?\}\}")
+
+
 def neutral(text: str, keep_literals: bool = False) -> str:
     """Replace Helm actions with a marker so the file parses as YAML.
 
     With keep_literals, a Helm raw string that wraps a Go-template action
     keeps its content (with sentinel brackets) instead of becoming a marker.
     """
-    text = re.sub(r"\{\{-?\s*/\*.*?\*/\s*-?\}\}[ \t]*\n?", "", text, flags=re.S)
-    text = re.sub(r"^[ \t]*\{\{-?\s*(?:if|else|end|range|with|define)\b.*?\}\}[ \t]*\n",
-                  "", text, flags=re.M)
+    text = re.sub(rf"{_COMMENT_ACTION}[ \t]*\n?", "", text, flags=re.S)
+    text = _STANDALONE.sub("", text)
     if keep_literals:
         def keep(m: re.Match) -> str:
             return m.group(1).replace("{{", LB).replace("}}", RB)
@@ -159,6 +186,45 @@ def neutral(text: str, keep_literals: bool = False) -> str:
     text = re.sub(r"\{\{\s*`.*?`\s*\}\}", "__TPL__", text, flags=re.S)
     text = re.sub(r"\{\{-?.*?-?\}\}", "__TPL__", text, flags=re.S)
     return text
+
+
+def template_control_findings(text: str, path: Path) -> list[str]:
+    """Helm actions in an ApplicationSet file other than comments, raw strings
+    and `.Values` lookups. A conditional keeps both branches in the text, so a
+    duplicate key could hide the value the chart renders; any other action may
+    change a key, a name or a path. Not modelled, therefore a finding."""
+    out = []
+    for m in _ANY_ACTION.finditer(text):
+        tok = m.group(0)
+        if re.fullmatch(_COMMENT_ACTION, tok, flags=re.S) or re.fullmatch(_RAW_ACTION, tok, flags=re.S) \
+                or _VALUE_REF.fullmatch(tok):
+            continue
+        line = text.count("\n", 0, m.start()) + 1
+        out.append(f"{path}:{line}: Helm action {' '.join(tok.split())[:60]!r} is not modelled in an "
+                   "ApplicationSet file (only comments, raw strings and .Values lookups are)")
+    return out
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that rejects a duplicate mapping key instead of keeping the last."""
+
+
+def _no_duplicates(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False):
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        try:
+            dup = key in seen
+            seen.add(key)
+        except TypeError:
+            raise yaml.constructor.ConstructorError(None, None, "unhashable mapping key", key_node.start_mark)
+        if dup:
+            raise yaml.constructor.ConstructorError(
+                None, None, f"duplicate mapping key {key!r}", key_node.start_mark)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+
+_StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates)
 
 
 def unlit(value):
@@ -173,25 +239,49 @@ def unlit(value):
 
 
 def parse_docs(text: str, path: Path, keep_literals: bool = False) -> list[dict]:
+    """Parse every YAML document; a duplicate key or a syntax error is Unreadable."""
     try:
-        docs = list(yaml.safe_load_all(neutral(text, keep_literals)))
+        docs = list(yaml.load_all(neutral(text, keep_literals), Loader=_StrictLoader))
     except yaml.YAMLError as exc:
         raise Unreadable(f"{path}: {exc}") from exc
     return [d for d in docs if isinstance(d, dict)]
 
 
+def yaml_files(base: Path) -> list[Path]:
+    """Every .yaml/.yml file below base, whatever its content."""
+    try:
+        return sorted(p for p in base.rglob("*") if p.suffix.lower() in (".yaml", ".yml") and p.is_file())
+    except OSError as exc:
+        raise Unreadable(f"{base}: {exc}") from exc
+
+
 def docs_of_kind(root: Path, kind: str, keep_literals: bool = False) -> list[tuple[Path, dict]]:
+    """Documents whose PARSED kind is `kind`, found by parsing every YAML file.
+
+    No text pre-filter: quoting, trailing comments, multi-document files and
+    the .yml suffix all select the same documents. A file that cannot be read
+    or parsed, a templated or non-string kind, and (for an ApplicationSet) a
+    template action that is not modelled are Unreadable, never skipped.
+    """
     out = []
     base = root / BOOTSTRAP
     if not base.is_dir():
         raise Unreadable(f"{base} is not a directory")
-    for path in sorted(base.rglob("*.yaml")):
+    for path in yaml_files(base):
         text = read_text(path)
-        if not re.search(rf"^kind:\s*{kind}\s*$", text, flags=re.M):
-            continue
+        found = False
         for doc in parse_docs(text, path, keep_literals):
-            if doc.get("kind") == kind:
+            k = doc.get("kind")
+            if k is not None and (not isinstance(k, str) or "__TPL__" in k):
+                raise Unreadable(f"{path}: kind is not a plain string ({k!r})")
+            if k == "ApplicationSet":
+                found = True
+            if k == kind:
                 out.append((path, doc))
+        if found:
+            problems = template_control_findings(text, path)
+            if problems:
+                raise Unreadable("; ".join(problems))
     return out
 
 
@@ -207,6 +297,24 @@ def controller_finalizers(preserve: bool, template_finalizers: list | None) -> l
     return template_finalizers
 
 
+def generator_override_paths(node, path: str) -> list[str]:
+    """Paths of `template` / `templatePatch` keys anywhere below the generators.
+
+    A generator (git, matrix, merge, ...) may carry its own template, which
+    overrides spec.template for the Applications it produces.
+    """
+    out = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("template", "templatePatch"):
+                out.append(f"{path}.{key}")
+            out += generator_override_paths(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            out += generator_override_paths(value, f"{path}[{i}]")
+    return out
+
+
 def shape_findings(name: str, doc: dict) -> list[str]:
     """Keys that change what is rendered and that this script does not model."""
     problems = []
@@ -217,6 +325,8 @@ def shape_findings(name: str, doc: dict) -> list[str]:
         why = "changes how Applications are rendered and is not modelled" \
             if key in UNMODELLED_RENDERING_KEYS else "is an unknown spec key"
         problems.append(f"ApplicationSet {name}: spec.{key} {why}; model and pin it before using it")
+    for where in generator_override_paths(spec.get("generators"), "spec.generators"):
+        problems.append(f"ApplicationSet {name}: {where} overrides what is rendered and is not modelled")
     tmpl = spec.get("template")
     if not isinstance(tmpl, dict):
         problems.append(f"ApplicationSet {name}: spec.template is not a mapping")
@@ -288,7 +398,8 @@ def load_appsets(root: Path) -> dict[str, dict]:
 # --------------------------------------------------------------------------
 
 def pinned_view(doc: dict) -> dict:
-    """The complete normalised view of an ApplicationSet, minus ALLOWED_TO_CHANGE."""
+    """The complete normalised view of an ApplicationSet, minus ALLOWED_TO_CHANGE
+    and the template annotations that are not in PINNED_ANNOTATIONS."""
     spec = copy.deepcopy(doc.get("spec") or {})
     for path in ALLOWED_TO_CHANGE:
         node = spec
@@ -296,6 +407,9 @@ def pinned_view(doc: dict) -> dict:
             node = node.get(key) if isinstance(node, dict) else None
         if isinstance(node, dict):
             node.pop(path[-1], None)
+    tmeta = (spec.get("template") or {}).get("metadata") if isinstance(spec.get("template"), dict) else None
+    if isinstance(tmeta, dict) and isinstance(tmeta.get("annotations"), dict):
+        tmeta["annotations"] = {k: v for k, v in tmeta["annotations"].items() if k in PINNED_ANNOTATIONS}
     meta = doc.get("metadata") or {}
     view = unlit({"metadata": {"name": meta.get("name"), "namespace": meta.get("namespace")},
                   "spec": spec})
@@ -1332,6 +1446,175 @@ def selftests(root: Path) -> None:
         check("Unreadable: a missing golden", raises(lambda: load_golden(t)))
         check("Unreadable: a bootstrap file that is not UTF-8", raises(lambda: load_appsets(t)))
         check("Unreadable: a missing bootstrap directory", raises(lambda: load_appsets(t / "none")))
+
+    discovery_selftests(root)
+
+
+def discovery_selftests(root: Path) -> None:
+    """G0 and the template-control and duplicate-key guards, on temporary trees."""
+    apps_text = read_text(root / APPS_APPSET)
+    tenants_text = read_text(root / TENANTS_APPSET)
+    flag = "    preserveResourcesOnDeletion: false\n"
+    assert apps_text.count(flag) == 1 and apps_text.count("kind: ApplicationSet\n") == 1
+
+    def raises(fn) -> bool:
+        try:
+            fn()
+        except Unreadable:
+            return True
+        return False
+
+    def tree(files: dict[str, str | bytes]) -> tempfile.TemporaryDirectory:
+        tmp = tempfile.TemporaryDirectory()
+        base = Path(tmp.name) / BOOTSTRAP / "bootstrap"
+        base.mkdir(parents=True)
+        for name, content in files.items():
+            if isinstance(content, bytes):
+                (base / name).write_bytes(content)
+            else:
+                (base / name).write_text(content, encoding="utf-8")
+        return tmp
+
+    def outcome(files: dict[str, str | bytes]) -> str:
+        """'red' when both sets are found and G1 reports the lost cascade,
+        'unreadable' when loading fails, 'green' when clean, else 'missed'."""
+        with tree(files) as tmp:
+            try:
+                sets = load_appsets(Path(tmp))
+            except Unreadable:
+                return "unreadable"
+            if appset_findings(sets) and set(sets) == set(EXPECTED_CASCADE) \
+                    and any("would NOT cascade" in f for f in appset_findings(sets)):
+                return "red"  # found, and G1 reports the lost cascade itself
+            return "green" if not appset_findings(sets) else "missed"
+
+    preserve_true = apps_text.replace(flag, "    preserveResourcesOnDeletion: true\n")
+    check("G0 control: the real pair is green in a temporary tree",
+          outcome({"a.yaml": apps_text, "t.yaml": tenants_text}) == "green")
+    spellings = {
+        "plain": "kind: ApplicationSet\n",
+        "double-quoted": 'kind: "ApplicationSet"\n',
+        "single-quoted": "kind: 'ApplicationSet'\n",
+        "trailing comment": "kind: ApplicationSet # note\n",
+        "extra spaces": "kind:   ApplicationSet   \n",
+    }
+    for label, line in spellings.items():
+        text = preserve_true.replace("kind: ApplicationSet\n", line)
+        check(f"G0 red: an ApplicationSet written as {label} is found and G1 fails",
+              outcome({"a.yaml": text, "t.yaml": tenants_text}) == "red")
+    check("G0 red: an ApplicationSet in a .yml file is found and G1 fails",
+          outcome({"a.yml": preserve_true, "t.yaml": tenants_text}) == "red")
+    check("G0 red: an ApplicationSet after other documents of a multi-document file",
+          outcome({"a.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c\n---\n" + preserve_true,
+                   "t.yaml": tenants_text}) == "red")
+    check("G0 red: quoted kind inside a multi-document .yml file",
+          outcome({"a.yml": "kind: ConfigMap\nmetadata:\n  name: c\n---\n"
+                   + preserve_true.replace("kind: ApplicationSet\n", 'kind: "ApplicationSet" # x\n'),
+                   "t.yaml": tenants_text}) == "red")
+    check("G0 green: a kind of another resource is not selected",
+          outcome({"a.yaml": apps_text, "t.yaml": tenants_text,
+                   "c.yml": "kind: ConfigMap\nmetadata:\n  name: c\n"}) == "green")
+    # the same blind spot for the other kind searched this way
+    with tree({"x.yml": 'kind: "Application"\nmetadata:\n  name: hand\n',
+               "y.yaml": "kind: Application # c\nmetadata:\n  name: hand2\n"}) as tmp:
+        names = sorted(d["metadata"]["name"] for _, d in docs_of_kind(Path(tmp), "Application"))
+        check("G0 red: hand-written Applications in each spelling and suffix are found",
+              names == ["hand", "hand2"], str(names))
+    # unreadable inputs are errors, never skipped
+    check("G0 unreadable: a .yml file that is not UTF-8",
+          outcome({"a.yaml": apps_text, "t.yaml": tenants_text, "b.yml": b"kind: x\n\xff\xfe"}) == "unreadable")
+    check("G0 unreadable: a .yaml file that does not parse",
+          outcome({"a.yaml": apps_text, "t.yaml": tenants_text, "b.yaml": "a: [1\nb: }\n"}) == "unreadable")
+    check("G0 unreadable: a templated kind",
+          outcome({"a.yaml": apps_text, "t.yaml": tenants_text,
+                   "b.yaml": "kind: {{ .Values.k }}\nmetadata:\n  name: b\n"}) == "unreadable")
+    check("G0 unreadable: a kind that is not a string",
+          outcome({"a.yaml": apps_text, "t.yaml": tenants_text, "b.yaml": "kind: [ApplicationSet]\n"}) == "unreadable")
+    check("G0 unreadable: a duplicate mapping key",
+          outcome({"a.yaml": apps_text.replace(flag, flag + flag), "t.yaml": tenants_text}) == "unreadable")
+    check("G0 unreadable: a duplicate key with a different value",
+          outcome({"a.yaml": apps_text.replace(flag, flag + "    preserveResourcesOnDeletion: true\n"),
+                   "t.yaml": tenants_text}) == "unreadable")
+    check("G0 unreadable: a duplicate kind key",
+          outcome({"a.yaml": apps_text.replace("kind: ApplicationSet\n", "kind: ApplicationSet\nkind: Other\n"),
+                   "t.yaml": tenants_text}) == "unreadable")
+
+    # Helm control flow inside an ApplicationSet file
+    cond = ("    {{- if .Values.keep }}\n    preserveResourcesOnDeletion: true\n    {{- else }}\n"
+            "    preserveResourcesOnDeletion: false\n    {{- end }}\n")
+    for label, text in (
+        ("an if/else that selects differing preserveResourcesOnDeletion values", apps_text.replace(flag, cond)),
+        ("the same conditional in the other order",
+         apps_text.replace(flag, cond.replace("true", "TMP").replace("false", "true").replace("TMP", "false"))),
+        ("a conditional with the control actions inline", apps_text.replace(
+            flag, "    {{ if .Values.keep }}\n    preserveResourcesOnDeletion: true\n    {{ else }}\n"
+                  "    preserveResourcesOnDeletion: false\n    {{ end }}\n")),
+        ("a range", apps_text.replace(flag, flag + "    {{- range .Values.x }}\n    {{- end }}\n")),
+        ("a with", apps_text.replace(flag, flag + "    {{- with .Values.x }}\n    {{- end }}\n")),
+        ("a define", apps_text.replace(flag, flag + '    {{- define "x" }}a{{- end }}\n')),
+        ("an include", apps_text.replace("requeueAfterSeconds: 30", 'requeueAfterSeconds: {{ include "x" . }}')),
+        ("a value pipeline", apps_text.replace("requeueAfterSeconds: 30", "requeueAfterSeconds: {{ .Values.x | default 30 }}")),
+        ("a variable assignment", apps_text.replace(flag, flag + '    {{- $x := "y" }}\n')),
+    ):
+        check(f"G0 unreadable: {label}",
+              outcome({"a.yaml": text, "t.yaml": tenants_text}) == "unreadable")
+    check("G0 unreadable: a conditional in the tenants ApplicationSet",
+          outcome({"a.yaml": apps_text, "t.yaml": tenants_text.replace(
+              flag, cond)}) == "unreadable")
+    check("G0 green: comments, raw strings and plain .Values lookups stay allowed",
+          not template_control_findings(apps_text, Path("x")))
+    check("G0 red: the control finding names the file and line",
+          any("x:1:" in f for f in template_control_findings("{{ if .Values.a }}\n", Path("x"))))
+    check("G0 model: the preserve flag read from a conditional would have been wrong",
+          yaml.safe_load("a:\n  p: true\n  p: false\n")["a"]["p"] is False)
+    check("G0 view_from_text: a conditional in the file at HEAD is a finding",
+          raises(lambda: view_from_text("apps", apps_text.replace(flag, cond), "x")))
+    check("G0 view_from_text: a duplicate key in the file at HEAD is a finding",
+          raises(lambda: view_from_text("apps", apps_text.replace(flag, flag + flag), "x")))
+
+    # generator-level template keys override spec.template
+    base = load_appsets(root)
+    for name in ("apps", "tenants"):
+        for where, mut in (
+            ("a git generator template", lambda d: d["spec"]["generators"][0]["git"].update(template={"metadata": {"name": "x"}})),
+            ("a git generator templatePatch", lambda d: d["spec"]["generators"][0]["git"].update(templatePatch="x")),
+            ("a nested matrix generator template",
+             lambda d: d["spec"].update(generators=[{"matrix": {"generators": [
+                 d["spec"]["generators"][0], {"git": {"template": {"metadata": {"finalizers": []}}}}]}}])),
+        ):
+            m = copy.deepcopy(base)
+            mut(m[name])
+            check(f"G1 red: {name} has {where}", any("overrides what is rendered" in x for x in appset_findings(m)))
+            check(f"G2 red: {name} {where} makes the names unreadable", raises(lambda: generated_names(root, m)))
+    check("G1 green: the real generators carry no template override",
+          not any(generator_override_paths(d["spec"].get("generators"), "g") for d in base.values()))
+
+    # pinned annotation
+    golden = load_golden(root)
+    key = PINNED_ANNOTATIONS[0]
+    for name in ("apps", "tenants"):
+        m = copy.deepcopy(base)
+        m[name]["spec"]["template"]["metadata"]["annotations"][key] = "/"
+        check(f"G5 red: {name} {key} changes", bool(golden_findings(m, golden)))
+        m = copy.deepcopy(base)
+        del m[name]["spec"]["template"]["metadata"]["annotations"][key]
+        check(f"G5 red: {name} {key} removed", bool(golden_findings(m, golden)))
+        m = copy.deepcopy(base)
+        del m[name]["spec"]["template"]["metadata"]["annotations"]
+        check(f"G5 red: {name} annotations removed", bool(golden_findings(m, golden)))
+    check("G5 golden pins the manifest-generate-paths annotation of every set",
+          all(key in g["spec"]["template"]["metadata"]["annotations"] for g in golden.values()))
+
+    # Known limit, asserted so that lifting it is noticed.
+    a, b = "{{ .Values.spec.source.repoURL }}", "{{ .Values.spec.source.targetRevision }}"
+    line_a, line_b = f"        repoURL: {a}\n", f"        revision: {b}\n"
+    assert apps_text.count(line_a) == 1 and apps_text.count(line_b) == 1
+    swapped = apps_text.replace(line_a, "        repoURL: @@\n").replace(line_b, f"        revision: {a}\n") \
+        .replace("        repoURL: @@\n", f"        repoURL: {b}\n")
+    swapped_view = pinned_view(parse_docs(swapped, Path("x"), keep_literals=True)[0])
+    check("G5 known limit: swapping two Helm values is NOT detected "
+          "(if this turns red the limit was lifted: update the docstring and invert this check)",
+          swapped != apps_text and not deep_diff(swapped_view, golden["apps"]))
 
 
 def main(argv: list[str]) -> int:
