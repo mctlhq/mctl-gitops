@@ -119,6 +119,34 @@ Negative controls
   through the same assertions the real cases use, and SHALL report `MUTATION-DETECTED`. If a
   mutation goes undetected the suite SHALL fail.
 
+## AMEND: hermetic test execution and independent security gate
+
+These EARS criteria are **required**; they override any ambiguous "no network"
+language above without changing the strictly test-only scope.
+
+- WHILE any L2 Go test runs THE SYSTEM SHALL permit only in-process calls,
+  loopback TCP for `httptest`, and local Unix sockets; all non-loopback
+  outbound network connections, external DNS and real MTProto/Telegram
+  clients SHALL be blocked. A test SHALL fail closed if such an attempt
+  occurs. Fake `SelfSender`, fake history API, synthetic identities and
+  in-memory SQLite remain mandatory. Installing Go dependencies *before*
+  test execution does not authorize test-time egress.
+- WHEN any L2 run finishes THE SYSTEM SHALL report `harness_status`
+  separately from `security_gate_status`, with a machine-validated
+  per-case manifest, counts and IDs for `PASS`, `FAIL/GAP`,
+  `NOT-IMPLEMENTED` and `CANNOT-OBSERVE`. Missing, duplicate or
+  unclassified mandatory results SHALL be errors.
+- IF any mandatory case is `FAIL/GAP`, `NOT-IMPLEMENTED` or
+  `CANNOT-OBSERVE` THEN THE SYSTEM SHALL explicitly output
+  `FINANCE_SECURITY_GATE=BLOCKED` in the Markdown report and any
+  manual CI job summary/artifacts **even when `go test` exits zero**.
+  The suite's successful exit means only that assertions and negative
+  controls executed correctly, not that finance security or a pilot
+  is approved. No green check may be labelled a security clearance.
+- WHEN an optional manual `workflow_dispatch` test job is added, it
+  SHALL have no deployment or product-promotion steps and SHALL visibly
+  distinguish harness integrity from the security gate outcome.
+
 ## Out of scope
 
 - Any production Go change: no new `/mctl` command, finance job kind, policy or permission rule,

@@ -184,6 +184,34 @@ Report
   row. It states that test approval is not pilot approval and that #325 and #1240 verdicts are
   unchanged.
 
+## AMEND: execution boundary and unambiguous evidence reporting
+
+**Hermetic L2 boundary.** Tests may use `httptest.NewRecorder` in-process
+or a locally bound `httptest` listener on loopback, plus local Unix
+sockets and in-memory SQLite. No non-loopback outbound TCP/UDP, external
+DNS, real MTProto, Telegram, SaaS, or production calls are permitted.
+Use a guarded test transport/dialer and fail assertions on any attempted
+external dial. If `SendToSelfWithRandomID` cannot be intercepted
+without connecting to a remote DC, do not attempt the connection:
+record `CANNOT-OBSERVE` with source-pinned reasoning. Any CI
+dependency fetch is a separate build setup action, not part of L2
+execution and never a justification for test-time egress.
+
+**Two independent summaries.** The `l2finance` test runner must validate
+one structured `L2RESULT` per required T1-T10 sub-case (and all
+mutation controls), with exact IDs and counts per rubric category.
+`harness_status=PASS` means that the tests ran and correctly detected
+their intentionally reproduced missing guards; it is **not**
+`security_gate_status=PASS`. A separate aggregation always reports
+`FINANCE_SECURITY_GATE=BLOCKED` if any required row has
+`FAIL/GAP`, `NOT-IMPLEMENTED`, `CANNOT-OBSERVE`, missing,
+duplicate or unclassified status. Never collapse a recorded gap into
+a green security conclusion. Report both statuses prominently in
+`docs/reports/finance-assistant-l2-results.md` and, if the optional
+manual `workflow_dispatch` is added, in its step summary and attached
+results. Do not wire the status to a deploy, pilot, product approval,
+or production promotion. No runtime fix is within the proposal scope.
+
 ## Alternatives
 
 1. Put the cases in default `go test ./...` without a build tag. Dropped: green main CI would
