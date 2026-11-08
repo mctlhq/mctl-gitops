@@ -515,6 +515,14 @@ jobs:
         # keep ours winning and on the same versions (#2036).
         run: python3 tests/test_k3s_kured_single_owner.py
 
+      - name: Check cascade and ownership guards for generated applications
+        # Finalizer outcome per ApplicationSet, distinct generated names, the
+        # retire-service delete order and a model of which live objects a
+        # cascade delete reaches. Each detector is proven red by a mutation.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_generated_app_cascade_guards.py
+
       - name: Check the in-cluster Access login probe against its sources
         # The CronJob in infra-components/observability/blackbox carries two
         # copies it cannot read at run time: scripts/access-login-probe.py as
