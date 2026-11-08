@@ -6,6 +6,15 @@ separate M1 approval is given. M2 and M3 are gate definitions, not tasks here. N
 this file deploys anything, publishes an image, provisions `glovo.mctl.ai`, logs in to a
 real Glovo account or writes to a provider basket.
 
+## AMEND 2026-11-08 — extra acceptance gates (documentation-only M0)
+
+- [ ] M0-A. Replace any `human-input approval` assertion with `aar_` action approval + receipt gate; record exact binding of tenant, owner, one execution `we_`, connection, install revision, fingerprint, hashed basket intent and target. Negative test fixture must show `hir_` answer never authorizes a provider mutation.
+- [ ] M0-B. Describe G2 as a **separate mctl-api implementation** proposal+approved/merged PR with tests for tenant and same-tenant owner separation, subject resolution, order/connection registry, revocation and `aar_` receipt. Do not count mctl-api#948/#950 (contract-only) as delivery.
+- [ ] M0-C. State precise secret lifecycle: durable master+HKDF-derived key is NOT crypto-erasure on ciphertext deletion. Use random per-connection DEK with wrapping and revocation/backup retention evidence, or weaken claim to data deletion only. Add revoke+backup+cache test criteria.
+- [ ] M0-D. Explicit two Temporal namespaces and cross-namespace Nexus or authenticated mctl-api bridge decision/gate; negative test provider identity cannot signal control/DevLoop.
+- [ ] M0-E. Make M1 `glovo_connect_account` explicitly fake-only. G3 requires legally/technically reviewed real account access and verified mobile basket continuity, no checkout/order/payment, no hosted/shared `session.json`.
+- [ ] M0-F. Explicitly preserve independent M1, image publication, GitOps, real-account, basket-write and pilot activation approvals. A #1227 M0 approval grants no execution of the M1 checklist.
+
 ## Part A: M0 (this approval)
 
 - [ ] 1. Write `docs/reports/glovo-connector-feasibility.md`, following the labelling
