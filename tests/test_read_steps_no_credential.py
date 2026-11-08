@@ -22,7 +22,7 @@ def check(name, cond, detail=""):
 
 
 # Central mctl-agents templates and platform workflows: init containers that clone
-# before the step that pushes. Next phase; none runs in a tenant namespace.
+# before the step that pushes. Remaining phases; none runs in a tenant namespace.
 KNOWN_READ_ONLY = {
     ("cwft-mctl-agents-approve.yaml", "flip-status", "clone-gitops"),
     ("cwft-mctl-agents-approve.yaml", "commit-and-push", "clone-gitops"),
@@ -32,11 +32,6 @@ KNOWN_READ_ONLY = {
     ("cwft-mctl-agents-investigate.yaml", "commit-and-push", "clone-gitops"),
     ("cwft-mctl-agents-reconcile.yaml", "run-reconcile", "clone-gitops"),
     ("cwft-mctl-agents-reconcile.yaml", "commit-and-push", "clone-gitops"),
-    ("cwft-mctl-agents-run.yaml", "run-orchestrator", "clone-gitops"),
-    ("cwft-mctl-agents-run.yaml", "commit-and-push", "clone-gitops"),
-    ("cwft-mctl-agents-run.yaml", "run-incident-responder", "clone-gitops"),
-    ("cwft-mctl-agents-shepherd.yaml", "run-shepherd", "clone-gitops"),
-    ("cwft-mctl-agents-shepherd.yaml", "commit-and-push", "clone-gitops"),
     ("wft-delete-tenant-safe.yaml", "retire-tenant-services", "main"),
     ("wft-lifecycle-bootstrap.yaml", "bootstrap", "clone-gitops"),
 }
@@ -81,6 +76,56 @@ for fname, tname in (("tpl-validate-tenant.yaml", "validate"), ("tpl-validate-te
     check(f"{fname} {tname}: no ssh setup", ".ssh" not in text and "git@github.com" not in text)
     check(f"{fname} {tname}: clones over anonymous https",
           'git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"' in t["script"]["source"])
+
+# Run and shepherd templates: every clone-gitops init container clones over
+# anonymous https with no key, and the step that pushes points origin at ssh
+# itself before its first fetch or push.
+def init_clones(doc):
+    out = []
+    for t in doc["spec"]["templates"]:
+        for i in t.get("initContainers") or []:
+            if i.get("name") == "clone-gitops":
+                out.append((t["name"], i))
+    return out
+
+
+def clone_is_anonymous(i):
+    text = "\n".join(i.get("args") or []) + "\n" + " ".join(m["name"] + m["mountPath"] for m in i.get("volumeMounts") or [])
+    return (KEY not in text and "deploy-key" not in text and ".ssh" not in text
+            and "git@github.com" not in text and "id_ed25519" not in text
+            and 'git clone --depth=1 "https://github.com/mctlhq/mctl-gitops.git"' in text)
+
+
+def push_step_sets_ssh_remote(t):
+    src = t["script"]["source"]
+    code = "\n".join(line for line in src.split("\n") if not line.lstrip().startswith("#"))
+    remote = code.find("git remote set-url origin git@github.com:mctlhq/mctl-gitops.git")
+    first_net = min(x for x in (code.find("git push"), code.find("git pull")) if x >= 0)
+    return remote >= 0 and remote < first_net
+
+
+for fname, n_clones, pusher in (("cwft-mctl-agents-run.yaml", 3, "commit-and-push"),
+                                ("cwft-mctl-agents-shepherd.yaml", 2, "commit-and-push")):
+    doc = dict(DOCS)[fname]
+    clones = init_clones(doc)
+    check(f"{fname}: {n_clones} clone-gitops init containers found", len(clones) == n_clones, len(clones))
+    for tname, i in clones:
+        check(f"{fname} {tname}: clone-gitops is anonymous https without any key", clone_is_anonymous(i))
+    t = [x for x in doc["spec"]["templates"] if x["name"] == pusher][0]
+    check(f"{fname} {pusher}: sets the ssh remote before its first fetch or push",
+          push_step_sets_ssh_remote(t))
+
+# Proven both ways on the new check: a clone with the key or ssh url is rejected.
+good = {"name": "clone-gitops", "args": ['git clone --depth=1 "https://github.com/mctlhq/mctl-gitops.git" /w']}
+bad_ssh = {"name": "clone-gitops", "args": ["git clone --depth=1 git@github.com:mctlhq/mctl-gitops.git /w"]}
+bad_key = dict(good, volumeMounts=[{"name": "deploy-key", "mountPath": "/secrets/deploy-key"}])
+check("the anonymous-clone check accepts https and rejects ssh or a key mount",
+      clone_is_anonymous(good) and not clone_is_anonymous(bad_ssh) and not clone_is_anonymous(bad_key))
+check("the remote-order check rejects a push step that sets the remote late or never",
+      push_step_sets_ssh_remote({"script": {"source": "git remote set-url origin git@github.com:mctlhq/mctl-gitops.git\ngit push"}})
+      and not push_step_sets_ssh_remote({"script": {"source": "git push\ngit remote set-url origin git@github.com:mctlhq/mctl-gitops.git"}})
+      and not push_step_sets_ssh_remote({"script": {"source": "git push"}})
+      and not push_step_sets_ssh_remote({"script": {"source": "# git remote set-url origin git@github.com:mctlhq/mctl-gitops.git\ngit push"}}))
 
 # Proven both ways: the sweep flags a read-only step with the key, and not a writer.
 sample = {"spec": {"templates": [
