@@ -12,8 +12,10 @@
   - it fails closed with explicit uncertainty or error results.
 - [ ] 8. Tests `docs/spikes/finance-assistant/tests/test_finance.py` (depends on 7) — DoD: T1-T12 pass locally with `python3 -I -m unittest discover -s docs/spikes/finance-assistant/tests -v`.
 - [ ] 9. Baseline-vs-assistant comparison protocol (depends on 7) — DoD: the rules-only digest output is committed. The assistant prompt and rubric (grounded claims, ungrounded claims, numeric mismatches against the oracle, confirmation burden, latency, cost) are committed. The LLM run is reported `not-run` with its reason.
+- [ ] 9a. Evidence ladder / safety assurance scope (depends on 3, 5, 8) — DoD: D0, D6 and D8 explicitly distinguish L0 pinned source inspection, L1 abstract offline `[MODEL]` results, L2 real application integration, L3 isolated preview and L4 production evidence. Show source/owner/gates for every `not-run` L2-L4 check, including tenant-owner principal binding, Telegram peer/group delivery, in-flight revocation, persistent delete/backup/logging, model-provider egress and bank-provider authorization. Never claim runtime isolation from a synthetic Grant test.
+- [ ] 9b. Neutral verdict verification (depends on 2-9a and 10) — DoD: no option is labeled preferred in the report before D1-D10 evidence; D11 compares all four outcome rules and states contradicting evidence, missing facts and why the proposed verdict is warranted. A passed fixture alone cannot mean production or integration gates passed.
 - [ ] 10. Cost, privacy, retention, revocation and incident matrix plus proactivity section (depends on 3, 5) — DoD: D9 has observed and estimated values in separate columns, using the #1088 caps as the budget frame. D10 is limited to the #322 control plane, on-demand first.
-- [ ] 11. Decision record D11 (depends on 2-10) — DoD:
+- [ ] 11. Decision record D11 (depends on 2-10 and 9a/9b) — DoD:
   - exactly one proposed outcome, chosen by the decision rules in design.md;
   - rejected alternatives with reasons;
   - the smallest follow-up, described but not created;
@@ -39,6 +41,7 @@
 - [ ] T11. Negative control: mutation-style checks. Removing the dedupe step, or switching to float arithmetic, makes T1/T2 fail. This proves that the oracle discriminates.
 - [ ] T12. Fixture hygiene: no IBAN in the fixtures passes the ISO 13616 mod-97 check, and every merchant is from the synthetic list.
 - [ ] T13. `python3 roadmap/scripts/validate.py roadmap/epics roadmap/spikes` passes with the new manifest.
+- [ ] T14. Evidence-boundary negative control: prove the report marks real integration paths (`Telegram owner identity`, `group delivery`, `tenant DB isolation`, `backup/log deletion`, `provider egress`) as L2–L4 `not-run`, regardless of whether T1–T12 pass. The synthetic grant fixture must never be cited as proof of actual production enforcement.
 
 ## Rollback
 
