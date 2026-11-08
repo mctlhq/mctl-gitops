@@ -63,7 +63,7 @@ DNS change at all. P0 has to make that impossible, not just unlikely.
   `platform-gitops/tenants/*`, `platform-gitops/infra-components/**`,
   `platform-gitops/bootstrap/**`, `platform-gitops/argo-workflows/**`).
 - WHEN a PR adds the host `glovo.mctl.ai`, a Glovo worker image, the Temporal namespace names `mctl-assistants` / `mctl-assistants-provider-glovo`, or the provider Kubernetes tenant/namespace to any reconciled path **under P0** THE SYSTEM SHALL always fail CI regardless of any self-written `gate.yaml` phase or issue URL; a later P1/P2 verifier requires a separate reviewed owner approval bound to immutable artifacts,
-  defined in the gate file (P1 or P2).
+  independently verified by a trusted external phase approval; a mutable `gate.yaml` never defines the grant.
 - WHEN CI runs on the staged package THE SYSTEM SHALL render every staged
   component with `platform-gitops/helm-charts/base-service`, pass
   `kubeconform -strict`, and pass the reserved-hosts and Argo CD project-scope
