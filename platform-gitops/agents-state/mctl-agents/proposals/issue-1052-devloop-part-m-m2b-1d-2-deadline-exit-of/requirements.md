@@ -1,217 +1,171 @@
-# DevLoop Part M, M2b-1d-2: deadline exit of the merge watch, and the gap-harness regression (#1021 slice, successor of #1051)
+# DevLoop Part M, M2b-1d-2a: the deadline decision, built inert (first half of the 1d-2 split)
 
 ## Context
 
-Issue #1052 carries slice M2b-1d-2 of the sequential plan recorded on #1021 and split in #1046. It replaces #1051, whose
-Temporal DevLoop ended `Completed` without a durable result and cannot be restarted. The scope is the 1d-2 row of the
-#1046 table:
+Issue #1052 carried slice M2b-1d-2 of the sequential plan recorded on #1021 and split in #1046: the merge watch's deadline
+exit gets a settle, a final PR read and a decision. The first version of this proposal (digest
+`sha256:512664c4d06c709be257ef053f2a94456b943389f157aac8fa73e9aee14c9d24`) was reviewed by two independent read-only
+passes on 2026-11-08 and **superseded by this amendment**; its grant `aar_2191c03d35aa4db58a91833004490dac` is not to be
+used. The owner ruled "docs-only amend + pre-split":
 
-- the merge watch's deadline exit gets a settle, a final PR read and a decision;
-- an unreadable final read gets an interim fail-closed end;
-- the defect pin in the gap harness (`tests/test_merge_watch_worker_gap.py`, #1029 / PR #1030) becomes a regression
-  test;
-- two replay fixtures are added.
+- **1d-2a (this proposal)** is inert preparation: the decision model and its helpers, covered by focused tests through a
+  test-only harness. Nothing in production calls it, so no deadline behaviour changes.
+- **1d-2b (a later issue, its own proposal, digest, review, approval and PR)** is the activation: the `while ... else:`
+  wiring, both `finally` guards, the `_deliver` guard (the V1/V2 closures, D13 and D18), the gap-harness conversion,
+  the replay fixtures, E1-E3 and the wiring mutations. 1d-2a and 1d-2b are never merged with an active unsafe runtime path
+  in between: the unsafe path (S1/S2 below) only becomes reachable in 1d-2b, together with its guards.
 
-The specification is the approved #1021 proposal
-(`platform-gitops/agents-state/mctl-agents/proposals/issue-1021-devloop-part-m-m2b-feedback-tick-and-dea/`, digest
-`sha256:e833d2af0ce3ce1e30699e6a77d221ba34af8948175c1ad75f2f0acd566fb144`). It is cited as provenance only: #1021 is
-not restarted and its files are not edited. This proposal is written against main `55b4633`, the merge of PR #1049
-(M2b-1d-1). It carries over the owner's rulings on the #1051 proposal and answers the three verified findings
-(V1-V3) listed on #1052.
+The specification is the approved #1021 proposal (digest `sha256:e833d2af0ce3ce1e30699e6a77d221ba34af8948175c1ad75f2f0acd566fb144`),
+cited as provenance only: #1021 is not restarted and its files are not edited. This proposal is written against main
+`55b4633` (the merge of PR #1049, M2b-1d-1).
 
-Today `DevLoopWorkflow._watch_pr` (`orchestrator/temporal/workflows/dev_loop.py`) ends at the 14-day deadline with no
-PR read once the loop condition goes false. If a worker gap crosses the deadline, the watch therefore ends on a stale
-`OPEN` even though the PR merged in the meantime. Scenario A of the gap harness pins this: it expects one
-`get_pr_state` call and `result.pr.state == "OPEN"`, while the fake already answers `MERGED`. The `finally` block then
-writes `release`, not `terminal`, and neither deploy observation nor the security record runs.
+### The defect the line fixes, and why the pieces must not ship apart
+
+Today `DevLoopWorkflow._watch_pr` (`orchestrator/temporal/workflows/dev_loop.py`) ends at the 14-day deadline with no PR
+read. After a worker gap that crosses the deadline the watch ends on a stale `OPEN` although the PR merged
+(scenario A of `tests/test_merge_watch_worker_gap.py`, #1029). The fix is a decision at the deadline: settle, read,
+decide. Verified on main:
+
+- **S1 (deliveries).** `_deliver` lands a still-waiting resume delivery `Succeeded` on any run end where
+  `_reconcile_required` is unset, so an interim Failed end would report success to a request.
+- **S2 (claim).** `finally` writes `release` for every exit other than a hop, so a cancel arriving during the decision
+  would release the claim while the PR state is unknown.
+- **S3 (cancel inside a final-read activity).** On `temporalio==1.34.0` a workflow cancel during a running activity
+  surfaces as `ActivityError` with a cancelled cause, which a `except ActivityError` counts as a failed attempt (an
+  accepted interim limit, pinned in 1d-2b).
+
+Activating the decision without the guards that close S1/S2 would create an unsafe path. 1d-2a therefore adds the
+decision but no caller; 1d-2b adds the caller and the guards in the same change.
 
 ## User stories
 
-- AS the owner of a DevLoop whose PR merged while no worker ran I WANT the watch to read the PR once more at the
-  deadline SO THAT the loop reports MERGED, writes `terminal`, and runs deploy observation and the security record.
-- AS an operator I WANT a deadline exit whose final read fails, or which is cancelled while it decides, to keep the
-  lifecycle claim and never report success SO THAT nothing is released or marked `Succeeded` while the PR state is
-  unknown.
-- AS the reviewer of the #1021 line I WANT the #1029 defect pin shown red on current main and green with the change
-  SO THAT the gap is proven fixed, not assumed fixed.
-- AS a release owner I WANT every pre-change history to replay unchanged, the replay and rollback consequences of the
-  marker stated, and no release implied SO THAT B4 (#1007) and the release hold are not touched.
+- AS the reviewer of the #1021 line I WANT the deadline decision's reads, ordering, kinds and flag lifecycle pinned in
+  isolation, with no production caller, SO THAT the activation slice (1d-2b) is a small wiring change on top of code
+  whose behaviour is already pinned. Cancellation surfaces and the settle's `workflow.wait` against a real gate are
+  not covered here; they are 1d-2b (D13 family).
+- AS an operator I WANT this slice to change no runtime behaviour, SO THAT it can be merged without a replay,
+  rollback or release consideration.
+- AS a release owner I WANT every pre-change history to replay unchanged and no marker, payload or result field touched,
+  SO THAT B4 (#1007) and the release hold are not touched.
 
 ## Acceptance criteria (EARS)
 
 ### Scope gate
 
-- R0a. IF making the change green needs any edit to an existing test or replay fixture other than E1, E2, E3, the
-  gap-harness pin and the two named fixtures THEN the implementer SHALL stop and report on #1052 with no workaround.
-  The owner accepted E1-E3 on #1051 as the only exceptions:
-  - E1: the final assertions of
-    `tests/test_dev_loop_workflow.py::TestDevLoopWorkflow::test_merge_detection_survives_read_failures_until_deadline`
-    (line 4103).
-  - E2: the `M1_ADDED` / `M1_DEFAULTS` rows for `MergeWatchResume.gate_ran_head` in `tests/test_pre_m1_compat.py`
-    (`M1_ADDED` at line 151).
-  - E3: removal of the `_WatchOutcome(watch_end=...)` half of `test_nothing_in_production_sets_the_flag_or_a_watch_end`
-    in `tests/test_merge_watch_typed_result.py` (line 79).
-- R0b. IF the work needs a record, a caller of `record_merge_watch_reconcile` or `confirm_no_pr`, a record backoff, a
-  heartbeat, a cancellation re-raise, `tick_blocked_until`, or `_reconcile_required` being set THEN the implementer
-  SHALL stop and report.
-- R0c. IF the slice does not fit one bounded implementer pass THEN the implementer SHALL stop and report the split
-  pre-declared in design.md section 9, not widen.
+- R0a. IF making the change green needs an edit to **any** existing test or replay fixture THEN the implementer SHALL
+  stop and report on #1052 with no workaround. 1d-2a edits no existing test: E1, E2 and E3 (defined in design.md
+  section 8) and the gap-harness conversion belong to 1d-2b, because they are caused by activation or by the `MergeWatchResume.gate_ran_head` payload
+  field, neither of which is in this slice.
+- R0b. IF the work needs any of the following THEN the implementer SHALL stop and report:
+  - a call site of the decision helpers in production code (R2);
+  - an edit to `_watch_pr`, `_deliver` or the `finally` block of `_watch_pr`;
+  - a new field on `MergeWatchResume`, `DevLoopResult`, `_MergeWatchRun` or any serialized payload;
+  - a `workflow.patched` marker, or use of the existing one;
+  - a record, a caller of `record_merge_watch_reconcile` or `confirm_no_pr`, a record backoff, a heartbeat, a cancellation
+    re-raise, `tick_blocked_until`, `_retain_claim`, or `_reconcile_required` being set.
+- R0c. IF the slice does not fit one bounded implementer pass THEN the implementer SHALL stop and report. It SHALL NOT
+  trim tests to fit.
 
-### Deadline exit
+### Inertness
 
-The deadline exit is gated by the existing marker `merge-watch-terminal-reconcile`, carried as `terminal_reconcile`.
+- R1. THE SYSTEM SHALL contain no production call site of `_decide_watch_end`, `_settle_watch_work`, `_final_pr_read`
+  or `_wait_unless_abandoned`, other than the calls those helpers make to each other. A test (D17a) SHALL pin this with
+  an AST scan of `dev_loop.py`, and SHALL name 1d-2b as the slice that replaces the pin with an activation pin.
+- R2. THE SYSTEM SHALL leave `_watch_pr`, `_deliver` and every other existing method unchanged, with exactly one
+  exception: `_record_gate_result` additionally records `self._gate_ran_head` (R9). The new code only adds new
+  methods, constants, dataclasses and two instance fields.
+- R3. Every existing test, replay suite and fixture SHALL pass unedited. No history changes shape, because the new code
+  issues no command from any existing path.
 
-- R1. WHEN the `while workflow.now() < deadline and not self._abandoned` loop of `_watch_pr` ends because its condition
-  went false, `watch.terminal_reconcile` is True and `self._abandoned` is False, THE SYSTEM SHALL decide the end through
-  `_decide_watch_end("deadline", ...)` before the `finally` block runs. It SHALL NOT decide after the hop `break`,
-  after the #516 terminal-status `break`, or after any `return`.
-- R2. WHEN the deadline decision starts THE SYSTEM SHALL first set the interim retention flag (R8). It SHALL then settle
-  the in-flight shepherd tick and merge gate through `_settle_watch_work`:
+### The decision (reachable only from the test harness in this slice)
+
+The decision is `_decide_watch_end("deadline", watch, service, slug)`, returning `_WatchDecision(kind, last)` with
+`kind` one of `final`, `open`, `abandoned`, `unrecorded`.
+
+- R4. WHEN the decision starts THE SYSTEM SHALL first set `self._watch_unrecorded = True` (the interim retention flag,
+  an instance field; neither `_reconcile_required` nor `_retain_claim`). It SHALL then settle the in-flight shepherd tick
+  and merge gate through `_settle_watch_work`:
   - cancel both;
-  - `await workflow.wait(...)` on the cancelled tasks, only if at least one was in flight;
-  - drain both through `_settle_tick` / `_settle_gate`, with the real `watch.poll_index`;
+  - `await workflow.wait(...)` on them, only if at least one was in flight;
+  - drain both through `_settle_tick` / `_settle_gate` with the real `watch.poll_index`;
   - set both task references to None.
 
   Only after that SHALL it issue the first final read.
-- R3. WHEN the final read runs THE SYSTEM SHALL call `get_pr_state` at most `FINAL_READ_ATTEMPTS = 3` times, with
-  `PR_STATE_TIMEOUT` and `PR_STATE_RETRY_POLICY`. Between attempts it SHALL wait `FINAL_READ_BACKOFF = 2 min`, and the
-  wait SHALL end early on abandon. THE SYSTEM SHALL apply `_apply_found_state` to the first found state and return
-  that state. Any `ActivityError` and any `found=False` counts as one failed attempt.
-- R4. IF a final read returns MERGED or CLOSED THEN THE SYSTEM SHALL write the lifecycle `terminal` op through
-  `_terminal_claim`. It SHALL end with that state and `watch_end == "final-read"`, followed by the existing tail:
-  deploy observation, `security-record-landed` and the incident watch on MERGED.
-- R5. IF a final read returns OPEN and no own attempt is unobserved THEN THE SYSTEM SHALL end with the fresh OPEN state
-  and `watch_end == "final-read"`, and the `finally` block SHALL write today's `release`.
-- R6. WHILE an own attempt is unobserved THE SYSTEM SHALL NOT treat a found OPEN as final. An attempt is unobserved if
-  the settle found a tick or gate in flight, or if the fresh OPEN head equals a non-empty `_gate_ran_head`. In that
-  case THE SYSTEM SHALL wait until `settled_at + GATED_ACTIVITY_TIMEOUT` (the wait ends early on abandon) and then run
-  one more final-read set.
-- R7. IF the final-read set yields no found state, or yields OPEN while an attempt is still unobserved, THEN THE SYSTEM
-  SHALL, as an interim end replaced in 1d-3:
-  - keep the retention flag set;
-  - skip every relinquishing lifecycle write;
-  - log `MERGE_WATCH_RECONCILE_UNRECORDED`;
-  - after `finally`, raise `ApplicationError(type="MergeWatchReconcileUnrecorded", non_retryable=True)`.
-
-  The run therefore ends `Failed` with the claim retained.
-
-### Retention, deliveries and cancellation (answers V1-V3)
-
-- R8. WHILE the deadline decision is in progress THE SYSTEM SHALL hold `self._watch_unrecorded = True`. That holds from
-  before the settle until the decision returns `final`, `open` or `abandoned`, and the flag is cleared only then. The
-  flag is an instance field, not `_reconcile_required` and not `_retain_claim`.
-- R9. WHILE `self._watch_unrecorded` is True THE SYSTEM SHALL issue no `release` and no `terminal` from `finally`, and
-  SHALL log `MERGE_WATCH_RECONCILE_UNRECORDED` there instead. This holds whatever unwinds the watch: the R7 raise, a
-  workflow cancellation, or an unexpected exception.
-- R10 (closes V1). WHILE `self._watch_unrecorded` is True THE SYSTEM SHALL NOT land a resume delivery `Succeeded`:
-  - `_deliver`'s decision wait SHALL NOT resolve on approval or gates alone while the flag is set;
-  - `decided` SHALL include `and not self._watch_unrecorded`;
-  - on the R7 Failed end and on a cancel during the decision, `run`'s `except` therefore lands each still-open
-    delivery `Failed`.
-
-  A delivery that is still waiting when the decision ends `final` or `open` SHALL land as today.
-- R11 (closes V2). IF the workflow is cancelled during the settle's `workflow.wait`, a final-read backoff, or the R6
-  window THEN THE SYSTEM SHALL end the run `Cancelled`. It SHALL write no `release` and no `terminal`, make no further
-  `get_pr_state` call after the cancel, and land open deliveries `Failed`.
-- R12 (V3, accepted interim limit). IF a workflow cancellation is delivered while a final-read `get_pr_state` activity
-  is running THEN THE SYSTEM SHALL count the resulting `ActivityError` as a failed attempt. That is today's SDK
-  behaviour and #1021 mutation (y) is not applied. The decision then continues under R3-R7 and R8-R10, with this
-  consequence:
-  - the run may end `Completed` on a fresh MERGED/CLOSED (`terminal`) or a fresh verified OPEN (`release`);
-  - or it may end `Failed` with the claim retained;
-  - it never ends on a stale state, and it never releases while the state is unknown.
-
-  A pin test (D13d) SHALL assert this. 1d-3 replaces it with the re-raise.
+- R5. WHEN the final read runs THE SYSTEM SHALL call `get_pr_state` at most `FINAL_READ_ATTEMPTS = 3` times, with
+  `PR_STATE_TIMEOUT` and `PR_STATE_RETRY_POLICY`, waiting `FINAL_READ_BACKOFF = 2 min` between attempts (the wait ends
+  early on abandon). It SHALL apply `_apply_found_state` to the first found state and return it. Any `ActivityError` and
+  any `found=False` counts as one failed attempt.
+- R6. IF the final read returns MERGED or CLOSED THEN THE SYSTEM SHALL write the lifecycle `terminal` op through
+  `_terminal_claim` and return kind `final` with that state.
+- R7. IF the final read returns OPEN and no own attempt is unobserved THEN THE SYSTEM SHALL return kind `open` with the
+  fresh state. The decision itself writes no `release`; that stays with the caller's `finally` in 1d-2b.
+- R8. WHILE an own attempt is unobserved THE SYSTEM SHALL NOT treat a found OPEN as final. An attempt is unobserved if the
+  settle found a tick or gate in flight, or if the fresh OPEN head equals a non-empty `_gate_ran_head`. In that case THE
+  SYSTEM SHALL wait until `settled_at + GATED_ACTIVITY_TIMEOUT` (the wait ends early on abandon), then run one more
+  final-read set.
+- R9. WHEN `_record_gate_result` records a result with `ran` True THE SYSTEM SHALL set `self._gate_ran_head` to that
+  attempt's head. The field is instance state: it issues no command, and carrying it across a hop is 1d-2b.
+- R10. IF the final-read set yields no found state, or yields OPEN while an attempt is still unobserved, THEN THE
+  SYSTEM SHALL return kind `unrecorded` and leave `self._watch_unrecorded` True. The decision schedules no write and
+  raises nothing: turning `unrecorded` into the interim `Failed` end is 1d-2b.
+- R11. WHEN the decision returns `final`, `open` or `abandoned` THE SYSTEM SHALL clear `self._watch_unrecorded` in the same
+  step, with no suspension point between the last await and the clear. An exception or a cancel raised anywhere inside
+  the decision SHALL leave it True.
+- R12. IF `self._abandoned` is observed after the settle, after a final-read attempt that found no MERGED/CLOSED, during
+  a backoff, or during the R8 window THEN THE SYSTEM SHALL wake at once, make no further read, and return kind
+  `abandoned` with the last observed or fresh state. A final read that returns MERGED/CLOSED under abandon SHALL still
+  return `final`. (Whether the future `else:` arm skips the decision when `_abandoned` is already set before it, or maps the
+  resulting kind to today's empty `watch_end`, is a wiring question for 1d-2b: the two are equal in commands but not in
+  the typed result. See design.md section 3 and section 8.)
 - R13. WHILE deciding THE SYSTEM SHALL NOT set `self._reconcile_required`, SHALL NOT schedule
   `record_merge_watch_reconcile` or `confirm_no_pr`, and SHALL NOT use `is_cancelled_exception`. It SHALL add no
-  heartbeat, no record backoff and no `_retain_claim`.
+  heartbeat, no record backoff and no `_retain_claim`. A cancel arriving during the decision propagates as the SDK
+  delivers it; pinning those surfaces is 1d-2b (D13, D13b-d).
 
-### Abandon, gate bookkeeping, replay
+### Evidence
 
-- R14. IF `self._abandoned` is observed at any of the following points THEN THE SYSTEM SHALL wake at once, make no
-  further read, clear the retention flag, end with `watch_end == "abandoned-unverified"` (with the last observed or
-  fresh state in `last`), and write today's `release`:
-  - after the settle;
-  - after a final-read attempt that found no MERGED/CLOSED;
-  - during a backoff;
-  - during the R6 window.
-
-  A final read that returns MERGED/CLOSED under abandon SHALL still end under R4.
-- R15. WHEN the `else:` of the loop is reached with `self._abandoned` True THE SYSTEM SHALL make no final read, add no
-  timer, set no retention flag, and set `watch_end == "abandoned-unverified"`. `ended` SHALL stay
-  `abandoned: <reason>` and `release` SHALL be unchanged.
-- R16. WHEN `_record_gate_result` records a result with `ran` True THE SYSTEM SHALL set `self._gate_ran_head` to that
-  attempt's head. The head SHALL be carried across a hop in `MergeWatchResume.gate_ran_head: str = ""` and rehydrated
-  by `_resume_merge_watch`.
-- R17. WHILE `watch.terminal_reconcile` is False THE SYSTEM SHALL schedule exactly today's commands at the deadline
-  exit and return today's result. This covers every history recorded before the marker and every resume record
-  without the field.
-- R18. WHEN a continued run starts past its carried deadline THE SYSTEM SHALL run the deadline decision at once,
-  without recomputing the deadline.
-- R19. THE SYSTEM SHALL add no new `workflow.patched` marker. This is an owner-visible deviation from #1052's wording:
-  see design.md section 7 and Q1.
-
-### Gap harness, fixtures, evidence
-
-- R20. WHEN the gap harness runs scenario A with a resume record carrying `terminal_reconcile=True` THE SYSTEM SHALL:
-  - schedule exactly two `get_pr_state`, the second at or after `gap_end`;
-  - return `pr.state == "MERGED"` and `watch_end == "final-read"`;
-  - write `terminal` and no `release`.
-
-  This test SHALL be shown red on main `55b4633` (or the later main commit the branch starts from) with no production
-  change. It SHALL fail on the read-count / `MERGED` assertion, not on an import or setup error.
-- R21. WHEN scenario A runs with `terminal_reconcile=False` THE SYSTEM SHALL keep today's end: one read and `OPEN`.
-- R22. THE SYSTEM SHALL ship `tests/fixtures/histories/merge_watch/dev_loop_final_read.json` and
-  `.../merge_watch/dev_loop_final_read_hop.json`. Both SHALL be replay-tested by a test in the normal CI suite (the
-  owner's condition for the subdirectory), and no existing fixture SHALL be re-recorded.
-- R23. THE SYSTEM SHALL be accompanied by mutation proof for (a), (d), (e), (g), (v), (w), (x), (ac), (ai) and
-  (al, first), plus the slice-local N1 and N2 (tasks.md task 9). Each mutation SHALL be applied locally, shown red with
-  the expected test named, reverted, and kept out of the diff. (am) and (ao) move to 1d-4 with `tick_blocked_until`,
-  per the owner's ruling.
+- R14. THE SYSTEM SHALL be accompanied by the 1d-2a share of mutation proof (tasks.md task 6): each mutation applied
+  locally, shown red with the expected test named, reverted and kept out of the diff. No mutation is claimed red without
+  its output.
 
 ## Out of scope
 
-- The following 1d-3 items:
-  - the record (`_record_reconcile` and the `record_merge_watch_reconcile` caller), `_reconcile_heartbeat`, the record
-    backoff and `_retain_claim`;
-  - all cancellation re-raises, including the one in `_final_pr_read` (#1021 mutation (y)) and the ones in
-    `_ownership` (aj);
-  - setting `_reconcile_required` and the `reconcile-required` result wiring;
-  - the `dev_loop_reconcile_required` fixture.
-- The following 1d-4 items:
-  - the grace-polls and non-transient read-error exits, `_no_pr_proven`, the `confirm_no_pr` caller and
-    `no-pr-confirmed`;
-  - `tick_blocked_until` with mutations (am) and (ao);
-  - the `dev_loop_no_pr_confirmed` fixture and the T-23 restart pins.
-- Any change to the fields of `DevLoopResult`, and any change to `orchestrator/temporal/cli.py`, `start.py`,
-  `activities/pr_state.py` or `activities/issue_state.py`.
-- Any release, deployment, Vault or GitOps rollout, any B4 decision (#1007), #1022, lifting the release hold, and
-  undrafting #1003, gitops#2394 or mctl-api#934. Starting 1d-3 or 1d-4 is also out of scope.
+- **1d-2b (next, its own issue, proposal and digest):**
+  - the `while ... else:` wiring under `watch.terminal_reconcile`, the `watch_end` and `decision_kind` locals, the raise
+    of `ApplicationError(type="MergeWatchReconcileUnrecorded", non_retryable=True)` after `finally`;
+  - **both** guards in `finally` (the relinquishing write at line 6974 and `_report_claim_abandonment` at line 7045),
+    and the `_deliver` guard (V1/V2 closures);
+  - `MergeWatchResume.gate_ran_head` and its hop carry;
+  - the gap-harness conversion (scenario A, #1029), E1, E2, E3, the two `merge_watch/` replay fixtures with their
+    recorder, D13/D13b/D13c/D13d, D18 and the wiring mutations, the activation pin replacing D17a;
+  - the V3 pin (accepted undeployed interim: S3).
+- **1d-3:** the record, `_reconcile_heartbeat`, record backoff, `_retain_claim`, all cancellation re-raises including
+  #1021 mutation (y), setting `_reconcile_required`, the `dev_loop_reconcile_required` fixture.
+- **1d-4:** grace-polls and read-error exits, `_no_pr_proven`, `confirm_no_pr`, `tick_blocked_until` with mutations (am)
+  and (ao), the `dev_loop_no_pr_confirmed` fixture, T-23.
+- Any change to `DevLoopResult`, `orchestrator/temporal/cli.py`, `start.py`, `activities/pr_state.py` or
+  `activities/issue_state.py`.
+- Any release, deployment, Vault or GitOps rollout, any B4 decision (#1007), #1022, lifting the release hold, undrafting
+  #1003, gitops#2394 or mctl-api#934, and starting 1d-3 or 1d-4.
 
 ## Open questions
 
-- Q1. **Marker reuse (owner-visible deviation).** #1052 asks for "new `workflow.patched` marker for any command-order
-  change". This proposal instead reuses the existing `merge-watch-terminal-reconcile` (M2b-1b), as #1021 specifies a
-  single marker for this line.
-  - Why it is sound: no deployed worker carries the marker. The worker tag is `1.117.0`, and #1039, #1042 and #1049 are
-    absent from that release's changelog. No committed fixture carries the marker either.
-  - The interpretation taken: approving this digest accepts the reuse.
-  - If the owner wants a new marker instead: it is `merge-watch-deadline-final-read`, evaluated in the fresh arm and
-    carried as a second `MergeWatchResume` bool. That costs one more E2-style row, which needs a fresh ruling.
-- Q2. **V2 closure pulls one piece of 1d-3 forward.** Retaining the claim when a cancel arrives during the decision is
-  part of what #1021 gives `_retain_claim` (mutation (z)). It is closed here with the interim flag only: no re-raise,
-  no record, no `_ownership` change. The cancel already propagates on its own from timer waits and from
-  `workflow.wait`. The interpretation taken is that this is not "behaviour from 1d-3" in the sense of R0b, because
-  R0b's list (record, callers, backoff, heartbeat, re-raises) is untouched, and the alternative would leave the
-  owner's STOP criterion violated. If the owner rules otherwise, the slice stops at task 0.
-- Q3. A delivery refused on the interim end lands `Failed` with an empty refusal, as an abandoned one does. No new
-  `delivery-<refusal>` reason is added, because a new reason would be a new vocabulary value for the surfaces.
-  1d-3's `merge-watch-reconcile-required` refusal is not reused, because it would claim a record that does not exist.
-- Q4. The implementer cap (#1025, $20 per the #1051 investigation) was not re-observed in this run. Sizing (design
-  section 9) is judged against the 1d-1 pass.
-- Q5. mctl-api's reader of `DevLoopResult` (`restartIfAbandoned`) was not re-read in this run. "Decodes `ended` and
-  `implement` only" is taken from the #1021 and #1046 designs.
-- Q6. V3's exact SDK surface was not executed in this run. On `temporalio==1.34.0` (installed and pinned), V3 says a
-  workflow cancel during a running activity surfaces as `ActivityError` with a cancelled cause. D13d pins the
-  behaviour actually observed. If it surfaces as `asyncio.CancelledError` instead, the run already ends `Cancelled`
-  with the claim retained, the R12 limit does not exist, and D13d asserts that and is reported as such in the PR.
+- Q1. **Marker reuse (accepted by the owner for 1d-2b).** 1d-2a uses no marker at all, existing or new. 1d-2b reuses
+  `merge-watch-terminal-reconcile`, with replay proof of old histories (owner ruling 2026-11-08). The reasoning is kept in
+  design.md section 8 so that 1d-2b's proposal can cite it.
+- Q2. **V2 closure pulls one piece of 1d-3 forward (owner confirmed 2026-11-08).** The minimal retention flag
+  `_watch_unrecorded` comes forward from 1d-3. 1d-2a introduces the field and pins its lifecycle (set at start, cleared
+  by `_settled`, kept on `unrecorded` and on an exception); 1d-2b adds its two readers (`finally`, `_deliver`). The flag is
+  not `_reconcile_required` and not `_retain_claim`; 1d-3 replaces it.
+- Q3. A delivery refused on the interim end lands `Failed` with an empty refusal, as an abandoned one does (1d-2b). No new
+  `delivery-<refusal>` reason is added. Accepted by the owner as interim, until 1d-3; the diagnostic remains an obligation
+  of 1d-3 and #1022.
+- Q4. **Budget.** The implementer cap (#1025, $20 per the #1051 investigation) was not re-observed. Sizing in design.md
+  section 9 is judged against 1d-1 (77 production + 428 test lines in about 29 minutes). 1d-2a is estimated at about
+  2 times that in production lines and about 1.3-1.6 times in test lines, and R0c is a hard stop.
+- Q5. mctl-api's reader of `DevLoopResult` (`restartIfAbandoned`) reads `Ended` and `Implemented` on Completed runs only
+  (`handlers_dev_loop.go:181-203`, read by the independent review). 1d-2a changes no result field.
+- Q6. SDK 1.34.0 facts (read from source, not executed): a workflow cancel during a running activity surfaces as
+  `ActivityError` with a cancelled cause, except that a `CancelledError` can be re-raised if the activity result is
+  already ready in the same activation (`_workflow_instance.py`, `run_activity`). The repo `.venv` has 1.31.0 while
+  `uv.lock` pins 1.34.0. 1d-2a pins none of this; 1d-2b does (D13d).
