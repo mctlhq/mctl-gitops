@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-11-08T14:39:42Z'
+updated_at: '2026-11-08T14:54:46Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-d0a0352945d301c7
@@ -49,9 +49,9 @@ completion:
   primary_observed: true
 review_attempts: 1
 merge_owner: human-codeowner
-refusals: 1
+refusals: 2
 refusals_head: 6d3d83cf8c12284cabc1af6515cadaad391c2499
-notes: 'implementer declined to act: Finding 1 already addressed: commit 6d3d83c regenerated
-  docs/spikes/finance-assistant/baseline/rules-digest.json with currency keys; re-running
-  model.py yields no diff (git status clean) and all 18 tests in docs/spikes/finance-assistant/tests
-  pass, including test_baseline_digest_is_committed_and_reproducible.'
+notes: 'implementer declined to act: Reviewer text 1: baseline/rules-digest.json was
+  already regenerated in commit 6d3d83c (contains currency keys). Regenerating via
+  model.py yields a byte-identical file (git status clean) and all 18 tests in docs/spikes/finance-assistant/tests
+  pass.'
