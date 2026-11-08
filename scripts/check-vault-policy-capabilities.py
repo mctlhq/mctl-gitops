@@ -129,26 +129,48 @@ def effective(rule_sets, request_path):
     return ["deny"] if "deny" in winner else sorted(winner)
 
 
+def _nonempty_str(v):
+    return isinstance(v, str) and v != ""
+
+
+def _validate_config(cfg):
+    """Every field has an exact type; a malformed config is Unknown, never a traceback."""
+    if not isinstance(cfg, dict):
+        raise Unknown("config: top level must be an object")
+    if not _nonempty_str(cfg.get("base_dir")):
+        raise Unknown("config: 'base_dir' must be a non-empty string")
+    idents = cfg.get("identities")
+    if not isinstance(idents, dict) or not idents:
+        raise Unknown("config: 'identities' must be a non-empty object")
+    for name, ident in idents.items():
+        pol = ident.get("policies") if isinstance(ident, dict) else None
+        if not isinstance(pol, list) or not pol or not all(_nonempty_str(p) for p in pol):
+            raise Unknown(f"config: identity {name!r} needs a non-empty policies list of non-empty strings")
+    exps = cfg.get("expectations")
+    if not isinstance(exps, list) or not exps:
+        raise Unknown("config: 'expectations' must be a non-empty list")
+    for i, e in enumerate(exps):
+        if not isinstance(e, dict):
+            raise Unknown(f"config: expectation #{i} must be an object")
+        ident = e.get("identity")
+        if not _nonempty_str(ident) or ident not in idents:
+            raise Unknown(f"config: expectation #{i} 'identity' must be a string naming a known identity")
+        if not _nonempty_str(e.get("path")):
+            raise Unknown(f"config: expectation #{i} 'path' must be a non-empty string")
+        eff = e.get("effective")
+        if not isinstance(eff, list):
+            raise Unknown(f"config: expectation #{i} 'effective' must be a list")
+        for c in eff:
+            if not isinstance(c, str) or c not in KNOWN_CAPS:
+                raise Unknown(f"config: expectation #{i} 'effective' has an element that is not a known capability name")
+
+
 def load_config(path):
     try:
         cfg = json.loads(pathlib.Path(path).read_text())
-    except (OSError, ValueError) as e:  # ValueError covers bad UTF-8 and bad JSON
+    except (OSError, ValueError, RecursionError) as e:  # ValueError covers bad UTF-8 and bad JSON
         raise Unknown(f"config {path}: {e}")
-    if not isinstance(cfg, dict):
-        raise Unknown("config: top level must be an object")
-    for key, typ in (("base_dir", str), ("identities", dict), ("expectations", list)):
-        if not isinstance(cfg.get(key), typ) or not cfg[key]:
-            raise Unknown(f"config: missing or empty {key!r}")
-    for name, ident in cfg["identities"].items():
-        pol = ident.get("policies") if isinstance(ident, dict) else None
-        if not isinstance(pol, list) or not pol or not all(isinstance(p, str) for p in pol):
-            raise Unknown(f"config: identity {name!r} needs a non-empty policies list")
-    for i, e in enumerate(cfg["expectations"]):
-        ok = (isinstance(e, dict) and e.get("identity") in cfg["identities"]
-              and isinstance(e.get("path"), str) and isinstance(e.get("effective"), list)
-              and all(c in KNOWN_CAPS for c in e["effective"]))
-        if not ok:
-            raise Unknown(f"config: expectation #{i} is malformed or names an unknown identity")
+    _validate_config(cfg)
     return cfg
 
 

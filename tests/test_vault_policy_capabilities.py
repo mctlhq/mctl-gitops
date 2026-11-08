@@ -110,10 +110,22 @@ check("the longest matching glob wins over a shorter one",
 check("an exact path beats a glob",
       C.effective([("secret/data/a/*", {"deny"}), ("secret/data/a/b", {"read"})], "secret/data/a/b") == ["read"])
 
-def mutant(src_old, src_new):
-    """Load the checker with one source line deliberately changed."""
+class _MissingMutant:
+    """Stand-in for a mutant whose target line is gone: every call returns a sentinel
+    that equals nothing, and the missing target is reported as a FAIL by mutant()."""
+
+    def __getattr__(self, name):
+        return lambda *a, **k: "MUTATION-TARGET-MISSING"
+
+
+def mutant(src_old, src_new, on_missing=None):
+    """Load the checker with one source line deliberately changed. If the line is
+    absent the mutation proves nothing: report a clean FAIL (no crash)."""
     text = pathlib.Path("scripts/check-vault-policy-capabilities.py").read_text()
-    assert src_old in text, "mutation target missing"
+    if src_old not in text:
+        (on_missing or (lambda m: check(f"mutation target present: {m}", False, "line absent from the checker")))(
+            src_old[:60].replace("\n", " "))
+        return _MissingMutant()
     m = importlib.util.module_from_spec(importlib.util.spec_from_file_location("mut", "scripts/x.py"))
     exec(compile(text.replace(src_old, src_new), "mutant", "exec"), m.__dict__)
     return m
@@ -218,6 +230,77 @@ try:
 except Exception:
     r = "traceback"
 check("mutation: catching only OSError turns the non-UTF-8 case red", r != C.UNKNOWN, str(r))
+
+# Malformed config shapes -> UNKNOWN (2) as a process exit, never a traceback (1).
+def cfg_with(path_to_value):
+    c = json.loads(json.dumps(FIX_CFG))
+    for keys, val in path_to_value:
+        node = c
+        for k in keys[:-1]:
+            node = node[k]
+        node[keys[-1]] = val
+    return c
+
+
+FIXF = {"shared.hcl": FIX_ESO, "scoped.hcl": FIX_WRITER}
+FIRST_ID = next(iter(FIX_CFG["identities"]))
+SHAPES = {
+    "identity is a list": cfg_with([(["expectations", 0, "identity"], ["shared"])]),
+    "identity is a number": cfg_with([(["expectations", 0, "identity"], 7)]),
+    "identity is an object": cfg_with([(["expectations", 0, "identity"], {"a": 1})]),
+    "identity is empty": cfg_with([(["expectations", 0, "identity"], "")]),
+    "effective element is a list": cfg_with([(["expectations", 0, "effective"], [["read"]])]),
+    "effective element is an object": cfg_with([(["expectations", 0, "effective"], [{"a": 1}])]),
+    "effective element is a number": cfg_with([(["expectations", 0, "effective"], [1])]),
+    "effective is a string": cfg_with([(["expectations", 0, "effective"], "read")]),
+    "effective is missing": cfg_with([(["expectations", 0, "effective"], None)]),
+    "path is a list": cfg_with([(["expectations", 0, "path"], ["a"])]),
+    "path is empty": cfg_with([(["expectations", 0, "path"], "")]),
+    "expectation is a string": cfg_with([(["expectations", 0], "x")]),
+    "expectation is a list": cfg_with([(["expectations", 0], [1, 2])]),
+    "expectations is an object": cfg_with([(["expectations"], {"a": 1})]),
+    "identities is a list": cfg_with([(["identities"], ["a"])]),
+    "identity entry is a list": cfg_with([(["identities", FIRST_ID], ["x"])]),
+    "identity entry is a string": cfg_with([(["identities", FIRST_ID], "x")]),
+    "policies is a string": cfg_with([(["identities", FIRST_ID, "policies"], "shared.hcl")]),
+    "policies element is a list": cfg_with([(["identities", FIRST_ID, "policies"], [["shared.hcl"]])]),
+    "policies element is empty": cfg_with([(["identities", FIRST_ID, "policies"], [""])]),
+    "base_dir is a list": cfg_with([(["base_dir"], ["p"])]),
+    "base_dir is empty": cfg_with([(["base_dir"], "")]),
+    "top level is a list": [1],
+    "top level is a string": "x",
+}
+DEFENCE_IN_DEPTH = {"policies is a string", "policies element is empty", "base_dir is empty"}
+M_NOVALID = mutant("    _validate_config(cfg)\n", "")
+for label, cfg in SHAPES.items():
+    d = fixture(FIXF, cfg)
+    proc = subprocess.run([sys.executable, "scripts/check-vault-policy-capabilities.py", "--root", str(d),
+                           "--config", str(d / "cfg.json")], capture_output=True, text=True)
+    check(f"malformed config ({label}) exits 2 as a process, no traceback",
+          proc.returncode == 2 and "Traceback" not in proc.stderr, (proc.returncode, proc.stderr[-200:]))
+    try:
+        r = M_NOVALID.run(d, d / "cfg.json")[0]
+    except Exception:
+        r = "traceback"
+    if label in DEFENCE_IN_DEPTH:
+        # Without the type validation these still end UNKNOWN, by accident (the
+        # characters or the empty name are not readable files), so a mutant cannot
+        # prove them; the exit-2 check above is the guard.
+        continue
+    check(f"mutation without type validation: ({label}) is no longer UNKNOWN", r != C.UNKNOWN, str(r))
+
+# A mutant whose target line is absent is a clean FAIL, not an AssertionError crash.
+seen = []
+res = mutant("this line is not in the checker", "x", on_missing=seen.append)
+check("mutant() reports an absent target line instead of crashing", len(seen) == 1)
+check("mutant() returns an inert stand-in that cannot pass a red-expected check silently",
+      res.effective([], "x") == "MUTATION-TARGET-MISSING")
+_real_check, _collected = check, []
+check = lambda name, cond, detail="": _collected.append((name, cond))  # noqa: E731
+mutant("this line is not in the checker", "x")
+check = _real_check
+check("mutant() with the default reporter records a FAIL, not an exception",
+      len(_collected) == 1 and _collected[0][1] is False)
 
 if failures:
     print("\nFAILURES:")
