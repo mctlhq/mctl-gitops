@@ -241,11 +241,7 @@ env:
   # messages, so a reviewer who later signs in as that account (DEMO_REVIEWER_
   # ENABLED true) could read every earlier digest; removing the id afterwards
   # does not delete them.
-  # TEMPORARY one-off run for the owner to see the HTML digest (2026-11-08):
-  # fires Sunday 17:00 UTC. Revert to "mon" and drop DIGEST_HOUR_UTC right
-  # after it has been sent.
-  DIGEST_WEEKDAY: "sun"
-  DIGEST_HOUR_UTC: "17"
+  DIGEST_WEEKDAY: "mon"
   DIGEST_RECIPIENTS: "210408407,924671154"
   # Reviewer/demo password-bypass login. OFF since 2026-10-23: the Claude
   # Directory submission is on hold until Telegram answers the API Terms
