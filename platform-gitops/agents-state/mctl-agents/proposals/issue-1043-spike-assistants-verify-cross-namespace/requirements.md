@@ -6,6 +6,12 @@ ADR 0010 and the merged runtime report (mctlhq/mctl-telegram#1225, proposal `iss
 
 This spike is research and documentation only. It produces a version-pinned decision memo in `docs/spikes/` of mctl-agents, with exactly one outcome: `NEXUS_VERIFIED`, `API_BRIDGE_SELECTED`, `BLOCKED_NEEDS_SDK_OR_SERVER_UPGRADE` or `DEFER`. It also produces machine-checkable contract schemas for the bridge, a call diagram, a failure/retry/cancellation matrix, a denial-test plan and an ownership map. Implementation, namespace creation, secrets and rollout belong to later, separately approved issues.
 
+## AMEND 2026-11-08 — role spelling and mandatory non-skipped schema validation
+
+- The stock Temporal system scope in ADR 0003 is `temporal-system:<role>`, e.g. `temporal-system:admin`, **not** `system:admin`. Nexus operator test data must use correct claims and clearly label candidate permissions until verified in server 1.31.0.
+- The JSON Schema contract validation test is a **required gate**, not an optional smoke. If the `jsonschema` library is absent in the CI test environment, **fail with an actionable dependency error**, or explicitly add/pin it in the test dependency group under a separately reviewed project change; never return a green suite through `pytest.importorskip`. Positive and negative fixtures must actually be executed and counted in CI.
+- These corrections remain documentation/contract-test only. No Temporal namespace/client auth change, bridge code or deployment is authorized.
+
 ## User stories
 
 - AS the platform owner I WANT one selected, source-backed cross-namespace transport SO THAT the M1 provider worker is not designed on an unverified or insecure dispatch path.
