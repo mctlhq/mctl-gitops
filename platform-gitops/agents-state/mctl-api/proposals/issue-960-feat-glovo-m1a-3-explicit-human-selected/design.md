@@ -72,6 +72,16 @@ Deployed state checked:
   needs-triage) is the parent design. Its "AMEND 2026-11-08" is the contract
   this slice implements.
 
+## AMEND 2026-11-08 — final Glovo OAuth opening and tenant selection contract
+
+The default `GLOVO_NON_SELECTABLE_TENANTS=admins,labs` below is superseded by **`admins` only** (or other explicitly reviewed system-only tenants): `labs` as a team can be chosen by an authorized, allowlisted principal after the human consent step; simply hosting the Glovo workload in `labs` never grants membership or silently selects it.
+
+The #958 proposal deliberately installs an **unconditionally closed** Glovo resource gate (`ErrGlovoNotReady`). #960 must add a separate default-FALSE authorization-code admission guard, such as `GLOVO_OAUTH_ENABLED=false`, with a single documented check: only if the operator explicitly enables it **and** grant store, selected-team consent, principal-mode role reader and per-principal pilot allowlist are healthy can `ResolveResource` admit this resource. Configuring `GLOVO_MCP_RESOURCE` alone still refuses `invalid_target`. Any public-facing enablement is a distinct P2 release approval; the code change and isolated tests do not enable pilot by themselves.
+
+All teamgrant/authorization-code/refresh stores must use a demonstrably atomic Postgres transaction covering issue-code, family activation/rotation/revocation and grant records **or** a versioned recoverable saga whose intermediate states are always denied for access-token minting and scope resolution. The project MUST identify the real `refreshstore` transaction hooks/pool topology and test interleavings including crash/restart. Do not emit signed access tokens before durable grant and refresh binding commits; revoked families cannot leave an active authorization grant. If no atomic/saga implementation is proven, expose `not_ready` for Glovo scope and report a separate integration blocker.
+
+Slice #958 and #959 must already be merged and reviewed before this implementation starts. No temporary stubs/shims duplicating their responsibilities; align to their **actual** exported APIs after merge, otherwise stop at BLOCKED_DEPENDENCY.
+
 ## Proposed solution
 
 Everything below is inert unless the Glovo resource is configured (slice 1).
@@ -123,8 +133,8 @@ The grant is server-owned. The client never sees anything but the opaque
   always calls `requestTeamConsent`, for every client kind, not only CIMD.
 - Eligible set = `TeamEligibility.Eligible(ctx, principalID)` (new small
   interface in `internal/glovo/scope`):
-  `TryNamespacesForPrincipal(prn)` -> drop `admins` and every name in
-  `GLOVO_NON_SELECTABLE_TENANTS` (default `admins,labs`) -> keep only tenants
+  `TryNamespacesForPrincipal(prn)` -> drop the non-customer/system tenants (default `admins`) and every name in
+  `GLOVO_NON_SELECTABLE_TENANTS` (default `admins`) -> keep only tenants
   where `MemberRolesForPrincipal` yields a tenant role -> keep only tenants
   with an allowlist row `(tenant, prn)`. The principal must be a human
   (`KindHuman`) with a non-empty `prn_` id. Login-only and non-principal-mode
@@ -211,7 +221,7 @@ Steps:
 3. `GrantChecker.Check`: `ErrGrantInvalid` -> `ambiguous_tenant`. The grant
    tenant must equal the `stn` claim, else `ambiguous_tenant`. A store error
    -> 503 `unavailable`.
-4. Tenant in the non-selectable set (`admins`, `labs`, ...) or a personal
+4. Tenant in the non-selectable set (`admins`, or separately reviewed system-only tenants, ...) or a personal
    scope -> `scope_unsupported`. Since there is no personal tenant in M1,
    any tenant not present as a gitops team tenant counts here.
 5. `MembershipReader.MemberRolesForPrincipal(tenant, prn)` -> no tenant role
