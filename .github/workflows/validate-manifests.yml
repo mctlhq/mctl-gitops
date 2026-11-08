@@ -551,6 +551,12 @@ jobs:
         # only install with --require-hashes from the pinned requirements file.
         run: python3 tests/test_pip_installs_hashed.py
 
+      - name: Submit contract fixtures match the repository
+        # mctlhq/mctl-gitops#1033: the workflow-namespace and portal-submit
+        # fixtures, the shipped templates and the per-tenant write mode must
+        # agree. Red on each named mutation, exit 2 when a file cannot be read.
+        run: python3 -I tests/test_submit_contract_fixtures.py
+
       - name: Release gate (selftest, tree, mutation tests)
         # mctlhq/mctl-agents#1007: the worker group may not be bumped
         # partially, below its image floor, or without Recreate on the control
