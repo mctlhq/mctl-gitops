@@ -90,6 +90,14 @@ provides:
 
 ## Proposed solution
 
+### AMEND 2026-11-08 — trusted approval is not a PR-controlled gate.yaml
+
+The P0 CI rule is **deny-only** for deployment/reconciled paths. `gate.yaml` can document planning state, but must NEVER serve as proof of approval or unlock the P0 leak guard. A PR author can edit both `gate.yaml` and manifests; a bare URL in that file is not a signed owner grant. Future P1/P2 activation must be separately approved with trusted, externally validated phase/environment/commit/manifest/image-digest binding through a required, independently controlled check. The approval verifier and policy exception require their own review and PR. If no such system exists, P1/P2 remains blocked.
+
+Test: valid provider Deployment in reconciled path + forged `gate.yaml p1:approved` and arbitrary issue URL -> fail exit 6. No P0 override by a mutable YAML key. Real provider, Glovo sessions and production release remain out of scope.
+
+
+
 ### 1. Staging area outside every reconciled path
 
 Add a top-level directory, `deploy/staged/glovo-m1/`. It sits outside
@@ -173,14 +181,8 @@ Add a `glovo-m1` job to `validate-manifests.yml` that runs a new script,
    - the kill switch defaults off, the allowlist is empty and team fallback
      is false
    - no secret value appears (ExternalSecret references only)
-3. Checks provenance. P0 mode allows `<digest-pending>`. P1 mode (when
-   `gate.yaml` says `p1: approved`) requires a `sha256:` digest, a source
-   commit and an SBOM reference for each image.
-4. Runs a **leak guard** that scans all reconciled paths (`platform-gitops/**`
-   excluding `agents-state/`) for `glovo.mctl.ai`, `mctl-assistants` and
-   `mctl-assistants-provider-glovo`. It fails unless `gate.yaml` marks the
-   matching phase approved with an approval issue URL. Changing `gate.yaml`
-   is itself a reviewed PR, which makes the gate auditable.
+3. Checks provenance. P0 staged mode allows `<digest-pending>`; no P1 mode is enabled by a local YAML bit. A later **separately approved** P1 policy (verified outside PR-controlled content) requires a `sha256:` image digest, source commit and SBOM for every image.
+4. Runs a **P0 deny-only leak guard** across all reconciled paths (`platform-gitops/**` excluding `agents-state/`) for Glovo host/workloads/images and assistant namespaces. It **always refuses** a Glovo reconciled resource under P0, regardless of `gate.yaml`, issue URL or local marker. P1/P2 would require separately approved CI policy with authenticated external grant verification before reconciled resources can be merged.
 
 Exit codes follow `release-gate.py`: 0 pass, 6 refused, 7 could not observe.
 Anything unreadable is a refusal.
