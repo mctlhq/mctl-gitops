@@ -31,6 +31,7 @@ exit 1. The mutation cases at the bottom prove the check goes red.
 """
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -104,7 +105,8 @@ def other_kind_names(root):
 
 
 def tenant_modes(root):
-    files = sorted((root / TENANTS_DIR).glob("*/values.yaml"))
+    base = root / TENANTS_DIR
+    files = sorted(set(base.glob("*/values.yaml")) | set(base.glob("*/values.yml")))
     if not files:
         raise Unknown(f"no tenant files found under {root / TENANTS_DIR}")
     modes = {}
@@ -203,7 +205,17 @@ def snapshot(root, dest):
     return dest
 
 
-W2_NAMES = ("deploy-service-w2", "retire-service-w2", "provision-database-w2")
+def w2_names(root=ROOT):
+    """The -w2 names come from the portal fixture, so renaming a team template
+    there cannot leave this test's mutations behind."""
+    p = root / FIX / "portal-team-templates.yaml"
+    entries = load_one(p).get("templates")
+    if not isinstance(entries, list) or not entries:
+        raise Unknown(f"{p}: `templates` must be a non-empty list")
+    return tuple(t["w2"] for t in entries)
+
+
+W2_NAMES = w2_names()
 
 
 def add_w2_templates(dest, kind="ClusterWorkflowTemplate", register=True):
@@ -304,6 +316,11 @@ def main():
             failures.append(f"{name}: {detail}")
 
     code, msgs = run(ROOT)
+    if code != 0:
+        # A broken baseline makes every mutation case meaningless; keep the
+        # contract: 2 = unreadable input, 1 = contract violation.
+        print("\n".join(msgs))
+        sys.exit(code)
     expect("converged repository is green", code == 0, "; ".join(msgs))
 
     # A tenant set to `on` with the portal flag on is a valid converged state.
@@ -330,6 +347,27 @@ def main():
         (d / TENANTS_DIR).mkdir()
         code, _ = run(d)
         expect("no tenant files is unknown (exit 2)", code == 2, f"code={code}")
+
+    # The exit code of the script itself keeps the contract: unreadable input
+    # exits 2, never 1 (run in a subprocess against a copy of the tree).
+    with tempfile.TemporaryDirectory() as td:
+        d = snapshot(ROOT, pathlib.Path(td) / "t")
+        (d / "tests").mkdir(exist_ok=True)
+        shutil.copy(pathlib.Path(__file__), d / "tests" / "probe_script.py")
+        bad = next((d / TENANTS_DIR).glob("*/values.yaml"))
+        bad.write_text("tenant: [unclosed\n")
+        r = subprocess.run([sys.executable, str(d / "tests" / "probe_script.py")],
+                           capture_output=True, text=True, timeout=120)
+        expect("script exits 2 on an unparseable tenant file", r.returncode == 2,
+               f"rc={r.returncode} out={r.stdout[-300:]}")
+
+    # A tenant described by values.yml is read like values.yaml.
+    with tempfile.TemporaryDirectory() as td:
+        d = snapshot(ROOT, pathlib.Path(td) / "t")
+        for p in list((d / TENANTS_DIR).glob("*/values.yaml")):
+            p.rename(p.with_suffix(".yml"))
+        code, msgs = run(d)
+        expect("values.yml tenants are read", code == 0, f"code={code} msgs={msgs}")
 
     if failures:
         print("\n".join(failures))
