@@ -229,6 +229,20 @@ env:
   # Open registration: every Telegram-authenticated user auto-gets the client
   # tier. Ban a specific user with the set_telegram_access MCP tool.
   AUTO_APPROVE_CLIENTS: "true"
+  # New-client digest (mctl-telegram 0.136.0+): weekly, Monday 09:00 UTC
+  # (DIGEST_HOUR_UTC defaults to 9), covering the last 7 days and skipped when
+  # nobody new joined. Recipients are two operator-owned accounts (@MashkovD,
+  # @dmitriimashkov); listing an id here grants no scope, unlike
+  # TG_LOGIN_ADMINS. On an older image both variables are unread and the
+  # digest stays daily to TG_LOGIN_ADMINS. DIGEST_FORMAT defaults to html; set
+  # it to plain to switch back.
+  # Do NOT add 8745115872 (@mctlhq): it is the App-Directory demo/reviewer
+  # identity. The digest lists new clients and Telegram keeps delivered
+  # messages, so a reviewer who later signs in as that account (DEMO_REVIEWER_
+  # ENABLED true) could read every earlier digest; removing the id afterwards
+  # does not delete them.
+  DIGEST_WEEKDAY: "mon"
+  DIGEST_RECIPIENTS: "210408407,924671154"
   # Reviewer/demo password-bypass login. OFF since 2026-10-23: the Claude
   # Directory submission is on hold until Telegram answers the API Terms
   # question in mctl-telegram#852, so there is no review window, and
