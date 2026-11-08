@@ -311,7 +311,14 @@ def reserved_patterns(text: str) -> list[list[str]]:
         # terminator is not a pattern list, so the final piece is dropped; a
         # body with no terminator yields no patterns (and fails the caller's
         # "has no patterns" check) rather than parsing the whole body.
-        for arm in re.split(r"\)\s*return 0 ;;", body)[:-1]:
+        *arms, tail = re.split(r"\)\s*return 0 ;;", body)
+        # A "return 0" in the tail that the terminator did not match (another
+        # spelling, such as "return 0;;") is an arm that could not be parsed,
+        # not an arm that is absent: fail instead of silently dropping it.
+        if re.search(r"\breturn\s+0\b", tail):
+            raise CheckError("tenant_name_reserved: text after the last 'return 0 ;;' contains an "
+                             "unparsed 'return 0'; keep the terminator spelled exactly 'return 0 ;;'")
+        for arm in arms:
             arm = arm.strip()
             if arm:
                 pats.extend(p for p in arm.split("|") if p.strip())

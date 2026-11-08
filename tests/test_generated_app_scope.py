@@ -93,6 +93,11 @@ class ReservedPatternParser(unittest.TestCase):
         text = self.shell("    a|b)\n      return 0 ;;\n    c|d)\n      return 0 ;;")
         self.assertEqual(gas.reserved_patterns(text), [["a", "b", "c", "d"]])
 
+    def test_unmatched_return_zero_spelling_fails_instead_of_dropping_arm(self):
+        text = self.shell("    a|b)\n      return 0 ;;\n    c|d)\n      return 0;;")
+        with self.assertRaisesRegex(gas.CheckError, "unparsed 'return 0'"):
+            gas.reserved_patterns(text)
+
     def test_body_without_terminator_has_no_patterns(self):
         self.assertEqual(gas.reserved_patterns(self.shell("    a|b) return 1 ;;")), [[]])
 
