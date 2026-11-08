@@ -42,6 +42,23 @@ the policy, whether any path in the subtree is granted. The brute-force
 cross-check test compares this against exhaustive enumeration over a small
 alphabet.
 
+Path spelling follows Vault's policy parser (vault/policy.go, ParseACLPolicy,
+checked at tag v1.18.0): exactly one leading "/" is stripped from a rule path
+("paths in Vault start after the / in the API path"), so "/secret/data/x" and
+"secret/data/x" are the same rule (canonical_path). Nothing else is normalised:
+case, trailing slashes and spaces are significant, "+*" is rejected by Vault.
+Every spelling beyond that single leading slash (a second leading slash,
+whitespace or control characters, a backslash escape, "//" inside a path, "."
+or ".." segments, "+*") is not modelled here and raises ValueError, because
+guessing how a request path would meet it could turn "cannot observe" into
+"no grant". Case is modelled: it is significant, so a differently-cased path is
+a different path.
+
+Scope: vault-policy-*.hcl and vault-policy-*.hcl.tmpl are evaluated (a template
+is evaluated after replacing its one known variable, ${TENANT}, with a
+placeholder; any other template action is an error). NOT_EVALUATED lists the
+policies written inline elsewhere in the repo, which this test does not see.
+
 Fail closed: a pattern shape this evaluator does not model (templated
 "{{ }}" paths, "*" anywhere but the end, "+" mixed into a longer segment) or a
 witness space too large to enumerate raises ValueError, which the check
@@ -51,6 +68,7 @@ Self-tests (test_* functions) run before the tree check.
 
 Run: python3 tests/test_vault_policy_files.py
 """
+import functools
 import itertools
 import pathlib
 import re
@@ -94,9 +112,51 @@ def parse_text(text):
     return rules
 
 
+def canonical_path(pattern):
+    """The rule path as Vault's policy parser stores it: one leading "/" removed."""
+    return pattern[1:] if pattern.startswith("/") else pattern
+
+
+def canonical_rules(rules):
+    return [(canonical_path(p), c) for p, c in rules]
+
+
+TENANT_VAR = "${TENANT}"
+TENANT_PLACEHOLDER = "tenantx"
+NOT_EVALUATED = [
+    ("platform-gitops/argo-workflows/cluster-templates/wft-create-tenant.yaml",
+     "policies written inline by `vault policy write` in the workflow script"),
+    ("platform-gitops/helm-charts/vault-human-auth-iac/iac/groups.tf",
+     "policies defined inline as Terraform vault_policy resources"),
+]
+
+
+def parse_template(path):
+    """Parse a *.hcl.tmpl after substituting the one known variable. Raise ValueError
+    on any other template action, so an unknown form is never read as plain text."""
+    text = re.sub(r"(?m)^\s*(#|//).*$", "", path.read_text(encoding="utf-8"))
+    rest = text.replace(TENANT_VAR, "")
+    if "${" in rest or "{{" in rest or "}}" in rest or "%{" in rest:
+        raise ValueError("template action other than %s" % TENANT_VAR)
+    return parse_text(text.replace(TENANT_VAR, TENANT_PLACEHOLDER))
+
+
+@functools.lru_cache(maxsize=None)
 def validate_pattern(pattern):
     """Raise ValueError for a path shape this evaluator does not model."""
-    if "{{" in pattern or "}}" in pattern:
+    if pattern.startswith("/"):
+        raise ValueError("path still starts with '/' after Vault's single-slash strip, not evaluable: %r" % pattern)
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in pattern):
+        raise ValueError("whitespace or control character in path not evaluable: %r" % pattern)
+    if "\\" in pattern:
+        raise ValueError("backslash in path not evaluable: %r" % pattern)
+    if "+*" in pattern:
+        raise ValueError("'+*' is rejected by Vault, not evaluable: %r" % pattern)
+    if "//" in pattern:
+        raise ValueError("empty segment inside the path not evaluable: %r" % pattern)
+    if any(seg in (".", "..") for seg in pattern.split("/")):
+        raise ValueError("'.' or '..' segment not evaluable: %r" % pattern)
+    if "{{" in pattern or "}}" in pattern or "${" in pattern:
         raise ValueError("templated policy path not evaluable: %s" % pattern)
     if "*" in pattern[:-1]:
         raise ValueError("'*' not at the end of the path not evaluable: %s" % pattern)
@@ -240,13 +300,18 @@ def deny_gaps(rules):
 
 def check():
     errs = []
-    files = sorted(D.glob("vault-policy-*.hcl"))
+    files = sorted(D.glob("vault-policy-*"))
     if not files:
         return ["no policy files found (could not observe)"]
     parsed = {}
     for f in files:
         try:
-            parsed[f.name] = parse(f)
+            if f.name.endswith(".hcl"):
+                parsed[f.name] = parse(f)
+            elif f.name.endswith(".hcl.tmpl"):
+                parsed[f.name] = parse_template(f)
+            else:
+                errs.append("%s: unknown policy file kind, not evaluated" % f.name)
         except (ValueError, OSError) as e:
             errs.append("%s: %s" % (f.name, e))
     return errs + check_parsed(parsed)
@@ -254,6 +319,10 @@ def check():
 
 def check_parsed(parsed):
     errs = []
+    canon = {}
+    for name, rules in parsed.items():
+        canon[name] = canonical_rules(rules)
+    parsed = canon
     w = parsed.get(WRITER_READ)
     if w is None:
         errs.append("%s missing or unparsable" % WRITER_READ)
@@ -484,11 +553,22 @@ def test_parse_text_rejects_garbage():
         raise AssertionError("accepted %r" % bad)
 
 
+EXPECTED_FORMS = ["data", "metadata", "subkeys", "delete", "undelete", "destroy"]
+LITERAL_GRANT_PATHS = [
+    "secret/data/writers/x", "secret/metadata/writers/x", "secret/subkeys/writers/x",
+    "secret/delete/writers/x", "secret/undelete/writers/x", "secret/destroy/writers/x",
+]
+
+
 def test_all_kv2_forms_are_protected():
-    for form in GRANT_FORMS:
-        assert _other_fails(("secret/%s/writers/x" % form, ["read"])), form
-        assert _other_fails(("secret/%s/writers/*" % form, ["update"])), form
-        assert _other_fails(("secret/%s/writers/a/b" % form, ["delete"])), form
+    # The expected set is a literal, independent of GRANT_FORMS: dropping a form
+    # from GRANT_FORMS must turn this red.
+    assert sorted(GRANT_FORMS) == sorted(EXPECTED_FORMS)
+    assert len(LITERAL_GRANT_PATHS) == len(EXPECTED_FORMS)
+    for path in LITERAL_GRANT_PATHS:
+        assert _other_fails((path, ["read"])), path
+        assert _other_fails((path.rsplit("/", 1)[0] + "/*", ["update"])), path
+        assert _other_fails((path + "/a/b", ["delete"])), path
     assert _other_fails(("secret/+/writers/*", ["read"]))
     # Forms that are not KV v2 API forms of this mount stay out of scope.
     assert not _other_fails(("secret/config/writers/x", ["read"]))
@@ -543,6 +623,153 @@ def test_glob_prefix_class_between_literals_is_witnessed():
     assert _other_fails(*rules)
 
 
+def _errs_for(*rules):
+    parsed = _good_denying()
+    parsed["vault-policy-other.hcl"] = list(rules)
+    return [e for e in check_parsed(parsed) if e.startswith("vault-policy-other.hcl")]
+
+
+def test_leading_slash_is_stripped_like_vault():
+    assert canonical_path("/secret/data/x") == "secret/data/x"
+    assert canonical_path("secret/data/x") == "secret/data/x"
+    assert canonical_path("//secret/data/x") == "/secret/data/x"
+    assert canonical_path("/") == ""
+    # An evaluated grant, not an evaluation error.
+    for pat in ("/secret/data/writers/x", "/secret/*", "/secret/data/writers/*", "/secret/+/writers/x",
+                "/secret/metadata/writers/gitops/deploy", "/*"):
+        errs = _errs_for((pat, ["read"]))
+        assert errs and all(" grants " in e for e in errs), (pat, errs)
+
+
+def test_leading_slash_deny_is_still_a_deny():
+    parsed = _good_denying()
+    for n in DENY_IN:
+        parsed[n] = [("/secret/data/platform/*", ["read"]), ("/secret/data/writers/*", ["deny"]),
+                     ("/secret/metadata/writers/*", ["deny"])]
+    assert check_parsed(parsed) == []
+    parsed[WRITER_READ] = [("/secret/data/writers/gitops/*", ["read"]),
+                           ("/secret/metadata/writers/gitops/*", ["read", "list"])]
+    assert check_parsed(parsed) == []
+
+
+def test_other_leading_slash_forms_fail_closed():
+    for pat in ("//secret/data/writers/x", "//secret/*", "///secret/data/writers/x", "//"):
+        errs = _errs_for((pat, ["read"]))
+        assert errs and all("cannot evaluate" in e for e in errs), (pat, errs)
+        try:
+            rule_matches(pat, "secret/data/writers/x")
+        except ValueError:
+            continue
+        raise AssertionError("matched %r" % pat)
+
+
+def test_unmodelled_spellings_fail_closed():
+    for pat in (" secret/data/writers/x", "secret/data/writers/x ", "secret/data/writers/x\t",
+                "secret/data/writers/x\n", "secret/data/wri ters/x", "secret/data/writers/x\x00",
+                "secret/data//writers/x", "secret//data/writers/*", "secret/data/./writers/x",
+                "secret/data/../data/writers/x", "secret/data/writers/..", "secret/data/writers/\\x",
+                "secret/data/writers/+*", "secret/+*", "${TENANT}/data/writers/x"):
+        errs = _errs_for((pat, ["read"]))
+        assert errs and all("cannot evaluate" in e for e in errs), (pat, errs)
+
+
+def test_case_and_trailing_slash_are_significant():
+    # Vault compares paths case-sensitively and does not trim a trailing slash.
+    assert not rule_matches("Secret/data/writers/x", "secret/data/writers/x")
+    assert not _other_fails(("Secret/data/writers/x", ["read"]))
+    assert not rule_matches("secret/data/writers/x/", "secret/data/writers/x")
+    assert rule_matches("secret/data/writers/x/", "secret/data/writers/x/")
+    assert _other_fails(("secret/data/writers/", ["list"]))
+
+
+def test_templates_are_evaluated():
+    assert [f.name for f in sorted(D.glob("vault-policy-*.hcl.tmpl"))] == [
+        "vault-policy-tenant-eso-preview.hcl.tmpl", "vault-policy-tenant-eso.hcl.tmpl"]
+    for f in sorted(D.glob("vault-policy-*.hcl.tmpl")):
+        rules = parse_template(f)
+        assert rules and all(TENANT_PLACEHOLDER in p for p, _ in rules), f.name
+        assert writers_grants(rules) == []
+
+
+def _tmpl(tmp, body):
+    f = tmp / "vault-policy-t.hcl.tmpl"
+    f.write_text(body, encoding="utf-8")
+    return f
+
+
+def test_template_substitution_is_evaluated_and_unknown_actions_fail():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp = pathlib.Path(d)
+        ok = 'path "secret/data/teams/${TENANT}/*" {\n capabilities = ["read"]\n}\n'
+        assert parse_template(_tmpl(tmp, ok)) == [("secret/data/teams/%s/*" % TENANT_PLACEHOLDER, ["read"])]
+        # A substituted template that grants inside writers/ is found.
+        wide = 'path "secret/data/writers/${TENANT}/*" {\n capabilities = ["read"]\n}\n'
+        assert writers_grants(parse_template(_tmpl(tmp, wide)))
+        for bad in ('path "secret/data/${OTHER}/*" {\n capabilities = ["read"]\n}\n',
+                    'path "secret/data/{{identity.entity.name}}/*" {\n capabilities = ["read"]\n}\n',
+                    'path "secret/data/%{ if x }a%{ endif }/*" {\n capabilities = ["read"]\n}\n',
+                    'path "secret/data/${TENANT/*" {\n capabilities = ["read"]\n}\n'):
+            try:
+                parse_template(_tmpl(tmp, bad))
+            except ValueError:
+                continue
+            raise AssertionError("accepted %r" % bad)
+        # A variable named only in a comment is not an action.
+        assert parse_template(_tmpl(tmp, "# ${ANY}\n" + ok))
+
+
+def test_template_grant_in_writers_fails_check():
+    parsed = _good_denying()
+    parsed["vault-policy-t.hcl.tmpl"] = [("secret/data/writers/%s/*" % TENANT_PLACEHOLDER, ["read"])]
+    assert any(e.startswith("vault-policy-t.hcl.tmpl grants") for e in check_parsed(parsed))
+
+
+def test_not_evaluated_gap_is_listed_and_current():
+    # The inline policies are a known gap. The list must name real files that still
+    # define policies, so a moved or removed file makes this red instead of leaving
+    # a stale claim, and a policy found in a new place is visible in review.
+    assert [p for p, _ in NOT_EVALUATED] == [
+        "platform-gitops/argo-workflows/cluster-templates/wft-create-tenant.yaml",
+        "platform-gitops/helm-charts/vault-human-auth-iac/iac/groups.tf"]
+    for rel, _ in NOT_EVALUATED:
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert "vault policy write" in text or "vault_policy" in text, rel
+
+
+def test_check_evaluates_template_files_in_the_tree_scan():
+    import tempfile
+    global D
+    old = D
+    with tempfile.TemporaryDirectory() as d:
+        D = pathlib.Path(d)
+        try:
+            for n in DENY_IN + [WRITER_READ]:
+                (D / n).write_text((old / n).read_text(encoding="utf-8"), encoding="utf-8")
+            assert check() == []
+            (D / "vault-policy-t.hcl.tmpl").write_text(
+                'path "secret/data/writers/${TENANT}/*" {\n capabilities = ["read"]\n}\n', encoding="utf-8")
+            assert any(e.startswith("vault-policy-t.hcl.tmpl grants") for e in check())
+            (D / "vault-policy-t.hcl.tmpl").write_text(
+                'path "secret/data/${NAME}/*" {\n capabilities = ["read"]\n}\n', encoding="utf-8")
+            assert any(e.startswith("vault-policy-t.hcl.tmpl:") for e in check())
+        finally:
+            D = old
+
+
+def test_unknown_policy_file_kind_fails_closed():
+    import tempfile
+    global D
+    old = D
+    with tempfile.TemporaryDirectory() as d:
+        D = pathlib.Path(d)
+        try:
+            (D / "vault-policy-x.hcl.bak").write_text("x")
+            assert any("unknown policy file kind" in e for e in check())
+        finally:
+            D = old
+
+
 # -- brute-force cross-check ------------------------------------------------
 
 def _outcomes(rules, paths):
@@ -566,12 +793,25 @@ def _procedure_outcomes(rules):
                             for p, _ in witness_paths(rules, (), 1, depth)))
 
 
-def _random_rules(rng):
+_BRUTE4 = None
+
+
+def _brute_paths4():
+    """Depth-4 enumeration over a small segment set. It contains every literal and
+    prefix class of the generator's alphabet (a, b, ab, "" and fresh z-extensions)."""
+    global _BRUTE4
+    if _BRUTE4 is None:
+        segs = ["", "a", "b", "ab", "z", "az", "bz", "abz"]
+        _BRUTE4 = [t for n in range(1, 5) for t in itertools.product(segs, repeat=n)]
+    return _BRUTE4
+
+
+def _random_rules(rng, depth=2):
     lits, prefixes = ["a", "b", "ab", "+"], ["", "a", "b", "ab"]
     caps = [["read"], ["list"], ["update"], ["create"], ["delete"], ["deny"], ["patch"]]
     rules = []
     for _ in range(rng.randint(2, 4)):
-        n = rng.randint(1, 2)
+        n = rng.randint(1, depth)
         segs = [rng.choice(lits) for _ in range(n - 1)]
         last = rng.choice(lits[:3] + ["+"] + [x + "*" for x in prefixes] * 2)
         rules.append(("/".join(segs + [last]), rng.choice(caps)))
@@ -585,7 +825,17 @@ def test_procedure_matches_exhaustive_enumeration():
         [("a*", ["read"]), ("a", ["deny"]), ("ab*", ["deny"]), ("", ["deny"])],
         [("*", ["read"]), ("a", ["deny"]), ("b", ["deny"]), ("", ["deny"])],
         [("a/+", ["read"]), ("a/*", ["deny"]), ("a/b", ["update"])],
+        # The glob only wins one segment deeper than the longest pattern.
+        [("a/*", ["read"]), ("a/+", ["deny"]), ("a/", ["deny"])],
         [("a*", ["read"]), ("ab*", ["list"]), ("a", ["update"]), ("ab", ["deny"]), ("", ["create"])],
+    ]
+    deep = [
+        [("a/+/b", ["read"]), ("a/*", ["deny"]), ("a/b/b", ["update"])],
+        [("+/a/ab*", ["read"]), ("+/a/a", ["deny"]), ("b/a/*", ["deny"]), ("+/+/a*", ["list"])],
+        [("a/b/a*", ["read"]), ("a/b/a", ["deny"]), ("a/b/ab*", ["deny"]), ("a/b/", ["deny"]),
+         ("a/b/+", ["list"])],
+        [("a/b/*", ["read"]), ("a/b/+", ["deny"]), ("a/b/", ["deny"])],
+        [("a/+/+", ["read"]), ("a/b/+", ["deny"]), ("+/a/b", ["update"]), ("a/a/*", ["list"])],
     ]
     sets = fixed + [_random_rules(rng) for _ in range(40)]
     for rules in sets:
@@ -593,6 +843,13 @@ def test_procedure_matches_exhaustive_enumeration():
         assert maxlen <= 3, rules
         brute = _outcomes(rules, _brute_paths(3))
         assert _procedure_outcomes(rules) == brute, rules
+    # Depth-3 patterns (so paths up to depth 4): mid-position "+" and literals
+    # mixed with globs. Deterministic seed, bounded by the small segment set.
+    deep_sets = deep + [_random_rules(rng, 3) for _ in range(30)]
+    brute4 = _brute_paths4()
+    for rules in deep_sets:
+        assert max_segments(rules) + 1 <= 4, rules
+        assert _procedure_outcomes(rules) == _outcomes(rules, brute4), rules
 
 
 def run_selftests():
