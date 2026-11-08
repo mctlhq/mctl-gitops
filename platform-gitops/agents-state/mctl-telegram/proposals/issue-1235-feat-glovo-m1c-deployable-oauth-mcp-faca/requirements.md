@@ -23,6 +23,15 @@ against an in-repo fake mctl-api harness, so it can proceed while mctl-api M1a/M
 (mctl-api#953, #954) are still in progress. Activation, image publication, DNS/TLS and
 deployment are out of scope and stay off.
 
+## AMEND 2026-11-08 — canonical **cross-repo** API contract and explicit team grant
+
+**Independent review P1:** this facade proposed `/api/v1/assistants/glovo/v1alpha1/*`, while mctl-api M1a #953 defines `/api/v1/glovo/facade/*` only for connections and M1b #954 defines separate `/api/v1/provider-orders/*`. Neither defines the seven aggregate tool endpoints as written. A self-consistent facade + local fake API test cannot prove deployability. Fix this with [mctl-api#957](https://github.com/mctlhq/mctl-api/issues/957) as the **single canonical wire contract owner**, not by duplicating unsupported routes.
+
+- The public seven tools remain exactly the M0 JSON contract. The **HTTP verbs/paths/headers/refusal mappings** to real mctl-api MUST be finalized in #957 with a shared versioned schema and golden fixtures before integration/activation. The `/api/v1/assistants/glovo/v1alpha1/*` protocol below is a **candidate harness interface**, NOT a proven/approved real mctl-api API. Independent source/code evidence must show real mctl-api handlers, or explicitly report BLOCKED_FOR_INTEGRATION.
+- The facade cannot decide user tenant from a mere `mctl_tenant` token claim or custom header. #953 OAuth issuer must mint an **explicit human-selected team** bound to a server-owned authorization grant; mctl-api re-verifies the grant, current membership and per-(team,principal) pilot allowlist on **each call**. A token with no explicit selection refuses even when only one tenant qualifies. No default `labs` or Telegram account.
+- #954's `aar_` approval flow plus physical fake-provider write fence is a dependency. `glovo_prepare_order` may create a pending request but must never mutate a basket; no model-callable approval tool exists. No proxy route may expose worker effect dispatch to unauthenticated MCP clients.
+- An independently runnable facade image/harness is allowed for a later **separately approved implementation**, but the final release acceptance requires contract tests against **real mctl-api handlers** from #953/#954/#957 and public MCP conformance/tenant negative tests, not fake-server-only tests. Do not claim full M1 deployable until this join exists.
+
 ## User stories
 
 - AS an MCTL team member in the pilot allowlist I WANT to connect Claude (or another

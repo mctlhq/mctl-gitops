@@ -62,6 +62,14 @@
   checklist referencing gates G2, G4, G5, G6) and cross-link from ADR 0010. (depends on
   9) — DoD: doc test pattern consistent with `docs/runbook_test.go` style if applicable.
 
+## AMEND 2026-11-08 — additional mandatory integration gates
+
+- [ ] A1. Coordinate a **single** real-api HTTP path/verb/request/response/schema mapping for the seven M0 tools with [mctl-api#957](https://github.com/mctlhq/mctl-api/issues/957); document whether each route is implemented by #953, #954 or #957. No parallel unofficial routes.
+- [ ] A2. Add cross-repo golden-wire tests against **real mctl-api server handlers**, not only the `fakeapi` harness. A fake-backed facade image alone is labelled BLOCKED_FOR_REAL_API and not marked deploy-ready.
+- [ ] A3. Verify OAuth selected-team is human-explicit and grant-bound in mctl-api (#953), not inferred from exactly one eligible team, untrusted `mctl_tenant` claim or `X-Mctl-Selected-Tenant` forwarded header. Negative tests include single eligible team with no consent = `ambiguous_tenant`, revoked selection, cross-team switch attempts, no default `labs`.
+- [ ] A4. Verify `aar_` requests remain human approval outside MCP, with physical provider write fenced by #954 and the fake worker. No synthetic basket write on prepare or read.
+- [ ] A5. Run no public DNS, OAuth activation, deployment or real provider calls under this proposal. Real-API integration and release are separate gates.
+
 ## Tests
 
 All in `go test -race ./...` unless noted; integration tests start the fake mctl-api
