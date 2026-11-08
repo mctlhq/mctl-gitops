@@ -19,12 +19,18 @@ b) Closure per tenant. Every credential Secret a tenant-class template reaches
 c) Reader-side reach, by name. For each tenant namespace that holds the Secrets,
    the subjects that can read a Secret (get, list, watch or * with no
    resourceNames or with its name), exec or attach into pods, or start a pod
-   some other way (the workload-capable predicate, WORKLOAD_RESOURCES below),
-   through the Roles and ClusterRoles the chart renders. ServiceAccount subjects
+   some other way (the workload-capable predicate, WORKLOAD_RESOURCES below), or
+   obtain another identity or more permissions (escalation, ESCALATION_RESOURCES
+   below), through the Roles and ClusterRoles the chart renders. ServiceAccount subjects
    are identified by namespace and name, so the central argo-workflows service
    account is not the tenant's own. The set must equal the ledger (the rows every
    tenant has plus the tenant's extras). The workflow ServiceAccount's own rows
    are the positive control: an empty result would be a detector that cannot see.
+   Reads are one row per credential. Resource entries are matched as the
+   Kubernetes RBAC authorizer does (see _resource_match). A tenant whose render
+   has no non-preview Namespace, and a readers_by_tenant entry for a tenant that
+   no longer exists, are failures; the real-chart mutations run on the first
+   sorted tenant without extras and the test fails if they did not run.
 
 Unreadable or unparsable input, a failed render, an RBAC rule that cannot be
 parsed, or a binding to a ClusterRole this test has not classified is an error,
@@ -139,8 +145,8 @@ def load_template_docs():
 # modification starts a pod, and the verbs that count. Anything that can start a
 # pod in a namespace can give it a volume, env var or envFrom that names a
 # Secret there, so these are as good as reading the Secret. "*" in a rule's
-# apiGroups, resources or verbs matches everything; "x/*" matches every
-# subresource of x. resourceNames is ignored on purpose: create cannot be
+# apiGroups, resources or verbs matches everything; a "*/sub"
+# entry matches that subresource of any resource (see _resource_match). resourceNames is ignored on purpose: create cannot be
 # limited by name, and patch/update of one named object can still change the
 # pod template it runs.
 _START = frozenset({"create", "patch", "update"})
@@ -159,6 +165,28 @@ WORKLOAD_RESOURCES = {
     ("argoproj.io", "workflowtemplates"): _START,
 }
 EXEC_RESOURCES = ("pods/exec", "pods/attach")
+# Privilege-escalation reach: ways to obtain the identity or the permissions of
+# another subject, which is as good as having its Secret access. Counted as the
+# separate way "escalation". Verbs: serviceaccounts/token create mints a token for
+# a ServiceAccount; impersonate acts as a user, group or ServiceAccount; the
+# RBAC objects can be written (create, update, patch) or bound/escalated past the
+# caller's own permissions (bind, escalate). resourceNames is ignored as above.
+# Conservative on purpose: a rule on a cluster-scoped resource (clusterroles,
+# clusterrolebindings) inside a namespaced Role grants nothing in the cluster but
+# is still counted. Out of scope: impersonating userextras or uids, which adds
+# attributes to an identity that must itself be impersonated.
+_RBAC = "rbac.authorization.k8s.io"
+_RBAC_WRITE = frozenset({"create", "update", "patch", "bind", "escalate"})
+ESCALATION_RESOURCES = {
+    ("", "serviceaccounts/token"): frozenset({"create"}),
+    ("", "users"): frozenset({"impersonate"}),
+    ("", "groups"): frozenset({"impersonate"}),
+    ("", "serviceaccounts"): frozenset({"impersonate"}),
+    (_RBAC, "roles"): _RBAC_WRITE,
+    (_RBAC, "rolebindings"): _RBAC_WRITE,
+    (_RBAC, "clusterroles"): _RBAC_WRITE,
+    (_RBAC, "clusterrolebindings"): _RBAC_WRITE,
+}
 EXEC_VERBS = frozenset({"create", "get"})
 READ_VERBS = frozenset({"get", "list", "watch"})
 
@@ -177,7 +205,19 @@ def _group_match(pat, group):
 
 
 def _resource_match(pat, res):
-    return pat == "*" or pat == res or (pat.endswith("/*") and res.startswith(pat[:-1]))
+    """Whether one entry of a rule's `resources` matches the requested resource
+    `res` ("pods", or "pods/exec" for a subresource). Exactly the Kubernetes RBAC
+    authorizer's ResourceMatches (k8s.io/kubernetes
+    plugin/pkg/auth/authorizer/rbac/rbac.go): "*" matches everything, including
+    every subresource; an exact "resource" or "resource/subresource" matches
+    itself; "*/subresource" matches that subresource of any resource, and only
+    when the request has a subresource. "resource/*" is NOT a form the authorizer
+    understands (it never matches), and neither is "*/*"; the Kubernetes RBAC
+    reference documents only "*", "resource/subresource" and "*/subresource"."""
+    if pat == "*" or pat == res:
+        return True
+    sub = res.partition("/")[2]
+    return bool(sub) and pat == "*/" + sub
 
 
 def _verb_match(verbs, wanted):
@@ -186,7 +226,8 @@ def _verb_match(verbs, wanted):
 
 def secrets_rules(rules, secret):
     """The ways the given rules reach one Secret: read, exec (exec or attach into
-    a pod), workload-create (start a pod some other way, see WORKLOAD_RESOURCES).
+    a pod), workload-create (start a pod some other way, see WORKLOAD_RESOURCES),
+    escalation (see ESCALATION_RESOURCES).
     A rule that cannot be parsed raises ReadError: it is not 'no access'."""
     via = set()
     if rules is not None and not isinstance(rules, list):
@@ -209,18 +250,12 @@ def secrets_rules(rules, secret):
             via.add("exec")
         if any(has(g, x, v) for (g, x), v in WORKLOAD_RESOURCES.items()):
             via.add("workload-create")
+        if any(has(g, x, v) for (g, x), v in ESCALATION_RESOURCES.items()):
+            via.add("escalation")
     return via
 
 
-def subject_id(s, ns):
-    """Identity of a binding subject. ServiceAccounts carry their namespace (a
-    missing one is the binding's own), so the same name in two namespaces is two
-    subjects; Users and Groups are kind/name."""
-    if not isinstance(s, dict) or not isinstance(s.get("kind"), str) or not isinstance(s.get("name"), str):
-        raise W.ReadError(f"unparseable subject: {s!r}"[:300])
-    if s["kind"] == "ServiceAccount":
-        return f"ServiceAccount/{s.get('namespace') or ns}/{s['name']}"
-    return f"{s['kind']}/{s['name']}"
+subject_id = W.subject_id
 
 
 def reader_rows(docs, ns, secrets):
@@ -259,7 +294,11 @@ def reader_rows(docs, ns, secrets):
             who = subject_id(s, ns)
             for sec in secrets:
                 for v in secrets_rules(rules, sec):
-                    rows.add((who, ref["name"], v))
+                    # A read depends on the Secret (resourceNames), so it is one row
+                    # per credential: moving access from one Secret to the other
+                    # changes the rows. The other ways reach every Secret in the
+                    # namespace, so they are one row however many credentials.
+                    rows.add((who, ref["name"], f"read:{sec}" if v == "read" else v))
     return sorted(rows)
 
 
@@ -290,6 +329,29 @@ def tenant_namespaces(docs):
             and (d["metadata"].get("labels") or {}).get("mctl.me/preview") != "true"]
 
 
+def tenant_ns_or_error(tenant, docs):
+    """The non-preview namespaces of a rendered tenant. None is an error: a tenant
+    that was not observed must not drop out of the checks."""
+    nss = tenant_namespaces(docs)
+    if not nss:
+        raise W.ReadError(f"tenant {tenant}: the render has no non-preview Namespace")
+    return nss
+
+
+def mutation_tenant(ledger, tenants):
+    """The tenant the real-chart mutations run on: the first in sorted order with no
+    readers_by_tenant entry, so its rows are the base rows. None when there is none."""
+    extras = ledger.get("readers_by_tenant") or {}
+    return next((t for t in sorted(tenants) if t not in extras), None)
+
+
+def stale_tenants(ledger, tenants):
+    """readers_by_tenant keys with no tenant directory. Fail closed: an entry that
+    outlives its tenant is an unreviewed grant kept on the ledger, so it is a
+    failure, and the change that deletes the tenant deletes the entry."""
+    return sorted(set(ledger.get("readers_by_tenant") or {}) - set(tenants))
+
+
 def missing_secrets(reach, have):
     return sorted({s for secs in reach.values() for s in secs} - set(have))
 
@@ -317,17 +379,20 @@ try:
           {k: v for k, v in want.items() if not set(v) <= set(reach.get(k, []))})
     check("the ledger observed something", len(want) > 0)
 
-    POSITIVE = ("ServiceAccount/{ns}/argo-workflow-sa", "argo-workflow-runner", "read")
+    POSITIVE = ("ServiceAccount/{ns}/argo-workflow-sa", "argo-workflow-runner", f"read:{W.SECRET_NAMES[0]}")
     check("the reader ledger has the workflow ServiceAccount as positive control",
-          any(r[0] == POSITIVE[0] and r[2] == "read" for r in ledger["readers"]))
+          any(r[0] == POSITIVE[0] and r[2].startswith("read:") for r in ledger["readers"]))
     n_ns = 0
     tenants_seen = set()
+    rendered = {}  # tenant -> (values file, rendered docs, namespaces)
     for vf in W.tenant_values():
         t = vf.parent.name
         docs = W.helm_render(CHART, vf, f"tenant-{t}", t)
-        for ns in tenant_namespaces(docs):
+        nss = tenant_ns_or_error(t, docs)
+        rendered[t] = (vf, docs, nss)
+        tenants_seen.add(t)
+        for ns in nss:
             n_ns += 1
-            tenants_seen.add(t)
             have = produced(docs, ns)
             check(f"{ns}: every credential a tenant-class template reaches is rendered here",
                   not missing_secrets(reach, have), missing_secrets(reach, have))
@@ -338,19 +403,33 @@ try:
                   rows == want_rows, (sorted(set(rows) - set(want_rows)), sorted(set(want_rows) - set(rows))))
             pos = (POSITIVE[0].replace("{ns}", ns),) + POSITIVE[1:]
             check(f"{ns}: the positive control is observed", pos in rows, rows)
-            if t == "karabu":
-                # Real-chart mutations: each must change the rows for this tenant.
-                for label, args in (("the central ServiceAccount binding turned on",
-                                     ("--set", "tenant.centralWorkflowSA.smokeVerify=true")),
-                                    ("a central restart grant added",
-                                     ("--set", "tenant.centralWorkflowSA.restartDeployments={x}"))):
-                    mut = reader_rows(W.helm_render(CHART, vf, f"tenant-{t}", t, args), ns, held)
-                    check(f"{ns}: {label} is not in the ledger", mut != want_rows,
-                          sorted(set(mut) - set(want_rows)))
     check("tenant namespaces were rendered", n_ns > 0)
-    stale_tenants = sorted(set(ledger.get("readers_by_tenant") or {}) - tenants_seen)
-    print(f"INFO  readers_by_tenant entries for tenants that no longer exist (allowed, delete them): {stale_tenants}"
-          if stale_tenants else "INFO  readers_by_tenant has no stale tenants")
+    stale = stale_tenants(ledger, tenants_seen)
+    check("readers_by_tenant names only tenants that exist (delete the entry with the tenant)", not stale, stale)
+
+    # Real-chart mutations. The tenant is the first one, in sorted order, that has no
+    # readers_by_tenant entry, so its rows are the base rows and each mutation must
+    # add rows to them. No fixed tenant name: renaming or deleting a tenant cannot
+    # silently remove the cases, and the counter below fails if none ran.
+    mut_tenant = mutation_tenant(ledger, rendered)
+    check("a real-chart mutation tenant was found (one without readers_by_tenant extras)", mut_tenant is not None)
+    mutations_run = 0
+    if mut_tenant is not None:
+        vf, _, nss = rendered[mut_tenant]
+        for ns in nss:
+            have = produced(rendered[mut_tenant][1], ns)
+            held = sorted(have & set(W.SECRET_NAMES))
+            want_rows = expected_rows(ledger, mut_tenant, ns)
+            for label, args in (("the central ServiceAccount binding turned on",
+                                 ("--set", "tenant.centralWorkflowSA.smokeVerify=true")),
+                                ("a central restart grant added",
+                                 ("--set", "tenant.centralWorkflowSA.restartDeployments={x}"))):
+                mut = reader_rows(W.helm_render(CHART, vf, f"tenant-{mut_tenant}", mut_tenant, args), ns, held)
+                mutations_run += 1
+                added = sorted(set(mut) - set(want_rows))
+                check(f"{ns}: {label} adds rows that are not in the ledger", bool(added), added)
+    check("the real-chart mutation cases ran (two per mutation tenant namespace)",
+          mut_tenant is not None and mutations_run >= 2, mutations_run)
 except W.ReadError as e:
     check("the repository could be observed", False, e)
 
@@ -410,15 +489,28 @@ def rule(groups, res, verbs, names=None):
 
 core = lambda res, verbs, names=None: rule([""], res, verbs, names)
 SA = "ServiceAccount/n/s"
-check("get on every Secret is a read", rows_of([core(["secrets"], ["get"])]) == [(SA, "r", "read")])
+RK = f"read:{K}"
+check("get on every Secret is a read", rows_of([core(["secrets"], ["get"])]) == [(SA, "r", RK)])
 check("get limited to another name is not a read", rows_of([core(["secrets"], ["get"], ["other"])]) == [])
-check("get limited to the name is a read", rows_of([core(["secrets"], ["get"], [K])]) == [(SA, "r", "read")])
-check("wildcard group, resources and verbs reach by read, exec and workload creation",
-      [r[2] for r in rows_of([rule(["*"], ["*"], ["*"])])] == ["exec", "read", "workload-create"])
+check("get limited to the name is a read", rows_of([core(["secrets"], ["get"], [K])]) == [(SA, "r", RK)])
+# one row per credential: a resourceNames edit that moves access from one Secret to the other
+# must change the rows, and a rule that names both gives one row each
+check("get limited to the other credential is a read of that one only",
+      rows_of([core(["secrets"], ["get"], [P])], secrets=(K, P)) == [(SA, "r", f"read:{P}")])
+check("moving resourceNames from one credential to the other changes the rows",
+      rows_of([core(["secrets"], ["get"], [K])], secrets=(K, P)) != rows_of([core(["secrets"], ["get"], [P])], secrets=(K, P)))
+check("get on both credentials is one row each",
+      rows_of([core(["secrets"], ["get"], [K, P])], secrets=(K, P)) == [(SA, "r", f"read:{P}"), (SA, "r", RK)])
+check("exec and workload-create stay one row however many credentials are held",
+      rows_of([core(["pods/exec"], ["create"]), core(["pods"], ["create"])], secrets=(K, P)) ==
+      [(SA, "r", "exec"), (SA, "r", "workload-create")])
+check("wildcard group, resources and verbs reach by every way",
+      [r[2] for r in rows_of([rule(["*"], ["*"], ["*"])])] == ["escalation", "exec", RK, "workload-create"])
 check("pods/exec create is exec", rows_of([core(["pods/exec"], ["create"])]) == [(SA, "r", "exec")])
 check("pods/exec get (legacy websocket exec) is exec", rows_of([core(["pods/exec"], ["get"])]) == [(SA, "r", "exec")])
 check("pods/attach create is exec", rows_of([core(["pods/attach"], ["create"])]) == [(SA, "r", "exec")])
-check("pods/* create is exec", rows_of([core(["pods/*"], ["create"])]) == [(SA, "r", "exec")])
+check("pods/* is not a form the authorizer matches: it reaches nothing",
+      rows_of([core(["pods/*"], ["create"])]) == [])
 check("creating Secrets only is not a read", rows_of([core(["secrets"], ["create"])]) == [])
 check("an empty Role reaches nothing", rows_of(None) == [] and rows_of([]) == [])
 check("a nonResourceURLs rule reaches nothing", rows_of([{"nonResourceURLs": ["/healthz"], "verbs": ["get"]}]) == [])
@@ -458,6 +550,73 @@ check("a rule that lists several resources reports the workload one",
 check("read-only access to workflows and deployments is not workload-create",
       rows_of([rule(["argoproj.io", "apps"], ["workflows", "deployments"], ["get", "list", "watch"])]) == [])
 
+# Resource spellings, as the Kubernetes RBAC authorizer reads them (ResourceMatches):
+# "*", exact "resource" or "resource/subresource", and "*/subresource". Written out
+# independently of the tables: (group, resource as requested, verbs that count, way).
+MUST_WAYS = [("", "pods/exec", ("create", "get"), "exec"), ("", "pods/attach", ("create", "get"), "exec"),
+             ("", "pods/ephemeralcontainers", ("patch", "update"), "workload-create"),
+             ("", "serviceaccounts/token", ("create",), "escalation"),
+             ("", "users", ("impersonate",), "escalation"), ("", "groups", ("impersonate",), "escalation"),
+             ("", "serviceaccounts", ("impersonate",), "escalation")]
+MUST_WAYS += [("rbac.authorization.k8s.io", r, ("create", "update", "patch", "bind", "escalate"), "escalation")
+              for r in ("roles", "rolebindings", "clusterroles", "clusterrolebindings")]
+MUST_WAYS += [(g, r, ("create", "patch", "update"), "workload-create") for g, r in (
+    ("", "replicationcontrollers"), ("apps", "deployments"), ("apps", "statefulsets"), ("apps", "replicasets"),
+    ("apps", "daemonsets"), ("batch", "jobs"), ("batch", "cronjobs"), ("argoproj.io", "workflows"),
+    ("argoproj.io", "cronworkflows"), ("argoproj.io", "workflowtemplates"))]
+MUST_WAYS += [("", "pods", ("create",), "workload-create")]
+for group, res, verbs, way in MUST_WAYS:
+    parent, _, sub = res.partition("/")
+    spellings = [res] + (["*/" + sub] if sub else [])
+    for pat in spellings:
+        for v in verbs:
+            check(f"{way}: {group or 'core'} resources [{pat}] verb {v} is counted",
+                  rows_of([rule([group], [pat], [v])]) == [(SA, "r", way)])
+        check(f"{way}: {group or 'core'} resources [{pat}] with the wildcard verb and a resourceName is counted",
+              rows_of([rule([group], [pat], ["*"], ["one"])]) == [(SA, "r", way)])
+        check(f"{way}: {group or 'core'} resources [{pat}] in another API group is not counted",
+              rows_of([rule(["other.example"], [pat], list(verbs))]) == [])
+    check(f"{way}: {group or 'core'} resources [{res}] with only get/list/watch/delete or no matching verb is not counted",
+          rows_of([rule([group], [res], [v for v in ("list", "watch", "delete") if v not in verbs])]) == [])
+    # Spellings the authorizer does not match: "resource/*", "*/*", "*/<another subresource>",
+    # and the parent alone for a subresource.
+    for bad in (res + "/*", parent + "/*", "*/*", "*/zzz"):
+        check(f"{way}: {group or 'core'} resources [{bad}] is not matched (not an authorizer form)",
+              rows_of([rule([group], [bad], list(verbs))]) == [])
+    if sub:
+        check(f"{way}: {group or 'core'} resources [{parent}] alone does not match the subresource {sub}",
+              rows_of([rule([group], [parent], [v for v in verbs if v != "create" or parent != "pods"])]) == [])
+check("*/exec in a rule that lists several resources reports the exec way",
+      rows_of([core(["configmaps", "*/exec"], ["create"])]) == [(SA, "r", "exec")])
+check("*/subresource does not match a resource that has no subresource",
+      rows_of([core(["*/exec"], ["get"])]) == [(SA, "r", "exec")] and rows_of([core(["*/exec"], ["list"])]) == [])
+check("the bare resource wildcard matches subresources too",
+      [r[2] for r in rows_of([core(["*"], ["create"])])] == ["escalation", "exec", "workload-create"])
+check("a read of Secrets through resources */secrets does not count (no such subresource)",
+      rows_of([core(["*/secrets"], ["get"])]) == [])
+# _resource_match itself, against the authorizer's table
+for pat, res, want in (("*", "pods", True), ("*", "pods/exec", True), ("pods", "pods", True), ("pods", "pods/exec", False),
+                       ("pods/exec", "pods/exec", True), ("pods/exec", "pods", False), ("*/exec", "pods/exec", True),
+                       ("*/exec", "pods", False), ("*/exec", "pods/attach", False), ("pods/*", "pods/exec", False),
+                       ("pods/*", "pods", False), ("*/*", "pods/exec", False), ("*/*", "pods", False),
+                       ("*/exe", "pods/exec", False), ("*/xec", "pods/exec", False), ("", "pods", False)):
+    check(f"_resource_match({pat!r}, {res!r}) is {want}", _resource_match(pat, res) is want)
+
+# the tenant chosen for the real-chart mutations, and what a render without a namespace is
+check("the mutation tenant is the first sorted one without extras",
+      mutation_tenant({"readers_by_tenant": {"a": []}}, ["c", "b", "a"]) == "b")
+check("the mutation tenant is chosen when readers_by_tenant is missing", mutation_tenant({}, ["b", "a"]) == "a")
+check("no mutation tenant when every tenant has extras", mutation_tenant({"readers_by_tenant": {"a": []}}, ["a"]) is None)
+check("a render with only a preview namespace is an error", raises(lambda: tenant_ns_or_error(
+    "t", [{"kind": "Namespace", "metadata": {"name": "p", "labels": {"mctl.me/preview": "true"}}}])))
+check("a render with no Namespace is an error", raises(lambda: tenant_ns_or_error("t", [])))
+check("a render with a namespace returns it", tenant_ns_or_error(
+    "t", [{"kind": "Namespace", "metadata": {"name": "t"}}]) == ["t"])
+check("a readers_by_tenant entry for a deleted tenant is reported",
+      stale_tenants({"readers_by_tenant": {"gone": [], "here": []}}, {"here"}) == ["gone"])
+check("no stale tenants when every entry has its tenant", stale_tenants({"readers_by_tenant": {"here": []}}, {"here"}) == [])
+check("no stale tenants when the ledger has no readers_by_tenant", stale_tenants({}, {"here"}) == [])
+
 # fail closed: a rule that cannot be understood is an error, never 'no access'
 for label, bad in (("a rule that is not a mapping", ["create"]),
                    ("verbs that are not a list", [{"apiGroups": [""], "resources": ["pods"], "verbs": "create"}]),
@@ -479,11 +638,11 @@ check("a subject that is not a mapping is an error", raises(lambda: rows_of([cor
 # subjects carry their namespace
 LOCAL = {"kind": "ServiceAccount", "name": "s"}
 check("a ServiceAccount subject without a namespace is in the binding's namespace",
-      rows_of([core(["secrets"], ["get"])], subjects=[LOCAL]) == [("ServiceAccount/n/s", "r", "read")])
+      rows_of([core(["secrets"], ["get"])], subjects=[LOCAL]) == [("ServiceAccount/n/s", "r", RK)])
 central = {"kind": "ServiceAccount", "name": "s", "namespace": "argo-workflows"}
 check("the same ServiceAccount name in another namespace is a different subject",
       rows_of([core(["secrets"], ["get"])], subjects=[LOCAL, central]) ==
-      [("ServiceAccount/argo-workflows/s", "r", "read"), ("ServiceAccount/n/s", "r", "read")])
+      [("ServiceAccount/argo-workflows/s", "r", RK), ("ServiceAccount/n/s", "r", RK)])
 check("Users and Groups are kind/name",
       [r[0] for r in rows_of([core(["secrets"], ["get"])], subjects=[
           {"kind": "User", "name": "u"}, {"kind": "Group", "name": "g"}])] == ["Group/g", "User/u"])

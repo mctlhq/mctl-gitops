@@ -181,6 +181,18 @@ def tenant_values(base=None):
     return files
 
 
+def subject_id(s, ns):
+    """Identity of a RoleBinding or ClusterRoleBinding subject. ServiceAccounts
+    carry their namespace (a missing one is the binding's own namespace `ns`), so
+    the same name in two namespaces is two subjects; Users and Groups are
+    kind/name. A subject that cannot be read is a ReadError."""
+    if not isinstance(s, dict) or not isinstance(s.get("kind"), str) or not isinstance(s.get("name"), str):
+        raise ReadError(f"unparseable subject: {s!r}"[:300])
+    if s["kind"] == "ServiceAccount":
+        return f"ServiceAccount/{s.get('namespace') or ns}/{s['name']}"
+    return f"{s['kind']}/{s['name']}"
+
+
 def container_secret_refs(cont, volumes, names=SECRET_NAMES):
     """Names from `names` a container (or init container, sidecar) can read:
     through a mounted Secret volume (plain or projected), an env secretKeyRef,

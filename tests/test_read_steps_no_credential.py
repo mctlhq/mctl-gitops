@@ -63,11 +63,55 @@ GIT_PUSH = re.compile(
 RUNS_ARG = re.compile(r"(?:\beval|\b(?:ba|z|da|k)?sh(?:\s+-\w+)*\s+-\w*c)\s*$")
 
 
+def _skip_dq(code, i):
+    """Index just past the double quote that closes a double-quoted string whose
+    body starts at `i`; a `$(...)` inside it is skipped as a whole, quotes and all."""
+    n = len(code)
+    while i < n:
+        if code[i] == "\\":
+            i += 2
+        elif code[i] == '"':
+            return i + 1
+        elif code.startswith("$(", i):
+            i = _subst_end(code, i + 2) + 1
+        else:
+            i += 1
+    return n
+
+
+def _subst_end(code, i):
+    """Index of the `)` that closes a `$(` whose body starts at `i` (len(code) when
+    there is none). Parentheses nest, and a quoted string inside may hold a `)`."""
+    n, depth = len(code), 1
+    while i < n:
+        c = code[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'":
+            k = code.find("'", i + 1)
+            i = n if k < 0 else k + 1
+            continue
+        if c == '"':
+            i = _skip_dq(code, i + 1)
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return n
+
+
 def _mask(code):
     """(code with quoted spans emptied, code carried inside quotes). A quoted
     span is data, so a separator or `git push` inside it is not a command; what
     does run is `$(...)` or a backtick body inside double quotes, and the argument
-    of sh -c / bash -c / eval. Those bodies are returned for a second pass.
+    of sh -c / bash -c / eval. Those bodies are returned for a second pass, which
+    reads them as code in their own right (so a quote inside `$(...)` inside
+    double quotes is matched by its own partner, not by the outer one).
     An unterminated quote is treated as quoted to the end: that errs towards
     reporting a step as read-only, which a reviewer sees, rather than hiding it."""
     out, nested, i, n = [], [], 0, len(code)
@@ -83,18 +127,25 @@ def _mask(code):
             continue
         j, body = i + 1, []
         while j < n and code[j] != ch:
-            if ch == '"' and code[j] == "\\" and j + 1 < n:
+            c = code[j]
+            if c == "\\" and ch == '"' and j + 1 < n:
                 body.append(code[j:j + 2])
                 j += 2
-                continue
-            body.append(code[j])
-            j += 1
-        text = "".join(body)
+            elif ch == '"' and code.startswith("$(", j):
+                k = _subst_end(code, j + 2)
+                nested.append(code[j + 2:k])
+                j = k + 1
+            elif ch == '"' and c == "`":
+                k = j + 1
+                while k < n and code[k] != "`":
+                    k += 2 if code[k] == "\\" else 1
+                nested.append(code[j + 1:k])
+                j = k + 1
+            else:
+                body.append(c)
+                j += 1
         if RUNS_ARG.search("".join(out)):
-            nested.append(text)
-        elif ch == '"':
-            for m in re.finditer(r"\$\(((?:[^()]|\([^()]*\))*)\)|`([^`]*)`", text):
-                nested.append(m.group(1) or m.group(2) or "")
+            nested.append("".join(body))
         out.append(ch + ch)
         i = j + 1
     return "".join(out), nested
@@ -236,16 +287,45 @@ for src, want in (
         ('echo \\"; git push', True),
         ('echo "a" "b"; git push', True),
         ('echo "$(echo hi)"', False),
-        ("git clone 'x;git push'", False)):
+        ("git clone 'x;git push'", False),
+        # quotes nested inside $(...) or backticks inside double quotes pair with each other
+        ('echo "$(echo "a; git push")"', False),
+        ('echo "$(echo "then git push")"', False),
+        ('echo "$(echo "x"; git push)"', True),
+        ('echo "$(echo "$(echo "a; git push")")"', False),
+        ('echo "$(echo "$(git push)")"', True),
+        ('echo "$(echo "a)"; git push)"', True),
+        ('echo "$(echo "a)")"; git push', True),
+        ('echo "$(echo "a)")" "b; git push"', False),
+        ('echo "$(echo "x $(echo ")") y")"; git push', True),
+        ('echo "$(echo "x $(echo ")") y; git push")"', False),
+        ('echo "`echo "a; git push"`"', False),
+        ('echo "`echo a; git push`"', True),
+        ('x="$(git log --format="%s; git push")"', False),
+        ('x="$(git log --format="%s")" && git push', True),
+        ("echo \"$(echo 'a; git push')\"", False),
+        ("echo \"$(echo 'a)'; git push)\"", True),
+        ('echo "$(echo "unterminated; git push', False)):
     check(f"pushes({src!r}) is {want}", pushes(src) is want, pushes(src))
+# Where the quote scanner errs: a quote it cannot pair (an unterminated one) is read as quoted
+# to the end of the script, so a `git push` after it is NOT seen and the step is reported
+# as read-only. That direction is deliberate (a reviewer looks at a step listed as read-only,
+# whereas a step wrongly taken for a writer would leave the ratchet silently); a heredoc body
+# is the opposite case and is read as code, so a push written inside one counts as a push.
+check("an unpaired quote hides what follows it, so the step is reported as read-only (documented direction)",
+      pushes('echo "oops\ngit push') is False)
+check("a heredoc body is read as code (documented direction)", pushes("cat <<EOF\ngit push\nEOF") is True)
 qs = {"spec": {"templates": [
     step("quoted-sep-reader", source='echo "a; git push"'),
     step("quoted-keyword-reader", source='echo "then git push"'),
     step("subst-writer", source='echo "$(git push)"'),
-    step("sh-c-writer", source="bash -c 'git push'")]}}
+    step("sh-c-writer", source="bash -c 'git push'"),
+    step("nested-quote-reader", source='echo "$(echo "a; git push")"'),
+    step("nested-quote-writer", source='echo "$(echo "a"; git push)"')]}}
 got = read_only_holders([("q.yaml", qs)])
 check("steps that only quote a push are read-only holders, steps that run one are writers",
-      got == {("q.yaml", "quoted-sep-reader", "main"), ("q.yaml", "quoted-keyword-reader", "main")}, got)
+      got == {("q.yaml", "quoted-sep-reader", "main"), ("q.yaml", "quoted-keyword-reader", "main"),
+              ("q.yaml", "nested-quote-reader", "main")}, got)
 
 # A template directory that cannot be loaded is one recorded failure, not a crash in the
 # lookups that follow. The case runs this file against a copy of the tests with an

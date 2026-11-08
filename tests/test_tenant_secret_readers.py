@@ -15,9 +15,12 @@ test, two subjects that never need them could read them anyway:
 For every tenant values file, in every non-preview namespace the chart
 renders:
 
-- every RoleBinding's role is known (a Role rendered here, or a ClusterRole
+- every RoleBinding's and ClusterRoleBinding's role is known (a Role rendered here, or a ClusterRole
   classified below), so a new binding cannot escape the check;
 - only the workflow ServiceAccounts read Secrets without resourceNames;
+  subjects are identified by namespace and name (the shared subject_id helper
+  in gitops_write_set.py), so a ServiceAccount of the same name in another
+  namespace is a different subject;
 - the SSO account reads exactly the artifact-repository credentials Secret
   that the controller config names, and nothing else;
 - mctl-api cannot get, list or watch any Secret.
@@ -31,6 +34,8 @@ import sys
 
 import yaml
 
+import gitops_write_set as W
+
 CHART = pathlib.Path("platform-gitops/helm-charts/tenant")
 TENANTS = pathlib.Path("platform-gitops/tenants")
 CONTROLLER = pathlib.Path("platform-gitops/bootstrap/templates/core-infra/argo-workflows.yaml")
@@ -39,8 +44,13 @@ READ = {"get", "list", "watch", "*"}
 # carry. argo-workflows-view comes from the upstream argo-workflows chart and
 # only covers argoproj.io resources.
 CLUSTER_ROLES = {"argo-workflows-view": []}
-# Subjects that run workflow pods here and mount the Secrets themselves.
-WORKFLOW_SAS = {"argo-workflow-sa"}
+# Subjects that run workflow pods and mount the Secrets themselves, as
+# namespace-qualified identities; "{ns}" is the tenant's own namespace. The
+# central argo-workflows ServiceAccount is bound in some tenants through the
+# smoke-verify Role (tenant.centralWorkflowSA.smokeVerify); which tenants may have
+# it is pinned by tests/test_gitops_tenant_template_write_set.py.
+WORKFLOW_SAS = {"ServiceAccount/{ns}/argo-workflow-sa", "ServiceAccount/argo-workflows/argo-workflow-sa"}
+MCTL_API = "ServiceAccount/mctl-api/mctl-api"
 
 failures = []
 
@@ -83,56 +93,129 @@ m = re.search(r"artifactRepository:.*?accessKeySecret:\s*\n\s*name:\s*(\S+)",
 check(m is not None, f"could not find artifactRepository.s3.accessKeySecret.name in {CONTROLLER}")
 ARTIFACT_SECRET = m.group(1) if m else None
 
-checked = 0
-for values_file in sorted(TENANTS.glob("*/values.yaml")):
-    tenant = values_file.parent.name
-    docs = render(values_file, tenant)
+def secret_check_binding(tenant, ns, b, rules, ref):
+    """Check one binding's subjects against the Secret rules of its role."""
+    name = b["metadata"]["name"]
+    unrestricted, names = secret_reads(rules)
+    sso_names = set()
+    for s in b.get("subjects") or []:
+        if b["kind"] == "ClusterRoleBinding" and isinstance(s, dict) and s.get("kind") == "ServiceAccount" \
+                and not s.get("namespace"):
+            check(False, f"{tenant}: ClusterRoleBinding {name}: ServiceAccount subject {s.get('name')} has no namespace")
+            continue
+        try:
+            who = W.subject_id(s, ns)
+        except W.ReadError as e:
+            check(False, f"{tenant}: {b['kind']} {name} in {ns}: {e}")
+            continue
+        if who == f"ServiceAccount/argo-workflows/sso-team-{tenant}":
+            check(not unrestricted,
+                  f"{tenant}: {name} in {ns} lets the SSO account {who} read every "
+                  "Secret, including the gitops deploy key")
+            sso_names |= names
+            continue
+        if who == MCTL_API:
+            check(not unrestricted and not names,
+                  f"{tenant}: {name} in {ns} lets mctl-api read Secrets "
+                  f"({'all' if unrestricted else sorted(names)}); it only creates them")
+            continue
+        if unrestricted:
+            check(who in {w.replace("{ns}", ns) for w in WORKFLOW_SAS},
+                  f"{tenant}: {b['kind']} {name} in {ns} grants get/list on every Secret to {who}")
+    return sso_names
+
+
+def check_tenant(tenant, docs):
+    """Check one tenant's rendered documents; returns the namespaces checked."""
     namespaces = [d["metadata"]["name"] for d in docs if d["kind"] == "Namespace"
                   and d["metadata"].get("labels", {}).get("mctl.me/preview") != "true"]
     check(namespaces, f"{tenant}: the chart rendered no tenant namespace")
+    cluster_roles = {d["metadata"]["name"]: d.get("rules") for d in docs if d["kind"] == "ClusterRole"}
     for ns in namespaces:
-        checked += 1
         roles = {d["metadata"]["name"]: d.get("rules") for d in docs
                  if d["kind"] == "Role" and d["metadata"].get("namespace") == ns}
-        sso = ("ServiceAccount", "argo-workflows", f"sso-team-{tenant}")
         sso_names = set()
         for b in docs:
-            if b["kind"] != "RoleBinding" or b["metadata"].get("namespace") != ns:
+            # A ClusterRoleBinding applies in every namespace, so it is checked in each.
+            if b["kind"] not in ("RoleBinding", "ClusterRoleBinding"):
+                continue
+            if b["kind"] == "RoleBinding" and b["metadata"].get("namespace") != ns:
                 continue
             name, ref = b["metadata"]["name"], b["roleRef"]
             if ref["kind"] == "Role":
-                check(ref["name"] in roles,
-                      f"{tenant}: RoleBinding {name} in {ns} references Role {ref['name']}, "
-                      "which the chart does not render")
+                check(b["kind"] == "RoleBinding" and ref["name"] in roles,
+                      f"{tenant}: {b['kind']} {name} in {ns} references Role {ref['name']}, "
+                      "which the chart does not render in that namespace")
                 rules = roles.get(ref["name"])
             else:
-                check(ref["name"] in CLUSTER_ROLES,
-                      f"{tenant}: RoleBinding {name} in {ns} references ClusterRole "
+                check(ref["name"] in cluster_roles or ref["name"] in CLUSTER_ROLES,
+                      f"{tenant}: {b['kind']} {name} in {ns} references ClusterRole "
                       f"{ref['name']}; classify its Secret access in CLUSTER_ROLES")
-                rules = CLUSTER_ROLES.get(ref["name"])
-            unrestricted, names = secret_reads(rules)
-            for s in b.get("subjects") or []:
-                who = (s["kind"], s.get("namespace"), s["name"])
-                if who == sso:
-                    check(not unrestricted,
-                          f"{tenant}: {name} in {ns} lets the SSO account {s['name']} read every "
-                          "Secret, including the gitops deploy key")
-                    sso_names |= names
-                    continue
-                if s["kind"] == "ServiceAccount" and s["name"] == "mctl-api":
-                    check(not unrestricted and not names,
-                          f"{tenant}: {name} in {ns} lets mctl-api read Secrets "
-                          f"({'all' if unrestricted else sorted(names)}); it only creates them")
-                    continue
-                if unrestricted:
-                    check(s["kind"] == "ServiceAccount" and s["name"] in WORKFLOW_SAS,
-                          f"{tenant}: {name} in {ns} grants get/list on every Secret to "
-                          f"{s.get('namespace')}/{s['name']}")
+                rules = cluster_roles[ref["name"]] if ref["name"] in cluster_roles else CLUSTER_ROLES.get(ref["name"])
+            sso_names |= secret_check_binding(tenant, ns, b, rules, ref)
         check(sso_names == {ARTIFACT_SECRET},
               f"{tenant}: the SSO account must read exactly {ARTIFACT_SECRET} in {ns} "
               f"(archived logs in the Argo UI), got {sorted(sso_names)}")
+    return namespaces
+
+
+checked = 0
+for values_file in sorted(TENANTS.glob("*/values.yaml")):
+    tenant = values_file.parent.name
+    checked += len(check_tenant(tenant, render(values_file, tenant)))
 
 check(checked > 0, "no tenant namespace rendered; the test checked nothing")
+
+# Self-test, run on synthetic documents: the check must be green on a converged input and
+# red on each deliberate mutation. The recorded failures are swapped out for the case.
+def failures_of(docs):
+    global failures
+    saved, failures = failures, []
+    try:
+        check_tenant("t", docs)
+        return list(failures)
+    finally:
+        failures = saved
+
+
+def tenant_docs(rules, subject, kind="RoleBinding", ref_kind="Role"):
+    sso = {"kind": "ServiceAccount", "name": "sso-team-t", "namespace": "argo-workflows"}
+    meta = {"name": "x", "namespace": "t"} if kind == "RoleBinding" else {"name": "x"}
+    return [
+        {"kind": "Namespace", "metadata": {"name": "t"}},
+        {"kind": "Role", "metadata": {"name": "all", "namespace": "t"}, "rules": rules},
+        {"kind": "ClusterRole", "metadata": {"name": "all"}, "rules": rules},
+        {"kind": "Role", "metadata": {"name": "art", "namespace": "t"}, "rules": [
+            {"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"], "resourceNames": [ARTIFACT_SECRET]}]},
+        {"kind": "RoleBinding", "metadata": {"name": "sso", "namespace": "t"},
+         "roleRef": {"kind": "Role", "name": "art"}, "subjects": [sso]},
+        {"kind": kind, "metadata": meta, "roleRef": {"kind": ref_kind, "name": "all"}, "subjects": [subject]}]
+
+
+ALL = [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}]
+sa = lambda ns, name="argo-workflow-sa": {"kind": "ServiceAccount", "name": name, "namespace": ns}
+if ARTIFACT_SECRET:
+    check(not failures_of(tenant_docs(ALL, sa("t"))), "self-test: the tenant's own workflow ServiceAccount may read every Secret")
+    check(not failures_of(tenant_docs(ALL, {"kind": "ServiceAccount", "name": "argo-workflow-sa"})),
+          "self-test: a ServiceAccount subject without namespace is in the binding's namespace")
+    check(failures_of(tenant_docs(ALL, sa("other"))),
+          "self-test: a ServiceAccount named like the workflow one in another namespace is not allowed")
+    check(failures_of(tenant_docs(ALL, sa("t", "someone-else"))), "self-test: another ServiceAccount reading every Secret is flagged")
+    check(failures_of(tenant_docs(ALL, sa("other", "mctl-api"))), "self-test: mctl-api named ServiceAccount elsewhere with every Secret is flagged")
+    check(failures_of(tenant_docs(ALL, sa("mctl-api", "mctl-api"))), "self-test: mctl-api reading every Secret is flagged")
+    NAMED = [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"], "resourceNames": ["other"]}]
+    check(failures_of(tenant_docs(NAMED, sa("mctl-api", "mctl-api"))), "self-test: mctl-api reading a named Secret is flagged")
+    check(not failures_of(tenant_docs(NAMED, sa("t", "mctl-api"))),
+          "self-test: a ServiceAccount named mctl-api in the tenant namespace is not the platform mctl-api")
+    check(failures_of(tenant_docs(ALL, {"kind": "User", "name": "u"}, "ClusterRoleBinding", "ClusterRole")),
+          "self-test: a ClusterRoleBinding granting every Secret to a user is flagged")
+    check(not failures_of(tenant_docs(ALL, sa("argo-workflows"), "ClusterRoleBinding", "ClusterRole")),
+          "self-test: a ClusterRoleBinding to the central workflow ServiceAccount is accepted")
+    check(failures_of(tenant_docs(ALL, {"kind": "ServiceAccount", "name": "argo-workflow-sa"}, "ClusterRoleBinding", "ClusterRole")),
+          "self-test: a ClusterRoleBinding ServiceAccount subject without namespace is flagged")
+    check(failures_of(tenant_docs(ALL, sa("argo-workflows", "sso-team-t"), "ClusterRoleBinding", "ClusterRole")),
+          "self-test: a ClusterRoleBinding giving the SSO account every Secret is flagged")
+    check(failures_of(tenant_docs(ALL, "x")), "self-test: a subject that is not a mapping is flagged")
 
 if failures:
     print("\n".join(f"FAIL: {f}" for f in failures))
