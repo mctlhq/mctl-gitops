@@ -50,6 +50,14 @@ registry interface shape is agreed. Until M1a merges, tasks use the fail-closed 
 - [ ] 12. Independent review and green CI; do not enable the switch in any environment
   (release gate is a later decision) — DoD: PR approved; deploy unchanged.
 
+## AMEND 2026-11-08 — new required safety gates
+
+- [ ] A1. Define a machine-authenticated per-effect physical write fence between mctl-api and private **fake** provider, keyed by owner+selected team+connection/install revision+`we_`+`aar_`+operation key; explicitly state how it serializes or CAS-fences connection revoke/reinstall. No signature-only access at actual mutation.
+- [ ] A2. Test deterministic race: sign a valid authorization, then revoke team membership / revoke connection / bump install revision **before** worker fake mutation; all cases yield **zero writes**. Repeat while worker is retrying a cached authorization; never mint or reuse a stale grant.
+- [ ] A3. Reverse order: fake mutation committed, then revoke; exactly one audited write, no second mutation or restored consent; late callback must be auditable without authorizing new calls.
+- [ ] A4. Missing authority or invalid selected-team binding on the last pre-write fence must fail closed. Never revive a failed/unknown effect or re-dispatch from a cached token. Existing T1–T19 remain mandatory.
+- [ ] A5. The release gate stays separate: this proposal authorizes no provider worker deployment, no Temporal/JWT config, no Glovo API and no real account.
+
 ## Tests
 
 All provider-side assertions use the fake provider's write counter.
@@ -62,9 +70,7 @@ All provider-side assertions use the fake provider's write counter.
 - [ ] T4. Stale install revision: order created at rev 1, connection now rev 2;
   dispatch refused; writes == 0. Reconnect (new connection id) cannot revive an old
   receipt.
-- [ ] T5. Revocation during activity: membership or connection revoked after approval,
-  before dispatch -> refused, writes == 0; revoked between dispatch and callback ->
-  callback recorded, status read refused for the revoked owner.
+- [ ] T5. Revocation during activity: membership or connection revoked after approval before dispatch -> refused, writes == 0; **revoked after signed dispatch but before actual fake-provider write** -> physical write fenced and refused, writes == 0; revoked after a previously committed write -> callback audited, no additional writes, status read refused for revoked owner.
 - [ ] T6. `hir_` answer present, no approved `aar_` -> writes == 0.
 - [ ] T7. Approved `aar_` from a different `we_`, or with a different mutation intent
   hash or basket fingerprint -> writes == 0.
