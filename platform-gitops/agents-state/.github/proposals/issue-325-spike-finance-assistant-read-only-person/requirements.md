@@ -18,7 +18,7 @@ The deliverable is research only, in the shape of earlier spikes in this repo
 - one proposed verdict from `REUSE_CATALOG_CSV_MVP | EXTEND_AFTER_CONNECTOR_GATES |
   RESEARCH_ONLY_DEFER | NO_ADOPTION`.
 
-Only the owner selects the verdict. Nothing is built, deployed or approved.
+Only the owner selects the verdict. The approved scope, if granted, is **research artifacts only** (report, synthetic offline reference model, tests, manifest and reviewed research PR). No product runtime, bank connector, live customer data processing or release is built, deployed or approved. Research approval never grants implementation or production permission.
 
 ## User stories
 
@@ -46,6 +46,9 @@ Only the owner selects the verdict. Nothing is built, deployed or approved.
 - WHEN a source is revoked or deleted while a job is in flight THE SYSTEM SHALL fence that job, so it neither delivers nor persists any derived result. The test SHALL prove this.
 - IF statement or merchant text contains instructions THEN THE SYSTEM SHALL treat them as inert data. The tool allowlist SHALL stay read-only (no payment, transfer, trade, credit, outbound share or credential access). The test SHALL prove this.
 - WHEN the rules-only baseline digest and the assistant explanation are compared THE SYSTEM SHALL use exactly the same fixture. Any run that needs a model or live service SHALL be reported `not-run` with a reason, never as a fabricated PASS.
+- WHEN offline model tests are reported THE SYSTEM SHALL label them `L1 [MODEL]` and identify the exact fixture/oracle. Their PASS means only the abstract model's behavior passed: it SHALL NOT be presented as proof of real OAuth/Telegram owner binding, group isolation, account-to-tenant enforcement, external data egress, credential custody, persistent deletion, actual bank-data handling, or safe live runtime.
+- WHEN the report assesses integration or production security THE SYSTEM SHALL separate L0 pinned code/config inspection, L1 synthetic model, L2 integration, L3 isolated preview and L4 production evidence. L2-L4 SHALL be `not-run` here with prerequisites and separately approved owners; `unknown` SHALL never imply a control is enforced.
+- WHEN choosing a proposed verdict THE SYSTEM SHALL apply the four outcome criteria after reviewing D1-D10, include strongest counter-evidence and avoid a predeclared preferred verdict. A green offline model test alone SHALL never justify `REUSE_CATALOG_CSV_MVP` or rollout.
 - WHEN the report concludes THE SYSTEM SHALL propose exactly one of the four outcomes. It SHALL also give the rejected alternatives, the decision rules used, the smallest follow-up, the responsible repository, the kill/exit criteria and the explicit statement that an owner decision is required.
 - THE SYSTEM SHALL keep `roadmap/spikes/<name>.yaml` at `lifecycle: proposed` with no `decision` block. The file SHALL pass `python3 roadmap/scripts/validate.py roadmap/epics roadmap/spikes`.
 - THE SYSTEM SHALL run the reference-model tests in CI from `.github/workflows/workflow-tests.yml`, using stdlib `unittest`, with no network access.
@@ -60,7 +63,7 @@ Only the owner selects the verdict. Nothing is built, deployed or approved.
 - A new runtime, orchestrator, identity, policy, approval or audit system. A new finance service or epic.
 - Changing any active EpicDefinition, or adding a required work item to one.
 - Creating implementation child issues before the owner decides.
-- Approving or accepting this spike. The investigator only proposes.
+- Approving or accepting this spike **as a final owner verdict**. The investigator only proposes; a later research-only proposal approval may authorize the report/fixture PR but not a separate product implementation approval.
 
 ## Open questions
 
