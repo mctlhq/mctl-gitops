@@ -186,9 +186,8 @@ A cross-table CHECK cannot express that, so Go enforces it under the
 locks below.
 
 Immutability uses the `internal/decisions` pattern:
-`glovo_audit_immutable()` raises on `BEFORE UPDATE`, and on
-`BEFORE DELETE` unless `current_setting('glovo.retention_sweep', true) = 'on'`.
-M1 has **no application-exposed sweep or custom GUC bypass**. A separate, privileged and reviewed retention-maintenance design is required before any deletion of audit records. Installs and connections have no DELETE path
+`glovo_audit_immutable()` unconditionally refuses `BEFORE UPDATE` and
+`BEFORE DELETE` to the runtime role. It has **no** `glovo.retention_sweep` custom-GUC exception or application-exposed sweep. A separate, privileged and reviewed retention-maintenance design is required before any deletion of audit records. Installs and connections have no DELETE path
 in Go. A `BEFORE DELETE` trigger on `glovo_connections` refuses
 unconditionally, because connection IDs must stay unique forever (never
 reused). Triggers are created with the `pg_trigger` existence test.
@@ -236,7 +235,7 @@ return `*Refusal` for domain refusals and wrapped errors for I/O
 
 ```go
 func NewStore(ctx context.Context, connStr string, opts ...Option) (*Store, error)
-// Option: WithClock(func() time.Time), WithAuditRetention(time.Duration) (default 400*24h)
+// Option: WithClock(func() time.Time); audit retention is a future privileged maintenance slice
 func (s *Store) Close()
 
 func (s *Store) Install(ctx, tenantID, actor string) (*Install, error)          // idempotent if already installed
@@ -350,9 +349,7 @@ info level.
   - *Foreign-ID oracle.* There is one query shape and one sentinel. A
     test asserts `errors.Is(err, ErrNotFound)`, an identical `err.Error()`,
     and an identical returned value (nil) for all three miss cases.
-  - *Retention trigger bypass.* The `glovo.retention_sweep` GUC is
-    transaction-local. A test asserts that a plain `DELETE` and an
-    `UPDATE` on `glovo_audit_events` both fail.
+  - *Audit tamper protection.* No caller-writable GUC or runtime sweep exists. With the restricted runtime DB role, both raw UPDATE and DELETE of audit rows always fail, including after forged custom-GUC changes.
   - *Shared database with other stores.* All objects carry the `glovo_`
     prefix, and the trigger function names are unique.
   - *Secret leakage.* No column can hold secret bytes (CHECK on the
