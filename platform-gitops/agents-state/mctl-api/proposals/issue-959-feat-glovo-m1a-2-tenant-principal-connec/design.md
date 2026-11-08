@@ -62,6 +62,14 @@ Deployed state checked:
 - Sibling issues read with `gh`: #953 (parent), #958, #960, #961, #954
   exist and are OPEN. This slice's scope was cut against them.
 
+## AMEND 2026-11-08 — mandatory corrections to original schema/test draft
+
+The previously proposed `glovo_audit_immutable()` exception based on `current_setting('glovo.retention_sweep', true)` is **REJECTED** because caller-controlled custom settings do not prove privileged maintenance identity. The M1 trigger must always `RAISE EXCEPTION` for UPDATE or DELETE against audit events under the API role; no `SET LOCAL` flag or callable `SweepAudit` may bypass it. Retention is a documented obligation and a future **separately approved** maintenance service/DB-role design, not a runtime task in this slice. A dedicated migration role owns the schema; deny UPDATE/DELETE for runtime DB roles and verify GRANTs explicitly.
+
+The old cleanup helper's `session_replication_role = replica` is also **REJECTED**. Build DB tests with a disposable per-test schema/database and set search_path only on test-owned connections, using an actual limited non-superuser role; after a test, drop the isolated schema/database through the CI test-owner connection. Never disable triggers or mutate shared production fixtures. All lock concurrency tests must operate on an isolated owned test schema and still execute the real triggers.
+
+These amendments supersede the audit retention GUC bypass, the original `SweepAudit` design and the session_replication_role cleanup in subsequent sections. No live migration/production deploy is allowed by proposal approval.
+
 ## Proposed solution
 
 Add a new self-contained package `internal/glovo` (no imports from
@@ -180,8 +188,7 @@ locks below.
 Immutability uses the `internal/decisions` pattern:
 `glovo_audit_immutable()` raises on `BEFORE UPDATE`, and on
 `BEFORE DELETE` unless `current_setting('glovo.retention_sweep', true) = 'on'`.
-The sweep sets that with `SET LOCAL` inside its own transaction, so no
-other code path can delete. Installs and connections have no DELETE path
+M1 has **no application-exposed sweep or custom GUC bypass**. A separate, privileged and reviewed retention-maintenance design is required before any deletion of audit records. Installs and connections have no DELETE path
 in Go. A `BEFORE DELETE` trigger on `glovo_connections` refuses
 unconditionally, because connection IDs must stay unique forever (never
 reused). Triggers are created with the `pg_trigger` existence test.
@@ -246,7 +253,7 @@ func (s *Store) Revoke(ctx, owner Owner, connectionID, reason string) (*Connecti
 func (s *Store) GetConnection(ctx, owner Owner, connectionID string) (*Connection, error) // ErrNotFound
 func (s *Store) LiveConnection(ctx, owner Owner) (*Connection, error)                    // no_connection
 func (s *Store) ListAudit(ctx, tenantID, entityID string) ([]AuditEvent, error)
-func (s *Store) SweepAudit(ctx) (deleted int64, err error)
+// Audit retention deletion is OUT OF SCOPE for M1; no SweepAudit API is exposed.
 ```
 
 The returned `[]Connection` from revoke/reinstall are the connections the
