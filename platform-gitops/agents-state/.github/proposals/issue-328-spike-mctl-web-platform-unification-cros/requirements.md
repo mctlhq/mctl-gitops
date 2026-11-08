@@ -31,7 +31,7 @@ mctl-design 0.20.2 has a successful Publish and deploy to ui.mctl.ai. Six consum
 - THE SYSTEM SHALL specify version provenance, per-file hashes, CDN SRI/CORS/cache preconditions, local vendoring checks and rollback; existing owners/issues are cited rather than duplicated.
 - WHEN performance data is unavailable or irreproducible THE SYSTEM SHALL mark it not-run; no framework migration recommendation shall rely on unmeasured benefits.
 - THE SYSTEM SHALL deliver ADR status PROPOSED / RESEARCH ONLY with tradeoffs, gaps, explicit follow-up triggers and a human owner decision gate.
-- IF SpikeDefinition is added THEN \`python roadmap/scripts/validate.py roadmap/epics roadmap/spikes\` SHALL pass and outcomes SHALL remain the five canonical #328 outcomes.
+- IF SpikeDefinition is added THEN `python roadmap/scripts/validate.py roadmap/epics roadmap/spikes` SHALL pass and outcomes SHALL remain the five canonical #328 outcomes.
 - THE SYSTEM SHALL NOT change surface apps, mctl-design, GitOps service values, production, auth/CSP, release tags or portfolio; SHALL NOT approve, merge, start an implementer or automatically authorize a later pilot.
 
 ## Out of scope / decision gate
