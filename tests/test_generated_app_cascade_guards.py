@@ -163,8 +163,37 @@ _RAW_ACTION = r"\{\{-?\s*`.*?`\s*-?\}\}"
 _PLAIN_ACTION = r"\{\{-?(?:(?!\}\}).)*\}\}"
 # Standalone action lines (control flow, variable assignment, multi-line
 # declarations) are removed so the rest of the file still parses.
-_STANDALONE = re.compile(
-    rf"^[ \t]*(?:\{{\{{-?(?!\s*`)(?:(?!\}}\}}).)*\}}\}}[ \t]*)+\n", flags=re.M | re.S)
+_ACTION_OPEN = re.compile(r"\{\{-?(?!\s*`)")
+_LINE_START = re.compile(r"^[ \t]*\{\{-?(?!\s*`)", flags=re.M)
+
+
+def drop_standalone_actions(text: str) -> str:
+    """Remove lines that consist only of non-raw Helm actions (linear scan)."""
+    out, pos = [], 0
+    for m in _LINE_START.finditer(text):
+        if m.start() < pos:
+            continue
+        end = m.end()
+        while True:
+            close = text.find("}}", end)
+            if close < 0:
+                break
+            end = close + 2
+            while end < len(text) and text[end] in " \t":
+                end += 1
+            if text.startswith("{{", end):
+                if _ACTION_OPEN.match(text, end) is None:
+                    break  # a raw string follows: the line carries content
+                end += 2
+                continue
+            if end < len(text) and text[end] == "\n":
+                out.append(text[pos:m.start()])
+                pos = end + 1
+            break
+    out.append(text[pos:])
+    return "".join(out)
+
+
 _ANY_ACTION = re.compile(rf"{_COMMENT_ACTION}|{_RAW_ACTION}|{_PLAIN_ACTION}", flags=re.S)
 # The only Helm actions an ApplicationSet file may carry: comments, raw
 # strings (kept literally for the controller) and plain `.Values` lookups.
@@ -178,7 +207,7 @@ def neutral(text: str, keep_literals: bool = False) -> str:
     keeps its content (with sentinel brackets) instead of becoming a marker.
     """
     text = re.sub(rf"{_COMMENT_ACTION}[ \t]*\n?", "", text, flags=re.S)
-    text = _STANDALONE.sub("", text)
+    text = drop_standalone_actions(text)
     if keep_literals:
         def keep(m: re.Match) -> str:
             return m.group(1).replace("{{", LB).replace("}}", RB)
