@@ -59,13 +59,13 @@ Deployed state checked:
      builds a `Store` via `NewStore(ctx, conn+"&search_path=bridge_t_<rand>")`. `NewStore` applies `bridgeSchema`
      inside that schema. `t.Cleanup` closes the store and runs `DROP SCHEMA ... CASCADE`. Because the table is
      tenant-agnostic, this is the only way to assert exact `LeaseSignals` results without picking up rows left by
-     other bridge tests. Fallback, if a runtime param is rejected: per-test id prefixes, assertions filtered to own
-     ids, and `DELETE` cleanup.
+     other bridge tests. If the runtime search-path parameter fails or `SELECT current_schema()` does not match the created schema,
+     **fail test setup**, not a shared-table fallback. No unscoped DELETE in the shared test database.
    - Fixtures: outbox rows are produced by the real path (`enqueue` -> `claimOne` -> `SubmitResult`), so at least
      one test proves the production write and lease work together. Scenario rows (due/not-due/terminal) are inserted
      directly with explicit `next_attempt_at`.
    - Tests (names prefixed `TestPGOutbox*` so they match `-run TestPG`):
-     - Lease basics: lease due rows, respect `limit` and ascending `next_attempt_at`, exclude future and terminal
+     - Lease basics: lease due rows, respect `limit` and *oldest-first selection priority* (not RETURNING order), exclude future and terminal
        rows, check `next_attempt_at` was moved to about now + visibility, and check a second immediate lease returns
        nothing.
      - Visibility expiry: with a 1-second visibility, or after backdating `next_attempt_at` in SQL, the row is
@@ -121,9 +121,18 @@ Deployed state checked:
      `bridge_write_permits` are unchanged. A lease-only backdate still gives `lease_stale`; a forged token on an
      expired command gives `lease_stale`.
    - HTTP: add `bridge.ErrCommandExpired: 409` to the mapping table in `handlers_bridge_test.go`.
-5. **CI visibility.** In `validate.yml`, add a step after `go test -p 1 ./...`:
-   `go test -p 1 -count=1 -v -run 'TestPG' ./internal/bridge/ | tee bridge-pg.log; ! grep -q -- '--- SKIP' bridge-pg.log`.
-   This proves the tests were not skipped. No other workflow change.
+5. **Fail-closed CI evidence.** In `validate.yml`, add a dedicated `shell: bash` step with the same
+   `TEST_DATABASE_URL` as the main Go test step. Run:
+   ```bash
+   set -euo pipefail
+   go test -p 1 -count=1 -v -run 'TestPG' ./internal/bridge/ | tee bridge-pg.log
+   if grep -q -- '--- SKIP' bridge-pg.log; then echo 'PG bridge test skipped' >&2; exit 1; fi
+   for t in TestPGOutboxLeaseDueOrderLimit TestPGOutboxConcurrentLeasersDisjoint TestPGOutboxTerminalStatesImmutable TestPGOutboxFromSubmitResult; do
+     if ! grep -q -- "--- PASS: ${t} (" bridge-pg.log; then echo "missing required PG PASS: ${t}" >&2; exit 1; fi
+   done
+   ```
+   Pipefail retains the Go test exit code; specific PASS evidence defeats vacuous zero-test success. This does
+   **not** turn agy's green Actions job into an acceptable semantic verdict — reviewer-gate enforcement is #240/#1040.
 
 Defaults are untouched: `MCTL_BRIDGE_ENABLED` and `refusingFence` are not modified.
 
@@ -136,8 +145,8 @@ Defaults are untouched: `MCTL_BRIDGE_ENABLED` and `refusingFence` are not modifi
   as leaving rows untouched, so the write would be discarded anyway. Classification alone fixes the wire code.
 - **Return `command_expired` before the token check.** Dropped as default: it lets a non-holder learn TTL state, and
   it would change the precedence the callers already rely on. It is listed as an open question for the owner.
-- **Share the default schema with cleanup by id.** Kept only as a fallback: `LeaseSignals` is global, so exact-count
-  assertions would be flaky against rows left by other tests.
+- **Share the default schema with cleanup by id.** Rejected even as fallback: `LeaseSignals` is global, and this
+  would silently weaken limit/disjointness assertions and interfere with unrelated test rows.
 
 ## Platform impact
 - Migrations: none. The schema is unchanged. Test schemas are created and dropped only in the test database.
@@ -154,3 +163,7 @@ Defaults are untouched: `MCTL_BRIDGE_ENABLED` and `refusingFence` are not modifi
 - Merge gate: green `go test -p 1 ./...` with PG tests visibly run, lint, CodeQL, Trivy and govulncheck, plus fresh
   Claude APPROVED and agy PASS on the same head SHA, or an explicit manual hold. No autonomous merge while agy
   reports P1/P2.
+
+## AMEND 2026-11-08 — independent evidence and isolation gates
+
+Never equate PostgreSQL `RETURNING` iteration order to the selector's `ORDER BY`. Verify both the selected set and the oldest-due priority via controlled fixtures; the Go method does not currently promise stable return ordering. Test-schema `search_path` must be verified or setup fails. A green test pipeline alone is insufficient: specific PostgreSQL test PASS lines and no SKIP must be visible; reviewer verdicts require separate current-SHA governance before merge.
