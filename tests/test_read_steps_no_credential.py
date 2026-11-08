@@ -4,9 +4,13 @@ A ratchet: every template step that mounts the deploy key must push, or be liste
 in KNOWN_READ_ONLY as work still to do. A new read-only step with the key fails
 here, and so does a listed one that no longer has it, so the list can only shrink.
 """
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 import yaml
 
@@ -55,12 +59,56 @@ GIT_PUSH = re.compile(
     r"git(?:\s+-\S+(?:\s+[^\s-]\S*)?)*\s+push\b", re.M)
 
 
+# `sh -c "..."`, `bash -lc '...'` and `eval "..."` run their quoted argument as code.
+RUNS_ARG = re.compile(r"(?:\beval|\b(?:ba|z|da|k)?sh(?:\s+-\w+)*\s+-\w*c)\s*$")
+
+
+def _mask(code):
+    """(code with quoted spans emptied, code carried inside quotes). A quoted
+    span is data, so a separator or `git push` inside it is not a command; what
+    does run is `$(...)` or a backtick body inside double quotes, and the argument
+    of sh -c / bash -c / eval. Those bodies are returned for a second pass.
+    An unterminated quote is treated as quoted to the end: that errs towards
+    reporting a step as read-only, which a reviewer sees, rather than hiding it."""
+    out, nested, i, n = [], [], 0, len(code)
+    while i < n:
+        ch = code[i]
+        if ch == "\\" and i + 1 < n:
+            out.append(code[i:i + 2])
+            i += 2
+            continue
+        if ch not in "'\"":
+            out.append(ch)
+            i += 1
+            continue
+        j, body = i + 1, []
+        while j < n and code[j] != ch:
+            if ch == '"' and code[j] == "\\" and j + 1 < n:
+                body.append(code[j:j + 2])
+                j += 2
+                continue
+            body.append(code[j])
+            j += 1
+        text = "".join(body)
+        if RUNS_ARG.search("".join(out)):
+            nested.append(text)
+        elif ch == '"':
+            for m in re.finditer(r"\$\(((?:[^()]|\([^()]*\))*)\)|`([^`]*)`", text):
+                nested.append(m.group(1) or m.group(2) or "")
+        out.append(ch + ch)
+        i = j + 1
+    return "".join(out), nested
+
+
 def pushes(src):
-    """Whether the script text runs `git push`. Comment lines do not count and
-    backslash-newline continuations are joined first."""
+    """Whether the script text runs `git push`. Comment lines do not count,
+    backslash-newline continuations are joined first, and quoted text is data
+    (see _mask). Known limits: a heredoc body is read as code, so a push written
+    inside one counts as a push; shell variables and functions are not expanded."""
     code = "\n".join(line for line in src.replace("\\\n", " ").split("\n")
                      if not line.lstrip().startswith("#"))
-    return bool(GIT_PUSH.search(code))
+    masked, nested = _mask(code)
+    return bool(GIT_PUSH.search(masked)) or any(pushes(x) for x in nested)
 
 
 def read_only_holders(docs):
@@ -91,19 +139,25 @@ except W.ReadError as e:
     DOCS = []
     check("the workflow templates could be read", False, e)
 check("the workflow templates were found", len(DOCS) > 0)
-found = read_only_holders(DOCS)
-check("no read-only step holds the key beyond the known list", found <= KNOWN_READ_ONLY, found - KNOWN_READ_ONLY)
-check("the known list has no step that lost the key", KNOWN_READ_ONLY <= found, KNOWN_READ_ONLY - found)
+if DOCS:
+    found = read_only_holders(DOCS)
+    check("no read-only step holds the key beyond the known list", found <= KNOWN_READ_ONLY, found - KNOWN_READ_ONLY)
+    check("the known list has no step that lost the key", KNOWN_READ_ONLY <= found, KNOWN_READ_ONLY - found)
 
-for fname, tname in (("tpl-validate-tenant.yaml", "validate"), ("tpl-validate-tenant.yaml", "image-name"),
-                     ("wft-preview-deploy.yaml", "deploy")):
-    doc = dict(DOCS)[fname]
-    t = [x for x in doc["spec"]["templates"] if x["name"] == tname][0]
-    text = yaml.safe_dump(t)
-    check(f"{fname} {tname}: no key anywhere in the step", KEY not in text and "deploy-key" not in text)
-    check(f"{fname} {tname}: no ssh setup", ".ssh" not in text and "git@github.com" not in text)
-    check(f"{fname} {tname}: clones over anonymous https",
-          'git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"' in t["script"]["source"])
+    docs_by_file = dict(DOCS)
+    for fname, tname in (("tpl-validate-tenant.yaml", "validate"), ("tpl-validate-tenant.yaml", "image-name"),
+                         ("wft-preview-deploy.yaml", "deploy")):
+        doc = docs_by_file.get(fname)
+        tpls = [x for x in (doc or {}).get("spec", {}).get("templates", []) if x.get("name") == tname]
+        check(f"{fname} {tname}: the template was found", len(tpls) == 1, fname)
+        if len(tpls) != 1:
+            continue
+        t = tpls[0]
+        text = yaml.safe_dump(t)
+        check(f"{fname} {tname}: no key anywhere in the step", KEY not in text and "deploy-key" not in text)
+        check(f"{fname} {tname}: no ssh setup", ".ssh" not in text and "git@github.com" not in text)
+        check(f"{fname} {tname}: clones over anonymous https",
+              'git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"' in t["script"]["source"])
 
 # Proven both ways: the sweep flags a read-only step with the key, and not a writer.
 sample = {"spec": {"templates": [
@@ -157,6 +211,57 @@ check("read-only steps: env, envFrom, projected, init env, echo, cron workflowSp
               ("b.yaml", "echo-reader", "main"), ("c.yaml", "cron-reader", "main")}, got)
 check("writer steps: -C, extra spaces, if !, env prefix, continuation and argv pushes are writers",
       not any(n.endswith("writer") for _, n, _ in got), got)
+
+# Quoted text is data (#1033 review): a separator or keyword inside quotes is not a
+# command boundary, while code that really runs from inside quotes still counts.
+for src, want in (
+        ('echo "done; git push next"', False),
+        ('echo "then git push"', False),
+        ("echo 'a; git push'", False),
+        ('echo "a | git push"', False),
+        ('echo "a && git push"', False),
+        ("echo 'it'\"'\"'s; git push'", False),
+        ('git commit -m "msg" && git push', True),
+        ('git -C "my dir" push', True),
+        ("git -c 'k=v w' push", True),
+        ('echo "x"; git push', True),
+        ('echo "$(git push)"', True),
+        ('echo "`git push`"', True),
+        ('echo "$(echo \\"a\\"; git push)"', True),
+        ('bash -c "git push"', True),
+        ("sh -c 'git push origin HEAD'", True),
+        ('bash -lc "git push"', True),
+        ('eval "git push"', True),
+        ('echo "unterminated; git push', False),
+        ('echo \\"; git push', True),
+        ('echo "a" "b"; git push', True),
+        ('echo "$(echo hi)"', False),
+        ("git clone 'x;git push'", False)):
+    check(f"pushes({src!r}) is {want}", pushes(src) is want, pushes(src))
+qs = {"spec": {"templates": [
+    step("quoted-sep-reader", source='echo "a; git push"'),
+    step("quoted-keyword-reader", source='echo "then git push"'),
+    step("subst-writer", source='echo "$(git push)"'),
+    step("sh-c-writer", source="bash -c 'git push'")]}}
+got = read_only_holders([("q.yaml", qs)])
+check("steps that only quote a push are read-only holders, steps that run one are writers",
+      got == {("q.yaml", "quoted-sep-reader", "main"), ("q.yaml", "quoted-keyword-reader", "main")}, got)
+
+# A template directory that cannot be loaded is one recorded failure, not a crash in the
+# lookups that follow. The case runs this file against a copy of the tests with an
+# unparsable template; the child skips this case (RR_CHILD) to avoid recursing.
+if not os.environ.get("RR_CHILD"):
+    with tempfile.TemporaryDirectory() as td:
+        tree = pathlib.Path(td)
+        shutil.copytree(ROOT / "tests", tree / "tests", ignore=shutil.ignore_patterns("__pycache__", "fixtures"))
+        tpl = tree / "platform-gitops/argo-workflows/cluster-templates"
+        tpl.mkdir(parents=True)
+        (tpl / "bad.yaml").write_text("kind: [unclosed\n")
+        proc = subprocess.run([sys.executable, str(tree / "tests" / pathlib.Path(__file__).name)],
+                              capture_output=True, text=True, env=dict(os.environ, RR_CHILD="1"))
+        check("unloadable templates fail the run with one recorded failure and no traceback",
+              proc.returncode == 1 and "Traceback" not in proc.stderr
+              and "FAIL  the workflow templates could be read" in proc.stdout, (proc.returncode, proc.stderr[-300:]))
 
 print()
 if failures:
