@@ -359,6 +359,34 @@ def main():
         expect("script exits 2 on an unparseable tenant file", r.returncode == 2,
                f"rc={r.returncode} out={r.stdout[-300:]}")
 
+    # An unreadable or malformed portal fixture is unknown (exit 2), never an
+    # empty set of -w2 names and never an uncaught traceback (exit 1).
+    for label, text in (("unparseable", "templates: [unclosed\n"),
+                        ("empty list", "templates: []\n"),
+                        ("not a mapping", "- a\n- b\n")):
+        with tempfile.TemporaryDirectory() as td:
+            d = snapshot(ROOT, pathlib.Path(td) / "t")
+            (d / FIX / "portal-team-templates.yaml").write_text(text)
+            try:
+                got = w2_names(d)
+                expect(f"w2_names rejects a {label} fixture", False, f"returned {got!r}")
+            except Unknown:
+                expect(f"w2_names rejects a {label} fixture", True)
+            (d / "tests").mkdir(exist_ok=True)
+            shutil.copy(pathlib.Path(__file__), d / "tests" / "probe_script.py")
+            r = subprocess.run([sys.executable, str(d / "tests" / "probe_script.py")],
+                               capture_output=True, text=True, timeout=120)
+            expect(f"script exits 2 on a {label} portal fixture", r.returncode == 2,
+                   f"rc={r.returncode} out={(r.stdout + r.stderr)[-300:]}")
+    with tempfile.TemporaryDirectory() as td:
+        d = snapshot(ROOT, pathlib.Path(td) / "t")
+        (d / FIX / "portal-team-templates.yaml").unlink()
+        try:
+            got = w2_names(d)
+            expect("w2_names rejects a missing fixture", False, f"returned {got!r}")
+        except Unknown:
+            expect("w2_names rejects a missing fixture", True)
+
     # A tenant described by values.yml is read like values.yaml.
     with tempfile.TemporaryDirectory() as td:
         d = snapshot(ROOT, pathlib.Path(td) / "t")
