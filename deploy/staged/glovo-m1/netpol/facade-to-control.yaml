@@ -8,7 +8,7 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: base-service
-      app.kubernetes.io/instance: assistants-control
+      app.kubernetes.io/instance: admins-assistants-control
   policyTypes:
     - Ingress
   ingress:

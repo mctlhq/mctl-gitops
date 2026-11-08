@@ -9,6 +9,6 @@ tenant:
     enabled: true
   networking:
     allowIntraNamespace: true
-    allowClusterEgress: true
+    allowClusterEgress: false
     # Provider is a fake: it must not reach the internet.
     allowInternetEgress: false

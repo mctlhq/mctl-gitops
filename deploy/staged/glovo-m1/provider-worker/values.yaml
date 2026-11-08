@@ -33,11 +33,9 @@ envFrom:
       name: glovo-provider-temporal
 extraExternalSecrets:
   glovo-provider-temporal:
-    store: vault-backend
-    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: glovo-provider-temporal
     data:
       - secretKey: TEMPORAL_CLIENT_CREDENTIAL
-        remoteKey: secret/data/teams/mctl-assistants-provider-glovo/provider-worker/temporal
+        remoteKey: teams/mctl-assistants-provider-glovo/provider-worker/temporal
         property: credential

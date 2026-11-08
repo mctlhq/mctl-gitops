@@ -115,6 +115,8 @@ def check_staged_values(root: Path) -> None:
     ten = _load(base / TENANT)
     _need(ten.get("tenant", {}).get("networking", {}).get("allowInternetEgress") is False,
           "provider tenant must set allowInternetEgress: false")
+    _need(ten.get("tenant", {}).get("networking", {}).get("allowClusterEgress") is False,
+          "provider tenant must set allowClusterEgress: false")
 
     for p in base.rglob("*"):
         if p.is_file() and p.suffix in {".yaml", ".md"}:
@@ -151,7 +153,7 @@ def leak_guard(root: Path) -> None:
             text = p.read_text()
         except (OSError, UnicodeDecodeError):
             continue  # binary content cannot carry a values file
-        if LEAK.search(text) or any(r in text for r in repos):
+        if LEAK.search(text) or LEAK.search(str(p.relative_to(top))) or any(r in text for r in repos):
             raise Refused(f"Glovo/assistants reference in reconciled path {p.relative_to(root)}")
 
 
@@ -270,6 +272,8 @@ def selftest() -> int:
             {"hosts": [HOST], "path": "/admin"})))
     add("tenant internet egress", REFUSED,
         lambda r: _edit(r, TENANT, lambda d: d["tenant"]["networking"].__setitem__("allowInternetEgress", True)))
+    add("tenant cluster egress", REFUSED,
+        lambda r: _edit(r, TENANT, lambda d: d["tenant"]["networking"].__setitem__("allowClusterEgress", True)))
     add("unlisted staged file", REFUSED,
         lambda r: (r / STAGED / "netpol/new.yaml").write_text("a: 1\n"))
     add("secret-shaped value", REFUSED,

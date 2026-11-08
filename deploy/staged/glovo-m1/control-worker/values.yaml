@@ -32,11 +32,9 @@ envFrom:
       name: glovo-control-temporal
 extraExternalSecrets:
   glovo-control-temporal:
-    store: vault-backend
-    storeKind: ClusterSecretStore
     refreshInterval: 1h
     targetSecret: glovo-control-temporal
     data:
       - secretKey: TEMPORAL_CLIENT_CREDENTIAL
-        remoteKey: secret/data/teams/admins/assistants-control/temporal
+        remoteKey: teams/admins/assistants-control/temporal
         property: credential
