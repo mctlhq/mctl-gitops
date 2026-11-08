@@ -567,7 +567,8 @@ jobs:
 
       - name: Auto-merge protected paths
         run: python3 tests/test_auto_merge_protected_paths.py
-
+      - name: Unit-test the release preflight
+        run: python3 tests/test_release_preflight.py
       - name: Read-only workflow steps hold no write credential
         run: python3 tests/test_read_steps_no_credential.py
       - name: Unit-test gitops-bump inputs and its edit check
