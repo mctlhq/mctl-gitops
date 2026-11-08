@@ -75,38 +75,14 @@ check("release-deploy: verify runs every push attempt, after the rebase, and is 
 check("gitops-bump: verify is the line right before git push",
       re.search(r"release-gate\.py verify\n\s+git push", gb) is not None)
 
-# 3b. The rollback workflow pushes one values file with the bypass key: it must
-#     refuse gated files, and a missing gate file, without needing an interpreter.
+# 3b. The rollback workflow pushes one values file with the deploy key. It calls
+#     the shared guard script like every other writer; its behaviour (gated file,
+#     missing or unparseable gate, rebased push) is exercised in
+#     tests/test_release_gate_guard.py. Here: no reader of its own is left.
 rb = (ROOT / "platform-gitops/argo-workflows/cluster-templates/wft-rollback-service.yaml").read_text()
-m = re.search(r"# release-gate guard begin.*?\n(.*?)\n\s*# release-gate guard end", rb, re.S)
-check("rollback: guard present", m is not None)
-if m:
-    guard = "\n".join(ln[10:] if ln.startswith(" " * 10) else ln for ln in m.group(1).split("\n"))
-    gated = "platform-gitops/services/admins/mctl-agents-worker-exec/values.yaml"
-    other = "platform-gitops/services/admins/mctl-docs/values.yaml"
-    real_gate = (ROOT / "platform-gitops/release-gates.yaml").read_text()
-    four_space = real_gate.replace("      - platform-gitops", "        - platform-gitops")
-    flow = 'gates:\n  - name: g\n    paths: ["%s", "x"]\n' % gated
-    for name, values, gate, want in (
-        ("gated file refused", gated, real_gate, 1),
-        ("other file allowed", other, real_gate, 0),
-        ("missing gate refused", other, None, 1),
-        ("gate naming no path refused", other, "gates: []\n", 1),
-        ("doubled slash alias refused", gated.replace("admins/", "admins//"), real_gate, 1),
-        ("trailing dot alias refused", gated.replace("-exec/", "-exec/./"), real_gate, 1),
-        ("leading dot alias refused", "./" + gated, real_gate, 1),
-        ("parent segment alias refused", gated.replace("admins/", "admins/../admins/"), real_gate, 1),
-        ("reindented gate still refuses", gated, four_space, 1),
-        ("flow-style gate still refuses", gated, flow, 1),
-    ):
-        with tempfile.TemporaryDirectory() as d:
-            for f in (gated, other):
-                (pathlib.Path(d) / f).parent.mkdir(parents=True, exist_ok=True)
-                (pathlib.Path(d) / f).write_text("image:\n  tag: x\n")
-            if gate is not None:
-                (pathlib.Path(d) / "platform-gitops/release-gates.yaml").write_text(gate)
-            rr = subprocess.run(["bash", "-c", f'VALUES="{values}"\n{guard}'], cwd=d, capture_output=True, text=True)
-            check(f"rollback: {name}", rr.returncode == want, f"rc={rr.returncode} {rr.stderr}")
+check("rollback: calls the shared guard",
+      "release-gate-guard.sh target" in rb and "release-gate-guard.sh outgoing origin/main" in rb)
+check("rollback: no inline reader of the gate file", "release-gates.yaml" not in rb and "release-gate guard begin" not in rb)
 
 # 3c. The real gate config still says what the design says; a PR that deletes
 #     the group or drops a declared Recreate requirement must fail here, not pass silently.
