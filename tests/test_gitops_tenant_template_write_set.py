@@ -484,12 +484,6 @@ def raises(fn):
     return False
 
 
-def only(rows, way):
-    """The rows for one way: core pods is counted under two ways (workload-create
-    for create, pod-modify for patch/update), so a wildcard verb gives both."""
-    return [r for r in rows if r[2] == way]
-
-
 def rule(groups, res, verbs, names=None):
     return {"apiGroups": groups, "resources": res, "verbs": verbs, **({"resourceNames": names} if names else {})}
 
@@ -545,7 +539,9 @@ for (group, res), verbs in sorted(WORKLOAD_RESOURCES.items()):
     check(f"{res} ({group or 'core'}) in another API group is not workload-create",
           rows_of([rule(["other.example"], [res], ["*"])]) == [])
     check(f"{res} ({group or 'core'}) with the wildcard verb and limited by name is workload-create",
-          only(rows_of([rule([group], [res], ["*"], ["one"])]), "workload-create") == [(SA, "r", "workload-create")])
+          rows_of([rule([group], [res], ["*"], ["one"])]) ==
+          # core pods is counted under two ways: the wildcard verb gives both
+          ([(SA, "r", "pod-modify")] if (group, res) == ("", "pods") else []) + [(SA, "r", "workload-create")])
 # pod-modify: patch/update of an existing core Pod, distinct from creating one.
 # Written out independently of POD_MODIFY_RESOURCES so that emptying the table goes red.
 PM = [(SA, "r", "pod-modify")]
@@ -555,8 +551,8 @@ for v in ("patch", "update"):
           rows_of([core(["pods"], [v])]) == PM)
     check(f"pods:{v} limited by resourceName is still pod-modify", rows_of([core(["pods"], [v], ["one"])]) == PM)
     check(f"pods:{v} on a wildcard API group is pod-modify", rows_of([rule(["*"], ["pods"], [v])]) == PM)
-    check(f"pods:{v} on the wildcard resource is pod-modify (and exec/escalation do not apply to it)",
-          only(rows_of([core(["*"], [v])]), "pod-modify") == PM)
+    check(f"pods:{v} on the wildcard core resource is pod-modify and workload-create, nothing else",
+          [r[2] for r in rows_of([core(["*"], [v])])] == ["pod-modify", "workload-create"])
     check(f"pods/status {v} is not pod-modify (a different subresource)", rows_of([core(["pods/status"], [v])]) == [])
     check(f"pods {v} in another API group is not pod-modify", rows_of([rule(["other.example"], ["pods"], [v])]) == [])
 check("pods:create without patch/update is workload-create and not pod-modify",
@@ -606,7 +602,9 @@ for group, res, verbs, way in MUST_WAYS:
             check(f"{way}: {group or 'core'} resources [{pat}] verb {v} is counted",
                   rows_of([rule([group], [pat], [v])]) == [(SA, "r", way)])
         check(f"{way}: {group or 'core'} resources [{pat}] with the wildcard verb and a resourceName is counted",
-              only(rows_of([rule([group], [pat], ["*"], ["one"])]), way) == [(SA, "r", way)])
+              rows_of([rule([group], [pat], ["*"], ["one"])]) ==
+              # core pods is counted under two ways: the wildcard verb gives both
+              ([(SA, "r", "pod-modify")] if (group, pat) == ("", "pods") else []) + [(SA, "r", way)])
         check(f"{way}: {group or 'core'} resources [{pat}] in another API group is not counted",
               rows_of([rule(["other.example"], [pat], list(verbs))]) == [])
     check(f"{way}: {group or 'core'} resources [{res}] with only get/list/watch/delete or no matching verb is not counted",
@@ -618,7 +616,9 @@ for group, res, verbs, way in MUST_WAYS:
               rows_of([rule([group], [bad], list(verbs))]) == [])
     if sub:
         check(f"{way}: {group or 'core'} resources [{parent}] alone does not match the subresource {sub}",
-              only(rows_of([rule([group], [parent], [v for v in verbs if v != "create" or parent != "pods"])]), way) == [])
+              rows_of([rule([group], [parent], [v for v in verbs if v != "create" or parent != "pods"])]) ==
+              # the parent pods with patch/update is pod-modify, never the subresource's way
+              (PM if (group, parent) == ("", "pods") and set(verbs) & {"patch", "update"} else []))
 check("*/exec in a rule that lists several resources reports the exec way",
       rows_of([core(["configmaps", "*/exec"], ["create"])]) == [(SA, "r", "exec")])
 check("*/subresource does not match a resource that has no subresource",
