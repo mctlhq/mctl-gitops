@@ -24,14 +24,10 @@ def check(name, cond, detail=""):
 # Central mctl-agents templates and platform workflows: init containers that clone
 # before the step that pushes. Next phase; none runs in a tenant namespace.
 KNOWN_READ_ONLY = {
-    ("cwft-mctl-agents-approve.yaml", "flip-status", "clone-gitops"),
-    ("cwft-mctl-agents-approve.yaml", "commit-and-push", "clone-gitops"),
     ("cwft-mctl-agents-implement.yaml", "run-implementer", "clone-gitops"),
     ("cwft-mctl-agents-implement.yaml", "commit-and-push", "clone-gitops"),
     ("cwft-mctl-agents-investigate.yaml", "run-investigator", "clone-gitops"),
     ("cwft-mctl-agents-investigate.yaml", "commit-and-push", "clone-gitops"),
-    ("cwft-mctl-agents-reconcile.yaml", "run-reconcile", "clone-gitops"),
-    ("cwft-mctl-agents-reconcile.yaml", "commit-and-push", "clone-gitops"),
     ("cwft-mctl-agents-run.yaml", "run-orchestrator", "clone-gitops"),
     ("cwft-mctl-agents-run.yaml", "commit-and-push", "clone-gitops"),
     ("cwft-mctl-agents-run.yaml", "run-incident-responder", "clone-gitops"),
@@ -81,6 +77,28 @@ for fname, tname in (("tpl-validate-tenant.yaml", "validate"), ("tpl-validate-te
     check(f"{fname} {tname}: no ssh setup", ".ssh" not in text and "git@github.com" not in text)
     check(f"{fname} {tname}: clones over anonymous https",
           'git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"' in t["script"]["source"])
+
+# Approve and reconcile: the clone steps are anonymous https, the push steps keep the key
+# and point origin at ssh.
+for fname, tname in (("cwft-mctl-agents-approve.yaml", "flip-status"), ("cwft-mctl-agents-approve.yaml", "commit-and-push"),
+                     ("cwft-mctl-agents-reconcile.yaml", "run-reconcile"), ("cwft-mctl-agents-reconcile.yaml", "commit-and-push")):
+    t = [x for x in dict(DOCS)[fname]["spec"]["templates"] if x["name"] == tname][0]
+    init = [i for i in t["initContainers"] if i["name"] == "clone-gitops"][0]
+    itext = yaml.safe_dump(init)
+    check(f"{fname} {tname}: clone-gitops holds no key and no ssh setup",
+          "deploy-key" not in itext and ".ssh" not in itext and "git@github.com" not in itext, itext[:200])
+    check(f"{fname} {tname}: clone-gitops clones over anonymous https",
+          "git clone --depth=1 https://github.com/mctlhq/mctl-gitops.git /workdir/mctl-gitops" in itext)
+    check(f"{fname} {tname}: clone-gitops image is pinned by digest", "@sha256:" in init["image"])
+    if tname == "commit-and-push":
+        src = t["script"]["source"]
+        check(f"{fname} {tname}: push step still mounts the key",
+              any(m["name"] == "deploy-key" for m in t["script"].get("volumeMounts") or []))
+        check(f"{fname} {tname}: origin points at ssh before the first push",
+              0 <= src.find("git remote set-url origin git@github.com:mctlhq/mctl-gitops.git") < src.find("git push origin"))
+    else:
+        check(f"{fname} {tname}: no step in the template mounts the key",
+              KEY not in yaml.safe_dump(t) and "deploy-key" not in yaml.safe_dump(t))
 
 # Proven both ways: the sweep flags a read-only step with the key, and not a writer.
 sample = {"spec": {"templates": [
