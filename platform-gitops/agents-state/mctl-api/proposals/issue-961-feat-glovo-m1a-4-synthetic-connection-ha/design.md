@@ -212,8 +212,7 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
 
 ## Platform impact
 
-- Migrations: #961 adds versioned additive handoff and quota-counter tables to the #959 data model; existing tables remain unchanged. If
-  the reconcile in task 0 finds one missing. Any such change must be additive and idempotent.
+- Migrations: #961 adds versioned, additive and idempotent handoff-reference and quota-counter tables to the #959 data model. Existing tables remain unchanged. Missing #958/#959/#960 primitives are hard dependency blockers, not an excuse to add duplicate migrations.
 - Backward compatibility: with `GLOVO_ENABLED` unset (the deployed state), every Glovo route
   answers 503 `not_ready`, and token issuance and verification are unchanged. Regression tests
   cover support, DevLoop, MCP and Telegram routes.
