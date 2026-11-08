@@ -9,7 +9,7 @@
   - connected-client evidence, from frontend logs or `temporal_request` metrics if available;
   - the SDK versions in mctl-api, mctl-agents 1.117.0 and kuptsi-app 0.2.27;
   - whether chart 1.2.0 supports `server.internalFrontend` and `server.config.tls`;
-  - the actual default-authorizer role required for each API (poll, start, signal, terminate, list, query) in Temporal 1.31.0 source. Valid claim role strings: `read`, `write`, `worker`, `admin`; cluster/system scope `temporal-system:<role>` (NOT `reader`/`writer`/`temporal-system:admin`); include a source-backed positive/negative role/RPC matrix;
+  - the actual default-authorizer role required for each API (poll, start, signal, terminate, list, query) in Temporal 1.31.0 source. Valid claim role strings: `read`, `write`, `worker`, `admin`; cluster/system scope `temporal-system:<role>` (NOT `reader`/`writer`/`system:admin`); include a source-backed positive/negative role/RPC matrix;
   - issuer, JWT `aud` enforcement with non-empty trusted audience, and the Vault/ESO token template and refresh API compatibility (unknown until proven);
   - whether JWKS can be fetched and verified with trusted TLS or a pinned key, and whether the UI's `temporal-system:read` would grant inappropriate read access across all namespaces.
 
