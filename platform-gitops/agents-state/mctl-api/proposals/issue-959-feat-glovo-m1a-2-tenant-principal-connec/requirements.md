@@ -129,11 +129,8 @@ Audit
   one audit event with a server-minted immutable `gae_<ULID>` event ID,
   tenant, subject principal, actor principal, entity, from/to state,
   install revision, reason code and timestamp.
-- THE SYSTEM SHALL refuse every UPDATE of an audit event and every DELETE
-  outside the retention sweep (database trigger).
-- WHEN the retention sweep runs THE SYSTEM SHALL delete only audit events
-  older than the configured retention (default 400 days) and SHALL never
-  delete install or connection rows.
+- THE SYSTEM SHALL refuse **every** UPDATE or DELETE of an audit event by the runtime application DB role, even if it sets a custom GUC.
+- THE SYSTEM SHALL document the audit retention obligation (400 days target) but SHALL NOT expose an application-side sweep in M1. Future privileged maintenance requires a separate reviewed schema/DB-role policy; install and connection rows remain non-deletable.
 - THE SYSTEM SHALL NOT store in any table, audit event or log line a
   provider session, cookie, token, password, email address, phone number
   or delivery address. The only secret-related value stored is an opaque
