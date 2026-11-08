@@ -45,7 +45,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install PyYAML
-        run: python3 -m pip install --quiet pyyaml
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
 
       - name: Compare content with the parent
         id: diff

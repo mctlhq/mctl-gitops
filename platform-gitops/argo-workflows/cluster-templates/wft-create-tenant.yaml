@@ -196,7 +196,7 @@ spec:
           - name: tenant_name
           - name: reprovision
       script:
-        image: alpine/git:2.43.0
+        image: alpine/git:2.43.0@sha256:76fdb7210689fc26c6ff101c4adacf9d12d3d25a919a7d8ff42ebaef5bedba65 # alpine/git:2.43.0
         command: [sh]
         envFrom:
           - configMapRef:
@@ -344,7 +344,7 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: PARAM_TENANT_NAME
@@ -481,7 +481,7 @@ spec:
           - name: reprovision
             value: "false"
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: PARAM_TENANT_NAME
@@ -670,7 +670,7 @@ spec:
             secretName: mctl-gitops-deploy-key
             defaultMode: 0600
       script:
-        image: alpine:3.19
+        image: alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 # alpine:3.19
         command: [sh]
         envFrom:
           - configMapRef:
@@ -1142,7 +1142,7 @@ spec:
     # ────────────────────────────────────────────────────────────────────────
     - name: refresh-tenants-appset
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         source: |
           set -e
@@ -1156,7 +1156,7 @@ spec:
         parameters:
           - name: tenant_name
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: PARAM_TENANT_NAME

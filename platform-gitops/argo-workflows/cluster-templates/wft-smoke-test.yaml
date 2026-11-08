@@ -154,7 +154,7 @@ spec:
     # ─── Step 1: Onboard service ──────────────────────────────────────────────
     - name: run-onboard
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -258,7 +258,7 @@ spec:
     # ─── Step 3: Deploy new version (with env vars + secrets to test deploy action) ──
     - name: run-deploy
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -349,7 +349,7 @@ spec:
     # ─── Step 5: Provision database ───────────────────────────────────────────
     - name: run-provision-db
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -391,7 +391,7 @@ spec:
     # ─── Step 6: Update config ────────────────────────────────────────────────
     - name: run-update-config
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -449,7 +449,7 @@ spec:
     # ─── Step 8: Retire service ───────────────────────────────────────────────
     - name: run-retire
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -538,7 +538,7 @@ spec:
     # ─── Verification: ExternalSecret for app secrets synced in service ns ───
     - name: check-app-externalsecret
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -597,7 +597,7 @@ spec:
     # ─── Verification: env var + secret in pod (from deploy action) ──────────
     - name: check-deploy-env-and-secret
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -647,7 +647,7 @@ spec:
           - name: previous_generation
             value: "0"
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -742,7 +742,7 @@ spec:
     # ─── Trigger ArgoCD sync for service app ─────────────────────────────────
     - name: trigger-argocd-sync
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: PARAM_TEAM_NAME
@@ -819,7 +819,7 @@ spec:
     # ─── Verification: ExternalSecret synced ─────────────────────────────────
     - name: check-k8s-secret
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -854,7 +854,7 @@ spec:
     # ─── Verification: service consumes the provisioned DB secret ────────────
     - name: check-db-secret-wiring
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -903,7 +903,7 @@ spec:
     # ─── Verification: env var in running pod ────────────────────────────────
     - name: check-env-var
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         env:
           - name: PARAM_TEAM_NAME
@@ -941,7 +941,7 @@ spec:
     # ─── Verification: retire removed runtime and secret references ──────────
     - name: check-retired
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [bash]
         source: |
           set -euo pipefail

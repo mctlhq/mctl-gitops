@@ -65,7 +65,7 @@ for label, wf, first_write in (("release-deploy", rd, "with open(path, 'w')"), (
     check(f"{label}: check sees normalised paths", "*[os.path.normpath(f) for f in files]" in wf)
     check(f"{label}: any nonzero exit refuses",
           re.search(r"if _gate\.returncode != 0:\n\s+print\([^\n]*\n\s+sys\.exit\(6\)", wf) is not None)
-    inst = wf.find("pip install --quiet pyyaml==6.0.2")
+    inst = wf.find("pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt")
     bump = wf.find("- name: Bump image tag")
     check(f"{label}: PyYAML is installed before the bump", 0 < inst < bump)
 check("release-deploy: verify runs every push attempt, after the rebase, and is fatal",

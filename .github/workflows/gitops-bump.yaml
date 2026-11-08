@@ -123,7 +123,7 @@ jobs:
       # on the runner image; if this step or the import fails the bump is
       # refused (the gate fails closed), never skipped.
       - name: Install PyYAML for the release gate
-        run: python3 -m pip install --quiet pyyaml==6.0.2
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
 
       - name: Bump image tags
         env:

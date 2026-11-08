@@ -72,7 +72,7 @@ spec:
           # wedge on ImagePullBackOff (see vault-auto-unseal incident).
           containers:
             - name: janitor
-              image: alpine/k8s:1.33.12
+              image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
               resources:
                 requests:
                   cpu: 10m
