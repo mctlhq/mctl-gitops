@@ -546,6 +546,11 @@ jobs:
         # of them forever.
         run: python3 tests/test_release_deploy_bump.py
 
+      - name: CI pip installs are hash-pinned
+        # mctlhq/mctl-gitops#1033: workflows that run beside credentials may
+        # only install with --require-hashes from the pinned requirements file.
+        run: python3 tests/test_pip_installs_hashed.py
+
       - name: Release gate (selftest, tree, mutation tests)
         # mctlhq/mctl-agents#1007: the worker group may not be bumped
         # partially, below its image floor, or without Recreate on the control
