@@ -297,6 +297,14 @@ env:
   MANAGED_BUDGET_USD_PER_ACCOUNT_DAY: "1.00"
   MANAGED_BUDGET_USD_GLOBAL_DAY: "5.00"
   MANAGED_MAX_JOB_COST_USD: "0.25"
+  # #889 second managed soak (6 h, about one message every 15 minutes), window
+  # limit 3.00 USD by the same rule as Part B: the month cap is the November
+  # ledger at the start (3.2649, of which 1.00 is four held rows of job 12032
+  # from 2026-11-05) plus 3.00. The claim cutoff stops new work after the
+  # window so a job started late cannot run past it. Remove both after the
+  # window.
+  MANAGED_BUDGET_USD_PER_ACCOUNT_MONTH: "6.27"
+  MANAGED_CLAIM_NOT_AFTER: "2026-11-09T05:30:00Z"
 ingress:
   enabled: true
   hosts:
