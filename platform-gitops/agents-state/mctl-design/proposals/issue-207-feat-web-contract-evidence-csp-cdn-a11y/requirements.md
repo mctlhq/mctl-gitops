@@ -31,11 +31,18 @@ CSP, CI, GitOps or production change is part of this work.
 ## Acceptance criteria (EARS)
 
 - WHEN the report is written THE SYSTEM SHALL record, for each of the six sites and `ui.mctl.ai`,
-  four separately labelled layers: source SHA/tag, GitOps desired image (`values.yaml` `image.tag`),
-  ArgoCD observed image and sync status, and public HTTP response.
-- WHEN a finding is stated THE SYSTEM SHALL tag it with exactly one of `[CODE]`, `[CONFIG]`,
-  `[LIVE]`, `[PREVIEW]` or `unknown (not observed)`, and SHALL record the UTC date/time and the pinned
-  commit SHA, image tag or URL it was taken from.
+  four separately labelled layers: independently inspected source SHA/tag `[CODE]`, GitOps desired
+  image (`values.yaml` `image.tag`) `[CONFIG]`, authenticated ArgoCD observed image/sync/health `[LIVE]`,
+  and anonymous public HTTP response `[LIVE]` (or `not-run`). The report SHALL additionally state
+  whether the image-tag-to-source-commit relationship was independently established; a match of
+  tags or a short SHA-looking image tag is NOT proof of deployed source provenance.
+- WHEN a finding is stated THE SYSTEM SHALL use one supported provenance classification:
+  `[CODE]` for pinned inspected source, `[CONFIG]` for GitOps declared/desired configuration,
+  `[LIVE]` for authenticated observed ArgoCD state or anonymous HTTP observation (explicitly name
+  which), `[PREVIEW]` for isolated preview, or `unknown (not observed)` with a reason. The report
+  SHALL record UTC date/time and the source SHA, image tag or URL as applicable. `not-run` denotes
+  an unexecuted check, while `not-applicable` denotes a behaviour genuinely absent by design;
+  neither is a passing test or a substitute for provenance.
 - WHEN a site's use of the design system is reported THE SYSTEM SHALL state the exact
   `ui.mctl.ai` URLs (versioned `/<X.Y.Z>/...css` or floating `/...css`) and/or `@mctlhq/*` package
   version found in that site's pinned source, and whether that equals `0.20.2`.
@@ -55,10 +62,17 @@ CSP, CI, GitOps or production change is part of this work.
   state, focus return to the burger, tab order, the 768px and 981px (`--drawer-wide`) breakpoints,
   `prefers-reduced-motion`, and no-JS rendering; and SHALL separate "observed result" from
   "proposed acceptance criterion".
+- WHEN a particular header check does not apply because the implementation does not expose that
+  mechanism (e.g. a JS drawer listener in Telegram's CSS-only public menu) THE SYSTEM SHALL
+  mark it `not-applicable` with pinned `[CODE]` justification. User-visible accessibility outcomes
+  (keyboard activation/dismissal, focus, tab order and no-JS operation) SHALL NOT be marked
+  `not-applicable` merely because the site uses CSS-only navigation or VitePress native components.
 - IF browser or preview testing is not permitted or not possible for a site THEN THE SYSTEM SHALL
-  mark each affected behaviour `not-run` for that site.
+  mark applicable, untested behaviours `not-run` with a reason; it SHALL NOT infer `PASS` or
+  substitute `not-applicable` for inaccessible test infrastructure.
 - WHEN the matrix is built THE SYSTEM SHALL list, per row, the claim, the evidence tag, the
-  observed value or `unknown`, the owning repository, and the existing tracking issue (design#34,
+  observed value or `unknown`, the test status (`observed`, `not-run`, or justified
+  `not-applicable`), the owning repository, and the existing tracking issue (design#34,
   design#78, telegram#599, academy#210, gitops#500) where one applies, and SHALL NOT create new
   implementation issues that duplicate them.
 - WHEN the report concludes THE SYSTEM SHALL state explicit, bounded entry gates for
@@ -95,4 +109,7 @@ CSP, CI, GitOps or production change is part of this work.
 - mctl-web's GitOps host list is `mctl.ru` and `mctl.ai`; whether `mctl.ru` is in scope (the issue
   only names `mctl.ai`). Proposed: observe both redirect behaviour, report `mctl.ai` in full.
 - The six source repositories are not in this clone; pinning their source SHAs requires read access
-  to them at implement time. If unavailable those rows are `unknown (not observed)`.
+  to them at implement time. The inspected `main` SHA, GitOps tag and ArgoCD image are independent
+  observations until an image digest, build attestation, immutable release mapping or equivalent
+  provenance joins the deployed artifact to a particular commit. If unavailable the mapping is
+  `unknown (not observed)` even when GitOps and ArgoCD tags match.
