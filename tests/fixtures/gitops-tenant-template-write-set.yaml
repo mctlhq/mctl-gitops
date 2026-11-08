@@ -15,7 +15,9 @@ template_reach:
   tpl-git-commit: [mctl-gitops-deploy-key]
 # readers: [subject, Role, way] for the subjects that can read the credential
 #   Secrets (read:<Secret>, one row per credential), exec or attach into pods
-#   (exec), start a pod some other way (workload-create: pods, Deployments,
+#   (exec), patch or update an existing Pod, whose container images are mutable
+#   (pod-modify: core pods patch/update; see POD_MODIFY_RESOURCES in the test),
+#   start a pod some other way (workload-create: pods create, Deployments,
 #   StatefulSets, ReplicaSets, DaemonSets, Jobs, CronJobs, Argo Workflows,
 #   CronWorkflows and WorkflowTemplates; see WORKLOAD_RESOURCES in the test) or
 #   obtain another subject's identity or permissions (escalation: serviceaccounts/
@@ -36,6 +38,7 @@ template_reach:
 readers:
   - ["ServiceAccount/mctl-api/mctl-api", mctl-api-workflows, "workload-create"]
   - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-helm-deploy, "escalation"]
+  - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-helm-deploy, "pod-modify"]
   - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-helm-deploy, "read:github-actions-pat"]
   - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-helm-deploy, "read:mctl-gitops-deploy-key"]
   - ["ServiceAccount/{ns}/argo-workflow-sa", argo-workflow-helm-deploy, "workload-create"]

@@ -38,6 +38,7 @@ never an empty set.
 
 Run: python3 tests/test_gitops_tenant_template_write_set.py
 """
+import copy
 import os
 import pathlib
 import sys
@@ -164,6 +165,16 @@ WORKLOAD_RESOURCES = {
     ("argoproj.io", "cronworkflows"): _START,
     ("argoproj.io", "workflowtemplates"): _START,
 }
+# Modifying an existing Pod: spec.containers[*].image (and initContainers[*].image,
+# activeDeadlineSeconds, tolerations) are mutable, so patch or update on core pods
+# can make a running Pod pull and start attacker-chosen code. Counted as the
+# separate way "pod-modify", not "workload-create": creating a new Pod and
+# changing an existing one are different grants, and a subject with pods:patch
+# but not pods:create must be reported as the former only. resourceNames is
+# ignored as above. pods/ephemeralcontainers stays under workload-create.
+POD_MODIFY_RESOURCES = {
+    ("", "pods"): frozenset({"patch", "update"}),
+}
 EXEC_RESOURCES = ("pods/exec", "pods/attach")
 # Privilege-escalation reach: ways to obtain the identity or the permissions of
 # another subject, which is as good as having its Secret access. Counted as the
@@ -200,6 +211,7 @@ _verb_match = W.verb_match
 def secrets_rules(rules, secret):
     """The ways the given rules reach one Secret: read, exec (exec or attach into
     a pod), workload-create (start a pod some other way, see WORKLOAD_RESOURCES),
+    pod-modify (patch or update an existing Pod, see POD_MODIFY_RESOURCES),
     escalation (see ESCALATION_RESOURCES).
     A rule that cannot be parsed raises ReadError: it is not 'no access'."""
     via = set()
@@ -214,6 +226,8 @@ def secrets_rules(rules, secret):
             via.add("exec")
         if any(has(g, x, v) for (g, x), v in WORKLOAD_RESOURCES.items()):
             via.add("workload-create")
+        if any(has(g, x, v) for (g, x), v in POD_MODIFY_RESOURCES.items()):
+            via.add("pod-modify")
         if any(has(g, x, v) for (g, x), v in ESCALATION_RESOURCES.items()):
             via.add("escalation")
     return via
@@ -387,8 +401,36 @@ try:
                 mutations_run += 1
                 added = sorted(set(mut) - set(want_rows))
                 check(f"{ns}: {label} adds rows that are not in the ledger", bool(added), added)
-    check("the real-chart mutation cases ran (two per mutation tenant namespace)",
-          mut_tenant is not None and mutations_run >= 2, mutations_run)
+            # pod-modify on the real rendered Roles: a rule granting pods patch (and, in the
+            # second case, only to the central ServiceAccount's Role) is added to a copy of
+            # the render. The ledger comparison must go red and the new row must name the
+            # subject, the Role and the way "pod-modify".
+            for label, extra, role_name, subject in (
+                    ("a tenant Role gaining pods:patch", (), "argo-workflow-smoke-verify",
+                     f"ServiceAccount/{ns}/argo-workflow-sa"),
+                    ("only the central ServiceAccount's Role gaining pods:patch",
+                     ("--set", "tenant.centralWorkflowSA.restartDeployments={x}"), "argo-workflow-central-restart",
+                     "ServiceAccount/argo-workflows/argo-workflow-sa")):
+                mdocs = copy.deepcopy(W.helm_render(CHART, vf, f"tenant-{mut_tenant}", mut_tenant, extra))
+                target = [d for d in mdocs if d.get("kind") == "Role" and d["metadata"].get("name") == role_name
+                          and d["metadata"].get("namespace") == ns]
+                check(f"{ns}: {label}: the Role {role_name} is rendered", len(target) == 1, len(target))
+                if len(target) != 1:
+                    continue
+                before = reader_rows(mdocs, ns, held)
+                target[0]["rules"] = list(target[0].get("rules") or []) + [
+                    {"apiGroups": [""], "resources": ["pods"], "verbs": ["patch"]}]
+                mut = reader_rows(mdocs, ns, held)
+                mutations_run += 1
+                added = sorted(set(mut) - set(before))
+                check(f"{ns}: {label} adds exactly the pod-modify row for {role_name}",
+                      added == [(subject, role_name, "pod-modify")], added)
+                check(f"{ns}: {label} makes the rows differ from the ledger",
+                      mut != expected_rows(ledger, mut_tenant, ns))
+                check(f"{ns}: {label} is not reported as workload-create",
+                      not any(r[2] == "workload-create" for r in set(mut) - set(before)), added)
+    check("the real-chart mutation cases ran (four per mutation tenant namespace)",
+          mut_tenant is not None and mutations_run >= 4, mutations_run)
 except W.ReadError as e:
     check("the repository could be observed", False, e)
 
@@ -442,6 +484,12 @@ def raises(fn):
     return False
 
 
+def only(rows, way):
+    """The rows for one way: core pods is counted under two ways (workload-create
+    for create, pod-modify for patch/update), so a wildcard verb gives both."""
+    return [r for r in rows if r[2] == way]
+
+
 def rule(groups, res, verbs, names=None):
     return {"apiGroups": groups, "resources": res, "verbs": verbs, **({"resourceNames": names} if names else {})}
 
@@ -464,7 +512,7 @@ check("exec and workload-create stay one row however many credentials are held",
       rows_of([core(["pods/exec"], ["create"]), core(["pods"], ["create"])], secrets=(K, P)) ==
       [(SA, "r", "exec"), (SA, "r", "workload-create")])
 check("wildcard group, resources and verbs reach by every way",
-      [r[2] for r in rows_of([rule(["*"], ["*"], ["*"])])] == ["escalation", "exec", RK, "workload-create"])
+      [r[2] for r in rows_of([rule(["*"], ["*"], ["*"])])] == ["escalation", "exec", "pod-modify", RK, "workload-create"])
 check("pods/exec create is exec", rows_of([core(["pods/exec"], ["create"])]) == [(SA, "r", "exec")])
 check("pods/exec get (legacy websocket exec) is exec", rows_of([core(["pods/exec"], ["get"])]) == [(SA, "r", "exec")])
 check("pods/attach create is exec", rows_of([core(["pods/attach"], ["create"])]) == [(SA, "r", "exec")])
@@ -497,7 +545,33 @@ for (group, res), verbs in sorted(WORKLOAD_RESOURCES.items()):
     check(f"{res} ({group or 'core'}) in another API group is not workload-create",
           rows_of([rule(["other.example"], [res], ["*"])]) == [])
     check(f"{res} ({group or 'core'}) with the wildcard verb and limited by name is workload-create",
-          rows_of([rule([group], [res], ["*"], ["one"])]) == [(SA, "r", "workload-create")])
+          only(rows_of([rule([group], [res], ["*"], ["one"])]), "workload-create") == [(SA, "r", "workload-create")])
+# pod-modify: patch/update of an existing core Pod, distinct from creating one.
+# Written out independently of POD_MODIFY_RESOURCES so that emptying the table goes red.
+PM = [(SA, "r", "pod-modify")]
+WC = [(SA, "r", "workload-create")]
+for v in ("patch", "update"):
+    check(f"pods:{v} without pods:create is pod-modify and not workload-create",
+          rows_of([core(["pods"], [v])]) == PM)
+    check(f"pods:{v} limited by resourceName is still pod-modify", rows_of([core(["pods"], [v], ["one"])]) == PM)
+    check(f"pods:{v} on a wildcard API group is pod-modify", rows_of([rule(["*"], ["pods"], [v])]) == PM)
+    check(f"pods:{v} on the wildcard resource is pod-modify (and exec/escalation do not apply to it)",
+          only(rows_of([core(["*"], [v])]), "pod-modify") == PM)
+    check(f"pods/status {v} is not pod-modify (a different subresource)", rows_of([core(["pods/status"], [v])]) == [])
+    check(f"pods {v} in another API group is not pod-modify", rows_of([rule(["other.example"], ["pods"], [v])]) == [])
+check("pods:create without patch/update is workload-create and not pod-modify",
+      rows_of([core(["pods"], ["create"])]) == WC)
+check("pods:create plus pods:patch in one rule is both ways, one row each",
+      rows_of([core(["pods"], ["create", "patch"])]) == PM + WC)
+check("pods:patch in one rule and pods:create in another is both ways",
+      rows_of([core(["pods"], ["patch"]), core(["pods"], ["create"])]) == PM + WC)
+check("pods get/list/watch/delete is not pod-modify",
+      rows_of([core(["pods"], ["get", "list", "watch", "delete"])]) == [])
+check("pods/ephemeralcontainers patch stays workload-create, not pod-modify",
+      rows_of([core(["pods/ephemeralcontainers"], ["patch"])]) == WC)
+check("the wildcard verb on pods is both ways", rows_of([core(["pods"], ["*"])]) == PM + WC)
+check("deployments patch is workload-create and not pod-modify",
+      rows_of([rule(["apps"], ["deployments"], ["patch"])]) == WC)
 check("a wildcard resource in the apps group is workload-create",
       rows_of([rule(["apps"], ["*"], ["create"])]) == [(SA, "r", "workload-create")])
 check("a wildcard API group on workflows is workload-create",
@@ -532,7 +606,7 @@ for group, res, verbs, way in MUST_WAYS:
             check(f"{way}: {group or 'core'} resources [{pat}] verb {v} is counted",
                   rows_of([rule([group], [pat], [v])]) == [(SA, "r", way)])
         check(f"{way}: {group or 'core'} resources [{pat}] with the wildcard verb and a resourceName is counted",
-              rows_of([rule([group], [pat], ["*"], ["one"])]) == [(SA, "r", way)])
+              only(rows_of([rule([group], [pat], ["*"], ["one"])]), way) == [(SA, "r", way)])
         check(f"{way}: {group or 'core'} resources [{pat}] in another API group is not counted",
               rows_of([rule(["other.example"], [pat], list(verbs))]) == [])
     check(f"{way}: {group or 'core'} resources [{res}] with only get/list/watch/delete or no matching verb is not counted",
@@ -544,7 +618,7 @@ for group, res, verbs, way in MUST_WAYS:
               rows_of([rule([group], [bad], list(verbs))]) == [])
     if sub:
         check(f"{way}: {group or 'core'} resources [{parent}] alone does not match the subresource {sub}",
-              rows_of([rule([group], [parent], [v for v in verbs if v != "create" or parent != "pods"])]) == [])
+              only(rows_of([rule([group], [parent], [v for v in verbs if v != "create" or parent != "pods"])]), way) == [])
 check("*/exec in a rule that lists several resources reports the exec way",
       rows_of([core(["configmaps", "*/exec"], ["create"])]) == [(SA, "r", "exec")])
 check("*/subresource does not match a resource that has no subresource",
