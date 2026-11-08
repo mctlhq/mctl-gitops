@@ -1,4 +1,5 @@
 {
+  "note": "Every expectation below records the policy state that is deployed today, read from the committed HCL. A row is an observation of existing access, not an authority introduced by the change that adds this file, and recording a row is not a statement that its breadth is intended or a change to it. Narrowing a policy is a separate change that edits the HCL and the matching row together.",
   "base_dir": "infrastructure/k3s-preview/cluster-bootstrap/vault-config",
   "identities": {
     "external-secrets": {"policies": ["vault-policy-external-secrets-read.hcl"]},

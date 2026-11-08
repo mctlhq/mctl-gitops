@@ -16,6 +16,9 @@ Exit codes:
      a file that cannot be read is never an empty policy and never a pass.
 
 Config (scripts/vault-policy-expectations.json):
+  note          free text. The expectation rows record the policy state deployed
+                today; they describe existing access and neither grant nor
+                endorse it, and recording one does not narrow it.
   base_dir      directory holding the policy files, relative to --root
   identities    {name: {"policies": [file, ...]}}
   expectations  [{"identity", "path", "effective": [caps]}]
@@ -73,6 +76,10 @@ def strip_comments(text):
 
 _PATH_RE = re.compile(r'\s*path\s+"((?:[^"\\]|\\.)*)"\s*\{', re.S)
 _CAPS_RE = re.compile(r'\s*capabilities\s*=\s*\[([^\]]*)\]\s*', re.S)
+# The bracket body must be exactly quoted strings separated by commas, with an
+# optional trailing comma. Anything else (bare words, numbers, a missing or
+# doubled comma) is not silently skipped: it makes the file Unknown.
+_CAP_LIST_RE = re.compile(r'\s*"[^"\\]*"(?:\s*,\s*"[^"\\]*")*\s*,?\s*', re.S)
 
 
 def parse_policy(text, label):
@@ -97,9 +104,12 @@ def parse_policy(text, label):
             # Any attribute besides capabilities (e.g. allowed_parameters)
             # changes the effective result in ways this check cannot model.
             raise Unknown(f"{label}: path {pattern!r} has attributes other than capabilities")
-        caps = re.findall(r'"([^"]*)"', cm.group(1))
-        if not caps:
+        raw = cm.group(1)
+        if not raw.strip():
             raise Unknown(f"{label}: path {pattern!r} has an empty capability list")
+        if not _CAP_LIST_RE.fullmatch(raw):
+            raise Unknown(f"{label}: path {pattern!r} has a capability list that is not a comma-separated list of quoted strings")
+        caps = re.findall(r'"([^"]*)"', raw)
         bad = set(caps) - KNOWN_CAPS
         if bad:
             raise Unknown(f"{label}: unknown capability {sorted(bad)} on {pattern!r}")
@@ -167,7 +177,7 @@ def _validate_config(cfg):
 
 def load_config(path):
     try:
-        cfg = json.loads(pathlib.Path(path).read_text())
+        cfg = json.loads(pathlib.Path(path).read_text(encoding="utf-8", errors="strict"))
     except (OSError, ValueError, RecursionError) as e:  # ValueError covers bad UTF-8 and bad JSON
         raise Unknown(f"config {path}: {e}")
     _validate_config(cfg)
@@ -183,7 +193,7 @@ def run(root, config):
         for fname in ident["policies"]:
             p = base / fname
             try:
-                text = p.read_text()
+                text = p.read_text(encoding="utf-8", errors="strict")
             except (OSError, ValueError) as e:
                 # ValueError includes UnicodeDecodeError: a file that is present
                 # but not valid UTF-8 could not be observed, so it is UNKNOWN.

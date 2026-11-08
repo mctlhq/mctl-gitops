@@ -302,6 +302,122 @@ check = _real_check
 check("mutant() with the default reporter records a FAIL, not an exception",
       len(_collected) == 1 and _collected[0][1] is False)
 
+# ---- Strict capability-list parsing: anything but quoted strings is UNKNOWN ----
+def _caps_policy(body):
+    return 'path "secret/data/x/*" { capabilities = %s }' % body
+
+
+def _parse_state(body):
+    try:
+        C.parse_policy(_caps_policy(body), "t")
+        return "parsed"
+    except C.Unknown:
+        return "unknown"
+
+
+BAD_CAP_LISTS = {
+    "bare word": '["read", list]',
+    "missing comma": '["read" "deny"]',
+    "doubled comma": '["read",,"list"]',
+    "leading comma": '[,"read"]',
+    "number element": '["read", 5]',
+    "semicolon separator": '["read"; "list"]',
+    "trailing junk after quoted": '["read" x]',
+}
+GOOD_CAP_LISTS = {
+    "single": '["read"]',
+    "two": '["read", "list"]',
+    "trailing comma": '["read", "list",]',
+    "multi-line": '[\n  "read",\n  "list",\n]',
+    "no spaces": '["read","list"]',
+}
+M_LOOSE = mutant("        if not _CAP_LIST_RE.fullmatch(raw):\n", "        if False:\n")
+for label, body in BAD_CAP_LISTS.items():
+    check(f"capability list ({label}) is UNKNOWN", _parse_state(body) == "unknown")
+    try:
+        M_LOOSE.parse_policy(_caps_policy(body), "t")
+        loose = "parsed"
+    except Exception:
+        loose = "unknown"
+    check(f"mutation without the strict list check: ({label}) is silently accepted", loose == "parsed")
+for label, body in GOOD_CAP_LISTS.items():
+    check(f"capability list ({label}) still parses", _parse_state(body) == "parsed")
+check("a trailing comma yields exactly the listed capabilities",
+      C.parse_policy(_caps_policy('["read", "list",]'), "t") == [("secret/data/x/*", {"read", "list"})])
+check("empty capability list stays UNKNOWN", _parse_state("[]") == "unknown")
+d = fixture({"shared.hcl": _caps_policy('["read", list]'), "scoped.hcl": FIX_WRITER})
+check("a bad capability list exits 2 via main, not a pass",
+      C.main(["--root", str(d), "--config", str(d / "cfg.json")]) == 2)
+
+# ---- Explicit UTF-8 decoding: independent of the process locale ----
+LATIN1_ONLY = b'path "secret/data/x/*" { capabilities = ["read"] }\n# caf\xe9\n'  # valid Latin-1, invalid UTF-8
+LATIN1_CFG = {"base_dir": "p", "identities": {"i": {"policies": ["a.hcl"]}},
+              "expectations": [{"identity": "i", "path": "secret/data/x/y", "effective": ["read"]}]}
+d = fixture({}, LATIN1_CFG)
+(d / "p" / "a.hcl").write_bytes(LATIN1_ONLY)
+check("Latin-1-only policy bytes are UNKNOWN (run)", run(d) == C.UNKNOWN)
+d_cfg = fixture({"a.hcl": FIX_WRITER}, LATIN1_CFG)
+(d_cfg / "cfg.json").write_bytes(json.dumps(LATIN1_CFG).replace('"i"', '"i\xe9"').encode("latin-1"))
+check("Latin-1-only config bytes are UNKNOWN (run)", run(d_cfg) == C.UNKNOWN)
+# Mutation: decode with Latin-1, as a Latin-1 locale default would -> the file is read as clean text.
+M_LAT = mutant('p.read_text(encoding="utf-8", errors="strict")', 'p.read_text(encoding="latin-1")')
+check("mutation decoding policy files as Latin-1 turns the Latin-1-only case green (red test)",
+      M_LAT.run(d, d / "cfg.json")[0] == C.OK)
+M_LATC = mutant('pathlib.Path(path).read_text(encoding="utf-8", errors="strict")',
+                'pathlib.Path(path).read_text(encoding="latin-1")')
+try:
+    M_LATC.load_config(d_cfg / "cfg.json")
+    _lat_cfg = "accepted"
+except C.Unknown:
+    _lat_cfg = "unknown"
+check("mutation decoding the config as Latin-1 accepts the Latin-1-only config (red test)", _lat_cfg == "accepted")
+# Real locale: run the script under a Latin-1 locale when the host has one.
+_probe = subprocess.run([sys.executable, "-X", "utf8=0", "-c", "import locale;print(locale.getpreferredencoding(False))"],
+                        capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "en_US.ISO8859-1"})
+if _probe.stdout.strip().upper().replace("-", "").replace("_", "") in ("ISO88591", "LATIN1"):
+    pr = subprocess.run([sys.executable, "-X", "utf8=0", "scripts/check-vault-policy-capabilities.py", "--root", str(d),
+                         "--config", str(d / "cfg.json")], capture_output=True, text=True,
+                        env={"PATH": "/usr/bin:/bin", "LC_ALL": "en_US.ISO8859-1"})
+    check("under a Latin-1 locale, Latin-1-only policy bytes still exit 2", pr.returncode == 2, pr.stdout + pr.stderr)
+else:
+    print("SKIP  Latin-1 locale not available on this host; covered by the Latin-1 decode mutation above")
+
+# ---- Capabilities merge across several policy files under one identity ----
+MF_CFG = {
+    "base_dir": "p",
+    "identities": {"multi": {"policies": ["one.hcl", "two.hcl"]},
+                   "first-only": {"policies": ["one.hcl"]},
+                   "second-only": {"policies": ["two.hcl"]}},
+    "expectations": [
+        {"identity": "multi", "path": "secret/data/m/a", "effective": ["list", "read"]},
+        {"identity": "first-only", "path": "secret/data/m/a", "effective": ["read"]},
+        {"identity": "second-only", "path": "secret/data/m/a", "effective": ["list"]},
+        {"identity": "multi", "path": "secret/data/m/b/c", "effective": ["deny"]},
+        {"identity": "multi", "path": "secret/data/n/x", "effective": ["update"]},
+    ],
+}
+MF_ONE = 'path "secret/data/m/*" { capabilities = ["read"] }\npath "secret/data/m/b/*" { capabilities = ["read"] }\n'
+MF_TWO = ('path "secret/data/m/*" { capabilities = ["list"] }\npath "secret/data/m/b/*" { capabilities = ["deny"] }\n'
+          'path "secret/data/n/*" { capabilities = ["update"] }\n')
+MF_FILES = {"one.hcl": MF_ONE, "two.hcl": MF_TWO}
+check("capabilities merge across files listed under one identity", run(fixture(MF_FILES, MF_CFG)) == C.OK)
+check("merge fixture turns red when the second file drops its deny",
+      run(fixture({"one.hcl": MF_ONE, "two.hcl": MF_TWO.replace('["deny"]', '["read"]')}, MF_CFG)) == C.FINDING)
+check("merge fixture turns red when the second file is not listed for the identity",
+      run(fixture(MF_FILES, dict(MF_CFG, identities=dict(MF_CFG["identities"], multi={"policies": ["one.hcl"]})))) == C.FINDING)
+# Mutation: keep only the last file's rules per identity (replace instead of accumulate).
+M_REPLACE = mutant("rules.extend(parse_policy(text, str(p)))", "rules = list(parse_policy(text, str(p)))")
+d = fixture(MF_FILES, MF_CFG)
+check("mutation replacing rules per file turns the multi-file merge red", M_REPLACE.run(d, d / "cfg.json")[0] == C.FINDING)
+# Mutation: keep only the first file.
+M_FIRST = mutant("rules.extend(parse_policy(text, str(p)))", "rules = rules or list(parse_policy(text, str(p)))")
+check("mutation keeping only the first file turns the multi-file merge red", M_FIRST.run(d, d / "cfg.json")[0] == C.FINDING)
+
+# ---- The recorded-state note is present and the real table still holds ----
+check("expectations file carries the recorded-state note",
+      isinstance(CFG.get("note"), str) and "deployed today" in CFG["note"])
+check("the note field does not change evaluation", C.run(".", REAL_CFG)[0] == C.OK)
+
 if failures:
     print("\nFAILURES:")
     for f in failures:
