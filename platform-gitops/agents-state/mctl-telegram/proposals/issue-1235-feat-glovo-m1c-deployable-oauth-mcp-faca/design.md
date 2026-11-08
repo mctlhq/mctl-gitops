@@ -73,6 +73,16 @@ Deployed state checked:
 
 ## Proposed solution
 
+### AMEND 2026-11-08 — canonical mctl-api facade contract is external to this repo
+
+The `glovo-facade-mctl-api/v1alpha1` wire section is currently an *unimplemented candidate*: [mctl-api#953](https://github.com/mctlhq/mctl-api/issues/953) proposes `/api/v1/glovo/facade/*` for connection authority; [mctl-api#954](https://github.com/mctlhq/mctl-api/issues/954) proposes `/api/v1/provider-orders/*` for orders and `aar_`; neither implements the proposed `/api/v1/assistants/glovo/v1alpha1/*` methods for history, basket, preview and order prepare. Source-backed contract join [mctl-api#957](https://github.com/mctlhq/mctl-api/issues/957) MUST freeze one final route/verb/schema matrix covering **all seven tools**, with real-API and facade cross-repo golden tests. Do not present the fake `mctlapi/fakeapi` implementation as production readiness.
+
+Identity: a Glovo-resource bearer `mctl_tenant` string, even if signed, must be bound to a **human-explicit team choice in a server-owned OAuth grant** per the AMEND to #953. Custom `X-Mctl-Selected-Tenant` is diagnostic/transport only: mctl-api must derive authoritative selected team from the verified grant and revalidate live per-principal allowlist and membership on every request. A user eligible for only one team but lacking an explicit selection gets `ambiguous_tenant`, not silent inference. Real mctl-api backend readiness remains blocked until #953/#954/#957 merge and pass negative tests.
+
+A facade runtime image can be implemented in isolation against a fake harness under a separate approval, but **its wire integration status remains BLOCKED_FOR_REAL_API**; no domain, DNS, OAuth pilot or other deployment can use a fake backend as if production-grade authority were present. M1 only handles synthetic baskets, no Glovo consumer API.
+
+
+
 ### Shape
 
 A new, independent executable and image in the same Go module:
@@ -213,13 +223,11 @@ are only consumable through the fake's separate human endpoint, never via `/mcp`
 
 ### Wire protocol `glovo-facade-mctl-api/v1alpha1` (frozen here)
 
-Documented in `docs/contracts/glovo-facade-mctl-api.md` and pinned by
-`internal/glovo/mctlapi/wire_test.go` (golden request/response fixtures shared by the
-real client and `fakeapi`). All under `POST|GET {API_BASE}/api/v1/assistants/glovo/v1alpha1/...`:
+Documented as a **candidate harness wire sketch** in `docs/contracts/glovo-facade-mctl-api.md` and pinned by `internal/glovo/mctlapi/wire_test.go` (golden fixtures for fake only). Final real HTTP routes, payloads and response codes MUST be owned by mctl-api#957 and shared between actual mctl-api handlers and facade; the candidate below is NOT an existing server API. Provisional sketch: `POST|GET {API_BASE}/api/v1/assistants/glovo/v1alpha1/...`:
 
 - Headers on every call: `Authorization: Bearer <facade workload credential>`,
   `X-Mctl-Subject-Token: <user access token, forwarded for re-verification>`,
-  `X-Mctl-Selected-Tenant: <mctl_tenant claim or empty>`, `X-Request-Id`,
+  `X-Mctl-Selected-Tenant: <mctl_tenant claim or empty>` (untrusted diagnostic; mctl-api MUST resolve verified server-owned OAuth grant selection, not trust this header), `X-Request-Id`,
   `Content-Type: application/json`. No query strings at all; ids travel in JSON bodies or path segments of opaque ids.
 - `POST /resolve` `{}` -> `200 {"scope_ref":"gsc_...","tenant":"<name>","expires_at"}`
   or `403 {"error":"no_tenant|ambiguous_tenant|scope_unsupported|not_in_pilot|not_authorized|no_install|stale_install"}`.
