@@ -27,6 +27,15 @@ As a result, any values file placed in a reconciled path deploys within about
 30 seconds. Any Ingress claiming `glovo.mctl.ai` is publicly reachable with no
 DNS change at all. P0 has to make that impossible, not just unlikely.
 
+## AMEND 2026-11-08 — no self-authorized GitOps deployment gate
+
+**Independent review P1:** the current `gate.yaml` may contain `p1: approved` plus an arbitrary GitHub issue URL, but it lives in the same PR-controlled repository tree as the manifests. This is **self-attestation**, NOT an authenticated human release grant. A PR could otherwise bypass the CI leak guard while activating ArgoCD resources on merge.
+
+- Under this P0 proposal, the CI guard MUST **unconditionally refuse** Glovo host/Ingress, provider/control Deployments, Temporal namespaces and provider K8s namespace resources in every reconciled GitOps path — **even if `gate.yaml` claims P1/P2 approved**. No P0 self-override.
+- `gate.yaml` is only a human-facing phase/evidence index and must be labelled "not authorization". A later P1/P2 proposal/PR requires an independently controlled release approval source **outside PR-modifiable files** bound to phase, environment, exact Git/manifest and immutable image digest, explicit owner, rollout/rollback; the verifier is itself separately reviewed and enforced as a required check. If unavailable, fail closed; do not count a pasted issue URL, GitHub comment or local YAML bit as approval.
+- Add negative test with fake `gate.yaml` containing `p1: approved, p2: approved` and forged approval URL plus a valid reconciled Glovo Deployment; guard MUST fail. All prior network, JWT, bridge, tenant, OAuth and rollout gates remain.
+- P0 merge must change only staged assets, validator and CI (non-reconciled), zero live workloads/DNS/credentials/Temporal changes; no activation authority is inherited from it.
+
 ## User stories
 
 - AS the platform owner I WANT the full Glovo M1 deployment package reviewed
@@ -53,10 +62,7 @@ DNS change at all. P0 has to make that impossible, not just unlikely.
   outside every path reconciled by Argo CD (`platform-gitops/services/*/*`,
   `platform-gitops/tenants/*`, `platform-gitops/infra-components/**`,
   `platform-gitops/bootstrap/**`, `platform-gitops/argo-workflows/**`).
-- WHEN a PR adds the host `glovo.mctl.ai`, the Temporal namespace names
-  `mctl-assistants` / `mctl-assistants-provider-glovo`, or the Kubernetes
-  namespace `mctl-assistants-provider-glovo` to any reconciled path THE
-  SYSTEM SHALL fail CI, unless that PR carries the phase approval marker
+- WHEN a PR adds the host `glovo.mctl.ai`, a Glovo worker image, the Temporal namespace names `mctl-assistants` / `mctl-assistants-provider-glovo`, or the provider Kubernetes tenant/namespace to any reconciled path **under P0** THE SYSTEM SHALL always fail CI regardless of any self-written `gate.yaml` phase or issue URL; a later P1/P2 verifier requires a separate reviewed owner approval bound to immutable artifacts,
   defined in the gate file (P1 or P2).
 - WHEN CI runs on the staged package THE SYSTEM SHALL render every staged
   component with `platform-gitops/helm-charts/base-service`, pass
