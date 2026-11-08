@@ -238,8 +238,8 @@ env:
   # html; set it to plain to switch back.
   # 8745115872 (@mctlhq) is also the App-Directory demo/reviewer identity:
   # remove it from DIGEST_RECIPIENTS before any reviewer window opens
-  # (REVIEWER_MODE on), because the digest lists new clients and an external
-  # reviewer signed in as that account would read it. Reviewer mode is OFF.
+  # (DEMO_REVIEWER_ENABLED true), because the digest lists new clients and an external
+  # reviewer signed in as that account would read it. DEMO_REVIEWER_ENABLED is false now.
   DIGEST_WEEKDAY: "mon"
   DIGEST_RECIPIENTS: "210408407,924671154,8745115872"
   # Reviewer/demo password-bypass login. OFF since 2026-10-23: the Claude
