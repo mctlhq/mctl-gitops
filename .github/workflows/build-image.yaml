@@ -78,7 +78,7 @@ on:
     # of `secrets: inherit`. This job checks out whichever repository
     # `inputs.repo` names and builds its Dockerfile, so every secret in the
     # caller's environment is a secret handed to a build of third-party
-    # source. These three are the complete set this file references
+    # source. These two are the complete set this file references
     # (mctlhq/mctl-gitops#1010).
     #
     # All optional: each has a documented fallback tier below, and making any
@@ -89,8 +89,6 @@ on:
     # GitHub rejects a `secrets:` entry whose name starts with GITHUB_.
     secrets:
       APP_PRIVATE_KEY:
-        required: false
-      GHCR_PAT:
         required: false
       GH_PACKAGES_TOKEN:
         required: false
@@ -482,52 +480,20 @@ jobs:
           persist-credentials: false
 
       # --- Resolve GHCR push token ---
-      # GITHUB_TOKEN canary. GHCR_PAT is a classic PAT with write:packages; it
-      # expired silently on 2026-10-12 and every release-deploy failed at GHCR
-      # login from 07:24Z until it was re-minted. The job's own GITHUB_TOKEN
-      # (packages: write) lives one run and cannot expire that way, but it can
-      # push to an existing package only after the package grants mctl-gitops
-      # Write under "Manage Actions access". Images listed here use it instead
-      # of GHCR_PAT; the list grows as packages are granted, and GHCR_PAT is
-      # deleted once every package is on it. A Vault PAT still wins: tenant
-      # builds push with their own credential.
+      # A Vault PAT wins: tenant builds push with their own credential.
+      # Everything else pushes with the job's own GITHUB_TOKEN
+      # (packages: write). It lives one run and cannot expire silently the way
+      # the classic GHCR_PAT did on 2026-10-12, but it can push to an existing
+      # package only after that package grants mctl-gitops Write under
+      # "Manage Actions access". A package without the grant fails here at
+      # GHCR login with a 403; grant it, do not bring back a PAT.
       - name: Resolve GHCR token
         id: ghcr_token
-        env:
-          IMAGE_NAME: ${{ inputs.image_name }}
-          GITHUB_TOKEN_IMAGES: |
-            ghcr.io/mctlhq/grafana-iac
-            ghcr.io/mctlhq/mc
-            ghcr.io/mctlhq/mctl-academy
-            ghcr.io/mctlhq/mctl-agent
-            ghcr.io/mctlhq/mctl-agents
-            ghcr.io/mctlhq/mctl-alice
-            ghcr.io/mctlhq/mctl-api
-            ghcr.io/mctlhq/mctl-design
-            ghcr.io/mctlhq/mctl-docs
-            ghcr.io/mctlhq/mctl-portal
-            ghcr.io/mctlhq/mctl-telegram
-            ghcr.io/mctlhq/mctl-web
-            ghcr.io/mctlhq/mctl-workflow-tools
-            ghcr.io/mctlhq/pfeifenpatenschaft-backend
-            ghcr.io/mctlhq/portfolio
-            ghcr.io/mctlhq/projects-mcp
-            ghcr.io/mctlhq/seerrsense
-            ghcr.io/mctlhq/vault-iac
-            ghcr.io/mctlhq/zitadel-iac
         run: |
           if [[ "${{ steps.vault_pat.outputs.has_pat }}" == "true" ]]; then
             echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
             echo "🔑 Using Vault PAT for GHCR push"
-          elif [[ -n "$IMAGE_NAME" ]] && grep -qxF -- "$IMAGE_NAME" <<< "$GITHUB_TOKEN_IMAGES"; then
-            echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
-            echo "username=${{ github.actor }}" >> $GITHUB_OUTPUT
-            echo "🌐 Using GITHUB_TOKEN for GHCR push (package granted to mctl-gitops)"
-          elif [[ -n "${{ secrets.GHCR_PAT }}" ]]; then
-            echo "token=${{ secrets.GHCR_PAT }}" >> $GITHUB_OUTPUT
-            echo "username=x-access-token" >> $GITHUB_OUTPUT
-            echo "🔐 Using GHCR_PAT for GHCR push"
           else
             echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
             echo "username=${{ github.actor }}" >> $GITHUB_OUTPUT

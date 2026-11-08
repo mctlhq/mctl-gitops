@@ -179,8 +179,8 @@ jobs:
     # workflow or the runner, and the standing cost of holding credentials a
     # build has no use for.
     #
-    # These three are every inheritable secret build-image references, and it
-    # declares them under `on: workflow_call:`. GITHUB_TOKEN is its fourth and
+    # These two are every inheritable secret build-image references, and it
+    # declares them under `on: workflow_call:`. GITHUB_TOKEN is its third and
     # is provided automatically - it is neither inheritable nor declarable.
     #
     # A name missing from this list does not fail loudly: build-image falls
@@ -189,7 +189,6 @@ jobs:
     # green run - see the PR that introduced this block.
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
-      GHCR_PAT: ${{ secrets.GHCR_PAT }}
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
   bump:
