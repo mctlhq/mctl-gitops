@@ -106,3 +106,6 @@ each phase; T11 no token (`eyJ`) in logs, Loki or histories.
 
 Live evidence in the runbook is entirely "not observed" at the time of
 writing; this ADR must not move beyond Proposed until it is filled.
+
+Spike #2469 evidence: `docs/runbooks/temporal-authz-role-matrix.md` and
+`docs/runbooks/temporal-auth-canary.md`; verdict in `docs/runbooks/temporal-client-auth.md`. Status stays `Proposed`.
