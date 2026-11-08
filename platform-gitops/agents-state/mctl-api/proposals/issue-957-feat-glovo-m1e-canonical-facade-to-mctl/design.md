@@ -76,6 +76,14 @@ Deployed state checked:
 
 ## Proposed solution
 
+### AMEND 2026-11-08 — M0 closed refusal + DB/approval atomicity proof
+
+`ambiguous_tenant` cannot become a public v1alpha1 refusal without deliberately changing the already-merged closed M0 contract and both source repositories. To align with the approved #953 proposal AMEND, missing or unbound selected-team OAuth grant = `ambiguous_tenant` (including one eligible team); mismatched `X-Mctl-Selected-Tenant` remains a transport refusal mapped to the supported public error. Audit the shared Go/JSON schemas, golden fixtures and facade error mapping as part of the integration contract.
+
+The `Prepare` sequence is not atomically satisfied merely by invoking existing `workitems.CreateActionApproval` and `ExecutionByID` while holding a separate `glovojoin` transaction. Design a concrete shared DB pool and `pgx.Tx`-aware WorkItem/execution/`aar_` APIs **or** an idempotent compensating state machine with separately validated transitions; prove failure injection on each boundary, no orphan approved receipt, no duplicate pord_/we_/aar_, and zero fake-provider writes. Any fallback to partial commit must explicitly remain `not_ready`/blocked until reconciled. The legacy #954 source uses `ReserveActionApprovalTx` only for reserve, not pending creation; don't assume a `Prepare` helper exists or can span databases.
+
+
+
 ### 1. Decision: one canonical route family, owned by mctl-api
 
 Keep the prefix #1235 froze, `/api/v1/assistants/glovo/v1alpha1/`. It is versioned, does
@@ -164,7 +172,7 @@ accepts an `hir_`.
 |---|---|
 | 400 | `invalid_request` (schema, unknown field, duplicate key, header/body key mismatch) |
 | 401 | `not_facade_identity`, `subject_token_invalid` (+ `WWW-Authenticate`) |
-| 403 | `insufficient_scope`, `tenant_selection_required`, `tenant_mismatch`, and the M1a codes passed through unchanged: `no_tenant`, `ambiguous_tenant`, `not_in_pilot`, `scope_unsupported`, `not_authorized`, `no_install`, `stale_install`, `connection_revoked` |
+| 403 | `insufficient_scope`, `ambiguous_tenant`, `tenant_mismatch`, and the M1a codes passed through unchanged: `no_tenant`, `ambiguous_tenant`, `not_in_pilot`, `scope_unsupported`, `not_authorized`, `no_install`, `stale_install`, `connection_revoked` |
 | 404 | `connection_not_found`, `preview_not_found`, `order_not_found` (owner and tenant mismatch included) |
 | 409 | `idempotency_key_reused`, `preview_expired`, `fingerprint_changed`, `connection_not_active` |
 | 429 | `rate_limited` |
@@ -212,8 +220,7 @@ Fingerprint, Items, IdempotencyKey})`. In one transaction that call must create 
 whose `IntentHash` covers the full Target string from #954 plus the fingerprint). No
 provider effect row and no dispatch is created. Idempotency is
 `UNIQUE(requested_by, idempotency_key)` in M1b, and a replay with a different
-fingerprint gets 409 `idempotency_key_reused`. If M1b does not expose `Prepare`,
-`Readiness` reports `provider_orders: not_ready` and the route returns 503.
+fingerprint gets 409 `idempotency_key_reused`. If M1b does not expose a verified transactional or compensating `Prepare`, `Readiness` reports `provider_orders: not_ready` and the route returns 503. A nominal `Prepare` method without tested cross-store atomicity and crash recovery does not satisfy readiness.
 
 ### 7. Contract package (shared with mctl-telegram)
 
