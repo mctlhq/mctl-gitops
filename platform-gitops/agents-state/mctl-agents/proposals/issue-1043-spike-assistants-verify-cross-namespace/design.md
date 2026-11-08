@@ -28,12 +28,18 @@ Deployed state checked:
 
 ## Proposed solution
 
+### AMEND 2026-11-08 — independent reviewer test integrity
+
+The Nexus operator permission gate tests `temporal-system:admin` and the real source-backed namespace role/RPC matrix. A `system:admin` JWT example is invalid and MUST NOT appear in fixtures. The offline `tests/test_spike_1043_contracts.py` validation **cannot skip** when `jsonschema` is absent. If the pinned test dependency is missing, fail and require an explicitly reviewed dependency update; record the number of positive and negative cases actually validated. A green job with all schema tests skipped is a review failure. No production Nexus or API bridge is implemented by this proposal.
+
+
+
 The spike delivers documentation and contract artifacts in mctl-agents, no runtime code:
 
 1. `docs/spikes/1043-cross-namespace-dispatch.md` — decision memo.
 2. `docs/spikes/1043/command.schema.json`, `docs/spikes/1043/result.schema.json` — bridge contracts (JSON Schema 2020-12).
 3. `docs/spikes/1043/fixtures/*.json` — positive and negative examples.
-4. `tests/test_spike_1043_contracts.py` — offline schema validation (uses `jsonschema`, `pytest.importorskip`).
+4. `tests/test_spike_1043_contracts.py` — offline schema validation (uses `jsonschema` with a required import; missing dependency FAILS CI rather than silently skipping).
 
 ### Decision procedure
 
@@ -50,7 +56,7 @@ Nexus gates (all against server 1.31.0, chart 1.2.0, Python SDK 1.34.0 / nexus-r
 |---|---|---|
 | N1 | Is Nexus available and enabled by default in OSS 1.31.0, or does it need dynamic config (`system.enableNexus`) and a frontend HTTP address? | Server release notes and `common/dynamicconfig` constants at tag v1.31.0; chart 1.2.0 values for the frontend HTTP port |
 | N2 | Can a caller namespace be restricted per endpoint in OSS (an allowlist of `mctl-assistants` only), or is that Temporal Cloud only? | Server source for endpoint registry and the authorizer call on Nexus dispatch; Cloud vs OSS docs |
-| N3 | Which identity and role can create/update endpoints, and is that operator API covered by the #2456 `system:admin` model? | `OperatorService` Nexus endpoint RPCs and their authorizer role |
+| N3 | Which identity and role can create/update endpoints, and is that operator API covered by the #2456 `temporal-system:admin` model? | `OperatorService` Nexus endpoint RPCs and their authorizer role |
 | N4 | Does the provider worker need any permission on the control namespace to receive tasks and complete operations? (It must not.) | Worker poll RPC (`PollNexusTaskQueue`) and completion target namespace; callback delivery path |
 | N5 | Does the default authorizer (#2456) evaluate Nexus dispatch against the target namespace with the caller's claims, so the provider identity cannot be used to call back into control? | Authorizer API list for Nexus HTTP and gRPC handlers |
 | N6 | Cancellation, retries, timeouts and error propagation (`OperationError`, `HandlerError` retryable vs non-retryable; schedule-to-close) on both SDKs | SDK source at the pinned versions |

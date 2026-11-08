@@ -6,9 +6,15 @@
 - [ ] 4. Decision (depends on 2, 3) — apply the decision rule from design.md and set the memo's first line to `STATUS: <OUTCOME>`, one of `NEXUS_VERIFIED`, `API_BRIDGE_SELECTED`, `BLOCKED_NEEDS_SDK_OR_SERVER_UPGRADE`, `DEFER`. — DoD: exactly one outcome, justified by gate results.
 - [ ] 5. Contract schemas (depends on 4) — write `docs/spikes/1043/command.schema.json` and `docs/spikes/1043/result.schema.json` (JSON Schema 2020-12, `additionalProperties: false`, bounded strings, opaque ref patterns, `aar_` required for mutation kinds) and fixtures under `docs/spikes/1043/fixtures/` (valid, extra-field, raw-secret-shaped field, missing approval on mutation, expired TTL > 15 min, bad ref pattern). If the outcome is `NEXUS_VERIFIED`, the same schemas define the Nexus operation input/output. — DoD: schemas and fixtures committed.
 - [ ] 6. Call diagram, failure/retry/cancellation matrix, denial-test plan D1-D12, ownership map, migration/rollback and cost (depends on 4) — in the memo, consistent with design.md. — DoD: each section present; denial tests name the exact RPC or route and expected answer.
-- [ ] 7. Offline test (depends on 5) — `tests/test_spike_1043_contracts.py`: validates each fixture against its schema (valid passes, each negative fails for the expected reason), asserts the memo's status line is one allowed outcome, and asserts no fixture contains `MCTL_TOKEN`, `Bearer ` or a JWT-shaped string. Use `pytest.importorskip("jsonschema")`. — DoD: `uv run pytest tests/test_spike_1043_contracts.py` passes offline; `ruff` clean.
+- [ ] 7. Offline test (depends on 5) — `tests/test_spike_1043_contracts.py`: validates each fixture against its schema (valid passes, each negative fails for the expected reason), asserts the memo's status line is one allowed outcome, and asserts no fixture contains `MCTL_TOKEN`, `Bearer ` or a JWT-shaped string. Use a required `import jsonschema` and fail CI if it is missing (pin/update the test dependency if needed, under review). — DoD: `uv run pytest tests/test_spike_1043_contracts.py` passes offline; `ruff` clean.
 - [ ] 8. Follow-up issue drafts (depends on 4) — in the memo, list the separate later issues (mctl-api bridge routes and outbox, mctl-agents control workflow, provider worker, gitops namespaces/identities after #2456), each needing its own approved DevLoop proposal. — DoD: list present; nothing filed or implemented here.
 - [ ] 9. PR — open the documentation PR with `Refs mctlhq/mctl-agents#1043` (never `Closes`, per `orchestrator/spike_issue.py`). — DoD: PR open; issue stays open for the owner's verdict.
+
+## AMEND 2026-11-08 — mandatory integrity checks
+
+- [ ] A1. Source-backed Temporal scope/role examples use `temporal-system:admin`, not `system:admin`, and assertions cover a negative invalid-scope JWT.
+- [ ] A2. Offline JSON Schema tests MUST NOT be skipped if `jsonschema` is unavailable: pin or explicitly require the dependency and fail CI with installation instructions. A green run must execute at least one positive and all negative fixtures, with case counts.
+- [ ] A3. The implementation remains a docs/schemas/contract-tests-only spike. Any separate dependency/lock update requires review; this does not authorize Nexus endpoints or real bridge operations.
 
 ## Tests
 
