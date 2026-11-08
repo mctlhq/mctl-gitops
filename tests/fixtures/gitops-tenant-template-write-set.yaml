@@ -1,0 +1,25 @@
+# Ledger for tests/test_gitops_tenant_template_write_set.py (tracker: mctlhq/mctl-gitops#1033).
+#
+# SHRINK-ONLY. Delete rows in the change that removes the reach; adding a row
+# needs a reviewer's explicit decision.
+#
+# template_reach: tenant-class workflow templates (those not submitted into the
+#   argo-workflows namespace) and the credential Secrets each can reach, through
+#   its own mounts and env references and through templateRef targets.
+# readers: [subject, Role, way] for the subjects that can read the credential
+#   Secrets (read), exec into pods (exec) or create pods (pod-create) in a tenant
+#   namespace that holds them. The same rows are expected in every tenant.
+template_reach:
+  deploy-service: [github-actions-pat, mctl-gitops-deploy-key]
+  preview-deploy: [github-actions-pat]
+  provision-database: [mctl-gitops-deploy-key]
+  retire-service: [mctl-gitops-deploy-key]
+  rollback-service: [mctl-gitops-deploy-key]
+  tpl-git-commit: [mctl-gitops-deploy-key]
+readers:
+  - [ServiceAccount/argo-workflow-sa, argo-workflow-helm-deploy, pod-create]
+  - [ServiceAccount/argo-workflow-sa, argo-workflow-helm-deploy, read]
+  - [ServiceAccount/argo-workflow-sa, argo-workflow-runner, read]
+  - [ServiceAccount/argo-workflow-sa, argo-workflow-smoke-verify, exec]
+  - [ServiceAccount/argo-workflow-sa, argo-workflow-smoke-verify, pod-create]
+  - [ServiceAccount/argo-workflow-sa, argo-workflow-smoke-verify, read]
