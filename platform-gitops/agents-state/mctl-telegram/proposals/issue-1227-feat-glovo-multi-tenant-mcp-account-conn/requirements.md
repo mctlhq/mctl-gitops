@@ -27,6 +27,17 @@ its own approval). **`GO_REAL_PILOT` is not granted.** The real-provider path is
 **`BLOCKED_PROVIDER_ACCESS`** until gate G3 (a sanctioned or legally reviewed access path)
 clears.
 
+## AMEND 2026-11-08 — action approvals, tenancy and readiness (normative)
+
+**M0 remains documentation/tests only; NO M1 coding or real account connection is authorized by approving this proposal.**
+
+1. **Never treat human-input clarification as approval.** The existing `docs/contracts/mctl-api-human-input.md` states that answering `hir_...` does NOT authorize a side effect. Before *every* externally observable provider basket mutation, mctl-api MUST create/resolve the canonical WorkItem/Execution `wi_/we_`, issue an `ActionApprovalRequest` (`aar_`) bound to that execution and the exact `(tenant_id, owner_principal_id, order_id, glovo_connection_id, install_id, install_revision, basket_fingerprint, mutation_intent_hash)`. Only a verified human identity, not the requesting agent, may decide it. On execution, enforce live identity+tenant+install+connection+fingerprint/policy/budget revalidation and the existing single-use **approval receipt gate** (reserve/consume/mark outcome on success or safe failure). Wrong owner, execution, revision, fingerprint, tenant, expired or replayed receipt = NO PROVIDER WRITE. A clarification answer or the existence of an automation schedule is NEVER sufficient.
+2. **G2 must reference an actual, separately approved mctl-api implementation**, not only mctl-api#948: PR #950 merged the canonical `AutomationDefinition` contract (docs/schemas/harness), but did NOT deliver Glovo-scoped principal/tenant selection, connection registry, authenticated MCP subject delegation, per-owner order index, `aar_` request/receipt integration or live permission checks. Until these are implemented, merged, independently reviewed and exercised with cross-tenant and same-tenant-different-user negative tests, the M1 integration and M3 rollout are BLOCKED.
+3. **Credential revocation terminology must be honest.** Deleting an AES-GCM ciphertext while a stable per-connection HKDF key can still be re-derived from a surviving master key is **not cryptographic erasure**. Prefer a truly independent random per-connection DEK wrapped by a KEK, with revocation destroying every active key copy and limiting backup/snapshot retention, or classify it only as best-effort data/session deletion. Do not claim hard crypto-shredding without proving the key lifecycle, cache eviction and backup behaviour.
+4. Temporal control and lower-trust provider MUST be in **separate Temporal namespaces**, with no provider permission on control or DevLoop. A plain Workflow Activity cannot cross namespaces. Require an approved Nexus bridge or authenticated mctl-api message/results bridge with exact SDK+server compatibility, replay and identity fencing. No trust from task-queue names alone.
+5. **Account connection and real provider readiness:** `glovo_connect_account` in M1 is **fake/synthetic only** and must be clearly labelled as such to test consumers. Real user credentials must never be taken from MCP prompts or put into a shared hosted `session.json`. G3 requires documented authorized/legally reviewed access, independently validated Montenegro availability and phone-basket continuity; otherwise `BLOCKED_PROVIDER_ACCESS`. No checkout/order/payment tool or silent basket write.
+6. **Identity contract:** `https://glovo.mctl.ai/mcp` is a separate OAuth protected resource; verify issuer/audience and how an MCTL `prn_` principal maps to current surface/Telegram claims. If personal scope is unsupported per .github#309, **reject**, never fall back to `labs` or `mctl`. Source repository choice G1 remains owner-controlled at .github#324.
+
 ## User stories
 
 - AS an MCTL principal in tenant A I WANT to connect my own Glovo account to
@@ -138,9 +149,7 @@ Per-action consent and order safety:
 
 - WHEN `glovo_prepare_order` succeeds THE SYSTEM SHALL return a preview with a basket
   fingerprint and an expiry, and SHALL NOT change the provider basket.
-- THE SYSTEM SHALL change the provider basket only after a human-input approval bound to
-  `(order_id, fingerprint, install_revision, connection_id)`. A replayed, expired or
-  mismatched approval SHALL be refused with `consent_invalid`.
+- THE SYSTEM SHALL change the provider basket only after a canonical `aar_` ActionApprovalRequest, human decision and live single-use approval receipt bound to `(tenant_id, owner_principal_id, execution_id, order_id, fingerprint, install_revision, connection_id, mutation_intent_hash)`. A `hir_` clarification answer is never approval. A replayed, expired, wrong-execution, cross-tenant, stale or mismatched receipt SHALL be refused with `consent_invalid` before any write.
 - THE SYSTEM SHALL expose no tool, activity or adapter method that places an order, pays,
   books a delivery slot or checks out.
 - IF the provider answers with an error, a protocol change, a timeout or an
