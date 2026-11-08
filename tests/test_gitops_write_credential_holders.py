@@ -52,7 +52,13 @@ def check(name, cond, detail=""):
 def observe_tree(root, names=W.ALL_NAMES):
     """Rows (file, document, template, mechanism, name) for every reference under root."""
     rows = []
-    for dirpath, dirnames, filenames in os.walk(root):
+
+    def unreadable(err):
+        # os.walk ignores listing errors by default, which would drop a whole
+        # directory from the observation without a word.
+        raise W.ReadError(f"{err.filename}: cannot list directory: {err.strerror}") from err
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=unreadable):
         at_root = pathlib.Path(dirpath) == pathlib.Path(root)
         dirnames[:] = sorted(d for d in dirnames if not (at_root and d in PRUNE))
         for fn in sorted(filenames):
@@ -210,6 +216,39 @@ with tempfile.TemporaryDirectory() as td:
         check("an unparsable file that mentions a credential is an error, not an empty result", False)
     except W.ReadError:
         check("an unparsable file that mentions a credential is an error, not an empty result", True)
+
+# An unlistable directory is a ReadError, not a shorter tree. chmod 000 does not
+# stop root (CI containers, some dev shells), so the case is skipped, loudly, when
+# the process is root or the mode change is not enforced.
+with tempfile.TemporaryDirectory() as td:
+    root = pathlib.Path(td)
+    (root / "scripts/locked").mkdir(parents=True)
+    (root / "scripts/locked/a.sh").write_text(f"kubectl get secret {SYNTH_NAME}\n")
+    locked = root / "scripts/locked"
+    os.chmod(locked, 0)
+    try:
+        enforced = not os.access(locked, os.R_OK)
+        if not enforced:
+            print("SKIP  unlistable directory cases: permissions not enforced "
+                  f"(euid={os.geteuid()}; root ignores chmod 000)")
+        else:
+            try:
+                observe_tree(root, SYNTH)
+                check("a directory that cannot be listed is a ReadError, not a shorter tree", False)
+            except W.ReadError:
+                check("a directory that cannot be listed is a ReadError, not a shorter tree", True)
+            try:
+                W.list_dir(locked)
+                check("list_dir on an unlistable directory is a ReadError", False)
+            except W.ReadError:
+                check("list_dir on an unlistable directory is a ReadError", True)
+            try:
+                W.yaml_files(locked)
+                check("yaml_files on an unlistable directory is a ReadError", False)
+            except W.ReadError:
+                check("yaml_files on an unlistable directory is a ReadError", True)
+    finally:
+        os.chmod(locked, 0o755)
 
 print()
 if failures:

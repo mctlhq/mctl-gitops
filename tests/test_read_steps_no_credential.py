@@ -86,7 +86,7 @@ def read_only_holders(docs):
 
 
 try:
-    DOCS = [(p.name, d) for p in sorted(TPL.glob("*.yaml")) for d in W.load_docs(p)]
+    DOCS = [(p.name, d) for p in W.yaml_files(TPL) for d in W.load_docs(p)]
 except W.ReadError as e:
     DOCS = []
     check("the workflow templates could be read", False, e)

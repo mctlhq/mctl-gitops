@@ -118,7 +118,7 @@ def reach_by_template(docs):
 
 def load_template_docs():
     docs = []
-    for p in sorted(TPL.glob("*.yaml")):
+    for p in W.yaml_files(TPL):
         docs += W.load_docs(p)
     if not docs:
         raise W.ReadError("no workflow templates found")

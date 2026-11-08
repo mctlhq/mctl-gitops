@@ -8,8 +8,10 @@ which are run as `python3 tests/<file>.py` (the script directory is on sys.path)
 "Could not observe" is never "observed absent": every unreadable or unparsable
 input raises ReadError, and the callers let it fail the test.
 """
+import os
 import pathlib
 import re
+import stat
 import subprocess
 
 import yaml
@@ -113,8 +115,44 @@ def helm_render(chart, values_file, release, namespace):
         raise ReadError(f"helm output for {release} is not YAML: {e}") from e
 
 
+def list_dir(path):
+    """Sorted entry names of a directory. A directory that cannot be listed is a
+    ReadError: pathlib's glob() would silently return nothing for it."""
+    try:
+        return sorted(os.listdir(path))
+    except OSError as e:
+        raise ReadError(f"{path}: cannot list directory: {e}") from e
+
+
+def yaml_files(path):
+    """Regular *.yaml files directly in `path`; an unreadable directory is a ReadError."""
+    out = []
+    for name in list_dir(path):
+        if name.endswith(".yaml"):
+            p = pathlib.Path(path) / name
+            try:
+                if stat.S_ISREG(os.stat(p).st_mode):
+                    out.append(p)
+            except OSError as e:
+                raise ReadError(f"{p}: {e}") from e
+    return out
+
+
 def tenant_values():
-    files = sorted((ROOT / "platform-gitops/tenants").glob("*/values.yaml"))
+    base = ROOT / "platform-gitops/tenants"
+    files = []
+    for name in list_dir(base):
+        vf = base / name / "values.yaml"
+        try:
+            st = os.stat(vf)
+        except FileNotFoundError:
+            # Listed fine but has no values.yaml: not a tenant. A directory that
+            # cannot be entered fails the stat with EACCES instead (ReadError below).
+            continue
+        except OSError as e:
+            raise ReadError(f"{vf}: {e}") from e
+        if stat.S_ISREG(st.st_mode):
+            files.append(vf)
     if not files:
         raise ReadError("no tenant values files found")
     return files
