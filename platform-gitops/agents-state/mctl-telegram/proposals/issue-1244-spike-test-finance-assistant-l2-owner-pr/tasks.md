@@ -54,6 +54,31 @@ file may change.
   `golangci-lint run --build-tags l2finance` are clean. (depends on 10) — DoD: command output is
   pasted into the PR description.
 
+## AMEND tasks: hermetic execution and security-gate accounting
+
+- [ ] 8a. Add a **test-only** network boundary for every tagged L2 package
+  and fake adapter. Permit loopback `httptest` and local Unix sockets,
+  but explicitly reject non-loopback outbound dials, DNS and live
+  Telegram/MTProto. Assert fail-closed behavior when an external
+  destination is attempted. If concrete gotd cannot be driven without
+  external calls, mark the wire-layer check `CANNOT-OBSERVE`;
+  do not dial. — DoD: test setup and results record the deny-egress
+  method and bounded network-negative control; no real network use.
+- [ ] 10a. Introduce a case-manifest-based L2 result validator in
+  **test-only code**, with one classified `L2RESULT` per mandatory T1–T10
+  sub-case. Validate all four outcome counts and IDs, reject missing,
+  duplicate or unclassified rows, and record `harness_status` separately
+  from `security_gate_status`. — DoD: `go test` exit 0 with
+  expected `FAIL/GAP` produces the explicit independent
+  `FINANCE_SECURITY_GATE=BLOCKED` security verdict; never a false PASS.
+- [ ] 10b. Publish the independent gate status prominently in
+  `docs/reports/finance-assistant-l2-results.md` and optional
+  manual `workflow_dispatch` job summary and artifact. — DoD: green
+  harness CI cannot hide any `FAIL/GAP`, `NOT-IMPLEMENTED`,
+  `CANNOT-OBSERVE` or missing mandatory row; no production/pilot
+  promotion. The L2 research PR remains separately reviewed and
+  the parent #325 verdict `RESEARCH_ONLY_DEFER` unchanged.
+
 ## Tests
 
 - [ ] T1. Owner `/mctl status` in Saved Messages (push and history) yields one router call and
