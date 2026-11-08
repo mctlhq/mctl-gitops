@@ -19,6 +19,15 @@ secret-reference interface, and a narrow machine identity for the provider
 worker. Only a synthetic (fake) provider exists. Two tenants, and two users
 inside one tenant, must be isolated from the first release.
 
+## Owner-selected M1 team-scope correction — AMEND 2026-11-08
+
+**Normative override of the investigator's automatic-tenant inference:** owner [.github#324](https://github.com/mctlhq/.github/issues/324) explicitly chose **an explicitly selected team tenant**, not "the sole team left after membership ∩ allowlist". The OAuth authorization-code/consent flow for the protected Glovo resource MUST require the authenticated human to choose a concrete team before a usable Glovo-scoped token is issued. mctl-api verifies *live* principal-role membership and pilot inclusion for that team, stores a server-side binding with the OAuth grant, and mints a non-user-editable selected-team claim tied to that same grant and `aud=https://glovo.mctl.ai/mcp`. On refresh the scope remains bound to the original team or is revoked; switching teams requires a new explicit authorization selection. Tool/body/query/header fields never select a tenant.
+
+- **Absence of explicit selection MUST fail closed**, even if there is exactly one eligible team. Until a new refusal code is separately accepted, map missing or inconsistent selection to existing `ambiguous_tenant`; invalid/no-longer-eligible selected team maps to `not_in_pilot` or `not_authorized`. Check membership, pilot allowlist, tenant selection, install revision at every facade request and worker authority checkpoint.
+- **M1 pilot allowlist is per principal AND team**, not automatic tenant-wide enrollment. Database key `(tenant_id, principal_id)` and no `principal_id NULL` wildcard (future broader cohort requires a separate decision). At least two distinct principals in one tenant can be explicitly allowlisted and must have independent `gcn_` connections. A team owner with a valid MCTL membership but *not* allowlisted cannot access or mint a connection.
+- Preserve OAuth issuer/audience validation, protection against multi-`aud` confusion, no personal scope (until #309), zero fallback to `labs`/Telegram principal, and no connection effects from an unselected token. Write negative tests for one-team-but-unselected, two-team switching attempts, revoked membership mid-session, expired grant, wrong-scope token, and tenant-wide allowlist bypass.
+- This AMEND is proposal material only, no grant or runtime code and no deploy.
+
 ## User stories
 
 - AS a tenant member using the Glovo MCP facade I WANT my connection to be
@@ -57,14 +66,12 @@ Resource and principal resolution
 - WHEN the principal could not be resolved THE SYSTEM SHALL refuse with
   `not_authorized` (fail closed; the Glovo slice never degrades to a
   login-only identity).
-- WHEN the caller is resolved THE SYSTEM SHALL compute the eligible tenants as
-  the principal's current tenant memberships (principal-mode roles) intersected
-  with the Glovo pilot allowlist, and SHALL:
-  - refuse `no_tenant` if the principal has no tenant membership at all;
-  - refuse `not_in_pilot` if it has memberships but none is allowlisted;
-  - refuse `ambiguous_tenant` if more than one tenant is eligible;
-  - refuse `scope_unsupported` if the only candidate scope is personal
-    (no tenant), while mctlhq/.github#309 is undecided.
+- WHEN the caller is resolved THE SYSTEM SHALL require a **previous human-selected team tenant** bound to the Glovo OAuth authorization grant and audience; mctl-api SHALL re-check the principal's current role membership and **principal-specific** pilot allowlist in that selected team on each call, and SHALL:
+  - refuse `no_tenant` if the principal has no team membership;
+  - refuse `not_in_pilot` if the selected team is not allowlisted for the principal;
+  - refuse `ambiguous_tenant` if the OAuth grant has no explicit selection, **even if one team is eligible**, or the bound selection is inconsistent;
+  - refuse `scope_unsupported` for a personal-only scope, until .github#309 resolves it;
+  - refuse on stale/expired/revoked grants or membership, and require new interactive authorization when switching teams.
 - THE SYSTEM SHALL ignore any tenant, owner, Temporal namespace, task queue,
   workflow id or hosting-tenant default (including `labs`) supplied in a
   request body, query, header or MCP tool argument when resolving scope.
