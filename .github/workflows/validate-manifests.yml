@@ -516,18 +516,28 @@ jobs:
         run: python3 tests/test_k3s_kured_single_owner.py
 
       - name: Check cascade and ownership guards for generated applications
-        # Finalizer outcome per ApplicationSet, generated names derived from
-        # the ApplicationSets, the retire-service delete order (text and a
-        # stub-kubectl run), a model of which live objects a cascade delete
-        # reaches, and the pinned generators. Each detector is proven red by
-        # a mutation. On a pull request the diff is also checked: a change
-        # to a pinned field of the apps or tenants ApplicationSet requires a
-        # real change of that set in
-        # tests/fixtures/generated-appsets.golden.json in the same diff.
+        # Every guard reads the output of a real `helm template` of
+        # platform-gitops/bootstrap (the helm installed by the step above, v3.16.4,
+        # found on PATH; a missing or failing helm fails the step, it is never
+        # skipped), over a bounded render matrix: default values, the two example
+        # overlays and every boolean flag flipped. Finalizer outcome per
+        # ApplicationSet, generated names derived from the rendered
+        # ApplicationSets, the retire-service delete order (text and a
+        # stub-kubectl run), a model of which objects a cascade delete reaches,
+        # and the pinned generators. Each detector is proven red by mutating a
+        # copy of the chart source. On a pull request the diff is also checked:
+        # a change to a pinned field of the rendered apps or tenants
+        # ApplicationSet requires a real change of that set in
+        # tests/fixtures/generated-appsets.golden.json in the same diff (the
+        # base is rendered from the full-history checkout with git archive).
+        timeout-minutes: 10
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
         run: |
+          set -euo pipefail
+          command -v helm
+          helm version --short
           python3 -m pip install --quiet pyyaml
           python3 tests/test_generated_app_cascade_guards.py
           if [ "$EVENT" = pull_request ]; then

@@ -5,31 +5,33 @@ to the workloads behind them when the Application is deleted depends on things
 that live in different places, and each one can be changed by an
 unrelated-looking edit.
 
-G0. Discovery. Every .yaml and .yml file below the bootstrap templates is
-    parsed as YAML and documents are selected by their PARSED kind, so quoting,
-    a trailing comment, a multi-document file or the .yml suffix cannot hide
-    an ApplicationSet. A file that cannot be decoded or parsed, a duplicate
-    mapping key (PyYAML would keep the last one) and, in an ApplicationSet
-    file, any Helm action other than a comment, a raw string or a plain
-    `.Values` lookup (a conditional keeps both branches in the text) are
-    Unreadable, which is a failure, never a skipped file.
-    Helm actions are read by ONE tokenizer (`tokenize_actions`) shared by
-    `neutral`, `drop_standalone_actions` and `template_control_findings`: a raw
-    string is exactly one backtick string, with or without trim markers and on
-    one line or several, and is kept as its literal content; a
-    standalone control line (if, else, end, range, with, define) or variable
-    assignment is dropped and its trim markers are applied; every other
-    standalone action line is a finding unless it is a data pipeline over a
-    short allow-list of functions that ends in `nindent N` or `indent N` with a
-    literal N > 0, and in an ApplicationSet file nothing but comments, raw
-    strings and inline `.Values` lookups is accepted; an action that cannot be
-    tokenized is Unreadable. Every file below templates/ must be a manifest
-    (.yaml, .yml), a helper (.tpl) or NOTES.txt, any other file is Unreadable,
-    a .tpl helper that mentions ApplicationSet is Unreadable, and so is a
-    manifest document that is not a mapping or a line made only of an
-    unmodelled action (include, template, tpl, block, lookup, fromYaml, printf,
-    a value at column 0, ...: it may render whole documents). Known limit:
-    a helper that assembles the word at render time is not seen.
+HOW THE CHART IS READ. Every guard that looks at the bootstrap chart reads the
+OUTPUT OF A REAL `helm template` (subprocess, absolute path from
+shutil.which, fixed timeout, exit code and stderr checked), never the template
+text. Helm itself expands `include`, `tpl`, `.Files.Get`, `toYaml | nindent`,
+conditionals, ranges and trim markers, so a new ApplicationSet cannot hide
+behind any of them. The output is parsed with yaml.safe_load_all through a
+loader that rejects duplicate mapping keys, and documents are selected by
+their PARSED `kind`. Any of these is an explicit failure (exit 2), never a
+skip, an empty set or "nothing found": helm missing, a timeout, a non-zero
+exit, an `Error:` on stderr, empty output, output that is not YAML, a document
+that is not a mapping with apiVersion and kind, a render with no
+ApplicationSet, an ApplicationSet / Application / AppProject without a string
+name.
+
+RENDER MATRIX. A hidden ApplicationSet may sit behind a values flag that is off
+by default, so the chart is rendered several times and every guard runs on
+every render: the default values (as CI does), the two example overlays in
+tests/fixtures (eval candidates, obi spike), both overlays together, each
+boolean in values.yaml flipped on its own (booleans below a `values:` key are
+settings of a downstream chart and are not gates here), every boolean true and
+every boolean false. The number of renders is capped (MAX_RENDERS); needing more
+is an error that says so, never a silent truncation. The run prints what was
+covered and what was not. NOT covered: gates that are not booleans (a string or
+number compared in an `if`, a list that is empty or not), combinations of flags
+beyond the ones above, values that Argo CD injects at sync time, and the
+Applications that the ApplicationSets generate at run time (see G2).
+
 G1. Finalizer. The ApplicationSet controller (Argo CD v3.3.8,
     applicationset/utils/utils.go, Render.RenderTemplateParams, condition at
     lines 285-288, verified against the v3.3.8 tag) adds
@@ -43,11 +45,11 @@ G1. Finalizer. The ApplicationSet controller (Argo CD v3.3.8,
     assigns `found.Finalizers = generatedApp.Finalizers` at line 766), so
     flipping the flag to true strips the finalizer from every live Application, and deleting
     such an Application then leaves its Deployments, Services and
-    ExternalSecrets running. Every ApplicationSet in the bootstrap chart is
+    ExternalSecrets running. Every ApplicationSet that any render yields is
     listed here with the finalizer outcome it is expected to have; a new
-    ApplicationSet, or a changed outcome, fails until the table is edited on
-    purpose. Spec keys that change what is rendered but are not modelled here
-    (`templatePatch`, `strategy`, `applyNestedSelectors`,
+    ApplicationSet, a missing one, or a changed outcome fails until the table is
+    edited on purpose. Spec keys that change what is rendered but are not
+    modelled here (`templatePatch`, `strategy`, `applyNestedSelectors`,
     `ignoreApplicationDifferences`, `preservedFields`) and any other unknown
     key of the spec, of the template or of the template metadata are a
     finding, not a pass: a patch that sets a name or a finalizer would change
@@ -56,20 +58,22 @@ G2. Names. The controller finds an existing Application by name and updates it
     (createOrUpdateInCluster); an Application that has no controller owner is
     adopted and its spec and finalizers are replaced. Two generated names that
     coincide, or a generated name that coincides with a hand-written
-    Application, are therefore not an error but a takeover. The names are
-    derived from the parsed ApplicationSets themselves: each git directory
-    generator path is globbed over the real tree and each name template is
-    rendered for every match (a template construct this script cannot render
-    is an error, never a skipped set). The result must be pairwise distinct
-    and must not equal a hand-written Application name.
+    Application, are therefore not an error but a takeover. The generated names
+    come from the rendered ApplicationSets: each git directory generator path
+    is globbed over the real tree (the directories are a filesystem input, not
+    a Helm one) and each name template is rendered for every match (a template
+    construct this script cannot render is an error, never a skipped set). The
+    result must be pairwise distinct and must not equal the name of any
+    Application in any render.
 G3. Retire order. retire-service deletes the Application with the verified UID
     as a precondition, waits for Argo CD to cascade, and only after the wait
     clears finalizers, with a patch that tests the UID, the team and the
-    project first. The guard script is extracted from the template and checked
+    project first. The guard script is extracted from the template (a plain
+    file read: it is an Argo Workflows template, not a Helm one) and checked
     twice: statically (exact patch operations, the only kubectl verbs, no
-    orphaning) and by running it against a stub kubectl in four scenarios
-    (cascade completes, finalizer stuck, object replaced, reads failing), so a
-    change that keeps the text but breaks the behaviour is still red.
+    orphaning) and by running it against a stub kubectl in several scenarios
+    (cascade completes, finalizer stuck, object replaced, reads failing, ...),
+    so a change that keeps the text but breaks the behaviour is still red.
 G4. Cascade coverage. Argo CD deletes on cascade only live objects that the
     Application's project permits (appcontroller.go, getPermittedAppLiveObjects
     -> AppProject.IsLiveResourcePermitted -> IsGroupKindNamePermitted and
@@ -79,8 +83,15 @@ G4. Cascade coverage. Argo CD deletes on cascade only live objects that the
     rule with glob matching for group, kind, name, server and namespace. Inputs
     it does not model (negated or named destinations, brace or backslash glob
     syntax, `permitOnlyProjectScopedClusters`) raise Unreadable rather than
-    being guessed at. It is self-tested here and is available as an offline
-    read-only check over a saved export:
+    being guessed at. Two uses:
+    (a) repo level: every Application of every render must name an AppProject
+        of that render and be permitted to deploy to its own destination, and
+        every object that `helm template` of the base-service chart renders
+        for each service directory (the values the `apps` ApplicationSet
+        feeds it) must be covered by the `apps` AppProject, so narrowing that
+        project's whitelist is red. NOT covered: the tenants ApplicationSet's
+        chart, and objects a chart creates at run time (operators, hooks).
+    (b) offline read-only check over a saved export:
 
         python3 tests/test_generated_app_cascade_guards.py \\
             --cascade-coverage APPLICATIONS.json PROJECT.yaml --project NAME
@@ -88,29 +99,46 @@ G4. Cascade coverage. Argo CD deletes on cascade only live objects that the
     prints every managed resource of the Applications in that project that the
     given AppProject would not cascade, exit 1 if any, exit 2 if an input
     cannot be read (unreadable is never "all covered").
-G5. Pinned generators. The `apps` and `tenants` ApplicationSets are compared
-    with `tests/fixtures/generated-appsets.golden.json`, which holds the
-    COMPLETE normalised spec of each set (generators, template, sources,
-    destination, syncPolicy, retry, ignoreDifferences) and its metadata name
-    and namespace. Of the template annotations only the keys in
-    PINNED_ANNOTATIONS (`argocd.argoproj.io/manifest-generate-paths`) are
-    pinned, the other annotations are left out; every other edit turns the
-    check red, and a key that the golden does not list is red as well.
-    KNOWN LIMIT: a Helm action that is not a raw string (`{{ .Values.x }}`) is
-    compared as one marker, so swapping two Helm values (for example the
-    repoURL and the targetRevision of the generator) is not seen by this
-    check; the self-test "G5 known limit" asserts that the limit exists, so
-    removing it is noticed. `--diff-guard BASE` looks at the diff against
-    the merge base: when an ApplicationSet file changed in a pinned field, the
-    golden entry of that set must differ from the base golden (comparing the
-    parsed content, so a whitespace or `_note` edit does not count) and must
-    equal the normalised view of the file at HEAD.
+G5. Pinned generators. The `apps` and `tenants` ApplicationSets, as RENDERED
+    with the default values, are compared with
+    `tests/fixtures/generated-appsets.golden.json`, which holds the COMPLETE
+    normalised spec of each set (generators, template, sources, destination,
+    syncPolicy, retry, ignoreDifferences) with the real repoURL, revision and
+    server, and its metadata name and namespace. Of the template annotations
+    only the keys in PINNED_ANNOTATIONS (`argocd.argoproj.io/manifest-generate-
+    paths`) are pinned, the other annotations are left out; every other edit
+    turns the check red, and a key that the golden does not list is red as
+    well. Every other render must yield the same view of the same sets as the
+    default one. `--diff-guard BASE` renders the chart at the merge base and at
+    HEAD (git archive into a scratch directory, the work tree is never
+    touched, default values only): when anything below platform-gitops/
+    bootstrap changed and the view of a set moved, the golden entry of that
+    set must differ from the base view and must equal the HEAD view.
 
-Every detector is proven both ways by the self-test: green on the converged
-input and red on a deliberate mutation of it. No pytest, matching the plain
-`python3 tests/<file>.py` convention.
+Mutation proof (AGENTS.md: a detector is accepted only when it is green on the
+converged input and red on a deliberate mutation). The self-test copies
+platform-gitops/bootstrap into a scratch directory, mutates the CHART SOURCE
+(not rendered text) and runs the real guard against the copy: a preserve flag, a
+template finalizer, a templatePatch, a new ApplicationSet through
+`toYaml | nindent`, through `.Files.Get`, through `include` of a `.tpl`
+helper, behind `{{ if }}` on a non-default flag, through indented emitters with
+trim markers, an Application whose name collides with a generated one, a
+duplicate generated name, swapped repoURL / revision, a narrowed project
+whitelist; each must be red, and the unmutated copy must be green. A fake helm
+that exits non-zero, prints nothing, hangs past the timeout or prints garbage
+must make the guard fail, and so must a PATH without helm.
+
+KNOWN LIMITS, stated plainly: the guard sees what `helm template` renders for
+the matrix above and nothing else. A gate that is not a boolean, a combination
+of flags outside the matrix, a value that only Argo CD supplies, and anything a
+generated Application deploys at run time are invisible. The local helm and the
+CI helm should be the same major version (CI pins v3.16.4); the run prints the
+version and refuses anything that is not v3.
+
+No pytest, matching the plain `python3 tests/<file>.py` convention.
 
 Run: python3 tests/test_generated_app_cascade_guards.py [--root DIR]
+     python3 tests/test_generated_app_cascade_guards.py --repo-checks   (no self-tests)
 """
 from __future__ import annotations
 
@@ -118,13 +146,18 @@ import concurrent.futures
 import copy
 import fnmatch
 import functools
+import io
 import json
 import os
 import re
+import shlex
 import shutil
+import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
+import textwrap
 import typing
 from pathlib import Path
 
@@ -132,12 +165,14 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 RESOURCES_FINALIZER = "resources-finalizer.argocd.argoproj.io"
-BOOTSTRAP = Path("platform-gitops/bootstrap/templates")
+CHART = Path("platform-gitops/bootstrap")
 RETIRE = Path("platform-gitops/argo-workflows/cluster-templates/wft-retire-service.yaml")
 GOLDEN = Path("tests/fixtures/generated-appsets.golden.json")
-TENANTS_APPSET = "platform-gitops/bootstrap/templates/bootstrap/applicationset-tenants.yaml"
-APPS_APPSET = "platform-gitops/bootstrap/templates/bootstrap/applicationset-apps.yaml"
-APPSET_FILES = {"apps": APPS_APPSET, "tenants": TENANTS_APPSET}
+FIXTURE_OVERLAYS = ("tests/fixtures/otel-eval-candidates.example-values.yaml",
+                    "tests/fixtures/obi-spike.example-values.yaml")
+HELM_TIMEOUT = 120.0          # seconds per `helm template`
+MAX_RENDERS = 64              # cap of the render matrix; more is an error, not a truncation
+RELEASE = "root"
 
 # What this script models of an ApplicationSet. Anything else is a finding.
 SPEC_KEYS = {"goTemplate", "goTemplateOptions", "syncPolicy", "generators", "template"}
@@ -155,9 +190,11 @@ PINNED_ANNOTATIONS = ("argocd.argoproj.io/manifest-generate-paths",)
 # the workloads? Both existing sets are `preserveResourcesOnDeletion: false`.
 EXPECTED_CASCADE = {"apps": True, "tenants": True}
 
-# Sentinels for a Go-template action that Helm passes through as a literal
-# (`{{ `...` }}`): kept readable so name templates and paths can be pinned.
-LB, RB = "⟦", "⟧"
+# Kinds that are cluster-scoped when a chart renders them without a namespace.
+CLUSTER_KINDS = {"Namespace", "ClusterRole", "ClusterRoleBinding", "CustomResourceDefinition",
+                 "StorageClass", "PersistentVolume", "PriorityClass", "IngressClass",
+                 "ValidatingWebhookConfiguration", "MutatingWebhookConfiguration",
+                 "ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding", "APIService"}
 
 
 class Unreadable(Exception):
@@ -172,263 +209,12 @@ def read_text(path: Path) -> str:
         raise Unreadable(f"{path}: {exc}") from exc
 
 
-# --------------------------------------------------------------------------
-# Template-tolerant YAML loading
-# --------------------------------------------------------------------------
-
-# One tokenizer for Helm actions. neutral(), drop_standalone_actions() and
-# template_control_findings() all classify through it, so they cannot
-# disagree about what an action is. It is a single left-to-right scan with no
-# optional-trim regex: `{{`, an optional `-` that is immediately followed by
-# whitespace (left trim), the body, an optional whitespace + `-` (right trim)
-# and `}}`. A `}}` inside a backtick, double-quoted or single-quoted string, or
-# inside a leading comment, does not close the action. An action that cannot
-# be tokenized (no closing `}}`, an unterminated string or comment) is
-# Unreadable.
-_WS = " \t\r\n"
-_VALUE_BODY = re.compile(r"\.Values(?:\.[A-Za-z_]\w*)+")
+# libyaml speeds the parse of a 170-document render up about 20 times; the pure Python
+# loader is the fallback and behaves the same.
+_BaseLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
-class Action(typing.NamedTuple):
-    start: int
-    end: int
-    trim_left: bool
-    trim_right: bool
-    kind: str      # "comment" | "raw" | "value" | "other"
-    literal: str   # the content of a raw string, else ""
-    body: str
-
-
-def _line_of(text: str, pos: int) -> int:
-    return text.count("\n", 0, pos) + 1
-
-
-def _classify(body: str) -> tuple[str, str]:
-    s = body.strip(_WS)
-    if s.startswith("/*") and s.endswith("*/") and s.find("*/") == len(s) - 2 and len(s) >= 4:
-        return "comment", ""
-    if len(s) >= 2 and s[0] == "`" and s.find("`", 1) == len(s) - 1:
-        return "raw", s[1:-1]
-    if _VALUE_BODY.fullmatch(s):
-        return "value", ""
-    return "other", ""
-
-
-def tokenize_actions(text: str, path: Path | str = "<text>") -> list[Action]:
-    out: list[Action] = []
-    n, pos = len(text), 0
-    while True:
-        s = text.find("{{", pos)
-        if s < 0:
-            return out
-        i = s + 2
-        trim_left = i + 1 < n and text[i] == "-" and text[i + 1] in _WS
-        if trim_left:
-            i += 1
-        body_start = i
-        while True:
-            if i >= n:
-                raise Unreadable(f"{path}:{_line_of(text, s)}: Helm action is never closed")
-            c = text[i]
-            if c in "`\"'":
-                j = i + 1
-                while j < n and text[j] != c:
-                    j += 2 if (c != "`" and text[j] == "\\") else 1
-                if j >= n:
-                    raise Unreadable(f"{path}:{_line_of(text, s)}: unterminated {c} string in a Helm action")
-                i = j + 1
-            elif text.startswith("/*", i) and not text[body_start:i].strip(_WS):
-                j = text.find("*/", i + 2)
-                if j < 0:
-                    raise Unreadable(f"{path}:{_line_of(text, s)}: unterminated comment in a Helm action")
-                i = j + 2
-            elif text.startswith("}}", i):
-                break
-            else:
-                i += 1
-        body = text[body_start:i]
-        trim_right = len(body) >= 2 and body[-1] == "-" and body[-2] in _WS
-        if trim_right:
-            body = body[:-1]
-        kind, literal = _classify(body)
-        out.append(Action(s, i + 2, trim_left, trim_right, kind, literal, body.strip(_WS)))
-        pos = i + 2
-
-
-def _standalone_spans(text: str, acts: list[Action]) -> list[tuple[int, int, list[Action]]]:
-    """Lines made only of Helm actions (and blanks) where no action is a raw
-    string and at least one is not a comment: control flow, variable
-    assignment, a bare lookup. Such a line is removed whole. A line that
-    carries a raw string, or a comment alone, is content and is kept."""
-    spans, i, n = [], 0, len(text)
-    while i < len(acts):
-        a = acts[i]
-        ls = text.rfind("\n", 0, a.start) + 1
-        if text[ls:a.start].strip(" \t\r"):
-            i += 1
-            continue
-        group, j, end = [a], i, a.end
-        while True:
-            k = end
-            while k < n and text[k] in " \t\r":
-                k += 1
-            if k >= n or text[k] == "\n":
-                break
-            if j + 1 < len(acts) and acts[j + 1].start == k:
-                j += 1
-                group.append(acts[j])
-                end = acts[j].end
-                continue
-            group = []
-            break
-        if group and all(g.kind != "raw" for g in group) and any(g.kind != "comment" for g in group):
-            spans.append((ls, min(k + 1, n), group))
-            i = j + 1
-        else:
-            i += 1
-    return spans
-
-
-# Standalone action lines a bootstrap template may carry without being read as
-# an emitter of whole keys or documents: pure control flow, and a variable
-# assignment (neither writes anything into the output).
-_CONTROL_WORDS = ("if", "else", "end", "range", "with", "define", "break", "continue")
-_ASSIGNMENT = re.compile(r"\$\w*\s*:?=")
-# A standalone value-emitting line is tolerated only as a data pipeline: bare
-# function names from this list, no method other than `.Files.Get`, and a last
-# stage `nindent N` / `indent N` with a literal N > 0, so every emitted line
-# is indented and cannot start a document or a top-level key.
-_EMIT_FUNCS = frozenset({"toYaml", "toJson", "nindent", "indent", "quote", "default", "trim", "b64enc",
-                         "dict", "list", "true", "false", "nil"})
-_QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"|`[^`]*`|\'(?:[^\'\\]|\\.)*\'')
-_INDENTED_TAIL = re.compile(r"\|\s*n?indent\s+[1-9][0-9]*\s*$")
-_WORD = re.compile(r"[A-Za-z_$.][\w.$]*")
-
-
-def _emitter_ok(body: str) -> bool:
-    s = _QUOTED.sub('""', body)
-    if not _INDENTED_TAIL.search(s):
-        return False
-    for w in _WORD.findall(s):
-        if w[0] in ".$":
-            if w.startswith(".Files.") and w != ".Files.Get":
-                return False
-        elif w not in _EMIT_FUNCS:
-            return False
-    return True
-
-
-def standalone_findings(text: str, path: Path | str = "<text>") -> list[str]:
-    """Lines made only of Helm actions that this script cannot model.
-
-    Control flow (if, else, end, range, with, define) and variable assignment
-    write nothing and are dropped by neutral(). Any other standalone action
-    can write whole keys or documents (include, template, tpl, block, lookup,
-    fromYaml, printf, toYaml at column 0, ...), so it is a finding unless it is
-    a data pipeline ending in an `nindent`/`indent` of a literal N > 0 over the
-    allow-listed functions: an unmodelled emitter is never skipped silently.
-    Callers treat a finding as Unreadable."""
-    acts = tokenize_actions(text, path)
-    out = []
-    for ls, _, grp in _standalone_spans(text, acts):
-        for g in grp:
-            if g.kind not in ("other", "value"):
-                continue
-            words = g.body.split(None, 1)
-            if (words and words[0] in _CONTROL_WORDS) or _ASSIGNMENT.match(g.body):
-                continue
-            if g.kind == "other" and _emitter_ok(g.body):
-                continue
-            out.append(f"{path}:{_line_of(text, g.start)}: a line made only of an action "
-                       f"({' '.join(g.body.split())[:40]!r}) may render whole keys or documents "
-                       "and is not modelled")
-    return out
-
-
-def drop_standalone_actions(text: str) -> str:
-    """Remove the lines that consist only of non-raw Helm actions."""
-    out, pos = [], 0
-    for ls, end, _ in _standalone_spans(text, tokenize_actions(text)):
-        out.append(text[pos:ls])
-        pos = end
-    out.append(text[pos:])
-    return "".join(out)
-
-
-def neutral(text: str, keep_literals: bool = False) -> str:
-    """Replace Helm actions with a marker so the file parses as YAML.
-
-    A raw string (with or without trim markers, on one line or several) is
-    replaced by its literal content, with sentinel brackets for the braces,
-    when keep_literals is set, otherwise by a marker. Comments render as
-    nothing. Trim markers remove the adjacent whitespace as Helm does.
-    """
-    acts = tokenize_actions(text)
-    spans = _standalone_spans(text, acts)
-    dropped = {id(g) for _, _, grp in spans for g in grp}
-    items = [(ls, end, grp) for ls, end, grp in spans] + [(a.start, a.end, a) for a in acts if id(a) not in dropped]
-    items.sort(key=lambda t: t[0])
-    out: list[str] = []
-    pos, rtrim = 0, False
-    for start, end, act in items:
-        seg = text[pos:start]
-        out.append(seg.lstrip(_WS) if rtrim else seg)
-        rtrim = False
-        pos = end
-        if isinstance(act, list):
-            # A dropped control line takes its own line break with it. Trim
-            # markers still apply: a left trim also removes the whitespace
-            # before the line (the break that follows it stays), a right trim
-            # removes the whitespace after it, so an indented key can reach
-            # column 0 exactly as Helm renders it.
-            first, last = act[0], act[-1]
-            if first.trim_left:
-                while out and not out[-1].strip(_WS):
-                    out.pop()
-                if out:
-                    out[-1] = out[-1].rstrip(_WS)
-                if not last.trim_right and text[end - 1:end] == "\n":
-                    out.append("\n")
-            rtrim = last.trim_right
-            continue
-        if act is None:
-            continue
-        if act.trim_left:
-            while out and not out[-1].strip(_WS):
-                out.pop()
-            if out:
-                out[-1] = out[-1].rstrip(_WS)
-        if act.kind == "comment":
-            out.append("")
-        elif act.kind == "raw" and keep_literals:
-            out.append(act.literal.replace("{{", LB).replace("}}", RB))
-        else:
-            out.append("__TPL__")
-        rtrim = act.trim_right
-    seg = text[pos:]
-    out.append(seg.lstrip(_WS) if rtrim else seg)
-    return "".join(out)
-
-
-def template_control_findings(text: str, path: Path) -> list[str]:
-    """Helm actions in an ApplicationSet file other than comments, raw strings
-    and `.Values` lookups, plus a lookup that stands alone on its line (it may
-    expand to whole lines). A conditional keeps both branches in the text, so
-    a duplicate key could hide the value the chart renders; any other action
-    may change a key, a name or a path. Not modelled, therefore a finding."""
-    acts = tokenize_actions(text, path)
-    bare = {id(g) for _, _, grp in _standalone_spans(text, acts) for g in grp if g.kind == "value"}
-    out = []
-    for a in acts:
-        if a.kind in ("comment", "raw") or (a.kind == "value" and id(a) not in bare):
-            continue
-        out.append(f"{path}:{_line_of(text, a.start)}: Helm action {' '.join(text[a.start:a.end].split())[:60]!r} "
-                   "is not modelled in an ApplicationSet file (only comments, raw strings and "
-                   ".Values lookups inside a line are)")
-    return out
-
-
-class _StrictLoader(yaml.SafeLoader):
+class _StrictLoader(_BaseLoader):
     """SafeLoader that rejects a duplicate mapping key instead of keeping the last."""
 
 
@@ -444,125 +230,216 @@ def _no_duplicates(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool =
         if dup:
             raise yaml.constructor.ConstructorError(
                 None, None, f"duplicate mapping key {key!r}", key_node.start_mark)
-    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+    return yaml.constructor.SafeConstructor.construct_mapping(loader, node, deep)
 
 
 _StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates)
 
 
-def unlit(value):
-    """Turn sentinel brackets back into Go-template braces, recursively."""
-    if isinstance(value, str):
-        return value.replace(LB, "{{").replace(RB, "}}")
-    if isinstance(value, list):
-        return [unlit(v) for v in value]
-    if isinstance(value, dict):
-        return {unlit(k): unlit(v) for k, v in value.items()}
-    return value
+# --------------------------------------------------------------------------
+# Real `helm template`
+# --------------------------------------------------------------------------
+
+def find_helm() -> str:
+    path = shutil.which("helm")
+    if not path:
+        raise Unreadable("helm is not on PATH: the chart cannot be rendered (a missing helm is a failure, "
+                         "not a skipped check)")
+    return os.path.abspath(path)
 
 
-def parse_docs(text: str, path: Path, keep_literals: bool = False) -> list[dict]:
-    """Parse every YAML document; a duplicate key or a syntax error is Unreadable.
-
-    A document that is not a mapping (an empty document aside) is Unreadable
-    as well: a template that consists only of an `include` or `template`
-    action renders whole documents this guard cannot see, so it fails closed
-    instead of being skipped as "no kind".
-    """
-    calls = standalone_findings(text, path)
-    if calls:
-        raise Unreadable("; ".join(calls))
+def helm_version(helm: str) -> str:
     try:
-        docs = list(yaml.load_all(neutral(text, keep_literals), Loader=_StrictLoader))
+        r = subprocess.run([helm, "version", "--short"], capture_output=True, text=True, timeout=30,
+                           env=_helm_env(), stdin=subprocess.DEVNULL)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise Unreadable(f"{helm} version: {exc}") from exc
+    out = r.stdout.strip()
+    if r.returncode != 0 or not out.startswith("v3."):
+        raise Unreadable(f"{helm} version: expected a v3 helm, got rc={r.returncode} {out!r} {r.stderr.strip()[:200]!r}")
+    return out
+
+
+def _helm_env() -> dict[str, str]:
+    keep = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "USER")
+    env = {k: v for k, v in os.environ.items() if k in keep or k.startswith("HELM_") or k.startswith("XDG_")}
+    env.setdefault("PATH", "/usr/bin:/bin")
+    return env
+
+
+def parse_rendered(text: str, label: str) -> list[dict]:
+    """Parse helm output into Kubernetes objects. Anything that is not a mapping
+    with a string apiVersion and kind is an error; only empty documents are dropped."""
+    try:
+        raw = list(yaml.load_all(text, Loader=_StrictLoader))
+    except yaml.YAMLError as exc:
+        raise Unreadable(f"{label}: helm output is not valid YAML ({str(exc)[:300]})") from exc
+    docs = []
+    for i, doc in enumerate(raw):
+        if doc is None:
+            continue
+        if not isinstance(doc, dict) or not isinstance(doc.get("kind"), str) \
+                or not isinstance(doc.get("apiVersion"), str):
+            raise Unreadable(f"{label}: document {i} of the helm output is not a Kubernetes object "
+                             "(a mapping with a string apiVersion and kind)")
+        if doc["kind"] in ("ApplicationSet", "Application", "AppProject"):
+            name = (doc.get("metadata") or {}).get("name") if isinstance(doc.get("metadata"), dict) else None
+            if not isinstance(name, str) or not name:
+                raise Unreadable(f"{label}: a {doc['kind']} without a string metadata.name")
+        docs.append(doc)
+    if not docs:
+        raise Unreadable(f"{label}: helm output holds no document")
+    return docs
+
+
+def helm_render(chart: Path, value_files: list[Path], helm: str, timeout: float, label: str,
+                release: str = RELEASE) -> list[dict]:
+    cmd = [helm, "template", release, str(chart)]
+    for f in value_files:
+        cmd += ["-f", str(f)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=_helm_env(),
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired as exc:
+        raise Unreadable(f"{label}: helm template did not finish within {timeout:g}s") from exc
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:   # ValueError: undecodable output
+        raise Unreadable(f"{label}: helm template could not be run or read ({exc})") from exc
+    if r.returncode != 0:
+        raise Unreadable(f"{label}: helm template exited {r.returncode}: {r.stderr.strip()[:400]}")
+    if re.search(r"^\s*(Error|error)\b", r.stderr, re.M):
+        raise Unreadable(f"{label}: helm template reported an error on stderr: {r.stderr.strip()[:400]}")
+    if not r.stdout.strip():
+        raise Unreadable(f"{label}: helm template printed nothing")
+    return parse_rendered(r.stdout, label)
+
+
+class Render(typing.NamedTuple):
+    label: str
+    docs: list[dict]
+
+
+def _load_values(path: Path) -> dict:
+    try:
+        values = yaml.load(read_text(path), Loader=_StrictLoader)
     except yaml.YAMLError as exc:
         raise Unreadable(f"{path}: {exc}") from exc
-    for d in docs:
-        if d is not None and not isinstance(d, dict):
-            raise Unreadable(f"{path}: a document is not a mapping, so it may be rendered by an "
-                             "action that is not modelled (include, template, bare value)")
-    return [d for d in docs if isinstance(d, dict)]
+    if not isinstance(values, dict):
+        raise Unreadable(f"{path}: values are not a mapping")
+    return values
 
 
-def helper_text(text: str, path: Path | str = "<text>") -> str:
-    """The literal text of a helper with its Helm actions folded in: raw strings
-    and plain double-quoted strings are spliced in as their content, other
-    actions vanish, and trim markers remove the neighbouring whitespace, so a
-    word split by an action is whole again. An action that cannot be tokenized
-    is Unreadable."""
-    out: list[str] = []
-    pos, rtrim = 0, False
-    for a in tokenize_actions(text, path):
-        seg = text[pos:a.start]
-        out.append(seg.lstrip(_WS) if rtrim else seg)
-        if a.trim_left:
-            out[-1] = out[-1].rstrip(_WS)
-        pos, rtrim = a.end, a.trim_right
-        if a.kind == "raw":
-            out.append(a.literal)
-        elif a.kind == "other" and len(a.body) >= 2 and a.body[0] == '"' and a.body[-1] == '"' \
-                and '"' not in a.body[1:-1] and "\\" not in a.body:
-            out.append(a.body[1:-1])
-    seg = text[pos:]
-    out.append(seg.lstrip(_WS) if rtrim else seg)
-    return "".join(out)
-
-
-def yaml_files(base: Path) -> list[Path]:
-    """Every manifest template below base, whatever its content.
-
-    Helm renders more than .yaml/.yml below templates/, so every file there
-    must be a recognised kind: a manifest (.yaml, .yml), a named-template
-    helper (.tpl) or NOTES.txt. Any other file is Unreadable. A helper is only
-    reachable through `include`, so when its text mentions ApplicationSet at
-    all it is Unreadable too (a helper that can build an ApplicationSet is not
-    modelled). A helper that hides the word, for example by assembling it with
-    printf, is a known limit of this textual rule.
-    """
-    try:
-        files = sorted(p for p in base.rglob("*") if p.is_file())
-    except OSError as exc:
-        raise Unreadable(f"{base}: {exc}") from exc
+def bool_flags(node, path: tuple = ()) -> list[tuple]:
+    """Paths of booleans, skipping everything below a `values` key (settings of a
+    downstream chart, not gates of this one)."""
     out = []
-    for p in files:
-        if p.suffix.lower() in (".yaml", ".yml"):
-            out.append(p)
-        elif p.suffix.lower() == ".tpl":
-            src = read_text(p)
-            if "applicationset" in src.lower() or "applicationset" in helper_text(src, p).lower():
-                raise Unreadable(f"{p}: a template helper that mentions ApplicationSet is not modelled")
-        elif p.name != "NOTES.txt":
-            raise Unreadable(f"{p}: not a recognised template file kind (.yaml, .yml, .tpl, NOTES.txt)")
+    if isinstance(node, bool):
+        out.append(path)
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            if k != "values":
+                out += bool_flags(v, path + (k,))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            out += bool_flags(v, path + (i,))
     return out
 
 
-def docs_of_kind(root: Path, kind: str, keep_literals: bool = False) -> list[tuple[Path, dict]]:
-    """Documents whose PARSED kind is `kind`, found by parsing every YAML file.
-
-    No text pre-filter: quoting, trailing comments, multi-document files and
-    the .yml suffix all select the same documents. A file that cannot be read
-    or parsed, a templated or non-string kind, and (for an ApplicationSet) a
-    template action that is not modelled are Unreadable, never skipped.
-    """
-    out = []
-    base = root / BOOTSTRAP
-    if not base.is_dir():
-        raise Unreadable(f"{base} is not a directory")
-    for path in yaml_files(base):
-        text = read_text(path)
-        found = False
-        for doc in parse_docs(text, path, keep_literals):
-            k = doc.get("kind")
-            if k is not None and (not isinstance(k, str) or "__TPL__" in k):
-                raise Unreadable(f"{path}: kind is not a plain string ({k!r})")
-            if k == "ApplicationSet":
-                found = True
-            if k == kind:
-                out.append((path, doc))
-        if found:
-            problems = template_control_findings(text, path)
-            if problems:
-                raise Unreadable("; ".join(problems))
+def _set_path(values: dict, path: tuple, fn) -> dict:
+    out = copy.deepcopy(values)
+    node = out
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = fn(node[path[-1]])
     return out
+
+
+def _dotted(path: tuple) -> str:
+    return ".".join(f"[{p}]" if isinstance(p, int) else str(p) for p in path).replace(".[", "[")
+
+
+def plan_matrix(chart: Path, root: Path, tmp: Path) -> tuple[list[tuple[str, list[Path]]], list[str]]:
+    """The renders to perform, and a log of what they cover."""
+    base = chart / "values.yaml"
+    values = _load_values(base)
+    overlays = []
+    for rel in FIXTURE_OVERLAYS:
+        p = root / rel
+        if not p.is_file():
+            raise Unreadable(f"render matrix overlay {rel} is missing")
+        overlays.append(p)
+    flags = bool_flags(values)
+    plan: list[tuple[str, list[Path]]] = [
+        ("default values", [base]),
+        ("overlay " + FIXTURE_OVERLAYS[0].rsplit("/", 1)[-1], [base, overlays[0]]),
+        ("overlay " + FIXTURE_OVERLAYS[1].rsplit("/", 1)[-1], [base, overlays[1]]),
+        ("both overlays", [base, *overlays]),
+    ]
+
+    def dump(name: str, data: dict) -> Path:
+        p = tmp / name
+        p.write_text(yaml.safe_dump(data, sort_keys=True), encoding="utf-8")
+        return p
+
+    for i, path in enumerate(flags):
+        plan.append((f"flip {_dotted(path)}", [dump(f"flip{i}.yaml", _set_path(values, path, lambda b: not b))]))
+    for word, state in (("true", True), ("false", False)):
+        data = values
+        for path in flags:
+            data = _set_path(data, path, lambda b, s=state: s)
+        plan.append((f"every boolean {word}", [dump(f"all-{word}.yaml", data)]))
+    if len(plan) > MAX_RENDERS:
+        raise Unreadable(f"the render matrix needs {len(plan)} renders, the cap is {MAX_RENDERS}: raise "
+                         "MAX_RENDERS or prune the flags on purpose, the matrix is never truncated silently")
+    log = [f"render matrix: {len(plan)} renders = default, 2 overlays, both overlays, {len(flags)} single "
+           "boolean flips, every boolean true, every boolean false",
+           "render matrix flags: " + ", ".join(_dotted(p) for p in flags),
+           "render matrix NOT covered: non-boolean gates, other flag combinations, values injected by "
+           "Argo CD at sync time, Applications generated at run time"]
+    return plan, log
+
+
+def render_matrix(chart: Path, root: Path, helm: str, timeout: float = HELM_TIMEOUT) -> tuple[list[Render], list[str]]:
+    with tempfile.TemporaryDirectory() as tmp:
+        plan, log = plan_matrix(chart, root, Path(tmp))
+        # The default render goes first and alone: when it cannot be had there is nothing to compare with.
+        first = Render(plan[0][0], helm_render(chart, plan[0][1], helm, timeout, plan[0][0]))
+        renders = [first]
+        errors = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as pool:
+            futures = [pool.submit(helm_render, chart, files, helm, timeout, label) for label, files in plan[1:]]
+            for (label, _), fut in zip(plan[1:], futures):
+                try:
+                    renders.append(Render(label, fut.result()))
+                except Unreadable as exc:
+                    errors.append(str(exc))
+    if errors:
+        raise Unreadable("; ".join(errors[:3]) + (f" (+{len(errors) - 3} more)" if len(errors) > 3 else ""))
+    return renders, log
+
+
+def docs_of_kind(docs: list[dict], kind: str) -> list[dict]:
+    return [d for d in docs if d.get("kind") == kind]
+
+
+def named(docs: list[dict], kind: str, where: str) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for d in docs_of_kind(docs, kind):
+        name = (d.get("metadata") or {}).get("name")
+        if not isinstance(name, str):
+            raise Unreadable(f"{where}: {kind} without a string name")
+        if name in out:
+            raise Unreadable(f"{where}: duplicate {kind} {name}")
+        out[name] = d
+    return out
+
+
+def appsets_of(render: Render) -> dict[str, dict]:
+    sets = named(render.docs, "ApplicationSet", render.label)
+    if not sets:
+        raise Unreadable(f"{render.label}: the render yields no ApplicationSet (zero is a failure, not "
+                         "'nothing to check')")
+    return sets
+
 
 
 # --------------------------------------------------------------------------
@@ -661,16 +538,28 @@ def appset_findings(appsets: dict[str, dict]) -> list[str]:
     return problems
 
 
-def load_appsets(root: Path) -> dict[str, dict]:
-    sets: dict[str, dict] = {}
-    for path, doc in docs_of_kind(root, "ApplicationSet", keep_literals=True):
-        name = (doc.get("metadata") or {}).get("name")
-        if not isinstance(name, str) or "__TPL__" in name:
-            raise Unreadable(f"{path}: ApplicationSet name not resolvable ({name!r})")
-        if name in sets:
-            raise Unreadable(f"{path}: duplicate ApplicationSet {name}")
-        sets[name] = doc
-    return sets
+
+def matrix_findings(renders: list[Render]) -> list[str]:
+    """G1 on every render, and every render must yield the same sets as the default one."""
+    problems: list[str] = []
+    default = renders[0]
+    default_sets = appsets_of(default)
+    seen: set[str] = set()
+    for r in renders:
+        sets = appsets_of(r)
+        seen |= set(sets)
+        for p in appset_findings(sets):
+            problems.append(p if r is default else f"{p} (render: {r.label})")
+        if r is default:
+            continue
+        for name, doc in sorted(sets.items()):
+            if name in default_sets and pinned_view(doc) != pinned_view(default_sets[name]):
+                problems.append(f"ApplicationSet {name} renders differently under {r.label}: a values flag "
+                                "changes a pinned field")
+    for name in sorted(seen - set(default_sets)):
+        problems.append(f"ApplicationSet {name} is rendered only under {', '.join(r.label for r in renders if name in appsets_of(r))[:200]}: "
+                        "a values flag hides it from the default render")
+    return sorted(set(problems))
 
 
 # --------------------------------------------------------------------------
@@ -691,9 +580,12 @@ def pinned_view(doc: dict) -> dict:
     if isinstance(tmeta, dict) and isinstance(tmeta.get("annotations"), dict):
         tmeta["annotations"] = {k: v for k, v in tmeta["annotations"].items() if k in PINNED_ANNOTATIONS}
     meta = doc.get("metadata") or {}
-    view = unlit({"metadata": {"name": meta.get("name"), "namespace": meta.get("namespace")},
-                  "spec": spec})
+    view = {"metadata": {"name": meta.get("name"), "namespace": meta.get("namespace")}, "spec": spec}
     return json.loads(json.dumps(view))
+
+
+def rendered_views(docs: list[dict]) -> dict[str, dict]:
+    return {name: pinned_view(doc) for name, doc in named(docs, "ApplicationSet", "render").items()}
 
 
 def deep_diff(live, pinned, path: str = "") -> list[str]:
@@ -747,39 +639,6 @@ def golden_findings(appsets: dict[str, dict], golden: dict[str, dict]) -> list[s
     return problems
 
 
-def view_from_text(name: str, text: str, path: str) -> dict:
-    docs = [d for d in parse_docs(text, Path(path), keep_literals=True) if d.get("kind") == "ApplicationSet"]
-    if len(docs) != 1 or (docs[0].get("metadata") or {}).get("name") != name:
-        raise Unreadable(f"{path}: expected exactly one ApplicationSet named {name}")
-    return pinned_view(docs[0])
-
-
-def diff_findings(changed: list[str], base_views: dict, head_views: dict,
-                  base_golden: dict | None, head_golden: dict | None) -> list[str]:
-    """Views are None when the file does not exist at that revision."""
-    problems = []
-    golden_changed = str(GOLDEN) in changed
-    for name, file in sorted(APPSET_FILES.items()):
-        if file not in changed:
-            continue
-        base, head = base_views.get(name), head_views.get(name)
-        if base == head:
-            continue                       # touched, but no pinned field moved
-        if head is None:
-            problems.append(f"{file} was removed; the pinned set {name} no longer exists")
-            continue
-        if not golden_changed:
-            problems.append(f"{file} changed in a pinned field but {GOLDEN} is not edited: the change "
-                            "must be visible in the golden in the same diff")
-            continue
-        new = (head_golden or {}).get(name)
-        if new == (base_golden or {}).get(name):
-            problems.append(f"{GOLDEN} is edited but the pinned entry of {name} is the same as on the "
-                            f"base: the edit is a no-op while {file} changed")
-        elif new != head:
-            problems.append(f"{GOLDEN} entry of {name} does not equal the normalised view of {file}")
-    return problems
-
 
 def _git_out(root: Path, *args: str) -> str:
     try:
@@ -798,26 +657,80 @@ def _git_show(root: Path, rev: str, path: str) -> str | None:
     return _git_out(root, "show", f"{rev}:{path}")
 
 
-def cli_diff_guard(base: str, root: Path) -> int:
+
+def diff_findings(changed: list[str], base_views: dict | None, head_views: dict | None,
+                  head_golden: dict | None) -> list[str]:
+    """Views are None when the chart does not exist at that revision."""
+    problems = []
+    if not any(c.startswith(str(CHART) + "/") for c in changed):
+        return problems
+    golden_changed = str(GOLDEN) in changed
+    for name in sorted(EXPECTED_CASCADE):
+        base, head = (base_views or {}).get(name), (head_views or {}).get(name)
+        if base == head:
+            continue                       # chart touched, but no pinned field moved
+        if head is None:
+            problems.append(f"the {name} ApplicationSet is no longer rendered by {CHART}")
+            continue
+        if not golden_changed:
+            problems.append(f"the rendered {name} ApplicationSet changed in a pinned field but {GOLDEN} is not "
+                            "edited: the change must be visible in the golden in the same diff")
+            continue
+        new = (head_golden or {}).get(name)
+        if new == base:
+            problems.append(f"{GOLDEN} is edited but the pinned entry of {name} is the same as the base render: "
+                            "the edit is a no-op while the rendered set changed")
+        elif new != head:
+            problems.append(f"{GOLDEN} entry of {name} does not equal the normalised view of the rendered set")
+    return problems
+
+
+def _archive_chart(root: Path, rev: str, dest: Path) -> bool:
+    """Extract the chart as of `rev` into dest with git archive; False if the rev has no chart."""
+    if not _git_out(root, "ls-tree", rev, "--", str(CHART)).strip():
+        return False
     try:
+        r = subprocess.run(["git", "-C", str(root), "archive", "--format=tar", rev, "--", str(CHART)],
+                           capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Unreadable(f"git archive {rev}: {exc}") from exc
+    if r.returncode != 0:
+        raise Unreadable(f"git archive {rev} failed: {r.stderr.decode(errors='replace').strip()[:300]}")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(r.stdout)) as tf:
+            for m in tf.getmembers():
+                target = (dest / m.name).resolve()
+                if dest.resolve() not in target.parents and target != dest.resolve():
+                    raise Unreadable(f"git archive {rev}: unsafe member {m.name!r}")
+            tf.extractall(dest)
+    except (tarfile.TarError, OSError) as exc:
+        raise Unreadable(f"git archive {rev}: cannot extract ({exc})") from exc
+    return True
+
+
+def rev_views(root: Path, rev: str, helm: str, timeout: float) -> dict | None:
+    with tempfile.TemporaryDirectory() as tmp:
+        if not _archive_chart(root, rev, Path(tmp)):
+            return None
+        docs = helm_render(Path(tmp) / CHART, [Path(tmp) / CHART / "values.yaml"], helm, timeout,
+                           f"{rev[:12]} default values")
+        return rendered_views(docs)
+
+
+def cli_diff_guard(base: str, root: Path, helm: str | None = None, timeout: float = HELM_TIMEOUT) -> int:
+    try:
+        helm = helm or find_helm()
         merge_base = _git_out(root, "merge-base", base, "HEAD").strip()
         changed = [l for l in _git_out(root, "diff", "--name-only", "--no-renames",
                                        merge_base, "HEAD").splitlines() if l]
-        views = {}
-        for rev in (merge_base, "HEAD"):
-            views[rev] = {}
-            for name, file in APPSET_FILES.items():
-                text = _git_show(root, rev, file)
-                views[rev][name] = None if text is None else view_from_text(name, text, file)
-        goldens = {}
-        for rev in (merge_base, "HEAD"):
-            text = _git_show(root, rev, str(GOLDEN))
-            try:
-                goldens[rev] = None if text is None else golden_sets(json.loads(text), f"{rev}:{GOLDEN}")
-            except ValueError as exc:
-                raise Unreadable(f"{rev}:{GOLDEN}: {exc}") from exc
-        problems = diff_findings(changed, views[merge_base], views["HEAD"],
-                                 goldens[merge_base], goldens["HEAD"])
+        base_views = rev_views(root, merge_base, helm, timeout)
+        head_views = rev_views(root, "HEAD", helm, timeout)
+        text = _git_show(root, "HEAD", str(GOLDEN))
+        try:
+            head_golden = None if text is None else golden_sets(json.loads(text), f"HEAD:{GOLDEN}")
+        except ValueError as exc:
+            raise Unreadable(f"HEAD:{GOLDEN}: {exc}") from exc
+        problems = diff_findings(changed, base_views, head_views, head_golden)
     except Unreadable as exc:
         print(f"UNREADABLE: {exc}", file=sys.stderr)
         return 2
@@ -828,10 +741,10 @@ def cli_diff_guard(base: str, root: Path) -> int:
 
 
 # --------------------------------------------------------------------------
-# G2: generated names are distinct, derived from the ApplicationSets
+# G2: generated names are distinct, derived from the rendered ApplicationSets
 # --------------------------------------------------------------------------
 
-_EXPR = re.compile(rf"{LB}\s*(.*?)\s*{RB}")
+_EXPR = re.compile(r"\{\{\s*(.*?)\s*\}\}")
 
 
 def git_directory_patterns(name: str, doc: dict) -> list[str]:
@@ -846,7 +759,7 @@ def git_directory_patterns(name: str, doc: dict) -> list[str]:
             raise Unreadable(f"ApplicationSet {name}: only git directory generators are modelled")
         for d in dirs:
             if not isinstance(d, dict) or set(d) != {"path"} or not isinstance(d["path"], str) \
-                    or "__TPL__" in d["path"]:
+                    or "{{" in d["path"] or d["path"].startswith(("/", "!")) or ".." in d["path"].split("/"):
                 raise Unreadable(f"ApplicationSet {name}: directory entry not modelled ({d!r})")
             out.append(d["path"])
     return out
@@ -872,7 +785,7 @@ def render_name(name: str, template: object, rel: Path) -> str:
         raise Unreadable(f"ApplicationSet {name}: template action {expr!r} is not modelled")
 
     rendered = _EXPR.sub(sub, template)
-    if LB in rendered or RB in rendered or "__TPL__" in rendered or not rendered:
+    if "{{" in rendered or "}}" in rendered or not rendered:
         raise Unreadable(f"ApplicationSet {name}: name template not renderable ({template!r})")
     return rendered
 
@@ -898,9 +811,12 @@ def generated_names(root: Path, appsets: dict[str, dict]) -> dict[str, list[str]
     return names
 
 
-def handwritten_names(root: Path) -> list[str]:
-    return [str(doc["metadata"]["name"]) for _, doc in docs_of_kind(root, "Application")
-            if isinstance(doc.get("metadata"), dict) and doc["metadata"].get("name")]
+def handwritten_names(renders: list[Render]) -> list[str]:
+    """The name of every Application in any render."""
+    out: set[str] = set()
+    for r in renders:
+        out |= set(named(r.docs, "Application", r.label))
+    return sorted(out)
 
 
 def name_findings(generated: dict[str, list[str]], handwritten: list[str]) -> list[str]:
@@ -909,12 +825,8 @@ def name_findings(generated: dict[str, list[str]], handwritten: list[str]) -> li
         if len(sources) > 1:
             problems.append(f"generated name {name} is produced by {sources}")
     for hw in handwritten:
-        # a templated hand-written name (marker) is matched as a pattern, so an
-        # unresolvable name can only over-report, never hide a collision
-        pattern = "^" + ".*".join(re.escape(p) for p in hw.split("__TPL__")) + "$"
-        for name in generated:
-            if re.match(pattern, name):
-                problems.append(f"generated name {name} equals hand-written Application {hw}")
+        if hw in generated:
+            problems.append(f"generated name {hw} equals hand-written Application {hw}")
     return problems
 
 
@@ -1313,6 +1225,145 @@ def cli_cascade_coverage(apps_path: str, project_path: str, project_name: str) -
         return 2
 
 
+
+
+def _group_of(api_version: str) -> str:
+    return api_version.split("/", 1)[0] if "/" in api_version else ""
+
+
+def project_findings(render: Render) -> list[str]:
+    """Every Application names a project of the same render and may deploy to its own destination."""
+    projects = named(render.docs, "AppProject", render.label)
+    problems = []
+    for name, app in sorted(named(render.docs, "Application", render.label).items()):
+        spec = app.get("spec") if isinstance(app.get("spec"), dict) else {}
+        proj_name = spec.get("project", "default")
+        proj = projects.get(proj_name)
+        if proj is None:
+            problems.append(f"Application {name} ({render.label}): project {proj_name!r} is not rendered")
+            continue
+        dest = spec.get("destination") if isinstance(spec.get("destination"), dict) else {}
+        try:
+            ok = _dest_ok(proj, str(dest.get("server", "")), str(dest.get("namespace", "")))
+        except Unreadable as exc:
+            raise Unreadable(f"Application {name} ({render.label}): {exc}") from exc
+        if not ok:
+            problems.append(f"Application {name} ({render.label}): project {proj_name} does not permit its "
+                            f"destination {dest.get('server')}/{dest.get('namespace')}")
+    return problems
+
+
+def _source_path_and_dirs(root: Path, apps_set: dict) -> tuple[str, list[Path]]:
+    tmpl = ((apps_set.get("spec") or {}).get("template") or {}).get("spec") or {}
+    paths = [s.get("path") for s in tmpl.get("sources") or [] if isinstance(s, dict) and s.get("path")]
+    if len(paths) != 1 or not isinstance(paths[0], str):
+        raise Unreadable("ApplicationSet apps: expected exactly one source with a chart path")
+    dirs = []
+    for pattern in git_directory_patterns("apps", apps_set):
+        dirs += sorted(p for p in root.glob(pattern) if p.is_dir())
+    if not dirs:
+        raise Unreadable("ApplicationSet apps: no service directory to render")
+    return paths[0], dirs
+
+
+@functools.lru_cache(maxsize=8)
+def _service_resources_cached(root: str, chart_rel: str, dirs: tuple[str, ...], helm: str,
+                              timeout: float) -> tuple:
+    chart = Path(root) / chart_rel
+    if not chart.is_dir():
+        raise Unreadable(f"service chart {chart_rel} does not exist")
+
+    def one(d: str) -> list[tuple[str, str, str, str, str]]:
+        vals = Path(root) / d / "values.yaml"
+        if not vals.is_file():
+            raise Unreadable(f"{d}: no values.yaml to render the service chart with")
+        docs = helm_render(chart, [vals], helm, timeout, f"service {d}")
+        team = Path(d).parts[2] if len(Path(d).parts) > 2 else ""
+        out = []
+        for doc in docs:
+            meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+            kind = doc["kind"]
+            ns = "" if kind in CLUSTER_KINDS else str(meta.get("namespace") or team)
+            out.append((d, _group_of(doc["apiVersion"]), kind, ns, str(meta.get("name", ""))))
+        return out
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as pool:
+        futures = [pool.submit(one, d) for d in dirs]
+        results, errors = [], []
+        for fut in futures:
+            try:
+                results += fut.result()
+            except Unreadable as exc:
+                errors.append(str(exc))
+    if errors:
+        raise Unreadable("; ".join(errors[:3]))
+    if not results:
+        raise Unreadable("service charts rendered no object")
+    return tuple(results)
+
+
+def service_cascade_findings(root: Path, render: Render, helm: str, timeout: float) -> list[str]:
+    """Objects of every service (base-service chart over the generated directories) that the
+    `apps` project would not cascade."""
+    sets = appsets_of(render)
+    apps = sets.get("apps")
+    if apps is None:
+        raise Unreadable(f"{render.label}: no apps ApplicationSet")
+    tmpl = (apps.get("spec") or {}).get("template") or {}
+    tspec = tmpl.get("spec") or {}
+    project_name = tspec.get("project")
+    server = (tspec.get("destination") or {}).get("server")
+    projects = named(render.docs, "AppProject", render.label)
+    project = projects.get(project_name)
+    if project is None or not isinstance(server, str):
+        raise Unreadable(f"{render.label}: project {project_name!r} or destination server of the apps set is not rendered")
+    chart_rel, dirs = _source_path_and_dirs(root, apps)
+    rows = _service_resources_cached(str(root), chart_rel, tuple(str(d.relative_to(root)) for d in dirs),
+                                     helm, timeout)
+    uncovered: dict[tuple[str, str, str], list[str]] = {}
+    for d, group, kind, ns, name in rows:
+        if not resource_permitted(project, server, {"group": group, "kind": kind, "namespace": ns, "name": name}):
+            uncovered.setdefault((group, kind, "cluster" if not ns else "namespaced"), []).append(d)
+    return [f"project {project_name} ({render.label}) would not cascade {g or 'core'}/{k} ({scope}) of "
+            f"{len(ds)} service(s), e.g. {ds[0]}" for (g, k, scope), ds in sorted(uncovered.items())]
+
+
+def cascade_repo_findings(root: Path, renders: list[Render], helm: str, timeout: float) -> list[str]:
+    problems = []
+    for r in renders:
+        problems += project_findings(r)
+    problems += service_cascade_findings(root, renders[0], helm, timeout)
+    return sorted(set(problems))
+
+
+# --------------------------------------------------------------------------
+# The whole analysis of one chart
+# --------------------------------------------------------------------------
+
+class Analysis(typing.NamedTuple):
+    findings: list[str]
+    renders: list[Render]
+    log: list[str]
+    names: dict
+    groups: dict
+
+
+def analyze(chart: Path, root: Path, helm: str, timeout: float = HELM_TIMEOUT, golden: dict | None = None) -> Analysis:
+    """Every guard on the render matrix of `chart`. `root` is the tree that holds the
+    service directories, the overlays and the golden."""
+    renders, log = render_matrix(chart, root, helm, timeout)
+    default_sets = appsets_of(renders[0])
+    names = generated_names(root, default_sets)
+    groups = {
+        "G1": matrix_findings(renders),
+        "G5": golden_findings(default_sets, golden if golden is not None else load_golden(root)),
+        "G2": name_findings(names, handwritten_names(renders)),
+        "G4": cascade_repo_findings(root, renders, helm, timeout),
+    }
+    findings = sorted({f for fs in groups.values() for f in fs})
+    return Analysis(findings, renders, log, names, groups)
+
+
 # --------------------------------------------------------------------------
 # Repo checks and self-tests
 # --------------------------------------------------------------------------
@@ -1327,16 +1378,25 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         failures.append(f"{name}: {detail}")
 
 
-def repo_checks(root: Path) -> None:
-    appsets = load_appsets(root)
-    p = appset_findings(appsets)
-    check("G1 every ApplicationSet has its recorded finalizer outcome", not p, "; ".join(p))
-    p = golden_findings(appsets, load_golden(root))
-    check("G5 the apps and tenants ApplicationSets match the pinned golden", not p, "; ".join(p))
-    p = name_findings(generated_names(root, appsets), handwritten_names(root))
-    check("G2 generated Application names are distinct and not hand-written", not p, "; ".join(p))
+def repo_checks(root: Path, helm: str) -> Analysis:
+    print(f"INFO  helm {helm_version(helm)} at {helm}")
+    a = analyze(root / CHART, root, helm)
+    for line in a.log:
+        print(f"INFO  {line}")
+    print(f"INFO  {len(a.renders)} renders, "
+          f"{sum(len(named(r.docs, 'ApplicationSet', r.label)) for r in a.renders)} ApplicationSet documents, "
+          f"{len(a.names)} generated names")
+    for group, title in (
+            ("G1", "G1 every rendered ApplicationSet has its recorded finalizer outcome, in every render"),
+            ("G5", "G5 the rendered apps and tenants ApplicationSets match the pinned golden"),
+            ("G2", "G2 generated Application names are distinct and not those of any rendered Application"),
+            ("G4", "G4 every Application's project exists and permits it, and the apps project cascades "
+                   "every object of the service charts")):
+        p = a.groups[group]
+        check(title, not p, "; ".join(p))
     p = retire_findings(retire_source(root))
     check("G3 retire-service clears finalizers only after the cascade wait, pinned", not p, "; ".join(p))
+    return a
 
 
 def mutated_set(base: dict[str, dict], name: str, **policy) -> dict[str, dict]:
@@ -1350,11 +1410,30 @@ def _git(cwd: Path, *args: str) -> None:
                     "-c", "commit.gpgsign=false", *args], check=True, capture_output=True, timeout=120)
 
 
-def selftests(root: Path) -> None:
+def raises_unreadable(fn) -> bool:
+    try:
+        fn()
+    except Unreadable:
+        return True
+    return False
+
+
+def selftests(root: Path, helm: str, analysis: Analysis) -> None:
     global ROOT_FOR_TESTS
     ROOT_FOR_TESTS = root
-    base = load_appsets(root)
+    base = appsets_of(analysis.renders[0])
     golden = load_golden(root)
+    APPS_APPSET = str(CHART / "templates/bootstrap/applicationset-apps.yaml")
+    TENANTS_APPSET = str(CHART / "templates/bootstrap/applicationset-tenants.yaml")
+    check("render: the default render holds the two ApplicationSets and the four AppProjects of the table",
+          sorted(base) == sorted(EXPECTED_CASCADE)
+          and len(named(analysis.renders[0].docs, "AppProject", "default")) >= 4)
+    check("G5 red: swapping the repoURL and the revision of the apps generator (invisible to a text check)",
+          bool(golden_findings(
+              {**base, "apps": (lambda m: (m["spec"]["generators"][0]["git"].update(
+                  repoURL=base["apps"]["spec"]["generators"][0]["git"]["revision"],
+                  revision=base["apps"]["spec"]["generators"][0]["git"]["repoURL"]), m)[1])(copy.deepcopy(base["apps"]))},
+              golden)))
     # G1 red on the mutations that remove or hide the finalizer
     check("G1 red: preserveResourcesOnDeletion true on apps",
           bool(appset_findings(mutated_set(base, "apps", preserveResourcesOnDeletion=True))))
@@ -1418,7 +1497,7 @@ def selftests(root: Path) -> None:
             ("metadata name", lambda m, n=name: m[n]["metadata"].update(name=n + "-x")),
             ("metadata namespace", lambda m, n=name: m[n]["metadata"].update(namespace="other")),
             ("name template", lambda m, n=name: m[n]["spec"]["template"]["metadata"].update(
-                name="x-" + LB + " .path.basename " + RB)),
+                name="x-{{ .path.basename }}")),
             ("template label", lambda m, n=name: m[n]["spec"]["template"]["metadata"]["labels"].update(env="x")),
             ("template finalizers", lambda m, n=name: m[n]["spec"]["template"]["metadata"].update(finalizers=["x"])),
             ("generator path", lambda m, n=name: m[n]["spec"]["generators"][0]["git"]["directories"][0].update(
@@ -1452,16 +1531,17 @@ def selftests(root: Path) -> None:
     check("G5 red: a key that the golden lacks",
           bool(golden_findings(base, {n: {"metadata": g["metadata"]} for n, g in golden.items()})))
 
-    # G5 diff guard: a real repository with the real ApplicationSet files and golden
+
+    # G5 diff guard: a real repository with the real chart and golden, rendered at both revisions
     if shutil.which("git") is None:
         raise Unreadable("git is not on PATH: the diff guard cannot be exercised")
-    check("G5 diff model: an unrelated change is green", not diff_findings(["README.md"], {}, {}, None, None))
+    check("G5 diff model: an unrelated change is green", not diff_findings(["README.md"], {}, {}, None))
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
         _git(t, "init", "-q", "-b", "main")
-        for f in (APPS_APPSET, TENANTS_APPSET, str(GOLDEN)):
-            (t / f).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(root / f, t / f)
+        shutil.copytree(root / CHART, t / CHART)
+        (t / GOLDEN).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / GOLDEN, t / GOLDEN)
         (t / "other.txt").write_text("a\n")
         _git(t, "add", "-A")
         _git(t, "commit", "-q", "-m", "base")
@@ -1473,31 +1553,28 @@ def selftests(root: Path) -> None:
             (t / file).write_text(text.replace(old, new, 1))
 
         def regolden(whitespace_only: bool = False) -> None:
-            """Rewrite the golden: honestly from the files, or only cosmetically."""
+            """Rewrite the golden: honestly from the render, or only cosmetically."""
+            g = json.loads((t / GOLDEN).read_text())
             if whitespace_only:
-                g = json.loads((t / GOLDEN).read_text())
                 g["_note"] = "edited"
                 (t / GOLDEN).write_text(json.dumps(g, indent=4) + "\n\n")
             else:
-                sets = load_appsets(t)
-                g = json.loads((t / GOLDEN).read_text())
-                g["sets"] = {n: pinned_view(sets[n]) for n in sorted(EXPECTED_CASCADE)}
+                views = rendered_views(helm_render(t / CHART, [t / CHART / "values.yaml"], helm, HELM_TIMEOUT, "regolden"))
+                g["sets"] = {n: views[n] for n in sorted(EXPECTED_CASCADE)}
                 (t / GOLDEN).write_text(json.dumps(g, indent=2, sort_keys=True) + "\n")
 
         def scenario(name: str, steps, want: int, label: str) -> None:
             _git(t, "checkout", "-q", "-b", name, "main")
             steps()
             _git(t, "commit", "-q", "-am", name)
-            got = cli_diff_guard("main", t)
+            got = cli_diff_guard("main", t, helm)
             check(f"G5 diff-guard {'green' if want == 0 else 'red'}: {label}", got == want, f"exit {got}")
             _git(t, "checkout", "-q", "main")
 
-        retry = "          limit: 3\n"
-        retry_new = "          limit: 4\n"
         for f in (TENANTS_APPSET, APPS_APPSET):
             who = "tenants" if f == TENANTS_APPSET else "apps"
-            old = retry if f == TENANTS_APPSET else "          limit: 5\n"
-            new = retry_new if f == TENANTS_APPSET else "          limit: 6\n"
+            old = "          limit: 3\n" if f == TENANTS_APPSET else "          limit: 5\n"
+            new = "          limit: 4\n" if f == TENANTS_APPSET else "          limit: 6\n"
             scenario(f"{who}-bare", lambda: edit(f, old, new), 1,
                      f"a pinned change to the {who} file without any golden edit")
             scenario(f"{who}-noop", lambda: (edit(f, old, new), regolden(whitespace_only=True)), 1,
@@ -1508,6 +1585,8 @@ def selftests(root: Path) -> None:
                      lambda: (edit(f, old, new), regolden(),
                               edit(str(GOLDEN), '"limit": ' + new.split()[1], '"limit": 9')),
                      1, f"a pinned change to the {who} file with a golden that says something else")
+        scenario("values-swap", lambda: edit(str(CHART / "values.yaml"), "targetRevision: main", "targetRevision: other"), 1,
+                 "a values.yaml change that moves the rendered revision, without a golden edit")
         scenario("annotation-only", lambda: edit(TENANTS_APPSET, "argocd/app-name:", "argocd/app-label:"), 0,
                  "an annotation-only change to the tenants file (not pinned)")
         scenario("templatepatch", lambda: edit(TENANTS_APPSET, "  generators:\n", "  templatePatch: |\n    metadata:\n      finalizers: []\n  generators:\n"), 1,
@@ -1516,11 +1595,17 @@ def selftests(root: Path) -> None:
         scenario("golden-only", lambda: regolden(whitespace_only=True), 0, "a cosmetic golden edit alone")
         scenario("removed", lambda: (t / TENANTS_APPSET).unlink(), 1, "the tenants file is deleted")
         check("G5 diff-guard exit 2: a base that cannot be resolved is not 'clean'",
-              cli_diff_guard("no-such-base", t) == 2)
+              cli_diff_guard("no-such-base", t, helm) == 2)
         _git(t, "checkout", "-q", "-b", "broken", "main")
         (t / GOLDEN).write_text("{not json")
         _git(t, "commit", "-q", "-am", "broken")
-        check("G5 diff-guard exit 2: a golden that is not JSON at HEAD", cli_diff_guard("main", t) == 2)
+        check("G5 diff-guard exit 2: a golden that is not JSON at HEAD", cli_diff_guard("main", t, helm) == 2)
+        _git(t, "checkout", "-q", "main")
+        _git(t, "checkout", "-q", "-b", "norender", "main")
+        (t / TENANTS_APPSET).write_text("{{ fail \"x\" }}\n")
+        _git(t, "commit", "-q", "-am", "norender")
+        check("G5 diff-guard exit 2: a chart that does not render at HEAD is not 'clean'",
+              cli_diff_guard("main", t, helm) == 2)
         _git(t, "checkout", "-q", "main")
 
     # G2 red on collisions, with names derived from the ApplicationSets
@@ -1541,7 +1626,7 @@ def selftests(root: Path) -> None:
         check("G2 red: a service named into the tenant-<x> namespace of names (tenant/foo vs tenants/foo)",
               any("tenant-foo" in x for x in p), "; ".join(p))
         m = copy.deepcopy(base)
-        m["tenants"]["spec"]["template"]["metadata"]["name"] = "t2-" + LB + " .path.basename " + RB
+        m["tenants"]["spec"]["template"]["metadata"]["name"] = "t2-{{ .path.basename }}"
         names_m = generated_names(t, m)
         check("G2 derived: the changed tenants template is what is rendered",
               names_m.get("t2-foo") == ["tenants:platform-gitops/tenants/foo"]
@@ -1557,9 +1642,9 @@ def selftests(root: Path) -> None:
               and "tenant-foo" in names_m, str(sorted(names_m.items())))
         for what, mut in (
             ("an unmodelled template action",
-             lambda m: m["apps"]["spec"]["template"]["metadata"].update(name=LB + " .path.nothing " + RB)),
+             lambda m: m["apps"]["spec"]["template"]["metadata"].update(name="{{ .path.nothing }}")),
             ("a segment index outside the path",
-             lambda m: m["apps"]["spec"]["template"]["metadata"].update(name=LB + " index .path.segments 9 " + RB)),
+             lambda m: m["apps"]["spec"]["template"]["metadata"].update(name="{{ index .path.segments 9 }}")),
             ("a generator that is not a git directory generator",
              lambda m: m["apps"]["spec"].update(generators=[{"list": {"elements": []}}])),
             ("a generator path that matches nothing",
@@ -1575,8 +1660,6 @@ def selftests(root: Path) -> None:
                 check(f"G2 red: {what} is an error, not an empty set", True)
     check("G2 red: a hand-written Application with a generated name",
           bool(name_findings({"admins-x": ["apps:admins/x"]}, ["admins-x"])))
-    check("G2 red: a templated hand-written name matches by pattern",
-          bool(name_findings({"otel-eval-foo": ["apps:otel/eval-foo"]}, ["otel-eval-__TPL__"])))
     check("G2 green: an unrelated hand-written name",
           not name_findings({"admins-x": ["apps:admins/x"]}, ["tracing-tempo"]))
 
@@ -1734,475 +1817,239 @@ def selftests(root: Path) -> None:
         check("G4 cli: exit 2 when no Application is in the project (not 'all covered')",
               cli_cascade_coverage(str(t / "apps.json"), str(t / "proj.yaml"), "zzz") == 2)
 
-    # Unreadable repo inputs are Unreadable, never a traceback or an empty set.
+
+    # Inputs that cannot be read are Unreadable, never a traceback or an empty set.
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
-        for rel in (RETIRE, GOLDEN, BOOTSTRAP / "bootstrap" / "x.yaml"):
+        for rel in (RETIRE, GOLDEN):
             (t / rel).parent.mkdir(parents=True, exist_ok=True)
         (t / RETIRE).write_bytes(b"\xff\xfe\x00")
         (t / GOLDEN).write_text("{not json")
-        (t / BOOTSTRAP / "bootstrap" / "x.yaml").write_bytes(b"kind: ApplicationSet\n\xff\xfe")
-
-        def raises(fn) -> bool:
-            try:
-                fn()
-            except Unreadable:
-                return True
-            return False
-
-        check("Unreadable: a retire-service file that is not UTF-8", raises(lambda: retire_source(t)))
+        check("Unreadable: a retire-service file that is not UTF-8", raises_unreadable(lambda: retire_source(t)))
         (t / RETIRE).unlink()
-        check("Unreadable: a missing retire-service file", raises(lambda: retire_source(t)))
-        check("Unreadable: a golden that is not JSON", raises(lambda: load_golden(t)))
+        check("Unreadable: a missing retire-service file", raises_unreadable(lambda: retire_source(t)))
+        check("Unreadable: a golden that is not JSON", raises_unreadable(lambda: load_golden(t)))
         (t / GOLDEN).unlink()
-        check("Unreadable: a missing golden", raises(lambda: load_golden(t)))
-        check("Unreadable: a bootstrap file that is not UTF-8", raises(lambda: load_appsets(t)))
-        check("Unreadable: a missing bootstrap directory", raises(lambda: load_appsets(t / "none")))
+        check("Unreadable: a missing golden", raises_unreadable(lambda: load_golden(t)))
 
-    discovery_selftests(root)
-    tokenizer_selftests(root)
-
-
-def rule_selftests() -> None:
-    """Rules of the Helm reading code on small inline texts. Nothing here reads
-    the repository, and every probe is wrapped, so a broken rule fails by its
-    own name instead of making the whole run unreadable."""
-    def probe(fn):
-        try:
-            return fn()
-        except Unreadable as exc:
-            return f"UNREADABLE {exc}"
-
-    one = tokenize_actions("{{ `x: 1` }}")
-    check("rule: a backtick string is classified as a raw string holding its content",
-          probe(lambda: (one[0].kind, one[0].literal)) == ("raw", "x: 1"))
-    check("rule: a raw string line is kept by neutral, not dropped as a control line",
-          probe(lambda: neutral("a:\n  {{ `b: 1` }}\n", True)) == "a:\n  b: 1\n"
-          and probe(lambda: drop_standalone_actions("a:\n  {{ `b: 1` }}\n")) == "a:\n  {{ `b: 1` }}\n")
-    lt = probe(lambda: tokenize_actions("{{- a -}}")[0])
-    check("rule: a dash followed by whitespace is a left trim marker and a trailing one a right trim marker",
-          not isinstance(lt, str) and lt.trim_left and lt.trim_right and lt.body == "a")
-    check("rule: a left trim marker removes the whitespace before a kept action",
-          probe(lambda: neutral("a: 1\n  {{- `b` }}\n", True)) == "a: 1b\n")
-    check("rule: a left trim on a dropped control line removes the break before it, not the one after it",
-          probe(lambda: neutral("a:\n{{- if x }}\n  b: 1\n{{- end }}\nc: 2\n")) == "a:\n  b: 1\nc: 2\n")
-    check("rule: a left trim on a dropped control line removes the blank lines before it",
-          probe(lambda: neutral("a: |+\n  x\n\n\n{{- if y }}\nb: 2\n")) == "a: |+\n  x\nb: 2\n")
-    check("rule: a left trim on a dropped control line changes a kept block scalar",
-          probe(lambda: parse_docs("a: |+\n  x\n\n\n{{- if y }}\nb: 2\n", Path("x")))
-          == [{"a": "x\n", "b": 2}])
-    check("rule: a control line without a trim marker keeps the blank lines before it",
-          probe(lambda: parse_docs("a: |+\n  x\n\n\n{{ if y }}\nb: 2\n", Path("x")))
-          == [{"a": "x\n\n\n", "b": 2}])
-    check("rule: a right trim on a dropped control line pulls an indented key to column 0",
-          probe(lambda: neutral("a:\n  {{ if x -}}\n  b: 1\n  {{ end }}\n")) == "a:\nb: 1\n")
-    check("rule: a right trim on a dropped control line changes the parsed structure",
-          probe(lambda: parse_docs("a:\n  p: 1\n  {{ if x -}}\n  b: 1\n  {{ end }}\n", Path("x")))
-          == [{"a": {"p": 1}, "b": 1}])
-
-    refused = ("{{ toYaml .Values.x }}", "{{ toYaml .Values.x | nindent 0 }}", "{{ .Values.extra | nindent 0 }}",
-               "{{- .Values.extra | toYaml | nindent 0 }}", "{{ .Values.extra | indent 0 }}",
-               '{{ printf "kind: ApplicationSet" }}', '{{ printf "kind: %s" "ApplicationSet" | nindent 4 }}',
-               "{{ tpl .Values.x . }}", "{{ tpl .Values.x . | nindent 4 }}", '{{ lookup "v1" "ConfigMap" "a" "b" }}',
-               "{{ fromYaml .Values.x }}", "{{ toYaml (fromYaml .Values.x) | nindent 4 }}",
-               '{{ include "x" . | nindent 4 }}', '{{ include "x" . }}', '{{ template "x" . }}',
-               '{{ block "x" . }}', "{{ .Values.x | nindent $n }}", '{{ .Files.Glob "*" | nindent 4 }}',
-               "{{ .Values.x | upper | nindent 4 }}", "{{ toYaml .Values.x | nindent 0 }}{{ toYaml .Values.y | nindent 4 }}",
-               "{{ if .Values.a }}{{ toYaml .Values.x }}")
-    for act in refused:
-        got = probe(lambda: standalone_findings(f"a:\n  b: 1\n{act}\n", "x"))
-        check(f"rule: a standalone {act} line is a finding", isinstance(got, list) and len(got) >= 1, str(got))
-    accepted = ("{{ if .Values.a }}", "{{- else if .Values.b }}", "{{- else }}", "{{- end }}", "{{ range .Values.x }}",
-                "{{- with .Values.x }}", '{{- define "x" }}', "{{ $x := list 1 2 }}", '{{- $y = "a" }}',
-                "{{ toYaml .Values.x | nindent 4 }}", "{{- .Values.x | toYaml | nindent 2 }}",
-                '{{ .Files.Get "files/a.json" | nindent 4 }}', "{{ toYaml (default dict .Values.x) | indent 6 }}")
-    for act in accepted:
-        got = probe(lambda: standalone_findings(f"a:\n  b: 1\n{act}\n", "x"))
-        check(f"rule: a standalone {act} line is a known-safe construct", got == [], str(got))
-    check("rule: an emitter inside a line (a value position) is not a standalone finding",
-          probe(lambda: standalone_findings("a: {{ include \"x\" . }}\n", "x")) == [])
-    check("rule: a line carrying a raw string or only a comment is content, not a finding",
-          probe(lambda: standalone_findings("a:\n  {{ `b: 1` }}\n  {{/* c */}}\n", "x")) == [])
-    check("rule: the finding names the file and the line",
-          probe(lambda: standalone_findings("a: 1\n{{ toYaml .Values.x }}\n", "f.yaml"))[0].startswith("f.yaml:2:"))
-
-    split = ("Applic{{ `ation` }}Set", 'Applic{{ "ation" }}Set', "Applic{{/* c */}}ationSet",
-             "Applic \n{{- `ation` -}}\n Set", "Application{{ `S` }}et", "{{ `Application` }}{{ `Set` }}")
-    for text in split:
-        got = probe(lambda: helper_text(text, "x").lower())
-        check(f"rule: a helper word split by an action is whole again: {text!r}",
-              got == "applicationset", str(got))
-    check("rule: a helper without the word stays without it",
-          "applicationset" not in probe(lambda: helper_text('{{- define "x" }}{{ `a` }}b{{- end }}', "x")).lower())
-    check("rule: an unterminated action in a helper is Unreadable",
-          str(probe(lambda: helper_text("a {{ `x", "x"))).startswith("UNREADABLE"))
+    parse_selftests()
+    mutation_selftests(root, helm)
+    fake_helm_selftests(root, helm)
 
 
-def tokenizer_selftests(root: Path) -> None:
-    """The shared Helm action tokenizer: one classification for every consumer."""
-    LIT = "LIT123"
-
-    def raises(fn) -> bool:
-        try:
-            fn()
-        except Unreadable:
-            return True
-        return False
-
-    # -- property-style grid: every consumer must agree on every spelling ----
-    lefts = ("{{", "{{- ", "{{-\t", "{{-\n", "{{  ", "{{- \n ")
-    rights = ("}}", " }}", " -}}", "\n-}}", "  -}}", "\t}}")
-    bodies = {
-        "raw": (f"`{LIT}: x`", f"  `{LIT}: x`", f"`{LIT}:\n  x: 1\n  y: 2`", f"\n`{LIT}`\n", f"`a }} b {LIT} {{{{ c`"),
-        "comment": ("/* c */", "/*\n multi\n line }} */", "/**/"),
-        "value": (".Values.a", ".Values.a.b.c"),
-        "other": ("if .Values.a", "else", "end", "range .Values.x", "with .Values.x", 'define "x"',
-                  'include "x" .', 'template "x"', 'block "x" .', '"quoted"', "'q'", ".Values.x | default 1",
-                  "$x := 1", f"`{LIT}` | upper", f"`{LIT}` `b`", "/* c */ x", "printf \"%s\" .Values.a"),
-    }
-    standalone_ctx = "a:\n  b: 1\n  @@\n  c: 2\n"
-    inline_ctx = "a: @@\nb: 2\n"
-    n = bad = 0
-    for kind, forms in bodies.items():
-        for left in lefts:
-            for right in rights:
-                for body in forms:
-                    action = f"{left}{body}{right}"
-                    # the grid must only contain spellings Helm treats as that kind
-                    toks = tokenize_actions(action)
-                    for ctx_name, ctx in (("standalone", standalone_ctx), ("inline", inline_ctx)):
-                        text = ctx.replace("@@", action)
-                        acts = tokenize_actions(text)
-                        stand = ctx_name == "standalone"
-                        got_kind = acts[0].kind
-                        dropped = drop_standalone_actions(text) != text
-                        literal = LIT in neutral(text, keep_literals=True)
-                        flagged = bool(template_control_findings(text, Path("x")))
-                        want_drop = stand and kind in ("other", "value")
-                        want_flag = kind == "other" or (kind == "value" and stand)
-                        n += 1
-                        if not (len(toks) == 1 and got_kind == kind and dropped == want_drop
-                                and literal == (kind == "raw") and flagged == want_flag):
-                            bad += 1
-                            if bad <= 5:
-                                print(f"  disagreement: {action!r} in {ctx_name}: kind={got_kind} (want {kind}) "
-                                      f"dropped={dropped} (want {want_drop}) literal={literal} flagged={flagged} "
-                                      f"(want {want_flag})")
-    check(f"tokenizer grid: neutral, drop_standalone_actions and the control findings agree on {n} spellings",
-          bad == 0, f"{bad} disagreements")
-
-    # -- trim markers are applied as Helm applies them ------------------------
-    check("tokenizer: a left-trim raw string joins the preceding line, keeping its content",
-          neutral("a:\n  {{- `\n  b: true` }}\nc: 1\n", True) == "a:\n  b: true\nc: 1\n")
-    check("tokenizer: a right-trim raw string consumes the whitespace after it",
-          neutral("a: {{ `x` -}}\n\n  y\n", True) == "a: xy\n")
-    check("tokenizer: a comment with trim markers trims like any action",
-          neutral("a: 1\n  {{- /* c */ -}}\nb: 2\n") == "a: 1b: 2\n")
-    check("tokenizer: a comment without trim markers leaves the line break",
-          neutral("a: 1 {{/* c */}}\nb: 2\n") == "a: 1 \nb: 2\n")
-    check("tokenizer: a dash not followed by whitespace is not a trim marker",
-          tokenize_actions("{{-5}}")[0].trim_left is False and tokenize_actions("{{-5}}")[0].kind == "other")
-    check("tokenizer: braces inside a raw string do not close the action",
-          len(tokenize_actions("{{ `a }} b` }} x {{ .Values.a }}")) == 2)
-    check("tokenizer: a multi-line standalone control action is one removed block",
-          drop_standalone_actions("a: 1\n{{- define \"x\" }}\nline\n{{- end }}\nb: 2\n") == "a: 1\nline\nb: 2\n")
-    check("tokenizer: a multi-line raw string on its own line is kept",
-          "b: true" in drop_standalone_actions("a:\n  {{- `\n  b: true` }}\n"))
-    for label, text in (("an action that is never closed", "a: {{ .Values.x\n"),
-                        ("an unterminated raw string", "a: {{ `x }}\n"),
-                        ("an unterminated quoted string", 'a: {{ "x }}\n'),
-                        ("an unterminated comment", "a: {{/* x }}\n")):
-        check(f"tokenizer unreadable: {label} (neutral, drop and findings all refuse)",
-              raises(lambda: neutral(text)) and raises(lambda: drop_standalone_actions(text))
-              and raises(lambda: template_control_findings(text, Path("x"))))
-
-    # -- the originally reported spellings, end to end through G1 -------------
-    apps_text = read_text(root / APPS_APPSET)
-    tenants_text = read_text(root / TENANTS_APPSET)
-    flag = "    preserveResourcesOnDeletion: false\n"
-
-    def outcome3(text: str) -> str:
-        with tempfile.TemporaryDirectory() as d:
-            base = Path(d) / BOOTSTRAP / "bootstrap"
-            base.mkdir(parents=True)
-            (base / "a.yaml").write_text(text, encoding="utf-8")
-            (base / "t.yaml").write_text(tenants_text, encoding="utf-8")
-            try:
-                sets = load_appsets(Path(d))
-            except Unreadable:
-                return "unreadable"
-            if any("would NOT cascade" in f for f in appset_findings(sets)):
-                return "red"
-            return "green" if not appset_findings(sets) and not golden_findings(sets, load_golden(root)) \
-                else "pinned"
-
-    def red(text: str) -> bool:
-        return outcome3(text) == "red"
-    for label, repl in (
-        ("left trim, one line of content", "    {{- `\n    preserveResourcesOnDeletion: true\n` }}\n"),
-        ("left trim, multi-line raw string", "    {{- `\n    preserveResourcesOnDeletion: true` }}\n"),
-        ("both trims", "    {{- `\n    preserveResourcesOnDeletion: true\n  ` -}}\n"),
-        ("right trim only", "    preserveResourcesOnDeletion: {{ `true\n  ` -}}\n"),
-        ("no trim, multi-line raw string", "    {{ `\n    preserveResourcesOnDeletion: true\n` }}\n"),
-    ):
-        text = apps_text.replace(flag, repl)
-        check(f"G1 red: a raw string with {label} that sets the flag to true is not skipped",
-              text != apps_text and red(text), outcome3(text))
-    for label, repl in (
-        ("left trim that joins the key onto the previous line", "    {{- `preserveResourcesOnDeletion: true` }}\n"),
-        ("right trim that joins the next key onto the value", "    preserveResourcesOnDeletion: {{ `true` -}}\n"),
-    ):
-        check(f"G1 refused: a raw string with {label} is red, pinned or unreadable, never green",
-              outcome3(apps_text.replace(flag, repl)) != "green")
-    check("G1 control: the unmodified file is not red", not red(apps_text))
-
-    # -- subprocess deadline ---------------------------------------------------
-    import time
-    with tempfile.TemporaryDirectory() as d:
-        pidfile = Path(d) / "pid"
-        t0 = time.monotonic()
-        rc, _ = run_bounded(["sh", "-c", f'sleep 20 & echo $! > "{pidfile}"; wait'], dict(os.environ), 1.5)
-        took = time.monotonic() - t0
-        grandchild = int(pidfile.read_text().strip()) if pidfile.exists() else 0
-        alive = False
-        for _ in range(20):
-            try:
-                os.kill(grandchild, 0)
-                alive = True
-                time.sleep(0.1)
-            except OSError:
-                alive = False
-                break
-        if alive:
-            try:
-                os.kill(grandchild, 9)  # do not leak it when the check fails
-            except OSError:
-                pass
-    check("run_bounded: a hung command is stopped at the deadline together with its child processes",
-          rc == TIMEOUT_RC and took < 12 and grandchild > 0 and not alive,
-          f"rc={rc} took={took:.1f}s grandchild={grandchild} alive={alive}")
-    check("run_bounded: a normal command returns its status and output",
-          run_bounded(["sh", "-c", "echo hi; exit 3"], dict(os.environ), 10) == (3, "hi\n"))
-    check("G3 red: a scenario that hit the deadline is a finding, never a pass",
-          bool(_scenario_findings("clears", TIMEOUT_RC, [], False, "")))
+def parse_selftests() -> None:
+    """Parsing of helm output: what is an error and what is not."""
+    ok = "---\n# Source: x\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: a\n---\n---\n# only a comment\n"
+    check("parse green: empty and comment-only documents are dropped, objects are kept",
+          [d["kind"] for d in parse_rendered(ok, "t")] == ["ConfigMap"])
+    for what, text in (
+            ("a document that is a list", "- a\n- b\n"),
+            ("a document that is a scalar", "just text\n"),
+            ("a document without kind", "apiVersion: v1\nmetadata:\n  name: a\n"),
+            ("a duplicate mapping key", "apiVersion: v1\nkind: ConfigMap\nkind: Secret\nmetadata:\n  name: a\n"),
+            ("YAML that does not parse", "a: [1, 2\nb: {\n"),
+            ("output with no document", "---\n# nothing\n"),
+            ("an ApplicationSet without a name", "apiVersion: argoproj.io/v1alpha1\nkind: ApplicationSet\nmetadata: {}\n"),
+            ("an Application whose name is not a string", "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: [x]\n")):
+        check(f"parse red: {what} is an error", raises_unreadable(lambda t=text: parse_rendered(t, "t")))
+    quoted = 'apiVersion: argoproj.io/v1alpha1\n"kind": "ApplicationSet"\nmetadata:\n  name: x\n'
+    check("parse: a quoted key and value is still selected by its parsed kind",
+          [d["kind"] for d in parse_rendered(quoted, "t")] == ["ApplicationSet"])
+    check("render red: a render without an ApplicationSet is an error, not an empty set",
+          raises_unreadable(lambda: appsets_of(Render("t", parse_rendered(ok, "t")))))
 
 
-def discovery_selftests(root: Path) -> None:
-    """G0 and the template-control and duplicate-key guards, on temporary trees."""
-    apps_text = read_text(root / APPS_APPSET)
-    tenants_text = read_text(root / TENANTS_APPSET)
-    flag = "    preserveResourcesOnDeletion: false\n"
-    assert apps_text.count(flag) == 1 and apps_text.count("kind: ApplicationSet\n") == 1
+def _copy_chart(root: Path, dest: Path) -> Path:
+    shutil.copytree(root / CHART, dest)
+    return dest
 
-    def raises(fn) -> bool:
-        try:
-            fn()
-        except Unreadable:
-            return True
-        return False
 
-    def tree(files: dict[str, str | bytes]) -> tempfile.TemporaryDirectory:
-        tmp = tempfile.TemporaryDirectory()
-        base = Path(tmp.name) / BOOTSTRAP / "bootstrap"
-        base.mkdir(parents=True)
-        for name, content in files.items():
-            if isinstance(content, bytes):
-                (base / name).write_bytes(content)
-            else:
-                (base / name).write_text(content, encoding="utf-8")
-        return tmp
+def _edit(path: Path, old: str, new: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    if text.count(old) != 1:
+        raise Unreadable(f"mutation anchor {old!r} found {text.count(old)} times in {path}")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
-    def outcome(files: dict[str, str | bytes]) -> str:
-        """'red' when both sets are found and G1 reports the lost cascade,
-        'unreadable' when loading fails, 'green' when clean, else 'missed'."""
-        with tree(files) as tmp:
-            try:
-                sets = load_appsets(Path(tmp))
-            except Unreadable:
-                return "unreadable"
-            if appset_findings(sets) and set(sets) == set(EXPECTED_CASCADE) \
-                    and any("would NOT cascade" in f for f in appset_findings(sets)):
-                return "red"  # found, and G1 reports the lost cascade itself
-            return "green" if not appset_findings(sets) else "missed"
 
-    preserve_true = apps_text.replace(flag, "    preserveResourcesOnDeletion: true\n")
-    check("G0 control: the real pair is green in a temporary tree",
-          outcome({"a.yaml": apps_text, "t.yaml": tenants_text}) == "green")
-    spellings = {
-        "plain": "kind: ApplicationSet\n",
-        "double-quoted": 'kind: "ApplicationSet"\n',
-        "single-quoted": "kind: 'ApplicationSet'\n",
-        "trailing comment": "kind: ApplicationSet # note\n",
-        "extra spaces": "kind:   ApplicationSet   \n",
-    }
-    for label, line in spellings.items():
-        text = preserve_true.replace("kind: ApplicationSet\n", line)
-        check(f"G0 red: an ApplicationSet written as {label} is found and G1 fails",
-              outcome({"a.yaml": text, "t.yaml": tenants_text}) == "red")
-    check("G0 red: an ApplicationSet in a .yml file is found and G1 fails",
-          outcome({"a.yml": preserve_true, "t.yaml": tenants_text}) == "red")
-    check("G0 red: an ApplicationSet after other documents of a multi-document file",
-          outcome({"a.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c\n---\n" + preserve_true,
-                   "t.yaml": tenants_text}) == "red")
-    check("G0 red: quoted kind inside a multi-document .yml file",
-          outcome({"a.yml": "kind: ConfigMap\nmetadata:\n  name: c\n---\n"
-                   + preserve_true.replace("kind: ApplicationSet\n", 'kind: "ApplicationSet" # x\n'),
-                   "t.yaml": tenants_text}) == "red")
-    check("G0 green: a kind of another resource is not selected",
-          outcome({"a.yaml": apps_text, "t.yaml": tenants_text,
-                   "c.yml": "kind: ConfigMap\nmetadata:\n  name: c\n"}) == "green")
-    # the same blind spot for the other kind searched this way
-    with tree({"x.yml": 'kind: "Application"\nmetadata:\n  name: hand\n',
-               "y.yaml": "kind: Application # c\nmetadata:\n  name: hand2\n"}) as tmp:
-        names = sorted(d["metadata"]["name"] for _, d in docs_of_kind(Path(tmp), "Application"))
-        check("G0 red: hand-written Applications in each spelling and suffix are found",
-              names == ["hand", "hand2"], str(names))
-    # unreadable inputs are errors, never skipped
-    check("G0 unreadable: a .yml file that is not UTF-8",
-          outcome({"a.yaml": apps_text, "t.yaml": tenants_text, "b.yml": b"kind: x\n\xff\xfe"}) == "unreadable")
-    check("G0 unreadable: a .yaml file that does not parse",
-          outcome({"a.yaml": apps_text, "t.yaml": tenants_text, "b.yaml": "a: [1\nb: }\n"}) == "unreadable")
-    check("G0 unreadable: a templated kind",
-          outcome({"a.yaml": apps_text, "t.yaml": tenants_text,
-                   "b.yaml": "kind: {{ .Values.k }}\nmetadata:\n  name: b\n"}) == "unreadable")
-    check("G0 unreadable: a kind that is not a string",
-          outcome({"a.yaml": apps_text, "t.yaml": tenants_text, "b.yaml": "kind: [ApplicationSet]\n"}) == "unreadable")
-    check("G0 unreadable: a duplicate mapping key",
-          outcome({"a.yaml": apps_text.replace(flag, flag + flag), "t.yaml": tenants_text}) == "unreadable")
-    check("G0 unreadable: a duplicate key with a different value",
-          outcome({"a.yaml": apps_text.replace(flag, flag + "    preserveResourcesOnDeletion: true\n"),
-                   "t.yaml": tenants_text}) == "unreadable")
-    check("G0 unreadable: a duplicate kind key",
-          outcome({"a.yaml": apps_text.replace("kind: ApplicationSet\n", "kind: ApplicationSet\nkind: Other\n"),
-                   "t.yaml": tenants_text}) == "unreadable")
+EVIL_SET = """apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: evil
+  namespace: argocd
+spec:
+  goTemplate: true
+  generators:
+    - list:
+        elements: []
+  template:
+    metadata:
+      name: evil
+    spec:
+      project: default
+"""
 
-    # -- every file below templates/ is recognised or refused -----------------
-    def unreadable_tree(files: dict[str, str]) -> bool:
-        with tempfile.TemporaryDirectory() as d:
-            base = Path(d) / BOOTSTRAP / "bootstrap"
-            base.mkdir(parents=True)
-            (base / "a.yaml").write_text(apps_text, encoding="utf-8")
-            (base / "t.yaml").write_text(tenants_text, encoding="utf-8")
-            for name, content in files.items():
-                (base / name).write_text(content, encoding="utf-8")
-            try:
-                load_appsets(Path(d))
-            except Unreadable:
-                return True
-            return False
-    check("G0 control: harmless helper and NOTES.txt files are accepted",
-          not unreadable_tree({"_helpers.tpl": '{{- define "x" }}a{{- end }}\n', "NOTES.txt": "see ApplicationSet docs\n"}))
-    check("G0 unreadable: a .json file below templates/", unreadable_tree({"x.json": "{}"}))
-    check("G0 unreadable: a .yaml.tpl file that mentions ApplicationSet",
-          unreadable_tree({"x.yaml.tpl": "kind: ApplicationSet\n"}))
-    check("G0 unreadable: a helper that defines an ApplicationSet",
-          unreadable_tree({"_helpers.tpl": '{{- define "x" }}\nkind: ApplicationSet\n{{- end }}\n'}))
-    check("G0 unreadable: a helper whose mention differs only in case",
-          unreadable_tree({"_h.tpl": "kind: applicationset\n"}))
-    check("G0 unreadable: a file with another extension",
-          unreadable_tree({"x.txt": "x", "y": "y"}))
-    check("G0 unreadable: a template that consists only of an include",
-          unreadable_tree({"inc.yaml": '{{ include "x" . }}\n'}))
-    check("G0 unreadable: a template that consists only of an include with a trim marker",
-          unreadable_tree({"inc.yaml": '{{- include "x" . | nindent 0 }}\n'}))
-    check("G0 unreadable: a template that consists only of a named-template call",
-          unreadable_tree({"inc.yaml": '{{ template "x" . }}\n'}))
-    check("G0 unreadable: a document that is a bare list",
-          unreadable_tree({"l.yaml": "- a\n- b\n"}))
-    check("G0 control: an empty template file is accepted", not unreadable_tree({"e.yaml": "# nothing\n"}))
-    for label, body in (
-        ("a whole-document toYaml", "{{ toYaml .Values.extra }}\n"),
-        ("a nindent 0 value", "{{ .Values.extra | nindent 0 }}\n"),
-        ("a printf that builds a document", '{{ printf "kind: ApplicationSet\\nmetadata:\\n  name: z" }}\n'),
-        ("a lookup", '{{ lookup "v1" "ConfigMap" "a" "b" }}\n'),
-        ("a fromYaml", "{{ fromYaml .Values.x }}\n"),
-        ("a tpl after a key", "a:\n  b: 1\n{{ tpl .Values.x . }}\n"),
-    ):
-        check(f"G0 unreadable: a template whose only content is {label}", unreadable_tree({"emit.yaml": body}))
-    check("G0 control: an indented data pipeline and control flow in another manifest are accepted",
-          not unreadable_tree({"ok.yaml": "kind: ConfigMap\ndata:\n  {{- if .Values.a }}\n  k: v\n  {{- end }}\n"
-                               "  x: |-\n  {{- toYaml .Values.b | nindent 4 }}\n"}))
-    check("G0 unreadable: a helper whose word is split by a raw string",
-          unreadable_tree({"_h.tpl": "kind: Applic{{ `ation` }}Set\n"}))
-    check("G0 unreadable: a helper whose word is split by a comment",
-          unreadable_tree({"_h.tpl": "kind: Applic{{/* x */}}ationSet\n"}))
 
-    # Helm control flow inside an ApplicationSet file
-    cond = ("    {{- if .Values.keep }}\n    preserveResourcesOnDeletion: true\n    {{- else }}\n"
-            "    preserveResourcesOnDeletion: false\n    {{- end }}\n")
-    for label, text in (
-        ("an if/else that selects differing preserveResourcesOnDeletion values", apps_text.replace(flag, cond)),
-        ("the same conditional in the other order",
-         apps_text.replace(flag, cond.replace("true", "TMP").replace("false", "true").replace("TMP", "false"))),
-        ("a conditional with the control actions inline", apps_text.replace(
-            flag, "    {{ if .Values.keep }}\n    preserveResourcesOnDeletion: true\n    {{ else }}\n"
-                  "    preserveResourcesOnDeletion: false\n    {{ end }}\n")),
-        ("a range", apps_text.replace(flag, flag + "    {{- range .Values.x }}\n    {{- end }}\n")),
-        ("a with", apps_text.replace(flag, flag + "    {{- with .Values.x }}\n    {{- end }}\n")),
-        ("a define", apps_text.replace(flag, flag + '    {{- define "x" }}a{{- end }}\n')),
-        ("an include", apps_text.replace("requeueAfterSeconds: 30", 'requeueAfterSeconds: {{ include "x" . }}')),
-        ("a value pipeline", apps_text.replace("requeueAfterSeconds: 30", "requeueAfterSeconds: {{ .Values.x | default 30 }}")),
-        ("a variable assignment", apps_text.replace(flag, flag + '    {{- $x := "y" }}\n')),
-    ):
-        check(f"G0 unreadable: {label}",
-              outcome({"a.yaml": text, "t.yaml": tenants_text}) == "unreadable")
-    check("G0 unreadable: a conditional in the tenants ApplicationSet",
-          outcome({"a.yaml": apps_text, "t.yaml": tenants_text.replace(
-              flag, cond)}) == "unreadable")
-    check("G0 green: comments, raw strings and plain .Values lookups stay allowed",
-          not template_control_findings(apps_text, Path("x")))
-    check("G0 red: the control finding names the file and line",
-          any("x:1:" in f for f in template_control_findings("{{ if .Values.a }}\n", Path("x"))))
-    check("G0 model: the preserve flag read from a conditional would have been wrong",
-          yaml.safe_load("a:\n  p: true\n  p: false\n")["a"]["p"] is False)
-    check("G0 view_from_text: a conditional in the file at HEAD is a finding",
-          raises(lambda: view_from_text("apps", apps_text.replace(flag, cond), "x")))
-    check("G0 view_from_text: a duplicate key in the file at HEAD is a finding",
-          raises(lambda: view_from_text("apps", apps_text.replace(flag, flag + flag), "x")))
-
-    # generator-level template keys override spec.template
-    base = load_appsets(root)
-    for name in ("apps", "tenants"):
-        for where, mut in (
-            ("a git generator template", lambda d: d["spec"]["generators"][0]["git"].update(template={"metadata": {"name": "x"}})),
-            ("a git generator templatePatch", lambda d: d["spec"]["generators"][0]["git"].update(templatePatch="x")),
-            ("a nested matrix generator template",
-             lambda d: d["spec"].update(generators=[{"matrix": {"generators": [
-                 d["spec"]["generators"][0], {"git": {"template": {"metadata": {"finalizers": []}}}}]}}])),
-        ):
-            m = copy.deepcopy(base)
-            mut(m[name])
-            check(f"G1 red: {name} has {where}", any("overrides what is rendered" in x for x in appset_findings(m)))
-            check(f"G2 red: {name} {where} makes the names unreadable", raises(lambda: generated_names(root, m)))
-    check("G1 green: the real generators carry no template override",
-          not any(generator_override_paths(d["spec"].get("generators"), "g") for d in base.values()))
-
-    # pinned annotation
+def mutation_selftests(root: Path, helm: str) -> None:
+    """Mutate a COPY of the chart source and run the real guard against it."""
     golden = load_golden(root)
-    key = PINNED_ANNOTATIONS[0]
-    for name in ("apps", "tenants"):
-        m = copy.deepcopy(base)
-        m[name]["spec"]["template"]["metadata"]["annotations"][key] = "/"
-        check(f"G5 red: {name} {key} changes", bool(golden_findings(m, golden)))
-        m = copy.deepcopy(base)
-        del m[name]["spec"]["template"]["metadata"]["annotations"][key]
-        check(f"G5 red: {name} {key} removed", bool(golden_findings(m, golden)))
-        m = copy.deepcopy(base)
-        del m[name]["spec"]["template"]["metadata"]["annotations"]
-        check(f"G5 red: {name} annotations removed", bool(golden_findings(m, golden)))
-    check("G5 golden pins the manifest-generate-paths annotation of every set",
-          all(key in g["spec"]["template"]["metadata"]["annotations"] for g in golden.values()))
+    first_generated = sorted(generated_names(root, appsets_of(Render("d", helm_render(
+        root / CHART, [root / CHART / "values.yaml"], helm, HELM_TIMEOUT, "names")))))[0]
 
-    # Known limit, asserted so that lifting it is noticed.
-    a, b = "{{ .Values.spec.source.repoURL }}", "{{ .Values.spec.source.targetRevision }}"
-    line_a, line_b = f"        repoURL: {a}\n", f"        revision: {b}\n"
-    assert apps_text.count(line_a) == 1 and apps_text.count(line_b) == 1
-    swapped = apps_text.replace(line_a, "        repoURL: @@\n").replace(line_b, f"        revision: {a}\n") \
-        .replace("        repoURL: @@\n", f"        repoURL: {b}\n")
-    swapped_view = pinned_view(parse_docs(swapped, Path("x"), keep_literals=True)[0])
-    check("G5 known limit: swapping two Helm values is NOT detected "
-          "(if this turns red the limit was lifted: update the docstring and invert this check)",
-          swapped != apps_text and not deep_diff(swapped_view, golden["apps"]))
+    def tmpl(c: Path, name: str, body: str) -> None:
+        (c / "templates" / name).write_text(body, encoding="utf-8")
+
+    def values_append(c: Path, text: str) -> None:
+        p = c / "values.yaml"
+        p.write_text(p.read_text(encoding="utf-8").rstrip("\n") + "\n" + text, encoding="utf-8")
+
+    def indent(text: str, n: int) -> str:
+        return "".join(" " * n + l + "\n" for l in text.splitlines())
+
+    apps = lambda c: c / "templates/bootstrap/applicationset-apps.yaml"
+    tenants = lambda c: c / "templates/bootstrap/applicationset-tenants.yaml"
+
+    def m_via_toyaml(c: Path) -> None:
+        values_append(c, "mutExtra:\n" + indent(EVIL_SET, 2))
+        tmpl(c, "mut-toyaml.yaml", "---\n{{- toYaml .Values.mutExtra | nindent 0 }}\n")
+
+    def m_via_files(c: Path) -> None:
+        (c / "files").mkdir(exist_ok=True)
+        (c / "files/evil.yaml").write_text(EVIL_SET, encoding="utf-8")
+        tmpl(c, "mut-files.yaml", '---\n{{ .Files.Get "files/evil.yaml" }}\n')
+
+    def m_via_include(c: Path) -> None:
+        tmpl(c, "_mut.tpl", '{{- define "mut.set" -}}\n' + EVIL_SET + "{{- end -}}\n")
+        tmpl(c, "mut-include.yaml", '---\n{{ include "mut.set" . }}\n')
+
+    def m_behind_flag(c: Path) -> None:
+        values_append(c, "mutGate: false")
+        tmpl(c, "mut-gate.yaml", "{{- if .Values.mutGate }}\n---\n" + EVIL_SET + "{{- end }}\n")
+
+    def m_trim_indented(c: Path) -> None:
+        body = textwrap.dedent(EVIL_SET.split("spec:\n", 1)[1])
+        tmpl(c, "_mut.tpl", '{{- define "mut.meta" -}}\nname: evil\nnamespace: argocd\n{{- end -}}\n'
+             '{{- define "mut.spec" -}}\n' + body + '{{- end -}}\n')
+        tmpl(c, "mut-trim.yaml",
+             "---\napiVersion: argoproj.io/v1alpha1\n  {{- with .Values.spec }}\nkind: ApplicationSet\nmetadata:\n"
+             '  {{- include "mut.meta" . | nindent 2 }}\nspec:\n  {{- include "mut.spec" . | trim | nindent 2 }}\n  {{- end }}\n')
+
+    def m_name_behind_flag(c: Path) -> None:
+        values_append(c, "mutGate: false")
+        tmpl(c, "mut-name.yaml", "{{- if .Values.mutGate }}\n---\napiVersion: argoproj.io/v1alpha1\nkind: Application\n"
+             f"metadata:\n  name: {first_generated}\n  namespace: argocd\nspec:\n  project: default\n{{{{- end }}}}\n")
+
+    def m_fail_behind_flag(c: Path) -> None:
+        values_append(c, "mutGate: false")
+        tmpl(c, "mut-fail.yaml", '{{- if .Values.mutGate }}{{ fail "boom" }}{{- end }}\n')
+
+    mutants = [
+        ("preserveResourcesOnDeletion true on apps",
+         lambda c: _edit(apps(c), "preserveResourcesOnDeletion: false", "preserveResourcesOnDeletion: true"), "NOT cascade"),
+        ("preserveResourcesOnDeletion true on tenants",
+         lambda c: _edit(tenants(c), "preserveResourcesOnDeletion: false", "preserveResourcesOnDeletion: true"), "NOT cascade"),
+        ("a template finalizer on apps (replaces the resources finalizer)",
+         lambda c: _edit(apps(c), "  template:\n    metadata:\n",
+                         "  template:\n    metadata:\n      finalizers:\n        - example.invalid/other\n"), "finalizers="),
+        ("a templatePatch on tenants",
+         lambda c: _edit(tenants(c), "  generators:\n",
+                         "  templatePatch: |\n    metadata:\n      finalizers: []\n  generators:\n"), "templatePatch"),
+        ("a new ApplicationSet through toYaml | nindent", m_via_toyaml, "evil"),
+        ("a new ApplicationSet through .Files.Get", m_via_files, "evil"),
+        ("a new ApplicationSet through include of a .tpl helper", m_via_include, "evil"),
+        ("a new ApplicationSet behind {{ if }} on a non-default flag", m_behind_flag, "evil"),
+        ("a new ApplicationSet through indented emitters with trim markers", m_trim_indented, "evil"),
+        ("an Application named like a generated one, behind a non-default flag", m_name_behind_flag,
+         "equals hand-written"),
+        ("a render that fails under a flipped flag", m_fail_behind_flag, "boom"),
+        ("a duplicate generated name (service dropped from the name template)",
+         lambda c: _edit(apps(c), "      name: '{{`{{ index .path.segments 2 }}-{{ index .path.segments 3 }}`}}'\n      labels:",
+                         "      name: '{{`{{ index .path.segments 2 }}`}}'\n      labels:"), "produced by"),
+        ("repoURL and revision swapped in the apps generator",
+         lambda c: _edit(apps(c), "        repoURL: {{ .Values.spec.source.repoURL }}\n        revision: {{ .Values.spec.source.targetRevision }}\n",
+                         "        repoURL: {{ .Values.spec.source.targetRevision }}\n        revision: {{ .Values.spec.source.repoURL }}\n"),
+         "ApplicationSet apps"),
+        ("a duplicate mapping key in a rendered ApplicationSet",
+         lambda c: _edit(tenants(c), "  goTemplate: true\n", "  goTemplate: true\n  goTemplate: true\n"), "duplicate mapping key"),
+        ("the apps project whitelist loses the apps group",
+         lambda c: _edit(c / "templates/projects/project-apps.yaml", '    - group: apps\n      kind: "*"\n', ""),
+         "would not cascade"),
+        ("the apps project destinations narrowed to one namespace",
+         lambda c: _edit(c / "templates/projects/project-apps.yaml", '      namespace: "*"', "      namespace: only-one"),
+         "would not cascade"),
+    ]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        clean = _copy_chart(root, Path(tmp) / "clean")
+        a = analyze(clean, root, helm, golden=golden)
+        check("mutation green: the unmutated copy of the chart has no finding", not a.findings, "; ".join(a.findings))
+
+        counter = iter(range(1000))
+
+        def run(item) -> tuple[str, bool, str]:
+            name, fn, want = item
+            c = _copy_chart(root, Path(tmp) / f"m{next(counter)}")
+            fn(c)
+            try:
+                found = "; ".join(analyze(c, root, helm, golden=golden).findings)
+            except Unreadable as exc:
+                found = "UNREADABLE " + str(exc)
+            return name, bool(found) and want in found, found[:300] or "no finding"
+
+        for item in mutants:
+            name, red, why = run(item)
+            check(f"mutation red: {name}", red, why)
+
+
+def fake_helm_selftests(root: Path, helm: str) -> None:
+    """A helm that fails, is silent, hangs or prints garbage must fail the guard, never skip it."""
+    ok_doc = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"
+    try:
+        valid = subprocess.run([helm, "template", RELEASE, str(root / CHART), "-f", str(root / CHART / "values.yaml")],
+                               capture_output=True, text=True, timeout=HELM_TIMEOUT, check=True).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Unreadable(f"fake helm fixture: the real render failed ({exc})") from exc
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        (t / "valid.yaml").write_text(valid, encoding="utf-8")
+        (t / "ok.yaml").write_text(ok_doc, encoding="utf-8")
+        v, ok = shlex.quote(str(t / "valid.yaml")), shlex.quote(str(t / "ok.yaml"))
+        # The first three print a COMPLETE, valid render and fail only in the way named, so only the
+        # check for that failure can catch them.
+        scripts = {
+            "exits non-zero after printing a valid render": f"#!/bin/sh\ncat {v}\nexit 3\n",
+            "reports an error on stderr but exits 0 with a valid render": f"#!/bin/sh\necho 'Error: partial' >&2\ncat {v}\n",
+            "hangs past the timeout after printing a valid render": f"#!/bin/sh\ncat {v}\nexec sleep 30\n",
+            "prints nothing and exits 0": "#!/bin/sh\nexit 0\n",
+            "prints garbage": "#!/bin/sh\necho '::: {not yaml [' \n",
+            "prints a list, not objects": "#!/bin/sh\nprintf -- '- a\\n- b\\n'\n",
+            "renders no ApplicationSet": f"#!/bin/sh\ncat {ok}\n",
+        }
+        _fake_helm_checks(root, t, scripts)
+
+
+def _fake_helm_checks(root: Path, t: Path, scripts: dict) -> None:
+    for what, body in scripts.items():
+        p = t / ("helm-" + re.sub(r"\W+", "-", what))
+        p.write_text(body, encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IXUSR)
+        check(f"fake helm red: a helm that {what} fails the guard",
+              raises_unreadable(lambda p=p: analyze(root / CHART, root, str(p), timeout=3.0)))
+    bindir = t / "bin-empty"
+    bindir.mkdir()
+    fake = t / "bin-fake"
+    fake.mkdir()
+    (fake / "helm").write_text("#!/bin/sh\necho 'Error: boom' >&2\nexit 1\n", encoding="utf-8")
+    (fake / "helm").chmod(0o755)
+    for what, path in (("no helm on PATH", str(bindir)), ("a helm that exits 1 on PATH", str(fake))):
+        r = subprocess.run([sys.executable, "-I", str(Path(__file__).resolve()), "--root", str(root),
+                            "--repo-checks"], capture_output=True, text=True, timeout=120,
+                           env={"PATH": path, "HOME": str(t)})
+        check(f"CLI red: {what} exits 2 and names the cause", r.returncode == 2 and "UNREADABLE" in r.stderr,
+              f"rc={r.returncode} {r.stderr[-200:]!r}")
+    r = subprocess.run([sys.executable, "-I", str(Path(__file__).resolve()), "--root", str(root),
+                        "--diff-guard", "HEAD"], capture_output=True, text=True, timeout=120,
+                       env={"PATH": str(bindir), "HOME": str(t)})
+    check("CLI red: --diff-guard without helm exits 2", r.returncode == 2, f"rc={r.returncode}")
 
 
 def main(argv: list[str]) -> int:
@@ -2218,9 +2065,11 @@ def main(argv: list[str]) -> int:
         args = args[2:]
     if args[:1] == ["--print-golden"]:
         try:
-            sets = load_appsets(root)
+            helm = find_helm()
+            docs = helm_render(root / CHART, [root / CHART / "values.yaml"], helm, HELM_TIMEOUT, "default values")
+            views = rendered_views(docs)
             note = json.loads(read_text(root / GOLDEN)).get("_note", "")
-            print(json.dumps({"_note": note, "sets": {n: pinned_view(sets[n]) for n in sorted(EXPECTED_CASCADE)}},
+            print(json.dumps({"_note": note, "sets": {n: views[n] for n in sorted(EXPECTED_CASCADE)}},
                              indent=2, sort_keys=True))
         except (Unreadable, KeyError, ValueError, AttributeError) as exc:
             print(f"UNREADABLE: {exc}", file=sys.stderr)
@@ -2231,13 +2080,17 @@ def main(argv: list[str]) -> int:
             print("usage: --diff-guard BASE", file=sys.stderr)
             return 2
         return cli_diff_guard(args[1], root)
+    repo_only = args[:1] == ["--repo-checks"]
+    if repo_only:
+        args = args[1:]
     if args:
         print(f"unknown arguments: {args}", file=sys.stderr)
         return 2
     try:
-        rule_selftests()
-        repo_checks(root)
-        selftests(root)
+        helm = find_helm()
+        analysis = repo_checks(root, helm)
+        if not repo_only:
+            selftests(root, helm, analysis)
     except Unreadable as exc:
         print(f"UNREADABLE: {exc}", file=sys.stderr)
         for f in failures:

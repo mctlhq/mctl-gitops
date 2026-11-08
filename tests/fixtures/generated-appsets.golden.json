@@ -1,5 +1,5 @@
 {
-  "_note": "Complete normalised spec of the apps and tenants ApplicationSets, except the template annotations other than PINNED_ANNOTATIONS. Edit only together with the ApplicationSet change it describes; regenerate with: python3 tests/test_generated_app_cascade_guards.py --print-golden",
+  "_note": "Complete normalised spec of the apps and tenants ApplicationSets as rendered by `helm template` with the default values of platform-gitops/bootstrap, except the template annotations other than PINNED_ANNOTATIONS. Edit only together with the ApplicationSet change it describes; regenerate with: python3 tests/test_generated_app_cascade_guards.py --print-golden",
   "sets": {
     "apps": {
       "metadata": {
@@ -15,9 +15,9 @@
                   "path": "platform-gitops/services/*/*"
                 }
               ],
-              "repoURL": "__TPL__",
+              "repoURL": "https://github.com/mctlhq/mctl-gitops.git",
               "requeueAfterSeconds": 30,
-              "revision": "__TPL__"
+              "revision": "main"
             }
           }
         ],
@@ -43,7 +43,7 @@
           "spec": {
             "destination": {
               "namespace": "{{ index .path.segments 2 }}",
-              "server": "__TPL__"
+              "server": "https://kubernetes.default.svc"
             },
             "ignoreDifferences": [
               {
@@ -72,13 +72,13 @@
                   ]
                 },
                 "path": "platform-gitops/helm-charts/base-service",
-                "repoURL": "__TPL__",
-                "targetRevision": "__TPL__"
+                "repoURL": "https://github.com/mctlhq/mctl-gitops.git",
+                "targetRevision": "main"
               },
               {
                 "ref": "values",
-                "repoURL": "__TPL__",
-                "targetRevision": "__TPL__"
+                "repoURL": "https://github.com/mctlhq/mctl-gitops.git",
+                "targetRevision": "main"
               }
             ],
             "syncPolicy": {
@@ -120,9 +120,9 @@
                   "path": "platform-gitops/tenants/*"
                 }
               ],
-              "repoURL": "__TPL__",
+              "repoURL": "https://github.com/mctlhq/mctl-gitops.git",
               "requeueAfterSeconds": 30,
-              "revision": "__TPL__"
+              "revision": "main"
             }
           }
         ],
@@ -147,7 +147,7 @@
           "spec": {
             "destination": {
               "namespace": "{{ .path.basename }}",
-              "server": "__TPL__"
+              "server": "https://kubernetes.default.svc"
             },
             "ignoreDifferences": [
               {
@@ -169,13 +169,13 @@
                   ]
                 },
                 "path": "platform-gitops/helm-charts/tenant",
-                "repoURL": "__TPL__",
-                "targetRevision": "__TPL__"
+                "repoURL": "https://github.com/mctlhq/mctl-gitops.git",
+                "targetRevision": "main"
               },
               {
                 "ref": "values",
-                "repoURL": "__TPL__",
-                "targetRevision": "__TPL__"
+                "repoURL": "https://github.com/mctlhq/mctl-gitops.git",
+                "targetRevision": "main"
               }
             ],
             "syncPolicy": {
