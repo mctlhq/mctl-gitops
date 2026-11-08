@@ -10,11 +10,12 @@
   instead of `json.Marshal(res)`. (depends on 1) — DoD: the stored
   `bridge_commands.result` has no `lease_token` key. The replay and
   `result_conflict` paths are unchanged.
-- [ ] 3. Change `ReadOutcome` to select `result - 'lease_token'`. Append the
-  idempotent historical scrub
-  `UPDATE bridge_commands SET result = result - 'lease_token' WHERE result ? 'lease_token';`
-  to `bridgeSchema`. — DoD: a row seeded with a token-bearing result reads
-  back without it, and the stored row is scrubbed after `NewStore`.
+- [ ] 3. Change `ReadOutcome` to select `result - 'lease_token'` immediately. Add bounded
+  `ScrubLegacyResultBatch(ctx, limit)` under `FOR UPDATE SKIP LOCKED`, short transactions/timeouts,
+  idempotent `result - 'lease_token'` updates, progress/remaining/error metrics and a separate
+  operator-controlled invocation **not** called from `NewStore` or `bridgeSchema`.
+  — DoD: old rows read clean before migration; 100+ legacy rows scrub in restartable bounded batches
+  without stalling startup; zero remaining independently verified before activation.
 - [ ] 4. Extract `expireTx` (scoped or unscoped, `LIMIT`, `FOR UPDATE SKIP LOCKED`,
   `RETURNING old_status`) from `claimTx`. Lazy expiry in `claimTx` uses the
   provider/tenant scope. — DoD: transition `from_status` is the locked prior
@@ -24,10 +25,11 @@
   transition. (depends on 4) — DoD: a reclaim records `leased -> leased` with
   the new epoch, and a first lease records `pending -> leased`.
 - [ ] 6. Add `Store.ExpireDue(ctx, limit)` and `internal/bridge/expiry.go::Expirer`
-  (`RunOnce`, `Run`, default 30s interval and 100 batch, actor
-  `system:expiry-sweep`; logs counts and errors only). Add the additive
-  partial index `bridge_commands_expiry`. (depends on 4) — DoD: unit tests with
-  a fake store, plus the PG tests below.
+  (`RunOnce`, `Run`, 30s interval, 100 batch, finite max batches/tick, actor
+  `system:expiry-sweep`; logs only counts/errors). Emit processed, oldest-overdue age,
+  backlog, error and last-success metrics, with defined alert thresholds and continuation across ticks.
+  Add additive partial index `bridge_commands_expiry`. (depends on 4) — DoD: test >batch backlog,
+  lock skips, concurrent replicas, progress and PG race tests.
 - [ ] 7. Wire the `Expirer` in `cmd/api/main.go`: it starts only when
   `bridgeStore != nil`, independent of `TEMPORAL_ADDRESS`, with an optional
   `MCTL_BRIDGE_EXPIRY_SWEEP_INTERVAL` override. (depends on 6) — DoD: with
@@ -48,13 +50,15 @@ without `TEST_DATABASE_URL`, like the existing tests.
 
 - [ ] T1. (PG) Submit a result, then read `bridge_commands.result` directly
   and through `ReadOutcome`. Neither contains `lease_token` or the `lt_` token
-  string. `result_digest` equals `ParseResult(body).Digest()`.
+  string. `result_digest` equals `ParseResult(body).Digest()`. This does NOT sanitize the plaintext
+  `bridge_commands.lease_token` column; it has an independent activation decision gate.
 - [ ] T2. (PG) Replay after redaction: the same body returns `replayed: true`,
   a changed `completed_at` returns `result_conflict`, and there is exactly one
   outbox row.
-- [ ] T3. (PG) Historical row: write a token-bearing `result` with raw SQL,
-  run the schema again (a new `NewStore`), and assert the key is gone and
-  `ReadOutcome` is clean.
+- [ ] T3. (PG) Historical row: seed token-bearing result, open a new `NewStore` and
+  prove it does not run an unbounded scrub; `ReadOutcome` is redacted immediately.
+  Run bounded `ScrubLegacyResultBatch` repeatedly, asserting batch limits, restartable progress, safe
+  concurrent writes and zero remaining after completion.
 - [ ] T4. (PG) No poller: enqueue for provider `p-idle`, set `expires_at` to
   the past, call `ExpireDue` (no `Claim` at all). Status is `expired`, there is
   one outbox row with digest `expired`, and the transition is
@@ -75,19 +79,27 @@ without `TEST_DATABASE_URL`, like the existing tests.
 - [ ] T8. (PG) Tenant isolation: provider-scoped lazy expiry in `Claim` never
   touches another tenant's due command. The unscoped sweep expires it, with its
   own transition row only.
-- [ ] T9. Unit test: the `Expirer`'s `RunOnce` with a fake store respects the
-  batch and the loop cap. A captured slog JSON handler across `Expirer`,
-  `Dispatcher` and handler failure paths contains no `lt_` substring.
+- [ ] T9. Unit/PG tests: `Expirer.RunOnce` honors batch and loop caps, continues >batch backlog
+  over ticks, reports metrics and alerts on persistent overdue age/error, and progresses around locked rows
+  with concurrent replica workers. Captured slog JSON across `Expirer`, `Dispatcher` and failure paths
+  contains no `lt_` substring.
 - [ ] T10. Unit test: the redacted stored form and `Digest()` stability
   against fixtures (task 1).
 
 ## Rollback
 
 The bridge is dark by default and not enabled in the deployed configuration,
-so the primary rollback is to revert the PR. The only data effect is the
-historical scrub, which removes a secret that must not be restored, and the
-expired/transition rows the sweep wrote. Both are valid states under the old
+so the primary rollback is to revert the PR. The only data effect from separately authorized maintenance is a bounded historical scrub that removes
+secrets which must never be restored. The scrub does not run at startup; any expired/transition rows
+from the sweep are valid terminal records. Both are valid states under the old
 code. The additive partial index can stay or be dropped with
 `DROP INDEX IF EXISTS bridge_commands_expiry`. If the bridge were ever enabled
 and the sweep misbehaved, unsetting `MCTL_BRIDGE_ENABLED` stops it, as
 documented in `docs/bridge.md`.
+
+## AMEND 2026-11-08 owner/security gates
+
+- [ ] Verify legacy scrub does not stall `NewStore` or API hot paths, works in bounded restartable batches, and reaches verified zero JSONB token copies before activation.
+- [ ] Prove >batch backlog, locked rows and multi-replica sweeps make eventual observable progress, not an unsupported one-interval SLA.
+- [ ] Record a separate approved security decision on plaintext live `lease_token` and backup retention before any provider credential issuance.
+- [ ] Re-review the new proposal digest; fresh independent Claude and agy review for implementation PR; no autonomous merge with #240/#1040 reviewer-gate defects unresolved.
