@@ -25,6 +25,15 @@ CI and permission surface without adding runtime isolation. This proposal is
 documentation only. Runtime code, a new repository and GitOps deployment each
 need their own later approval.
 
+## AMEND 2026-11-08 — multi-tenant and cross-namespace boundary (normative)
+
+The owner selected **multi-tenant from first usable release** at `https://glovo.mctl.ai/mcp`, a non-Telegram MCP surface. The option-C repository promotion trigger (a second surface/credential trust boundary) MUST be re-evaluated; `REUSE_EXISTING` remains only a **provisional fake-adapter recommendation**, not an approved repository decision on .github#324.
+
+- Control work runs in Temporal namespace `mctl-assistants`; lower-trust Glovo provider work runs in a **different** Temporal namespace `mctl-assistants-provider-glovo` and a separate K8s workload namespace. Stock Temporal authorizer enforces roles per namespace, **not per task queue**. Provider has no identity/role on control or `mctl-agents`. MCTL user/tenant/order authorization belongs to mctl-api.
+- Ordinary Temporal Activities cannot jump namespaces. The report MUST select or explicitly BLOCK an inter-namespace bridge: Temporal Nexus (only after proving running OSS server/SDK support, endpoint permissions and negative calls), or a tightly authenticated mctl-api command/results bridge. Specify idempotency, dedupe, timeout, retries, cancellation, token/secret handling, per-user consent and provider->control denial tests. Neither transport can weaken provider least privilege.
+- The merged mctl-api contract PR #950 (#948, 2026-11-08) contains **contracts only**. It does NOT implement Glovo connection ownership, tenant selection, per-order index or ActionApprovalRequest integration; create separately approved mctl-api follow-up slices. The public MCP facade cannot fall back to a Telegram OAuth principal or deployment-wide `labs`/`mctl` tenant.
+- **This proposal remains DOCS ONLY.** No new repo, image, runtime, Temporal namespace, Glovo API access, GitOps, DNS or deployment is authorized by its approval.
+
 ## User stories
 
 - AS the platform owner I WANT one evidence-backed recommendation between A, B and C
@@ -85,10 +94,7 @@ need their own later approval.
 
 ## Open questions
 
-- mctl-api#948 (AutomationDefinition v1 contract) is observed in
-  `agents-state/mctl-api/proposals/issue-948-.../.status.yaml` as `status: proposed`,
-  not accepted as the issue states. The report records the observed status and treats
-  the automation contract as not yet settled.
+- mctl-api#948 was observed as `proposed` in the original 2026-11-07 investigator snapshot; PR #950 merged on 2026-11-08 as a **contract-only** change. The report records dated observations, and requires a new issue for the Glovo-specific APIs.
 - #1184 is `status: implemented` with PR #1187, but the clone's `main` (e3ff43c) has
   none of its files (`docs/reports/glovo-assistant-spike.md`,
   `docs/adr/0009-assistant-temporal-tenancy.md`, `test/glovo-poc/`). Whether PR #1187
