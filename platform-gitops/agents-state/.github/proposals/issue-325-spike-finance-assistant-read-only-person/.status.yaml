@@ -1,5 +1,5 @@
-status: review-stuck
-updated_at: '2026-11-08T15:09:34Z'
+status: merged
+updated_at: '2026-11-08T16:19:27Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-d0a0352945d301c7
@@ -47,10 +47,6 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
-review_attempts: 1
-merge_owner: human-codeowner
-refusals: 3
-refusals_head: 6d3d83cf8c12284cabc1af6515cadaad391c2499
 notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
   was never charged — the proposal is not at fault; a human must reconcile the review
   with the operator decision. Last reason: Finding 1 already addressed: baseline/rules-digest.json
@@ -58,3 +54,9 @@ notes: 'The implementer declined to act 3 time(s) and the findings still stand. 
   python3 -I docs/spikes/finance-assistant/model.py yields zero git diff, and python3
   -I -m unittest discover -s docs/spikes/finance-assistant/tests passes 18/18 including
   test_baseline_digest_is_committed_and_reproducible.'
+github:
+  state: merged
+  head_sha: 6d3d83cf8c12284cabc1af6515cadaad391c2499
+  observed_at: '2026-11-08T16:19:27Z'
+merged_at: '2026-11-08T16:19:27Z'
+merge_commit: 5b3fb9ca9f85a2b3344a4755990f10712ca8b54b
