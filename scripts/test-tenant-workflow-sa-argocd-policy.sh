@@ -174,6 +174,9 @@ owner karabu-web apps
 owner labs-web apps
 owner karabu-outside-apps apps
 owner tenant-karabu tenants
+for a in karabu-tp-web karabu-tp-labs karabu-tp-bare karabu-tp-longer labs-tp-web; do
+  owner "$a" apps
+done
 
 # Live Applications carry a status of up to ~700 KB (resources, history,
 # operationState). Application has no status subresource, so every refresh
@@ -274,6 +277,15 @@ admit "retire-service: delete own Application" \
 admit "retire-service: clear own Application's finalizers" \
   patch application karabu-web --type merge -p '{"metadata":{"finalizers":null}}'
 
+# The per-team project: an Application of this tenant in project tenant-karabu
+# is owned exactly like one in project apps.
+admit "retire-service: delete own Application in project tenant-karabu" \
+  delete application karabu-tp-web
+admit "smoke-test: refresh own Application in project tenant-karabu" \
+  annotate application karabu-tp-web argocd.argoproj.io/refresh=hard --overwrite
+admit "retire-service: clear finalizers of own Application in project tenant-karabu" \
+  patch application karabu-tp-web --type merge -p '{"metadata":{"finalizers":null}}'
+
 # Creates. The Role grants no create, and the API server checks create for a
 # server-side apply that would create the object, so RBAC refuses it today.
 cat > "$WORK/new-app.yaml" <<'YAML'
@@ -308,6 +320,22 @@ deny "delete shared-pg" "may only delete Applications labelled" delete applicati
 deny "delete another tenant's app" "may only delete Applications labelled" delete application labs-web
 deny "delete tenant-karabu" "may only delete Applications labelled" delete application tenant-karabu
 deny "delete team=karabu outside project apps" "may only delete Applications labelled" delete application karabu-outside-apps
+
+# The accepted projects are exactly apps and tenant-<own team>.
+deny "delete team=karabu in the project of another tenant" "may only delete Applications labelled" \
+  delete application karabu-tp-labs
+deny "delete team=karabu in project tenant- (bare prefix)" "may only delete Applications labelled" \
+  delete application karabu-tp-bare
+deny "delete team=karabu in project tenant-karabu-x" "may only delete Applications labelled" \
+  delete application karabu-tp-longer
+deny "delete another tenant's app in its own tenant project" "may only delete Applications labelled" \
+  delete application labs-tp-web
+deny "clear finalizers of team=karabu in the project of another tenant" \
+  "may only remove finalizers, and only from their own" \
+  patch application karabu-tp-labs --type merge -p '{"metadata":{"finalizers":null}}'
+deny "refresh team=karabu in the project of another tenant" \
+  "and only on their own Applications and shared-pg" \
+  annotate application karabu-tp-labs argocd.argoproj.io/refresh=hard --overwrite
 
 # Updates beyond the refresh annotations.
 deny "retarget own Application's repoURL" "may not change an Application's spec" \
@@ -411,6 +439,10 @@ admit "delete-tenant-safe: delete a service app the apps ApplicationSet generate
   delete application karabu-web
 admit "delete-tenant-safe: delete another tenant's generated service app" \
   delete application labs-web
+admit "delete-tenant-safe: delete a generated service app in project tenant-karabu" \
+  delete application karabu-tp-web
+admit "delete-tenant-safe: delete a generated service app in project tenant-labs" \
+  delete application labs-tp-web
 admit "delete-tenant: delete tenant-karabu" \
   delete application tenant-karabu
 admit "delete-tenant: delete Role argo-workflow-argocd-karabu" \
@@ -433,6 +465,12 @@ deny "platform: delete shared-pg"           "$DEL_APP" delete application shared
 deny "platform: delete temporal (project platform)" "$DEL_APP" delete application temporal
 deny "platform: delete team-labelled app outside project apps" "$DEL_APP" \
   delete application karabu-outside-apps
+deny "platform: delete a service app in the project of another tenant" "$DEL_APP" \
+  delete application karabu-tp-labs
+deny "platform: delete a service app in project tenant- (bare prefix)" "$DEL_APP" \
+  delete application karabu-tp-bare
+deny "platform: delete a service app in project tenant-karabu-x" "$DEL_APP" \
+  delete application karabu-tp-longer
 deny "platform: delete a service-shaped app nothing generated" "$DEL_APP" \
   delete application karabu-handmade
 deny "platform: delete a tenant-shaped app nothing generated" "$DEL_APP" \
