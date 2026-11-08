@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-11-08T14:54:46Z'
+status: review-stuck
+updated_at: '2026-11-08T15:09:34Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-d0a0352945d301c7
@@ -49,9 +49,12 @@ completion:
   primary_observed: true
 review_attempts: 1
 merge_owner: human-codeowner
-refusals: 2
+refusals: 3
 refusals_head: 6d3d83cf8c12284cabc1af6515cadaad391c2499
-notes: 'implementer declined to act: Reviewer text 1: baseline/rules-digest.json was
-  already regenerated in commit 6d3d83c (contains currency keys). Regenerating via
-  model.py yields a byte-identical file (git status clean) and all 18 tests in docs/spikes/finance-assistant/tests
-  pass.'
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: Finding 1 already addressed: baseline/rules-digest.json
+  was regenerated in commit 6d3d83c (contains currency key, 6 occurrences). Re-running
+  python3 -I docs/spikes/finance-assistant/model.py yields zero git diff, and python3
+  -I -m unittest discover -s docs/spikes/finance-assistant/tests passes 18/18 including
+  test_baseline_digest_is_committed_and_reproducible.'
