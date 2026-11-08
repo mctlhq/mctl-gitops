@@ -530,6 +530,10 @@ jobs:
         # ApplicationSet requires a real change of that set in
         # tests/fixtures/generated-appsets.golden.json in the same diff (the
         # base is rendered from the full-history checkout with git archive).
+        # The G6 template-text scan is a best-effort heuristic with documented
+        # unresolved limits (see the test module docstring); it is not a proof of
+        # coverage of Helm template conditions. The render-based checks, the matrix
+        # and review of the bootstrap chart are the real controls.
         # A full run takes 2 to 3 minutes (134 to 174 s measured) and prints its elapsed time; the
         # timeout leaves room for a slow runner.
         timeout-minutes: 20
