@@ -12,12 +12,33 @@ text. Helm itself expands `include`, `tpl`, `.Files.Get`, `toYaml | nindent`,
 conditionals, ranges and trim markers, so a new ApplicationSet cannot hide
 behind any of them. The output is parsed with yaml.safe_load_all through a
 loader that rejects duplicate mapping keys, and documents are selected by
-their PARSED `kind`. Any of these is an explicit failure (exit 2), never a
+their PARSED `kind`; a `kind: List` (any kind ending in List) is flattened to its
+items, recursively, the way Argo CD splits manifests, and a List whose items are
+not objects is an error. Any of these is an explicit failure (exit 2), never a
 skip, an empty set or "nothing found": helm missing, a timeout, a non-zero
 exit, an `Error:` on stderr, empty output, output that is not YAML, a document
 that is not a mapping with apiVersion and kind, a render with no
 ApplicationSet, an ApplicationSet / Application / AppProject without a string
 name.
+
+RENDER INPUTS. Argo CD renders root-app as `helm template root-app` into namespace
+argocd with the cluster's API versions in .Capabilities, so the guard does too
+(RELEASE, NAMESPACE, API_VERSIONS, plus every literal that a template passes to
+`.Capabilities.APIVersions.Has`; any other use of APIVersions is an error). A gate
+on `.Release.Name`, `.Release.Namespace`, `.Capabilities.APIVersions` or
+`.Capabilities.KubeVersion` is exposed by extra renders: release `root` without a
+namespace or API versions, another release name and namespace, and kube versions
+below and above any plausible gate (KUBE_VERSIONS).
+
+G6. Declared values. The matrix flips what values.yaml declares and nothing else, so
+every `.Values.a.b` path that a template reads must be declared in values.yaml
+(below an empty mapping or a scalar it is free-form and counts as declared), and
+`.Values` used as a whole is a finding. A gate on a key nobody declared is red.
+G7. Finalizers and projects. metadata.finalizers of EVERY Application and AppProject
+(hand-written ones included) in every render, and the complete spec of the `apps`
+and `platform` AppProjects, equal the `finalizers` and `projects` tables of the
+golden; an object not listed there must have no finalizer. Other AppProject specs
+are not pinned, only checked by G4.
 
 RENDER MATRIX. A hidden ApplicationSet may sit behind a values flag that is off
 by default, so the chart is rendered several times and every guard runs on
@@ -25,11 +46,17 @@ every render: the default values (as CI does), the two example overlays in
 tests/fixtures (eval candidates, obi spike), both overlays together, each
 boolean in values.yaml flipped on its own (booleans below a `values:` key are
 settings of a downstream chart and are not gates here), every boolean true and
-every boolean false. The number of renders is capped (MAX_RENDERS); needing more
-is an error that says so, never a silent truncation. The run prints what was
+every boolean false. The number of renders is capped (MAX_RENDERS = 64, 39 used: each
+boolean added to values.yaml costs one render here and in every mutation pass, and
+about 25 more would hit the cap, which fails an unrelated values edit on purpose
+rather than truncating); needing more is an error that says so. Budget: a full run
+takes about 2 to 3 minutes locally (the mutation pass re-renders the matrix per
+mutant; the elapsed time is printed) and the CI step has a 20 minute timeout, so
+a timeout is a CI setup problem, not a pass or a silent skip. The run prints what was
 covered and what was not. NOT covered: gates that are not booleans (a string or
 number compared in an `if`, a list that is empty or not), combinations of flags
-beyond the ones above, values that Argo CD injects at sync time, and the
+beyond the ones above, release names, namespaces and cluster versions other than
+the variants above, values that Argo CD injects at sync time, and the
 Applications that the ApplicationSets generate at run time (see G2).
 
 G1. Finalizer. The ApplicationSet controller (Argo CD v3.3.8,
@@ -123,13 +150,20 @@ template finalizer, a templatePatch, a new ApplicationSet through
 `toYaml | nindent`, through `.Files.Get`, through `include` of a `.tpl`
 helper, behind `{{ if }}` on a non-default flag, through indented emitters with
 trim markers, an Application whose name collides with a generated one, a
-duplicate generated name, swapped repoURL / revision, a narrowed project
-whitelist; each must be red, and the unmutated copy must be green. A fake helm
+duplicate generated name, swapped repoURL / revision, a narrowed or widened
+project, a changed finalizer, a gate on the release name, namespace, API version or
+kube version, an ApplicationSet inside a List, a gate on an undeclared value; each
+must be red, and the unmutated copy must be green. The mutations find their place in
+the chart with whitespace- and filter-tolerant patterns (`_edit_re`), so an edit that
+changes only how a line is spelled does not break the self-test; a change of what
+those lines MEAN makes the pattern miss and fails with exit 2 naming the file, and
+the pattern is then updated together with that change. A fake helm
 that exits non-zero, prints nothing, hangs past the timeout or prints garbage
 must make the guard fail, and so must a PATH without helm.
 
 KNOWN LIMITS, stated plainly: the guard sees what `helm template` renders for
-the matrix above and nothing else. A gate that is not a boolean, a combination
+the matrix above and nothing else. A gate that is not a boolean (or a string or
+number compared in an `if` on a declared value), a combination
 of flags outside the matrix, a value that only Argo CD supplies, and anything a
 generated Application deploys at run time are invisible. The local helm and the
 CI helm should be the same major version (CI pins v3.16.4); the run prints the
@@ -158,6 +192,7 @@ import sys
 import tarfile
 import tempfile
 import textwrap
+import time
 import typing
 from pathlib import Path
 
@@ -172,7 +207,15 @@ FIXTURE_OVERLAYS = ("tests/fixtures/otel-eval-candidates.example-values.yaml",
                     "tests/fixtures/obi-spike.example-values.yaml")
 HELM_TIMEOUT = 120.0          # seconds per `helm template`
 MAX_RENDERS = 64              # cap of the render matrix; more is an error, not a truncation
-RELEASE = "root"
+# How Argo CD renders root-app: `helm template root-app` into namespace argocd, with the cluster's
+# API versions in .Capabilities. The release name, namespace and capabilities are inputs a template
+# may gate on, so the guard renders with the real ones and the matrix also varies them.
+RELEASE = "root-app"
+NAMESPACE = "argocd"
+API_VERSIONS = ("argoproj.io/v1alpha1", "apps/v1", "batch/v1", "networking.k8s.io/v1",
+                "external-secrets.io/v1beta1", "monitoring.coreos.com/v1",
+                "operator.victoriametrics.com/v1beta1", "traefik.io/v1alpha1")
+KUBE_VERSIONS = ("v1.25.0", "v1.35.0")   # one below and one above any plausible semverCompare gate
 
 # What this script models of an ApplicationSet. Anything else is a finding.
 SPEC_KEYS = {"goTemplate", "goTemplateOptions", "syncPolicy", "generators", "template"}
@@ -267,6 +310,29 @@ def _helm_env() -> dict[str, str]:
     return env
 
 
+def _flatten(doc: dict, where: str, out: list[dict], depth: int = 0) -> None:
+    """Append `doc` to out; a `*List` object (v1 List, any kind ending in List) is replaced by its items,
+    recursively, the way Argo CD splits manifests: an object inside `items:` is a real object. A list whose
+    items are not Kubernetes objects is an error, never an empty set."""
+    kind = doc["kind"]
+    if kind.endswith("List"):
+        items = doc.get("items")
+        if depth > 8 or not isinstance(items, list):
+            raise Unreadable(f"{where}: a {kind} without a usable `items` list")
+        for j, item in enumerate(items):
+            if not isinstance(item, dict) or not isinstance(item.get("kind"), str) \
+                    or not isinstance(item.get("apiVersion"), str):
+                raise Unreadable(f"{where}: item {j} of a {kind} is not a Kubernetes object "
+                                 "(a mapping with a string apiVersion and kind)")
+            _flatten(item, f"{where} item {j}", out, depth + 1)
+        return
+    if kind in ("ApplicationSet", "Application", "AppProject"):
+        name = (doc.get("metadata") or {}).get("name") if isinstance(doc.get("metadata"), dict) else None
+        if not isinstance(name, str) or not name:
+            raise Unreadable(f"{where}: a {kind} without a string metadata.name")
+    out.append(doc)
+
+
 def parse_rendered(text: str, label: str) -> list[dict]:
     """Parse helm output into Kubernetes objects. Anything that is not a mapping
     with a string apiVersion and kind is an error; only empty documents are dropped."""
@@ -282,19 +348,35 @@ def parse_rendered(text: str, label: str) -> list[dict]:
                 or not isinstance(doc.get("apiVersion"), str):
             raise Unreadable(f"{label}: document {i} of the helm output is not a Kubernetes object "
                              "(a mapping with a string apiVersion and kind)")
-        if doc["kind"] in ("ApplicationSet", "Application", "AppProject"):
-            name = (doc.get("metadata") or {}).get("name") if isinstance(doc.get("metadata"), dict) else None
-            if not isinstance(name, str) or not name:
-                raise Unreadable(f"{label}: a {doc['kind']} without a string metadata.name")
-        docs.append(doc)
+        _flatten(doc, f"{label}: document {i}", docs)
     if not docs:
         raise Unreadable(f"{label}: helm output holds no document")
     return docs
 
 
+class RenderEnv(typing.NamedTuple):
+    """What `helm template` is told besides the values: release name, namespace, the API versions of
+    .Capabilities and the Kubernetes version."""
+    release: str = RELEASE
+    namespace: str | None = NAMESPACE
+    api_versions: tuple = API_VERSIONS
+    kube_version: str | None = None
+
+
+ARGO_ENV = RenderEnv()
+PLAIN_ENV = RenderEnv("root", None, (), None)    # for charts that are not root-app (service charts)
+
+
 def helm_render(chart: Path, value_files: list[Path], helm: str, timeout: float, label: str,
-                release: str = RELEASE) -> list[dict]:
-    cmd = [helm, "template", release, str(chart)]
+                env: RenderEnv | None = None) -> list[dict]:
+    env = env or ARGO_ENV
+    cmd = [helm, "template", env.release, str(chart)]
+    if env.namespace:
+        cmd += ["--namespace", env.namespace]
+    if env.kube_version:
+        cmd += ["--kube-version", env.kube_version]
+    for api in env.api_versions:
+        cmd += ["--api-versions", api]
     for f in value_files:
         cmd += ["-f", str(f)]
     try:
@@ -357,8 +439,68 @@ def _dotted(path: tuple) -> str:
     return ".".join(f"[{p}]" if isinstance(p, int) else str(p) for p in path).replace(".[", "[")
 
 
-def plan_matrix(chart: Path, root: Path, tmp: Path) -> tuple[list[tuple[str, list[Path]]], list[str]]:
+_ACTION = re.compile(r"\{\{-?(.*?)-?\}\}", re.S)
+_RAW_ACTION = re.compile(r"\{\{-?\s*`.*?`\s*-?\}\}", re.S)
+
+
+def template_actions(chart: Path) -> list[tuple[Path, str]]:
+    """The Go template actions of every template file of the chart, minus comments, raw (backtick) strings
+    and string literals; a file that cannot be read is Unreadable."""
+    out = []
+    for f in sorted((chart / "templates").rglob("*")):
+        if not f.is_file():
+            continue
+        text = _RAW_ACTION.sub("", read_text(f))
+        for m in _ACTION.finditer(text):
+            a = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
+            a = re.sub(r"`[^`]*`", "``", a)
+            out.append((f, a))
+    return out
+
+
+def chart_api_versions(chart: Path) -> tuple[str, ...]:
+    """API versions the templates ask `.Capabilities.APIVersions.Has` about, so that the render that models
+    the cluster answers yes to each. A use of APIVersions that is not a plain string literal is an error."""
+    found = []
+    for f, a in template_actions(chart):
+        literals = re.findall(r'APIVersions\.Has\s+"([^"]+)"', a)
+        if len(re.findall(r"APIVersions", a)) != len(literals):
+            raise Unreadable(f"{f}: .Capabilities.APIVersions is used in a way other than `Has \"literal\"`; "
+                             "the render matrix cannot model it")
+        found += literals
+    return tuple(sorted(set(found) - set(API_VERSIONS)))
+
+
+def values_findings(chart: Path) -> list[str]:
+    """Every `.Values.a.b` path a template reads must be declared in values.yaml (the render matrix flips
+    what values.yaml declares and nothing else, so a gate on an undeclared key would never be switched on).
+    A path below an empty mapping or a scalar is a free-form value and counts as declared. A use of `.Values`
+    as a whole (`$v := .Values`, `index .Values "k"`, `toYaml .Values`) cannot be enumerated and is a finding."""
+    values = _load_values(chart / "values.yaml")
+    problems = []
+    for f, a in template_actions(chart):
+        rel = f.relative_to(chart)
+        for m in re.finditer(r"\.Values\b((?:\.[A-Za-z_][A-Za-z0-9_-]*)*)", a):
+            keys = [k for k in m.group(1).split(".") if k]
+            if not keys:
+                problems.append(f"{rel}: `.Values` is used as a whole in `{a.strip()[:60]}`: the keys it reaches "
+                                "cannot be enumerated, name each one as `.Values.key`")
+                continue
+            node = values
+            for k in keys:
+                if not isinstance(node, dict) or not node:
+                    break                      # free-form map or scalar below here
+                if k not in node:
+                    problems.append(f"{rel}: `.Values.{'.'.join(keys)}` is read by a template but `{k}` is not "
+                                    "declared in values.yaml, so no render of the matrix sets it")
+                    break
+                node = node[k]
+    return sorted(set(problems))
+
+
+def plan_matrix(chart: Path, root: Path, tmp: Path) -> tuple[list[tuple[str, list[Path], RenderEnv]], list[str]]:
     """The renders to perform, and a log of what they cover."""
+    env = ARGO_ENV._replace(api_versions=API_VERSIONS + chart_api_versions(chart))
     base = chart / "values.yaml"
     values = _load_values(base)
     overlays = []
@@ -368,12 +510,17 @@ def plan_matrix(chart: Path, root: Path, tmp: Path) -> tuple[list[tuple[str, lis
             raise Unreadable(f"render matrix overlay {rel} is missing")
         overlays.append(p)
     flags = bool_flags(values)
-    plan: list[tuple[str, list[Path]]] = [
-        ("default values", [base]),
-        ("overlay " + FIXTURE_OVERLAYS[0].rsplit("/", 1)[-1], [base, overlays[0]]),
-        ("overlay " + FIXTURE_OVERLAYS[1].rsplit("/", 1)[-1], [base, overlays[1]]),
-        ("both overlays", [base, *overlays]),
-    ]
+    plan: list[tuple[str, list[Path], RenderEnv]] = [
+        ("default values", [base], env),
+        ("overlay " + FIXTURE_OVERLAYS[0].rsplit("/", 1)[-1], [base, overlays[0]], env),
+        ("overlay " + FIXTURE_OVERLAYS[1].rsplit("/", 1)[-1], [base, overlays[1]], env),
+        ("both overlays", [base, *overlays], env),
+        # Release, namespace and capabilities are template inputs too: a gate on any of them must not
+        # hide an ApplicationSet from every render.
+        ("release root, no namespace, no API versions", [base], PLAIN_ENV),
+        ("release other-release, namespace other-ns", [base],
+         env._replace(release="other-release", namespace="other-ns")),
+    ] + [(f"kube-version {v}", [base], env._replace(kube_version=v)) for v in KUBE_VERSIONS]
 
     def dump(name: str, data: dict) -> Path:
         p = tmp / name
@@ -381,19 +528,22 @@ def plan_matrix(chart: Path, root: Path, tmp: Path) -> tuple[list[tuple[str, lis
         return p
 
     for i, path in enumerate(flags):
-        plan.append((f"flip {_dotted(path)}", [dump(f"flip{i}.yaml", _set_path(values, path, lambda b: not b))]))
+        plan.append((f"flip {_dotted(path)}", [dump(f"flip{i}.yaml", _set_path(values, path, lambda b: not b))], env))
     for word, state in (("true", True), ("false", False)):
         data = values
         for path in flags:
             data = _set_path(data, path, lambda b, s=state: s)
-        plan.append((f"every boolean {word}", [dump(f"all-{word}.yaml", data)]))
+        plan.append((f"every boolean {word}", [dump(f"all-{word}.yaml", data)], env))
     if len(plan) > MAX_RENDERS:
         raise Unreadable(f"the render matrix needs {len(plan)} renders, the cap is {MAX_RENDERS}: raise "
                          "MAX_RENDERS or prune the flags on purpose, the matrix is never truncated silently")
-    log = [f"render matrix: {len(plan)} renders = default, 2 overlays, both overlays, {len(flags)} single "
-           "boolean flips, every boolean true, every boolean false",
+    log = [f"render matrix: {len(plan)} renders (cap {MAX_RENDERS}) = default, 2 overlays, both overlays, "
+           f"{len(KUBE_VERSIONS) + 2} release/namespace/capability variants, {len(flags)} single "
+           "boolean flips, every boolean true, every boolean false; the main renders use release "
+           f"{env.release}, namespace {env.namespace} and {len(env.api_versions)} API versions",
            "render matrix flags: " + ", ".join(_dotted(p) for p in flags),
-           "render matrix NOT covered: non-boolean gates, other flag combinations, values injected by "
+           "render matrix NOT covered: non-boolean gates on declared values, other flag combinations, other "
+           "release names, namespaces and cluster versions than the variants above, values injected by "
            "Argo CD at sync time, Applications generated at run time"]
     return plan, log
 
@@ -402,12 +552,12 @@ def render_matrix(chart: Path, root: Path, helm: str, timeout: float = HELM_TIME
     with tempfile.TemporaryDirectory() as tmp:
         plan, log = plan_matrix(chart, root, Path(tmp))
         # The default render goes first and alone: when it cannot be had there is nothing to compare with.
-        first = Render(plan[0][0], helm_render(chart, plan[0][1], helm, timeout, plan[0][0]))
+        first = Render(plan[0][0], helm_render(chart, plan[0][1], helm, timeout, plan[0][0], plan[0][2]))
         renders = [first]
         errors = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as pool:
-            futures = [pool.submit(helm_render, chart, files, helm, timeout, label) for label, files in plan[1:]]
-            for (label, _), fut in zip(plan[1:], futures):
+            futures = [pool.submit(helm_render, chart, files, helm, timeout, label, e) for label, files, e in plan[1:]]
+            for (label, _, _), fut in zip(plan[1:], futures):
                 try:
                     renders.append(Render(label, fut.result()))
                 except Unreadable as exc:
@@ -622,9 +772,65 @@ def golden_sets(golden: object, where: str) -> dict[str, dict]:
     sets = golden.get("sets") if isinstance(golden, dict) else None
     if not isinstance(sets, dict) or sorted(sets) != sorted(EXPECTED_CASCADE):
         raise Unreadable(f"{where}: expected a 'sets' object with exactly {sorted(EXPECTED_CASCADE)}")
-    if set(golden) - {"_note", "sets"}:
-        raise Unreadable(f"{where}: unknown top-level key {sorted(set(golden) - {'_note', 'sets'})}")
+    if set(golden) - GOLDEN_KEYS:
+        raise Unreadable(f"{where}: unknown top-level key {sorted(set(golden) - GOLDEN_KEYS)}")
     return sets
+
+
+GOLDEN_KEYS = {"_note", "sets", "projects", "finalizers"}
+PINNED_PROJECTS = ("apps", "platform")      # AppProjects whose complete spec the golden holds
+
+
+def load_pins(root: Path) -> dict:
+    """The `projects` and `finalizers` tables of the golden. A golden without them is Unreadable."""
+    path = root / GOLDEN
+    try:
+        golden = json.loads(read_text(path))
+    except ValueError as exc:
+        raise Unreadable(f"{path}: {exc}") from exc
+    golden_sets(golden, str(path))
+    projects, fins = golden.get("projects"), golden.get("finalizers")
+    if not isinstance(projects, dict) or sorted(projects) != sorted(PINNED_PROJECTS):
+        raise Unreadable(f"{path}: expected a 'projects' object with exactly {sorted(PINNED_PROJECTS)}")
+    if not isinstance(fins, dict) or not all(
+            isinstance(k, str) and isinstance(v, list) and v and all(isinstance(x, str) for x in v)
+            for k, v in fins.items()):
+        raise Unreadable(f"{path}: 'finalizers' must map Kind/name to a non-empty list of strings")
+    return {"projects": projects, "finalizers": fins}
+
+
+def object_key(doc: dict) -> str:
+    return f"{doc['kind']}/{(doc.get('metadata') or {}).get('name')}"
+
+
+def pin_findings(renders: list[Render], pins: dict) -> list[str]:
+    """Finalizers of every Application and AppProject, and the complete spec of the pinned AppProjects,
+    in every render. The ApplicationSet guard (G1) covers generated Applications; these cover the
+    objects Argo CD or Helm applies as they are. Anything not in the golden is expected to have none."""
+    problems = []
+    for r in renders:
+        tag = "" if r is renders[0] else f" (render: {r.label})"
+        for kind in ("Application", "AppProject"):
+            for name, doc in sorted(named(r.docs, kind, r.label).items()):
+                key = f"{kind}/{name}"
+                fins = (doc.get("metadata") or {}).get("finalizers", [])
+                want = pins["finalizers"].get(key, [])
+                if not isinstance(fins, list) or fins != want:
+                    problems.append(f"{key}: metadata.finalizers is {fins!r}, the golden says {want!r}{tag}; "
+                                    f"an intended change edits {GOLDEN} in the same diff")
+        projects = named(r.docs, "AppProject", r.label)
+        for name in PINNED_PROJECTS:
+            if name not in projects:
+                problems.append(f"AppProject {name} is pinned in {GOLDEN} but is not rendered{tag}")
+                continue
+            live = json.loads(json.dumps(projects[name].get("spec") or {}))
+            for d in deep_diff(live, pins["projects"][name]):
+                problems.append(f"AppProject {name}{tag}: {d}; an intended change edits {GOLDEN} in the same diff")
+    rendered = {object_key(d) for r in renders for kind in ("Application", "AppProject")
+                for d in docs_of_kind(r.docs, kind)}
+    for key in sorted(set(pins["finalizers"]) - rendered):
+        problems.append(f"{key} has finalizers pinned in {GOLDEN} but is not rendered by any render")
+    return sorted(set(problems))
 
 
 def golden_findings(appsets: dict[str, dict], golden: dict[str, dict]) -> list[str]:
@@ -1277,7 +1483,7 @@ def _service_resources_cached(root: str, chart_rel: str, dirs: tuple[str, ...], 
         vals = Path(root) / d / "values.yaml"
         if not vals.is_file():
             raise Unreadable(f"{d}: no values.yaml to render the service chart with")
-        docs = helm_render(chart, [vals], helm, timeout, f"service {d}")
+        docs = helm_render(chart, [vals], helm, timeout, f"service {d}", PLAIN_ENV)
         team = Path(d).parts[2] if len(Path(d).parts) > 2 else ""
         out = []
         for doc in docs:
@@ -1348,9 +1554,11 @@ class Analysis(typing.NamedTuple):
     groups: dict
 
 
-def analyze(chart: Path, root: Path, helm: str, timeout: float = HELM_TIMEOUT, golden: dict | None = None) -> Analysis:
+def analyze(chart: Path, root: Path, helm: str, timeout: float = HELM_TIMEOUT, golden: dict | None = None,
+            pins: dict | None = None) -> Analysis:
     """Every guard on the render matrix of `chart`. `root` is the tree that holds the
     service directories, the overlays and the golden."""
+    values_problems = values_findings(chart)
     renders, log = render_matrix(chart, root, helm, timeout)
     default_sets = appsets_of(renders[0])
     names = generated_names(root, default_sets)
@@ -1359,6 +1567,8 @@ def analyze(chart: Path, root: Path, helm: str, timeout: float = HELM_TIMEOUT, g
         "G5": golden_findings(default_sets, golden if golden is not None else load_golden(root)),
         "G2": name_findings(names, handwritten_names(renders)),
         "G4": cascade_repo_findings(root, renders, helm, timeout),
+        "G6": values_problems,
+        "G7": pin_findings(renders, pins if pins is not None else load_pins(root)),
     }
     findings = sorted({f for fs in groups.values() for f in fs})
     return Analysis(findings, renders, log, names, groups)
@@ -1391,7 +1601,10 @@ def repo_checks(root: Path, helm: str) -> Analysis:
             ("G5", "G5 the rendered apps and tenants ApplicationSets match the pinned golden"),
             ("G2", "G2 generated Application names are distinct and not those of any rendered Application"),
             ("G4", "G4 every Application's project exists and permits it, and the apps project cascades "
-                   "every object of the service charts")):
+                   "every object of the service charts"),
+            ("G6", "G6 every .Values path a template reads is declared in values.yaml (the matrix can switch it)"),
+            ("G7", "G7 finalizers of every Application and AppProject, and the apps and platform AppProject "
+                   "specs, match the golden, in every render")):
         p = a.groups[group]
         check(title, not p, "; ".join(p))
     p = retire_findings(retire_source(root))
@@ -1546,11 +1759,17 @@ def selftests(root: Path, helm: str, analysis: Analysis) -> None:
         _git(t, "add", "-A")
         _git(t, "commit", "-q", "-m", "base")
 
-        def edit(file: str, old: str, new: str) -> None:
-            text = (t / file).read_text()
-            if text.count(old) != 1:
-                raise Unreadable(f"diff-guard fixture: anchor {old!r} found {text.count(old)} times in {file}")
-            (t / file).write_text(text.replace(old, new, 1))
+        def ere(file: str, pattern: str, repl) -> None:
+            _edit_re(t / file, pattern, repl)
+
+        def limit_of(file: str) -> str:
+            m = re.search(r"^[ \t]*limit:[ \t]*(\d+)", (t / file).read_text(), re.M)
+            if not m:
+                raise Unreadable(f"diff-guard fixture: no `limit:` in {file}")
+            return m.group(1)
+
+        def bump_limit(file: str) -> None:
+            ere(file, r"^([ \t]*limit:[ \t]*)(\d+)", lambda m: m.group(1) + str(int(m.group(2)) + 1))
 
         def regolden(whitespace_only: bool = False) -> None:
             """Rewrite the golden: honestly from the render, or only cosmetically."""
@@ -1573,24 +1792,25 @@ def selftests(root: Path, helm: str, analysis: Analysis) -> None:
 
         for f in (TENANTS_APPSET, APPS_APPSET):
             who = "tenants" if f == TENANTS_APPSET else "apps"
-            old = "          limit: 3\n" if f == TENANTS_APPSET else "          limit: 5\n"
-            new = "          limit: 4\n" if f == TENANTS_APPSET else "          limit: 6\n"
-            scenario(f"{who}-bare", lambda: edit(f, old, new), 1,
+            scenario(f"{who}-bare", lambda f=f: bump_limit(f), 1,
                      f"a pinned change to the {who} file without any golden edit")
-            scenario(f"{who}-noop", lambda: (edit(f, old, new), regolden(whitespace_only=True)), 1,
+            scenario(f"{who}-noop", lambda f=f: (bump_limit(f), regolden(whitespace_only=True)), 1,
                      f"a pinned change to the {who} file with a whitespace and _note edit of the golden")
-            scenario(f"{who}-honest", lambda: (edit(f, old, new), regolden()), 0,
+            scenario(f"{who}-honest", lambda f=f: (bump_limit(f), regolden()), 0,
                      f"a pinned change to the {who} file with the golden regenerated from it")
             scenario(f"{who}-wrong",
-                     lambda: (edit(f, old, new), regolden(),
-                              edit(str(GOLDEN), '"limit": ' + new.split()[1], '"limit": 9')),
+                     lambda f=f: (bump_limit(f), regolden(),
+                                  ere(str(GOLDEN), r'"limit": ' + limit_of(f) + r"\b", '"limit": 99')),
                      1, f"a pinned change to the {who} file with a golden that says something else")
-        scenario("values-swap", lambda: edit(str(CHART / "values.yaml"), "targetRevision: main", "targetRevision: other"), 1,
+        scenario("values-swap",
+                 lambda: ere(str(CHART / "values.yaml"), r"^([ \t]*targetRevision:[ \t]*)main[ \t]*$", r"\1other"), 1,
                  "a values.yaml change that moves the rendered revision, without a golden edit")
-        scenario("annotation-only", lambda: edit(TENANTS_APPSET, "argocd/app-name:", "argocd/app-label:"), 0,
+        scenario("annotation-only", lambda: ere(TENANTS_APPSET, r"argocd/app-name:", "argocd/app-label:"), 0,
                  "an annotation-only change to the tenants file (not pinned)")
-        scenario("templatepatch", lambda: edit(TENANTS_APPSET, "  generators:\n", "  templatePatch: |\n    metadata:\n      finalizers: []\n  generators:\n"), 1,
-                 "a templatePatch added to the tenants file without a golden edit")
+        scenario("templatepatch",
+                 lambda: ere(TENANTS_APPSET, r"^([ \t]*)generators:[ \t]*\n",
+                             lambda m: f"{m.group(1)}templatePatch: |\n{m.group(1)}  metadata:\n{m.group(1)}    finalizers: []\n" + m.group(0)),
+                 1, "a templatePatch added to the tenants file without a golden edit")
         scenario("unrelated", lambda: (t / "other.txt").write_text("b\n"), 0, "a change to an unrelated file")
         scenario("golden-only", lambda: regolden(whitespace_only=True), 0, "a cosmetic golden edit alone")
         scenario("removed", lambda: (t / TENANTS_APPSET).unlink(), 1, "the tenants file is deleted")
@@ -1871,6 +2091,22 @@ def _edit(path: Path, old: str, new: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
+def _edit_re(path: Path, pattern: str, repl, flags: int = re.M) -> None:
+    """Mutate chart source at ONE place found by a whitespace- and filter-tolerant pattern. `repl` is a
+    string or a function of the match. The anchors describe what the chart means (a key, a value), not its
+    exact spelling, so a behaviour-neutral edit (a pipe, a comment, other indentation) leaves them valid.
+    An anchor that no longer matches exactly once is an error that names the file: a deliberate change of
+    the meaning of those lines means updating the anchor here."""
+    text = path.read_text(encoding="utf-8")
+    found = list(re.finditer(pattern, text, flags))
+    if len(found) != 1:
+        raise Unreadable(f"mutation anchor /{pattern}/ matched {len(found)} times in {path}: the guard's "
+                         "self-test must be updated together with this change")
+    m = found[0]
+    new = repl(m) if callable(repl) else m.expand(repl)
+    path.write_text(text[:m.start()] + new + text[m.end():], encoding="utf-8")
+
+
 EVIL_SET = """apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -1892,6 +2128,7 @@ spec:
 def mutation_selftests(root: Path, helm: str) -> None:
     """Mutate a COPY of the chart source and run the real guard against it."""
     golden = load_golden(root)
+    pins = load_pins(root)
     first_generated = sorted(generated_names(root, appsets_of(Render("d", helm_render(
         root / CHART, [root / CHART / "values.yaml"], helm, HELM_TIMEOUT, "names")))))[0]
 
@@ -1942,45 +2179,111 @@ def mutation_selftests(root: Path, helm: str) -> None:
         values_append(c, "mutGate: false")
         tmpl(c, "mut-fail.yaml", '{{- if .Values.mutGate }}{{ fail "boom" }}{{- end }}\n')
 
+    def m_gate(cond: str, body: str = EVIL_SET):
+        def mutate(c: Path) -> None:
+            tmpl(c, "mut-gate-env.yaml", "{{- if " + cond + " }}\n---\n" + body + "{{- end }}\n")
+        return mutate
+
+    def list_items(doc_text: str) -> str:
+        return "".join("  " + ("- " if i == 0 else "  ") + line + "\n" for i, line in enumerate(doc_text.splitlines()))
+
+    def m_in_list(c: Path) -> None:
+        tmpl(c, "mut-list.yaml", "---\napiVersion: v1\nkind: List\nitems:\n" + list_items(EVIL_SET))
+
+    def m_in_list_list(c: Path) -> None:
+        inner = "apiVersion: v1\nkind: List\nitems:\n" + list_items(EVIL_SET)
+        tmpl(c, "mut-list2.yaml", "---\napiVersion: v1\nkind: List\nitems:\n" + list_items(inner))
+
+    def m_bad_list(c: Path) -> None:
+        tmpl(c, "mut-badlist.yaml", "---\napiVersion: v1\nkind: List\nitems:\n  - just a string\n")
+
+    def m_undeclared(c: Path) -> None:
+        tmpl(c, "mut-undeclared.yaml", "{{- if (default dict .Values.hiddenFlag).enabled }}\n---\n" + EVIL_SET + "{{- end }}\n")
+
+    def m_values_whole(c: Path) -> None:
+        tmpl(c, "mut-whole.yaml", "{{- $v := .Values }}\n{{- if $v.hiddenFlag }}\n---\n" + EVIL_SET + "{{- end }}\n")
+
+    pa = lambda c: c / "templates/projects/project-apps.yaml"
+    root_app = lambda c: c / "templates/bootstrap/root-app.yaml"
+
     mutants = [
         ("preserveResourcesOnDeletion true on apps",
-         lambda c: _edit(apps(c), "preserveResourcesOnDeletion: false", "preserveResourcesOnDeletion: true"), "NOT cascade"),
+         lambda c: _edit_re(apps(c), r"preserveResourcesOnDeletion:[ \t]*false", "preserveResourcesOnDeletion: true"), "NOT cascade"),
         ("preserveResourcesOnDeletion true on tenants",
-         lambda c: _edit(tenants(c), "preserveResourcesOnDeletion: false", "preserveResourcesOnDeletion: true"), "NOT cascade"),
+         lambda c: _edit_re(tenants(c), r"preserveResourcesOnDeletion:[ \t]*false", "preserveResourcesOnDeletion: true"), "NOT cascade"),
         ("a template finalizer on apps (replaces the resources finalizer)",
-         lambda c: _edit(apps(c), "  template:\n    metadata:\n",
-                         "  template:\n    metadata:\n      finalizers:\n        - example.invalid/other\n"), "finalizers="),
+         lambda c: _edit_re(apps(c), r"^([ \t]*)template:[ \t]*\n([ \t]+)metadata:[ \t]*\n",
+                            lambda m: m.group(0) + f"{m.group(2)}  finalizers:\n{m.group(2)}    - example.invalid/other\n"),
+         "finalizers="),
         ("a templatePatch on tenants",
-         lambda c: _edit(tenants(c), "  generators:\n",
-                         "  templatePatch: |\n    metadata:\n      finalizers: []\n  generators:\n"), "templatePatch"),
+         lambda c: _edit_re(tenants(c), r"^([ \t]*)generators:[ \t]*\n",
+                            lambda m: f"{m.group(1)}templatePatch: |\n{m.group(1)}  metadata:\n{m.group(1)}    finalizers: []\n" + m.group(0)),
+         "templatePatch"),
         ("a new ApplicationSet through toYaml | nindent", m_via_toyaml, "evil"),
         ("a new ApplicationSet through .Files.Get", m_via_files, "evil"),
         ("a new ApplicationSet through include of a .tpl helper", m_via_include, "evil"),
         ("a new ApplicationSet behind {{ if }} on a non-default flag", m_behind_flag, "evil"),
         ("a new ApplicationSet through indented emitters with trim markers", m_trim_indented, "evil"),
+        ("a new ApplicationSet behind a gate on the release name root-app", m_gate('eq .Release.Name "root-app"'), "evil"),
+        ("a new ApplicationSet behind a gate on any other release name", m_gate('ne .Release.Name "root-app"'), "evil"),
+        ("a new ApplicationSet behind a gate on the release name root", m_gate('ne .Release.Name "root"'), "evil"),
+        ("a new ApplicationSet behind a gate on the namespace argocd", m_gate('eq .Release.Namespace "argocd"'), "evil"),
+        ("a new ApplicationSet behind a gate on any other namespace", m_gate('ne .Release.Namespace "argocd"'), "evil"),
+        ("a new ApplicationSet behind a gate on .Capabilities.APIVersions argoproj.io/v1alpha1",
+         m_gate('.Capabilities.APIVersions.Has "argoproj.io/v1alpha1"'), "evil"),
+        ("a new ApplicationSet behind a gate on an API version no list names",
+         m_gate('.Capabilities.APIVersions.Has "mut.example.invalid/v1"'), "evil"),
+        ("a new ApplicationSet behind a gate on the absence of an API version",
+         m_gate('not (.Capabilities.APIVersions.Has "argoproj.io/v1alpha1")'), "evil"),
+        ("a new ApplicationSet behind a gate on a newer cluster version",
+         m_gate('semverCompare ">=1.33.0" .Capabilities.KubeVersion.Version'), "evil"),
+        ("a new ApplicationSet behind a gate on an older cluster version",
+         m_gate('semverCompare "<1.30.0" .Capabilities.KubeVersion.Version'), "evil"),
+        ("a new ApplicationSet wrapped in a kind: List", m_in_list, "evil"),
+        ("a new ApplicationSet wrapped in a List inside a List", m_in_list_list, "evil"),
+        ("a List whose item is not an object", m_bad_list, "not a Kubernetes object"),
+        ("a gate on a value that values.yaml does not declare", m_undeclared, "not declared"),
+        ("a template that reads .Values as a whole", m_values_whole, "as a whole"),
         ("an Application named like a generated one, behind a non-default flag", m_name_behind_flag,
          "equals hand-written"),
         ("a render that fails under a flipped flag", m_fail_behind_flag, "boom"),
         ("a duplicate generated name (service dropped from the name template)",
-         lambda c: _edit(apps(c), "      name: '{{`{{ index .path.segments 2 }}-{{ index .path.segments 3 }}`}}'\n      labels:",
-                         "      name: '{{`{{ index .path.segments 2 }}`}}'\n      labels:"), "produced by"),
+         lambda c: _edit_re(apps(c), r"^([ \t]*name:[^\n]*?)\{\{\s*index \.path\.segments 2\s*\}\}-\{\{\s*index \.path\.segments 3\s*\}\}",
+                            lambda m: m.group(1) + "{{ index .path.segments 2 }}"), "produced by"),
         ("repoURL and revision swapped in the apps generator",
-         lambda c: _edit(apps(c), "        repoURL: {{ .Values.spec.source.repoURL }}\n        revision: {{ .Values.spec.source.targetRevision }}\n",
-                         "        repoURL: {{ .Values.spec.source.targetRevision }}\n        revision: {{ .Values.spec.source.repoURL }}\n"),
+         lambda c: _edit_re(apps(c), r"^([ \t]*repoURL:[ \t]*)(\{\{.*?\}\})([^\n]*\n[ \t]*revision:[ \t]*)(\{\{.*?\}\})",
+                            lambda m: m.group(1) + m.group(4) + m.group(3) + m.group(2)),
          "ApplicationSet apps"),
         ("a duplicate mapping key in a rendered ApplicationSet",
-         lambda c: _edit(tenants(c), "  goTemplate: true\n", "  goTemplate: true\n  goTemplate: true\n"), "duplicate mapping key"),
+         lambda c: _edit_re(tenants(c), r"^([ \t]*)goTemplate:[ \t]*true[ \t]*\n", lambda m: m.group(0) * 2), "duplicate mapping key"),
         ("the apps project whitelist loses the apps group",
-         lambda c: _edit(c / "templates/projects/project-apps.yaml", '    - group: apps\n      kind: "*"\n', ""),
+         lambda c: _edit_re(pa(c), r"^[ \t]*-[ \t]*group:[ \t]*apps[ \t]*\n[ \t]*kind:[ \t]*[\"']?\*[\"']?[ \t]*\n", ""),
          "would not cascade"),
         ("the apps project destinations narrowed to one namespace",
-         lambda c: _edit(c / "templates/projects/project-apps.yaml", '      namespace: "*"', "      namespace: only-one"),
+         lambda c: _edit_re(pa(c), r"(namespace:[ \t]*)[\"']?\*[\"']?", r"\1only-one"),
          "would not cascade"),
+        ("the apps project clusterResourceWhitelist widened to every kind",
+         lambda c: _edit_re(pa(c), r"clusterResourceWhitelist:[ \t]*\[[ \t]*\]",
+                            'clusterResourceWhitelist:\n    - group: "*"\n      kind: "*"'), "AppProject apps"),
+        ("the apps project sourceRepos widened to any repository",
+         lambda c: _edit_re(pa(c), r"^([ \t]*)sourceRepos:[ \t]*\n[ \t]*-[^\n]*\n",
+                            lambda m: f'{m.group(1)}sourceRepos:\n{m.group(1)}  - "*"\n'),
+         "AppProject apps"),
+        ("the resources finalizer removed from root-app",
+         lambda c: _edit_re(root_app(c), r"^[ \t]*finalizers:[ \t]*\n[ \t]*-[ \t]*resources-finalizer\.argocd\.argoproj\.io[ \t]*\n", ""),
+         "Application/root-app"),
+        ("a second finalizer on root-app",
+         lambda c: _edit_re(root_app(c), r"^([ \t]*)-[ \t]*resources-finalizer\.argocd\.argoproj\.io[ \t]*\n",
+                            lambda m: m.group(0) + f"{m.group(1)}- example.invalid/other\n"),
+         "Application/root-app"),
+        ("a finalizer on the apps AppProject",
+         lambda c: _edit_re(pa(c), r"^(  name:[ \t]*apps[ \t]*\n)", lambda m: m.group(1) + "  finalizers:\n    - example.invalid/other\n"),
+         "AppProject/apps"),
     ]
 
     with tempfile.TemporaryDirectory() as tmp:
         clean = _copy_chart(root, Path(tmp) / "clean")
-        a = analyze(clean, root, helm, golden=golden)
+        a = analyze(clean, root, helm, golden=golden, pins=pins)
         check("mutation green: the unmutated copy of the chart has no finding", not a.findings, "; ".join(a.findings))
 
         counter = iter(range(1000))
@@ -1990,7 +2293,7 @@ def mutation_selftests(root: Path, helm: str) -> None:
             c = _copy_chart(root, Path(tmp) / f"m{next(counter)}")
             fn(c)
             try:
-                found = "; ".join(analyze(c, root, helm, golden=golden).findings)
+                found = "; ".join(analyze(c, root, helm, golden=golden, pins=pins).findings)
             except Unreadable as exc:
                 found = "UNREADABLE " + str(exc)
             return name, bool(found) and want in found, found[:300] or "no finding"
@@ -2053,6 +2356,13 @@ def _fake_helm_checks(root: Path, t: Path, scripts: dict) -> None:
 
 
 def main(argv: list[str]) -> int:
+    started = time.monotonic()
+    code = _main(argv)
+    print(f"INFO  elapsed {time.monotonic() - started:.0f}s", file=sys.stderr if code == 2 else sys.stdout)
+    return code
+
+
+def _main(argv: list[str]) -> int:
     args = argv[1:]
     root = ROOT
     if args[:1] == ["--cascade-coverage"]:
@@ -2069,8 +2379,14 @@ def main(argv: list[str]) -> int:
             docs = helm_render(root / CHART, [root / CHART / "values.yaml"], helm, HELM_TIMEOUT, "default values")
             views = rendered_views(docs)
             note = json.loads(read_text(root / GOLDEN)).get("_note", "")
-            print(json.dumps({"_note": note, "sets": {n: views[n] for n in sorted(EXPECTED_CASCADE)}},
-                             indent=2, sort_keys=True))
+            renders, _ = render_matrix(root / CHART, root, helm)
+            fins = {object_key(d): d["metadata"]["finalizers"]
+                    for r in renders for kind in ("Application", "AppProject") for d in docs_of_kind(r.docs, kind)
+                    if (d.get("metadata") or {}).get("finalizers")}
+            projects = named(docs, "AppProject", "default values")
+            print(json.dumps({"_note": note, "sets": {n: views[n] for n in sorted(EXPECTED_CASCADE)},
+                              "projects": {n: json.loads(json.dumps(projects[n]["spec"])) for n in PINNED_PROJECTS},
+                              "finalizers": fins}, indent=2, sort_keys=True))
         except (Unreadable, KeyError, ValueError, AttributeError) as exc:
             print(f"UNREADABLE: {exc}", file=sys.stderr)
             return 2

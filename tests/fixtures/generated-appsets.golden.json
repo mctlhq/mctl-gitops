@@ -1,5 +1,289 @@
 {
-  "_note": "Complete normalised spec of the apps and tenants ApplicationSets as rendered by `helm template` with the default values of platform-gitops/bootstrap, except the template annotations other than PINNED_ANNOTATIONS. Edit only together with the ApplicationSet change it describes; regenerate with: python3 tests/test_generated_app_cascade_guards.py --print-golden",
+  "_note": "Pinned output of `helm template root-app platform-gitops/bootstrap --namespace argocd` with the default values: `sets` is the complete normalised spec of the apps and tenants ApplicationSets (template annotations other than PINNED_ANNOTATIONS left out); `projects` is the complete spec of the apps and platform AppProjects; `finalizers` lists every Application and AppProject that carries metadata.finalizers (an object not listed must have none). Edit only together with the change it describes; regenerate with: python3 tests/test_generated_app_cascade_guards.py --print-golden",
+  "finalizers": {
+    "Application/admins-mctl-agent": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/argo-rollouts": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/argo-workflows": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/argo-workflows-config": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/cloudnative-pg": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/descheduler": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/erpact-control": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/erpact-deployer": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/erpact-infra": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/erpact-oidc-zitadel": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/erpact-shared": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/external-secrets": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/forgejo": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/grafana-iac": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/labs-oidc-zitadel": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/loki-stack": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/mctl-agents-egress-proxy": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/mctl-portal-oidc-zitadel": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/monitoring": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/otel-collector": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/otel-eval-candidate-a": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/otel-eval-candidate-b": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/otel-eval-tempo": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/plugin-barman-cloud": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/reflector": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/root-app": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/shared-pg": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/temporal": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/temporal-web": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/tracing-tempo": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/valkey": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/vault": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/vault-human-auth-iac": [
+      "resources-finalizer.argocd.argoproj.io"
+    ],
+    "Application/zitadel": [
+      "resources-finalizer.argocd.argoproj.io"
+    ]
+  },
+  "projects": {
+    "apps": {
+      "clusterResourceWhitelist": [],
+      "description": "Services and workers",
+      "destinations": [
+        {
+          "namespace": "*",
+          "server": "https://kubernetes.default.svc"
+        }
+      ],
+      "namespaceResourceWhitelist": [
+        {
+          "group": "",
+          "kind": "*"
+        },
+        {
+          "group": "apps",
+          "kind": "*"
+        },
+        {
+          "group": "networking.k8s.io",
+          "kind": "*"
+        },
+        {
+          "group": "autoscaling",
+          "kind": "*"
+        },
+        {
+          "group": "batch",
+          "kind": "*"
+        },
+        {
+          "group": "external-secrets.io",
+          "kind": "*"
+        },
+        {
+          "group": "argoproj.io",
+          "kind": "*"
+        },
+        {
+          "group": "monitoring.coreos.com",
+          "kind": "*"
+        },
+        {
+          "group": "operator.victoriametrics.com",
+          "kind": "*"
+        },
+        {
+          "group": "traefik.io",
+          "kind": "*"
+        }
+      ],
+      "orphanedResources": {
+        "ignore": [
+          {
+            "group": "argoproj.io",
+            "kind": "Workflow"
+          },
+          {
+            "kind": "Secret"
+          },
+          {
+            "kind": "ConfigMap"
+          },
+          {
+            "kind": "ServiceAccount"
+          },
+          {
+            "group": "networking.k8s.io",
+            "kind": "NetworkPolicy"
+          }
+        ],
+        "warn": true
+      },
+      "sourceRepos": [
+        "https://github.com/mctlhq/mctl-gitops.git"
+      ]
+    },
+    "platform": {
+      "clusterResourceWhitelist": [
+        {
+          "group": "",
+          "kind": "Namespace"
+        },
+        {
+          "group": "rbac.authorization.k8s.io",
+          "kind": "ClusterRole"
+        },
+        {
+          "group": "rbac.authorization.k8s.io",
+          "kind": "ClusterRoleBinding"
+        }
+      ],
+      "description": "Platform tenants \u2014 namespace provisioning and workflow RBAC",
+      "destinations": [
+        {
+          "namespace": "*",
+          "server": "https://kubernetes.default.svc"
+        }
+      ],
+      "namespaceResourceWhitelist": [
+        {
+          "group": "",
+          "kind": "ResourceQuota"
+        },
+        {
+          "group": "",
+          "kind": "LimitRange"
+        },
+        {
+          "group": "networking.k8s.io",
+          "kind": "NetworkPolicy"
+        },
+        {
+          "group": "",
+          "kind": "ServiceAccount"
+        },
+        {
+          "group": "",
+          "kind": "Service"
+        },
+        {
+          "group": "",
+          "kind": "ConfigMap"
+        },
+        {
+          "group": "",
+          "kind": "Pod"
+        },
+        {
+          "group": "",
+          "kind": "Secret"
+        },
+        {
+          "group": "rbac.authorization.k8s.io",
+          "kind": "Role"
+        },
+        {
+          "group": "rbac.authorization.k8s.io",
+          "kind": "RoleBinding"
+        },
+        {
+          "group": "external-secrets.io",
+          "kind": "ExternalSecret"
+        },
+        {
+          "group": "external-secrets.io",
+          "kind": "SecretStore"
+        },
+        {
+          "group": "argoproj.io",
+          "kind": "CronWorkflow"
+        },
+        {
+          "group": "apps",
+          "kind": "Deployment"
+        },
+        {
+          "group": "networking.k8s.io",
+          "kind": "Ingress"
+        },
+        {
+          "group": "batch",
+          "kind": "Job"
+        },
+        {
+          "group": "traefik.io",
+          "kind": "Middleware"
+        }
+      ],
+      "orphanedResources": {
+        "warn": false
+      },
+      "sourceRepos": [
+        "https://github.com/mctlhq/mctl-gitops.git",
+        "https://github.com/mctlhq/mctl-api.git",
+        "https://go.temporal.io/helm-charts"
+      ]
+    }
+  },
   "sets": {
     "apps": {
       "metadata": {

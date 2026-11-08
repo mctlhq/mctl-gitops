@@ -530,7 +530,9 @@ jobs:
         # ApplicationSet requires a real change of that set in
         # tests/fixtures/generated-appsets.golden.json in the same diff (the
         # base is rendered from the full-history checkout with git archive).
-        timeout-minutes: 10
+        # A full run takes 2 to 3 minutes and prints its elapsed time; the
+        # timeout leaves room for a slow runner.
+        timeout-minutes: 20
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
@@ -538,7 +540,7 @@ jobs:
           set -euo pipefail
           command -v helm
           helm version --short
-          python3 -m pip install --quiet pyyaml
+          python3 -m pip install --quiet pyyaml==6.0.2
           python3 tests/test_generated_app_cascade_guards.py
           if [ "$EVENT" = pull_request ]; then
             python3 tests/test_generated_app_cascade_guards.py --diff-guard "origin/${BASE_REF}"
