@@ -38,7 +38,6 @@ KNOWN_READ_ONLY = {
     ("cwft-mctl-agents-shepherd.yaml", "run-shepherd", "clone-gitops"),
     ("cwft-mctl-agents-shepherd.yaml", "commit-and-push", "clone-gitops"),
     ("wft-delete-tenant-safe.yaml", "retire-tenant-services", "main"),
-    ("wft-lifecycle-bootstrap.yaml", "bootstrap", "clone-gitops"),
 }
 
 
@@ -81,6 +80,15 @@ for fname, tname in (("tpl-validate-tenant.yaml", "validate"), ("tpl-validate-te
     check(f"{fname} {tname}: no ssh setup", ".ssh" not in text and "git@github.com" not in text)
     check(f"{fname} {tname}: clones over anonymous https",
           'git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"' in t["script"]["source"])
+
+# The lifecycle bootstrap template only reads the checkout: its clone step uses
+# anonymous https and the template carries no key volume, mount or ssh setup.
+doc = dict(DOCS)["wft-lifecycle-bootstrap.yaml"]
+text = yaml.safe_dump(doc)
+check("wft-lifecycle-bootstrap.yaml: no key anywhere in the template", KEY not in text and "deploy-key" not in text)
+check("wft-lifecycle-bootstrap.yaml: no ssh setup", ".ssh" not in text and "git@github.com" not in text)
+check("wft-lifecycle-bootstrap.yaml: clones over anonymous https",
+      "git clone --depth=1 https://github.com/mctlhq/mctl-gitops.git /workdir/mctl-gitops" in text)
 
 # Proven both ways: the sweep flags a read-only step with the key, and not a writer.
 sample = {"spec": {"templates": [
