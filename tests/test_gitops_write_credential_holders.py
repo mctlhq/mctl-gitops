@@ -49,7 +49,7 @@ def check(name, cond, detail=""):
         failures.append(f"{name}: {str(detail)[:600]}")
 
 
-def observe_tree(root):
+def observe_tree(root, names=W.ALL_NAMES):
     """Rows (file, document, template, mechanism, name) for every reference under root."""
     rows = []
     for dirpath, dirnames, filenames in os.walk(root):
@@ -68,11 +68,11 @@ def observe_tree(root):
                 raise W.ReadError(f"{rel}: not text: {e}") from e
             except OSError as e:
                 raise W.ReadError(f"{rel}: {e}") from e
-            found = W.mentions(text)
+            found = W.mentions(text, names)
             if not found:
                 continue
             if p.suffix in (".yaml", ".yml") and not TEMPLATED.search(rel):
-                sites = [s for d in W.load_docs(p) for s in W.sites_in_doc(d)]
+                sites = [s for d in W.load_docs(p) for s in W.sites_in_doc(d, names)]
                 for doc, tpl, mech, name in sites:
                     rows.append((rel, doc, tpl, mech, name))
                 for name in sorted(found - {s[3] for s in sites}):
@@ -157,25 +157,28 @@ check("ledger comparison: a new reference is reported", compare(observed, [])[0]
 check("ledger comparison: a removed reference leaves a stale row", compare([], observed)[1] == observed)
 check("ledger comparison: equal input is clean", compare(observed, observed) == ([], []))
 
+# The synthetic trees use a placeholder name, passed as `names`, not a real credential name.
+SYNTH_NAME = "example-holder-name"
+SYNTH = (SYNTH_NAME,)
 with tempfile.TemporaryDirectory() as td:
     root = pathlib.Path(td)
     for d in ROOT_PRUNED:
         (root / d).mkdir()
-        (root / d / "ignored.yaml").write_text(f"x: {REF}\n")
+        (root / d / "ignored.yaml").write_text(f"x: {SYNTH_NAME}\n")
     (root / "scripts").mkdir()
-    (root / "scripts/a.sh").write_text(f"# {REF}\necho ok\n")
+    (root / "scripts/a.sh").write_text(f"# {SYNTH_NAME}\necho ok\n")
     check("root-level excluded directories (tests, agents-state, node_modules, .worktrees) are not scanned "
-          "and comment-only mentions observe nothing", observe_tree(root) == [])
+          "and comment-only mentions observe nothing", observe_tree(root, SYNTH) == [])
     for d in ROOT_PRUNED:
         # Mutation-discriminating: with an any-depth prune these go red.
         (root / "platform-gitops/x" / d).mkdir(parents=True)
-        (root / "platform-gitops/x" / d / "nested.yaml").write_text(f"x: {REF}\n")
+        (root / "platform-gitops/x" / d / "nested.yaml").write_text(f"x: {SYNTH_NAME}\n")
         check(f"a nested directory named {d} is still scanned",
-              any(r[0] == f"platform-gitops/x/{d}/nested.yaml" for r in observe_tree(root)), observe_tree(root))
+              any(r[0] == f"platform-gitops/x/{d}/nested.yaml" for r in observe_tree(root, SYNTH)), observe_tree(root, SYNTH))
     (root / "scripts/__pycache__").mkdir()
     (root / "scripts/__pycache__/m.cpython-314.pyc").write_bytes(b"\x00\x8b\xff")
     try:
-        observe_tree(root)
+        observe_tree(root, SYNTH)
         check("a compiled .pyc is not an unreadable-file error", True)
     except W.ReadError as e:
         check("a compiled .pyc is not an unreadable-file error", False, e)
@@ -183,27 +186,27 @@ with tempfile.TemporaryDirectory() as td:
     (root / "scripts/__pycache__").rmdir()
     for d in ROOT_PRUNED:
         shutil.rmtree(root / "platform-gitops/x" / d)
-    (root / "scripts/a.sh").write_text(f"kubectl get secret {REF}\n")
-    check("a script mention is observed", [r[3:] for r in observe_tree(root)] == [("text", REF)])
+    (root / "scripts/a.sh").write_text(f"kubectl get secret {SYNTH_NAME}\n")
+    check("a script mention is observed", [r[3:] for r in observe_tree(root, SYNTH)] == [("text", SYNTH_NAME)])
     (root / "platform-gitops/helm-charts/c/templates").mkdir(parents=True)
     (root / "platform-gitops/helm-charts/c/templates/es.yaml").write_text(
-        f"{{{{- if x }}}}\nname: {REF}\n{{{{- end }}}}\n")
+        f"{{{{- if x }}}}\nname: {SYNTH_NAME}\n{{{{- end }}}}\n")
     check("a templated chart file (not parseable YAML) is observed by text",
-          any(r[1] == "(chart template)" for r in observe_tree(root)))
+          any(r[1] == "(chart template)" for r in observe_tree(root, SYNTH)))
     (root / "wf.yaml").write_text(
         f"kind: Workflow\nmetadata: {{name: w}}\nspec:\n  templates:\n  - name: t\n    volumes:\n"
-        f"    - name: k\n      secret: {{secretName: {REF}}}\n")
+        f"    - name: k\n      secret: {{secretName: {SYNTH_NAME}}}\n")
     check("a new workflow volume is observed with its template",
-          ("wf.yaml", "Workflow/w", "t", "secret.secretName", REF) in observe_tree(root))
+          ("wf.yaml", "Workflow/w", "t", "secret.secretName", SYNTH_NAME) in observe_tree(root, SYNTH))
     (root / "wf.yaml").write_text("kind: [unclosed\n")
     try:
-        observe_tree(root)
+        observe_tree(root, SYNTH)
         check("an unparsable file that mentions nothing is not an error", True)
     except W.ReadError:
         check("an unparsable file that mentions nothing is not an error", False)
-    (root / "bad.yaml").write_text(f"a: [{REF}\n")
+    (root / "bad.yaml").write_text(f"a: [{SYNTH_NAME}\n")
     try:
-        observe_tree(root)
+        observe_tree(root, SYNTH)
         check("an unparsable file that mentions a credential is an error, not an empty result", False)
     except W.ReadError:
         check("an unparsable file that mentions a credential is an error, not an empty result", True)
