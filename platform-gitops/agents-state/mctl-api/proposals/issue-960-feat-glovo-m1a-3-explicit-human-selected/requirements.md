@@ -22,6 +22,16 @@ principal-mode membership and a per-(tenant, principal) pilot allowlist.
 Membership alone never admits a principal to the pilot. A single eligible
 team is never chosen on the human's behalf.
 
+## AMEND 2026-11-08 — explicit team ≠ banning `labs`; cross-slice and token-commit gates
+
+**Independent review P1:** the user's architecture decision [.github#324](https://github.com/mctlhq/.github/issues/324) forbids **automatically assigning `labs`** as a caller tenant, but does **not** forbid a human who is a current member of the `labs` team, individually allowlisted, from selecting `labs` explicitly. The previous default `GLOVO_NON_SELECTABLE_TENANTS=admins,labs` would make the owner's own allowlisted pilot unable to select that team. Default exclusion may cover non-customer/system tenants such as `admins`, **not `labs` merely because it hosts the service**. Explicit authenticated selection + live role + per-principal allowlist remain mandatory; no fallback ever.
+
+**Cross-slice blocker:** #958 defines `ResolveResource` returning `ErrGlovoNotReady` for every Glovo resource even when `GLOVO_MCP_RESOURCE` is configured. This slice MUST explicitly replace that unconditional denial with a **separately disabled-by-default Glovo OAuth admission switch**, enabled only when grant store, allowlist, live membership, consent binding and token minting are ready. Presence of `GLOVO_MCP_RESOURCE` by itself never issues Glovo tokens. All tests must verify disabled-by-default and normal OAuth unchanged. The feature cannot open public routes or publish DNS before separate P2 activation.
+
+**Transactional integrity:** the proposed team-grant, auth-code and refresh-family stores may use different transactions. Before minting any selected-team token, prove one shared atomic transaction or durable, idempotent, fail-closed commit/compensation protocol. Crash or DB outage after grant creation, code issuance, refresh rotation, grant activation or family revoke must never leave a usable token tied to an uncommitted/revoked grant, duplicate active grants or a refresh session with an invalid team. The design must cite concrete shared pool/transaction APIs or mark integration NOT READY. Do not silently assume atomicity.
+
+**Dependency ordering:** #960 implementer MUST stop if #958 and #959 are unmerged or interfaces absent. Do not add temporary duplicate auth/store implementations to make it compile alone; separately approved slices are authority boundaries.
+
 ## User stories
 - AS a pilot user in one or more teams I WANT to choose the team I am acting for when I connect an assistant to Glovo SO THAT my orders and connections are never placed in a team I did not choose.
 - AS a team owner I WANT pilot access to be granted per principal, not per team SO THAT joining my team does not by itself admit someone to the pilot.
@@ -56,6 +66,6 @@ team is never chosen on the human's behalf.
 ## Open questions
 - Ownership of the `glovo_pilot_allowlist` table between slice 2 and slice 3. Assumption: slice 3 ships the DDL with `CREATE TABLE IF NOT EXISTS` and the identical schema from the #953 design, so either merge order converges. If slice 2 has already merged it, slice 3 reuses slice 2's reader.
 - Exact identifiers from slices 1 and 2 (`OAuthServer.GlovoResource`, `User.IsGlovoAudience()`, the `internal/glovo` refusal enum) are taken from the #953 design and are not yet in the clone. The implementer codes against the closed interfaces described in design.md until they land.
-- Which tenants are excluded from selection besides `admins`. Assumption: `labs` (the Glovo service's deployment tenant, per the #953 amendment), configurable through `GLOVO_NON_SELECTABLE_TENANTS` (default `admins,labs`). There is no personal-tenant marker in the code today, so personal scope is refused by rule rather than detected (see design).
+- Which tenants are excluded from selection besides `admins`. Corrected: `labs` is **not** implicitly selected, but an explicitly consenting allowlisted team member may select it. `GLOVO_NON_SELECTABLE_TENANTS` defaults to `admins` only; personal/system-only scopes remain unsupported. There is no personal-tenant marker in the code today, so personal scope is refused by rule rather than detected (see design).
 - Team grant lifetime. Assumption: equal to the refresh token TTL (`RefreshTokenTTL`, default 30 days), with no sliding extension. Re-consent is needed after expiry.
 - The refusal code for membership removed mid-session. `no_tenant` is chosen as the existing typed refusal. The reviewer should confirm it is in the closed M0 contract.
