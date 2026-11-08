@@ -7,10 +7,13 @@ writing `docs/evidence/web-contract-evidence.md`.
       browser, access to the six source repos), provenance tag legend — DoD: header block present;
       every unavailable tool named with reason.
 - [ ] 2. (depends on 1) Parity table: for mctl-web, mctl-docs, mctl-telegram, mctl-academy,
-      mctl-alice, seerrsense and mctl-design, record source SHA of the deployed tag `[CODE]`, GitOps
-      `image.tag` from `services/<tenant>/<svc>/values.yaml` `[CONFIG]`, ArgoCD observed image and
-      sync/health via `mctl_list_services` / `mctl_get_service_status` `[CONFIG]` — DoD: four layers
-      per row, mismatches flagged, missing reads marked `unknown (not observed)`.
+      mctl-alice, seerrsense and mctl-design, record independently inspected source SHA/tag
+      `[CODE]`, GitOps desired `image.tag` `[CONFIG]`, and authenticated ArgoCD observed image and
+      sync/health via `mctl_list_services` / `mctl_get_service_status` `[LIVE]`. Separately check
+      image-tag-to-source provenance via immutable build metadata, digest or release attestation;
+      do not infer deployed source SHA from `main` or an image tag matching a short SHA — DoD:
+      source, desired, observed and HTTP layers distinguishable, unproven deployed-source mapping
+      `unknown (not observed)`, tag parity and missing reads explicitly recorded.
 - [ ] 3. (depends on 2) Design usage per site: grep pinned source for `ui.mctl.ai` URLs and
       `@mctlhq/*` versions — DoD: exact URLs/versions listed, each classified as `0.20.2`, other pin,
       or floating.
@@ -29,11 +32,15 @@ writing `docs/evidence/web-contract-evidence.md`.
       `scripts/browser-tests-docker.sh`: Storybook `Foundations/Site Header` stories at the pinned
       SHA, `tg-preview.mctl.ai`, and anonymous public landing pages where permitted; at 768px and
       981px; toggle, Enter/Space/Escape, outside pointer, `aria-expanded`, focus return, tab order,
-      reduced motion, JS disabled — DoD: per site and check, "observed" and "proposed criterion"
-      columns; `not-run` where not executed; script quoted in the report, not committed.
+      reduced motion, JS disabled — DoD: per site/check, "observed", "proposed criterion", status
+      and reason; `not-run` for applicable but unexecuted tests, `not-applicable` only for a
+      source-proven absent implementation mechanism. Telegram's CSS-only menu and VitePress native
+      navigation still require applicable user-visible keyboard, focus and no-JS checks; a missing
+      browser tool is never N/A. Reproduction script quoted in report, not committed.
 - [ ] 8. (depends on 2-7) Evidence/unknown/owner matrix linking design#34, design#78,
-      telegram#599, academy#210, gitops#500 — DoD: every claim has tag, value or `unknown`, owner repo,
-      existing issue or "none"; no new implementation issues created.
+      telegram#599, academy#210, gitops#500 — DoD: every claim has provenance tag, value or
+      `unknown`, observation/test status (`observed`, `not-run`, or justified `not-applicable`),
+      owner repo, existing issue or "none"; no new implementation issues created.
 - [ ] 9. (depends on 8) Next gates for `web-header-a11y-contract` and
       `web-asset-integrity-contract` with owners and entry conditions — DoD: bounded, no CSP
       relaxation recommended, nothing started or approved.
@@ -46,12 +53,18 @@ writing `docs/evidence/web-contract-evidence.md`.
 - [ ] T1. `pnpm format:check` and `pnpm lint` pass with the new Markdown file.
 - [ ] T2. `git diff --name-only origin/main` lists only `docs/evidence/web-contract-evidence.md`.
 - [ ] T3. `pnpm check:token-version` and `pnpm check:versions` pass without a version bump.
-- [ ] T4. Grep the report: every table row contains one of `[CODE]`, `[CONFIG]`, `[LIVE]`,
-      `[PREVIEW]`, `unknown (not observed)` or `not-run`.
+- [ ] T4. Grep/check the report: every evidence row uses `[CODE]`, `[CONFIG]`, `[LIVE]`,
+      `[PREVIEW]` or `unknown (not observed)` as provenance, and an independent status where
+      relevant (`observed`, `not-run` with reason, or justified `not-applicable`). Confirm
+      authenticated ArgoCD data is `[LIVE]` and desired GitOps is `[CONFIG]`.
 - [ ] T5. Grep the report for `Cookie:`, `Authorization`, tokens, `code=`, `state=` query
       parameters: none present.
-- [ ] T6. A reviewer re-runs two `[LIVE]` reproduction commands and gets matching headers (or a
-      documented, dated drift).
+- [ ] T6. CONDITIONAL: If anonymous public HTTP requests were available, a reviewer re-runs two
+      `[LIVE]` reproduction commands and records matching headers or dated drift. If outbound
+      HTTP was unavailable, blocked or out of scope, mark T6 `not-run` with reason, keep the
+      unobserved rows `unknown (not observed)`, and include reproduction commands for a later
+      authorized run. T6 `not-run` is not a pass and does not block a truthful docs-only evidence
+      report; downstream adoption of CDN/SRI contracts must retain an evidence gate.
 - [ ] T7. Confirm `Dockerfile` does not copy `docs/` into the image, so `ui.mctl.ai` output is unchanged.
 
 ## Rollback
