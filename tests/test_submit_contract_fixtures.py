@@ -14,11 +14,13 @@ and asserts:
      repository exactly once, and the list of names without a template is
      disjoint from the defined ones.
   2. Every portal template has a legacy ClusterWorkflowTemplate; a `-w2`
-     variant, if defined, is a ClusterWorkflowTemplate; names are unique and
-     `w2` is `<legacy>-w2`.
+     variant, if defined, is a ClusterWorkflowTemplate; names are unique, `w2` is `<legacy>-w2`, and neither name is in the
+     shared `argo_workflows_namespace` list.
   3. For each tenant the template names it may submit follow its write mode
      (tenant.gitopsWritesMode: legacy|shadow|on, unset = legacy): legacy and
-     shadow use the legacy names, on uses the `-w2` names.
+     shadow use the legacy names, on uses the `-w2` names. Every allowed name
+     must have a template, so a tenant in mode `on` needs the `-w2` templates
+     (they may be absent only while no tenant is in mode `on`).
   4. While the portal fixture says `off`, no tenant is in a mode other than
      `legacy`.
 
@@ -68,19 +70,36 @@ def str_list(doc, key, path):
     return v
 
 
-def cwt_names(root):
+def template_files(root):
     d = root / CWT_DIR
-    files = sorted(d.glob("*.yaml"))
+    files = sorted(set(d.glob("*.yaml")) | set(d.glob("*.yml")))
     if not files:
         raise Unknown(f"no templates found under {d}")
+    return files
+
+
+def cwt_names(root):
     names = []
-    for f in files:
+    for f in template_files(root):
         for doc in load(f):
             if isinstance(doc, dict) and doc.get("kind") == "ClusterWorkflowTemplate":
                 n = (doc.get("metadata") or {}).get("name")
                 if not isinstance(n, str) or not n:
                     raise Unknown(f"{f}: ClusterWorkflowTemplate without a name")
                 names.append(n)
+    return names
+
+
+def other_kind_names(root):
+    """Names of documents in the template directory that are not a
+    ClusterWorkflowTemplate (for example a namespaced WorkflowTemplate)."""
+    names = set()
+    for f in template_files(root):
+        for doc in load(f):
+            if isinstance(doc, dict) and doc.get("kind") != "ClusterWorkflowTemplate":
+                n = (doc.get("metadata") or {}).get("name")
+                if isinstance(n, str) and n:
+                    names.add(n)
     return names
 
 
@@ -142,6 +161,7 @@ def check(root):
         if not (isinstance(t, dict) and isinstance(t.get("legacy"), str)
                 and isinstance(t.get("w2"), str)):
             raise Unknown(f"{p}: each entry needs string `legacy` and `w2`")
+    other_kinds = other_kind_names(root)
     legacy = [t["legacy"] for t in pt]
     if len(set(legacy)) != len(legacy):
         errs.append("portal-team-templates: duplicate legacy name")
@@ -150,8 +170,11 @@ def check(root):
             errs.append(f"portal-team-templates: {t['w2']} is not {t['legacy']}-w2")
         if t["legacy"] not in nameset:
             errs.append(f"portal-team-templates: no template defined for {t['legacy']}")
-        if t["legacy"] in central:
-            errs.append(f"portal-team-templates: {t['legacy']} is a shared-namespace template, not a team one")
+        for key in ("legacy", "w2"):
+            if t[key] in central or t[key] in central_nt:
+                errs.append(f"portal-team-templates: {t[key]} is a shared-namespace template, not a team one")
+        if t["w2"] in other_kinds:
+            errs.append(f"portal-team-templates: {t['w2']} is defined but not as a ClusterWorkflowTemplate")
 
     # 3 + 4. tenants versus portal state
     p = root / FIX / "portal-submit-state.yaml"
@@ -161,11 +184,12 @@ def check(root):
     modes = tenant_modes(root)
     for tenant, mode in sorted(modes.items()):
         want = allowed_names(mode, pt)
+        # Every name a tenant may submit must have a template. The `-w2`
+        # variants are introduced later, so while no tenant is in mode `on`
+        # their absence is allowed; a tenant in mode `on` needs them.
         for n in want:
-            if n.endswith("-w2") and n in nameset:
-                continue
-            if not n.endswith("-w2") and n not in nameset:
-                errs.append(f"{tenant}: allowed name {n} has no template")
+            if n not in nameset:
+                errs.append(f"{tenant}: allowed name {n} has no template (mode {mode})")
         if state == "off" and mode != "legacy":
             errs.append(f"{tenant}: mode {mode} while submitViaMctlApi is off")
     return errs
@@ -177,6 +201,26 @@ def snapshot(root, dest):
     for rel in (CWT_DIR, TENANTS_DIR, FIX):
         shutil.copytree(root / rel, dest / rel)
     return dest
+
+
+W2_NAMES = ("deploy-service-w2", "retire-service-w2", "provision-database-w2")
+
+
+def add_w2_templates(dest, kind="ClusterWorkflowTemplate", register=True):
+    """Define the `-w2` variants; register them as team-namespace names."""
+    for n in W2_NAMES:
+        (dest / CWT_DIR / f"probe-{n}.yaml").write_text(
+            f"apiVersion: argoproj.io/v1alpha1\nkind: {kind}\n"
+            f"metadata:\n  name: {n}\nspec:\n  templates: []\n")
+    if register:
+        p = dest / FIX / "workflow-namespaces.yaml"
+        p.write_text(p.read_text() + "".join(f"  - {n}\n" for n in W2_NAMES))
+
+
+def set_tenant_on(dest):
+    (dest / FIX / "portal-submit-state.yaml").write_text('submitViaMctlApi: "on"\n')
+    p = next((dest / TENANTS_DIR).glob("*/values.yaml"))
+    p.write_text(p.read_text().replace("tenant:\n", "tenant:\n  gitopsWritesMode: \"on\"\n", 1))
 
 
 def mutate(dest, case):
@@ -201,6 +245,27 @@ def mutate(dest, case):
         (fx / "portal-submit-state.yaml").write_text("submitViaMctlApi: [unterminated\n")
     elif case == "portal-state-bare-bool":
         (fx / "portal-submit-state.yaml").write_text("submitViaMctlApi: off\n")
+    elif case == "tenant-on-without-w2-templates":
+        set_tenant_on(dest)
+    elif case == "w2-in-shared-namespace":
+        add_w2_templates(dest, register=False)
+        p = fx / "workflow-namespaces.yaml"
+        p.write_text(p.read_text().replace(
+            "argo_workflows_namespace:\n", "argo_workflows_namespace:\n  - deploy-service-w2\n", 1))
+    elif case == "w2-wrong-kind":
+        (dest / CWT_DIR / "probe-wrong-kind.yaml").write_text(
+            "apiVersion: argoproj.io/v1alpha1\nkind: WorkflowTemplate\n"
+            "metadata:\n  name: deploy-service-w2\nspec:\n  templates: []\n")
+    elif case == "portal-duplicate-legacy":
+        p = fx / "portal-team-templates.yaml"
+        p.write_text(p.read_text() + "  - legacy: deploy-service\n    w2: deploy-service-w2\n")
+    elif case == "portal-bad-w2-naming":
+        p = fx / "portal-team-templates.yaml"
+        p.write_text(p.read_text().replace("w2: retire-service-w2", "w2: retire-service-v2", 1))
+    elif case == "yml-template-not-in-fixture":
+        (dest / CWT_DIR / "wft-extra-yml-probe.yml").write_text(
+            "apiVersion: argoproj.io/v1alpha1\nkind: ClusterWorkflowTemplate\n"
+            "metadata:\n  name: extra-yml-probe\nspec:\n  templates: []\n")
     else:
         raise AssertionError(case)
 
@@ -213,6 +278,12 @@ RED = {  # case -> (exit class, substring)
     "tenant-unknown-mode": (2, "sideways"),
     "portal-state-unreadable": (2, "cannot read"),
     "portal-state-bare-bool": (2, "must be the string on or off"),
+    "tenant-on-without-w2-templates": (1, "allowed name deploy-service-w2 has no template (mode on)"),
+    "w2-in-shared-namespace": (1, "deploy-service-w2 is a shared-namespace template"),
+    "w2-wrong-kind": (1, "deploy-service-w2 is defined but not as a ClusterWorkflowTemplate"),
+    "portal-duplicate-legacy": (1, "duplicate legacy name"),
+    "portal-bad-w2-naming": (1, "retire-service-v2 is not retire-service-w2"),
+    "yml-template-not-in-fixture": (1, "extra-yml-probe is defined but not in the fixture"),
 }
 
 
@@ -238,11 +309,10 @@ def main():
     # A tenant set to `on` with the portal flag on is a valid converged state.
     with tempfile.TemporaryDirectory() as td:
         d = snapshot(ROOT, pathlib.Path(td) / "t")
-        (d / FIX / "portal-submit-state.yaml").write_text('submitViaMctlApi: "on"\n')
-        p = next((d / TENANTS_DIR).glob("*/values.yaml"))
-        p.write_text(p.read_text().replace("tenant:\n", "tenant:\n  gitopsWritesMode: \"on\"\n", 1))
+        set_tenant_on(d)
+        add_w2_templates(d)
         code, msgs = run(d)
-        expect("mode on with portal flag on is green", code == 0, "; ".join(msgs))
+        expect("mode on with portal flag on and -w2 templates defined is green", code == 0, "; ".join(msgs))
 
     for case, (want_code, needle) in RED.items():
         with tempfile.TemporaryDirectory() as td:
