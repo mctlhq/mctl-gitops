@@ -533,7 +533,8 @@ jobs:
         # The G6 template-text scan is a best-effort heuristic with documented
         # unresolved limits (see the test module docstring); it is not a proof of
         # coverage of Helm template conditions. The render-based checks, the matrix
-        # and review of the bootstrap chart are the real controls.
+        # are the real controls. Review of the bootstrap chart is not enforced by the
+        # repository settings and is not counted as a control.
         # A full run takes 2 to 3 minutes (134 to 174 s measured) and prints its elapsed time; the
         # timeout leaves room for a slow runner.
         timeout-minutes: 20

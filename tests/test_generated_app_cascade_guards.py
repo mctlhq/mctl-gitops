@@ -51,8 +51,10 @@ KNOWN LIMITS, UNRESOLVED (documented, not fixed):
   - plain truthiness gates on non-boolean declared values;
   - a new AppProject that is not pinned (only `apps` and `platform` are, see G7).
 THE REAL CONTROLS are the render-based checks G1, G2, G4, G5 and G7 (they read the output of a real
-`helm template`), the render matrix, render-twice determinism, --include-crds, and human review of any
-change to the bootstrap chart. G6 is an additional net on top of them and never a substitute for them.
+`helm template`), the render matrix, render-twice determinism and --include-crds. Review of changes to
+the bootstrap chart is routed to the code owner by CODEOWNERS but is NOT enforced by the repository
+settings today (code owner review is not required), so it is not counted as a control here. G6 is an
+additional net on top of the render-based checks and never a substitute for them.
 
 G6. Template inputs the matrix cannot switch (best-effort, see above). It flips what values.yaml declares and nothing else,
 so every `.Values.a.b` path that a template reads (also `(default dict .Values.a).b`) must be declared in
@@ -767,7 +769,7 @@ def plan_matrix(chart: Path, root: Path, tmp: Path) -> tuple[list[tuple[str, lis
            "boolean flips, every boolean true, every boolean false; the main renders use release "
            f"{env.release}, namespace {env.namespace} and {len(env.api_versions)} API versions",
            "render matrix flags: " + ", ".join(_dotted(p) for p in flags),
-           "G6 is best-effort and does not prove coverage of Helm template conditions (see the module docstring); "
+           "G6 is best-effort and does not prove coverage of Helm template conditions (see the module docstring)",
            "render matrix NOT covered: non-boolean gates on declared values, other flag combinations, other "
            "release names, namespaces and cluster versions than the variants above, values injected by "
            "Argo CD at sync time, Applications generated at run time"]
@@ -1835,7 +1837,7 @@ def repo_checks(root: Path, helm: str) -> Analysis:
             ("G2", "G2 generated Application names are distinct and not those of any rendered Application"),
             ("G4", "G4 every Application's project exists and permits it, and the apps project cascades "
                    "every object of the service charts"),
-            ("G6", "G6 (best-effort heuristic, not a coverage proof) every .Values path a template reads is declared in values.yaml"),
+            ("G6", "G6 (best-effort heuristic, not a coverage proof) the .Values paths it can see a template reading are declared in values.yaml"),
             ("G7", "G7 finalizers of every Application and AppProject, and the apps and platform AppProject "
                    "specs, match the golden, in every render")):
         p = a.groups[group]
