@@ -55,13 +55,21 @@ Scope and safety
 - THE SYSTEM SHALL emit exactly one `L2RESULT id=<id> outcome=<outcome> rev=<sha> evidence=<...>`
   line per sub-case.
 
-T2 (owner summary from a Bob-conversation job)
-- WHEN a job-bound identity for a job on Alice's conversation with Bob posts `/notify/summary`
-  with finance-looking text containing the marker THE SYSTEM SHALL record the observed decision,
-  the action status and whether an `owner_notifications` row was queued.
-- IF the summary is executed and queued THEN THE SYSTEM SHALL record `T2.bob_job_owner_summary`
-  as `FAIL/GAP` against the finance contract (peer-originated finance content reaches the owner
-  channel) through `expectGap`, and SHALL NOT change policy.
+T2 (ordinary owner summary versus an unimplemented finance-source authorization)
+- WHEN a job-bound identity for Alice's conversation with Bob posts `/notify/summary`
+  with synthetic finance-looking text THE SYSTEM SHALL record the action decision/status,
+  the owning user of every `owner_notifications` row, and the destination of the notification.
+- IF one notification goes ONLY to Alice's owner channel, with no peer send and no
+  cross-user row, THE SYSTEM SHALL classify `T2.bob_job_owner_summary` as `PASS`
+  for **ordinary owner-routing isolation**. A peer conversation being the source
+  of an owner summary is normal product behaviour; it is not by itself a
+  financial security breach.
+- THE SYSTEM SHALL separately emit `T2.finance_origin_authorization`:
+  without a finance-source label, source authorization/consent enforcement, or
+  a real finance-specific policy gate, classify it `NOT-IMPLEMENTED` rather
+  than infer either finance authorization PASS or FAIL/GAP from finance-looking
+  text. If any actual peer/cross-user disclosure is observed, record
+  `FAIL/GAP` with concrete sink/user evidence; do not repair it here.
 
 T3 (cross-tenant isolation)
 - WHEN Alice's account identity or Alice's job-bound identity names Carol's conversation id on
@@ -90,9 +98,16 @@ T9 (no immediate peer send for finance text)
   that the persisted status is not `approved` or `executed`. It SHALL also require that the
   handler performs no peer send: the API server has no sender, and the peer sink stays empty. If
   both hold, the result is `PASS`.
-- WHEN the same request runs in `guarded` mode with an allowlisted intent THE SYSTEM SHALL record
-  the observed decision. IF the status is `approved` (the executor would send without a human)
-  THEN it SHALL be recorded as `FAIL/GAP`. Otherwise it is `PASS`.
+- WHEN the same request runs in `guarded` mode with an allowlisted intent THE SYSTEM SHALL
+  record the observed policy decision, persisted status and handler-side send count in
+  `T9.guarded_allowlisted`. An `approved` row is an API authorization decision,
+  **not evidence of a peer message sent**. Classify this API-layer case `PASS`
+  only for the specified policy transition and absence of synchronous sends;
+  use `FAIL/GAP` for an actual API-policy violation, not merely `approved`.
+- THE SYSTEM SHALL emit `T9.executor_peer_send` as `CANNOT-OBSERVE`
+  because actual delivery happens in the executor outside this slice.
+  A no-op peer sink attached to an API without any sender cannot prove that
+  a later executor did not send. Do not claim full finance no-peer-send PASS.
 - IF the request names a finance tier or action field THEN THE SYSTEM SHALL record the observed
   400 and classify `T9.finance_tier` as `NOT-IMPLEMENTED`.
 
@@ -100,9 +115,13 @@ T10 (audit rows and redaction)
 - WHEN any T2, T3, T7.3 or T9 request completes THE SYSTEM SHALL require that each resulting
   `agent_actions` row has a non-empty `status`, `policy_decision` and, for denials,
   `policy_reasons`.
-- THE SYSTEM SHALL record whether a deny code is persisted on the action row. IF it is not (it is
-  observed only through the `CountPolicyDenial` metric) THEN it SHALL be recorded as
-  `T10.denycode_persisted` `FAIL/GAP`.
+- THE SYSTEM SHALL separately record `T10.denycode_persisted`: the accepted
+  #1244 audit contract requires the structured denial code to survive on the
+  durable action/audit record. A code visible only in `CountPolicyDenial`
+  metrics is NOT durable evidence, and shall be `FAIL/GAP` (a missing
+  required field), not `NOT-IMPLEMENTED`. Only the absence of an entire
+  unapproved finance feature is classified `NOT-IMPLEMENTED`. Do not
+  modify the database or production code in this test-only slice.
 - WHILE the T10 calls run THE SYSTEM SHALL capture all slog output through the production
   pipeline (`audit.NewRedactingHandler` over a JSON handler), and SHALL require that the marker
   appears neither there nor in plaintext in `audit_logs`, `agent_actions` or
@@ -110,6 +129,12 @@ T10 (audit rows and redaction)
 - WHEN the marker is placed in the agent-supplied `intent` field instead of `text` THE SYSTEM
   SHALL record whether it surfaces in `audit_logs` or in `agent_actions.intent`/`policy_reasons`
   (`T10.intent_channel`). If it surfaces, that is `FAIL/GAP`.
+- FOR `T10.traces`, IF the real agent API emits no spans or no production
+  trace exporter is observable from this offline test THEN the row SHALL be
+  `CANNOT-OBSERVE` with the observed span count (including zero). A
+  test-local empty provider is NOT a redaction PASS. Only captured spans
+  from the actual exercised instrumentation may support a trace-redaction
+  PASS; never manufacture an instrumentation layer.
 - WHEN harness-only control M4 logs the marker under key `text` through a JSON handler with no
   redaction THE SYSTEM SHALL require that the same assertion helper used by T10 reports the leak.
   The row is recorded as `M4 PASS (detected)`. IF the helper does not report it THEN the suite
@@ -147,19 +172,19 @@ Reporting
 
 ## Open questions
 
-- T2 classification: queuing an owner summary from a peer-conversation job is the product's
-  normal behaviour. The proposal follows the #1244 rubric (`FAIL/GAP` vs the finance contract).
-  The reviewer should confirm that framing.
-- T9 guarded mode: `handleProposeReply` records `approved` and leaves the actual send to the
-  executor, which is outside this slice. Is the persisted `approved` status sufficient evidence of
-  an "immediate send"?
-- T10 traces: `internal/agentapi` emits no OpenTelemetry spans, and `go.opentelemetry.io/otel/sdk`
-  is not a dependency. Trace redaction is therefore recorded from a test-local `TracerProvider` as
-  "0 spans observed". Is a vacuous result acceptable, or should it be `CANNOT-OBSERVE`?
+- Resolved rubric (AMEND): `T2.bob_job_owner_summary` tests ordinary owner routing,
+  not invented finance-origin permission; `T2.finance_origin_authorization`
+  is `NOT-IMPLEMENTED` until that security capability exists.
+- Resolved rubric (AMEND): guarded-mode `approved` is an API policy state,
+  not an observed executor send; `T9.executor_peer_send` is
+  `CANNOT-OBSERVE` in this slice.
+- Resolved rubric (AMEND): zero agent API trace spans is
+  `T10.traces CANNOT-OBSERVE`, never a vacuous PASS.
 - T1: the gotd module source (`v0.163.0`) was not in the investigator's module cache. Whether a
   terminating middleware captures `Invoke` before any connection exists is unverified. Both
   outcomes are defined above.
-- Should `T10.denycode_persisted` be `FAIL/GAP` (the #1244 rubric: "any missing field") or
-  `NOT-IMPLEMENTED`?
+- Resolved rubric (AMEND): a denial code required by #1244 but absent from
+  a durable action/audit record is `T10.denycode_persisted FAIL/GAP`,
+  separate from the policy engine's ability to produce a code.
 - This proposal needs its own approval grant. #1244's grant (`aar_5dc0456105f442829583adaa101516c6`)
   and slice B's grant (`aar_9020e7a758204906b74b976033994fe6`) do not transfer.
