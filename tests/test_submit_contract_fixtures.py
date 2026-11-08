@@ -215,18 +215,16 @@ def w2_names(root=ROOT):
     return tuple(t["w2"] for t in entries)
 
 
-W2_NAMES = w2_names()
-
-
 def add_w2_templates(dest, kind="ClusterWorkflowTemplate", register=True):
     """Define the `-w2` variants; register them as team-namespace names."""
-    for n in W2_NAMES:
+    names = w2_names(dest)
+    for n in names:
         (dest / CWT_DIR / f"probe-{n}.yaml").write_text(
             f"apiVersion: argoproj.io/v1alpha1\nkind: {kind}\n"
             f"metadata:\n  name: {n}\nspec:\n  templates: []\n")
     if register:
         p = dest / FIX / "workflow-namespaces.yaml"
-        p.write_text(p.read_text() + "".join(f"  - {n}\n" for n in W2_NAMES))
+        p.write_text(p.read_text() + "".join(f"  - {n}\n" for n in names))
 
 
 def set_tenant_on(dest):
