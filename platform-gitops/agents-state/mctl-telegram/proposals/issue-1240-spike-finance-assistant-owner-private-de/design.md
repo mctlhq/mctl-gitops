@@ -144,8 +144,10 @@ sends, managed runtime (#1088), connector trust changes (#1048) or shared
 memory beyond #309 is needed.
 
 ## Alternatives
-- **REUSE_EXISTING_OWNER_PATH**: dropped because no owner-initiated invocation exists.
-  The only producer of owner summaries is a peer-triggered job (counterexample above).
+- **REUSE_EXISTING_OWNER_PATH**: the initial code inspection did not find
+  an owner-initiated invocation (the examined owner summaries were peer-triggered).
+  **Re-assess this option** against the complete pinned inventory and L2 plan;
+  do not reject it before the report's evidence-based verdict.
 - **Implement the extension now**: dropped. The issue forbids implementation, and #325
   stays RESEARCH_ONLY_DEFER.
 - **NO_TELEGRAM_SURFACE (workspace-only)**: kept as the fallback recommendation if the
