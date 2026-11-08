@@ -230,3 +230,73 @@ def workflow_templates(doc):
     for s in (spec, spec.get("workflowSpec") or {}):
         out.append((s.get("templates") or [], s.get("volumes") or []))
     return out
+
+
+def rule_strs(rule, key, required=True):
+    v = rule.get(key)
+    if v is None and not required:
+        return []
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+        raise ReadError(f"unparseable RBAC rule ({key} is not a list of strings): {rule!r}"[:300])
+    return v
+
+
+def group_match(pat, group):
+    return pat == "*" or pat == group
+
+
+def resource_match(pat, res):
+    """Whether one entry of a rule's `resources` matches the requested resource
+    `res` ("pods", or "pods/exec" for a subresource). Modelled on
+    ResourceMatches in k8s.io/kubernetes pkg/apis/rbac/v1/evaluation_helpers.go,
+    which plugin/pkg/auth/authorizer/rbac/rbac.go (RuleAllows) calls with the
+    combined "resource/subresource" string and the bare subresource. Verified
+    against the source fetched at tag v1.37.2 (also read for APIGroupMatches,
+    which is "*" or an exact group): "*" matches everything, including
+    every subresource; an exact "resource" or "resource/subresource" matches
+    itself; "*/subresource" matches that subresource of any resource, and only
+    when the request has a subresource (a rule entry of exactly len(sub)+2 chars
+    with prefix "*/" and suffix sub). "resource/*" is NOT a form the authorizer
+    understands (it never matches), and neither is "*/*"; the Kubernetes RBAC
+    reference documents only "*", "resource/subresource" and "*/subresource"."""
+    if pat == "*" or pat == res:
+        return True
+    sub = res.partition("/")[2]
+    return bool(sub) and pat == "*/" + sub
+
+
+def verb_match(verbs, wanted):
+    return "*" in verbs or bool(set(verbs) & set(wanted))
+
+
+def parse_rules(rules):
+    """Validate a Role's or ClusterRole's `rules` and return a list of
+    (apiGroups, resources, verbs, resourceNames) tuples. `rules` may be absent
+    (None) only; anything that is not a list of mappings, or a rule whose
+    apiGroups, resources, verbs or resourceNames are not lists of strings, is a
+    ReadError, never 'no access'. A pure URL rule (nonResourceURLs without
+    resources) reaches no namespaced object and is skipped."""
+    if rules is not None and not isinstance(rules, list):
+        raise ReadError(f"unparseable RBAC rules: {rules!r}"[:300])
+    out = []
+    for r in rules or []:
+        if not isinstance(r, dict):
+            raise ReadError(f"unparseable RBAC rule: {r!r}"[:300])
+        if "resources" not in r and r.get("nonResourceURLs"):
+            continue
+        out.append((rule_strs(r, "apiGroups"), rule_strs(r, "resources"), rule_strs(r, "verbs"),
+                    rule_strs(r, "resourceNames", required=False)))
+    return out
+
+
+def cluster_role_rules(docs):
+    """{name: rules} of the ClusterRoles in `docs`. An aggregated ClusterRole
+    (aggregationRule) has its rules filled in by the cluster, so they are not in
+    the render: that is a ReadError, never an empty rule set."""
+    out = {}
+    for d in docs:
+        if d.get("kind") == "ClusterRole":
+            if d.get("aggregationRule"):
+                raise ReadError(f"ClusterRole {d['metadata']['name']} is aggregated: its rules are not in the render")
+            out[d["metadata"]["name"]] = d.get("rules")
+    return out

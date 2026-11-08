@@ -72,17 +72,18 @@ def render(values_file, tenant):
 
 def secret_reads(rules):
     """(unrestricted, names): whether any rule reads all Secrets, and which
-    Secrets are readable by name."""
+    Secrets are readable by name. Rules are parsed by the shared fail-closed
+    parser: a rule that cannot be read is a ReadError, never 'no access'."""
     unrestricted, names = False, set()
-    for r in rules or []:
-        if not ({"", "*"} & set(r.get("apiGroups", []))):
+    for groups, res, verbs, rnames in W.parse_rules(rules):
+        if not any(W.group_match(g, "") for g in groups):
             continue
-        if not ({"secrets", "*"} & set(r.get("resources", []))):
+        if not any(W.resource_match(p, "secrets") for p in res):
             continue
-        if not (READ & set(r.get("verbs", []))):
+        if not (READ & set(verbs)):
             continue
-        if r.get("resourceNames"):
-            names |= set(r["resourceNames"])
+        if rnames:
+            names |= set(rnames)
         else:
             unrestricted = True
     return unrestricted, names
@@ -96,7 +97,11 @@ ARTIFACT_SECRET = m.group(1) if m else None
 def secret_check_binding(tenant, ns, b, rules, ref):
     """Check one binding's subjects against the Secret rules of its role."""
     name = b["metadata"]["name"]
-    unrestricted, names = secret_reads(rules)
+    try:
+        unrestricted, names = secret_reads(rules)
+    except W.ReadError as e:
+        check(False, f"{tenant}: {b['kind']} {name} in {ns}: {e}")
+        return set()
     sso_names = set()
     for s in b.get("subjects") or []:
         if b["kind"] == "ClusterRoleBinding" and isinstance(s, dict) and s.get("kind") == "ServiceAccount" \
@@ -120,7 +125,10 @@ def secret_check_binding(tenant, ns, b, rules, ref):
                   f"({'all' if unrestricted else sorted(names)}); it only creates them")
             continue
         if unrestricted:
-            check(who in {w.replace("{ns}", ns) for w in WORKFLOW_SAS},
+            # The allowance is for the namespaced shape only: a RoleBinding to a Role in
+            # this namespace. A ClusterRoleBinding applies in every namespace.
+            allowed = b["kind"] == "RoleBinding" and ref["kind"] == "Role"
+            check(allowed and who in {w.replace("{ns}", ns) for w in WORKFLOW_SAS},
                   f"{tenant}: {b['kind']} {name} in {ns} grants get/list on every Secret to {who}")
     return sso_names
 
@@ -130,7 +138,11 @@ def check_tenant(tenant, docs):
     namespaces = [d["metadata"]["name"] for d in docs if d["kind"] == "Namespace"
                   and d["metadata"].get("labels", {}).get("mctl.me/preview") != "true"]
     check(namespaces, f"{tenant}: the chart rendered no tenant namespace")
-    cluster_roles = {d["metadata"]["name"]: d.get("rules") for d in docs if d["kind"] == "ClusterRole"}
+    try:
+        cluster_roles = W.cluster_role_rules(docs)
+    except W.ReadError as e:
+        check(False, f"{tenant}: {e}")
+        cluster_roles = {}
     for ns in namespaces:
         roles = {d["metadata"]["name"]: d.get("rules") for d in docs
                  if d["kind"] == "Role" and d["metadata"].get("namespace") == ns}
@@ -209,8 +221,46 @@ if ARTIFACT_SECRET:
           "self-test: a ServiceAccount named mctl-api in the tenant namespace is not the platform mctl-api")
     check(failures_of(tenant_docs(ALL, {"kind": "User", "name": "u"}, "ClusterRoleBinding", "ClusterRole")),
           "self-test: a ClusterRoleBinding granting every Secret to a user is flagged")
-    check(not failures_of(tenant_docs(ALL, sa("argo-workflows"), "ClusterRoleBinding", "ClusterRole")),
-          "self-test: a ClusterRoleBinding to the central workflow ServiceAccount is accepted")
+    check(failures_of(tenant_docs(ALL, sa("argo-workflows"), "ClusterRoleBinding", "ClusterRole")),
+          "self-test: a ClusterRoleBinding to the central workflow ServiceAccount is flagged (cluster-wide read)")
+    check(failures_of(tenant_docs(ALL, sa("t"), "ClusterRoleBinding", "ClusterRole")),
+          "self-test: a ClusterRoleBinding to the tenant's own workflow ServiceAccount is flagged")
+    check(not failures_of(tenant_docs(ALL, sa("argo-workflows"))),
+          "self-test: the namespaced Role binding of the central workflow ServiceAccount is accepted")
+    check(failures_of(tenant_docs(ALL, sa("argo-workflows"), "RoleBinding", "ClusterRole")),
+          "self-test: a RoleBinding of the central workflow ServiceAccount through a ClusterRole is flagged")
+    # fail closed: RBAC that cannot be read is an error, never "no Secret access"
+    def swap(docs, rules, *, aggregated=False):
+        out = []
+        for d in docs:
+            if d["kind"] in ("Role", "ClusterRole") and d["metadata"]["name"] == "all":
+                d = dict(d, rules=rules)
+                if aggregated and d["kind"] == "ClusterRole":
+                    d["aggregationRule"] = {"clusterRoleSelectors": [{"matchLabels": {"x": "y"}}]}
+            out.append(d)
+        return out
+    wf = sa("t")
+    for label, bad in (("rules that are not a list", "get"),
+                       ("rules as an empty mapping", {}),
+                       ("a rule that is not a mapping", ["get"]),
+                       ("verbs as a string", [{"apiGroups": [""], "resources": ["secrets"], "verbs": "get"}]),
+                       ("resources as a string", [{"apiGroups": [""], "resources": "secrets", "verbs": ["get"]}]),
+                       ("apiGroups as a string", [{"apiGroups": "", "resources": ["secrets"], "verbs": ["get"]}]),
+                       ("resourceNames as a string", [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"], "resourceNames": "x"}]),
+                       ("a rule without verbs", [{"apiGroups": [""], "resources": ["secrets"]}])):
+        for kind, ref_kind in (("RoleBinding", "Role"), ("ClusterRoleBinding", "ClusterRole")):
+            check(failures_of(swap(tenant_docs(ALL, wf, kind, ref_kind), bad)),
+                  f"self-test: {label} in a {ref_kind} is an error, not 'no access'")
+    check(failures_of(swap(tenant_docs(ALL, wf, "ClusterRoleBinding", "ClusterRole"), [], aggregated=True)),
+          "self-test: an aggregated ClusterRole with empty rules is an error")
+    check(failures_of(swap(tenant_docs(ALL, wf, "ClusterRoleBinding", "ClusterRole"), None, aggregated=True)),
+          "self-test: an aggregated ClusterRole with no rules is an error")
+    check(failures_of(swap(tenant_docs(ALL, wf, "RoleBinding", "Role"), [], aggregated=True)),
+          "self-test: an aggregated ClusterRole is an error even when only a Role is bound")
+    check(not failures_of(swap(tenant_docs(ALL, wf), [{"apiGroups": [""], "resources": ["configmaps"], "verbs": ["get"]}])),
+          "self-test: readable rules without Secret access are no access")
+    check(secret_reads([{"nonResourceURLs": ["/healthz"], "verbs": ["get"]}]) == (False, set()),
+          "self-test: a pure URL rule reaches no Secret")
     check(failures_of(tenant_docs(ALL, {"kind": "ServiceAccount", "name": "argo-workflow-sa"}, "ClusterRoleBinding", "ClusterRole")),
           "self-test: a ClusterRoleBinding ServiceAccount subject without namespace is flagged")
     check(failures_of(tenant_docs(ALL, sa("argo-workflows", "sso-team-t"), "ClusterRoleBinding", "ClusterRole")),

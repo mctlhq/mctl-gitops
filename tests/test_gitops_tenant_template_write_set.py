@@ -191,37 +191,10 @@ EXEC_VERBS = frozenset({"create", "get"})
 READ_VERBS = frozenset({"get", "list", "watch"})
 
 
-def _strs(rule, key, required=True):
-    v = rule.get(key)
-    if v is None and not required:
-        return []
-    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
-        raise W.ReadError(f"unparseable RBAC rule ({key} is not a list of strings): {rule!r}"[:300])
-    return v
-
-
-def _group_match(pat, group):
-    return pat == "*" or pat == group
-
-
-def _resource_match(pat, res):
-    """Whether one entry of a rule's `resources` matches the requested resource
-    `res` ("pods", or "pods/exec" for a subresource). Exactly the Kubernetes RBAC
-    authorizer's ResourceMatches (k8s.io/kubernetes
-    plugin/pkg/auth/authorizer/rbac/rbac.go): "*" matches everything, including
-    every subresource; an exact "resource" or "resource/subresource" matches
-    itself; "*/subresource" matches that subresource of any resource, and only
-    when the request has a subresource. "resource/*" is NOT a form the authorizer
-    understands (it never matches), and neither is "*/*"; the Kubernetes RBAC
-    reference documents only "*", "resource/subresource" and "*/subresource"."""
-    if pat == "*" or pat == res:
-        return True
-    sub = res.partition("/")[2]
-    return bool(sub) and pat == "*/" + sub
-
-
-def _verb_match(verbs, wanted):
-    return "*" in verbs or bool(set(verbs) & set(wanted))
+_strs = W.rule_strs
+_group_match = W.group_match
+_resource_match = W.resource_match
+_verb_match = W.verb_match
 
 
 def secrets_rules(rules, secret):
@@ -230,16 +203,7 @@ def secrets_rules(rules, secret):
     escalation (see ESCALATION_RESOURCES).
     A rule that cannot be parsed raises ReadError: it is not 'no access'."""
     via = set()
-    if rules is not None and not isinstance(rules, list):
-        raise W.ReadError(f"unparseable RBAC rules: {rules!r}"[:300])
-    for r in rules or []:
-        if not isinstance(r, dict):
-            raise W.ReadError(f"unparseable RBAC rule: {r!r}"[:300])
-        if "resources" not in r and r.get("nonResourceURLs"):
-            continue  # URL rule: reaches no namespaced object
-        groups, res, verbs = _strs(r, "apiGroups"), _strs(r, "resources"), _strs(r, "verbs")
-        names = _strs(r, "resourceNames", required=False)
-
+    for groups, res, verbs, names in W.parse_rules(rules):
         def has(group, resource, wanted):
             return (any(_group_match(g, group) for g in groups)
                     and any(_resource_match(p, resource) for p in res)
@@ -263,12 +227,7 @@ def reader_rows(docs, ns, secrets):
     ClusterRoleBindings, through the Roles and ClusterRoles in `docs`."""
     roles = {d["metadata"]["name"]: d.get("rules") for d in docs
              if d.get("kind") == "Role" and d["metadata"].get("namespace") == ns}
-    croles = {}
-    for d in docs:
-        if d.get("kind") == "ClusterRole":
-            if d.get("aggregationRule"):
-                raise W.ReadError(f"ClusterRole {d['metadata']['name']} is aggregated: its rules are not in the render")
-            croles[d["metadata"]["name"]] = d.get("rules")
+    croles = W.cluster_role_rules(docs)
     rows = set()
     for b in docs:
         kind = b.get("kind")
@@ -599,7 +558,8 @@ for pat, res, want in (("*", "pods", True), ("*", "pods/exec", True), ("pods", "
                        ("pods/exec", "pods/exec", True), ("pods/exec", "pods", False), ("*/exec", "pods/exec", True),
                        ("*/exec", "pods", False), ("*/exec", "pods/attach", False), ("pods/*", "pods/exec", False),
                        ("pods/*", "pods", False), ("*/*", "pods/exec", False), ("*/*", "pods", False),
-                       ("*/exe", "pods/exec", False), ("*/xec", "pods/exec", False), ("", "pods", False)):
+                       ("*/exe", "pods/exec", False), ("*/xec", "pods/exec", False), ("", "pods", False),
+                       ("*/", "pods", False), ("*/", "pods/exec", False)):
     check(f"_resource_match({pat!r}, {res!r}) is {want}", _resource_match(pat, res) is want)
 
 # the tenant chosen for the real-chart mutations, and what a render without a namespace is
@@ -627,6 +587,7 @@ for label, bad in (("a rule that is not a mapping", ["create"]),
                                                             "resourceNames": "x"}])):
     check(f"an unparseable rule is an error: {label}", raises(lambda bad=bad: rows_of(bad)))
 check("rules that are not a list is an error", raises(lambda: rows_of({"verbs": ["get"]})))
+check("rules as an empty mapping is an error", raises(lambda: rows_of({})))
 check("an unclassified ClusterRole binding is an error", raises(lambda: reader_rows(
     [{"kind": "RoleBinding", "metadata": {"name": "b", "namespace": "n"},
       "roleRef": {"kind": "ClusterRole", "name": "new-role"}, "subjects": []}], "n", [K])))
