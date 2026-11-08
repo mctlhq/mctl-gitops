@@ -20,6 +20,16 @@ provider writes for any invalid, replayed, mismatched, expired, stale-revision,
 revoked or wrong-owner grant. It depends on M1a (connection registry). Nothing in
 this slice talks to real Glovo.
 
+## AMEND 2026-11-08 — revocation race at **actual** fake provider mutation
+
+**P1 finding from independent review:** the original design revalidated only before signing an `EffectAuthorization`, but the provider worker could act on a previously signed authorization after the connection, membership or install revision was revoked. A signed token by itself is not live authorization, and "revoke between dispatch and callback" is not safe enough.
+
+- **At every provider physical mutation boundary** (not merely at request creation, approval, dispatch signing or callback), the worker MUST perform a fresh, narrowly scoped mctl-api authorization/fence for `(team tenant, principal, connection, install revision, order, we_, aar_, effect, intent hash, operation key)`. Verify live selected-team binding from #953, membership, allowlist, connection state, install revision, approval receipt and deadline before effect I/O. Missing or unreachable authority = no write.
+- For M1 **synthetic** provider, the final fence and state mutation SHALL be atomic with respect to connection revoke/reinstall where practicable (e.g. shared transaction/CAS or another explicitly designed mutual-exclusion mechanism). If the seam cannot guarantee it, the proposal MUST state the residual TOCTOU and mark security gate BLOCKED until a deterministic race test proves no write when revocation wins. Real external Glovo I/O remains out of scope.
+- A retry MUST NOT return/replay a still-signed authorization to the worker without a new live authority check. Preserve the original operation key and deadline; never mint a new receipt or operation to get around a revoked/expired effect. A late callback after a completed effect is observable but does not reinstate consent or membership.
+- Tests MUST deterministically revoke the install/connection/membership **after mctl-api signed dispatch but before fake worker write**, and assert **zero** mutation. Conversely, if fake mutation committed before revocation, it remains an audited effect, and revocation prevents any second mutation. Include concurrency and ambiguous-timeout variants.
+- Approval of this proposal still does not authorize the later worker release, Glovo account access, DNS, or deployment.
+
 ## User stories
 
 - AS a tenant member who owns a Glovo connection I WANT to approve one specific basket
@@ -83,9 +93,7 @@ Write boundary
   then sign one effect authorization for the provider worker.
 - WHILE an execution already has an effect row THE SYSTEM SHALL refuse a second effect
   for that `we_` (one execution per requested effect).
-- WHEN the same effect is retried with the same idempotency key and the same intent
-  THE SYSTEM SHALL return the existing effect and the identical authorization (same
-  provider operation key, same deadline), never a new one.
+- WHEN the same effect is retried with the same idempotency key and intent THE SYSTEM SHALL first recheck live membership, explicitly selected team grant, provider connection and install revision, approval receipt state and dispatch deadline. Only while those remain valid may it return the existing effect and the identical authorization (same operation key, same deadline); it must NEVER mint a second authorization or re-dispatch when revoked, expired or ambiguous.
 - IF an idempotency key is reused with a different intent THEN THE SYSTEM SHALL refuse
   with `idempotency_key_reused` and zero provider I/O.
 - WHEN the provider worker reports a definitive success THE SYSTEM SHALL settle the
@@ -98,9 +106,7 @@ Write boundary
   receipt in_flight and the effect unknown, and SHALL resolve it only by provider
   read-back on the same operation key: found -> succeeded; not found after the
   authorization deadline plus clock skew -> failed (no effect); never by re-dispatch.
-- IF the tenant membership, the connection or the install is revoked between approval
-  and dispatch, or during an activity before dispatch, THEN THE SYSTEM SHALL refuse
-  with zero provider I/O.
+- IF the team tenant membership, connection, selected-team grant or install is revoked between approval and dispatch, OR **after authorization signing and before actual fake-provider mutation**, THEN THE SYSTEM SHALL refuse with zero provider writes (not just zero new dispatch). If a mutation committed before revocation, record the effect but reject subsequent mutations. Provider must enforce an atomic live-revocation fence at the physical fake write seam; zero writes on injected race is required test evidence.
 - IF any authority source (membership, connection registry, approval store) cannot be
   read THEN THE SYSTEM SHALL refuse with `authority_unavailable` and zero provider I/O;
   unknown is never allowed.
