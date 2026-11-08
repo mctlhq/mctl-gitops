@@ -118,8 +118,8 @@ OWNERS = {
 PRIVATE_OWNERS = {"projects"}
 
 # Read by the fetch below. `ALLOWLIST_TOKEN` is set by cloudflare-drift.yml
-# from a mctl-agents App token with contents:read, the way release-drift.yml
-# mints one; GITHUB_TOKEN would not do, being scoped to this repository.
+# from a mctl-org-read App token (environment app-org-read) with contents:read;
+# GITHUB_TOKEN would not do, being scoped to this repository.
 TOKEN_ENV = "ALLOWLIST_TOKEN"
 GITHUB_API = "https://api.github.com"
 PORTAL = "mcp"

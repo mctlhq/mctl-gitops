@@ -6,9 +6,11 @@ name: Release gate watch
 # pull request. Argo CD syncs main either way, so this is the only signal.
 #
 # A detector, not enforcement: it reports after the push, it reverts nothing,
-# and it sees only what `release-gate.py verify` checks (tags, repository,
-# `requires`). Other edits to a gated values file pass it. A push can change
-# this file too, so the daily run reads whatever main then holds.
+# and it sees what `release-gate.py verify` checks (tags, repository,
+# `requires`). On a push it also compares the gated files and the gate policy
+# between the parent and the pushed commit by content, reading the policy from
+# the parent. A read that fails is reported as unknown, never as clean. A push
+# can change this file too, so the daily run reads whatever main then holds.
 
 on:
   push:
@@ -25,8 +27,12 @@ on:
 permissions:
   contents: read
 
+# A group keeps one pending run and drops older pending ones, so a push that
+# arrives while a run is in progress could be skipped. Each push therefore gets
+# its own group (by commit) and is always judged; the other triggers keep one
+# group per ref.
 concurrency:
-  group: release-gate-watch-${{ github.ref }}
+  group: release-gate-watch-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -35,12 +41,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
 
       - name: Install PyYAML
-        run: python3 -m pip install --quiet pyyaml
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+
+      - name: Compare content with the parent
+        id: diff
+        if: (success() || failure()) && github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          # 6 = content that the parent policy does not allow, 7 = a read of
+          # either side failed. Both end the step red; 7 is never clean.
+          rc=0
+          python3 scripts/release-gate.py diff --base "$BEFORE" --head "$SHA" || rc=$?
+          case "$rc" in
+            0) echo "gated content matches the parent policy" ;;
+            6) echo "state=violated" >> "$GITHUB_OUTPUT"
+               echo "::error::the push changed gated content" ;;
+            7) echo "state=unknown" >> "$GITHUB_OUTPUT"
+               echo "::error::could not compare the push with its parent" ;;
+            *) echo "::error::release-gate.py exited $rc, nothing was compared" ;;
+          esac
+          exit "$rc"
 
       - name: Verify
         id: verify
+        # Runs even when the comparison step failed, so both results are
+        # reported; a cancelled run still stops here.
+        if: success() || failure()
         run: |
           # Only exit 6, the gate's own refusal, counts as a violation. Anything
           # else is a check that did not run, which says nothing about main.
@@ -57,7 +89,7 @@ jobs:
           exit "$rc"
 
       - name: Notify Telegram - gate violated
-        if: failure() && github.event_name != 'pull_request' && steps.verify.outputs.state == 'violated'
+        if: failure() && github.event_name != 'pull_request' && (steps.verify.outputs.state == 'violated' || steps.diff.outputs.state == 'violated')
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -69,12 +101,12 @@ jobs:
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Notify Telegram - the check itself failed
-        if: failure() && github.event_name != 'pull_request' && steps.verify.outputs.state != 'violated'
+        if: failure() && github.event_name != 'pull_request' && steps.verify.outputs.state != 'violated' && steps.diff.outputs.state != 'violated'
         uses: appleboy/telegram-action@390cf7345777cd821dba28c72f436a78bce19cc5 # master 2026-05
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             🔧 *Release gate check could not run*
-            This says nothing about main: checkout, PyYAML or the script failed.
+            Main is unverified, not known to be clean: checkout, PyYAML, the script or a read of the parent commit failed.
             Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
