@@ -180,6 +180,7 @@ changes.
 - **L4 — production evidence:** privacy/security review, operational soak and release controls under the existing owners. Never infer L4 from L1, GitOps configuration or a green research CI.
 
 **Approval separation:** approving this research-only proposal authorizes the report, synthetic reference model, tests, SpikeDefinition and an independently reviewed PR in `mctlhq/.github`—nothing in `mctl-telegram`/`mctl-api`, no real financial data, no bank integration, no activation. Human approval of later implementation is a *new* exact-artifact decision. The research PR must not auto-close #325; the owner records the spike verdict.
+
 ## Alternatives
 
 - **Build a prototype finance assistant definition in mctl-telegram now.** Dropped. The issue
