@@ -1,57 +1,201 @@
 {
-  "_note": "Pinned view of the apps and tenants ApplicationSets. Edit only together with the ApplicationSet change it describes.",
+  "_note": "Complete normalised spec of the apps and tenants ApplicationSets, except the paths in ALLOWED_TO_CHANGE. Edit only together with the ApplicationSet change it describes; regenerate with: python3 tests/test_generated_app_cascade_guards.py --print-golden",
   "sets": {
     "apps": {
-      "generators": [
-        {
-          "git": {
-            "directories": [
+      "metadata": {
+        "name": "apps",
+        "namespace": "argocd"
+      },
+      "spec": {
+        "generators": [
+          {
+            "git": {
+              "directories": [
+                {
+                  "path": "platform-gitops/services/*/*"
+                }
+              ],
+              "repoURL": "__TPL__",
+              "requeueAfterSeconds": 30,
+              "revision": "__TPL__"
+            }
+          }
+        ],
+        "goTemplate": true,
+        "goTemplateOptions": [
+          "missingkey=error"
+        ],
+        "syncPolicy": {
+          "preserveResourcesOnDeletion": false
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "backstage.io/kubernetes-id": "{{ index .path.segments 3 }}",
+              "env": "apps",
+              "team": "{{ index .path.segments 2 }}"
+            },
+            "name": "{{ index .path.segments 2 }}-{{ index .path.segments 3 }}"
+          },
+          "spec": {
+            "destination": {
+              "namespace": "{{ index .path.segments 2 }}",
+              "server": "__TPL__"
+            },
+            "ignoreDifferences": [
               {
-                "path": "platform-gitops/services/*/*"
+                "jqPathExpressions": [
+                  ".data"
+                ],
+                "kind": "Secret",
+                "name": "ghcr-credentials"
+              },
+              {
+                "group": "external-secrets.io",
+                "jqPathExpressions": [
+                  ".metadata.annotations",
+                  ".spec.target.deletionPolicy",
+                  ".status"
+                ],
+                "kind": "ExternalSecret"
               }
             ],
-            "repoURL": "__TPL__",
-            "requeueAfterSeconds": 30,
-            "revision": "__TPL__"
+            "project": "apps",
+            "sources": [
+              {
+                "helm": {
+                  "valueFiles": [
+                    "$values/{{ .path.path }}/values.yaml"
+                  ]
+                },
+                "path": "platform-gitops/helm-charts/base-service",
+                "repoURL": "__TPL__",
+                "targetRevision": "__TPL__"
+              },
+              {
+                "ref": "values",
+                "repoURL": "__TPL__",
+                "targetRevision": "__TPL__"
+              }
+            ],
+            "syncPolicy": {
+              "automated": {
+                "prune": true,
+                "selfHeal": true
+              },
+              "retry": {
+                "backoff": {
+                  "duration": "5s",
+                  "factor": 2,
+                  "maxDuration": "3m"
+                },
+                "limit": 5,
+                "refresh": true
+              },
+              "syncOptions": [
+                "CreateNamespace=false",
+                "ApplyOutOfSyncOnly=true",
+                "ServerSideApply=true",
+                "RespectIgnoreDifferences=true"
+              ]
+            }
           }
         }
-      ],
-      "goTemplate": true,
-      "goTemplateOptions": [
-        "missingkey=error"
-      ],
-      "name": "apps",
-      "syncPolicy": {
-        "preserveResourcesOnDeletion": false
-      },
-      "templateName": "{{ index .path.segments 2 }}-{{ index .path.segments 3 }}",
-      "templateProject": "apps"
+      }
     },
     "tenants": {
-      "generators": [
-        {
-          "git": {
-            "directories": [
+      "metadata": {
+        "name": "tenants",
+        "namespace": "argocd"
+      },
+      "spec": {
+        "generators": [
+          {
+            "git": {
+              "directories": [
+                {
+                  "path": "platform-gitops/tenants/*"
+                }
+              ],
+              "repoURL": "__TPL__",
+              "requeueAfterSeconds": 30,
+              "revision": "__TPL__"
+            }
+          }
+        ],
+        "goTemplate": true,
+        "goTemplateOptions": [
+          "missingkey=error"
+        ],
+        "syncPolicy": {
+          "preserveResourcesOnDeletion": false
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "env": "platform",
+              "mctl.me/tenant": "{{ .path.basename }}"
+            },
+            "name": "tenant-{{ .path.basename }}"
+          },
+          "spec": {
+            "destination": {
+              "namespace": "{{ .path.basename }}",
+              "server": "__TPL__"
+            },
+            "ignoreDifferences": [
               {
-                "path": "platform-gitops/tenants/*"
+                "group": "external-secrets.io",
+                "jqPathExpressions": [
+                  ".metadata.annotations",
+                  ".spec.target.deletionPolicy",
+                  ".status"
+                ],
+                "kind": "ExternalSecret"
               }
             ],
-            "repoURL": "__TPL__",
-            "requeueAfterSeconds": 30,
-            "revision": "__TPL__"
+            "project": "platform",
+            "sources": [
+              {
+                "helm": {
+                  "valueFiles": [
+                    "$values/{{ .path.path }}/values.yaml"
+                  ]
+                },
+                "path": "platform-gitops/helm-charts/tenant",
+                "repoURL": "__TPL__",
+                "targetRevision": "__TPL__"
+              },
+              {
+                "ref": "values",
+                "repoURL": "__TPL__",
+                "targetRevision": "__TPL__"
+              }
+            ],
+            "syncPolicy": {
+              "automated": {
+                "prune": true,
+                "selfHeal": true
+              },
+              "retry": {
+                "backoff": {
+                  "duration": "10s",
+                  "factor": 2,
+                  "maxDuration": "2m"
+                },
+                "limit": 3,
+                "refresh": true
+              },
+              "syncOptions": [
+                "CreateNamespace=true",
+                "ApplyOutOfSyncOnly=true",
+                "ServerSideApply=true",
+                "RespectIgnoreDifferences=true"
+              ]
+            }
           }
         }
-      ],
-      "goTemplate": true,
-      "goTemplateOptions": [
-        "missingkey=error"
-      ],
-      "name": "tenants",
-      "syncPolicy": {
-        "preserveResourcesOnDeletion": false
-      },
-      "templateName": "tenant-{{ .path.basename }}",
-      "templateProject": "platform"
+      }
     }
   }
 }

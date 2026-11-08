@@ -6,19 +6,26 @@ that live in different places, and each one can be changed by an
 unrelated-looking edit.
 
 G1. Finalizer. The ApplicationSet controller (Argo CD v3.3.8,
-    applicationset/utils/utils.go, RenderTemplateParams, lines 284-287) adds
+    applicationset/utils/utils.go, Render.RenderTemplateParams, condition at
+    lines 285-288, verified against the v3.3.8 tag) adds
     `resources-finalizer.argocd.argoproj.io` to every generated Application
     when the template carries no finalizer of its own and
     `syncPolicy.preserveResourcesOnDeletion` is not true. On update it also
     replaces the Application's finalizers with the generated set, keeping only
-    the pre/post-delete hook finalizers (applicationset_controller.go,
-    createOrUpdateInCluster, defaultPreservedFinalizers), so flipping the flag
+    the pre/post-delete hook finalizers (applicationset/controllers/
+    applicationset_controller.go, defaultPreservedFinalizers at lines 81-84,
+    used in createOrUpdateInCluster at lines 754-760), so flipping the flag
     to true strips the finalizer from every live Application, and deleting
     such an Application then leaves its Deployments, Services and
     ExternalSecrets running. Every ApplicationSet in the bootstrap chart is
     listed here with the finalizer outcome it is expected to have; a new
     ApplicationSet, or a changed outcome, fails until the table is edited on
-    purpose.
+    purpose. Spec keys that change what is rendered but are not modelled here
+    (`templatePatch`, `strategy`, `applyNestedSelectors`,
+    `ignoreApplicationDifferences`, `preservedFields`) and any other unknown
+    key of the spec, of the template or of the template metadata are a
+    finding, not a pass: a patch that sets a name or a finalizer would change
+    the outcome without touching anything the table reads.
 G2. Names. The controller finds an existing Application by name and updates it
     (createOrUpdateInCluster); an Application that has no controller owner is
     adopted and its spec and finalizers are replaced. Two generated names that
@@ -56,12 +63,18 @@ G4. Cascade coverage. Argo CD deletes on cascade only live objects that the
     given AppProject would not cascade, exit 1 if any, exit 2 if an input
     cannot be read (unreadable is never "all covered").
 G5. Pinned generators. The `apps` and `tenants` ApplicationSets are compared
-    with `tests/fixtures/generated-appsets.golden.json`: name, generators,
-    name template, project and syncPolicy. Changing the tenants ApplicationSet
-    requires editing that golden in the same diff. For diff-based CI,
-    `--diff-guard BASE` fails when the diff against BASE touches
-    platform-gitops/bootstrap/templates/bootstrap/applicationset-tenants.yaml
-    without also touching the golden, and names the golden in the message.
+    with `tests/fixtures/generated-appsets.golden.json`, which holds the
+    COMPLETE normalised spec of each set (generators, template, sources,
+    destination, syncPolicy, retry, ignoreDifferences) and its metadata name
+    and namespace. Only the paths in ALLOWED_TO_CHANGE (the template
+    annotations) are left out, so every other edit turns the check red, and a
+    key that the golden does not list is red as well. Helm actions that are not
+    raw strings are compared as one marker, so a swap between two Helm values
+    is not seen by this check. `--diff-guard BASE` looks at the diff against
+    the merge base: when an ApplicationSet file changed in a pinned field, the
+    golden entry of that set must differ from the base golden (comparing the
+    parsed content, so a whitespace or `_note` edit does not count) and must
+    equal the normalised view of the file at HEAD.
 
 Every detector is proven both ways by the self-test: green on the converged
 input and red on a deliberate mutation of it. No pytest, matching the plain
@@ -74,6 +87,7 @@ from __future__ import annotations
 import concurrent.futures
 import copy
 import fnmatch
+import functools
 import json
 import os
 import re
@@ -91,6 +105,18 @@ BOOTSTRAP = Path("platform-gitops/bootstrap/templates")
 RETIRE = Path("platform-gitops/argo-workflows/cluster-templates/wft-retire-service.yaml")
 GOLDEN = Path("tests/fixtures/generated-appsets.golden.json")
 TENANTS_APPSET = "platform-gitops/bootstrap/templates/bootstrap/applicationset-tenants.yaml"
+APPS_APPSET = "platform-gitops/bootstrap/templates/bootstrap/applicationset-apps.yaml"
+APPSET_FILES = {"apps": APPS_APPSET, "tenants": TENANTS_APPSET}
+
+# What this script models of an ApplicationSet. Anything else is a finding.
+SPEC_KEYS = {"goTemplate", "goTemplateOptions", "syncPolicy", "generators", "template"}
+UNMODELLED_RENDERING_KEYS = {"templatePatch", "strategy", "applyNestedSelectors",
+                             "ignoreApplicationDifferences", "preservedFields"}
+TEMPLATE_KEYS = {"metadata", "spec"}
+TEMPLATE_META_KEYS = {"name", "labels", "annotations", "finalizers"}
+SYNC_POLICY_KEYS = {"preserveResourcesOnDeletion", "applicationsSync"}
+# Paths (inside spec) that the golden does not pin.
+ALLOWED_TO_CHANGE = [("template", "metadata", "annotations")]
 
 # ApplicationSet name -> does a delete of one of its Applications cascade to
 # the workloads? Both existing sets are `preserveResourcesOnDeletion: false`.
@@ -181,9 +207,44 @@ def controller_finalizers(preserve: bool, template_finalizers: list | None) -> l
     return template_finalizers
 
 
+def shape_findings(name: str, doc: dict) -> list[str]:
+    """Keys that change what is rendered and that this script does not model."""
+    problems = []
+    spec = doc.get("spec")
+    if not isinstance(spec, dict):
+        return [f"ApplicationSet {name}: spec is not a mapping"]
+    for key in sorted(map(str, set(spec) - SPEC_KEYS)):
+        why = "changes how Applications are rendered and is not modelled" \
+            if key in UNMODELLED_RENDERING_KEYS else "is an unknown spec key"
+        problems.append(f"ApplicationSet {name}: spec.{key} {why}; model and pin it before using it")
+    tmpl = spec.get("template")
+    if not isinstance(tmpl, dict):
+        problems.append(f"ApplicationSet {name}: spec.template is not a mapping")
+        return problems
+    for key in sorted(map(str, set(tmpl) - TEMPLATE_KEYS)):
+        problems.append(f"ApplicationSet {name}: spec.template.{key} is an unknown key")
+    meta = tmpl.get("metadata")
+    if not isinstance(meta, dict):
+        problems.append(f"ApplicationSet {name}: spec.template.metadata is not a mapping")
+    else:
+        for key in sorted(map(str, set(meta) - TEMPLATE_META_KEYS)):
+            problems.append(f"ApplicationSet {name}: spec.template.metadata.{key} is an unknown key")
+    policy = spec.get("syncPolicy")
+    if policy is not None and not isinstance(policy, dict):
+        problems.append(f"ApplicationSet {name}: spec.syncPolicy is not a mapping")
+    elif isinstance(policy, dict):
+        for key in sorted(map(str, set(policy) - SYNC_POLICY_KEYS)):
+            problems.append(f"ApplicationSet {name}: spec.syncPolicy.{key} is an unknown key")
+    return problems
+
+
 def appset_findings(appsets: dict[str, dict]) -> list[str]:
     problems = []
     for name, doc in sorted(appsets.items()):
+        shape = shape_findings(name, doc)
+        problems += shape
+        if shape:
+            continue
         spec = doc.get("spec") or {}
         policy = spec.get("syncPolicy") or {}
         preserve = policy.get("preserveResourcesOnDeletion", False)
@@ -227,17 +288,39 @@ def load_appsets(root: Path) -> dict[str, dict]:
 # --------------------------------------------------------------------------
 
 def pinned_view(doc: dict) -> dict:
-    spec = doc.get("spec") or {}
-    tmpl = spec.get("template") or {}
-    return unlit({
-        "name": (doc.get("metadata") or {}).get("name"),
-        "goTemplate": spec.get("goTemplate"),
-        "goTemplateOptions": spec.get("goTemplateOptions"),
-        "syncPolicy": spec.get("syncPolicy"),
-        "generators": spec.get("generators"),
-        "templateName": (tmpl.get("metadata") or {}).get("name"),
-        "templateProject": (tmpl.get("spec") or {}).get("project"),
-    })
+    """The complete normalised view of an ApplicationSet, minus ALLOWED_TO_CHANGE."""
+    spec = copy.deepcopy(doc.get("spec") or {})
+    for path in ALLOWED_TO_CHANGE:
+        node = spec
+        for key in path[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+        if isinstance(node, dict):
+            node.pop(path[-1], None)
+    meta = doc.get("metadata") or {}
+    view = unlit({"metadata": {"name": meta.get("name"), "namespace": meta.get("namespace")},
+                  "spec": spec})
+    return json.loads(json.dumps(view))
+
+
+def deep_diff(live, pinned, path: str = "") -> list[str]:
+    if isinstance(live, dict) and isinstance(pinned, dict):
+        out = []
+        for key in sorted(set(live) | set(pinned), key=str):
+            where = f"{path}/{key}"
+            if key not in pinned:
+                out.append(f"{where}: not in the golden (file has {live[key]!r})")
+            elif key not in live:
+                out.append(f"{where}: only in the golden (golden has {pinned[key]!r})")
+            else:
+                out += deep_diff(live[key], pinned[key], where)
+        return out
+    if isinstance(live, list) and isinstance(pinned, list) and len(live) == len(pinned):
+        out = []
+        for i, (a, b) in enumerate(zip(live, pinned)):
+            out += deep_diff(a, b, f"{path}[{i}]")
+        return out
+    same = json.dumps(live, sort_keys=True) == json.dumps(pinned, sort_keys=True)
+    return [] if same else [f"{path or '/'}: file has {live!r}, golden has {pinned!r}"]
 
 
 def load_golden(root: Path) -> dict[str, dict]:
@@ -246,9 +329,15 @@ def load_golden(root: Path) -> dict[str, dict]:
         golden = json.loads(read_text(path))
     except ValueError as exc:
         raise Unreadable(f"{path}: {exc}") from exc
+    return golden_sets(golden, str(path))
+
+
+def golden_sets(golden: object, where: str) -> dict[str, dict]:
     sets = golden.get("sets") if isinstance(golden, dict) else None
     if not isinstance(sets, dict) or sorted(sets) != sorted(EXPECTED_CASCADE):
-        raise Unreadable(f"{path}: expected a 'sets' object with exactly {sorted(EXPECTED_CASCADE)}")
+        raise Unreadable(f"{where}: expected a 'sets' object with exactly {sorted(EXPECTED_CASCADE)}")
+    if set(golden) - {"_note", "sets"}:
+        raise Unreadable(f"{where}: unknown top-level key {sorted(set(golden) - {'_note', 'sets'})}")
     return sets
 
 
@@ -258,36 +347,86 @@ def golden_findings(appsets: dict[str, dict], golden: dict[str, dict]) -> list[s
         if name not in appsets:
             problems.append(f"ApplicationSet {name} is pinned in {GOLDEN} but was not found")
             continue
-        live = json.loads(json.dumps(pinned_view(appsets[name])))
-        pinned = golden[name]
-        for key in sorted(set(live) | set(pinned)):
-            if live.get(key) != pinned.get(key):
-                problems.append(
-                    f"ApplicationSet {name}: {key} differs from {GOLDEN} "
-                    f"(file has {live.get(key)!r}, golden has {pinned.get(key)!r}); "
-                    "an intended change edits the golden in the same diff")
+        for d in deep_diff(pinned_view(appsets[name]), golden[name]):
+            problems.append(f"ApplicationSet {name}: {d}; an intended change edits {GOLDEN} "
+                            "in the same diff")
     return problems
 
 
-def diff_findings(changed: list[str]) -> list[str]:
-    if TENANTS_APPSET in changed and str(GOLDEN) not in changed:
-        return [f"{TENANTS_APPSET} is touched but {GOLDEN} is not: a change to the tenants "
-                f"ApplicationSet must edit {GOLDEN} in the same diff so the change is visible "
-                "and reviewed"]
-    return []
+def view_from_text(name: str, text: str, path: str) -> dict:
+    docs = [d for d in parse_docs(text, Path(path), keep_literals=True) if d.get("kind") == "ApplicationSet"]
+    if len(docs) != 1 or (docs[0].get("metadata") or {}).get("name") != name:
+        raise Unreadable(f"{path}: expected exactly one ApplicationSet named {name}")
+    return pinned_view(docs[0])
+
+
+def diff_findings(changed: list[str], base_views: dict, head_views: dict,
+                  base_golden: dict | None, head_golden: dict | None) -> list[str]:
+    """Views are None when the file does not exist at that revision."""
+    problems = []
+    golden_changed = str(GOLDEN) in changed
+    for name, file in sorted(APPSET_FILES.items()):
+        if file not in changed:
+            continue
+        base, head = base_views.get(name), head_views.get(name)
+        if base == head:
+            continue                       # touched, but no pinned field moved
+        if head is None:
+            problems.append(f"{file} was removed; the pinned set {name} no longer exists")
+            continue
+        if not golden_changed:
+            problems.append(f"{file} changed in a pinned field but {GOLDEN} is not edited: the change "
+                            "must be visible in the golden in the same diff")
+            continue
+        new = (head_golden or {}).get(name)
+        if new == (base_golden or {}).get(name):
+            problems.append(f"{GOLDEN} is edited but the pinned entry of {name} is the same as on the "
+                            f"base: the edit is a no-op while {file} changed")
+        elif new != head:
+            problems.append(f"{GOLDEN} entry of {name} does not equal the normalised view of {file}")
+    return problems
+
+
+def _git_out(root: Path, *args: str) -> str:
+    try:
+        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Unreadable(f"git {' '.join(args)}: {exc}") from exc
+    if r.returncode != 0:
+        raise Unreadable(f"git {' '.join(args)} failed: {r.stderr.strip()}")
+    return r.stdout
+
+
+def _git_show(root: Path, rev: str, path: str) -> str | None:
+    """The file at a revision; None only when the revision has no such path."""
+    if not _git_out(root, "ls-tree", rev, "--", path).strip():
+        return None
+    return _git_out(root, "show", f"{rev}:{path}")
 
 
 def cli_diff_guard(base: str, root: Path) -> int:
     try:
-        r = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--no-renames",
-                            f"{base}...HEAD"], capture_output=True, text=True, timeout=120)
-        if r.returncode != 0:
-            raise Unreadable(f"git diff {base}...HEAD failed: {r.stderr.strip()}")
-        changed = [line for line in r.stdout.splitlines() if line]
-    except (OSError, subprocess.SubprocessError, Unreadable) as exc:
+        merge_base = _git_out(root, "merge-base", base, "HEAD").strip()
+        changed = [l for l in _git_out(root, "diff", "--name-only", "--no-renames",
+                                       merge_base, "HEAD").splitlines() if l]
+        views = {}
+        for rev in (merge_base, "HEAD"):
+            views[rev] = {}
+            for name, file in APPSET_FILES.items():
+                text = _git_show(root, rev, file)
+                views[rev][name] = None if text is None else view_from_text(name, text, file)
+        goldens = {}
+        for rev in (merge_base, "HEAD"):
+            text = _git_show(root, rev, str(GOLDEN))
+            try:
+                goldens[rev] = None if text is None else golden_sets(json.loads(text), f"{rev}:{GOLDEN}")
+            except ValueError as exc:
+                raise Unreadable(f"{rev}:{GOLDEN}: {exc}") from exc
+        problems = diff_findings(changed, views[merge_base], views["HEAD"],
+                                 goldens[merge_base], goldens["HEAD"])
+    except Unreadable as exc:
         print(f"UNREADABLE: {exc}", file=sys.stderr)
         return 2
-    problems = diff_findings(changed)
     for p in problems:
         print(f"REJECTED  {p}")
     print(f"{len(changed)} changed file(s) checked against {base}")
@@ -351,6 +490,9 @@ def generated_names(root: Path, appsets: dict[str, dict]) -> dict[str, list[str]
         doc = appsets.get(set_name)
         if doc is None:
             raise Unreadable(f"ApplicationSet {set_name} not found: generated names cannot be derived")
+        shape = shape_findings(set_name, doc)
+        if shape:
+            raise Unreadable("; ".join(shape))
         template = (((doc.get("spec") or {}).get("template") or {}).get("metadata") or {}).get("name")
         for pattern in git_directory_patterns(set_name, doc):
             matches = sorted(p.relative_to(root) for p in root.glob(pattern) if p.is_dir())
@@ -418,7 +560,10 @@ def retire_static(source: str) -> list[str]:
     text = code_only(source)
     delete = text.find('kubectl delete --raw "$APP_URI"')
     wait = text.find("wait_gone 36")
+    recheck = text.find("wait_gone 12")
     patches = [m.start() for m in re.finditer(r"\bkubectl\s+patch\b", text)]
+    if recheck < 0:
+        problems.append("the confirmation that the Application is gone after the patch (wait_gone 12) is gone")
     if delete < 0:
         problems.append("the Application delete (kubectl delete --raw \"$APP_URI\") is gone")
     if wait < 0:
@@ -429,6 +574,8 @@ def retire_static(source: str) -> list[str]:
         problems.append("cannot order the delete, the wait and the patch")
     elif not delete < wait < patches[0]:
         problems.append("the finalizer-clearing patch is not after the delete and the wait")
+    elif recheck >= 0 and not patches[0] < recheck:
+        problems.append("the confirmation that the Application is gone (wait_gone 12) is not after the patch")
     verbs = re.findall(r"\bkubectl\s+(?:-\S+\s+)*([a-z][a-z-]*)", text)
     for v in sorted(set(verbs) - {"get", "delete", "patch"}):
         problems.append(f"kubectl {v} is used: only get, delete and patch are expected")
@@ -456,68 +603,73 @@ def retire_static(source: str) -> list[str]:
     return problems
 
 
-KUBECTL_STUB = r"""#!/usr/bin/env python3
-import json, os, pathlib, sys
-S = pathlib.Path(os.environ["KSTATE"])
-mode = (S / "mode").read_text().strip()
-argv = sys.argv[1:]
-log = open(S / "log", "a")
-app = S / "app.json"
-def load():
-    return json.loads(app.read_text()) if app.exists() else None
-def opt(flag):
-    return argv[argv.index(flag) + 1] if flag in argv else None
-verb = argv[0] if argv else ""
-log.write("kubectl " + verb + "\n")
-deleted = (S / "deleted").exists()
-if verb == "get":
-    if deleted and mode == "blind":
-        print("Error from server (Forbidden)", file=sys.stderr); sys.exit(1)
-    if deleted and mode == "clears":
-        n = int((S / "reads").read_text() or "0") + 1
-        (S / "reads").write_text(str(n))
-        if n > 3:
-            app.unlink(missing_ok=True)
-    obj = load()
-    print(json.dumps({"kind": "List", "items": [obj] if obj else []}))
-    sys.exit(0)
-if verb == "delete" and "--raw" in argv:
-    body = json.loads(pathlib.Path(opt("-f")).read_text())
-    log.write("body " + json.dumps(body, sort_keys=True) + "\n")
-    obj = load()
-    want = body.get("preconditions", {}).get("uid")
-    if obj is None or want != obj["metadata"]["uid"]:
-        print("Error from server (Conflict)", file=sys.stderr); sys.exit(1)
-    (S / "deleted").write_text("")
-    (S / "reads").write_text("0")
-    if mode == "swap":
-        app.write_text(json.dumps({"metadata": {"name": obj["metadata"]["name"],
-            "uid": "99999999-9999-9999-9999-999999999999", "labels": {}}, "spec": {"project": "default"}}))
-    elif mode in ("stuck", "blind"):
-        obj["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
-        app.write_text(json.dumps(obj))
-    sys.exit(0)
-if verb == "patch":
-    ops = json.loads(opt("-p"))
-    log.write("patchbody " + json.dumps(ops) + "\n")
-    obj = load()
-    if mode == "blind" or obj is None:
-        sys.exit(1)
-    for op in ops:
-        node = obj
-        parts = op["path"].strip("/").split("/")
-        for p in parts[:-1]:
-            node = node.get(p, {})
-        if op["op"] == "test" and node.get(parts[-1]) != op["value"]:
-            print("Error from server (UnprocessableEntity): test failed", file=sys.stderr); sys.exit(1)
-        if op["op"] in ("add", "replace"):
-            node[parts[-1]] = op["value"]
-    if obj["metadata"].get("deletionTimestamp") and not obj["metadata"].get("finalizers"):
-        app.unlink()
-    else:
-        app.write_text(json.dumps(obj))
-    sys.exit(0)
-sys.exit(3)
+KUBECTL_STUB = r"""#!/bin/sh
+# Stub kubectl: one shell process and, for writes, one jq call. State is files.
+# modes: clears  the object disappears a few reads after the delete
+#        stuck   the object keeps its finalizer; a finalizer patch removes it
+#        swap    another object holds the name after the delete
+#        blind   every read after the delete fails
+#        lingers the finalizer patch is accepted but the object stays
+#        reject  the delete is refused and the object stays
+#        rejectgone  the delete is refused and the object is gone
+#        patchfail   stuck, and the finalizer patch is refused
+#        patchgone   stuck, and the finalizer patch is refused as the object vanishes
+S="$KSTATE"
+read -r mode < "$S/mode"
+verb="$1"
+echo "kubectl $verb" >> "$S/log"
+case "$verb" in
+get)
+  if [ -e "$S/deleted" ]; then
+    if [ "$mode" = blind ]; then echo "Error from server (Forbidden)" >&2; exit 1; fi
+    if [ "$mode" = clears ]; then
+      read -r n < "$S/reads"; n=$((n + 1)); echo "$n" > "$S/reads"
+      if [ "$n" -gt 3 ]; then rm -f "$S/app.json"; fi
+    fi
+  fi
+  if [ -e "$S/app.json" ]; then
+    read -r app < "$S/app.json"
+    printf '{"kind":"List","items":[%s]}\n' "$app"
+  else
+    echo '{"kind":"List","items":[]}'
+  fi
+  exit 0 ;;
+delete)
+  case " $* " in *" --raw "*) ;; *) exit 3 ;; esac
+  f=""; prev=""
+  for a in "$@"; do if [ "$prev" = "-f" ]; then f="$a"; fi; prev="$a"; done
+  echo "body $(jq -cS . "$f")" >> "$S/log"
+  if [ "$mode" = rejectgone ]; then rm -f "$S/app.json"; echo "Error from server (NotFound)" >&2; exit 1; fi
+  if [ "$mode" = reject ]; then echo "Error from server (Forbidden)" >&2; exit 1; fi
+  want=$(jq -r '.preconditions.uid' "$f")
+  have=$(jq -r '.metadata.uid' "$S/app.json" 2>/dev/null) || have=""
+  if [ ! -e "$S/app.json" ] || [ "$want" != "$have" ]; then echo "Error from server (Conflict)" >&2; exit 1; fi
+  : > "$S/deleted"; echo 0 > "$S/reads"
+  case "$mode" in
+    swap) jq -c '{metadata:{name:.metadata.name,uid:"99999999-9999-9999-9999-999999999999",labels:{}},spec:{project:"default"}}' \
+            "$S/app.json" > "$S/new" && mv "$S/new" "$S/app.json" ;;
+    clears) ;;
+    *) jq -c '.metadata.deletionTimestamp="2026-01-01T00:00:00Z"' "$S/app.json" > "$S/new" && mv "$S/new" "$S/app.json" ;;
+  esac
+  exit 0 ;;
+patch)
+  ops=""; prev=""
+  for a in "$@"; do if [ "$prev" = "-p" ]; then ops="$a"; fi; prev="$a"; done
+  echo "patchbody $(printf '%s' "$ops" | jq -c .)" >> "$S/log"
+  if [ "$mode" = blind ] || [ "$mode" = patchfail ] || [ ! -e "$S/app.json" ]; then exit 1; fi
+  if [ "$mode" = patchgone ]; then rm -f "$S/app.json"; exit 1; fi
+  jq -c --argjson ops "$ops" 'reduce $ops[] as $o (.; ($o.path | split("/")[1:]) as $p
+      | if $o.op == "test" then (if getpath($p) != $o.value then error("test failed") else . end)
+        elif $o.op == "add" or $o.op == "replace" then setpath($p; $o.value)
+        else . end)' "$S/app.json" > "$S/new" || { echo "Error from server (UnprocessableEntity)" >&2; exit 1; }
+  if [ "$mode" != lingers ] && [ "$(jq -r '(.metadata.deletionTimestamp != null) and ((.metadata.finalizers // []) | length == 0)' "$S/new")" = true ]; then
+    rm -f "$S/app.json" "$S/new"
+  else
+    mv "$S/new" "$S/app.json"
+  fi
+  exit 0 ;;
+esac
+exit 3
 """
 
 
@@ -549,51 +701,103 @@ def _first(events: list[str], prefix: str) -> int:
     return next((i for i, e in enumerate(events) if e.startswith(prefix)), -1)
 
 
-def retire_behaviour(source: str) -> list[str]:
+SCENARIOS = ("clears", "stuck", "swap", "blind", "lingers", "reject", "rejectgone", "patchfail", "patchgone")
+
+
+def _after(ev: list[str], first: str, what: str) -> int:
+    """Count `what` events after the first event that starts with `first`."""
+    k = _first(ev, first)
+    return sum(1 for e in ev[k + 1:] if e == what) if k >= 0 else 0
+
+
+def _scenario_findings(mode: str, rc: int, ev: list[str], left: bool, out: str) -> list[str]:
+    problems = []
+    other = sorted({e.split()[1] for e in ev if e.startswith("kubectl ")} - {"get", "delete", "patch"})
+    if other:
+        problems.append(f"{mode}: kubectl {other} was called")
+    if ev.count("kubectl delete") != 1:
+        problems.append(f"{mode}: expected exactly one delete, saw {ev.count('kubectl delete')}")
+    bodies = [json.loads(e[5:]) for e in ev if e.startswith("body ")]
+    if bodies != [EXPECTED_DELETE_BODY]:
+        problems.append(f"{mode}: the delete body is not exactly the UID precondition: {bodies}")
+    patched = ev.count("kubectl patch")
+    if mode == "clears":
+        if rc != 0 or left:
+            problems.append(f"clears: expected exit 0 with the object gone, got rc={rc} left={left}")
+        if patched:
+            problems.append("clears: a finalizer patch ran although the cascade completed")
+        if ev.count("sleep") < 1:
+            problems.append("clears: the wait never sleeps between reads")
+    elif mode == "stuck":
+        p = _first(ev, "kubectl patch")
+        d = _first(ev, "kubectl delete")
+        reads = sum(1 for e in ev[d + 1:p] if e == "kubectl get") if p > d >= 0 else 0
+        sleeps = sum(1 for e in ev[d + 1:p] if e == "sleep") if p > d >= 0 else 0
+        if rc != 0 or left:
+            problems.append(f"stuck: expected exit 0 with the object gone, got rc={rc} left={left}")
+        if patched != 1:
+            problems.append(f"stuck: expected exactly one patch, saw {patched}")
+        elif reads < 36 or sleeps < 35:
+            problems.append(f"stuck: the patch came after only {reads} reads and {sleeps} sleeps "
+                            "(the bounded wait is 36 reads)")
+        if _after(ev, "kubectl patch", "kubectl get") < 1:
+            problems.append("stuck: the object was not read again after the patch (removal not confirmed)")
+        pb = [json.loads(e[10:]) for e in ev if e.startswith("patchbody ")]
+        if pb != [EXPECTED_PATCH]:
+            problems.append(f"stuck: the patch operations differ from the pinned list: {pb}")
+    elif mode == "swap":
+        if rc == 0 or patched:
+            problems.append(f"swap: a replaced object must fail the run and stay unpatched (rc={rc})")
+    elif mode == "blind":
+        if rc == 0:
+            problems.append("blind: reads that all fail were counted as the Application being gone")
+    elif mode == "lingers":
+        # The patch is accepted but the object stays: poll, then fail.
+        if rc == 0 or "Stuck Application object removed" in out:
+            problems.append(f"lingers: an Application that outlives the finalizer patch was reported "
+                            f"as removed (rc={rc})")
+        if patched != 1:
+            problems.append(f"lingers: expected exactly one patch, saw {patched}")
+        elif _after(ev, "kubectl patch", "kubectl get") < 12 or _after(ev, "kubectl patch", "sleep") < 11:
+            problems.append("lingers: the wait after the patch did not read the object 12 times")
+    elif mode == "reject":
+        # A rejected delete of a live object: not a success, no wait, no patch.
+        if rc == 0 or patched or "rejected" not in out:
+            problems.append(f"reject: a rejected delete of a live object must fail the run without "
+                            f"patching (rc={rc}, patches={patched})")
+        if _after(ev, "kubectl delete", "sleep") != 0:
+            problems.append("reject: the run waited for a cascade that was never started")
+    elif mode == "rejectgone":
+        if rc != 0 or patched or _after(ev, "kubectl delete", "sleep") != 0:
+            problems.append(f"rejectgone: a rejected delete of an already absent object must end "
+                            f"cleanly without a patch (rc={rc})")
+    elif mode == "patchfail":
+        # A refused patch: fail at once, do not wait as if it had worked.
+        if rc == 0 or "Could not clear the finalizer" not in out:
+            problems.append(f"patchfail: a refused finalizer patch was ignored (rc={rc})")
+        if patched != 1 or _after(ev, "kubectl patch", "sleep") != 0:
+            problems.append("patchfail: the run waited or retried after a refused patch")
+    elif mode == "patchgone":
+        if rc != 0 or "removed while the finalizer was being cleared" not in out or patched != 1:
+            problems.append(f"patchgone: a refused patch on a vanished object must end cleanly (rc={rc})")
+    return problems
+
+
+def retire_behaviour(source: str, modes: tuple[str, ...] = SCENARIOS) -> list[str]:
+    """Run the guard against the stub in the given scenarios and check each."""
     if shutil.which("jq") is None:
         raise Unreadable("jq is not on PATH: the retire-service guard cannot be run")
-    modes = ("clears", "stuck", "swap", "blind")
+    return list(_retire_behaviour(source, tuple(modes)))
+
+
+@functools.lru_cache(maxsize=None)
+def _retire_behaviour(source: str, modes: tuple[str, ...]) -> tuple[str, ...]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(modes)) as pool:
-        res = dict(zip(modes, pool.map(lambda m: _run_scenario(source, m), modes)))
-    problems = []
-    for mode, (rc, ev, left, out) in res.items():
-        other = sorted({e.split()[1] for e in ev if e.startswith("kubectl ")} - {"get", "delete", "patch"})
-        if other:
-            problems.append(f"{mode}: kubectl {other} was called")
-        if ev.count("kubectl delete") != 1:
-            problems.append(f"{mode}: expected exactly one delete, saw {ev.count('kubectl delete')}")
-        bodies = [json.loads(e[5:]) for e in ev if e.startswith("body ")]
-        if bodies != [EXPECTED_DELETE_BODY]:
-            problems.append(f"{mode}: the delete body is not exactly the UID precondition: {bodies}")
-    rc, ev, left, out = res["clears"]
-    if rc != 0 or left:
-        problems.append(f"clears: expected exit 0 with the object gone, got rc={rc} left={left}")
-    if "kubectl patch" in ev:
-        problems.append("clears: a finalizer patch ran although the cascade completed")
-    if ev.count("sleep") < 1:
-        problems.append("clears: the wait never sleeps between reads")
-    rc, ev, left, out = res["stuck"]
-    p = _first(ev, "kubectl patch")
-    d = _first(ev, "kubectl delete")
-    reads = sum(1 for e in ev[d + 1:p] if e == "kubectl get") if p > d >= 0 else 0
-    sleeps = sum(1 for e in ev[d + 1:p] if e == "sleep") if p > d >= 0 else 0
-    if rc != 0 or left:
-        problems.append(f"stuck: expected exit 0 with the object gone, got rc={rc} left={left}")
-    if ev.count("kubectl patch") != 1:
-        problems.append(f"stuck: expected exactly one patch, saw {ev.count('kubectl patch')}")
-    elif reads < 36 or sleeps < 35:
-        problems.append(f"stuck: the patch came after only {reads} reads and {sleeps} sleeps "
-                        "(the bounded wait is 36 reads)")
-    pb = [json.loads(e[10:]) for e in ev if e.startswith("patchbody ")]
-    if pb != [EXPECTED_PATCH]:
-        problems.append(f"stuck: the patch operations differ from the pinned list: {pb}")
-    rc, ev, left, out = res["swap"]
-    if rc == 0 or "kubectl patch" in ev:
-        problems.append(f"swap: a replaced object must fail the run and stay unpatched (rc={rc})")
-    rc, ev, left, out = res["blind"]
-    if rc == 0:
-        problems.append("blind: reads that all fail were counted as the Application being gone")
-    return problems
+        results = list(pool.map(lambda m: _run_scenario(source, m), modes))
+    problems: list[str] = []
+    for mode, (rc, ev, left, out) in zip(modes, results):
+        problems += _scenario_findings(mode, rc, ev, left, out)
+    return tuple(problems)
 
 
 def retire_findings(source: str) -> list[str]:
@@ -688,6 +892,7 @@ def cli_cascade_coverage(apps_path: str, project_path: str, project_name: str) -
 # --------------------------------------------------------------------------
 
 failures: list[str] = []
+ROOT_FOR_TESTS = ROOT
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -720,6 +925,8 @@ def _git(cwd: Path, *args: str) -> None:
 
 
 def selftests(root: Path) -> None:
+    global ROOT_FOR_TESTS
+    ROOT_FOR_TESTS = root
     base = load_appsets(root)
     golden = load_golden(root)
     # G1 red on the mutations that remove or hide the finalizer
@@ -738,12 +945,38 @@ def selftests(root: Path) -> None:
     check("G1 red: a listed ApplicationSet disappears", bool(appset_findings(m)))
     check("G1 red: applicationsSync other than the default",
           bool(appset_findings(mutated_set(base, "apps", applicationsSync="create-only"))))
+    for name in ("apps", "tenants"):
+        for key in sorted(UNMODELLED_RENDERING_KEYS):
+            m = copy.deepcopy(base)
+            m[name]["spec"][key] = {"x": 1}
+            check(f"G1 red: {name} spec.{key} is not modelled",
+                  any(f"spec.{key}" in x for x in appset_findings(m)))
+            try:
+                generated_names(ROOT_FOR_TESTS, m)
+                check(f"G2 red: {name} spec.{key} makes the names unreadable", False)
+            except Unreadable:
+                check(f"G2 red: {name} spec.{key} makes the names unreadable", True)
+        m = copy.deepcopy(base)
+        m[name]["spec"]["templatePatch"] = "metadata:\n  name: x\n  finalizers: []\n"
+        check(f"G1 red: {name} templatePatch that sets a name and a finalizer",
+              bool(appset_findings(m)))
+        for where, mut in (("an unknown spec key", lambda d: d["spec"].update(somethingNew=1)),
+                           ("an unknown template key", lambda d: d["spec"]["template"].update(extra=1)),
+                           ("an unknown template metadata key",
+                            lambda d: d["spec"]["template"]["metadata"].update(namespace="x")),
+                           ("an unknown syncPolicy key",
+                            lambda d: d["spec"]["syncPolicy"].update(preserveResourcesOnDeletion=False, extra=1))):
+            m = copy.deepcopy(base)
+            mut(m[name])
+            check(f"G1 red: {name} has {where}", bool(appset_findings(m)))
+    check("G1 green: the real ApplicationSets have no unmodelled key",
+          not any(shape_findings(n, d) for n, d in base.items()))
     check("G1 model: preserve false adds the finalizer, true does not, an own list wins",
           controller_finalizers(False, None) == [RESOURCES_FINALIZER]
           and controller_finalizers(True, None) == []
           and controller_finalizers(False, ["x"]) == ["x"])
 
-    # G5 red on every pinned field of both sets; green on the converged input
+    # G5: the golden pins the complete spec; green on the real input, red on every edit
     check("G5 green: the real ApplicationSets match the golden",
           not golden_findings(base, golden), "; ".join(golden_findings(base, golden)))
 
@@ -753,54 +986,116 @@ def selftests(root: Path) -> None:
         return bool(golden_findings(m, golden))
 
     for name in ("apps", "tenants"):
-        check(f"G5 red: {name} metadata name changes",
-              g5(lambda m, n=name: m[n]["metadata"].update(name=n + "-x")))
-        check(f"G5 red: {name} name template changes",
-              g5(lambda m, n=name: m[n]["spec"]["template"]["metadata"].update(name="x-" + LB + " .path.basename " + RB)))
-        check(f"G5 red: {name} generator path changes",
-              g5(lambda m, n=name: m[n]["spec"]["generators"][0]["git"]["directories"][0].update(path="platform-gitops/other/*")))
-        check(f"G5 red: {name} template project changes",
-              g5(lambda m, n=name: m[n]["spec"]["template"]["spec"].update(project="default")))
-        check(f"G5 red: {name} syncPolicy changes",
-              g5(lambda m, n=name: m[n]["spec"]["syncPolicy"].update(preserveResourcesOnDeletion=True)))
-        check(f"G5 red: {name} revision generator field changes",
-              g5(lambda m, n=name: m[n]["spec"]["generators"][0]["git"].update(requeueAfterSeconds=1)))
-    check("G5 green: an edit outside the pinned fields (an annotation) is not pinned",
-          not g5(lambda m: m["tenants"]["spec"]["template"]["metadata"]["annotations"].update(x="y")))
-    check("G5 diff-guard model: the tenants file without the golden is red",
-          bool(diff_findings([TENANTS_APPSET])))
-    check("G5 diff-guard model: the tenants file with the golden is green",
-          not diff_findings([TENANTS_APPSET, str(GOLDEN)]))
-    check("G5 diff-guard model: an unrelated file is green", not diff_findings(["README.md"]))
+        spec = lambda m, n=name: m[n]["spec"]
+        tspec = lambda m, n=name: m[n]["spec"]["template"]["spec"]
+        for what, mut in (
+            ("metadata name", lambda m, n=name: m[n]["metadata"].update(name=n + "-x")),
+            ("metadata namespace", lambda m, n=name: m[n]["metadata"].update(namespace="other")),
+            ("name template", lambda m, n=name: m[n]["spec"]["template"]["metadata"].update(
+                name="x-" + LB + " .path.basename " + RB)),
+            ("template label", lambda m, n=name: m[n]["spec"]["template"]["metadata"]["labels"].update(env="x")),
+            ("template finalizers", lambda m, n=name: m[n]["spec"]["template"]["metadata"].update(finalizers=["x"])),
+            ("generator path", lambda m, n=name: m[n]["spec"]["generators"][0]["git"]["directories"][0].update(
+                path="platform-gitops/other/*")),
+            ("generator revision field", lambda m, n=name: m[n]["spec"]["generators"][0]["git"].update(
+                requeueAfterSeconds=1)),
+            ("template project", lambda m, n=name: tspec(m, n).update(project="default")),
+            ("destination namespace", lambda m, n=name: tspec(m, n)["destination"].update(namespace="x")),
+            ("destination server", lambda m, n=name: tspec(m, n)["destination"].update(server="https://x.invalid")),
+            ("automated prune", lambda m, n=name: tspec(m, n)["syncPolicy"]["automated"].update(prune=False)),
+            ("automated selfHeal", lambda m, n=name: tspec(m, n)["syncPolicy"]["automated"].update(selfHeal=False)),
+            ("sync options", lambda m, n=name: tspec(m, n)["syncPolicy"]["syncOptions"].append("PruneLast=true")),
+            ("retry", lambda m, n=name: tspec(m, n)["syncPolicy"]["retry"].update(limit=99)),
+            ("sources", lambda m, n=name: tspec(m, n)["sources"][0].update(path="platform-gitops/other")),
+            ("sources list", lambda m, n=name: tspec(m, n)["sources"].pop()),
+            ("ignoreDifferences", lambda m, n=name: tspec(m, n)["ignoreDifferences"][0].update(kind="Other")),
+            ("ignoreDifferences list", lambda m, n=name: tspec(m, n)["ignoreDifferences"].pop()),
+            ("syncPolicy", lambda m, n=name: m[n]["spec"]["syncPolicy"].update(preserveResourcesOnDeletion=True)),
+            ("goTemplate", lambda m, n=name: m[n]["spec"].update(goTemplate=False)),
+            ("goTemplateOptions", lambda m, n=name: m[n]["spec"].update(goTemplateOptions=[])),
+            ("an extra spec key", lambda m, n=name: m[n]["spec"].update(templatePatch="x")),
+            ("an extra template spec key", lambda m, n=name: tspec(m, n).update(info=[])),
+            ("an extra template metadata key", lambda m, n=name: m[n]["spec"]["template"]["metadata"].update(
+                generateName="x")),
+        ):
+            check(f"G5 red: {name} {what} changes", g5(mut))
+        check(f"G5 green: {name} template annotations are the only unpinned path",
+              not g5(lambda m, n=name: m[n]["spec"]["template"]["metadata"]["annotations"].update(x="y")))
+    check("G5 red: a key that only the golden has",
+          bool(golden_findings(base, {n: {**g, "extra": 1} for n, g in golden.items()})))
+    check("G5 red: a key that the golden lacks",
+          bool(golden_findings(base, {n: {"metadata": g["metadata"]} for n, g in golden.items()})))
+
+    # G5 diff guard: a real repository with the real ApplicationSet files and golden
     if shutil.which("git") is None:
         raise Unreadable("git is not on PATH: the diff guard cannot be exercised")
+    check("G5 diff model: an unrelated change is green", not diff_findings(["README.md"], {}, {}, None, None))
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
         _git(t, "init", "-q", "-b", "main")
-        for f in (TENANTS_APPSET, str(GOLDEN), "other.txt"):
+        for f in (APPS_APPSET, TENANTS_APPSET, str(GOLDEN)):
             (t / f).parent.mkdir(parents=True, exist_ok=True)
-            (t / f).write_text("a\n")
+            shutil.copyfile(root / f, t / f)
+        (t / "other.txt").write_text("a\n")
         _git(t, "add", "-A")
         _git(t, "commit", "-q", "-m", "base")
 
-        def branch(name: str, files: list[str]) -> None:
-            _git(t, "checkout", "-q", "-b", name, "main")
-            for f in files:
-                (t / f).write_text("b\n")
-            _git(t, "commit", "-q", "-am", name)
+        def edit(file: str, old: str, new: str) -> None:
+            text = (t / file).read_text()
+            if text.count(old) != 1:
+                raise Unreadable(f"diff-guard fixture: anchor {old!r} found {text.count(old)} times in {file}")
+            (t / file).write_text(text.replace(old, new, 1))
 
-        branch("touch-tenants", [TENANTS_APPSET])
-        check("G5 diff-guard red: a diff that touches the tenants ApplicationSet alone",
-              cli_diff_guard("main", t) == 1)
-        _git(t, "checkout", "-q", "main")
-        branch("unrelated", ["other.txt"])
-        check("G5 diff-guard green: a diff that touches an unrelated file", cli_diff_guard("main", t) == 0)
-        _git(t, "checkout", "-q", "main")
-        branch("with-golden", [TENANTS_APPSET, str(GOLDEN)])
-        check("G5 diff-guard green: the tenants file edited together with the golden",
-              cli_diff_guard("main", t) == 0)
+        def regolden(whitespace_only: bool = False) -> None:
+            """Rewrite the golden: honestly from the files, or only cosmetically."""
+            if whitespace_only:
+                g = json.loads((t / GOLDEN).read_text())
+                g["_note"] = "edited"
+                (t / GOLDEN).write_text(json.dumps(g, indent=4) + "\n\n")
+            else:
+                sets = load_appsets(t)
+                g = json.loads((t / GOLDEN).read_text())
+                g["sets"] = {n: pinned_view(sets[n]) for n in sorted(EXPECTED_CASCADE)}
+                (t / GOLDEN).write_text(json.dumps(g, indent=2, sort_keys=True) + "\n")
+
+        def scenario(name: str, steps, want: int, label: str) -> None:
+            _git(t, "checkout", "-q", "-b", name, "main")
+            steps()
+            _git(t, "commit", "-q", "-am", name)
+            got = cli_diff_guard("main", t)
+            check(f"G5 diff-guard {'green' if want == 0 else 'red'}: {label}", got == want, f"exit {got}")
+            _git(t, "checkout", "-q", "main")
+
+        retry = "          limit: 3\n"
+        retry_new = "          limit: 4\n"
+        for f in (TENANTS_APPSET, APPS_APPSET):
+            who = "tenants" if f == TENANTS_APPSET else "apps"
+            old = retry if f == TENANTS_APPSET else "          limit: 5\n"
+            new = retry_new if f == TENANTS_APPSET else "          limit: 6\n"
+            scenario(f"{who}-bare", lambda: edit(f, old, new), 1,
+                     f"a pinned change to the {who} file without any golden edit")
+            scenario(f"{who}-noop", lambda: (edit(f, old, new), regolden(whitespace_only=True)), 1,
+                     f"a pinned change to the {who} file with a whitespace and _note edit of the golden")
+            scenario(f"{who}-honest", lambda: (edit(f, old, new), regolden()), 0,
+                     f"a pinned change to the {who} file with the golden regenerated from it")
+            scenario(f"{who}-wrong",
+                     lambda: (edit(f, old, new), regolden(),
+                              edit(str(GOLDEN), '"limit": ' + new.split()[1], '"limit": 9')),
+                     1, f"a pinned change to the {who} file with a golden that says something else")
+        scenario("annotation-only", lambda: edit(TENANTS_APPSET, "argocd/app-name:", "argocd/app-label:"), 0,
+                 "an annotation-only change to the tenants file (not pinned)")
+        scenario("templatepatch", lambda: edit(TENANTS_APPSET, "  generators:\n", "  templatePatch: |\n    metadata:\n      finalizers: []\n  generators:\n"), 1,
+                 "a templatePatch added to the tenants file without a golden edit")
+        scenario("unrelated", lambda: (t / "other.txt").write_text("b\n"), 0, "a change to an unrelated file")
+        scenario("golden-only", lambda: regolden(whitespace_only=True), 0, "a cosmetic golden edit alone")
+        scenario("removed", lambda: (t / TENANTS_APPSET).unlink(), 1, "the tenants file is deleted")
         check("G5 diff-guard exit 2: a base that cannot be resolved is not 'clean'",
               cli_diff_guard("no-such-base", t) == 2)
+        _git(t, "checkout", "-q", "-b", "broken", "main")
+        (t / GOLDEN).write_text("{not json")
+        _git(t, "commit", "-q", "-am", "broken")
+        check("G5 diff-guard exit 2: a golden that is not JSON at HEAD", cli_diff_guard("main", t) == 2)
+        _git(t, "checkout", "-q", "main")
 
     # G2 red on collisions, with names derived from the ApplicationSets
     gen = generated_names(root, base)
@@ -864,37 +1159,67 @@ def selftests(root: Path) -> None:
     real = retire_findings(src)
     check("G3 green: the real retire-service script has no findings", not real, "; ".join(real))
 
-    def g3(name: str, old: str, new: str, behaviour_only: bool = False) -> None:
-        if src.count(old) != 1:
-            check(f"G3 red: {name}", False, f"mutation anchor found {src.count(old)} times")
-            return
-        mut = src.replace(old, new, 1)
-        found = retire_behaviour(mut) if behaviour_only else retire_findings(mut)
-        check(f"G3 red: {name}" + (" (behaviour)" if behaviour_only else ""), bool(found))
-
     wait_call = "rc=0\nwait_gone 36 || rc=$?\n"
-    g3("the finalizer patch runs before the wait", wait_call,
-       "kubectl patch application \"${APP_NAME}\" -n argocd --type=json "
-       "-p '[{\"op\":\"add\",\"path\":\"/metadata/finalizers\",\"value\":[]}]' >/dev/null || true\n" + wait_call)
-    g3("the project test op is dropped", '{"op":"test","path":"/spec/project","value":"apps"},', "")
-    g3("the uid test op is dropped", '{"op":"test","path":"/metadata/uid","value":"%s"},', "")
-    g3("the delete body asks for orphaning", '"preconditions"', '"propagationPolicy":"Orphan","preconditions"')
-    g3("the uid precondition is dropped", '"preconditions":{"uid"', '"x":{"uid"')
-    g3("the wait is removed", "wait_gone 36 || rc=$?", "rc=1")
-    # The eight edits that a text-only check let through.
-    g3("the wait body is skipped", '_wg_i=0\n  while [ "$_wg_i" -lt "$1" ]; do',
-       '_wg_i=0\n  while false; do', True)
-    g3("the sleep between reads is removed", "    sleep 5\n", "", True)
-    g3("the exit-0 branch after the wait is dropped",
-       '0) echo "✅ ArgoCD Application and managed resources deleted"; exit 0 ;;', "0) ;;", True)
-    g3("the wait call survives only in a comment", "wait_gone 36 || rc=$?", "rc=1 # wait_gone 36", True)
-    g3("a second finalizer clear through replace", wait_call,
-       "kubectl replace --raw \"$APP_URI\" -f /dev/null >/dev/null || true\n" + wait_call, True)
-    g3("an extra patch operation", '{"op":"add","path":"/metadata/finalizers","value":[]}]',
-       '{"op":"add","path":"/metadata/finalizers","value":[]},{"op":"remove","path":"/metadata/ownerReferences"}]', True)
-    g3("the project test is not pinned to apps", '"path":"/spec/project","value":"apps"',
-       '"path":"/spec/project","value":"default"', True)
-    g3("an unreadable read is counted as gone", "_wg_state=$(app_state); then", "_wg_state=$(app_state || echo absent); then", True)
+    patch_line = 'if ! kubectl patch application "${APP_NAME}" -n argocd --type=json -p "$PATCH" >/dev/null; then'
+    # (name, old, new, scenario): scenario None = the static check must catch it,
+    # otherwise the named stub scenario must.
+    mutations = [
+        ("the finalizer patch runs before the wait", wait_call,
+         "kubectl patch application \"${APP_NAME}\" -n argocd --type=json "
+         "-p '[{\"op\":\"add\",\"path\":\"/metadata/finalizers\",\"value\":[]}]' >/dev/null || true\n" + wait_call, None),
+        ("the project test op is dropped", '{"op":"test","path":"/spec/project","value":"apps"},', "", None),
+        ("the uid test op is dropped", '{"op":"test","path":"/metadata/uid","value":"%s"},', "", None),
+        ("the delete body asks for orphaning", '"preconditions"', '"propagationPolicy":"Orphan","preconditions"', None),
+        ("the uid precondition is dropped", '"preconditions":{"uid"', '"x":{"uid"', None),
+        ("the wait is removed", "wait_gone 36 || rc=$?", "rc=1", None),
+        # Edits that a text-only check let through: only a run can see them.
+        ("the wait body is skipped", '_wg_i=0\n  while [ "$_wg_i" -lt "$1" ]; do',
+         '_wg_i=0\n  while false; do', "stuck"),
+        ("the sleep between reads is removed", "    sleep 5\n", "", "clears"),
+        ("the exit-0 branch after the wait is dropped",
+         '0) echo "✅ ArgoCD Application and managed resources deleted"; exit 0 ;;', "0) ;;", "clears"),
+        ("the wait call survives only in a comment", "wait_gone 36 || rc=$?", "rc=1 # wait_gone 36", "stuck"),
+        ("a second finalizer clear through replace", wait_call,
+         "kubectl replace --raw \"$APP_URI\" -f /dev/null >/dev/null || true\n" + wait_call, "clears"),
+        ("an extra patch operation", '{"op":"add","path":"/metadata/finalizers","value":[]}]',
+         '{"op":"add","path":"/metadata/finalizers","value":[]},{"op":"remove","path":"/metadata/ownerReferences"}]', "stuck"),
+        ("the project test is not pinned to apps", '"path":"/spec/project","value":"apps"',
+         '"path":"/spec/project","value":"default"', "stuck"),
+        ("an unreadable read is counted as gone", "_wg_state=$(app_state); then",
+         "_wg_state=$(app_state || echo absent); then", "blind"),
+        # The confirmation after the finalizer patch, and the two refusals.
+        ("the post-patch wait is replaced by success", "wait_gone 12 || rc=$?", "rc=0", "lingers"),
+        ("the post-patch wait is replaced by success (stuck sees no read)", "wait_gone 12 || rc=$?", "rc=0", "stuck"),
+        ("the post-patch wait is shortened", "wait_gone 12 || rc=$?", "wait_gone 2 || rc=$?", "lingers"),
+        ("a rejected delete is not acted on", 'if [ "$DELETE_RC" -ne 0 ]; then', "if false; then", "reject"),
+        ("a rejected delete status is dropped", ">/dev/null || DELETE_RC=$?", ">/dev/null || true", "reject"),
+        ("a rejected delete is treated as already gone",
+         'echo "❌ Delete of ${APP_NAME} was rejected"', 'echo "x"; exit 0', "reject"),
+        ("a rejected delete of an absent object is a failure",
+         'echo "✅ ArgoCD Application already gone"', 'echo "x"; exit 1', "rejectgone"),
+        ("a refused patch is ignored", patch_line,
+         'kubectl patch application "${APP_NAME}" -n argocd --type=json -p "$PATCH" >/dev/null || true\n'
+         "          if false; then", "patchfail"),
+        ("a refused patch reports success", 'echo "❌ Could not clear the finalizer of ${APP_NAME}"',
+         'echo "x"; exit 0', "patchfail"),
+        ("a refused patch on a vanished object is a failure",
+         'echo "✅ Application removed while the finalizer was being cleared"', 'echo "x"; exit 1', "patchgone"),
+        ("the final failure exits 0", 'echo "❌ Application ${APP_NAME} still exists after finalizer fallback"',
+         'echo "x"; exit 0', "lingers"),
+    ]
+
+    def run_mutation(m) -> tuple[str, bool, str]:
+        name, old, new, scenario = m
+        if src.count(old) != 1:
+            return name, False, f"mutation anchor found {src.count(old)} times"
+        mut = src.replace(old, new, 1)
+        found = retire_static(mut) if scenario is None else retire_behaviour(mut, (scenario,))
+        return name, bool(found), ""
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        outcomes = list(pool.map(run_mutation, mutations))
+    for (name, red, why), m in zip(outcomes, mutations):
+        check(f"G3 red: {name}" + (f" (scenario {m[3]})" if m[3] else " (static)"), red, why)
 
     # G4 model: green and red
     server = "https://kubernetes.default.svc"
@@ -1020,6 +1345,16 @@ def main(argv: list[str]) -> int:
     if args[:1] == ["--root"] and len(args) >= 2:
         root = Path(args[1]).resolve()
         args = args[2:]
+    if args[:1] == ["--print-golden"]:
+        try:
+            sets = load_appsets(root)
+            note = json.loads(read_text(root / GOLDEN)).get("_note", "")
+            print(json.dumps({"_note": note, "sets": {n: pinned_view(sets[n]) for n in sorted(EXPECTED_CASCADE)}},
+                             indent=2, sort_keys=True))
+        except (Unreadable, KeyError, ValueError, AttributeError) as exc:
+            print(f"UNREADABLE: {exc}", file=sys.stderr)
+            return 2
+        return 0
     if args[:1] == ["--diff-guard"]:
         if len(args) != 2:
             print("usage: --diff-guard BASE", file=sys.stderr)

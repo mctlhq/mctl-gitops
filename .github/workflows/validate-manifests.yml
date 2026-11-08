@@ -520,8 +520,9 @@ jobs:
         # the ApplicationSets, the retire-service delete order (text and a
         # stub-kubectl run), a model of which live objects a cascade delete
         # reaches, and the pinned generators. Each detector is proven red by
-        # a mutation. On a pull request the diff is also checked: touching
-        # the tenants ApplicationSet requires editing
+        # a mutation. On a pull request the diff is also checked: a change
+        # to a pinned field of the apps or tenants ApplicationSet requires a
+        # real change of that set in
         # tests/fixtures/generated-appsets.golden.json in the same diff.
         env:
           EVENT: ${{ github.event_name }}
