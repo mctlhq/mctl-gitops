@@ -86,6 +86,21 @@
 
 ## Proposed solution
 
+### AMEND 2026-11-08 — invariants superseding ambiguous initial design
+
+**Approval is NOT `human-input`.** The mctl-telegram pinned `docs/contracts/mctl-api-human-input.md` explicitly says that an answer never grants action approval. Glovo `prepare_order` may show a preview and request a human decision, but the actual provider write must be fenced by mctl-api's canonical **ActionApprovalRequest `aar_` + single-use receipt gate** from `internal/workitems/action_approvals.go` (and governance revalidation), bound to one `we_` and hashed provider effect:
+`(tenant, owner principal, order, connection, install ID/revision, basket fingerprint, item/qty/modifier/price intent, provider target)`. A different `we_`, owner, tenant, receipt, changed fingerprint or revoked connection is rejected before I/O. Clarification `hir_`, successful `glovo_prepare_order`, a schedule or the model's answer never substitutes for a human-signed `aar_` decision. Revalidation must happen both at the approved handoff and immediately before **every** provider write, including retries, where read-back prevents duplicates. Use the existing `aar_` semantics rather than inventing a second approval engine.
+
+**G2 is not fulfilled by `mctl-api#948` or merged PR #950.** Those are contract-only. G2 requires a dedicated mctl-api implementation issue/proposal/approved merged PR and live negative integration evidence: principal-tenant-scope selection; per-owner connection registry and encrypted secret references; per-owner order index; authorization checks including revocation; `aar_` creation, decision verification and receipt reservation/consumption at the write boundary. **No fake M1 control-plane wiring or real M2/3 activation claim may treat a planning issue as delivery.**
+
+**No hard crypto-shredding with derivable HKDF keys.** If a master KEK survives and the per-connection key can be rederived from `tenant_id` and `gcn_`, deleting ciphertext cannot prove cryptographic destruction. Use random per-connection DEKs individually wrapped under an independently rotated KEK, deleting all active DEK wrappers and copies on revoke, with tracked cache/backup retention; or explicitly label revocation as deletion/denial, NOT crypto-shredding. Logs/Temporal histories never carry session bytes.
+
+**Trust domain:** `mctl-assistants` and `mctl-assistants-provider-glovo` are independent Temporal namespaces. Stock authorizer has no task-queue RBAC. Control-provider dispatch must use a verified Nexus endpoint or a narrowly authenticated mctl-api bridge (message IDs, tenant-scoped opaque handles, retry/dedupe/cancel, no provider->control signal authority); ordinary Activities do not jump namespaces. G5 includes denial tests for provider->control and provider->DevLoop.
+
+**Provider and M1 presentation:** connection handoff in M1 is for a synthetic provider; no real login. A public-facing facade remains disabled until separate DNS/TLS/OAuth, tenant identity and M3 activation approvals. Provider session bootstrap/refresh must pass G3's sanctioned/legally reviewed access path and independent real-device basket continuity tests, with explicit customer consent. The new MCP resource is NOT the existing Telegram authorization server or a default `labs` user scope.
+
+
+
 ### Decision and gates
 
 Recorded decision: **`GO_FAKE_MULTITENANT`**. The real path is **`BLOCKED_PROVIDER_ACCESS`**.
@@ -94,7 +109,7 @@ Recorded decision: **`GO_FAKE_MULTITENANT`**. The real path is **`BLOCKED_PROVID
 |---|---|---|---|
 | G0 | This M0 proposal merged and independently reviewed | M1 planning | ADR, report, schemas and threat model, plus the doc tests green |
 | G1 | Runtime ownership verdict recorded on .github#324 | M1 repo placement | Owner comment on #324 (`REUSE_EXISTING` expected) |
-| G2 | Identity contract accepted by mctl-api (mctl-api#948) | M1 control-plane wiring | mctl-api issue with the endpoints in "mctl-api contract" below |
+| G2 | Glovo identity and action-approval service implemented in mctl-api (separate issue/PR; #948/#950 are only Automation contract) | M1 control-plane wiring and later release | independently reviewed, merged code + cross-tenant and same-tenant-different-user negative integration tests + `aar_` receipt enforcement |
 | G3 | Provider access legally and technically GO | M2 | A sanctioned partner API, or a written legal review of the consumer API and terms, plus an accepted #1048 connector threat model |
 | G4 | M1 security GO | M2 | Isolation tests T1-T16 green, plus independent review |
 | G5 | Temporal client auth live (#2456) and deploy sequencing (#2457) | M3 deploy | Negative test: the provider identity cannot reach `mctl-agents` |
@@ -162,13 +177,9 @@ active|expired|pending_* --revoke | uninstall | membership removed--> revoked   
 - A reconnect always mints a new `gcn_` and a new secret. A `revoked` connection is never
   reactivated, and a reinstall never revives it. Consents are bound to `connection_id`,
   so old consents die with the connection.
-- Revocation is crypto-shredding: the sealed blob is deleted and the provider-side
-  session is invalidated if the provider supports it (UNVERIFIED for Glovo). It is
+- Revocation is fail-closed session and connection deletion. It may be called crypto-shredding ONLY if an independently random per-connection DEK and all recoverable wrappers/backups are destroyed with evidence; HKDF from surviving master key does not meet this condition. Provider-side session invalidation remains UNVERIFIED. It is
   recorded in the audit log with IDs only.
-- Secret key: `HKDF(glovo_master, salt = tenant_id, info = "mctl-glovo-connection-v1" ||
-  connection_id)`. The blob format reuses the versioned-blob idea of
-  `internal/crypto/aesgcm.go`, with a new version byte. The master key exists only in the
-  provider worker's Vault path. The facade and the control worker never see it.
+- Secret key: a random per-connection DEK sealed/wrapped by a provider-only Vault KEK (AES-256-GCM with authenticated associated data for tenant/principal/connection). The DEK wrapper and caches must be destroyed or denied on revocation, with bounded backup retention; otherwise treat it as best-effort data deletion, never guaranteed cryptographic erasure. The provider-only KEK is unavailable to the facade or control worker. The facade and the control worker never see it.
 - In M1 the fake provider issues synthetic sessions (canary strings), so the leak checks
   have something to search for.
 
@@ -202,10 +213,7 @@ Every refusal is typed, and none falls back. The workflow ID
 | `glovo_prepare_order` | `{preview_id, idempotency_key}` | `{order_id, fingerprint, consent_request_id, expires_at}` | prepares and asks for consent; no basket write |
 | `glovo_order_status` | `{order_id}` | `{state, outcome: OUTCOME_UNKNOWN \| observed_placed, handoff_url?}` | read |
 
-- No `place_order`, `pay`, `checkout` or `confirm_payment`. The basket write happens only
-  after a human-input approval, outside the tool surface. Approval is done by the
-  human-input path, not by a model-callable tool, so the model cannot approve its own
-  write.
+- No `place_order`, `pay`, `checkout` or `confirm_payment`. The basket write happens only after independent human approval on a canonical `aar_` request, consumed via the single-use receipt gate at provider I/O. The `hir_` clarification path NEVER authorizes a write. No model-callable tool may approve its own request.
 - Text from the provider (store names, item names) is returned as bounded, sanitised
   structured fields, never as instruction-bearing free text.
 - Protected-resource metadata (`/.well-known/oauth-protected-resource`):
@@ -264,7 +272,7 @@ type Adapter interface {
 - `POST /api/v1/assistants/glovo/connections`, `GET .../connections/{gcn}` and
   `DELETE .../connections/{gcn}` (revoke).
 - `POST /api/v1/assistants/glovo/orders` (start), `GET .../orders/{order_id}`. Consent
-  goes through the existing human-input routes.
+  requires canonical `aar_` ActionApprovalRequest and receipt enforcement; `hir_` may collect clarification only.
 - mctl-api is the only Temporal client. The facade calls these routes with the user's
   token, or with a token exchanged for it (RFC 8693).
 
