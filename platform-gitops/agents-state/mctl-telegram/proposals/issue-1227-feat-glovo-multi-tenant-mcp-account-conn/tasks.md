@@ -157,4 +157,4 @@ user), Dana (no install). Run `git grep` on any numeric id before use.
   deploy exists (M3, not here), the layered kill switches are: `GLOVO_MCP_ENABLED=false`,
   provider worker `replicaCount: 0`, `GLOVO_PROVIDER_REAL=false`, revoking the provider
   Temporal identity, and removing the mctl-api pilot allowlist. Revoked connections are
-  crypto-shredded and are not restored by a rollback.
+  deleted/revoked with an evidence-backed key lifecycle and are not restored by rollback.
