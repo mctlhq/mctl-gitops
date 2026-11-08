@@ -55,9 +55,7 @@ exception is optional task 7, which needs its own explicit approval.
     Ingress/LoadBalancer/NodePort; the facade host and paths are exact; the
     fail-closed defaults hold; provenance is checked in P0 or P1 mode
     according to `gate.yaml`.
-  - Leak guard: no `glovo.mctl.ai`, `mctl-assistants` or provenance image
-    repo appears in `platform-gitops/**` (excluding `agents-state/`) unless
-    the matching phase is approved in `gate.yaml`.
+  - Leak guard: in P0, no `glovo.mctl.ai`, `mctl-assistants`, provider workloads or provenance images may appear in reconciled `platform-gitops/**` (excluding `agents-state/`) **regardless of `gate.yaml` claims**. Later P1/P2 has a separate owner grant and externally verified gate.
   - Exit codes 0/6/7, as in `scripts/release-gate.py`.
   - DoD: the selftest covers each refusal, and the script passes on the P0
     tree.
@@ -91,6 +89,13 @@ exception is optional task 7, which needs its own explicit approval.
   - DoD: `mctl_list_services labs` still shows 21 apps with no glovo entry,
     and there is no new Argo CD Application or Temporal namespace. The
     evidence is commented on #2470.
+
+## AMEND 2026-11-08 — security tests for release approval provenance
+
+- [ ] A1. CI **unconditionally** rejects new reconciled Glovo host, provider/control images and assistant namespaces in P0; `gate.yaml` cannot enable a P1/P2 exception.
+- [ ] A2. Fake PR test: `gate.yaml p1:approved,p2:approved` plus forged approval issue URL AND reconciled valid provider Deployment; validator returns exit 6, never a pass or skip.
+- [ ] A3. `gate.yaml` is explicitly informational. A future P1/P2 owner grant must be verified via trusted evidence outside PR-modifiable content, bound to phase/environment/manifest digest/image digest; without it rollout stays BLOCKED.
+- [ ] A4. P0 contains no live GitOps apply, Temporal auth/namespaces, Cloudflare DNS, JWT credentials or user activation. The actual P1 and P2 remain separate issues and explicit owner approvals.
 
 ## Tests
 
