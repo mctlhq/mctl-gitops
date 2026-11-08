@@ -124,12 +124,14 @@ Invariants:
 ## Open questions
 
 - Q1. `cli.status` obtains its handle with `client.get_workflow_handle(workflow_id)` (no result type) and then reads
-  `result.ended` as an attribute (`orchestrator/temporal/cli.py:70-95`). With Temporal's default converter an untyped
-  `result()` decodes to a dict, so this path may already fail at runtime; `tests/test_temporal_cli.py` stubs the handle
-  and cannot see it. `start.restart_if_restartable` uses the typed `get_workflow_handle_for(DevLoopWorkflow.run, ...)`.
-  Interpretation taken: out of scope (fixing it changes the CLI's handle acquisition, which the issue does not list);
-  the new CLI tests feed a real `DevLoopResult` object like the existing stubs, and the reviewer should decide whether a
-  separate issue is wanted. If the implementer finds the CLI cannot be tested without changing this, that is a STOP.
+  `result.ended` as an attribute (`orchestrator/temporal/cli.py:70-95`). Confirmed by the independent review: with the
+  default converter an untyped `result()` decodes a `DevLoopResult` payload to a `dict`, so `result.ended` on a COMPLETED
+  run raises `AttributeError` today; `tests/test_temporal_cli.py` stubs the handle (`lambda _wid: handle`) and cannot
+  see it. The three new CLI branches are therefore unreachable in production until the handle is fixed, and T7 proves
+  formatting only. Fixing it here would break that existing stub and no existing test may be edited, so it is out of
+  scope: the PR states this and a separate issue is filed for the typed handle (`get_workflow_handle_for`, as
+  `start.restart_if_restartable` does). If the implementer finds the CLI cannot be tested without changing this, that is
+  a STOP.
 - Q2. R6 of #1021 asks the `MERGE_WATCH_RECONCILE_REQUIRED` log line to name the slug and the exit. `_finish_after_watch`
   has no slug parameter today. Interpretation taken: the line names repo, workflow id, `ended` (which the 1d-3 producer
   will make name the exit) and record; the slug is added in 1d-3 when the producer carries it, so the two call sites of
@@ -137,6 +139,11 @@ Invariants:
 - Q3. Whether the `wait_condition` predicate in `_deliver` should also wake on `_reconcile_required`. Interpretation
   taken: no, the predicate stays unchanged (R14), as #1021 specifies two checks only; on a watch `_gates_passed` is True,
   so the wait resolves at once, and keeping the predicate unchanged keeps the first check observable by mutation.
-- Q4. mctl-api's `restartIfAbandoned` (`internal/api/handlers_dev_loop.go`) was not re-read in this run; the statement
-  that it decodes only `ended` and `implement` is taken from the #1021 design. The implementer or reviewer should cite it
-  at its default branch in the PR (as #1021 R15 requires), with no change to mctl-api.
+- Q4. Answered by the independent review (read-only, `origin/main`): mctl-api decodes the result into
+  `devLoopResultEnd{Ended string json:"ended"; Implement json.RawMessage json:"implement"}`
+  (`internal/temporalclient/client.go:225-227`), used by `DevLoopEnded` and `restartIfAbandoned`
+  (`internal/api/handlers_dev_loop.go:188`); Go's `encoding/json` ignores the three new keys, and a reconcile-required
+  result carries no abandon prefix in `ended`, so no restart is triggered. The Python readers are `cli.py:88` and
+  `start.py:138` (typed, `implement` and `ended` only). A grep of mctl-telegram, tools, mctl-portal and mctl-gitops found
+  no other reader. The implementer cites these at the default branch in the PR (as #1021 R15 requires), with no change
+  to mctl-api.
