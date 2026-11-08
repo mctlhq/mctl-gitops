@@ -37,7 +37,6 @@ KNOWN_READ_ONLY = {
     ("cwft-mctl-agents-run.yaml", "run-incident-responder", "clone-gitops"),
     ("cwft-mctl-agents-shepherd.yaml", "run-shepherd", "clone-gitops"),
     ("cwft-mctl-agents-shepherd.yaml", "commit-and-push", "clone-gitops"),
-    ("wft-delete-tenant-safe.yaml", "retire-tenant-services", "main"),
     ("wft-lifecycle-bootstrap.yaml", "bootstrap", "clone-gitops"),
 }
 
@@ -73,7 +72,8 @@ check("no read-only step holds the key beyond the known list", found <= KNOWN_RE
 check("the known list has no step that lost the key", KNOWN_READ_ONLY <= found, KNOWN_READ_ONLY - found)
 
 for fname, tname in (("tpl-validate-tenant.yaml", "validate"), ("tpl-validate-tenant.yaml", "image-name"),
-                     ("wft-preview-deploy.yaml", "deploy")):
+                     ("wft-preview-deploy.yaml", "deploy"),
+                     ("wft-delete-tenant-safe.yaml", "retire-tenant-services")):
     doc = dict(DOCS)[fname]
     t = [x for x in doc["spec"]["templates"] if x["name"] == tname][0]
     text = yaml.safe_dump(t)
@@ -81,6 +81,14 @@ for fname, tname in (("tpl-validate-tenant.yaml", "validate"), ("tpl-validate-te
     check(f"{fname} {tname}: no ssh setup", ".ssh" not in text and "git@github.com" not in text)
     check(f"{fname} {tname}: clones over anonymous https",
           'git clone --depth=1 "https://github.com/${GITOPS_ORG}/${GITOPS_REPO}.git"' in t["script"]["source"])
+
+# The steps of the tenant-delete template that push keep their key mount and ssh
+# clone unchanged: only the read-only step was narrowed.
+dts = dict(DOCS)["wft-delete-tenant-safe.yaml"]
+for tname in ("cleanup-tenant-db-from-gitops", "delete-tenant-from-git"):
+    t = [y for y in dts["spec"]["templates"] if y["name"] == tname][0]
+    check(f"wft-delete-tenant-safe.yaml {tname}: writer keeps the key and pushes",
+          KEY in yaml.safe_dump(t) and "git push" in t["script"]["source"])
 
 # Proven both ways: the sweep flags a read-only step with the key, and not a writer.
 sample = {"spec": {"templates": [
