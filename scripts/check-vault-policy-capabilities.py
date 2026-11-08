@@ -113,8 +113,11 @@ def parse_policy(text, label):
         bad = set(caps) - KNOWN_CAPS
         if bad:
             raise Unknown(f"{label}: unknown capability {sorted(bad)} on {pattern!r}")
-        if "+" in pattern or "{{" in pattern or "%" in pattern:
-            raise Unknown(f"{label}: wildcard/template syntax in {pattern!r} is not supported")
+        # HCL decodes string escapes and interpolation; this checker compares
+        # raw text, so any such spelling is unknown rather than evaluated.
+        if ("+" in pattern or "{{" in pattern or "%" in pattern
+                or "\\" in pattern or "${" in pattern):
+            raise Unknown(f"{label}: wildcard/template/escape syntax in {pattern!r} is not supported")
         rules.append((pattern, set(caps)))
         pos = end + 1
     if not rules:

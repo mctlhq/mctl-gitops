@@ -354,12 +354,17 @@ TEMPLATE_PATTERNS = {
     "plus segment wildcard": "secret/data/+/x",
     "template braces": "secret/data/{{identity.entity.name}}/x",
     "percent": "secret/data/%/x",
+    "hcl escape": "secret/data/\\u0077riters/x",
+    "interpolation": "secret/data/${var.x}/x",
 }
-TEMPLATE_OLD = 'if "+" in pattern or "{{" in pattern or "%" in pattern:'
+TEMPLATE_OLD = '''if ("+" in pattern or "{{" in pattern or "%" in pattern
+                or "\\\\" in pattern or "${" in pattern):'''
 TEMPLATE_MUTANTS = {
-    "plus segment wildcard": 'if False or "{{" in pattern or "%" in pattern:',
-    "template braces": 'if "+" in pattern or False or "%" in pattern:',
-    "percent": 'if "+" in pattern or "{{" in pattern or False:',
+    "plus segment wildcard": 'if (False or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern):',
+    "template braces": 'if ("+" in pattern or False or "%" in pattern\n                or "\\\\" in pattern or "${" in pattern):',
+    "percent": 'if ("+" in pattern or "{{" in pattern or False\n                or "\\\\" in pattern or "${" in pattern):',
+    "hcl escape": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or False or "${" in pattern):',
+    "interpolation": 'if ("+" in pattern or "{{" in pattern or "%" in pattern\n                or "\\\\" in pattern or False):',
 }
 for label, pat in TEMPLATE_PATTERNS.items():
     pol = 'path "%s" { capabilities = ["read"] }' % pat
