@@ -65,6 +65,16 @@ Deployed state checked:
 
 ## Proposed solution
 
+### AMEND 2026-11-08 — selected-team OAuth grant, no ambient tenant inference
+
+This proposal MUST implement the owner-confirmed team choice at the protected-resource **OAuth authorization-code consent step** (a human, first-party MCTL screen), persist `selected_team_tenant` in the *server-owned authorization grant*, and bind that selected team to the Glovo `aud` in a tamper-evident access token/verified server-side token record. The service must validate live role membership **and** per-principal pilot allowlist on each Glovo call; a single eligible tenant after filtering still does **not** constitute explicit selection. Missing selection = existing `ambiguous_tenant` refusal (no new public enum required), and a team switch requires new user consent/new OAuth grant. Any tool-provided `tenant` or fake installation hint is ignored/rejected. Issuer and exact audience remain mandatory.
+
+The previous resolver sketch below that automatically maps exactly one membership∩allowlist tenant to a `Scope` is **superseded**. Resolver must read `SelectedTeamTenant` from the authenticated grant, ensure selection integrity and expiry/revocation, then test membership+principal-specific allowlist and emit a `Scope` for that team; never select a team itself. Adapt OAuth authorize/consent and refresh tests, not just token-verifier tests.
+
+M1 pilot allowlist schema must be `(tenant_id, principal_id NOT NULL)` with a unique key, **no tenant wildcard row**; team membership alone cannot authorize entry. The deployment tenant `labs` cannot become the caller tenant. Preserve a negative test where the principal is allowlisted in exactly one team **but has not explicitly selected it**; route must refuse before any store or provider effect.
+
+
+
 ### 1. Glovo resource audience (`internal/auth`)
 
 - Add `OAuthServer.GlovoResource string` (env `GLOVO_MCP_RESOURCE`, default
@@ -102,9 +112,8 @@ Deployed state checked:
      used); role read failure -> 503, never an answer;
   3. none -> `no_tenant` (or `scope_unsupported` when a personal scope marker
      is the only candidate);
-  4. eligible = memberships ∩ `glovo_pilot_allowlist` -> 0 `not_in_pilot`,
-     >1 `ambiguous_tenant`, 1 -> `Scope{PrincipalID, Tenant, Role}`.
-  The resolver takes no request input other than the authenticated user.
+  4. Require `SelectedTeamTenant` on the authenticated OAuth grant (selected directly by human at authorization), reject absence as `ambiguous_tenant` even if exactly one eligible team, then intersect live role membership AND per-principal allowlist for **this** selected team. Only then return `Scope{PrincipalID, Tenant, Role}`.
+  The resolver takes no tenant selection from MCP arguments, request headers or body.
 - `types.go` — refusal codes (closed enum), connection states and the
   transition table `allowed[from][to]`.
 - `store.go` — inline DDL (commerce pattern):
@@ -122,8 +131,8 @@ Deployed state checked:
   - `glovo_connection_requests(tenant_id, principal_id, idempotency_key,
     request_hash, connection_id, created_at, UNIQUE(tenant_id, principal_id,
     idempotency_key))`;
-  - `glovo_pilot_allowlist(tenant_id, principal_id NULL, added_by,
-    added_at)` — tenant-wide or per-principal rows;
+  - `glovo_pilot_allowlist(tenant_id, principal_id NOT NULL, added_by,
+    added_at, UNIQUE(tenant_id, principal_id))` — **per-principal and per-team only**, no wildcard/tenant-wide entries in M1;
   - `glovo_audit_events(id gae_ PK, tenant_id, principal_id, actor_kind,
     connection_id NULL, installation_id NULL, install_revision, event,
     from_state, to_state, refusal_code, created_at)` with a trigger that
