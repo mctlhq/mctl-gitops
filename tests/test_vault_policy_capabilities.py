@@ -9,6 +9,7 @@ import importlib.util
 import json
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -108,8 +109,53 @@ check("the longest matching glob wins over a shorter one",
       C.effective([("secret/data/a/*", {"deny"}), ("secret/data/a/b/*", {"read"})], "secret/data/a/b/c") == ["read"])
 check("an exact path beats a glob",
       C.effective([("secret/data/a/*", {"deny"}), ("secret/data/a/b", {"read"})], "secret/data/a/b") == ["read"])
-check("same-pattern capabilities merge and deny wins across policies",
-      C.effective([("secret/data/a/*", {"read"}), ("secret/data/a/*", {"deny"})], "secret/data/a/x") == ["deny"])
+
+def mutant(src_old, src_new):
+    """Load the checker with one source line deliberately changed."""
+    text = pathlib.Path("scripts/check-vault-policy-capabilities.py").read_text()
+    assert src_old in text, "mutation target missing"
+    m = importlib.util.module_from_spec(importlib.util.spec_from_file_location("mut", "scripts/x.py"))
+    exec(compile(text.replace(src_old, src_new), "mutant", "exec"), m.__dict__)
+    return m
+
+
+GLOB_OLD = "globs.setdefault(pattern, set()).update(caps)"
+EXACT_OLD = "exact.setdefault(pattern, set()).update(caps)"
+GP, EP = "secret/data/a/*", "secret/data/a/b"
+MERGE_CASES = [  # (rules, request path, expected under merge)
+    ("glob deny then read", [(GP, {"deny"}), (GP, {"read"})], "secret/data/a/x", ["deny"]),
+    ("glob read then deny", [(GP, {"read"}), (GP, {"deny"})], "secret/data/a/x", ["deny"]),
+    ("glob read then list", [(GP, {"read"}), (GP, {"list"})], "secret/data/a/x", ["list", "read"]),
+    ("glob list then read", [(GP, {"list"}), (GP, {"read"})], "secret/data/a/x", ["list", "read"]),
+    ("exact deny then read", [(EP, {"deny"}), (EP, {"read"})], EP, ["deny"]),
+    ("exact read then deny", [(EP, {"read"}), (EP, {"deny"})], EP, ["deny"]),
+    ("exact read then list", [(EP, {"read"}), (EP, {"list"})], EP, ["list", "read"]),
+    ("exact list then read", [(EP, {"list"}), (EP, {"read"})], EP, ["list", "read"]),
+]
+for label, rules, req, want in MERGE_CASES:
+    check(f"same-pattern merge: {label}", C.effective(rules, req) == want)
+
+# Replace merge with last-writer-wins / first-writer-wins: every kind of rule
+# (glob and exact) must turn at least the discriminating cases red, and the
+# deny-then-read order must be red under last-writer-wins, the reverse order
+# under first-writer-wins.
+for kind, old, last, first in (
+    ("glob", GLOB_OLD, "globs[pattern] = set(caps)", "globs.setdefault(pattern, set(caps))"),
+    ("exact", EXACT_OLD, "exact[pattern] = set(caps)", "exact.setdefault(pattern, set(caps))"),
+):
+    for mname, repl in (("overwrite (last wins)", last), ("keep first", first)):
+        M = mutant(old, repl)
+        red = {lab for lab, rules, req, want in MERGE_CASES
+               if kind in lab and M.effective(rules, req) != want}
+        check(f"mutation {kind} {mname} turns cases red", len(red) >= 3, str(sorted(red)))
+        for lab in (f"{kind} read then list", f"{kind} list then read"):
+            check(f"mutation {kind} {mname}: union case '{lab}' red", lab in red)
+    check(f"mutation {kind} overwrite: deny-then-read order red",
+          f"{kind} deny then read" in {lab for lab, r, q, w in MERGE_CASES
+                                       if mutant(old, last).effective(r, q) != w})
+    check(f"mutation {kind} keep-first: read-then-deny order red",
+          f"{kind} read then deny" in {lab for lab, r, q, w in MERGE_CASES
+                                       if mutant(old, first).effective(r, q) != w})
 for label, mut in (
     ("removing the committed narrow deny", (ESO, 'path "secret/data/platform/github-app-agents*" {\n  capabilities = ["deny"]', 'path "secret/data/platform/github-app-agents*" {\n  capabilities = ["read"]')),
     ("granting the shared identity a tenant prefix", (ESO, 'path "secret/data/platform/*" {\n  capabilities = ["read"]', 'path "secret/data/platform/*" {\n  capabilities = ["read"]\n}\npath "secret/data/teams/*" {\n  capabilities = ["read"]')),
@@ -138,6 +184,40 @@ bad = fixture({"shared.hcl": FIX_ESO, "scoped.hcl": FIX_WRITER}, cfg={"base_dir"
 check("empty config is UNKNOWN", run(bad) == C.UNKNOWN)
 bad2 = json.loads(json.dumps(FIX_CFG)); bad2["expectations"][0]["identity"] = "nobody"
 check("expectation naming an unknown identity is UNKNOWN", run(fixture({"shared.hcl": FIX_ESO, "scoped.hcl": FIX_WRITER}, bad2)) == C.UNKNOWN)
+
+# Present but not valid UTF-8 -> UNKNOWN (2), never a traceback, never 1
+def raw_fixture(name, data, cfg=FIX_CFG, other=None):
+    d = fixture({"shared.hcl": FIX_ESO, "scoped.hcl": FIX_WRITER}, cfg)
+    (d / "p" / name).write_bytes(data)
+    return d
+
+
+BAD_UTF8 = b'path "secret/data/x/*" { capabilities = ["read"] }\n# \xff\xfe\n'
+d = raw_fixture("shared.hcl", BAD_UTF8)
+check("non-UTF-8 policy file is UNKNOWN (run)", run(d) == C.UNKNOWN)
+check("non-UTF-8 policy file exits 2 via main", C.main(["--root", str(d), "--config", str(d / "cfg.json")]) == 2)
+check("non-UTF-8 policy file exits 2 as a process",
+      subprocess.run([sys.executable, "scripts/check-vault-policy-capabilities.py", "--root", str(d),
+                      "--config", str(d / "cfg.json")], capture_output=True).returncode == 2)
+d = raw_fixture("shared.hcl", b"\xff\xfe\x00")
+check("non-UTF-8 binary policy file exits 2", C.main(["--root", str(d), "--config", str(d / "cfg.json")]) == 2)
+d = fixture({"shared.hcl": FIX_ESO, "scoped.hcl": FIX_WRITER})
+(d / "cfg.json").write_bytes(b"\xff\xfe{")
+check("non-UTF-8 config exits 2", C.main(["--root", str(d), "--config", str(d / "cfg.json")]) == 2)
+d = fixture({"shared.hcl": FIX_ESO, "scoped.hcl": FIX_WRITER}, cfg={"base_dir": "p", "identities": FIX_CFG["identities"],
+            "expectations": [dict(FIX_CFG["expectations"][0], effective=["read"])] + FIX_CFG["expectations"][1:]})
+check("actual mismatch exits 1 via main", C.main(["--root", str(d), "--config", str(d / "cfg.json")]) == 1)
+(d / "p" / "scoped.hcl").write_bytes(BAD_UTF8)
+check("non-UTF-8 file outranks a mismatch (exit 2, not 1)",
+      C.main(["--root", str(d), "--config", str(d / "cfg.json")]) == 2)
+# Mutation: catch only OSError -> non-UTF-8 must stop being UNKNOWN
+src_old = "except (OSError, ValueError) as e:\n                # ValueError includes"
+M = mutant(src_old, "except OSError as e:\n                # ValueError includes")
+try:
+    r = M.run(raw_fixture("shared.hcl", BAD_UTF8), raw_fixture("shared.hcl", BAD_UTF8) / "cfg.json")[0]
+except Exception:
+    r = "traceback"
+check("mutation: catching only OSError turns the non-UTF-8 case red", r != C.UNKNOWN, str(r))
 
 if failures:
     print("\nFAILURES:")

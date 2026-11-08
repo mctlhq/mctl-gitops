@@ -11,8 +11,8 @@ talks to Vault: it proves what the repository text says, not what is applied.
 Exit codes:
   0  every expectation holds
   1  at least one expectation differs (a finding)
-  2  something could not be observed (missing/unreadable/unparseable policy
-     file, malformed config, unsupported syntax). UNKNOWN outranks a finding:
+  2  something could not be observed (missing/unreadable/non-UTF-8/unparseable
+     policy file, malformed config, unsupported syntax). UNKNOWN outranks a finding:
      a file that cannot be read is never an empty policy and never a pass.
 
 Config (scripts/vault-policy-expectations.json):
@@ -132,7 +132,7 @@ def effective(rule_sets, request_path):
 def load_config(path):
     try:
         cfg = json.loads(pathlib.Path(path).read_text())
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError) as e:  # ValueError covers bad UTF-8 and bad JSON
         raise Unknown(f"config {path}: {e}")
     if not isinstance(cfg, dict):
         raise Unknown("config: top level must be an object")
@@ -162,8 +162,10 @@ def run(root, config):
             p = base / fname
             try:
                 text = p.read_text()
-            except OSError as e:
-                problems.append(f"{name}: cannot read policy file {p}: {e.strerror or e}")
+            except (OSError, ValueError) as e:
+                # ValueError includes UnicodeDecodeError: a file that is present
+                # but not valid UTF-8 could not be observed, so it is UNKNOWN.
+                problems.append(f"{name}: cannot read policy file {p}: {getattr(e, 'strerror', None) or e}")
                 continue
             try:
                 rules.extend(parse_policy(text, str(p)))
