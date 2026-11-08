@@ -5,7 +5,7 @@
 
 image:
   repository: ghcr.io/mctlhq/mctl-design
-  tag: "14e6f798e498"
+  tag: "a82d3dec6982"
 imagePullSecrets:
   - name: ghcr-credentials
 service:
