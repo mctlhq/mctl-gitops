@@ -9,12 +9,14 @@ Checks:
 - every vault-policy-*.hcl parses, with known capabilities and balanced braces;
 - gitops-writer-read grants only read/list, only under writers/gitops/;
 - external-secrets-read and argo-workflow-teams-rw deny secret/{data,metadata}/writers/*;
-- no other policy file grants anything on the writers/ prefix, judged by
-  evaluating each policy's effective capabilities on concrete sample paths
-  (see effective_caps), not by looking at path prefixes.
+- no other policy file grants anything on the writers/ subtree, judged by
+  evaluating each policy's effective capabilities (see effective_caps) on a
+  witness set derived from that policy's own rule patterns (see witnesses),
+  not by looking at path prefixes and not on a fixed list of sample paths.
 
-Path matching follows the Vault policy docs ("Policies", sections on path
-globs, "+" segment wildcards and "Priority matching"): when several rules in a
+Path matching follows the Vault policy docs (https://developer.hashicorp.com/vault/docs/concepts/policies,
+sections "Policy syntax" for globs and "+" segment wildcards, and "Priority
+matching"): when several rules in a
 policy match a request path, only the highest-priority one applies. Priority:
 a later first wildcard beats an earlier one; a path that does not end in "*"
 beats one that does; fewer "+" segments beats more; a longer path beats a
@@ -22,10 +24,27 @@ shorter one; otherwise the lexicographically larger path wins. Rules with the
 identical path are merged, and "deny" in the merged set wins. So a deny is only
 protection when its rule is the winning one for the path in question.
 
+Witness construction (pattern-vs-subtree, not sampling): the subtree is
+secret/{data,metadata}/writers[/<extra segments>]. Whether a rule can match,
+and win, anywhere inside it depends only on how each path segment compares to
+the segments the policy's patterns mention. So for every policy the candidate
+extra segments are: each literal segment of its patterns, each trailing-glob
+partial prefix (as is, and extended), the empty segment, and one fresh segment
+no pattern can match by name. Every combination of these up to one segment
+deeper than the longest pattern is evaluated; any segment outside the set
+behaves like the fresh one. A grant anywhere in that set is a grant on the
+subtree.
+
+Fail closed: a pattern shape this evaluator does not model (templated
+"{{ }}" paths, "*" anywhere but the end, "+" mixed into a longer segment) or a
+witness space too large to enumerate raises ValueError, which the check
+reports as an error. It is never read as "no grant".
+
 Self-tests (test_* functions) run before the tree check.
 
 Run: python3 tests/test_vault_policy_files.py
 """
+import itertools
 import pathlib
 import re
 import sys
@@ -68,25 +87,20 @@ def parse_text(text):
     return rules
 
 
-# Concrete request paths a writers/ grant would have to match: KV v2 data and
-# metadata forms, a gitops and a non-gitops entry, the bare mount-relative
-# prefix, and the trailing-slash list form.
-WRITER_SAMPLES = [
-    "secret/data/writers/gitops/x",
-    "secret/metadata/writers/gitops/x",
-    "secret/data/writers/other/x",
-    "secret/metadata/writers/other/x",
-    "secret/data/writers",
-    "secret/metadata/writers",
-    "secret/data/writers/",
-    "secret/metadata/writers/",
-]
-# Samples strictly below the prefix: a deny must be the effective rule here.
-WRITER_CHILD_SAMPLES = [s for s in WRITER_SAMPLES if s.count("/") >= 4 or s.endswith("writers/")]
+def validate_pattern(pattern):
+    """Raise ValueError for a path shape this evaluator does not model."""
+    if "{{" in pattern or "}}" in pattern:
+        raise ValueError("templated policy path not evaluable: %s" % pattern)
+    if "*" in pattern[:-1]:
+        raise ValueError("'*' not at the end of the path not evaluable: %s" % pattern)
+    for seg in pattern.rstrip("*").split("/"):
+        if "+" in seg and seg != "+":
+            raise ValueError("'+' inside a longer segment not evaluable: %s" % pattern)
 
 
 def rule_matches(pattern, path):
     """Vault path match: exact, "+" for one whole segment, trailing "*" prefix glob."""
+    validate_pattern(pattern)
     glob = pattern.endswith("*")
     base = pattern[:-1] if glob else pattern
     psegs = base.split("/")
@@ -106,6 +120,44 @@ def rule_matches(pattern, path):
         elif ps != segs[i]:
             return False
     return True
+
+
+MAX_WITNESSES = 200000
+
+
+def witnesses(rules):
+    """[(path, extra_segments)] covering every behaviour inside the writers/ subtree."""
+    alpha = {""}
+    prefixes = set()
+    maxlen = 0
+    for pat, _ in rules:
+        validate_pattern(pat)
+        segs = pat.split("/")
+        maxlen = max(maxlen, len(segs))
+        for i, sg in enumerate(segs):
+            if sg == "+":
+                continue
+            if i == len(segs) - 1 and pat.endswith("*"):
+                sg = sg[:-1]
+                prefixes.add(sg)
+                if sg:
+                    alpha.add(sg + "q")
+            if sg:
+                alpha.add(sg)
+    fresh = "f"
+    while any(p and (fresh.startswith(p) or p.startswith(fresh)) for p in prefixes) or fresh in alpha:
+        fresh += "f"
+    alpha.add(fresh)
+    alpha = sorted(alpha)
+    depth = max(maxlen - 3, 0) + 1
+    if sum(len(alpha) ** n for n in range(depth + 1)) * 2 > MAX_WITNESSES:
+        raise ValueError("witness space too large to enumerate")
+    out = []
+    for form in ("data", "metadata"):
+        for n in range(depth + 1):
+            for combo in itertools.product(alpha, repeat=n):
+                out.append(("secret/%s/writers" % form + "".join("/" + c for c in combo), n))
+    return out
 
 
 def priority(pattern):
@@ -129,9 +181,9 @@ def effective_caps(rules, path):
 
 
 def writers_grants(rules):
-    """[(sample, caps)] where the policy grants something other than deny on a writers path."""
+    """[(witness, caps)] where the policy grants something other than deny inside writers/."""
     out = []
-    for s in WRITER_SAMPLES:
+    for s, _ in witnesses(rules):
         caps = effective_caps(rules, s)
         if caps and caps != {"deny"}:
             out.append((s, sorted(caps)))
@@ -139,8 +191,8 @@ def writers_grants(rules):
 
 
 def deny_gaps(rules):
-    """Child samples whose effective capabilities are not exactly deny."""
-    return [s for s in WRITER_CHILD_SAMPLES if effective_caps(rules, s) != {"deny"}]
+    """Witnesses strictly below writers/ whose effective capabilities are not exactly deny."""
+    return [s for s, n in witnesses(rules) if n >= 1 and effective_caps(rules, s) != {"deny"}]
 
 
 def check():
@@ -175,12 +227,22 @@ def check_parsed(parsed):
         if rules is None:
             errs.append("%s missing or unparsable" % name)
             continue
-        for gap in deny_gaps(rules):
+        try:
+            gaps = deny_gaps(rules)
+        except ValueError as e:
+            errs.append("%s: cannot evaluate: %s" % (name, e))
+            continue
+        for gap in gaps[:5]:
             errs.append("%s: deny is not the effective rule on %s" % (name, gap))
     for name, rules in parsed.items():
         if name == WRITER_READ:
             continue
-        for sample, caps in writers_grants(rules):
+        try:
+            grants = writers_grants(rules)
+        except ValueError as e:
+            errs.append("%s: cannot evaluate: %s" % (name, e))
+            continue
+        for sample, caps in grants[:5]:
             errs.append("%s grants %s on %s" % (name, caps, sample))
     return errs
 
@@ -269,6 +331,98 @@ def test_plus_rule_outranked_by_later_wildcard():
     # so the explicit writers/ rule (the deny) is the one that applies.
     rules = [("secret/data/+/x", ["read"]), ("secret/data/writers/*", ["deny"])]
     assert effective_caps(rules, "secret/data/writers/x") == {"deny"}
+
+
+def _other_fails(*rules):
+    parsed = _good_denying()
+    parsed["vault-policy-other.hcl"] = list(rules)
+    return any(e.startswith("vault-policy-other.hcl") for e in check_parsed(parsed))
+
+
+def test_exact_path_in_writers_fails():
+    assert _other_fails(("secret/data/writers/foo", ["read"]))
+    assert _other_fails(("secret/metadata/writers/foo", ["list"]))
+
+
+def test_exact_path_under_gitops_fails():
+    assert _other_fails(("secret/data/writers/gitops/deploy", ["read"]))
+
+
+def test_deeper_exact_path_fails():
+    assert _other_fails(("secret/data/writers/a/b/c/d", ["read"]))
+
+
+def test_glob_inside_writers_fails():
+    assert _other_fails(("secret/data/writers/z*", ["read"]))
+    assert _other_fails(("secret/data/writers/gitops/deep/er*", ["read"]))
+
+
+def test_plus_segments_fail():
+    assert _other_fails(("secret/data/writers/+", ["read"]))
+    assert _other_fails(("secret/data/+/foo", ["read"]))
+    assert _other_fails(("secret/+/writers/+/x", ["read"]))
+
+
+def test_bare_mount_glob_fails():
+    assert _other_fails(("secret/*", ["read"]))
+    assert _other_fails(("*", ["read"]))
+    assert _other_fails(("sec*", ["read"]))
+
+
+def test_wider_glob_in_another_policy_fails():
+    assert _other_fails(("secret/data/*", ["read"]), ("secret/data/platform/*", ["read"]))
+    assert _other_fails(("secret/metadata/*", ["list"]))
+
+
+def test_unrelated_exact_and_glob_pass():
+    assert not _other_fails(("secret/data/writer", ["read"]), ("secret/data/writersx/*", ["read"]),
+                            ("secret/data/platform/writers/*", ["read"]))
+    assert not _other_fails(("secret/data/writers-old/x", ["read"]))
+
+
+def test_unevaluable_patterns_fail_closed():
+    for pat in ("secret/data/{{identity.entity.name}}/*", "secret/*/writers", "secret/data/wri+ters/x"):
+        assert _other_fails((pat, ["read"])), pat
+        try:
+            writers_grants([(pat, ["read"])])
+        except ValueError:
+            continue
+        raise AssertionError("evaluated %r" % pat)
+
+
+def test_unevaluable_in_deny_policy_fails_closed():
+    parsed = _good_denying()
+    parsed[DENY_IN[0]] = parsed[DENY_IN[0]] + [("secret/data/{{x}}/y", ["read"])]
+    assert any(DENY_IN[0] in e and "cannot evaluate" in e for e in check_parsed(parsed))
+
+
+def test_partial_segment_globs_do_not_overmatch():
+    assert not rule_matches("secret/data/ab*", "secret/data/a")
+    assert not rule_matches("secret/data/ab*", "secret/data/ba")
+    assert not rule_matches("secret/data/writers/gitops*", "secret/data/writers/gitop")
+    assert not rule_matches("secret/data/x*", "secret/data/yx")
+    assert not rule_matches("secret/da*", "secret/metadata/x")
+    assert rule_matches("secret/da*", "secret/data/x")
+    assert rule_matches("secret/data/ab*", "secret/data/abc/d")
+
+
+def test_partial_glob_outside_writers_passes():
+    assert not _other_fails(("secret/data/wx*", ["read"]))
+    assert not _other_fails(("secret/data/writers-*", ["read"]))
+
+
+def test_glob_grant_next_to_exact_deny_fails():
+    # The exact deny only covers the path "z"; the glob grant still wins on "zq...".
+    assert _other_fails(("secret/data/writers/z*", ["read"]), ("secret/data/writers/z", ["deny"]))
+    # Same, with the deeper "z/..." paths denied too: only the extended segment "zq" is granted.
+    assert _other_fails(("secret/data/writers/z*", ["read"]), ("secret/data/writers/z", ["deny"]),
+                        ("secret/data/writers/z/*", ["deny"]))
+
+
+def test_trailing_slash_exact_grant_beats_deny_glob():
+    parsed = _good_denying()
+    parsed[DENY_IN[0]] = parsed[DENY_IN[0]] + [("secret/data/writers/", ["list"])]
+    assert any(DENY_IN[0] in e and "not the effective rule" in e for e in check_parsed(parsed))
 
 
 def test_missing_deny_fails():
