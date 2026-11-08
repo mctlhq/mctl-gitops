@@ -175,9 +175,11 @@ With `watch_end == ""` the output is identical to today's.
 A new file `tests/test_merge_watch_typed_result.py` holds every test of this slice (T1-T7 in `tasks.md`), so no
 existing test file changes. Delivery tests reuse the fixtures of `tests/test_execution_request_resume.py` by import and
 a test-only subclass `@workflow.defn(name="DevLoopWorkflow", sandboxed=False) class _FlaggedLoop(DevLoopWorkflow)`
-with one extra `@workflow.signal` that sets `self._reconcile_required = True` (the same subclass pattern as
-`_ReleasedStrandedLoop`). A signal handler runs in the activation it is delivered in, which is exactly the
-"wait resolves in the activation that sets the flag" case. The production class gains no signal. Result-shape tests
+that redefines `@workflow.run` (calling `super().run`, else class creation fails) and adds two signals: `flag` (sets
+`self._reconcile_required = True`) and `flag_and_pass` (sets it and `self._gates_passed = True` in one handler). Only the
+combined handler resolves `wait_condition` in the same activation that sets the flag, because the predicate is
+unchanged and a flag-only signal never wakes it; this was measured by the independent review of this proposal. The
+`pending_phase` case needs the flag set before `_deliver` runs (`start_signal`). The production class gains no signal. Result-shape tests
 call `_finish_after_watch` from a probe workflow (`@workflow.defn(name="FinishAfterWatchProbe", sandboxed=False)`,
 like `PatchMemoProbe` in `tests/test_patch_memoization.py`) so `workflow.patched`/`workflow.now` run in a real workflow
 context; the reconcile-required and OPEN cases schedule no activity.
