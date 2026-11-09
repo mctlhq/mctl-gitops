@@ -710,6 +710,12 @@ jobs:
         # argo-workflow; create/delete-tenant manage the per-tenant role.
         run: python3 tests/test_vault_login_role.py
 
+      - name: Pin the argo-workflow-rotator Vault role's reach
+        # The dedicated rotation role grants exactly the KV paths the
+        # rotate-github-app-tokens template names (derived from it), is bound to
+        # one ServiceAccount, and nothing else. Not yet used by the template.
+        run: python3 tests/test_vault_rotator_role.py
+
       - name: Unit-test create-tenant's existing-tenant checks
         # create-tenant creates a tenant: an existing one fails validate unless
         # reprovision=true, and the commit step refuses one that appeared
