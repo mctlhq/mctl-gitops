@@ -30,6 +30,7 @@ Every regression or negative test below carries one requirement: it is shown red
 - [ ] T6. `TestPGGlovoContractUnknownAmbiguous`, `...UnknownWorkerRestart`, `...UnknownLostResult`, `...StaleHolder`: unknown, no retry, no second write.
 - [ ] T7. `TestPGGlovoContractExactlyOnce`: one effect under concurrent claims, repeated dispatch and duplicate posts.
 - [ ] T8. `TestPGGlovoContractIsolation`: no cross-tenant or cross-principal leak on any of the three surfaces.
+- [ ] T8a. Audit and metrics assertions of task 12: redacted effect id, principal and tenant, hashed intent, receipt id and outcome present; no `lt_` token, raw effect id or foreign tenant in records or label values.
 - [ ] T9. The fake provider's own tests, including the non-loopback dial guard, run in the CI step and required by name.
 - [ ] T10. Every delegated row of the negative matrix, by the owner's test name recorded in task 0, required by the CI step.
 - [ ] T11. The suite run with `-count=20` before merge with no flake, recorded in the PR.

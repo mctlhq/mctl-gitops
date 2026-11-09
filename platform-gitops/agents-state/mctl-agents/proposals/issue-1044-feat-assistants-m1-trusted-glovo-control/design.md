@@ -49,7 +49,7 @@ have been edited. Values owned by a sibling are cited by section, not restated.
 | OPEN-957-11 (b), (c), OPEN-985-12 | Route constants mirror #953/#954; the control contract files and the Go-produced golden have no consumer | New vendored sets with provenance, and tests, see "Vendored contracts" and tasks 12 and 13. This slice vendors no bridge schema: it has no bridge port, and the only enum source is the in-repo result schema |
 | OPEN-988-2 | `GlovoControlInput` must name the one basket fingerprint | `fingerprint` is `"sha256:" + hex(sha256(JCS(approval_basket)))` as defined by mctl-agents#1059 and #988; the workflow carries and compares it and never parses a basket |
 | `handoff_ref` | No source: the control routes return ids, enums and digests only, and `handoff_url` belongs to `POST /connections` (#961), not to an order (#957 §3a) | Removed from `GlovoControlResult` |
-| `tenant_cap_reached` | Not in the closed code set of #957 §4.1 or #985 §2b | Removed. Admission pressure arrives as `rate_limited` or `tenant_busy` (M10b) |
+| `tenant_cap_reached` | Not in the closed code set of #957 §4.1 or #985 §2b | Removed. Admission pressure arrives as `rate_limited` (retryable) or `tenant_busy` (refusal) (M10b) |
 | #954 references | #954 is decomposed into #988 (orders), #989 (`aar_` and fence), #985 (dispatch, cancel, permit wiring), #957 (prepare, facade) and #986 (reads) | Citations updated; `CheckpointSideEffect` and `ReserveActionApproval` wording replaced by the #985 transaction |
 | M6 (race) | A `bridge-result` signal can arrive before the dispatch activity has stored `cmd_` | A signal for an unknown `command_id` is ignored; the poll of `read_command_result` recovers it, so no result is lost |
 
@@ -63,7 +63,7 @@ control call. A code outside the closed set, or a body that does not parse, is
 
 | Code(s) | Disposition | `order_status` | `reason_code` |
 |---|---|---|---|
-| `unavailable`, `rate_limited` | retryable: bounded backoff (honour `Retry-After`); on exhaustion in `dispatching`, attempt `cancel_order` once and end as shown | `unknown` | `dispatch_unconfirmed` |
+| `unavailable`, `rate_limited` | retryable (#957 §4.1 and #985 §2b: 429 `rate_limited` is admission pressure with nothing written, and the code is not a terminal refusal): bounded backoff (honour `Retry-After`); on exhaustion in `dispatching`, attempt `cancel_order` once and end as shown. `rate_limited` is never a `reason_code`: the exhausted outcome is `dispatch_unconfirmed` | `unknown` | `dispatch_unconfirmed` |
 | `approval_invalid`, `approval_expired`, `approval_replayed`, `intent_mismatch`, `basket_changed`, `tenant_busy` | refusal, no retry | `refused` | the code |
 | `not_ready` | refusal, no retry | `refused` | `provider_disabled` |
 | `no_tenant`, `no_connection`, `connection_revoked`, `connection_expired`, `stale_install` | refusal (scope not live), no retry | `refused` | the code |
@@ -132,10 +132,11 @@ table above:
 - class `none`: the table decides only when `provider_effect` is `none`; `applied` or `unknown` is `unknown`/`result_inconsistent`.
 
 For effect `none` the workflow surface is allowed to differ from the #957 §3a wire state, because the
-workflow outcome is a workflow-only vocabulary owned by M9. Exactly two cells do, and the wire column
-names both: provider result `succeeded` with `provider_effect` `none` is workflow `unknown`/`result_inconsistent`
-while #985 closes the order and the wire says `failed`; `approval_refused` with `none` is workflow `refused`
-while the wire says `failed`. Every pair whose effect is not `none` agrees on both surfaces.
+workflow outcome is a workflow-only vocabulary owned by M9. Exactly one cell does, and the wire column
+names it: `approval_refused` with `provider_effect` `none` is workflow `refused` while the wire says `failed`.
+Provider result `succeeded` with `provider_effect` `none` is workflow `failed`/`result_inconsistent` and the wire
+says `failed` too (#985 closes the order): the same state, with a reason that records the contradiction.
+Every pair whose effect is not `none` agrees on both surfaces.
 
 So the workflow outcome never says "no effect" against an observed or possible pair, and never
 says "completed" against anything but an observed one. Where the triple and the pair disagree
@@ -398,7 +399,7 @@ Rules:
 - At startup logs the `ASSISTANTS_API_CONTRACT` pin; if `ASSISTANTS_API=real` while
   the pin is missing or differs from the `PROVENANCE` of the vendored mctl-api#985
   contract set, exits with status `BLOCKED_FOR_INTEGRATION` (amended 2026-11-09, round 7).
-- Noisy-tenant pressure reaches the workflow only as `rate_limited` or `tenant_busy`
+- Noisy-tenant pressure reaches the workflow only as `rate_limited` (retried) or `tenant_busy` (refused)
   (mctl-api#985 §2b); the worker's slot limits cap total parallelism.
 
 ### 4. Test harness

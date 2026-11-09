@@ -155,8 +155,9 @@ Resource budgets:
   worker from bounded env settings. The workflow lifetime is bounded by the approval wait
   (`aar_` expiry) plus `settle_timeout_s` from the input `limits`; there is no separate
   execution timeout.
-- IF mctl-api answers a dispatch with `rate_limited` or `tenant_busy` THEN THE SYSTEM SHALL
-  end `refused` with that reason (mctl-api#985 §2b) and write nothing.
+- IF mctl-api answers a dispatch with `tenant_busy` THEN THE SYSTEM SHALL end `refused` with that
+  reason (mctl-api#985 §2b) and write nothing. IF it answers `rate_limited` (429, nothing written) THEN THE
+  SYSTEM SHALL retry with bounded backoff honouring `Retry-After`, and on exhaustion end `unknown`/`dispatch_unconfirmed` as for `unavailable` (M10b); `rate_limited` is never a `reason_code`.
 
 Safety:
 - THE SYSTEM SHALL contain no Glovo HTTP client, no provider cookie or session
