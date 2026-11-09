@@ -63,7 +63,7 @@ Marker-aware rollback check (`tools/rollback_compat_check.py`)
   declaring workflow type, an unreadable file, or a report older than `--max-age` (default 30
   minutes) THEN THE SYSTEM SHALL print UNKNOWN with a stable reason code and exit 2.
 - IF a tree cannot be parsed, or a `workflow.patched` argument is not a literal or resolvable
-  module constant, THEN THE SYSTEM SHALL return UNKNOWN (exit 2) and never COMPATIBLE.
+  module constant, THEN THE SYSTEM SHALL return UNKNOWN (exit 2) and never PATCH_COMPATIBLE.
 - WHEN `removed` is empty, or every id in it has a complete, fresh report with only
   MARKER_ABSENT, THE SYSTEM SHALL print `PATCH_COMPATIBLE` (exit 0) and state that this is **only an offline necessary-condition check**, valid at the scan instant. It SHALL **NOT** assert that the target worker is replay-safe, that a release/rollback is authorised, or that new markers cannot appear before a rollout.
 - THE SYSTEM SHALL NOT connect to Temporal, GitHub or Kubernetes. Its inputs are files and a
