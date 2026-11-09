@@ -63,10 +63,11 @@ spec:
             # start, so when a rollout depends on generated configuration
             # (for example zitadel-iac output), bump only after it is applied.
             # The line below records why the current value was set.
-            # This rollout loads OAUTH_JWT_SIGNING_KEYS, which #2171 mapped
-            # into mctl-api-secrets (step C0 of mctlhq/mctl-api#805); envFrom
-            # is read only at container start.
-            ROLLOUT_MARKER: "2026-10-26-jwt-signing-keys"
+            # This rollout loads the orchestrator subject_audiences entry
+            # (mctlhq/mctl-api#963, #973) that zitadel-iac writes into
+            # MCTL_OIDC_PROVIDERS (mctl-gitops#2517); envFrom is read only at
+            # container start.
+            ROLLOUT_MARKER: "2026-11-09-orchestrator-subject-audience"
             ARGOCD_URL: https://ops.mctl.ai
             # Repositories the orchestrator DevLoop principal may start or
             # read a DevLoop for (mctlhq/mctl-api#963), exact and
