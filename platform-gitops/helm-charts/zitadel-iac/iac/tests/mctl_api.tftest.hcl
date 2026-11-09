@@ -135,6 +135,53 @@ run "oauth_upstream_client_is_a_confidential_pkce_web_client" {
   }
 }
 
+# The client of the DevLoop decide page (mctl-api#964). The same attributes as
+# mctl-api-oauth, because the same things keep it closed.
+run "decide_client_is_a_confidential_pkce_web_client" {
+  command = plan
+  plan_options {
+    target = [zitadel_application_oidc.mctl_api_decide]
+  }
+
+  override_resource {
+    target = zitadel_project.mctl_api
+    values = { id = "mctl-api-project" }
+  }
+
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_decide.name == "mctl-api-decide"
+    error_message = "The client is named mctl-api-decide."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_decide.project_id == "mctl-api-project" && zitadel_application_oidc.mctl_api_decide.org_id == "100000000000000001"
+    error_message = "The client must be in the MCTL API project of MCTL: has_project_check there is what limits who can sign in."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_decide.redirect_uris == tolist(["https://api.mctl.ai/devloop/decide/callback"])
+    error_message = "The only redirect URI must be https://api.mctl.ai/devloop/decide/callback."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_decide.app_type == "OIDC_APP_TYPE_WEB" && zitadel_application_oidc.mctl_api_decide.auth_method_type == "OIDC_AUTH_METHOD_TYPE_BASIC"
+    error_message = "The client must be a confidential web client authenticating with client_secret_basic."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_decide.grant_types == tolist(["OIDC_GRANT_TYPE_AUTHORIZATION_CODE"]) && zitadel_application_oidc.mctl_api_decide.response_types == tolist(["OIDC_RESPONSE_TYPE_CODE"])
+    error_message = "Authorization code only: no implicit, refresh token or device grant."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_decide.access_token_type == "OIDC_TOKEN_TYPE_BEARER"
+    error_message = "The access token must stay opaque (BEARER), never JWT."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_decide.id_token_userinfo_assertion == true
+    error_message = "id_token_userinfo_assertion must be on: mctl-api reads preferred_username from the ID token."
+  }
+  assert {
+    condition     = zitadel_application_oidc.mctl_api_decide.dev_mode == false
+    error_message = "dev_mode must stay off: on, ZITADEL accepts http redirects."
+  }
+}
+
 # The Job patches one Secret for three consumers. The new keys must carry the
 # new client's credentials, not the link client's, and the keys mctl-api and
 # the CLI already read must stay.
@@ -165,6 +212,10 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
     values = { client_id = "dev-client-id", client_secret = "dev-client-secret" }
   }
   override_resource {
+    target = zitadel_application_oidc.mctl_api_decide
+    values = { client_id = "decide-client-id", client_secret = "decide-client-secret" }
+  }
+  override_resource {
     target = zitadel_org.customers
     values = { id = "customers-org-id" }
   }
@@ -181,10 +232,12 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
       "ZITADEL_LINK_CLIENT_SECRET",
       "OAUTH_ZITADEL_CLIENT_ID",
       "OAUTH_ZITADEL_CLIENT_SECRET",
+      "DEVLOOP_DECIDE_CLIENT_ID",
+      "DEVLOOP_DECIDE_CLIENT_SECRET",
       "MCTL_API_DEV_ZITADEL_CLIENT_ID",
       "MCTL_API_DEV_ZITADEL_CLIENT_SECRET",
     ])
-    error_message = "mctl-api/mctl-api-oidc-zitadel must carry exactly the eight keys its consumers read."
+    error_message = "mctl-api/mctl-api-oidc-zitadel must carry exactly the ten keys its consumers read."
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_API_DEV_ZITADEL_CLIENT_ID"]) == "dev-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_API_DEV_ZITADEL_CLIENT_SECRET"]) == "dev-client-secret"
@@ -201,6 +254,10 @@ run "oauth_upstream_client_reaches_the_mctl_api_secret" {
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["ZITADEL_LINK_CLIENT_ID"]) == "link-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["ZITADEL_LINK_CLIENT_SECRET"]) == "link-client-secret"
     error_message = "The link client's keys must still carry the link client's credentials."
+  }
+  assert {
+    condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["DEVLOOP_DECIDE_CLIENT_ID"]) == "decide-client-id" && nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["DEVLOOP_DECIDE_CLIENT_SECRET"]) == "decide-client-secret"
+    error_message = "The decide keys must carry the mctl-api-decide client's credentials, never another flow's."
   }
   assert {
     condition     = nonsensitive(kubernetes_secret_v1_data.mctl_api_oidc.data["MCTL_CLI_ZITADEL_CLIENT_ID"]) == "cli-client-id"
