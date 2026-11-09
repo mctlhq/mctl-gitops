@@ -12,9 +12,10 @@ mctl-api#935 (lease-aware drain) also have to be accounted for.
 
 The deployed mctl-api is the Argo CD Application `admins-mctl-api`, declared in
 `platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml`. It is pinned to `image.tag: "4.154.0"`
-and has no `MCTL_BRIDGE_*` variables. This proposal delivers three things: a gated release-readiness
-checklist, a future one-line tag-bump plan, and a repository-level guard that keeps Bridge dark. None of
-them merges, tags, builds, pushes, mutates the deployed GitOps value, or activates anything.
+and has no `MCTL_BRIDGE_*` variables. This **docs-only** proposal delivers a gated release-readiness checklist and a plan
+for a future one-line tag bump. An executable repository/release guard is a **separate mandatory
+implementation dependency**, not authorised by this proposal. No merge, tag, build, push,
+deployed GitOps mutation or activation is authorised.
 
 ## User stories
 
@@ -22,8 +23,9 @@ them merges, tags, builds, pushes, mutates the deployed GitOps value, or activat
   #934 hold cannot be bypassed by a partial readiness signal (e.g. a successful M1 merge alone).
 - AS a platform operator I WANT the future GitOps change limited to one `image.tag` line SO THAT the dark
   rollout cannot carry Bridge enablement or unrelated toggles.
-- AS the security owner I WANT a CI check that fails if Bridge flags or provider credentials appear in
-  `mctl-api.yaml` SO THAT shipping the code dark cannot turn into activation by accident.
+- AS the security owner I WANT a fail-closed guard at the point of release/deployment effect
+  (including direct-main workflow writes), not merely PR-only CI, SO THAT automatic bumpers
+  cannot silently activate Bridge. This slice documents the dependency only.
 - AS an on-call engineer I WANT post-deploy smoke checks, stop criteria and a Temporal-aware rollback path
   SO THAT I can decide in minutes whether to halt or revert.
 
@@ -45,16 +47,27 @@ them merges, tags, builds, pushes, mutates the deployed GitOps value, or activat
 - THE SYSTEM SHALL deliver the tag bump through a reviewed feature-branch PR, never through
   `release-deploy.yaml` / `gitops-bump.yaml`. Those workflows push directly to `main` and would skip the
   separate owner approval this issue requires.
-- WHILE Bridge activation is not separately approved, THE SYSTEM SHALL fail CI if `mctl-api.yaml` sets
-  `MCTL_BRIDGE_ENABLED` to anything other than absent or `"false"`. CI SHALL also fail if the file defines
-  `MCTL_BRIDGE_PROVIDERS` or `MCTL_BRIDGE_PROVIDER_TOKENS`, or sets `MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE`
-  to anything other than absent or `"false"`.
+- BEFORE lifting the hold, a **separately reviewed and approved** fail-closed gate SHALL be
+  proven effective on every permitted production deploy path, including direct pushes by
+  `release-deploy.yaml` / `gitops-bump.yaml`. It SHALL reject unauthorised
+  `MCTL_BRIDGE_ENABLED`, `MCTL_BRIDGE_PROVIDERS`, `MCTL_BRIDGE_PROVIDER_TOKENS` and
+  `MCTL_EXECUTION_REQUEST_QUEUE_WHILE_ACTIVE`. PR-only CI is insufficient; this docs-only
+  scope does not implement the gate and cannot satisfy the release GO.
 - WHEN 4.155.0 is deployed, the operator SHALL record post-deploy evidence: the GitOps revision, the tag, the
   running image digest equal to the release digest, `admins-mctl-api` Healthy/Synced, 2/2 ready pods with the
   rollout complete, a negative Bridge HTTP smoke (Bridge routes unavailable, no dispatcher or expiry sweeper
   started in logs), and the existing API/DevLoop canary invariants passing.
 - IF a stop condition fires (see design.md) THEN the operator SHALL halt and follow the rollback path for the
   Temporal history/marker state actually deployed. A blind image revert is not the rollback path.
+
+## Unresolved automation bypass (release STOP)
+
+The current `release-deploy.yaml` and `gitops-bump.yaml` can push bootstrap image tags
+**directly to `main`**. PR-only CI and a runbook prohibition do not protect these paths.
+Until separately authorised, fail-closed, point-of-effect enforcement and negative bypass
+tests are verified, `BLOCKED_RELEASE_HOLD` is mandatory, even with green release CI.
+The Helm chart follows `main`; reverting the image tag does not revert independently
+synced chart changes.
 
 ## Out of scope
 
@@ -65,6 +78,8 @@ them merges, tags, builds, pushes, mutates the deployed GitOps value, or activat
   provider OIDC, mctl-api#954, `lease_token` retention, and expiry metrics/alerts.
 - Running `go run ./cmd/bridge-scrub` in production.
 - Changes to the mctl-api Helm chart or source.
+- CI tests, workflow edits, executable release/deploy enforcement and image tag changes
+  under this **docs-only** proposal. Each executable guard needs its own owner approval.
 
 ## Open questions
 
