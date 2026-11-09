@@ -27,12 +27,34 @@ WHAT CONTROL THIS IS, AND IS NOT (state of main-protection, ruleset 18465404)
     it only guarantees the change is on the page. Whoever edits the workflow
     step or this file removes the control in the same PR, with the same
     visibility and no more.
-  * Independent of CODEOWNERS, the test itself refuses a one-sided update:
-    when a base is observable (a pull request), the fixture may change if and
-    only if the pinned content changed. A pin update with no source change,
-    or a source change with no pin update, is red. It cannot prevent a
-    deliberate paired edit, and it cannot run where the base is unobservable
-    (see below: that is exit 2 in a pull_request run, "NOT CHECKED" locally).
+  * Independent of CODEOWNERS, the test itself refuses a one-sided update
+    in a pull request: the fixture may change if and only if the pinned
+    content changed (merge base vs head). A source change with no pin update
+    is red. It cannot prevent a deliberate paired edit.
+
+COUPLING: PULL REQUEST CONTEXT, FAIL-CLOSED
+  A pull request context is: --base given, or GITHUB_EVENT_NAME is
+  pull_request / pull_request_target, or GITHUB_BASE_REF is set. There the
+  base must be observable; an unresolvable base ref, a missing GITHUB_BASE_REF,
+  no merge base (shallow checkout) or an unreadable base tree is exit 2, never
+  "not checked". Outside a pull request (local run, push to main) the
+  coupling is not applicable and the test says so
+  ("coupling: not applicable (not a pull request)").
+
+COUPLING: REPAIR PATH (fixture-only change)
+  If a source change ever reaches main without a pin update, main stays red
+  and a source-free PR would be red on the rule above. Rule: a fixture-only
+  change (fixture differs from the base's, pinned sources identical) is
+  allowed ONLY IF (a) the base commit is itself in drift, i.e. its own pinned
+  sources do not match its own fixture, evaluated from the base git tree
+  (unreadable base tree or malformed base fixture is exit 2), AND (b) the new
+  fixture matches the head tree. Any other one-sided change stays red: a
+  fixture-only change on a converged base, a repair whose fixture still does
+  not match head, or a source change without a pin update on a drifted base.
+  LIMIT: the repair path cannot tell a legitimate repair from an author who
+  re-pins a drifted base to whatever the tree now contains; it restores
+  consistency, it does not judge the content. The reviewer of the fixture
+  diff still decides.
 
 INPUTS COME FROM THE GIT TREE, NOT THE FILESYSTEM
   The file set and file bytes are read from a commit (HEAD by default, or
@@ -64,9 +86,19 @@ WHAT IS PINNED
     4. value: ["']ghcr.io/mctlhq/<name>:<v>                    (Pattern 4)
   <v> is masked only if it has the exact shape both workflows validate:
   ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ (forms 1 and 2 also accept it in double
-  quotes, which is what the workflows write, with an optional trailing CR the
-  bot strips). Anything else on that line (a Helm action, a comment, a
-  longer or empty value) is not masked and so is drift. The selftest checks
+  quotes, which is what the workflows write). The line ending (LF or CRLF)
+  is preserved in the masked form, so an EOL change of a masked line is a
+  byte change and is drift. Anything else on that line (a Helm action, a
+  longer or empty value) is not masked and so is drift. A bot bump of a line
+  that a human saved with CRLF rewrites it to LF (the bots eat the CR) and so
+  is visible drift too; the real files are LF.
+  Two inputs are REJECTED with exit 2 instead of being hashed, because
+  hashing them would be ambiguous:
+    * a literal "<bump-managed>" anywhere in a file under that prefix (it
+      would hash exactly like a masked real tag);
+    * forms 1/2 written by a human the way the bots would rewrite them away:
+      a single-quoted tag (tag: 'x') or a valid tag followed by a trailing
+      comment (tag: "x" # c). Write tag: "x". The selftest checks
   the regexes in both workflows still read as recorded here.
 
 SCOPE LIMITS (not pinned at all)
@@ -93,7 +125,9 @@ Usage:
   options: --rev REV (default HEAD), --base REV (coupling base; else
   $GITHUB_BASE_REF as origin/<ref>; else origin/main when present)
 """
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -111,16 +145,16 @@ PLACEHOLDER = b"<bump-managed>"
 
 _NAME = rb"[a-z0-9][a-z0-9._-]*"
 _TAG = rb"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}(?![A-Za-z0-9._-])"
-_EOL = rb"\r?(?=\n|\Z)"
+_EOL = rb"(\r?)(?=\n|\Z)"   # group 2: kept, so an EOL change stays visible
 # Tag-line forms 1 and 2: the bot leaves ` "<tag>"` or ` <tag>` after `tag:`.
 _VAL = rb'(?: "' + _TAG + rb'"| ' + _TAG + rb")" + _EOL
 MASKS = [
     # 1. Pattern 1 (both workflows): combined repository + tag
     (re.compile(rb"(repository:\s*ghcr\.io/mctlhq/" + _NAME + rb"\n\s+tag:)" + _VAL),
-     rb"\1 " + PLACEHOLDER),
+     rb"\1 " + PLACEHOLDER + rb"\2"),
     # 2. Pattern 2: split registry / repository / tag
     (re.compile(rb"(registry:\s*ghcr\.io\n\s+repository:\s*mctlhq/" + _NAME + rb"\n\s+tag:)" + _VAL),
-     rb"\1 " + PLACEHOLDER),
+     rb"\1 " + PLACEHOLDER + rb"\2"),
     # 3. Pattern 3: inline image: <image>:<tag>
     (re.compile(rb"(image:\s*[\"']?ghcr\.io/mctlhq/" + _NAME + rb")[\"']?:" + _TAG),
      rb"\1:" + PLACEHOLDER),
@@ -128,6 +162,13 @@ MASKS = [
     (re.compile(rb"(value:\s*[\"']?ghcr\.io/mctlhq/" + _NAME + rb")[\"']?:" + _TAG),
      rb"\1:" + PLACEHOLDER),
 ]
+# Forms 1/2 a human may commit but the bots would rewrite to ` "<tag>"`
+# (their regex is `tag:)[^\\n]+`, which eats quotes and comments): single-quoted
+# tag, or a valid tag followed by a trailing comment. Rejected, never masked.
+_HUMAN_TAG = (rb"(?:repository:\s*ghcr\.io/mctlhq/" + _NAME + rb"|registry:\s*ghcr\.io\n\s+repository:\s*mctlhq/"
+              + _NAME + rb")\n\s+tag:[ \t]*(?:'" + _TAG + rb"'|(?:\"" + _TAG + rb"\"|" + _TAG
+              + rb")[ \t]*\#)")
+HUMAN_TAG_RE = re.compile(_HUMAN_TAG)
 GLOB_RE = re.compile(rb"^\s*-\s*path:\s*(\S+)\s*$")
 # Regex-defining lines the selftest requires verbatim (whitespace-stripped)
 # in the bump workflows, so a changed bot pattern fails the selftest instead
@@ -249,6 +290,14 @@ def mask(data):
 
 def digest(rel, data):
     if rel.startswith(BUMP_PREFIX):
+        if PLACEHOLDER in data:
+            raise Unobservable(
+                "literal %s in a bump-managed file would hash like a masked tag: %s"
+                % (show(PLACEHOLDER), show(rel)))
+        if HUMAN_TAG_RE.search(data):
+            raise Unobservable(
+                "bump-managed tag line in a form the bots rewrite (single quotes or a "
+                "trailing comment); write it as tag: \"<tag>\": %s" % show(rel))
         data = mask(data)
     return hashlib.sha256(data).hexdigest()
 
@@ -346,17 +395,21 @@ def drift_of(actual, pinned):
 
 
 def resolve_base(root, head, explicit):
-    """Merge base commit for the coupling check, or None if not required and
-    not observable. Raises Unobservable when a base is required."""
+    """Merge base commit for the coupling check. None only when this is not a
+    pull request run (no --base, no pull_request event, no GITHUB_BASE_REF):
+    the coupling is then not applicable. In a pull request context an
+    unresolvable base is Unobservable (exit 2), never "not checked"."""
     event = os.environ.get("GITHUB_EVENT_NAME", "")
     ref = os.environ.get("GITHUB_BASE_REF", "").strip()
-    strict = bool(explicit) or event == "pull_request"
+    strict = bool(explicit) or event in ("pull_request", "pull_request_target") or bool(ref)
+    if not strict:
+        return None          # not a pull request: coupling is not applicable
     if explicit:
         cands = [explicit]
     elif ref:
         cands = ["origin/" + ref, ref]
     else:
-        cands = ["origin/main"]
+        raise Unobservable("pull_request run without GITHUB_BASE_REF: base unknown")
     tip = None
     for c in cands:
         p = git(root, ["rev-parse", "--verify", "--quiet", "--end-of-options", c + "^{commit}"], ok=(0, 1))
@@ -364,9 +417,7 @@ def resolve_base(root, head, explicit):
             tip = p.stdout.decode().strip()
             break
     if tip is None:
-        if strict:
-            raise Unobservable("base revision not observable (tried %s)" % ", ".join(cands))
-        return None
+        raise Unobservable("base revision not observable (tried %s)" % ", ".join(cands))
     p = git(root, ["merge-base", head, tip], ok=(0, 1))
     if p.returncode == 0 and p.stdout.strip():
         return p.stdout.decode().strip()
@@ -375,9 +426,7 @@ def resolve_base(root, head, explicit):
     p = git(root, ["rev-parse", "--verify", "--quiet", head + "^1"], ok=(0, 1))
     if p.returncode == 0 and p.stdout.decode().strip() == tip:
         return tip
-    if strict:
-        raise Unobservable("no merge base between HEAD and %s" % cands[0])
-    return None
+    raise Unobservable("no merge base between HEAD and %s (shallow checkout?)" % cands[0])
 
 
 def coupling(root, head, explicit_base):
@@ -385,19 +434,30 @@ def coupling(root, head, explicit_base):
     change together."""
     base = resolve_base(root, head, explicit_base)
     if base is None:
-        return 0, ["coupling: NOT CHECKED (no base observable; required and "
-                   "enforced as exit 2 on pull_request runs)"]
+        return 0, ["coupling: not applicable (not a pull request)"]
     fix_b = load_fixture(root, base)
     if fix_b is None:
         return 0, ["coupling: not applicable (the fixture does not exist at the base: introduction)"]
     fix_h = load_fixture(root, head)
     src_b, src_h = build(root, base), build(root, head)
+    if fix_h is None:
+        raise Unobservable("fixture missing at head")
     fix_changed = fix_b != fix_h
     src_changed = (src_b["sources"], src_b["excluded_unpinned_glob_inputs"]) != \
                   (src_h["sources"], src_h["excluded_unpinned_glob_inputs"])
     if fix_changed and not src_changed:
-        return 1, ["COUPLING: the pin fixture changed but no pinned bootstrap source changed "
-                   "since the merge base (%s)" % base[:12]]
+        # Repair path: allowed only if the base commit is itself in drift
+        # (evaluated from the base tree; unreadable base tree is exit 2 above)
+        # AND the new fixture matches the head tree.
+        if not drift_of(src_b, fix_b):
+            return 1, ["COUPLING: the pin fixture changed but no pinned bootstrap source changed "
+                       "since the merge base (%s), and the base is not in drift (not a repair)"
+                       % base[:12]]
+        if drift_of(src_h, fix_h):
+            return 1, ["COUPLING: repair attempt, but the new fixture does not match the head tree "
+                       "(base %s is in drift)" % base[:12]]
+        return 0, ["coupling: repair ok (base %s was in drift; the fixture now matches the head tree)"
+                   % base[:12]]
     if src_changed and not fix_changed:
         return 1, ["COUPLING: pinned bootstrap sources changed since the merge base (%s) "
                    "but the pin fixture did not" % base[:12]]
@@ -628,12 +688,26 @@ def selftest():
 
         # P2: tag value shape
         ("tag is a Helm action", set_tag_line(mp, api_tag, rb'\1 {{ .Values.evil }}'), None, 1, {}),
-        ("tag with trailing comment", set_tag_line(mp, api_tag, rb'\1 "1.0.0" # x'), None, 1, {}),
+        # Forms a human may commit but the bots would rewrite: rejected with a
+        # clear message (exit 2), never silently left unmasked.
+        ("tag with trailing comment is rejected", set_tag_line(mp, api_tag, rb'\1 "1.0.0" # x'), None, 2, {}),
+        ("tag unquoted with trailing comment is rejected", set_tag_line(mp, api_tag, rb'\1 1.0.0 # x'), None, 2, {}),
+        ("split form (portal) single-quoted tag is rejected",
+         set_tag_line(pt, rb'(?m)^(\s*tag:) [^\n]*$', rb"\1 '1.0.0'"), None, 2, {}),
+        ("tag with comment but invalid value stays plain drift", set_tag_line(mp, api_tag, rb'\1 "a b" # x'), None, 1, {}),
+        # P3: masked line keeps its line ending; placeholder text cannot collide
+        ("LF to CRLF on a masked tag line is a byte change", set_tag_line(mp, rb'(?m)^(\s*tag: "[^"]*")$', rb'\1\r'), None, 1, {}),
+        ("bot bump of a CRLF tag line is visible drift (bot strips the CR)",
+         lambda r: (set_tag_line(mp, rb'(?m)^(\s*tag: "[^"]*")$', rb'\1\r')(r), repin(r),
+                    bump_with(bot_gitops_bump, mp, "ghcr.io/mctlhq/mctl-api", "9.9.9")(r))[-1], None, 1, {}),
+        ("literal placeholder as tag value", set_tag_line(mp, api_tag, rb'\1 <bump-managed>'), None, 2, {}),
+        ("literal placeholder in a comment", lambda r: append(b(r, mp), b"# <bump-managed>\n"), None, 2, {}),
+        ("placeholder text outside the bump prefix is plain content", lambda r: append(b(r, "values.yaml"), b"# <bump-managed>\n"), None, 1, {}),
         ("tag longer than 128", set_tag_line(mp, api_tag, rb'\1 "' + b"a" * 129 + b'"'), None, 1, {}),
         ("tag with a space", set_tag_line(mp, api_tag, rb'\1 "1.0 0"'), None, 1, {}),
         ("tag empty", set_tag_line(mp, api_tag, rb'\1 '), None, 1, {}),
         ("tag leading dash", set_tag_line(mp, api_tag, rb'\1 "-1.0"'), None, 1, {}),
-        ("tag single-quoted (bots never write it)", set_tag_line(mp, api_tag, rb"\1 '1.0.0'"), None, 1, {}),
+        ("tag single-quoted is rejected", set_tag_line(mp, api_tag, rb"\1 '1.0.0'"), None, 2, {}),
         ("tag valid shape 128 chars stays green", set_tag_line(mp, api_tag, rb'\1 "' + b"a" * 128 + b'"'), None, 0, {}),
 
         # P2: case variants
@@ -658,15 +732,37 @@ def selftest():
         """Cases that need a base commit: build a base repo, then a 'PR'."""
         out = []
 
-        def run(name, setup_base, pr, want, base_arg="BASE"):
+        def run(name, setup_base, pr, want, base_arg="BASE", env=None, direct=False, say=None):
             root = fresh()
             setup_base(root)
             base = resolve(root, "HEAD")
             pr(root)
-            kw = {"base": base if base_arg == "BASE" else base_arg}
-            got = verify(root, base=kw["base"])
+            if base_arg == "BASE":
+                base_arg = base
+            elif base_arg == "NONE":
+                base_arg = None
+            for k in ("GITHUB_EVENT_NAME", "GITHUB_BASE_REF"):
+                os.environ.pop(k, None)
+            os.environ.update(env or {})
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    if direct:       # coupling() alone, bypassing verify()'s own drift check
+                        try:
+                            got = coupling(root, resolve(root, "HEAD"), base_arg)[0]
+                        except Unobservable:
+                            got = 2
+                    else:
+                        got = verify(root, base=base_arg)
+            finally:
+                for k in ("GITHUB_EVENT_NAME", "GITHUB_BASE_REF"):
+                    os.environ.pop(k, None)
             if got != want:
                 failures.append("%s: want exit %d, got %d" % (name, want, got))
+            if say and say not in buf.getvalue():
+                failures.append("%s: output lacks %r" % (name, say))
+            if say is None and "NOT CHECKED" in buf.getvalue():
+                failures.append("%s: printed NOT CHECKED" % name)
             out.append(name)
 
         def stale_fixture(root):
@@ -701,18 +797,95 @@ def selftest():
             g(root, "rm", "-q", FIXTURE)
             commit(root, "base without pin")
 
+        def drifted_base(root):          # a source change reached main without a pin update
+            append(b(root, "values.yaml"))
+            g(root, "add", "-A")
+            commit(root, "drifted base")
+
+        def pin_comment_only(root):      # fixture-only change on a converged base
+            p = os.path.join(root, FIXTURE)
+            d = json.loads(rd(p))
+            d["_comment"] += " (edited)"
+            wr(p, render(d).encode())
+            g(root, "add", "-A")
+            commit(root, "fixture only")
+
+        def wrong_repair(root):          # fixture-only change that still does not match head
+            p = os.path.join(root, FIXTURE)
+            d = json.loads(rd(p))
+            d["sources"][sorted(d["sources"])[1]] = "1" * 64
+            wr(p, render(d).encode())
+            g(root, "add", "-A")
+            commit(root, "wrong repair")
+
+        def base_without_chart(root):    # unreadable base tree: no bootstrap chart at base
+            g(root, "rm", "-rq", CHART)
+            commit(root, "base without chart")
+
+        def base_bad_fixture(root):
+            wr(os.path.join(root, FIXTURE), b"{nope")
+            g(root, "add", "-A")
+            commit(root, "base with malformed fixture")
+
+        def restore_chart(root):
+            tracked = g(REPO, "ls-files", "-z", "--", CHART).split(b"\0")
+            for rel in tracked:
+                if rel:
+                    d = os.path.join(root.encode(), rel)
+                    os.makedirs(os.path.dirname(d), exist_ok=True)
+                    shutil.copyfile(os.path.join(REPO.encode(), rel), d)
+            g(root, "add", "-A")
+            commit(root, "chart back")
+
+        def shallow_pr(root):
+            """Replace root by a depth-1 clone of the head whose origin/main
+            is fetched at depth 1 too: no common history, base unobservable."""
+            tag = os.path.join(tmp, "shallow")
+            shutil.rmtree(tag, ignore_errors=True)
+            g(root, "branch", "-f", "main", "HEAD~1")
+            subprocess.run(["git", "clone", "-q", "--depth", "1", "--branch", "pr",
+                            "file://" + root, tag], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            g(tag, "fetch", "-q", "--depth", "1", "origin", "main:refs/remotes/origin/main")
+            shutil.rmtree(root)
+            shutil.move(tag, root)
+
         def intro(root):
             pass
 
+        PR = {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_BASE_REF": "main"}
+
         run("coupling: source change with pin update", lambda r: None, src_and_pin, 0)
         run("coupling: source change without pin update", lambda r: None, src_only, 1)
-        run("coupling: pin update without source change", stale_fixture, fix_fixture_only, 1)
+        # repair path: a fixture-only change is allowed ONLY on a drifted base
+        run("repair: fixture-only PR on a drifted base is green", drifted_base, fix_fixture_only, 0)
+        run("repair: fixture-only change on a converged base is red", lambda r: None, pin_comment_only, 1)
+        run("repair: fixture that does not match head is red (verify)", drifted_base, wrong_repair, 1)
+        run("repair: fixture that does not match head is red (coupling alone)", drifted_base, wrong_repair, 1, direct=True)
+        run("repair: drifted base, source change without pin stays red", drifted_base, src_only, 1)
+        run("repair: base tree without the chart is unobservable", base_without_chart, restore_chart, 2)
+        run("repair: base with malformed fixture is unobservable", base_bad_fixture, fix_fixture_only, 2)
+        run("coupling: stale base fixture fixed by fixture-only PR is a repair", stale_fixture, fix_fixture_only, 0)
         run("coupling: bump-only change, no pin change", lambda r: None, bump_only, 0)
         run("coupling: no change at all", lambda r: None, lambda r: None, 0)
         run("coupling: base missing a fixture (introduction)", no_fixture_at_base,
             lambda r: (wr(os.path.join(r, FIXTURE), render(build(r, resolve(r, "HEAD"))).encode()),
                        g(r, "add", "-A"), commit(r, "introduce"))[0], 0)
         run("coupling: explicit base does not resolve", lambda r: None, lambda r: None, 2, base_arg="no-such-base")
+        # fail-closed base: a PR run that cannot resolve its base is exit 2
+        run("pr run: base ref does not resolve", lambda r: None, src_only, 2, base_arg="NONE",
+            env={"GITHUB_EVENT_NAME": "pull_request", "GITHUB_BASE_REF": "no-such-branch"})
+        run("pr run: GITHUB_BASE_REF alone (no event) is still strict", lambda r: None, src_only, 2, base_arg="NONE",
+            env={"GITHUB_BASE_REF": "no-such-branch"})
+        run("pr run: no GITHUB_BASE_REF at all", lambda r: None, src_only, 2, base_arg="NONE",
+            env={"GITHUB_EVENT_NAME": "pull_request"})
+        run("pr run: shallow checkout without the base", lambda r: (g(r, "checkout", "-q", "-b", "pr"), None)[1],
+            lambda r: (src_and_pin(r), shallow_pr(r))[1], 2, base_arg="NONE", env=PR)
+        # outside a PR the coupling is explicitly not applicable
+        run("non-pr run: coupling not applicable, says so", lambda r: None, src_only, 1, base_arg="NONE",
+            say="coupling: not applicable (not a pull request)")
+        run("non-pr run (push to main): converged tree is green and says so", lambda r: None, lambda r: None, 0,
+            base_arg="NONE", say="coupling: not applicable (not a pull request)")
         return out
 
     n = 0
