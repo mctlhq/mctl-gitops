@@ -112,7 +112,7 @@ New file: `tools/rollback_compat_check.py`. It is stdlib-only and offline, in th
     - UNKNOWN if there is no report, the report is stale or malformed, `listing_complete` is
       false, `UNKNOWN > 0`, or the query does not contain `WorkflowType = "<declaring type>"`
       and `ExecutionStatus = "Running"`, or contains `WorkflowId`.
-    - COMPATIBLE otherwise.
+    - PATCH_COMPATIBLE otherwise.
   - The overall verdict is the worst of the per-id verdicts, with UNKNOWN ranked above
     INCOMPATIBLE. Exit codes are 0/2/3, matching the scanner.
 - Text and `--json` output list the per-id verdict, reason code, scanner version, `scanned_at`,
