@@ -25,8 +25,8 @@ Slice 1d-2b-ii of #1021. Tests, fixtures and one tool only, with no change under
 - [ ] 6. D16 (depends on 2), parametrized `nocache` and `restart`. — DoD: green, with one `terminal`, one
   `resolve_deploy_target`, and clean replay.
 - [ ] 7. Carry-over D7 (T8a, T8b), D9 window, D12, D14 (depends on 1). — DoD: green. Size guard: if the slice does not
-  fit one pass, the implementer stops and reports; it cuts the carry-over (D7, D9 window, D12, D14) back to the tracking
-  issue #1061 and never cuts the D15/D16 core.
+  fit one pass, the implementer STOPS and reports, keeps the D15/D16 core, and proposes a separate coverage issue that
+  needs an owner GO. No test is deleted silently.
 - [ ] 8. Evidence (depends on 5-7). For each mutation below, run the named tests on a scratch tree, confirm they are
   red, and revert. Paste the table in the PR. No mutation is committed. — DoD: every row red.
 
@@ -40,7 +40,7 @@ Slice 1d-2b-ii of #1021. Tests, fixtures and one tool only, with no change under
   | f6 | in `_final_pr_read`, skip the `get_pr_state` activity when `workflow.unsafe.is_replaying()` (a replay-only divergence, exact text recorded in the PR) | T7 `nocache` and `restart` (nondeterminism on replay); D3 stays green, so D16 is proven independent of D3 |
 
 - [ ] 9. PR. State that this is 1d-2b-ii, tests and fixtures only, no release, B4 (#1007) FAIL, and the hold ON. List the
-  deferred D13b-e (tracked on #1061, to be taken into the 1d-3 proposal). — DoD: PR opened with `Refs #1021`.
+  deferred D13b-e, which are a mandatory input to the future 1d-3 proposal (#1061 is closed, historical reference only). — DoD: PR opened with `Refs #1021`.
 
 ## Tests
 

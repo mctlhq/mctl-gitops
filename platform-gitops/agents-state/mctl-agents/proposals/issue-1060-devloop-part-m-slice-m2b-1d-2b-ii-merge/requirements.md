@@ -102,9 +102,10 @@ Carry-over coverage
 ## Open questions
 
 - Carry-over split: this proposal takes D7, D9 window, D12, D14 and D15a, and defers D13b-e to 1d-3. The deferred
-  D13b-e are tracked on #1061 and are to be taken into the 1d-3 proposal. The owner may move D13b-e back in, or move all
-  carry-over to 1d-3, without changing the D15/D16 core. If the slice does not fit one pass, the carry-over is cut back
-  to #1061 and the D15/D16 core is never cut.
+  D13b-e are a mandatory input to the future 1d-3 proposal (issue #1061 is closed as not planned and is only a historical
+  reference, not a tracking issue). The owner may move D13b-e back in, or move all carry-over to 1d-3, without changing
+  the D15/D16 core. If the slice exceeds its budget, the implementer STOPS and reports, keeps the D15/D16 core, and
+  proposes a separate coverage issue that needs an owner GO. No test is deleted silently.
 - "Duplicate delivery of the final-read task" is read as a workflow task redelivered or reprocessed by a worker that lost
   its cache. The read is a read-only activity, and the server deduplicates activity completions. Both forms
   (cache-disabled worker, worker restart) are proposed. If the owner meant a different form, only T7 changes.
