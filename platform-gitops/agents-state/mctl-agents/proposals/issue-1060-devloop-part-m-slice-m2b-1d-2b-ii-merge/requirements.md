@@ -2,106 +2,111 @@
 
 ## Context
 
-Slice 1d-2b-i (#1055, PR #1058, merge `0ef0e04f5`) wired the merge watch's deadline decision
-(`DevLoopWorkflow._decide_watch_end`, `_final_pr_read`, `_settle_watch_work` in
-`orchestrator/temporal/workflows/dev_loop.py`). A fresh run whose `merge-watch-terminal-reconcile` marker is recorded
-(or a continued run that carries `MergeWatchResume.terminal_reconcile=True`) now reads the PR once more at the deadline
-before it lets go of the lifecycle claim. 1d-2b-i explicitly deferred the history half of its spec: the recorder
-`record_final_read`, the thin tool `tools/record_merge_watch_final_read.py`, the two committed fixtures under
-`tests/fixtures/histories/merge_watch/`, test D15b (the fixtures replay clean) and test D16 (duplicate delivery of the
-final-read task). The 1d-2b-i spec lives in mctl-gitops at
-`platform-gitops/agents-state/mctl-agents/proposals/issue-1055-devloop-part-m-m2b-1d-2b-wire-the-merge/` (design
-section 6, tasks 9, D15 and D16).
+Slice 1d-2b-i (#1055, PR #1058, merge `0ef0e04`) wired the merge watch's deadline decision
+(`DevLoopWorkflow._decide_watch_end` in `orchestrator/temporal/workflows/dev_loop.py`) into `_watch_pr`. Its
+spec (mctl-gitops `platform-gitops/agents-state/mctl-agents/proposals/issue-1055-devloop-part-m-m2b-1d-2b-wire-the-merge/`,
+design section 6, tasks 9, D15b and D16) deferred the committed-fixture half to this slice: a recorder, a thin recording
+tool, two committed histories under `tests/fixtures/histories/merge_watch/`, the replay test over them (D15b), and the
+duplicate-delivery test (D16). `tests/test_merge_watch_final_read.py` on main says so in its module docstring.
 
-This slice is tests and fixtures only. It gives the release gate (B4, #1007) committed evidence that histories
-carrying deadline-decision commands replay against today's definitions, and that a redelivered workflow task in the
-decision lands the relinquishing write exactly once. No production code changes, so `workflow.patched` stays at 38
-(`PATCHED_CALLS` in `tests/test_merge_watch_decision.py`) and no new marker is introduced.
+This slice is tests, fixtures and one test-support tool only. It adds no production code, no `workflow.patched` call
+(the count stays 38, pinned by `PATCHED_CALLS` in `tests/test_merge_watch_decision.py`), and no release. It also takes a
+subset of the coverage items 1d-2b-i did not write (D7, D9 window variant, D12, D14, D15a). D13b-e are deferred to 1d-3
+(see Out of scope). The aim is that a recorded history of the deadline decision becomes a permanent replay input, so a
+later change that alters the decision's command stream fails CI instead of wedging an in-flight execution.
 
 ## User stories
 
-- AS the release owner I WANT committed histories that contain a recorded deadline decision SO THAT any later change
-  to the decision's command shape fails replay in CI instead of failing in production.
-- AS a reviewer I WANT the recorder committed beside the fixtures SO THAT the fixtures can be audited and reproduced.
-- AS an operator I WANT proof that a redelivered workflow task in the decision issues one `terminal` and one deploy
-  observation SO THAT a worker crash at the deadline cannot double-write the lifecycle store.
+- AS the DevLoop owner I WANT committed histories of a fresh and of a hopped watch that reach the deadline decision
+  SO THAT every later change to `_watch_pr` and `_decide_watch_end` is replayed against them in CI.
+- AS a reviewer I WANT the recorder and the tool that produced the fixtures committed beside them SO THAT the fixtures
+  can be audited and re-recorded on purpose, never by accident.
+- AS the DevLoop owner I WANT proof that a workflow task carrying the final-read result, processed twice, gives exactly
+  one relinquishing write and one deploy observation SO THAT a worker restart at the deadline cannot double-write the
+  lifecycle claim.
 
 ## Acceptance criteria (EARS)
 
 Recorder and tool
 
 - WHEN `record_final_read(env, hop=False)` runs THE SYSTEM SHALL drive a fresh `DevLoopWorkflow` under
-  `UnsandboxedWorkflowRunner` with `dev_loop.MERGE_WATCH_DEADLINE` monkeypatched to 40 minutes, answer `get_pr_state`
-  OPEN before the deadline and MERGED from the deadline on, and return the history of that single run with the
-  `final-read` end.
-- WHEN `record_final_read(env, hop=True)` runs THE SYSTEM SHALL additionally monkeypatch
-  `dev_loop.MERGE_WATCH_HISTORY_FLOOR` to 1, assert the watch continued-as-new at least once, and return the history of
-  the last run of the chain (the run that executed the decision), with a fresh OPEN head at the deadline (`final-read`,
-  `release` with the fresh head).
-- WHEN the tool `tools/record_merge_watch_final_read.py` is run with its output directory set THE SYSTEM SHALL write
-  `tests/fixtures/histories/merge_watch/dev_loop_final_read.json`, `.../dev_loop_final_read_hop.json` and a
-  `MANIFEST.json` that names the recording commit, the `temporalio` version, the monkeypatched constants, and each
-  file's canonical sha256 and workflow id.
-- WHEN a fixture is written THE SYSTEM SHALL blank every `stackTrace` and `identity` value, as
-  `tools/record_pre_m1_histories.py::_scrub` does.
-- WHILE CI runs (`testpaths = ["tests"]`) THE SYSTEM SHALL NOT collect or execute the tool.
+  `UnsandboxedWorkflowRunner` with `MERGE_WATCH_DEADLINE` monkeypatched to 40 minutes, answer OPEN to every in-loop
+  poll and MERGED to the post-deadline read, and return the completed handle.
+- WHEN `record_final_read(env, hop=True)` runs THE SYSTEM SHALL additionally monkeypatch `MERGE_WATCH_HISTORY_FLOOR`
+  to 1, so the watch continues-as-new before the deadline, and return a handle to the last run of the chain (the run
+  that executes the decision).
+- WHEN `tools/record_merge_watch_final_read.py` is run with `MERGE_WATCH_OUT` set THE SYSTEM SHALL write
+  `dev_loop_final_read.json` and `dev_loop_final_read_hop.json` into that directory, with stack traces and worker
+  identities scrubbed, and register each file's canonical sha256, workflow id, recording commit and temporalio version
+  in `tests/fixtures/histories/merge_watch/MANIFEST.json`.
+- IF `MERGE_WATCH_OUT` is unset THEN the tool SHALL skip and write nothing, so a plain `pytest` run never re-records.
 
-D15 (marker and replay)
+Fixtures (D15b)
 
-- WHEN the fresh fixture is read THE SYSTEM SHALL find the `merge-watch-terminal-reconcile` patch id exactly once.
-- WHEN the hop fixture is read THE SYSTEM SHALL find that patch id zero times and a start input whose
-  `resume.terminal_reconcile` is True.
-- WHEN each committed fixture is replayed through `Replayer(workflows=[DevLoopWorkflow],
-  workflow_runner=UnsandboxedWorkflowRunner())` under the constants named in its manifest entry THE SYSTEM SHALL
-  replay without a nondeterminism error.
-- WHEN a fixture's canonical sha256 differs from `MANIFEST.json`, or the manifest lists a file not on disk (or the
-  reverse) THE SYSTEM SHALL fail.
-- WHEN a fresh run is recorded in-test and replayed in the same test (D15a) THE SYSTEM SHALL replay clean, for both
-  the fresh and the hop variant.
-- WHEN an unpatched record (`terminal_reconcile=False`) rides across the deadline THE SYSTEM SHALL schedule no
-  `get_pr_state` at or after the deadline, and its in-test recording SHALL replay clean.
-- WHILE this slice is applied THE SYSTEM SHALL keep `tests/test_workflow_replay.py`,
-  `tests/test_execution_request_replay.py`, `tests/test_pre_m1_compat.py` and `tests/test_patch_memoization.py`
-  green with no edits to them.
+- THE SYSTEM SHALL commit `tests/fixtures/histories/merge_watch/dev_loop_final_read.json` and
+  `tests/fixtures/histories/merge_watch/dev_loop_final_read_hop.json`.
+- WHEN each committed fixture is replayed by `Replayer(workflows=[DevLoopWorkflow],
+  workflow_runner=UnsandboxedWorkflowRunner())` with the recording's monkeypatches applied THE SYSTEM SHALL replay
+  it without a nondeterminism error.
+- THE SYSTEM SHALL assert that each fixture is not vacuous: the fresh fixture records the
+  `merge-watch-terminal-reconcile` marker exactly once, the hop fixture zero times; each has at least one
+  `get_pr_state` scheduled after the last in-loop poll timer, and a `terminal` ownership write after it.
+- THE SYSTEM SHALL assert that each fixture's canonical sha256 matches `MANIFEST.json`, and that every `*.json` in
+  `merge_watch/` other than the manifest is listed in it.
 
-D7 (ordering, read from history)
+Marker and replay (D15, including the D15a carry-over)
 
-- WHEN the fresh fixture is read THE SYSTEM SHALL show, after the last pre-deadline `get_pr_state` schedule, the
-  first post-deadline `get_pr_state` schedule before the `lifecycle_ownership` schedule that carries the `terminal`
-  op, and that `terminal` schedule before the deploy observation (`resolve_deploy_target`).
-- WHEN the hop fixture is read THE SYSTEM SHALL show the post-deadline `get_pr_state` schedule before the
-  `lifecycle_ownership` schedule that carries `release`.
+- WHEN a fresh run reaches the deadline THE SYSTEM SHALL record the marker once; WHEN a continued run reaches it THE
+  SYSTEM SHALL record it zero times.
+- WHEN a run whose resume record carries `terminal_reconcile=False` rides past the deadline THE SYSTEM SHALL make no
+  post-deadline read, and its history SHALL replay clean.
+- WHEN a history is recorded in-test by today's code (fresh and hop) THE SYSTEM SHALL replay it clean without
+  committing it (D15a).
+- WHILE this slice is applied `tests/test_workflow_replay.py`, `tests/test_execution_request_replay.py`,
+  `tests/test_pre_m1_compat.py` and `tests/test_patch_memoization.py` SHALL stay green without edits, and the
+  `merge_watch/` subdirectory SHALL NOT be picked up by the top-level orphan check in `test_workflow_replay.py`.
 
-D16 (duplicate delivery of the final-read task)
+Duplicate delivery (D16)
 
-- IF the workflow task that processes the MERGED final-read result fails once and is redelivered THEN THE SYSTEM
-  SHALL execute exactly one `terminal` ownership op and schedule exactly one deploy observation.
-- WHEN that history (containing one `WORKFLOW_TASK_FAILED`) is replayed through the plain `DevLoopWorkflow` THE
-  SYSTEM SHALL replay clean, that is, add no command beyond those recorded.
+- WHEN the workflow task that carries the final-read MERGED result is processed twice (a worker with
+  `max_cached_workflows=0`, and separately a worker restarted between the read's completion and the next task) THE
+  SYSTEM SHALL issue exactly one `terminal` ownership write, schedule the deploy observation (`resolve_deploy_target`)
+  exactly once, and end Completed.
+- WHEN the resulting history is replayed THE SYSTEM SHALL issue no command beyond those recorded.
+
+Carry-over coverage
+
+- WHEN D3, D4, D5 and D6 runs end THE SYSTEM SHALL show in history: the settle commands, then the first post-deadline
+  read, then the relinquishing write where one exists (D7).
+- WHEN the final read answers OPEN THE SYSTEM SHALL set `_last_pr` and `saw_open_pr`, reset the poll counters and hold
+  the claim; WHEN a MERGED is first seen by the final read with no claim THE SYSTEM SHALL write `acquire` then
+  `terminal` (D12).
+- IF an abandon arrives while `_settle_watch_work` waits on an in-flight gate THEN THE SYSTEM SHALL make no read after
+  the settle, end `abandoned-unverified` and write `release` (D14).
+- IF an abandon arrives during the gate window THEN THE SYSTEM SHALL wake at once, make no further read, end
+  `abandoned-unverified` and write `release` (D9 window variant).
 
 ## Out of scope
 
-- 1d-3 (`record_merge_watch_reconcile`, liveness, cancellation re-raise, #1022) and 1d-4 (grace-polls and read-error
-  exits, `confirm_no_pr`).
-- Any production change in `orchestrator/`, any mctl-api change, any release, tag or deploy. B4 (#1007) stays FAIL,
-  the release hold stays ON.
-- Carry-over items that are not history-shaped: D9 window variant, D12, D13b-e and D14. They are deferred to a
-  separate coverage slice (see Open questions).
-- Closing #1029 (owner's call). The PR uses `Refs #1021`, never `Closes`.
+- Any production change (`orchestrator/`), any new `workflow.patched` marker, any mctl-api change.
+- Any release, tag or deploy. B4 (#1007) stays FAIL and the release hold stays ON. Workers stay on 1.117.0.
+- 1d-3: `record_merge_watch_reconcile`, liveness, cancellation re-raise (#1022). The cancellation pins D13b-e are
+  deferred to 1d-3, because 1d-3 changes the cancellation surface they would pin (the 1d-2b-i spec says 1d-3's (y)
+  turns D13d red).
+- 1d-4: grace polls, read-error exits, `confirm_no_pr`.
+- Closing #1029. The PR uses `Refs #1021`, not `Closes`.
+- Re-recording any existing fixture under `tests/fixtures/histories/` or `pre_m1/`.
 
 ## Open questions
 
-- Carry-over split: this proposal takes D15a and D7 (both read recorded histories, so they share this slice's
-  harness) and defers D9-window, D12, D13b-e and D14 to a follow-up coverage slice. If the owner wants them here, they
-  extend `tests/test_merge_watch_final_read.py` with the existing `_resume_run` / `_released_gate_run` harness and no
-  new infrastructure.
-- "Duplicate delivery of the final-read task" is read as a redelivered WORKFLOW task (first attempt fails after the
-  final-read activity completed, the server retries the task, the worker replays from history). The alternative
-  reading, a redelivered `get_pr_state` ACTIVITY task, would by design produce two reads and is not what "one landed
-  `terminal`" asserts. This proposal uses the workflow-task reading.
-- The hop fixture commits only the last run of the chain (the one holding the decision). The earlier runs carry no
-  decision command and continued-as-new chains are already covered by `tests/test_pre_m1_compat.py`. If the owner
-  wants the whole chain, name the files `dev_loop_final_read_hop_run<N>.json` like the pre-M1 set.
-- Fixture branch choice: fresh = MERGED (`terminal` and deploy observation), hop = OPEN with a fresh head (`release`).
-  This covers both relinquishing writes; the unreadable (`unrecorded`) end is not committed as a fixture because it
-  is an interim end that 1d-3 replaces.
+- Carry-over split: this proposal takes D7, D9 window, D12, D14 and D15a, and defers D13b-e to 1d-3. The owner may
+  move D13b-e back in, or move all carry-over to 1d-3, without changing the D15/D16 core.
+- "Duplicate delivery of the final-read task" is read as a workflow task redelivered or reprocessed by a worker that lost
+  its cache. The read is a read-only activity, and the server deduplicates activity completions. Both forms
+  (cache-disabled worker, worker restart) are proposed. If the owner meant a different form, only T7 changes.
+- The hop fixture is one file, but a hop chain has several runs. This proposal commits the last run, the one that
+  executes the decision with the carried `terminal_reconcile=True` and no marker. Earlier runs are covered by D15a's
+  in-test replay, not committed.
+- A 40-minute deadline cannot be patched under the sandboxed runner, because the sandbox re-imports the module (see the
+  comment above `DEADLINE` in `tests/test_merge_watch_final_read.py`). The fixtures can therefore only be replayed
+  unsandboxed with the same monkeypatches. This matches how `test_pre_m1_compat.py` replays the pre-M1 hop chain.
