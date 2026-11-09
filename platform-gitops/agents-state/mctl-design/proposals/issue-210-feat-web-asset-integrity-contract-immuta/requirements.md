@@ -60,11 +60,15 @@ consumer repository. Enforcement is deferred to the separately approved
 - THE SYSTEM SHALL state that a successful `curl` does not prove browser SRI or CORS behaviour.
 - THE SYSTEM SHALL contain a supply matrix covering route classes on the six sites: mctl.ai, docs,
   tg public, tg lite/auth, academy, alice, seerrsense public, seerrsense consent. For each route
-  class it records the source pin, delivery mode, observed `style-src`, integrity status and owner.
+  class it records the source pin, delivery mode, effective `style-src` (or `default-src` fallback),
+  integrity status and owner.
   Every unobserved value is `unknown (not observed)` or `not-run`.
-- WHILE a route has `style-src 'self'` (for example alice.mctl.ai) or a strict `script-src` THE
-  SYSTEM SHALL require locally vendored delivery, and SHALL NOT propose adding `https://ui.mctl.ai`
-  or any other relaxation to that CSP.
+- WHILE a route's effective stylesheet policy is restricted to its own origin (`style-src 'self'`,
+  or a restrictive `default-src` fallback when `style-src` is absent), or its sensitive-route policy
+  requires local resources, THE SYSTEM SHALL use locally vendored CSS and SHALL NOT add
+  `https://ui.mctl.ai` or widen CSP merely for adoption. A strict `script-src` alone does NOT ban
+  cross-origin stylesheets: assess `style-src` and the route separately (Academy publicly allows
+  `https://ui.mctl.ai` styles despite a non-inline script policy).
 - THE SYSTEM SHALL specify a release and consumer verification chain: source pin, then package
   lock or URL, then manifest, then build artifact, then OCI image digest, then GitOps desired
   state, then ArgoCD observed state, then a safe anonymous HTTP response. Each link is classified
