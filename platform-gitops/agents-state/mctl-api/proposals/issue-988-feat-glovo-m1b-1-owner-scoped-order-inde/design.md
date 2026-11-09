@@ -326,7 +326,7 @@ That is eight triggers and five functions.
   `Validate`, and returns the RFC 8785 bytes of the validated input. The #1059 basket files are
   vendored once, here, in `internal/glovo/basket/contract/` (#986 and #985 pin the same
   sha256 and do not copy them). The write command schema that wraps this basket by `$ref`
-  is #1059's `command-place-order-fake.schema.json`, vendored by #985.
+  is #1059's `command-place-order-fake.schema.json`, vendored and gated by #986 §2a (round 7; #985 only enqueues it).
 - `basket.Fingerprint(canonical) = "sha256:" + hex(sha256(canonical))`, with RFC 8785 from the
   `internal/jcs.Canonicalize` of this slice (round 4, N3; #986 imports it). Prices and amounts are part of `t`, so
   a price change changes the fingerprint.
@@ -361,9 +361,9 @@ That is eight triggers and five functions.
 | `finalized` | `finalized` | `BindApproval` (write-once `approval_ref`) | #989 `CreateGlovoApprovalTx` |
 | `open`, `finalized` | `cancelled` | `MarkCancelled` | #985 |
 | `finalized` | `dispatched` | `MarkDispatched(cmd_)` (writes the effect row) | #985 |
-| `dispatched` | `cancelled` | `MarkCancelled` (bridge effect `none`) | #985 |
-| `dispatched` | `unknown` | `MarkUnknown` | #985 |
-| `dispatched` | `closed` | `MarkClosed` | #985 `read_command_result` on a terminal effect (round 6, G2; the `unknown -> closed` edge stays in the trigger matrix but has no caller) |
+| `dispatched` | `cancelled` | `MarkCancelled` (a `cancelled` or `expired` command with effect `none`) | #985 `reconcileOrder` |
+| `dispatched` | `unknown` | `MarkUnknown` (a terminal command, `completed`, `cancelled` or `expired`, whose effect is `unknown`) | #985 `reconcileOrder` |
+| `dispatched` | `closed` | `MarkClosed` (a `completed` command with effect `succeeded`, `failed`, `not_performed` or `none`) | #985 `reconcileOrder`, one function with the total table of #985 §2a (rounds 6 and 7; this slice needs no new edge; the `unknown -> closed` edge stays in the trigger matrix but has no caller) |
 
 Every write CASes on `version` and `state`; the trigger enforces the same matrix for raw
 SQL. Approval state is never stored on the order.

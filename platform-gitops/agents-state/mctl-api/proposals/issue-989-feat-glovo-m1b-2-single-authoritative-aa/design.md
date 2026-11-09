@@ -1,5 +1,14 @@
 # Design: issue-989-feat-glovo-m1b-2-single-authoritative-aa
 
+## Amendment 2026-11-09 (c), round 7 of the AMEND PR
+
+Two seams left by round 6. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| R7-989-1, CROSS X-C (the `aar_` table and the order mapping were two partial tables) | §7: the `aar_` side stays here, keyed by the command pair (`status`, `effect_state`); the order side and the one function that applies both is mctl-api#985 §2a, `reconcileOrder`. The two `none` rows of that table (a `completed` command with no permit, and a `cancelled` or `expired` one) are exactly the rows that call `MarkGlovoApprovalUnknownTx`; every other row leaves the `aar_` alone, as the table below says |
+| CROSS X-A (§6 said #985 vendors the write schema) | §6: the schema is mctl-agents#1059 §Write command; mctl-api#986 §2a vendors it, owns the wire version and gates the claim; #985 only enqueues; the provider is mctl-telegram#1262 task 2b. `Ready` fails until the vendored schema and the `place_order_fake` wire version exist (the same condition as before, on the new owner) |
+
 ## Amendment 2026-11-09 (c), round 4 of the AMEND PR
 
 Resolves the round-3 findings F1 and F2 and the cross-slice finding X-2. Where this section and older text disagree, this section wins.
@@ -479,10 +488,12 @@ back. JSONB in `bridge_commands.payload` keeps no duplicate keys and no key orde
 RFC 8785 canonicalizes the parsed value, so recomputing from JSONB is deterministic. The
 #1059 number rules (integers only, within ±(2^53-1)) are checked by `basket.Validate`.
 
-The command payload must carry the approval basket. The v1alpha1 `place_order_fake`
-payload is `{item_codes, quantity_total, note}`, so this depends on the
-#1059 `command-place-order-fake.schema.json` that #985 vendors (OPEN-985-8, closed).
-Until that vendored copy exists, `Ready` fails.
+The command payload must carry the approval basket. The closed v1alpha1 `place_order_fake`
+payload `{item_codes, quantity_total, note}` cannot carry it, so this depends on the
+#1059 `command-place-order-fake.schema.json`, which mctl-api#986 §2a vendors (round 7;
+OPEN-985-8, closed; #985 only enqueues it with the v1alpha2 wire version). The fence reads the payload
+bytes, never the wire version. Until that vendored copy and the `place_order_fake` wire version
+exist, `Ready` fails.
 
 ### 7. Recording an outcome without a permit
 
@@ -513,6 +524,13 @@ Instead:
 | unknown | `none` / `not_performed` | command ended without a permit |
 | unknown | `unknown` | the provider reported `unknown` without a permit (`effectFor`, `store.go:716-722`) |
 
+The `effect_state` column is read together with the command `status`
+(`bridge.Store.CommandEffect` returns both, #985 §2a): `reserved` with `none` holds only while the
+command is `pending` or `leased`; the same `none` on a `completed`, `cancelled` or `expired` command is
+the `unknown` row. #985 `reconcileOrder` writes the `unknown` in the transaction that moves the order
+(its two `none` rows); the sweeper writes it for a command that nobody reads. A terminal command with
+`permitted`, or with `succeeded` and no permit row, is an invariant violation.
+
 Any other pair is an invariant violation. T16 asserts the table, and `receipt.Audit`
 reports violations as a readiness failure.
 
@@ -526,8 +544,8 @@ reports violations as a readiness failure.
   role is not a member of the table owners, and its grants equal #957 §6d.1 (§2);
 - `glovo.order.owner-approval` v1 is registered;
 - the work-items, bridge, #988 order and #959 connection stores are non-nil;
-- the #1059 approval basket and `command-place-order-fake.schema.json` are vendored
-  (OPEN-985-8, closed).
+- the #1059 approval basket (vendored by #988) and `command-place-order-fake.schema.json` (vendored by
+  #986 §2a) are present (OPEN-985-8, closed).
 
 Only #985 task 9 calls `bridgeStore.SetFence(receipt.NewFence(...))`, and only when
 all six #985 §7.3 preconditions hold, among them `glovo.ControlDefault.Open` and

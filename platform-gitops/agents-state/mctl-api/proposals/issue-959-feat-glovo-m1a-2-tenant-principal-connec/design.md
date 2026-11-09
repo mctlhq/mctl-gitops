@@ -1,5 +1,11 @@
 # Design: issue-959-feat-glovo-m1a-2-tenant-principal-connec
 
+## Amendment 2026-11-09 (c), round 7 of the AMEND PR
+
+| Finding | Change here |
+|---|---|
+| T9 (the happy path assigned `pending_handoff -> pending_provider` to `Transition` and `-> active` to `ActivateTx`, but `ActivateTx` itself takes both steps) | T9 is rewritten: `pending_handoff -(ActivateTx)-> active -(Transition)-> revoked`. The edge `pending_handoff -> pending_provider` through `Transition` is its own case. `ActivateTx` starts only from `pending_handoff` (see the comment above `ActivateTx` in the Go listing); this agrees with #961 §Activate, where any other state is `invalid_transition`. #961 is not edited |
+
 ## Amendment 2026-11-09 (c), round 5 of the AMEND PR
 
 Fold-in of the round-4 findings; simplified, no new mechanism beyond the one named per row. Where this section and older text disagree, this section wins.
@@ -481,6 +487,9 @@ func (s *Store) Reconnect(ctx, in ConnectInput, priorConnectionID string) (*Conn
 // runs in.AfterLocks (the handoff-ref consume, level L2b of #957 §6b), then steps
 // pending_handoff -> pending_provider -> active (two audited transitions, the edge table
 // is unchanged) with expires_at = clock_timestamp() + in.ExpiresIn, computed in SQL
+// (ActivateTx starts only from pending_handoff: a connection in any other state,
+// including pending_provider, is invalid_transition and nothing is written; the
+// pending_provider state is reached only through Transition, a separate edge)
 // (round 4: no Go time.Time crosses the boundary, so it cannot be in the past or drift
 // from the database clock; ExpiresIn <= 0 or above MaxConnectionTTL (24 h) is invalid_request).
 // It checks ExpectedVersion and ExpectedInstallRevision (stale_version / stale_install).

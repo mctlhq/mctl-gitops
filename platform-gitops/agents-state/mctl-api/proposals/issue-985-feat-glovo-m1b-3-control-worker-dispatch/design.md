@@ -1,5 +1,14 @@
 # Design: issue-985-feat-glovo-m1b-3-control-worker-dispatch
 
+## Amendment 2026-11-09 (c), round 7 of the AMEND PR
+
+Targeted fixes for two seams the round-6 text left open. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| F1, #986 R6-986-1, #1059 R6-1 to R6-3, CROSS X-A (the v1alpha2 `place_order_fake` had no owner in `internal/bridge`) | One owner per responsibility, each stated once (table in #986 design §2a): schema, envelope and result contract in #1059 §Write command; per-command wire version, projection, Claim gating, `SubmitResult` and vendoring in mctl-api in #986; the provider in mctl-telegram#1262. This slice only enqueues with `WireVersion: bridge.WireV1alpha2` (§5 step 11) and calls #986 `EnableWireVersions` from `NewRuntimeStore` (task 4). It vendors nothing; OPEN-985-8 stays closed |
+| F2, #957 R6-957-1, #988 X-1, #989 R7-989-1, CROSS X-C (result to order was not total) | §2a: one total table over (command status, `effect_state`) and one function, `reconcileOrder`, that applies it from `read_command_result` and from `Cancel` on `ErrAlreadyCompleted` (§6). `CommandEffect` returns `(status, effectState)`. #957 §3a renders the same keys; #988 needs no new edge |
+
 ## Amendment 2026-11-09 (c), round 5 of the AMEND PR
 
 Fold-in of the round-4 findings; simplified, no new mechanism beyond the one named per row. Where this section and older text disagree, this section wins.
@@ -41,7 +50,7 @@ text disagree, this section wins; the older passages are edited.
 | P3 F7 (cancel vs concurrent receipt transitions) | Cancel treats a receipt already `denied` (for this order) or `unknown` (for this `cmd_`) as success; T7 adds refused-then-cancel and sweeper-then-cancel |
 | P3 F8 (test gaps) | T16 adds the surface principal and `PinClaims` negatives (wrong aud, iss, sub; expired; nbf) and a production-build check that no verifier is wired; the revokers list includes `Reconnect` and terminal `Transition` |
 | X-1, #957 F5 (workflow id, run id, refs) | `EnqueueInput.WorkflowID` comes from #989 `ExecutionBindingTx`, `RunID` from #957 `glovojoin.ControlStartTx` (may be `''`), `TenantRef`/`PrincipalRef` from #988 `LookupJoinRefTx` (§5 step 11) |
-| X-2, X-8 (payload shape) | The `place_order_fake` payload is exactly the order's final approval-basket bytes, no wrapper (#957 §6d.3); the schema is owned by #1059 (`command-place-order-fake.schema.json`, round 6 G1) and vendored here (OPEN-985-8 closed) |
+| X-2, X-8 (payload shape) | The `place_order_fake` payload is exactly the order's final approval-basket bytes, no wrapper (#957 §6d.3); the schema is owned by #1059 (`command-place-order-fake.schema.json`, round 6 G1) and, from round 7, vendored and gated by #986 §2a, not here; this slice only enqueues it (OPEN-985-8 closed) |
 | #959 F7 (end-to-end revocation proof) | New T24 here: with the real hook and fence, revoke-then-permit and `expires_at`-passed-then-permit give no permit |
 | #989 F3 (`cancel_order_fake`) | `read_command_result` answers only for `place_order_fake`; Glovo M1 never enqueues `cancel_order_fake` |
 
@@ -231,14 +240,36 @@ Deployed state:
   commands whose order is inside the `tenants` bound. Anything else is `not_found`.
   (Amended (c): `place_order_fake` only. Glovo M1 never enqueues `cancel_order_fake`;
   cancellation is `bridge.Store.Cancel` on the existing command.)
-- **Result to order (round 6, G2; closes OPEN-985-5; the one owner is this route).** When
-  `read_command_result` sees a terminal command whose order is still `dispatched`, it takes
-  L3 (`LockOrderForControl`) and calls #988 `MarkClosed` for `effect_state` `succeeded`,
-  `failed` or `not_performed`, or `MarkUnknown` for `unknown`. Both are CAS and idempotent.
-  A missed call only delays the stored state: #957 §3a derives the wire `state` and
-  `outcome` from `effect_state` on every read, through the read-only
-  `bridge.Store.CommandEffect(ctx, q dbq.Querier, tenants []string, commandID string)
-  (effectState string, err error)` that this slice adds in task 4.
+- **Result to order (round 7, F2; closes OPEN-985-5; the one owner is this route, and this table is the only copy).**
+  One function, `Dispatcher.reconcileOrder(ctx, tx, order, commandID)`, applies the table below. It
+  has exactly two callers: `read_command_result`, which first takes L3 (`LockOrderForControl`) and,
+  for the `none` rows, L4; and `Cancel` (§6) on `ErrAlreadyCompleted`, which already holds L3, L4
+  and L5. It reads `(status, effectState)` through `CommandEffect` on the same transaction and acts
+  only while the order is `dispatched`. A terminal command never changes again, so the unlocked
+  read in `read_command_result` is safe, and a non-terminal command changes nothing, so a stale
+  read only delays the transition. Every `Mark*` is a CAS and idempotent.
+
+  | Command `status` | `effect_state` | #988 call on the `dispatched` order | #989 call on the `aar_` | #957 §3a wire `state` |
+  |---|---|---|---|---|
+  | `pending`, `leased` | `none`, `permitted` | none | none | `dispatched` |
+  | `pending`, `leased` | `unknown` (a reclaim turned `permitted` into `unknown`) | none | none | `unknown` |
+  | `completed` | `succeeded` | `MarkClosed` | none (the permit consumed it) | `placed` |
+  | `completed` | `failed`, `not_performed` | `MarkClosed` | none | `failed` |
+  | `completed` | `unknown` | `MarkUnknown` | none | `unknown` |
+  | `completed` | `none` (the provider ended the command before any permit) | `MarkClosed` | `MarkGlovoApprovalUnknownTx` | `failed` |
+  | `cancelled`, `expired` | `none` | `MarkCancelled` | `MarkGlovoApprovalUnknownTx` | `cancelled` |
+  | `cancelled`, `expired` | `unknown` | `MarkUnknown` | none | `unknown` |
+  | any other pair (for example a terminal command with `permitted`) | | none: an invariant violation. The route answers 503 `unavailable` and audits it. It is never read as "nothing happened" | none | `unknown` |
+
+  The two `none` rows pair `MarkGlovoApprovalUnknownTx` with the order call, as `Cancel` does in §6
+  and as #989 §7 requires: a reserved receipt of a command that ended without a permit can never
+  be spent. For the other effect values the permit already consumed the receipt, or the sweeper
+  covers it (#989 §7, OPEN-989-8). `bridge.CancelOpenForConnections` (L5 only) never touches the
+  order: the stored order catches up on the next `read_command_result` or `cancel`, while the wire
+  `state` does not wait, because #957 §3a derives it from the same two inputs on every read.
+  `bridge.Store.CommandEffect(ctx, q dbq.Querier, tenants []string, commandID string) (status,
+  effectState string, err error)` is the read-only call that this slice adds in task 4 and that
+  #957 §3a consumes.
 - `revalidate_scope` and `resolve_connection` from #1044's `ControlApiPort` are not
   added here. Their owner is an OPEN item.
 
@@ -269,7 +300,8 @@ reason goes to audit only.
 | Rate limit | 429 (+ `Retry-After`) | `rate_limited` | retryable |
 
 Cancelling a command that is already `completed` or `expired` is **not** a refusal. It
-answers 200 with the current `order_state` and `effect_state`, and changes nothing.
+answers 200 with the current `order_state` and `effect_state`; the bridge command is unchanged,
+and the order moves only through `reconcileOrder` (§2a).
 
 It is an OPEN item whether #1044 already maps the #959 codes in this table: `no_tenant`,
 `no_connection`, `connection_revoked`, `connection_expired`, `stale_install`,
@@ -285,6 +317,7 @@ type OrderIndex interface { // #988 (M1b/1), tx-scoped, control path
     MarkDispatched(ctx context.Context, tx pgx.Tx, o *orders.Order, commandID string, actor orders.Actor) error // finalized -> dispatched, command_id write-once
     MarkCancelled(ctx context.Context, tx pgx.Tx, o *orders.Order, actor orders.Actor) error  // only when no effect is possible
     MarkUnknown(ctx context.Context, tx pgx.Tx, o *orders.Order, actor orders.Actor) error    // the effect may have happened
+    MarkClosed(ctx context.Context, tx pgx.Tx, o *orders.Order, actor orders.Actor) error     // dispatched -> closed only; reconcileOrder (§2a)
 }
 type Receipts interface { // provided by #989 (internal/workitems, glovo_approvals.go); tx-scoped; #985 never writes action_approval_requests itself
     LockGlovoApprovalTx(ctx context.Context, tx pgx.Tx, id string) (*workitems.ActionApprovalRequest, *workitems.GlovoBinding, error) // L4, FOR UPDATE
@@ -418,9 +451,11 @@ This is the only step order. Task 5 implements exactly this.
     `glovojoin.ControlStartTx` (empty is valid, `bridge_commands.run_id` defaults to
     `''`, `internal/bridge/store.go:74`); `TenantRef`/`PrincipalRef` from #988
     `LookupJoinRefTx`; `OrderRef` the `ordr_`; `ConnectionRef` the `gcn_`. The payload
-    shape is fixed in #957 §6d.3 and defined once by #1059
-    `command-place-order-fake.schema.json` (`bridge.mctl.ai/v1alpha2`), vendored here
-    (OPEN-985-8, closed); until that copy exists dispatch is `not_ready`. `created=false` at this
+    shape is fixed in #957 §6d.3 and the command is defined once by #1059 §Write command.
+    Its wire version (`bridge.mctl.ai/v1alpha2`), projection, validation against the schema, Claim
+    gating and vendoring are #986 §2a: this step only passes `WireVersion: bridge.WireV1alpha2`.
+    `Enqueue` refuses that value below the wire-version level (`ErrReadUnavailable`, which
+    dispatch answers as `not_ready`). `created=false` at this
     point (the order is still `finalized`) is an invariant violation: roll back, audit
     it, and answer `unavailable`.
 12. `Receipts.ReserveGlovoApprovalTx(aar, workitems.ReserveCommand{CommandID, Tenant,
@@ -447,9 +482,10 @@ Locks are taken in the same order as §5: L1/L2 shared, L3, L4, L5.
     `aar_` is already `consumed` and is not touched (the outcome lives only in
     `effect_state`, #989). Call `MarkUnknown`. The order is **never** `cancelled` in this
     case.
-  - `ErrAlreadyCompleted`: change nothing and answer 200 with the command's current
-    `effect_state`. The result path reconciles the order
-    (§2a, "Result to order").
+  - `ErrAlreadyCompleted` (`completed` or `expired`): the bridge changed nothing, so call
+    `reconcileOrder` (§2a, "Result to order") under the L3, L4 and L5 already held, and answer 200
+    with the resulting `order_state` and the command's `effect_state`. The order is therefore never
+    left `dispatched` behind a terminal command.
 - `cancelled` or `unknown`: no-op, 200 with the current state.
 - No path ever returns an `aar_` to `approved`.
 
@@ -588,7 +624,7 @@ revocation. The owner must accept it explicitly; this is an OPEN item.
     commands);
   - the #988 order index;
   - the #989 methods of §3 and its `receipt.Fence`;
-  - the vendored #1059 `command-place-order-fake.schema.json` and approval basket (OPEN-985-8, closed: #1059 owns the schema);
+  - the #1059 `command-place-order-fake.schema.json` as vendored by #986 §2a, and the approval basket as vendored by #988 (OPEN-985-8, closed: #1059 owns the schema);
   - #987, the fallback removal;
   - mctl-gitops#2506, for a production verifier.
 

@@ -1,12 +1,24 @@
 # Design: issue-957-feat-glovo-m1e-canonical-facade-to-mctl
 
+## Amendment 2026-11-09 (c), round 7 of the AMEND PR
+
+Two seams that round 6 left open. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| R6-957-1, CROSS X-C (the §3a mapping was not total over (command status, `effect_state`)) | §3a is rewritten as one table keyed by the order state and the pair (`status`, `effect_state`) that `bridge.Store.CommandEffect` returns. The canonical result-to-order table is mctl-api#985 §2a (one function, `reconcileOrder`); §3a only renders the wire strings of its last column and never redefines a transition. A pair outside the table is wire `unknown` and an audit event, never `dispatched` or `failed`. §6d.4 gives `CommandEffect` its two-value return |
+| CROSS X-A, #985 F1 (G1 said #985 vendors the write schema; it has no emitter, gate or provider) | G1 below is corrected. One owner per responsibility: schema, envelope and result contract mctl-agents#1059 §Write command; per-command wire version, projection, Claim gating, `SubmitResult` and vendoring mctl-api#986 §2a (not #985); enqueue with `WireVersion` v1alpha2 #985 §5 step 11; parse and execute mctl-telegram#1262 task 2b. §7 pins the write schema digest next to the v1alpha1 ones |
+| #985 read path (new lock row) | §6b: the `read_command_result` path is listed |
+
+Open items table (round 6) after round 7: unchanged except OPEN-1059-4, whose write-schema half is closed by the vendoring rule above (one copy in #1059, vendored once in mctl-api by #986 task 1 and once in the provider by #1262 task 2b, each pinned by sha256).
+
 ## Amendment 2026-11-09 (c), round 6 (final, targeted) of the AMEND PR
 
 Owner decision: only four groups are fixed now; every other round-5 finding is recorded as an OPEN item in its owning proposal. Where this section and older text disagree, this section wins.
 
 | Group | Change |
 |---|---|
-| G1 (X-2, write command schema) | One owner: mctl-agents#1059 `command-place-order-fake.schema.json` (`bridge.mctl.ai/v1alpha2`, payload = the approval basket by `$ref`). #985 vendors it; #957, #986, #988, #989 reference it. OPEN-1059-1, OPEN-985-8 and OPEN-989-6 are closed |
+| G1 (X-2, write command schema) | One owner: mctl-agents#1059 `command-place-order-fake.schema.json` (`bridge.mctl.ai/v1alpha2`, payload = the approval basket by `$ref`). (Round 7 correction: mctl-api#986 §2a vendors it and owns the wire version, Claim gating and `SubmitResult`; #985 only enqueues with `WireVersion` v1alpha2; mctl-telegram#1262 task 2b is the provider.) #957, #985, #988, #989 reference it. OPEN-1059-1, OPEN-985-8 and OPEN-989-6 are closed |
 | G2 (X-1, F1, status bodies) | §3a: this slice owns the `GET /connection` and `GET /orders/{order_id}` bodies and every wire value; `outcome` comes from #985 `bridge.Store.CommandEffect`; #985 `read_command_result` owns `dispatched -> closed\|unknown` through #988 `MarkClosed` / `MarkUnknown` (OPEN-985-5 closed); `handoff_url` and `provider_account_label` are omitted from these bodies |
 | G3 (F3, #988 P2-2) | Merge order puts A13/A14 (`glovo.control_starts`, `glovojoin.ApplySchema`, `ControlStartTx`) before #986 and #985; #985 lists A14 as a blocking dependency; package direction `control` imports `glovojoin`, and `Readiness` takes an injected `func`; #988 `Ready` is `not_ready` until #989 task 2b grants the `SELECT`s |
 | G4 (#959 P2-3, P2-1) | `Transition` to `active` is `invalid_request`; CHECK `glovo_connections_active_expiry_check`; `Connection` and `Install` fields listed once in #959 Types (remainder OPEN-959-3). #960 N1 (one line): the allowlist routes use `isHumanAdmin` with T21a-T21d |
@@ -447,26 +459,48 @@ omitted.
 - `GET /orders/{order_id}`: `{state, outcome}`. `handoff_url` is never part of this body
   (it belongs to `POST /connections`, #961). Inputs: #988 `Order.State` and `CommandID`;
   #989 `GlovoApprovalStatus(aar)` only while the order is `finalized`; #985
-  `bridge.Store.CommandEffect(commandID)` (its `effect_state`) only when `CommandID` is
-  non-empty. `outcome` is `observed_placed` only for `effect_state = succeeded`, else
-  `OUTCOME_UNKNOWN` (placement not observed).
+  `bridge.Store.CommandEffect(commandID)`, which returns the pair (`status`, `effect_state`) of
+  the command (round 7), only when `CommandID` is non-empty. `outcome` is `observed_placed` only for
+  (`completed`, `succeeded`), else `OUTCOME_UNKNOWN` (placement not observed).
+
+The order state decides the first four rows alone. For an order that has a `CommandID` and is
+`dispatched` or `closed` the wire `state` is the last column of the canonical table in mctl-api#985
+§2a ("Result to order"), keyed by the pair, and is not stored or waited for: it is derived on every
+read, so it is the same before and after `reconcileOrder` has moved the stored order.
 
 | #988 `Order.State` | other input | wire `state` | wire `outcome` |
 |---|---|---|---|
 | `open` | none | `open` | `OUTCOME_UNKNOWN` |
 | `finalized` | aar `pending` / `approved` / `refused` / `expired` | `awaiting_approval` / `approved` / `refused` / `expired` | `OUTCOME_UNKNOWN` |
-| `dispatched`, `closed` | `effect_state` `none` or `permitted` | `dispatched` | `OUTCOME_UNKNOWN` |
-| `dispatched`, `closed` | `succeeded` | `placed` | `observed_placed` |
-| `dispatched`, `closed` | `failed` or `not_performed` | `failed` | `OUTCOME_UNKNOWN` |
-| `dispatched`, `closed`, `unknown` | `unknown`, or order `unknown` | `unknown` | `OUTCOME_UNKNOWN` |
-| `cancelled` | none | `cancelled` | `OUTCOME_UNKNOWN` |
+| `cancelled` | any | `cancelled` | `OUTCOME_UNKNOWN` |
+| `unknown` | any | `unknown` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `pending` or `leased`, `none` or `permitted` | `dispatched` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `pending` or `leased`, `unknown` | `unknown` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `completed`, `succeeded` | `placed` | `observed_placed` |
+| `dispatched`, `closed` | `completed`, `failed` or `not_performed` | `failed` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `completed`, `unknown` | `unknown` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `completed`, `none` | `failed` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `cancelled` or `expired`, `none` | `cancelled` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `cancelled` or `expired`, `unknown` | `unknown` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | any other pair, or `CommandEffect` finds no command, or its read fails | `unknown`, and an audit event | `OUTCOME_UNKNOWN` |
+
+The table is total: every #988 state, and for the last six rows every pair of the five command
+statuses and six effect states, lands on exactly one row (the "any other pair" row is the
+complement, and an unreadable command is never read as a command that did nothing). A pair outside
+the table can only come from an invariant violation (for example a terminal command whose
+`effect_state` is `permitted`); it is never rendered as `dispatched` or `failed`. The mapping to
+#1044 M9 (a workflow vocabulary: `completed`, `cancelled`, `expired`, `failed`, `unknown` with
+`reason_code`) is a different surface and is read by #985's `read_command_result` triple, not by this
+body; the two agree on every pair that has an effect, and differ only in that an expired command is
+`cancelled` on this wire and `expired` in the workflow (a wire string that does not exist here,
+by design, because the facade vocabulary has no `expired` for a dispatched order).
 
 A failed effect is surfaced only; it writes nothing to the order or the `aar_` (#989 §7
 already leaves that `aar_` `consumed` or `unknown`). The result-to-order transition
-(`dispatched` to `closed` or `unknown`) is owned by #985 `read_command_result`, and this
-body does not wait for it: it is derived from `effect_state` on every read. The contract
-JSON pins these strings, with one fixture per row and a test over every #988 state and
-every `effect_state` value (T6).
+(`dispatched` to `closed`, `cancelled` or `unknown`) is owned by #985 `reconcileOrder`
+(called from `read_command_result` and from `Cancel`), and this body does not wait for it. The
+contract JSON pins these strings, with one fixture per row and a test over every #988 state and
+every (`status`, `effect_state`) pair (T6).
 
 ### 4. Refusal and status mapping (closed set; amended 2026-11-09 and (c))
 
@@ -802,7 +836,8 @@ runtime transaction. #989 `CreateGlovoExecutionTx` takes no advisory lock.
 | #961 connect / reconnect (round 3) | L1 sh, L2 ex, L2a (inside #959's `AfterLocks`) |
 | #961 worker activate (round 3) | L1 sh, L2 ex, L2b (inside #959 `ActivateTx`'s `AfterLocks`) |
 | #957 read routes (minting refs, then `ReadBridge`) | L1 sh, L2 sh in a short transaction that only mints join refs; the read itself takes L5 on its own read command only (#986); history then inserts `glovo.join_read_refs` (§5a) in a separate short transaction with no lock level |
-| #985 dispatch / cancel | L1 sh, L2 sh, L6 read, L3, L4, L5 |
+| #985 dispatch / cancel | L1 sh, L2 sh, L6 read, L3, L4, L5; `Cancel` on `ErrAlreadyCompleted` calls `reconcileOrder` under these same locks (round 7) |
+| #985 `read_command_result` (round 7) | L1 sh, L2 sh, L3 (`LockOrderForControl`), then L4 for the two `none` rows of the #985 §2a table; no L5: a terminal command never changes, so `CommandEffect` reads it without a lock |
 | Bridge permit | `WriteFence.PreLock` (#989): L1 sh, L2 sh, L3, L4; then `lockOwned`: L5; then `Check` |
 | #989 owner decision | L4 only |
 | #959 connection enders (`Revoke`, `RevokeForMembership`, `RevokeInstall`, `Reinstall`, `Reconnect` (`superseded`), terminal `Transition`) | L1 (sh, or ex for install changes), L2 ex, connection rows, then the revocation hook `bridge.CancelOpenForConnections`: L5 `ORDER BY command_id`, same transaction |
@@ -1060,7 +1095,7 @@ log); in every case the fake provider sees zero writes.
   top-level field. The #989 fence runs `basket.Parse` on the payload, so an extra field,
   a missing field or any other shape is `basket_changed`. The schema is owned by
   mctl-agents#1059 (`command-place-order-fake.schema.json`, `bridge.mctl.ai/v1alpha2`),
-  vendored by #985; #1059 OPEN-1059-1 is closed.
+  vendored and gated by mctl-api#986 §2a (round 7; not #985); #1059 OPEN-1059-1 is closed.
 - An empty basket or an all-unavailable preview is a valid read (#1059 `empty: true`)
   with no approval basket. It can be shown, never fingerprinted, prepared or approved.
 
@@ -1107,7 +1142,7 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | #985 bridge and control | `bridge.CancelOpenForConnections(ctx, tx pgx.Tx, connectionIDs []string, actor string) error` | the `RevocationHook` implementation; L5 `ORDER BY command_id` |
 | | `bridge.WriteFence.PreLock(ctx, tx pgx.Tx, c bridge.Caller, commandID string) error` | called by `permitTx` before `lockOwned`; step 0 applies `lockOwned`'s provider and tenants predicate and answers `ErrCommandNotFound` for absent and foreign ids alike, and refuses non-`place_order_fake` kinds, before any lock (#985 §7.2, #989 §6) |
 | | `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole string) error`, `bridge.NewRuntimeStore(ctx, pool *pgxpool.Pool) (*Store, error)` (the shared `GLOVO_DB_URL` pool; no DDL) | §6d.1; `ApplySchema` calls #986 `bridge.ApplyReadSchemaTx` (round 4, X-3) |
-| | `bridge.Store.CommandEffect(ctx, q dbq.Querier, tenants []string, commandID string) (effectState string, err error)` | round 6, G2: read-only; Glovo `place_order_fake` commands inside `tenants` only, anything else `not_found`; the source of `outcome` in §3a |
+| | `bridge.Store.CommandEffect(ctx, q dbq.Querier, tenants []string, commandID string) (status, effectState string, err error)` | round 6, G2, round 7: read-only; Glovo `place_order_fake` commands inside `tenants` only, anything else `not_found`; returns the pair that keys the #985 §2a table and §3a |
 | | `Dispatcher.Dispatch` replay | round 4 (#985 F2): on any order state with a non-empty `command_id` whose `approval_ref` and fingerprint match, the same `cmd_` with the current `order_state` and `effect_state` |
 | | `control.ProveOneDatabase(ctx, bridgeStore *bridge.Store, glovoStore *glovo.Store, workItemsPool *pgxpool.Pool) error` | §6d.1 checks; requires `glovoStore.Pool() == bridgeStore.Pool()` (round 3: two stores, one pool, one role) and proves `workItemsPool` is the same database through the colocation probe |
 | #960 (`internal/glovo/scope`, `internal/auth`) | `Resolver.Resolve(ctx, u *auth.User) (Scope, *glovo.Error)`, `User.TeamGrant() (grantID, tenant string, ok bool)`, `teamgrant.Check(ctx, grantID, principalID, clientID, resource) (teamgrant.Grant, error)` (only an `active` grant passes) | round 3: sole owner of consent-time selection and of the claims `tgr`/`stn`. Round 5 (R4-1): #960 defines `teamgrant.Grant{ID, PrincipalID, Tenant, ClientID, Resource, RefreshFamilyID, State}`; `Grant.RefreshFamilyID` is the `scope_ref` binding key (§2b) and is the only place #957 reads it |
@@ -1124,7 +1159,8 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
   limits, the timeouts (5 s), the OAuth resource metadata expectations (`resource`,
   `scopes_supported`, `bearer_methods_supported: ["header"]`) and `dependencies` version
   gates (minimum M1a and M1b schema versions, bridge `bridge.mctl.ai/v1alpha1` schema
-  digests as vendored at `a9ca5814`; amended 2026-11-09).
+  digests as vendored at `a9ca5814`, and (round 7) the digest of `command-place-order-fake.schema.json`
+  as vendored by #986; amended 2026-11-09).
 - `contract.go` (`//go:embed`) and `contract_test.go`, which pins `Digest` (sha256 of
   the file). Changing the file without bumping the digest fails the test, and so does
   bumping the digest without bumping the version.

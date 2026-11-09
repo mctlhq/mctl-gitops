@@ -5,24 +5,31 @@ merged. Without it no task starts.
 
 - [ ] 1. Vendor the #1059 v1alpha2 read files into `internal/bridge/schema/v1alpha2/`
   (`read-command.schema.json`, `read-result.schema.json`, fixtures, digest vectors; the basket
-  files are #988's, `internal/glovo/basket/contract/`, round 4 N3) with a `PROVENANCE` file (repo, PR, merge commit,
+  files are #988's, `internal/glovo/basket/contract/`, round 4 N3) and, round 7, the #1059
+  `command-place-order-fake.schema.json` with its fixtures, with a `PROVENANCE` file (repo, PR, merge commit,
   sha256 per file) and a `TestVendoredV1alpha2MatchesProvenance`. DoD: no file differs
   from #1059; v1alpha1 files and their pin test are unchanged.
 - [ ] 2. Versioning in `schema.go` and `store.go` (depends on 1):
   - `compileSchemas()` compiles both versions; `ParseResult` selects by `schema_version`;
-  - `SubmitResult` (`store.go:745`) accepts v1alpha2 only for a v1alpha2 command;
+  - `SubmitResult` (`store.go:745`) accepts a v1alpha2 result only for a read-kind command; every
+    write kind, including the v1alpha2 `place_order_fake`, takes the unchanged v1alpha1 result
+    (design §2a);
   - `validate()` (`store.go:229-256`) gets the read-kind branch of design §2;
-  - `projection()` (`store.go:334`) is unchanged for write kinds and emits the #1059 read
-    projection, including `install_revision_ref`, for read kinds (round 4, R3-1);
+  - `projection()` (`store.go:334`) is unchanged for every v1alpha1 row and emits the #1059 read
+    projection, including `install_revision_ref`, for read kinds (round 4, R3-1), and the v1alpha2
+    `place_order_fake` document validated against the vendored write schema at `Enqueue` and at
+    `Claim` (round 7, design §2a);
+  - `EnqueueInput.WireVersion`, the `validate()` rule and `Store.EnableWireVersions(ctx)` of design
+    §2a (round 7; #985 `NewRuntimeStore` is the only caller);
   - `cmdCols`/`scanCmd` are NOT changed; the new columns are read only in read-kind paths
     through the extras query of design §4a (round 4, R3-3);
-  - `BridgeProviderConfig.SupportedVersions` (default `[v1alpha1]`), `Claim` leases read
-    kinds only to v1alpha2-capable providers, versioned claim envelope
-    (`handlers_bridge.go:200`) (OPEN-1059-2).
+  - `BridgeProviderConfig.SupportedVersions` (default `[v1alpha1]`), `Claim` leases v1alpha2
+    commands (read kinds and the v1alpha2 `place_order_fake`) only to v1alpha2-capable providers, versioned claim envelope
+    (`handlers_bridge.go:200`) (OPEN-1059-2, closed in round 7: this slice owns it).
   DoD: all v1alpha1 tests pass unchanged.
 - [ ] 3. Idempotent schema (depends on 2): `bridge.ApplyReadSchemaTx(ctx, tx pgx.Tx,
   runtimeRole string) error` (round 4, X-3), the one owner of the read DDL: the guarded `DO` block
-  of design §4 (incl. `install_revision_ref` and the read-shape CHECK), the `bridge_read_results`
+  of design §4 (incl. `install_revision_ref`, the read-shape CHECK and, round 7, the `wire_version` CHECK that admits v1alpha2 only for the read kinds and for `place_order_fake` with a non-empty `approval_ref`), the `bridge_read_results`
   table, `bridge_read_schema_version`, the `bridge_commands_read_request` index and their
   grants, plus `bridge.CheckReadLevel`. #985's `bridge.ApplySchema` calls it (amended (c)). DoD: it applies on a database built only from
   today's `bridgeSchema` with no #985 object present; applying it twice,
@@ -62,8 +69,25 @@ merged. Without it no task starts.
 - [ ] T3b. (round 4, #1059 R3-1) Go leg of `pattern-parity.json` over the vendored read schemas (`placed_on`, `issued_at`, `expires_at`, `completed_at`, `item_name`): trailing `\n` and `\r`, Arabic-Indic and fullwidth digits are rejected by Go `regexp`, exactly as by the Python validator.
 - [ ] T4. v1alpha1 golden projection and result digests are unchanged.
 - [ ] T4b. (round 4, R3-1) A read command enqueued through `EnqueueRead` with `InstallRevisionRef` `irv_...` is projected for `Claim` with `install_revision_ref` equal to it, plus every field the vendored `read-command.schema.json` requires, and the projection validates against that schema (red with the column or the projection field removed); `EnqueueRead` with an empty ref is refused; the decimal `install_revision` is never emitted as the ref.
-- [ ] T4c. (round 4, R3-3) On a database built only from today's `bridgeSchema` (no migrator run), on one migrated by `ApplyReadSchemaTx`, and on one migrated by an older `ApplySchema` without `bridge_read_schema_version`: v1alpha1 `Claim`, `SubmitResult`, `Cancel`, `IssueWritePermit` and `ExpireDue` pass unchanged, and a pgx tracer shows no statement mentioning `wire_version`, `read_request_id` or `install_revision_ref` for a write kind; `EnqueueRead` and `ReadClient.Read` on the first and third give `ErrReadUnavailable` through `bridge.CheckReadLevel` called directly (red with the level check removed). The `NewRuntimeStore` `not_ready` leg is #985's T26 (round 5, F3).
+- [ ] T4c. (round 4, R3-3) On a database built only from today's `bridgeSchema` (no migrator run), on one migrated by `ApplyReadSchemaTx`, and on one migrated by an older `ApplySchema` without `bridge_read_schema_version`: v1alpha1 `Claim`, `SubmitResult`, `Cancel`, `IssueWritePermit` and `ExpireDue` pass unchanged, and a pgx tracer shows no statement mentioning `wire_version`, `read_request_id` or `install_revision_ref` for `quote`, `cancel_order_fake` or `read_status`, nor for `place_order_fake` on a store that did not call `EnableWireVersions` (round 7); `EnqueueRead` and `ReadClient.Read` on the first and third give `ErrReadUnavailable` through `bridge.CheckReadLevel` called directly (red with the level check removed). The `NewRuntimeStore` `not_ready` leg is #985's T26 (round 5, F3).
 - [ ] T4d. (round 4, X-3) `ApplyReadSchemaTx` standalone: run as the migration role on a database holding only today's `bridgeSchema` it succeeds twice; run as the runtime role it fails; it refuses when `bridge_commands` is owned by another role; the grants on `bridge_read_results` equal the #957 §6d.1 row.
+- [ ] T4e. (Round 7) The v1alpha2 `place_order_fake`: with wire versions enabled, `Enqueue` with
+  `WireVersion` v1alpha2 and an approval-basket payload succeeds, the stored row is v1alpha2 and its
+  claim projection validates against the vendored write schema; the same payload without
+  `WireVersion` is refused at enqueue (the v1alpha1 closed payload), a v1alpha1 payload
+  `{item_codes, quantity_total, note}` under v1alpha2 is refused, v1alpha2 on `quote`, `cancel_order_fake`
+  or `read_status` is `invalid_document`, and with the flag off v1alpha2 is `ErrReadUnavailable`.
+  Proven red: make `projection()` ignore the row's wire version.
+- [ ] T4f. (Round 7) Claim gating: a provider configured `[v1alpha1]` never receives the v1alpha2
+  `place_order_fake` (it stays `pending`, `ExpireDue` expires it with effect `none` and writes the
+  usual outbox row); one configured with v1alpha2 receives it with `schema_version` v1alpha2 inside
+  the `bridge.mctl.ai/claim/v1alpha2` envelope; a legacy v1alpha1 `place_order_fake` queued beside it
+  is still leased to the `[v1alpha1]` provider with the T4 golden projection. Proven red: remove the
+  gate for write kinds.
+- [ ] T4g. (Round 7) Result version: a v1alpha1 result for the v1alpha2 `place_order_fake` is accepted
+  and `effect_state` follows today's `effectFor` (`applied` after a permit gives `succeeded`; `applied`
+  without a permit is refused as today); a v1alpha2-versioned result for it is `binding_mismatch`; a
+  v1alpha1 result for a read kind is `binding_mismatch`.
 - [ ] T5. A read command has `''` as `workflow_id`, `order_ref`, `execution_id` and
   `work_item_id`, and its completion writes no `bridge_signal_outbox` row.
 - [ ] T5c. Round 3 (N1): two concurrent reads from two tenants, and two reads from one principal, all enqueue and are claimable together (no `unique_violation`, no read waits on another); after `ApplySchema` the index definition carries the read-kind predicate, a second run is a no-op, and a v1alpha1 execution's `sequence` ordering and duplicate-`sequence` refusal are unchanged.
@@ -83,7 +107,7 @@ merged. Without it no task starts.
 - [ ] T7c. Versioning: a provider configured `[v1alpha1]` never receives a read-kind
   command from `Claim`; one configured with v1alpha2 does; an unclaimed read command
   expires.
-- [ ] T7d. A provider queue with mixed read and v1alpha1 write commands: `Claim`,
+- [ ] T7d. A provider queue with mixed read, v1alpha1 write and (round 7) v1alpha2 write commands: `Claim`,
   `Cancel`, `IssueWritePermit` (refused for the read) and `ExpireDue` all succeed on both
   kinds; nothing fails to scan.
 - [ ] T8. Replay returns the same `res_`; a different digest gives `result_conflict`.

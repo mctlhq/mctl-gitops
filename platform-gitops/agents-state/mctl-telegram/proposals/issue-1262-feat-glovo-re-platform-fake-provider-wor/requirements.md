@@ -64,7 +64,13 @@ Wire contract
 
 Bridge client
 - WHEN polling, THE SYSTEM SHALL `POST {base}/api/v1/bridge/commands/claim` with body `{"max": n}`,
-  where 1 <= n <= 10, and SHALL accept only a response `{"schema_version":"bridge.mctl.ai/v1alpha1","commands":[...]}`.
+  where 1 <= n <= 10, and SHALL accept only a response `{"schema_version":"bridge.mctl.ai/v1alpha1","commands":[...]}`
+  or, for a provider served v1alpha2 commands (round 7), `{"schema_version":"bridge.mctl.ai/claim/v1alpha2","commands":[...]}`.
+- WHEN a claimed command is a v1alpha2 `place_order_fake` (mctl-agents#1059 §Write command), THE SYSTEM
+  SHALL validate it against that schema, run it through the same permit/effect/result path as the
+  v1alpha1 mutating kinds (fake only), and answer with the v1alpha1 result. A v1alpha2 command of any
+  other kind SHALL be refused locally as invalid. A provider that does not declare v1alpha2 SHALL never be
+  handed that command (mctl-api#986 §2a); this issue's test proves it with the fake bridge (task 2b). (round 7)
 - IF a claim response has a missing, null or non-array `commands`, a wrong `schema_version`, any
   extra top-level field, trailing data after the JSON value, or a body that reaches the 64 KiB cap,
   THEN THE SYSTEM SHALL treat it as a failed claim (error + `claim_errors_total{code="malformed"}`),
@@ -155,6 +161,7 @@ Retained gates
 - Enabling `MCTL_BRIDGE_ENABLED` or changing mctl-api.
 - Choosing the provider credential issuer (gated on mctl-gitops#2506/#2540).
 - Any change to the v1alpha1 wire (that requires mctl-agents#1044, this issue and mctl-api#957 together).
+  The v1alpha2 write is defined in mctl-agents#1059, not here; this issue only vendors and executes it.
 - A real Glovo API, login, basket, checkout or payment.
 - Changes to the root module, `cmd/server`, `cmd/glovo-mcp` or `internal/glovo`.
 

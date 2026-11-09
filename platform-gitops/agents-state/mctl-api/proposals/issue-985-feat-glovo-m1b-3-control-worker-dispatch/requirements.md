@@ -136,13 +136,22 @@ Cancel
 
   The response SHALL carry `effect_state`.
 - THE SYSTEM SHALL never return an `aar_` to `approved`.
-- WHEN a cancel repeats, or the command is already `completed` or `expired`, THE SYSTEM
-  SHALL return 200 with the current state and change nothing.
+- WHEN a cancel repeats THE SYSTEM SHALL return 200 with the current state and change
+  nothing. WHEN the command is already `completed` or `expired` THE SYSTEM SHALL return 200,
+  leave the bridge command unchanged and apply the design §2a result-to-order table under the
+  locks it already holds.
 
 Read routes
 - WHEN the control worker calls `read_command_result` or `read_approval` THE SYSTEM
   SHALL return only ids, enums, timestamps and digests. It SHALL never return a payload
   or a stored result body.
+- WHEN `read_command_result` sees a terminal command whose order is `dispatched` THE SYSTEM
+  SHALL apply the design §2a table, which covers every (command status, `effect_state`) pair:
+  a terminal command with `effect_state` `none` SHALL move the order to `closed` (`completed`)
+  or `cancelled` (`cancelled`, `expired`) and the reserved receipt to `unknown`; a pair outside
+  the table SHALL change nothing and answer 503 `unavailable`. (round 7)
+- THE SYSTEM SHALL enqueue the Glovo `place_order_fake` with wire version `v1alpha2` (#986
+  design §2a) and SHALL NOT vendor, project or validate the command schema itself. (round 7)
 
 Revocation race and the write fence
 - THE SYSTEM SHALL take locks only in the canonical order L1..L6 of #957 design §6b on every
@@ -217,9 +226,9 @@ Data hygiene
   amend #1044 to drop `release_reservation` (activity, T12 and the requirement line) in
   the same wave as OPEN-985-3. If the owner prefers to keep it, its semantics must equal
   `cancel` and it is added to the §2a route table. #1044 is not edited here.
-- OPEN-985-5 (closed, round 6 G2). The transition from a terminal command result to order
-  `closed` or `unknown` belongs to #985 `read_command_result` (design §2a, "Result to
-  order"), through #988 `MarkClosed` and `MarkUnknown`.
+- OPEN-985-5 (closed, round 6 G2; completed round 7). The transition from a terminal command to
+  the order belongs to #985 (design §2a, "Result to order"): one total table over (command status,
+  `effect_state`), applied by `reconcileOrder` from `read_command_result` and from `Cancel`.
 - OPEN-985-6. How the migration role and the one Glovo runtime role of mctl-api#957
   design §6d.1 are provisioned (CNPG managed roles in mctl-gitops). Until they exist
   with exactly those grants, the §4 proof fails (it checks every grant) and the routes
@@ -231,8 +240,9 @@ Data hygiene
   exactly the order's final approval-basket bytes, with no wrapper (mctl-api#957 design
   §6d.3), so #989's fence recomputes the fingerprint from what is written. The schema is
   owned by mctl-agents#1059 (`command-place-order-fake.schema.json`, `schema_version`
-  `bridge.mctl.ai/v1alpha2`); this slice vendors it with its fixtures and `SHA256SUMS`
-  pin and validates the enqueued command against it. Dispatch is `not_ready` until that
-  vendored copy exists.
+  `bridge.mctl.ai/v1alpha2`). Round 7: mctl-api#986 vendors it and owns the wire version,
+  projection and Claim gating (#986 design §2a); this slice only enqueues with
+  `WireVersion: bridge.WireV1alpha2`. Dispatch is `not_ready` until #986's wire-version level
+  is present.
 - OPEN-985-11 (round 6; recommendation: a separate const `MCTL_GLOVO_WRITE_FENCE_ENABLED`, distinct from the route flag, set only by the gitops PR that lifts mctl-gitops#2457). Fence precondition 2 ("hold #2457 lifted") has no machine-checkable signal, so `SetFence` gating and T17 cannot be implemented as written. Order of the two flags: route mount first, fence last; T17 asserts `SetFence` is not called with it false while the route flag is true; docs/glovo-control.md (task 10) names it.
 - OPEN-985-12 (round 6; recommendation: vendored copy with `SHA256SUMS` provenance, pinned commit, checked by a #1044 test). The contract fixture set `internal/glovo/control/contract/*.json` has an owner but no consumer picks it up. Specify the transfer to mctl-agents, list file names per route, and make the matching edits in #1044 (replace the #953/#954 wording, add a pin-and-vendor task and a test that every M10 code and the replay header appear) and #990 (a hop or provenance check for dispatch, cancel, `read_command_result` and `read_approval`).

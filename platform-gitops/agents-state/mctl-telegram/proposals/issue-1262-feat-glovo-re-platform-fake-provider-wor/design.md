@@ -1,5 +1,13 @@
 # Design: issue-1262-feat-glovo-re-platform-fake-provider-wor
 
+## Amendment 2026-11-09 (round 7): the v1alpha2 `place_order_fake`
+
+Class A of the Glovo M1 seam review. The Glovo `place_order_fake` is the one v1alpha2 write
+(mctl-agents#1059 §Write command defines it; mctl-api#986 §2a owns the wire version, projection,
+Claim gating and vendoring). This issue owns parsing and executing it, fake only. Everything else
+in this proposal (the v1alpha1 wire, `cancel_order_fake`, `quote`, `read_status`) is unchanged.
+See "Wire", "Bridge client" and task 2b below.
+
 ## Amendment 2026-11-09
 
 Resolves the independent pre-approval review on mctlhq/mctl-telegram#1262 (comment 6740949177).
@@ -146,8 +154,19 @@ limits churn; its contents are replaced.
 - `Result` struct with exactly the 12 schema properties. `EncodeResult(Result) ([]byte, error)`
   marshals and then validates against `result.schema.json`, so an extra field or a bad enum can never
   leave the process.
+- The v1alpha2 write (round 7, task 2b). The provider vendors `command-place-order-fake.schema.json`,
+  `approval-basket.schema.json` and `claim-response.schema.json` from mctl-agents#1059 (the files and
+  digests of its `SHA256SUMS`, copied byte for byte, with the sha256 pinned in `wire_test.go`).
+  `ParseCommand` dispatches on `schema_version`: `bridge.mctl.ai/v1alpha1` validates against the
+  command schema above; `bridge.mctl.ai/v1alpha2` is accepted ONLY with `kind == place_order_fake`
+  and validates against the write schema; any other combination (a v1alpha2 read kind, a v1alpha2
+  `cancel_order_fake`, a v1alpha1 `place_order_fake` carrying an approval basket) is `ErrInvalid`.
+  The v1alpha2 `payload` is the approval basket; the fake stores its `item_codes` and quantities and
+  nothing else. The result is the unchanged v1alpha1 `result.schema.json` (#1059 §Write command,
+  "Result"): `EncodeResult` is not versioned. `cancel_order_fake` stays v1alpha1.
 - `wire_test.go` checks:
-  - `sha256(schema/*.json)` equals the two pinned digests;
+  - `sha256(schema/*.json)` equals the pinned digests (the two v1alpha1 ones and, round 7, the three
+    vendored from #1059);
   - `PROVENANCE` names the same digests and merge `14645f93`;
   - the fixtures in `testdata` validate or fail exactly as their names say (`command.valid`,
     `result.valid` pass; `command.extra-field`, `command.bad-ref-pattern`,
@@ -185,8 +204,10 @@ limits churn; its contents are replaced.
   gives `Code=""`; the caller maps by status only for the rows below and fails closed otherwise.
   `Retry-After` (seconds) is kept on the error for 429.
 - Claim response: strict decode of exactly `{"schema_version","commands"}` with
-  `DisallowUnknownFields` and no trailing data; `schema_version == "bridge.mctl.ai/v1alpha1"`;
-  `commands` present and an array (`null` is an error). A body reaching the 64 KiB cap is an error.
+  `DisallowUnknownFields` and no trailing data; `schema_version` is `bridge.mctl.ai/v1alpha1` or, when
+  mctl-api serves this provider v1alpha2 commands, `bridge.mctl.ai/claim/v1alpha2` (#1059 §Claim
+  response; each element is then validated by its own `schema_version`); any other value is a failed
+  claim; `commands` present and an array (`null` is an error). A body reaching the 64 KiB cap is an error.
   Any failure is a claim error (`claim_errors_total{code="malformed"}`), never an empty batch. A
   command without `lease_token` is dropped with `commands_dropped_total{reason="no_lease_token"}`.
 - Poller: on a claim error, back off exponentially with jitter (cap 60s). A claim 429 waits at
@@ -220,7 +241,10 @@ limits churn; its contents are replaced.
    `quote` prices `payload.item_codes` and `quantity_total` against the fakestore catalogue.
    `read_status` reads the fake order of `order_ref`. Success is `succeeded`/`none`/`none`, with
    `result_ref` set to a deterministic `res_` id derived from `command_id`.
-4. Mutating kinds (`place_order_fake`, `cancel_order_fake`):
+4. Mutating kinds (`place_order_fake` in either wire version, `cancel_order_fake`). The provider is
+   handed a v1alpha2 `place_order_fake` only if it is configured to declare `bridge.mctl.ai/v1alpha2`
+   (mctl-api#986 §2a, Claim gating); a provider that does not is never handed that command, and a
+   v1alpha2 command arriving anyway is refused locally by `ParseCommand` as above:
    1. Read back `fakestore.EffectOf(command_id)`. If any local effect record exists (confirmed or
       ambiguous), the command came back after a reclaim, and the server has already turned
       `effect_state` `permitted` into `unknown` (`store.go:637`; cancel at `store.go:830-831`).

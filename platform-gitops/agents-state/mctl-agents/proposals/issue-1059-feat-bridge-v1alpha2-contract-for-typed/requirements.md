@@ -15,8 +15,9 @@ This proposal adds bridge **v1alpha2** as an additive, data-only contract: JSON 
 read commands and read results, golden fixtures, and RFC 8785 (JCS) digest test vectors. It
 also adds a stdlib-only Python JCS reference implementation that the vectors are checked
 against. Go consumers (mctl-api, mctl-telegram) vendor the same files, pinned by sha256, and
-must pass the same vectors. v1alpha1 stays byte-for-byte unchanged and remains the only
-contract for writes and for `read_status`.
+must pass the same vectors. v1alpha1 stays byte-for-byte unchanged and remains the contract
+for every write except the Glovo `place_order_fake` (round 7, the one v1alpha2 write, defined here
+in `command-place-order-fake.schema.json`) and for `read_status`.
 
 ## User stories
 
@@ -50,6 +51,14 @@ v1alpha1 and versioning
   0..10, `additionalProperties: false`), with an envelope version independent of each
   command's `schema_version`, and SHALL keep the v1alpha1 envelope byte-identical for a
   provider that declares only v1alpha1. (amended (c))
+- THE SYSTEM SHALL define the Glovo `place_order_fake` write command field by field as a delta
+  over the v1alpha1 command (design §Write command): `schema_version` v1alpha2, `kind` const,
+  `approval_ref` required, the approval basket as `payload`, no `install_revision_ref`,
+  `ttl_seconds` 1..900, the RFC 3339 UTC timestamp pattern, `cancel_requested` and `lease_token`
+  as in v1alpha1. A missing required field, an extra top-level field and `install_revision_ref`
+  SHALL each be rejected. (round 7)
+- THE SYSTEM SHALL answer that command with the unchanged v1alpha1 `result.schema.json`; the
+  read result schema SHALL reject it. (round 7)
 
 Read command
 - WHEN a read command has `schema_version` `bridge.mctl.ai/v1alpha2`, a `kind` of
@@ -157,11 +166,14 @@ Closed by the amendment: the `workflow_id`/#1045 question (P3-3), the ref prefix
 - OPEN-1059-1 (closed, round 6 G1). This issue owns the write schema:
   `command-place-order-fake.schema.json`, whose `payload` is the approval basket by
   `$ref` (mctl-api#957 §6d.3), with two fixtures and one invalid fixture per wrong
-  payload shape. mctl-api#985 vendors it (mctl-api OPEN-985-8, OPEN-989-6 point here).
-- OPEN-1059-2. Who implements the versioned claim envelope in mctl-api and the declared
-  versions in `BridgeProviderConfig`: #986 (proposed there) or a separate slice. The
-  envelope's shape is fixed here (design §Claim response).
-- OPEN-1059-3. mctl-telegram#1262 must vendor these files and pass `must-reject.json`
+  payload shape. mctl-api#986 §2a vendors it (round 7; #985 only enqueues it; mctl-api OPEN-985-8, OPEN-989-6 point here).
+- OPEN-1059-2 (closed, round 7). mctl-api#986 §2a implements the versioned claim envelope, the declared
+  versions in `BridgeProviderConfig` and the per-command wire version for the read kinds and for the
+  v1alpha2 `place_order_fake`. The envelope's shape is fixed here (design §Claim response).
+- OPEN-1059-3 (write half closed, round 7: mctl-telegram#1262 task 2b vendors the write command and
+  claim-response schemas, parses the `claim/v1alpha2` envelope, executes the v1alpha2 `place_order_fake`
+  fake-only and posts the v1alpha1 result; the read half stays open). mctl-telegram#1262 must vendor
+  these files and pass `must-reject.json`
   with its Go parser; tracked on that issue. Widened (round 3): the same issue must also
   implement Provider MUST 1-3 (resolve a `pho_` or `cursor` only inside the command's
   connection; a foreign or unknown one is `failed_terminal/provider_rejected`) and carry a

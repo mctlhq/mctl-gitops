@@ -120,7 +120,10 @@ merge.
 - [ ] T13. Ending without a permit: #985 cancel moves the `aar_` to `unknown` in its own
   transaction; the sweeper moves a reserved `aar_` whose command expired or completed
   without a permit to `unknown`; a command with provider-reported `unknown` and no permit
-  gives the `unknown`/`unknown` pair.
+  gives the `unknown`/`unknown` pair. Round 7: `reconcileOrder` (#985 §2a) writes the `unknown` in
+  the order's transaction for a `completed`, `cancelled` or `expired` command with effect `none`, and
+  leaves the `aar_` alone for every other pair. Proven red: drop the `MarkGlovoApprovalUnknownTx` call from
+  the `completed`/`none` row and the `aar_` stays `reserved`.
 - [ ] T14. Atomicity: a failure injected after `ConsumeGlovoApprovalTx` inside
   `permitTx` leaves the `aar_` `reserved`, no permit row and `effect_state` `none`.
 - [ ] T15. Database enforcement under the runtime role, raw SQL: every forbidden
