@@ -103,6 +103,8 @@ Lifecycle, enforced in the database
   SYSTEM SHALL refuse it in the trigger.
 - THE SYSTEM SHALL treat `consumed`, `unknown` and `denied` as final and SHALL never
   return a Glovo `aar_` to `approved`.
+- THE SYSTEM SHALL set `artifact_hash` of every Glovo `aar_` to its basket fingerprint, so that the existing decision binding gate can pass under `MCTL_APPROVAL_BINDING=enforce`, and SHALL keep it immutable. (round 4, F1)
+- THE SYSTEM SHALL take the approval expiry from one caller-chosen `ExpiresIn` (`0 < ExpiresIn <= MaxApprovalTTL`) applied at `clock_timestamp()`, and SHALL refuse a Reserve whose `fresh_until` is within `ReservePermitMargin`. (round 4, F2)
 - THE SYSTEM SHALL keep `action_kind`, `intent_hash`, `expires_at`, `execution_id`,
   `work_item_id`, `subject_principal_id`, `requested_by` and the policy fields of a
   Glovo row immutable, and SHALL refuse `DELETE` of a Glovo row.
@@ -196,6 +198,7 @@ and refused stored as `denied` (kept).
 - OPEN-989-5. The fingerprint of a low-entropy fake basket travels in
   `GlovoControlInput` (Temporal history), as the merged #957/#1044 contracts say. The
   owner accepts this for fake-only M1, or asks for a keyed digest before real data.
+- OPEN-989-7 (new, round 4; recommendation: 120 s). `ReservePermitMargin`, the minimum remaining `fresh_until` that Reserve requires so that a reserved approval is not stranded by a freshness window that closes before the permit. A longer margin refuses more late dispatches; a shorter one leaves more rows to the sweeper.
 - OPEN-989-6. The `place_order_fake` command payload is exactly the approval basket
   (#957 §6d.3, fixed in (c)); which contract issue and version adds that write schema is
   OPEN-985-8 = mctl-agents OPEN-1059-1.

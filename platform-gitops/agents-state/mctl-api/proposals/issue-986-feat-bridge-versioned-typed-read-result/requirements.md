@@ -35,6 +35,11 @@ Contract
   vectors byte for byte, pinned by sha256 in a `PROVENANCE` file, and SHALL NOT author or
   modify them.
 - IF #1059 is not merged THEN the implementation task SHALL NOT start.
+- THE SYSTEM SHALL own the read DDL as `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)`, callable by #985 `bridge.ApplySchema` and testable on a database built only from today's `bridgeSchema`. (round 4, X-3)
+- THE SYSTEM SHALL store the `irv_` wire ref in `bridge_commands.install_revision_ref` (NOT NULL for read kinds, NULL for write kinds) and SHALL emit it in the read-command projection, which SHALL validate against the vendored `read-command.schema.json`. (round 4, R3-1)
+- WHEN a result body exceeds `bridgeMaxBody` THE SYSTEM SHALL answer 413 `payload_too_large` at the handler; `ErrPayloadTooLarge`, `ErrReadUnavailable` and `ErrReadNotAuthorized` SHALL be registered in `codedErrors` with explicit statuses and SHALL NOT surface as 500. (round 4, R3-2)
+- THE SYSTEM SHALL leave `cmdCols`/`scanCmd` and every write-kind query unchanged, read the new columns only in read-kind paths, and refuse reads (`ErrReadUnavailable`) below the read level of `bridge_read_schema_version`, so a database that never ran the migrator keeps a working v1alpha1 bridge. (round 4, R3-3)
+- THE SYSTEM SHALL import RFC 8785 canonicalization and the raw-bytes pre-check from #988 `internal/jcs` and SHALL NOT implement either itself. (round 4, N3)
 - THE SYSTEM SHALL keep v1alpha1 schemas, kinds, projections and digests unchanged.
 - THE SYSTEM SHALL support exactly the read kinds `read_history`, `read_preview` and
   `read_basket`. It SHALL NOT add a read kind for prepare; prepare is the #957 write.

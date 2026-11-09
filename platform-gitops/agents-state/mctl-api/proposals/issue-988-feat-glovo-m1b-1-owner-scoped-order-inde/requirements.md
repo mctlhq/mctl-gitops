@@ -96,7 +96,9 @@ Effects
   of `glovo.order_effects` for the order's `we_` in the same transaction.
 - WHEN `basket.Parse` receives bytes THE SYSTEM SHALL run the #1059 raw-bytes pre-check,
   the vendored `approval-basket.schema.json` with no extra fields, and `Validate`, and
-  SHALL fingerprint only the JCS bytes it returns. (amended (c))
+  SHALL fingerprint only the JCS bytes it returns. (amended (c)) The pre-check and the canonicalization are `internal/jcs`, owned by this slice (round 4, N3).
+- THE SYSTEM SHALL bind at most one order to a `we_` (partial unique index `orders_execution`) and SHALL map a unique violation on it, on `orders_approval` or on `orders_command` to `invalid_transition`. (round 4, N1)
+- WHEN `AppendSnapshot`, `Finalize` or `BindApproval` runs THE SYSTEM SHALL re-read the live connection on the caller's transaction; `MarkCancelled`, `MarkUnknown` and `MarkDispatched` SHALL NOT. (round 4, N2)
 
 Refusals
 - THE SYSTEM SHALL use only `glovo.Code` values, each mapped through mctl-api#957 design

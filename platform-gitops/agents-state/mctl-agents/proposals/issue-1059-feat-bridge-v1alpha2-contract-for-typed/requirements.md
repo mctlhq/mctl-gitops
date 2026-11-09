@@ -70,7 +70,7 @@ Read result
   that `{}` and any object missing a field are invalid.
 - THE SYSTEM SHALL bound every string by pattern, with `item_name` and `store_name`
   `^[A-Za-z0-9 .,'()-]{1,60}$`, `error_detail` printable ASCII up to 128 bytes,
-  `placed_on` `^\d{4}-\d{2}-\d{2}$`, and `issued_at`, `expires_at` and `completed_at`
+  `placed_on` `^[0-9]{4}-[0-9]{2}-[0-9]{2}$`, and `issued_at`, `expires_at` and `completed_at`
   an explicit RFC 3339 UTC pattern in addition to `format`.
 - THE SYSTEM SHALL carry a required boolean `empty` in the preview and basket payloads;
   `approval_basket` SHALL be required iff `empty` is false and forbidden iff it is true,
@@ -84,6 +84,7 @@ Approval basket and fingerprint
   `lines` (`item_code`, `quantity`, `unit_price_minor`), `subtotal_minor`,
   `delivery_fee_minor`, `service_fee_minor`, `discount_minor` and `total_minor`, all
   required, and no display, availability or time field.
+- THE SYSTEM SHALL write every schema `pattern` in the RE2/Python common subset (digits as `[0-9]`, no `\d`, no flags) and SHALL ship `vectors/pattern-parity.json`; IF a string with a trailing newline or non-ASCII digits is given for an anchored pattern THEN every consumer SHALL reject it.
 - IF the lines are not sorted ascending by `item_code`, or an `item_code` repeats, or
   `subtotal_minor` or `total_minor` does not match the arithmetic of design.md THEN the
   reference validator SHALL reject the basket.

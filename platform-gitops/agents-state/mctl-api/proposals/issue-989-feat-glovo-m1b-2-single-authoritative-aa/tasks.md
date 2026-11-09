@@ -16,7 +16,7 @@ owner-confirmed role model of #957 §6d.1.
   `internal/bridge/store.go:164-165`; an id from the generic store (`store.go:395`,
   `:676`) is `not_found` in `ExecutionBindingTx`; a rollback leaves no row.
 
-- [ ] 1. `workitems.ApplyGlovoApprovalSchema(ctx, migrationPool)` (design §2): schema
+- [ ] 1. `workitems.ApplyGlovoApprovalSchema(ctx, migrationConnStr, runtimeRole string)` (design §2; round 4, X-2: the shape of every `ApplySchema`, calls `workitems.ApplySchema` first): schema
   version row; the widened state CHECK and the exact-kind CHECK (guarded, `NOT VALID`
   then `VALIDATE`); `glovo.approval_bindings` with `UNIQUE (order_ref)`, the partial
   unique index on `command_id` and `install_revision TEXT`; `glovo.aar_guard()`,
@@ -94,6 +94,7 @@ merge.
   `order_ref` vs binding `order_ref`, `install_id`): `intent_mismatch`; the `aar_` stays
   `reserved`. Reserve: one subtest per `ReserveCommand` field changed, and one per field
   empty, is refused and the `aar_` stays `approved`.
+- [ ] T7b. (round 4, F2) `GlovoApprovalInput`: `ExpiresIn` of 0 and of `MaxApprovalTTL + 1s` are `invalid_request` and write nothing; the stored `expires_at` equals `clock_timestamp() + ExpiresIn` (not the transaction start) and is the value the prepare response returns. `fresh_until` inside `ReservePermitMargin` at Reserve gives `approval_expired` with the `aar_` still `approved`; `fresh_until` that expires between Reserve and permit gives `approval_expired` from the fence, no provider effect, and the sweeper moves the row to `unknown` (with the margin check removed from Reserve the first case fails). A long transaction (`pg_sleep`) that starts before `expires_at` and permits after it is refused (red with `now()` restored).
 - [ ] T7. Expiry: decide, reserve and fence past `expires_at` or `fresh_until` are refused
   with `approval_expired`; a reserved row past expiry can become `unknown` but never
   `consumed`; `consumed`/`unknown`/`denied` never read as `expired`.
@@ -128,7 +129,7 @@ merge.
   `intent_hash`, `expires_at` or `subject_principal_id`, `DELETE`, a binding column
   update other than the first `command_id`, a Glovo `aar_` committed without a binding,
   and `ALTER TABLE … DISABLE TRIGGER` are each rejected. Amended (c): one subtest per
-  immutable column (`action_kind`, `intent_hash`, `expires_at`, `execution_id`,
+  immutable column (`action_kind`, `intent_hash`, `expires_at`, `artifact_hash` (round 4, F1), `execution_id`,
   `work_item_id`, `subject_principal_id`, `requested_by`, `policy_rule_id`,
   `policy_version`); raw `INSERT` of a Glovo row in `approved`, `reserved` or
   `consumed`, with a `decided_*` field set, with another `requested_by`, or with an
@@ -151,6 +152,7 @@ merge.
   `not_ready`, and `SetFence` is not called.
 - [ ] T19. Governance in strict mode: an owner approve passes `guardDecision` and records
   `authority_basis = resource_owner`; the start-up backfill leaves Glovo rows unchanged.
+  Round 4 (F1), with `MCTL_APPROVAL_BINDING=enforce`: the `aar_` carries `artifact_hash` equal to the basket fingerprint; an owner approve with a complete binding copied from the `GET` (`content_digest == artifact_hash`) passes; one with a stale `content_digest` is `context_changed`; a row inserted with an empty `artifact_hash` is refused by `aar_guard` (red with the INSERT clause removed).
 - [ ] T20. Control worker: run with the real role split (round 3): `GlovoApprovalStatus` and `GlovoApprovalForDecision` on the `glovo_runtime` pool succeed, and the same read on the work-items pool gets `permission denied for schema glovo`, so no code path uses it; `GlovoApprovalStatus` returns only ids and enums, and
   `not_found` outside `tenants`; `RevokeGlovoApprovalTx` moves `pending` and `approved`
   to `denied`, succeeds again on a row already `denied` for that order, and is refused

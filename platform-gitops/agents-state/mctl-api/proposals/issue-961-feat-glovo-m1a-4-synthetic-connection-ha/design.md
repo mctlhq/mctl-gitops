@@ -1,5 +1,18 @@
 # Design: issue-961-feat-glovo-m1a-4-synthetic-connection-ha
 
+## Amendment 2026-11-09 (c), round 4 of the AMEND PR
+
+Resolves the round-3 findings that land here (N1-N4) and the cross-slice finding X-1. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| N1 (worker routes have no owner for the #959 primitives) | Section 4: the worker routes read the connection once with #959 `GetConnectionForWorker(ctx, id)` (no owner predicate, worker-only), take the write-once Owner and `ExpectedVersion` from it, and pass them to `Transition`/`ActivateTx`, which re-check under L1/L2. No raw SQL on `glovo_connections` |
+| N2 (no refusal codes for handoff and activate) | New table in section 4: every case maps to an existing #957 §4.1 code. A wrong, foreign, expired or consumed reference is one `not_found`, so it is no oracle. Tests T6 and T9 carry the rows |
+| N3 (#959 purge and grant check for #961 tables) | Option (b) of #959 F2: #959 names no #961 table. This slice installs `glovo.WithEndPurger` (purge of the connection's unconsumed `glovo_handoff_refs` rows) and adds its rows to #959's `glovo.expectedGrants`; `glovoReady()` also requires `store.EndPurgerInstalled()`; the wiring passes `WithEndPurgerRequired(true)` |
+| N4 (L2a row creation) | Section 5: `AfterLocks` first runs `INSERT ... ON CONFLICT DO NOTHING` of the mutex row with the fixed `window_start = 'epoch'`, then `SELECT ... FOR UPDATE`; `Sweep` never deletes `scope = 'tenant_mutex'`. T7 races from an empty table and after a `Sweep` |
+| X-1 (join-API connection routes have no owner) | Section 4a (new): this slice owns `connect.Service`, the one in-process code path under both the facade connect routes and #957's `GET /connection` and `POST /connections`. The `handoff_url` source is defined there. #957 §3 and §6d.4 point at it |
+| #959 F1 (`now()` is the transaction start) | `ActivateInput.ExpiresIn: 24 * time.Hour` instead of a Go `ExpiresAt`; every expiry comparison here is `clock_timestamp()` |
+
 ## Amendment 2026-11-09 — joint 959/960/961 AMEND
 
 Independent review of digest `sha256:75e615f99f39894730fcd530251fa05a6e423fed77a2ad723dfa50d068bfa4e0` (mctl-api#961, comment of 2026-11-09) required one joint amendment across #959, #960 and #961. Finding -> change in this slice:
@@ -152,7 +165,7 @@ store.
 | `GET /api/v1/glovo/facade/connections/{id}` | owner-scoped read; foreign or missing ids get the same 404 |
 | `POST /api/v1/glovo/facade/connections/{id}/handoff` | issues the synthetic handoff reference `ghr_` + 32 random bytes, stores only the SHA-256, TTL 10 min, single use. It only inserts the `glovo_handoff_refs` row; the connection stays `pending_handoff` (round 3: the state moves only in the worker `activate`, below) |
 | `POST /api/v1/glovo/facade/connections/{id}/revoke` | `-> revoked`, idempotent |
-| `POST /api/v1/glovo/facade/connections/{id}/reconnect` (`Idempotency-Key`) | new `gcn_` `pending`, `supersedes_id` set; this route calls #959 `Reconnect` with `ConnectInput.TerminalOnly = true` (round 3), which evaluates under L2 and takes only the terminal branch: a prior that is `expired`, `failed` or `revoked`, or `active` with `expires_at <= now()` (database clock), gets a new `gcn_`; a live prior is refused `connection_exists` (409), so the route never supersedes. There is no pre-check read of `GetConnection` (it does not apply the clock) |
+| `POST /api/v1/glovo/facade/connections/{id}/reconnect` (`Idempotency-Key`) | new `gcn_` `pending`, `supersedes_id` set; this route calls #959 `Reconnect` with `ConnectInput.TerminalOnly = true` (round 3), which evaluates under L2 and takes only the terminal branch: a prior that is `expired`, `failed` or `revoked`, or `active` with `expires_at <= clock_timestamp()` (database clock), gets a new `gcn_`; a live prior is refused `connection_exists` (409), so the route never supersedes. There is no pre-check read of `GetConnection` (it does not apply the clock) |
 
 These routes are added to #977's `glovoAudienceRoutes`, which is empty today; every other route
 stays closed to a Glovo-audience token.
@@ -180,25 +193,91 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
   #968 bridge provider (`bridge:provide`) are refused on worker routes; the Glovo worker is
   refused on `/api/v1/bridge/*` by `bridgeProviderGate`'s counterpart. If the credential is
   absent, worker routes answer 503 `not_ready`.
+- **How the worker routes get the owner (round 4, N1).** The worker holds only a `gcn_` id.
+  Every worker handler starts with #959 `GetConnectionForWorker(ctx, id)`, the one by-id read
+  without an owner predicate, which returns the connection with its write-once Owner (tenant,
+  principal), state, version, install revision and `expires_at`. An absent id is `not_found`.
+  That read takes no lock and is not an authority: it only supplies the Owner and the
+  `ExpectedVersion` that the locked primitives then re-check. Nothing here reads
+  `glovo_connections` with raw SQL, and no handler skips L1/L2.
 - `POST /api/v1/glovo/worker/check` takes `{schema, connection_id, install_revision}` and
   returns `{schema, allowed, tenant, owner_principal_id, state, expires_at}`. Lost membership is
   `no_tenant`, lost pilot admission `not_in_pilot`, a `failed` connection `no_connection`. The tenant comes
-  from the connection row, never from the request. At call time the handler re-reads:
+  from the connection row (`GetConnectionForWorker`), never from the request. At call time the handler re-reads:
   installation state and revision, connection state and expiry, the owner's live role (through
   the same principal-mode role reader the resolver uses), and the allowlist row.
 - `POST /api/v1/glovo/worker/connections/{id}/activate` takes
   `{schema, install_revision, handoff_ref}`. It makes one call, #959 `ActivateTx` (round 3)
-  on a transaction it opened, with `ActivateInput{ExpiresAt: now()+24h (database clock),
-  ExpectedInstallRevision, AfterLocks}`. `ActivateTx` takes L1 shared and L2 exclusive,
+  on a transaction it opened, with `ActivateInput{Owner, ConnectionID,
+  ExpectedVersion` (the version `GetConnectionForWorker` returned, re-checked by `ActivateTx`
+  under L1/L2; a change in between is `stale_version` and commits nothing)`, ExpectedInstallRevision,
+  ExpiresIn: 24 * time.Hour` (computed in SQL as `clock_timestamp() + ExpiresIn`; no Go clock crosses
+  the boundary)`, AfterLocks}`. `ActivateTx` takes L1 shared and L2 exclusive,
   then runs `AfterLocks`, which takes the `glovo_handoff_refs` row `FOR UPDATE` (level
   L2b of #957 §6b), verifies the reference hash, its TTL and `consumed_at IS NULL`, and
   sets `consumed_at`. `ActivateTx` then steps `pending_handoff -> pending_provider ->
   active` and sets `expires_at`, so `LiveConnectionTx` reports `connection_expired` once it
   passes. Zero or a lost row, an expired or consumed reference, or a revoked or stale
-  connection commits nothing. This slice adds no store primitive and writes no
+  connection commits nothing, with the codes of the table below. This slice adds no store
+  primitive of its own: it uses the #959 primitives named in task 0 and writes no
   `glovo_connections` row itself.
 - `POST /api/v1/glovo/worker/connections/{id}/expire` is synthetic and is used to drive the
-  expiry path deterministically in tests.
+  expiry path deterministically in tests. It reads the Owner and version with
+  `GetConnectionForWorker` and calls #959 `Transition(ctx, owner, id, expired, version,
+  "synthetic_expire", nil)`.
+
+**Refusal codes of handoff and activate (round 4, N2).** Only members of the closed set of
+#957 §4.1; the HTTP status is `glovo.Status(code)`. Nothing here adds a code.
+
+| Case | `glovo.Code` | Notes |
+|---|---|---|
+| Handoff or activate on an unknown, foreign or never-existing connection id | `not_found` (404) | the same body as a missing id (no oracle) |
+| Activate with a reference that is unknown, of another connection, of another tenant, expired or already consumed | `not_found` (404) | one code for all four, so a wrong and an expired reference are not distinguishable |
+| Handoff or activate on a connection that is not `pending_handoff` (already `pending_provider` or `active`) | `invalid_transition` (409) | |
+| Handoff or activate on a `revoked` connection | `connection_revoked` (409) | |
+| Handoff or activate on an `expired` connection, or one whose `expires_at` has passed | `connection_expired` (409) | |
+| Handoff or activate on a `failed` connection | `no_connection` (404) | as `check` |
+| Install revision differs from the install's current one | `stale_install` (403) | |
+| `ExpectedVersion` no longer matches under the locks | `stale_version` (409) | nothing committed |
+| Store or lock failure | `unavailable` (503) | never a refusal that could read as "no" |
+
+### 4a. Join-route connection seam (round 4, X-1; owner: this slice)
+
+The join API of #957 serves `GET /connection` and `POST /connections`. This slice owns the
+code behind them, so that the 50-per-tenant limit, the hourly limit, the L2a mutex and the
+handoff are enforced on the one route that creates connections, whichever front end calls it.
+`internal/glovo/connect` exports one in-process service. Both the facade handler
+`POST /api/v1/glovo/facade/connections` (section 2) and #957's `glovojoin.Connections`
+adapter call it; there is no second connect path and the join routes never call the
+`/api/v1/glovo/facade/*` HTTP routes.
+
+```go
+// JoinScope is the verified scope: tenant, principal and install revision come from the
+// #957 / #960 resolver, never from a request body.
+type JoinScope struct { Tenant, PrincipalID string; InstallRevision int64 }
+type ConnectOutcome struct { Connection *glovo.Connection; HandoffURL string; HandoffExpiresAt time.Time; Replayed bool }
+func (s *Service) Connect(ctx context.Context, sc JoinScope, idempotencyKey string) (*ConnectOutcome, error)
+func (s *Service) Current(ctx context.Context, sc JoinScope) (*glovo.Connection, error) // no_connection when none
+```
+
+- `Connect` calls #959 `Connect` with `ConnectInput.AfterLocks` (the rate limits and the L2a
+  mutex of section 5), then, in a second short transaction under L1 shared and L2 shared,
+  inserts the single-use `ghr_` row for the new connection and deletes the connection's
+  older unconsumed rows. A replay (same key and body) returns the original connection with
+  `Replayed = true` and a fresh `handoff_url`; the raw reference is never stored, so a replay
+  cannot return the old one.
+- **`handoff_url` source.** `GLOVO_SYNTHETIC_HANDOFF_BASE_URL` (unset: `Connect` answers
+  `not_ready`, never a made-up URL) plus `/` plus the raw `ghr_` value. It is synthetic
+  and test-only like the worker credential. `HandoffExpiresAt` (the 10 minute handoff TTL) is
+  what #957 returns as `expires_at` of `POST /connections`.
+- `Current` is #959 `LiveConnection` for the scope's Owner; none is `no_connection` (404),
+  an `expires_at` that has passed is `connection_expired` (the clock rule of #959).
+- Failures are the closed #957 §4.1 codes (`rate_limited`, `connection_exists`,
+  `idempotency_key_reused`, `stale_install`, `no_install`, `not_ready`, `unavailable`);
+  #957 maps them to the wire with its own table.
+- Merge order: #959, #960, then this slice; #957's join routes (M1e) merge after it, or run
+  against test doubles of `glovojoin.Connections` until then.
+
 - The worker has no groups, no admin flag and no agent scope. Because `glovoWorkerGate` runs in
   the authenticated chain before `r.Route("/api/v1")`, the worker gets 403 on
   `/api/v1/agents/dev-loop/*` (approve, abandon, get), on Temporal-backed routes, on `/mcp` and
@@ -213,7 +292,14 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
   slice adds two levels there, both after L2 and before L3 (round 3): **L2a**, the tenant
   mutex row `glovo_rate_counters(scope='tenant_mutex', tenant_id)` taken `FOR UPDATE`
   by connect and reconnect, and **L2b**, the `glovo_handoff_refs` row taken `FOR UPDATE`
-  by activate. The 50-per-tenant limit is enforced by counting non-terminal connections
+  by activate. **The mutex row is created, not assumed (round 4, N4).** `AfterLocks` first runs
+  `INSERT INTO glovo.glovo_rate_counters (scope, tenant_id, principal_id, window_start,
+  count, updated_at) VALUES ('tenant_mutex', $tenant, '', 'epoch', 0, clock_timestamp())
+  ON CONFLICT DO NOTHING` (`window_start` is the fixed `'epoch'` timestamp, so there is
+  exactly one such row per tenant) and then `SELECT ... FOR UPDATE` on it. A first connect, and
+  a connect after a `Sweep`, therefore always find a row to lock. `Sweep` never deletes
+  `scope = 'tenant_mutex'` rows (they are one tiny row per tenant); it deletes only stale
+  `owner_hour` windows. The 50-per-tenant limit is enforced by counting non-terminal connections
   **after** L2a is held, never with `count(*)` under L1 shared and L2 alone: two replicas
   connecting for different principals of one tenant would both count 49 and insert, and
   the tenant mutex row serializes them. The hourly owner counter row is incremented
@@ -232,12 +318,19 @@ owner predicate is in the SQL and a foreign id is indistinguishable from a missi
   ('owner_hour','tenant_mutex')), tenant_id TEXT NOT NULL, principal_id TEXT NOT NULL
   DEFAULT '', window_start TIMESTAMPTZ NOT NULL, count INTEGER NOT NULL, updated_at
   TIMESTAMPTZ NOT NULL, PRIMARY KEY (scope, tenant_id, principal_id, window_start))`.
-  The exact `glovo_runtime` rights are rows of #957 §6d.1: `glovo_handoff_refs`
+  **Ownership of the purge and of the grant check (round 4, N3).** #959 names no table of this
+  slice. This slice installs `glovo.WithEndPurger` with a function that deletes the ended
+  connections' unconsumed `glovo_handoff_refs` rows on the revoker's own transaction, adds
+  its `glovo_handoff_refs`, `glovo_rate_counters` rows (and the extra `DELETE` right on
+  `glovo_connect_requests` is already a #959 row) to #959's `glovo.expectedGrants`, and
+  `glovoReady()` requires `store.EndPurgerInstalled()`. The wiring passes
+  `WithEndPurgerRequired(true)` once these routes are mounted, so a deployment that forgot
+  the purger is `end_purger_missing`, never silently purge-less. The exact `glovo_runtime` rights are rows of #957 §6d.1: `glovo_handoff_refs`
   `SELECT, INSERT, UPDATE (consumed_at), DELETE` (the TTL purge and #959's `endConnection`
   purge of unconsumed rows); `glovo_rate_counters` `SELECT, INSERT, UPDATE (count,
-  updated_at), DELETE` (stale windows); and `DELETE` on `glovo.glovo_connect_requests`
+  updated_at), DELETE` (stale `owner_hour` windows, never `tenant_mutex`); and `DELETE` on `glovo.glovo_connect_requests`
   for the 24 h cleanup. That cleanup is this slice's `Sweep(ctx, limit)`, a bounded
-  `DELETE` batch of the three tables, run by a ticker that exists only while
+  `DELETE` batch of the three tables (excluding `tenant_mutex` rows), run by a ticker that exists only while
   `GLOVO_ENABLED=true`; it is the cleanup #959 refers to.
 - Every mutation, and every refusal on a mutating route that names an existing install or
   connection, appends to `glovo_audit_events` with `actor_kind` (`user|owner|admin|worker`,

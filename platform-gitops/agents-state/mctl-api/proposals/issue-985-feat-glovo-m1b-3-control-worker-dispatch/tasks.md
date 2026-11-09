@@ -1,6 +1,7 @@
 # Tasks: issue-985-feat-glovo-m1b-3-control-worker-dispatch
 
-Blocking dependencies (amended 2026-11-09 (b)):
+Blocking dependencies (amended 2026-11-09 (b); round 4, X-3: #986 merges before this slice and
+provides `bridge.ApplyReadSchemaTx`):
 - the amended #959 store, with tx-scoped `LockOwnerShared` and `LiveConnectionTx`,
   `Ready`, `MembershipRevocationWired`, and connection-ending paths that call the hook
   in the same tx (mctl-api#957 design §6d.4);
@@ -55,9 +56,9 @@ With any of them missing, the code merges with nil collaborators and answers
     migration role: `bridgeSchema`, the `bridge_commands_mutating_approval` partial
     unique index, the `bridge_colocation_probe` table, `bridge_schema_version` (the mode
     selector, written last; refuses with an error naming the tables when they exist under
-    another owner, OPEN-957-6), #986's read objects and the grants
+    another owner, OPEN-957-6), #986's read objects (one call to `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)` inside the same transaction, round 4 X-3) and the grants
     of mctl-api#957 design §6d.1; and `bridge.NewRuntimeStore(ctx, pool)` on the shared
-    `GLOVO_DB_URL` pool, which runs no DDL and only checks the schema version and the
+    `GLOVO_DB_URL` pool, which runs no DDL and only checks the schema version, #986's `bridge.CheckReadLevel` (`not_ready` below the compiled read level, round 4 R3-3) and the
     grants. `cmd/api/main.go` uses it whenever the `bridge_schema_version` row exists (whatever the Glovo flags say, round 3 F2), instead of `NewStore`
     (`internal/bridge/store.go:365-379`, which runs `bridgeSchema` at `:374` on every
     start at origin/main `ceac9ed`). This is the owner-mandated bridge startup AMEND
@@ -122,8 +123,13 @@ Fake order, receipt and connection tables are created in the same database, and 
 advisory keys are used.
 
 - [ ] T1. Repeated dispatch with the same order, `aar_` and fingerprint: the same
-  `cmd_`, `Idempotent-Replayed: true` on the second call, a byte-identical body, and one
-  `bridge_commands` row.
+  `cmd_`, `Idempotent-Replayed: true` on the second call, and one `bridge_commands` row.
+  Round 4 (F2): the same call after the command's result (order `closed`), after a cancel of
+  the dispatched command (order `cancelled`) and after a sweeper `unknown` returns the same
+  `cmd_` with the current `order_state` and `effect_state`; a different `aar_` on each of
+  those orders is `approval_replayed`; an order cancelled before dispatch is
+  `invalid_transition` (with the replay condition narrowed back to `dispatched` the first
+  three fail).
 - [ ] T2. Concurrent dispatch: N goroutines on the same order. Exactly one row exists,
   and every success returns the same `cmd_`.
 - [ ] T3. A different `aar_` on a dispatched order returns `approval_replayed`, and no
@@ -196,7 +202,8 @@ advisory keys are used.
   lock level. No `40P01` occurs, and every run ends in one of the two outcomes of design
   §7.2.
 - [ ] T22. A crash between commit and the HTTP response: the retry returns the same
-  `cmd_` with `Idempotent-Replayed: true`. A `read_command_result` after the crash
+  `cmd_` with `Idempotent-Replayed: true`, also when the command completed or was cancelled
+  in between (round 4, F2). A `read_command_result` after the crash
   returns the command.
 - [ ] T23. Read routes: `read_command_result` and `read_approval` return only the
   fields of §2a. A sentinel placed in the stored result never appears in the response.
@@ -210,7 +217,7 @@ advisory keys are used.
 - [ ] T25. Dispatch payload and refs: the enqueued payload is byte-equal to the order's
   final snapshot; `workflow_id` equals `glovo.control_starts.workflow_id`; `run_id` is
   `''` before the workflow started and the started run id after.
-- [ ] T26. Role model negative tests (#957 §6d.1 R5, owner decision 2026-11-09): with a
+- [ ] T26. Role model negative tests (#957 §6d.1 R5, owner decision 2026-11-09). Round 4 (F3), selector outcomes: with `bridge_schema_version` present and `GLOVO_DB_URL` unset, a probe error injected, and a version row older than the compiled level, the bridge is `not_ready` and `NewStore` is never called (a pgx tracer sees no DDL; red with the fallback restored); with the table absent `NewStore` runs unchanged; with the table present and the old `COMMERCE_DB_URL` role, the `to_regclass` probe succeeds although that role has no privilege on the table. With a
   runtime role that has `CREATEROLE`, or `CREATEDB`, or a disabled guard trigger
   (`tgenabled <> 'O'`), each giving `not_ready` with zero provider writes (round 3, F1);
   after `bridge.ApplySchema`, with every Glovo flag off, the bridge provider routes still

@@ -1,5 +1,15 @@
 # Design: issue-985-feat-glovo-m1b-3-control-worker-dispatch
 
+## Amendment 2026-11-09 (c), round 4 of the AMEND PR
+
+Resolves the round-3 findings F2 and F3 and the cross-slice finding X-3. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| F2 (dispatch replay only on `dispatched`; "byte for byte" cannot hold) | §5 step 5: replay on any order state whose `command_id` is non-empty (`dispatched`, `cancelled` after dispatch, `unknown`, `closed`) when the body's `approval_ref` equals the order's and the fingerprint matches. The 200 body carries the same `command_id` with the current `order_state` and `effect_state`, so a late activity retry after a result or a cancel still gets its `cmd_`. §2a is reworded to "the same `command_id`". A different `aar_` on an order with a `command_id` stays `approval_replayed`; an order with no `command_id` that is `cancelled` or `closed` stays `invalid_transition`. T1 and T22 gain the after-result and after-cancel cases |
+| F3 (selector reader and outcomes undefined) | §4: the mode is decided once at startup by a probe, `to_regclass('public.bridge_schema_version') IS NOT NULL`, on the `GLOVO_DB_URL` pool when that is set and otherwise on the legacy bridge DSN (`COMMERCE_DB_URL`, as today). `to_regclass` needs no table privilege, so it works for the old bridge role that no longer owns the tables; the version value is read afterwards by `NewRuntimeStore` as `glovo_runtime` (`SELECT` granted by `ApplySchema`). Outcome table in §4: present and `GLOVO_DB_URL` unset is bridge `not_ready`; any probe or version-read error is bridge `not_ready`; neither ever falls back to `NewStore`. T26 adds both cases. OPEN-985-10 records the legacy-DSN probe |
+| X-3 (read DDL claimed by #985 and #986) | One owner: #986 `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)`. `bridge.ApplySchema` calls it inside its own transaction and depends on #986 task 3; #986 tests it standalone. Merge order: #1059, #988, #959, #960, #961, #989, #986, #985 (#957 §6d.1). The blocking list names #986 |
+
 ## Amendment 2026-11-09 (c), round 2 of the AMEND PR
 
 Re-review of the AMEND PR head `dc1fe6e5`; code references re-checked at mctl-api
@@ -188,8 +198,10 @@ Deployed state:
 
 - No body carries `execution_id` any more. It is derived from the locked order row
   (`Order.ExecutionID`, #988).
-- A replayed dispatch returns the original body byte for byte, with the header
-  `Idempotent-Replayed: true` (the #957 M4 convention). The body has no `replayed` field.
+- A replayed dispatch returns the same `command_id`, with the header
+  `Idempotent-Replayed: true` (the #957 M4 convention), and the current `order_state` and
+  `effect_state` (round 4, F2: they change after dispatch, so the body is not byte-identical
+  to the first answer). The body has no `replayed` field.
 - `read_command_result` returns ids, enums and the digest only, never the stored result
   body or a payload. It answers only for Glovo `place_order_fake`
   commands whose order is inside the `tenants` bound. Anything else is `not_found`.
@@ -274,9 +286,23 @@ type Dispatcher struct {
 ### 4. One-database proof (owner decision A)
 - Required config: `GLOVO_DB_URL` (the one `glovo_runtime` pool, shared by the #959 store and the bridge store, #957 §6d.1 R4) and `WORK_ITEMS_DB_URL`, each set explicitly. The bridge
   store mode is chosen by one selector (round 3, F2): `bridge_schema_version`, created and
-  written by `bridge.ApplySchema`. Row present: `bridge.NewRuntimeStore` on the
-  `GLOVO_DB_URL` pool, whatever any Glovo flag says; `COMMERCE_DB_URL` is not read for the
-  bridge (amended (c)). Row absent: `NewStore` unchanged. Bridge tables created earlier by
+  written by `bridge.ApplySchema`. Round 4 (F3): `main.go` probes
+  `to_regclass('public.bridge_schema_version') IS NOT NULL` once at startup, on the
+  `GLOVO_DB_URL` pool when it is set and otherwise on the legacy bridge DSN (the only use
+  of `COMMERCE_DB_URL` left for the bridge, and read-only). Table present and
+  `GLOVO_DB_URL` set: `bridge.NewRuntimeStore` on that pool, whatever any Glovo flag says,
+  and it reads the version row as `glovo_runtime`. Table absent: `NewStore` unchanged.
+
+  | Probe result | Bridge |
+  |---|---|
+  | table present, `GLOVO_DB_URL` set, version row readable and at least the compiled level | `NewRuntimeStore` |
+  | table present, `GLOVO_DB_URL` unset | bridge `not_ready` (never `NewStore`) |
+  | probe or version-read error, version row missing or older than the compiled level | bridge `not_ready` (never `NewStore`) |
+  | table absent | `NewStore`, unchanged |
+
+  Existing bridge consumers therefore never fall into `NewStore`'s `ALTER TABLE` on
+  tables they no longer own; an operator who unsets `GLOVO_DB_URL` after `ApplySchema` sees
+  an explicit `not_ready`, not a silent switch. Bridge tables created earlier by
   `NewStore` under another owner make `ApplySchema` refuse (OPEN-957-6). A missing value is `not_ready`. None of them falls back to `AUDIT_DB_URL`
   or to another one.
 - `control.ProveOneDatabase(ctx, bridgeStore *bridge.Store, glovoStore *glovo.Store, workItemsPool *pgxpool.Pool)` runs at startup (round 3, X-3: it first requires `glovoStore.Pool() == bridgeStore.Pool()`, one pool and one role; the work-items pool is the only other pool):
@@ -318,12 +344,14 @@ This is the only step order. Task 5 implements exactly this.
 4. `Orders.LockOrderForControl(order_ref, tenants)` takes L3. It re-checks that the
    tenant and owner equal those from step 2. They are write-once, so a difference is an
    invariant violation and answers `unavailable`.
-5. Replay check, before any receipt check. If `order.state == dispatched`, the order's
-   `approval_ref` equals the body's and the fingerprint matches, commit and return the
-   stored `command_id` with `Idempotent-Replayed: true`. A reserved or consumed receipt
-   therefore replays and is not refused. Otherwise:
-   - a different `aar_` on a dispatched order is `approval_replayed`;
-   - `cancelled`, `unknown` or `closed` is `invalid_transition`;
+5. Replay check, before any receipt check (round 4, F2). If `order.command_id` is non-empty
+   (`command_id` is written once, on `finalized -> dispatched`, so it exists in `dispatched`,
+   `cancelled` after dispatch, `unknown` and `closed`), the order's `approval_ref` equals
+   the body's and the fingerprint matches, commit and return the stored `command_id` with
+   the current `order_state` and `effect_state` and `Idempotent-Replayed: true`. A reserved,
+   consumed or finished receipt therefore replays and is not refused. Otherwise:
+   - a different `aar_` on an order that has a `command_id` is `approval_replayed`;
+   - `cancelled` or `closed` without a `command_id` is `invalid_transition`;
    - any state other than `finalized` is `invalid_transition`.
 6. `body.fingerprint` must equal `order.final_basket_fingerprint`, else
    `basket_changed`. The value is the single M1 basket fingerprint defined in
@@ -481,7 +509,7 @@ revocation. The owner must accept it explicitly; this is an OPEN item.
   §6d.1, applies `bridgeSchema` (`internal/bridge/store.go:66-67` onward), then:
   - the partial unique index `bridge_commands_mutating_approval`;
   - the table `bridge_colocation_probe(nonce TEXT PRIMARY KEY, created_at TIMESTAMPTZ)`;
-  - #986's guarded read objects;
+  - #986's read objects, by calling `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)` (owned and tested standalone by #986; round 4, X-3) inside this transaction;
   - the grants of the bridge rows of #957 §6d.1 to `runtimeRole`, and `SELECT` on
     `bridge_colocation_probe` to the work-items role for the proof, and `SELECT`,
     `UPDATE (result)` on `bridge_commands` to the bridge maintenance role
@@ -514,6 +542,7 @@ revocation. The owner must accept it explicitly; this is an OPEN item.
   - Token confusion: exact audience, a confining gate and the `tenants` bound.
 - **Dependencies (blocking).** If any of these is missing, the routes answer
   `not_ready`:
+  - #986, for `bridge.ApplyReadSchemaTx` (round 4, X-3: merge order #986 before #985);
   - the amended #959 store (one database, tx-scoped reads, revokers that cancel
     commands);
   - the #988 order index;

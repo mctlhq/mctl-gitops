@@ -1,5 +1,17 @@
 # Design: issue-988-feat-glovo-m1b-1-owner-scoped-order-inde
 
+## Amendment 2026-11-09 (c), round 4 of the AMEND PR
+
+Resolves the round-3 findings N1-N4 and the cross-slice finding X-3 (merge order). Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| N1 (`orders.execution_id` is not unique; two orders can bind one `we_`) | §2: `CREATE UNIQUE INDEX orders_execution ON glovo.orders (execution_id) WHERE execution_id <> ''`. §7: SQLSTATE `23505` on `orders_execution`, `orders_approval` or `orders_command` is `invalid_transition` (an invariant: the caller never reuses an id); on `order_ref` it is `invalid_request`. Tests: T12 (second order with the same `we_` is refused by the index), T17 (raw-SQL insert of a second order for an owner's `we_`) |
+| N2 (which writes re-read the live connection) | §6, new table "Connection re-check per method": `Create`, `AppendSnapshot`, `Finalize` and `BindApproval` call `LiveConnectionTx` on the caller's transaction; `MarkDispatched`, `MarkCancelled` and `MarkUnknown` never do (cancel must succeed after a revoke; dispatch re-checks the connection in #985 itself). T4 gains the revoke case |
+| N3 (no owner for the Go RFC 8785 implementation) | Owner: this slice, task 2. A neutral package `internal/jcs` (`Canonicalize(raw []byte) ([]byte, error)`, `Precheck(raw []byte) error`) reproduces the #1059 `vectors/` byte for byte, including the UTF-16 key order and number-form vectors. #986 imports it (its `rawcheck.go` becomes a wrapper over `jcs.Precheck`), so this slice depends on #1059 only, never on #986. The #1059 files this slice needs (`approval-basket.schema.json`, `basket-fingerprint.json`, `must-reject.json`, `pattern-parity.json`) are vendored here under `internal/glovo/basket/contract/` by sha256; #986 vendors the read-command and read-result schemas and references this copy for the basket files |
+| N4 (`NewStore`/`Ready` have no role names; surface missing from #957 §6d.4) | §1: `NewStore(ctx, pool, runtimeRole, migrationRole string, conns, execs)`; `Ready` compares the owner of schema `glovo`, every table and every trigger function with exactly `migrationRole`. `Querier`, `JoinKind`, `ActorKind` and `Snapshot` are defined in §1. #957 §6d.4 lists `NewStore`, `Ready`, `ApplySchema`, `AppendSnapshot`, `Get`, `LockOrder`, `ScopeFromRefs` and these types |
+| X-3 (merge order) | Merge order of the Glovo M1 slices, no cycle: #1059, #988 (with `internal/jcs`), #959, #960, #961, #989, #986, #985, then the #957 read routes. This slice has no dependency on #986 or #985 |
+
 ## Amendment 2026-11-09 (c), round 2 of the AMEND PR
 
 Re-review of the AMEND PR head `dc1fe6e5`; code references re-checked at mctl-api
@@ -13,7 +25,7 @@ edited.
 | F1, X-1 (`Order.ExecutionID` only via a `RecordEffect` #957 forbids) | The `we_` is bound at `Create`: `CreateInput.ExecutionID` (from #989 `CreateGlovoExecutionTx`, #957 §6d.2), checked through `ExecutionBindingTx` (tenant **and** owner) and written once at insert. `RecordEffect` is withdrawn; `MarkDispatched` writes the `place_order_fake` effect row. The `Executions` collaborator is #989's `ExecutionBindingTx`, not an adapter written by #957 |
 | F2 (CHECK rejects real `we_` ids) | The CHECK stays `^we_[A-Za-z0-9]{16,40}$`, equal to the bridge pattern (`internal/bridge/store.go:164`). Glovo `we_` ids come only from #989 `CreateGlovoExecutionTx` (alphanumeric); a generic `we_`+UUID (`internal/workitems/store.go:676`) is refused, and T9 uses an id from the real generic store to prove it |
 | F3, X-6 (signatures drift) | `Connections` is #959's `LiveConnectionTx(ctx, tx, owner glovo.Owner) (*glovo.Connection, error)`; `PeekOrderScope` returns `Scope` (#985 now copies it); #989 calls `BindApproval` with `Scope{Tenant, PrincipalID: owner}` and `Actor{system, "service:glovo-prepare"}`; the #989 fence passes `[]string{command tenant}` to `LockOrderForControl`. All in #957 §6d.4 |
-| F4 (no raw-bytes entry point) | `basket.Parse(raw []byte) (Approval, []byte, error)` runs the shared raw-bytes pre-check (#986 `internal/bridge/rawcheck.go`), the vendored `approval-basket.schema.json` (`additionalProperties: false`) and `Validate`, and returns the JCS bytes; `basket.Fingerprint(canonical []byte)` hashes them. These are the only entry points; the #1059 files are vendored once, in #986's `internal/bridge/schema/v1alpha2` |
+| F4 (no raw-bytes entry point) | `basket.Parse(raw []byte) (Approval, []byte, error)` runs the shared raw-bytes pre-check (`internal/jcs.Precheck`, round 4), the vendored `approval-basket.schema.json` (`additionalProperties: false`) and `Validate`, and returns the JCS bytes; `basket.Fingerprint(canonical []byte)` hashes them. These are the only entry points; the #1059 basket files are vendored once, here, in `internal/glovo/basket/contract/` (round 4, N3) |
 | F5 (`invalid_transition` maps to no §4 row) | §7 maps through #957 §4: on the facade prepare route it is an invariant failure (`unavailable`; a replay never reaches a write), on the #985 control routes it is 409 `invalid_transition` |
 | F6, #957 F5 (refs, workflow id, run id) | `LookupJoinRefTx` (read-only) is added; the order row carries only `ordr_`, `we_`, fingerprint and `aar_`. #985 reads `tnr_`/`prr_` here, the workflow id from #989 `ExecutionBindingTx` and the run id from #957 `ControlStartTx` |
 | F7 (readiness only checks `relowner <> current_user`) | `Ready` and `ApplySchema` require `NOT pg_has_role(current_user, owner, 'MEMBER')` for every table, trigger function and schema `glovo`, and that schema `glovo` is owned by the migration role. T14 adds an inherited-membership case and a runtime-owned schema |
@@ -85,9 +97,19 @@ after #985's `ProveOneDatabase` passed.
 
 ```go
 func ApplySchema(ctx context.Context, migrationConnStr, runtimeRole string) error
-func NewStore(ctx context.Context, pool *pgxpool.Pool, conns Connections, execs Executions) (*Store, error) // no DDL
+func NewStore(ctx context.Context, pool *pgxpool.Pool, runtimeRole, migrationRole string, conns Connections, execs Executions) (*Store, error) // no DDL; round 4 (N4): both role names are checked by Ready
 func (s *Store) Ready(ctx context.Context) error
 
+type Querier interface {                                       // round 4 (N4): satisfied by *pgxpool.Pool and by pgx.Tx
+    Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+    Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+    QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+type JoinKind string                                           // JoinTenant "tenant", JoinPrincipal "principal", JoinInstallRevision "install_revision"
+type ActorKind string                                          // ActorOwner "owner", ActorControlWorker "control_worker", ActorSystem "system"
+type Snapshot struct {                                         // one row of order_snapshots
+    OrderRef string; Seq, LineCount int; Fingerprint string; Canonical []byte; CreatedAt time.Time
+}
 type Scope struct{ Tenant, PrincipalID string }              // owner path: from the verified caller
 type Actor struct{ Kind ActorKind; ID string }               // owner | control_worker | system
 type Connections interface {                                  // #959, tx-scoped (#957 §6d.4)
@@ -178,6 +200,7 @@ CREATE TABLE IF NOT EXISTS glovo.orders (
   CHECK (execution_id = '' OR execution_id ~ '^we_[A-Za-z0-9]{16,40}$'));
 CREATE UNIQUE INDEX IF NOT EXISTS orders_approval ON glovo.orders (approval_ref) WHERE approval_ref <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS orders_command  ON glovo.orders (command_id)   WHERE command_id <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS orders_execution ON glovo.orders (execution_id) WHERE execution_id <> '';   -- round 4 (N1): one `we_` binds at most one order
 CREATE TABLE IF NOT EXISTS glovo.order_snapshots (
   order_id TEXT NOT NULL REFERENCES glovo.orders (order_id), seq INTEGER NOT NULL,
   basket_fingerprint TEXT NOT NULL, basket_canonical BYTEA NOT NULL,   -- JCS bytes
@@ -269,8 +292,10 @@ That is eight triggers and five functions.
   these tables; for
   every table, trigger function and schema `glovo`,
   `NOT pg_has_role(current_user, <owner>, 'MEMBER')` (amended (c); covers inherited
-  membership, not only `relowner <> current_user`); schema `glovo` is owned by the
-  configured migration role; and the runtime grants equal the #988 rows of #957 §6d.1.
+  membership, not only `relowner <> current_user`); schema `glovo` is owned by exactly
+  the `migrationRole` argument (round 4, N4: every table, trigger function and the schema
+  are compared with that one name, so an object owned by any other role, including another
+  non-superuser, fails); and the runtime grants equal the #988 rows of #957 §6d.1.
   Otherwise `not_ready`.
 
 ### 4. One basket fingerprint (`internal/glovo/basket`)
@@ -288,8 +313,8 @@ That is eight triggers and five functions.
   (so an extra field such as `item_name`, or `quantity: 1.0`, is refused), runs
   `Validate`, and returns the RFC 8785 bytes of the validated input. The #1059 files are
   vendored once, in #986's `internal/bridge/schema/v1alpha2`, and referenced here.
-- `basket.Fingerprint(canonical) = "sha256:" + hex(sha256(canonical))`, with RFC 8785 from the same
-  `internal/bridge` JCS implementation #986 uses. Prices and amounts are part of `t`, so
+- `basket.Fingerprint(canonical) = "sha256:" + hex(sha256(canonical))`, with RFC 8785 from the
+  `internal/jcs.Canonicalize` of this slice (round 4, N3; #986 imports it). Prices and amounts are part of `t`, so
   a price change changes the fingerprint.
 - mctl-api computes it itself at preview (#957), at prepare (`Create`/`Finalize` here),
   at dispatch (#985 compares) and at the write fence (#989 recomputes from the stored
@@ -329,6 +354,18 @@ That is eight triggers and five functions.
 Every write CASes on `version` and `state`; the trigger enforces the same matrix for raw
 SQL. Approval state is never stored on the order.
 
+Connection re-check per method (round 4, N2). A method that can start or extend work for
+the owner re-reads the live connection on the caller's transaction; a method that only
+records a terminal fact never does, so cancellation and recording still succeed after a
+revoke.
+
+| Method | `LiveConnectionTx` on the caller's tx | Why |
+|---|---|---|
+| `Create`, `AppendSnapshot`, `Finalize`, `BindApproval` | yes (L2 held by the caller; revoked, expired, no connection and a moved install revision are refused) | each commits the owner to a basket or an approval |
+| `MarkDispatched` | no | #985 re-reads the connection itself in dispatch step 8, before `Enqueue`; this method only records the command id and the effect row |
+| `MarkCancelled`, `MarkUnknown` | no, and must not | a revoked connection is exactly when these run (the revoker cancels open commands); refusing them would strand the order |
+| `Get`, `Snapshot`, `LockOrder`, control-path reads | no | reads work after revoke (T4) |
+
 ### 7. Refusal map (extends `glovo.Code`)
 
 Amended (c): the codes are internal `glovo.Code` values; status and wire value come only
@@ -344,8 +381,9 @@ from mctl-api#957 design §4.1.
 | basket invalid or empty at create or finalize | `invalid_request` | 400 `invalid_arguments` (facade) |
 | expected fingerprint differs | `fingerprint_changed` | 409 `fingerprint_changed` |
 | idempotency key reused with another request hash | `idempotency_key_reused` | 409 `idempotency_key_reused` |
-| version or state CAS miss, write-once column already set | `invalid_transition` | facade prepare route: invariant, 503 `dependency_unavailable` (#957 §4.2; a replay is answered before any write); #985 control routes: 409 `invalid_transition` |
+| version or state CAS miss, write-once column already set, or SQLSTATE `23505` on `orders_execution`, `orders_approval` or `orders_command` (round 4, N1) | `invalid_transition` | facade prepare route: invariant, 503 `dependency_unavailable` (#957 §4.2; a replay is answered before any write); #985 control routes: 409 `invalid_transition` |
 | `ExecutionID` bound to another tenant or owner, or not a Glovo `we_` | `not_found` | 404 `not_found` (control) / invariant `unavailable` (prepare) |
+| SQLSTATE `23505` on `orders_order_ref_key` (a `Create` with an `ordr_` that already exists under another key) | `invalid_request` | 400 `invalid_arguments` (facade) |
 | `lock_timeout` (SQLSTATE `55P03`) on `LockOrder`, `LockOrderForControl` or any CAS `UPDATE` (round 3) | `tenant_busy` | #957 §4.1: facade 503 `dependency_unavailable`, control 409 `tenant_busy` |
 | any other collaborator or database error, wrong isolation level | `unavailable` | 503 `dependency_unavailable` (facade) / `unavailable` (control) |
 | collaborator nil, schema not ready | `not_ready` | 503 `not_ready` |
@@ -388,4 +426,4 @@ from mctl-api#957 design §4.1.
 - Backward compatibility: no route, MCP tool, env var or `main.go` change.
 - Dependencies: mctl-agents#1059 (approval basket and vectors), #959 (`LiveConnectionTx`),
   #989 (`BindApproval` caller and `ExecutionBindingTx`), #985 (control-path caller),
-  #986 (vendored #1059 files and `rawcheck`), #957 (prepare caller). Until then `not_ready`. Hold mctl-gitops#2457 stays ON.
+  #957 (prepare caller). #986 and #985 depend on this slice (`internal/jcs`, round 4), never the reverse. Until then `not_ready`. Hold mctl-gitops#2457 stays ON.

@@ -14,7 +14,7 @@ passages are edited.
 | F2 (`pho_` refs and cursors are not scoped to the binding) | New normative section "Provider MUST": `history_order_ref` and `cursor` resolve only within the command's `connection_ref` and `principal_ref`; an unknown or foreign value is `failed_terminal` with `provider_rejected`, never data. Consumer duty 10: mctl-api accepts a `pho_` or a cursor only if a prior history read for the same tenant, principal and connection returned it |
 | F3 (no must-reject vector for duplicate keys that differ only in escaping) | Keys are compared after JSON unescaping (normative). `must-reject.json` adds `{"a":1,"\u0061":2}` at top level, and an escaped duplicate of `quantity` inside a basket line. Any `\u` escape in an object key is rejected as well, since every contract key is plain ASCII |
 | F4 (the versioned claim envelope is required but undefined) | New `claim-response.schema.json` and README field table (§Claim response). The envelope version is independent of each command's `schema_version`; a provider that declares only v1alpha1 gets the v1alpha1 envelope byte for byte (`internal/api/handlers_bridge.go:200`). Fixtures for both |
-| P3 F5 (date-time is format-only, a Go/Python parity gap) | Explicit RFC 3339 UTC patterns on `issued_at`, `expires_at` and `completed_at`; `placed_on` `^\d{4}-\d{2}-\d{2}$`; invalid fixture with a bad date-time |
+| P3 F5 (date-time is format-only, a Go/Python parity gap) | Explicit RFC 3339 UTC patterns on `issued_at`, `expires_at` and `completed_at`; `placed_on` `^[0-9]{4}-[0-9]{2}-[0-9]{2}$`; invalid fixture with a bad date-time |
 | P3 F6 (stale passages) | The memo and "not observable" passages in Current state now state the verified PROVENANCE match; the `jcs-digest.json` categories are listed inline |
 | P3 F7 (size numbers) | Preview `display` aligned to 0..30 and `unavailable_items` 0..30, disjoint from the basket lines; fees and discount bounded. Re-measured: preview 8,273 B, basket read 7,127 B, approval basket 3,135 B, history 10,673 B. The 12,288-byte payload cap is defense in depth that only a schema bypass can reach; over-cap is `invalid_document` at the mctl-api route and `payload_too_large` in the reference validator |
 | P3 F8 (#986 vendors names this contract does not produce) | `SHA256SUMS` is the exact list a consumer vendors; mctl-api#986 vendors that list and nothing else |
@@ -142,6 +142,7 @@ docs/contracts/bridge/v1alpha2/
     approval-basket.{unsorted,duplicate-item,total-mismatch,display-field}.json  # invalid
   vectors/
     jcs-digest.json              # positive JCS vectors
+    pattern-parity.json          # accepted/rejected strings per schema pattern (Go RE2 = Python)
     basket-fingerprint.json      # approval basket -> canonical bytes -> fingerprint
     must-reject.json             # raw-text inputs every consumer must reject
   SHA256SUMS
@@ -166,7 +167,7 @@ field below required unless marked optional.
 | `issuer` | const `mctl-api` |
 | `audience` | `^provider:[a-z0-9-]{1,32}$` |
 | `nonce` | `^[A-Za-z0-9_-]{22}$` |
-| `issued_at`, `expires_at` | date-time and pattern `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$` (RFC 3339 UTC; Python does not enforce `format`) |
+| `issued_at`, `expires_at` | date-time and pattern `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$` (RFC 3339 UTC; Python does not enforce `format`) |
 | `ttl_seconds` | integer 1..300 |
 | `lease_token` | optional, v1alpha1 pattern |
 | `params` | object, per kind |
@@ -208,8 +209,22 @@ mctl-api).
     equal characters);
   - `currency` `^[A-Z]{3}$`;
   - every money and count field is an integer, as a JSON integer token (§Numbers).
+- Pattern semantics (normative, round 4). Every `pattern` in these schemas is written in
+  the subset that Go RE2 and Python `re` read identically: literals, `[...]` classes with
+  explicit ASCII ranges, `{m,n}` repeats, groups, `|`, `?`, and the anchors `^` and `$`
+  at the two ends. It never uses `\d \w \s \b \Z \z`, lookaround, backreferences or
+  flags, because Python `\d` matches Unicode digits and Python `$` also matches before a
+  trailing newline, while Go does neither. Digits are `[0-9]`. The Python reference
+  validator matches with `re.fullmatch` and `re.ASCII`, which makes `$` strict. A
+  consumer in Go matches the same text with `regexp` (RE2) unchanged.
+  `vectors/pattern-parity.json` pins accepted and rejected strings for `placed_on`,
+  `issued_at`, `item_code`, `item_name` and `store_ref`: a trailing `\n` and a trailing
+  `\r`, Arabic-Indic digits and fullwidth digits in a date, and a lowercase and a non-ASCII
+  `item_code` are all rejected. A lint test fails the build if a schema pattern leaves the
+  subset. The Go legs run the same file: mctl-api#988 over its vendored basket copy and
+  mctl-api#986 over the read schemas (tracked there, not here).
 - `payload_read_history` (required: `orders`; optional: `next_cursor`): `orders` 0..20 of
-  `{history_order_ref` `pho_`, `placed_on` `^\d{4}-\d{2}-\d{2}$`, `status` `delivered|cancelled|in_progress`,
+  `{history_order_ref` `pho_`, `placed_on` `^[0-9]{4}-[0-9]{2}-[0-9]{2}$`, `status` `delivered|cancelled|in_progress`,
   `total_minor` 0..10000000, `currency`, `line_count` 1..100, `lines` 1..5 of
   `{item_code, quantity 1..100}`}`. Only the first five lines are carried; `line_count`
   says how many there are. The preview gives the full basket.
@@ -238,10 +253,10 @@ payload stays a transport-integrity digest only.
 | `v` | const `mctl-approval-basket/v1` (version tag inside the hashed bytes) |
 | `store_ref` | `^pst_[A-Za-z0-9]{16,40}$`, the provider's stable store id |
 | `currency` | `^[A-Z]{3}$` |
-| `lines` | 1..30 of `{item_code, quantity 1..100, unit_price_minor 0..1000000}` |
-| `subtotal_minor` | integer, `= sum(quantity * unit_price_minor)` |
+| `lines` | 1..30 of `{item_code, quantity 1..100, unit_price_minor 0..1000000}`; `item_code` is `^FAKE-[A-Z0-9-]{1,32}$` |
+| `subtotal_minor` | integer 0..3000000000 (`maximum` in the schema), `= sum(quantity * unit_price_minor)` |
 | `delivery_fee_minor`, `service_fee_minor`, `discount_minor` | integers 0..10000000 |
-| `total_minor` | integer, `= subtotal + delivery_fee + service_fee - discount`, >= 0 |
+| `total_minor` | integer 0..3020000000 (`maximum` in the schema), `= subtotal + delivery_fee + service_fee - discount` |
 
 All fields are required, with `additionalProperties: false`. The basket holds no name,
 availability flag, timestamp or basket id. Rules that JSON Schema cannot express are
@@ -267,7 +282,7 @@ a minimal basket; a 30-line basket; the same basket with the input keys permuted
 fingerprint); one unit price changed by 1 (different fingerprint); the delivery fee
 changed (different fingerprint). Its `must_reject` cases are: unsorted lines, a duplicate
 `item_code`, a wrong subtotal, a wrong total, an extra `item_name` field, and
-`quantity: 1.0`.
+`quantity: 1.0`, and a lowercase and a non-ASCII `item_code`.
 
 The command payload of a Glovo `place_order_fake` write is not part of this read
 contract, but its shape is fixed (mctl-api#957 §6d.3, amended (c)): the payload **is**

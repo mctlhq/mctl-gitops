@@ -31,9 +31,11 @@ schema, RFC 3339 patterns and the re-measured sizes.
   2): all fields required, `additionalProperties: false`; vectors for a minimal basket, a
   30-line basket, permuted input keys (same fingerprint), one unit price +1 and the
   delivery fee changed (different fingerprint); `must_reject` for unsorted lines, a
-  duplicate `item_code`, a wrong subtotal, a wrong total, an extra `item_name`, and
-  `quantity: 1.0`. — DoD: `bridge_contract.check_approval_basket(raw)` reproduces every
-  vector.
+  duplicate `item_code`, a wrong subtotal, a wrong total, an extra `item_name`,
+  `quantity: 1.0`, and a lowercase and a non-ASCII `item_code`; `maximum` on
+  `subtotal_minor` (3000000000) and `total_minor` (3020000000); `item_code`
+  `^FAKE-[A-Z0-9-]{1,32}$` stated in the schema. — DoD: `bridge_contract.check_approval_basket(raw)`
+  reproduces every vector.
 - [ ] 6. `read-command.schema.json`: design.md fields, the forbidden-field `not/anyOf`,
   per-kind params (history `{limit, cursor?}`, preview `{history_order_ref}`, basket
   `{}`). — DoD: `check_schema` passes; every object has `additionalProperties: false`
@@ -41,11 +43,18 @@ schema, RFC 3339 patterns and the re-measured sizes.
 - [ ] 7. `read-result.schema.json` (depends on 5, 6): no binding refs; `payload` and
   `payload_digest` iff `succeeded`; per-kind payloads embedding `approval_basket` by
   `$ref`; `required` everywhere; the name and `error_detail` patterns; `placed_on`
-  `^\d{4}-\d{2}-\d{2}$`; RFC 3339 UTC patterns on the timestamps; the required `empty`
+  `^[0-9]{4}-[0-9]{2}-[0-9]{2}$` (no `\d` anywhere); RFC 3339 UTC patterns on the timestamps; the required `empty`
   boolean with `approval_basket` iff `empty` is false; preview `display` 0..30 and
   `unavailable_items` 0..30 disjoint from the lines; fees and discount 0..10000000.
   — DoD: `{}` as a payload, and each payload missing one field, is invalid; an empty
   basket and an all-unavailable preview are valid.
+- [ ] 7a. `vectors/pattern-parity.json` and a lint test (depends on 5, 7): design
+  §Pattern semantics. Cases: trailing `\n` and `\r` on `placed_on`, `item_code` and
+  `item_name`; Arabic-Indic and fullwidth digits in a date. The validator matches with
+  `re.fullmatch` and `re.ASCII`; the lint walks every `pattern` and fails on `\d \w \s \b
+  \Z \z`, lookaround, backreferences or flags. Listed in `SHA256SUMS` and the README.
+  — DoD: the file passes in pytest; reverting `[0-9]` to `\d` in one schema turns the
+  lint and a vector red.
 - [ ] 7b. `claim-response.schema.json` (design §Claim response): `schema_version`
   (`bridge.mctl.ai/v1alpha1` or `bridge.mctl.ai/claim/v1alpha2`), `commands` 0..10,
   `additionalProperties: false`. — DoD: the v1alpha1-only fixture equals the shape

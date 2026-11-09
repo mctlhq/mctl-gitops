@@ -1,5 +1,23 @@
 # Design: issue-957-feat-glovo-m1e-canonical-facade-to-mctl
 
+## Amendment 2026-11-09 (c), round 4 of the AMEND PR
+
+Resolves the round-3 findings that land in this canonical seam (F1 P3, F2, F3, X-1, X-2, X-3) and propagates the changes the other eight slices made. This slice stays the only copy of the refusal set, the lock order and the interface list. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| F2 (the outbox stores only a digest; the dispatcher cannot rebuild the input) | §6c: `glovo.control_starts` gains `input BYTEA NOT NULL`, the canonical `GlovoControlInput` JSON (refs, digests and the `gin_` taken from the preview row; no payload), written in the prepare transaction, INSERT-only (not in the UPDATE column list of §6d.1). `CHECK (input_digest = 'sha256:' \|\| encode(sha256(input), 'hex'))`. The dispatcher sends those bytes verbatim after re-checking the digest and rebuilds nothing. New crash-recovery test (tasks A13, T11) that starts from the stored input only |
+| F3 (stale consent migration text) | Platform impact and tasks Rollback: the selected-tenant column and the consent change are deleted. The only migrations of this slice are the four `glovojoin.ApplySchema` tables (`join_previews`, `join_scope_refs`, `join_read_refs`, `control_starts`) |
+| F1 P3 (one preview prepared into many orders) | §5 and §6: the preview is single-use. `join_previews.consumed_order_ref TEXT NULL` with a partial unique index; prepare claims it with `UPDATE ... WHERE consumed_order_ref IS NULL` under a new lock level L2c (§6b). Zero rows is 409 `fingerprint_changed` with the new internal reason `preview_consumed` (§4.2), so no code is added to the closed set. Grant row `UPDATE (consumed_order_ref)` on `join_previews` only. Tests T5 and T11 |
+| X-1 (`GET /connection` and `POST /connections` have no owner) | Owner: #961, package `internal/glovo/connect` (`Service.Current`, `Service.Connect`, `JoinScope`, `ConnectOutcome`). §3 backing calls and §6d.4 list it. A replay of `POST /connections` returns the same `connection_id` and a freshly minted `handoff_url` (the raw handoff reference is never stored), with `Idempotent-Replayed: true`; this is the one documented exception to "byte for byte" |
+| X-2 (`ApplyGlovoApprovalSchema` signature) | §6d.4 and §6d.1: `workitems.ApplyGlovoApprovalSchema(ctx, migrationConnStr, runtimeRole string) error`, the same shape as every other `ApplySchema` |
+| X-3 (bridge read DDL claimed by #985 and #986) | One owner: #986, `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)`. #985 `bridge.ApplySchema` calls it and depends on it. Merge order (§6d.1), no cycle: #1059, #988 (with `internal/jcs`), #959, #960, #961, #989, #986, #985, then this slice's read routes. The grant row of `bridge_read_results` names #986 as creator |
+| Class sweep (#959 F1) | Every database-clock expiry compare in the Glovo slices is `clock_timestamp()`, never `now()` (the transaction start time). §6d.4 `LiveConnectionTx` and `ActivateTx` are updated; `join_read_refs` uses `clock_timestamp()` too |
+| #959 F2/F3, #961 N3 (purge hook and grant registry) | §6d.4 lists `WithEndPurger`, `WithEndPurgerRequired`, `EndPurgerInstalled`, `GetConnectionForWorker` and the grant registry `glovo.expectedGrants`, which mirrors the `glovo.*` rows of §6d.1 |
+| #985 F3 (bridge-store selector) | §6d.1 mode selector: probe, DSN and failure outcomes specified |
+| #985 F2 (dispatch replay) | §6d.4: dispatch replays on any state with a non-empty `command_id` (the #985 definition); nothing changes here beyond the interface text |
+| #989 F1, F2 | §6d.4: `GlovoApprovalInput` and `artifact_hash` (the basket fingerprint) are named; prepare chooses the TTL (`GlovoApprovalTTL`, a constant at most `MaxApprovalTTL`), the same value as the response `expires_at` and #1044's wait bound |
+
 ## Amendment 2026-11-09 (c), round 3 of the AMEND PR
 
 Resolves the 35 confirmed findings of the second review round, at head `68118cc3c` (the round-3 fix-up). This slice
@@ -361,8 +379,8 @@ Scopes are checked against the subject token.
 | MCP tool | Verb + path | Request body | 200 body (= tool output) | Scope | Backing call | Source owner |
 |---|---|---|---|---|---|---|
 | (preflight) | `POST /resolve` | `{}` | exactly `{scope_ref, tenant, expires_at}` (amended 2026-11-09; the facade decodes with `DisallowUnknownFields`) | any Glovo scope | `glovo.Resolver.Resolve`, then mint a `gsc_` (§2b) | M1a #953 / M1e |
-| `glovo_auth_status` | `GET /connection` | none | `{connection_state, connection_id?, provider_account_label?, expires_at?}` | `glovo:read` | `glovo.Connections.Current(tenant, principal)` | M1a #953 |
-| `glovo_connect_account` | `POST /connections` | `{idempotency_key}` | `{connection_id, state:"pending_handoff", handoff_url, expires_at}` | `glovo:basket:prepare` | `glovo.Connections.Create` (synthetic handoff URL) | M1a #953 |
+| `glovo_auth_status` | `GET /connection` | none | `{connection_state, connection_id?, provider_account_label?, expires_at?}` | `glovo:read` | `connect.Service.Current(ctx, JoinScope)` (#961 §4a; `no_connection` when there is none) | #961 |
+| `glovo_connect_account` | `POST /connections` | `{idempotency_key}` | `{connection_id, state:"pending_handoff", handoff_url, expires_at}` | `glovo:basket:prepare` | `connect.Service.Connect(ctx, JoinScope, idempotency_key)` (#961 §4a: #959 `Connect` under L1/L2/L2a, then the `ghr_` row; `handoff_url` = `GLOVO_SYNTHETIC_HANDOFF_BASE_URL` + `/` + the raw reference) | #961 |
 | `glovo_get_order_history` | `POST /orders:list` | `{limit<=20, cursor?}` | `{orders:[...], next_cursor?}` | `glovo:read` | `ReadBridge.History` | M1e (seam), mctl-api#986 (transport), mctl-telegram#1262 (fake data) |
 | `glovo_preview_reorder` | `POST /previews` | `{order_ref}` (wire name unchanged; value is the #1059 `pho_` history-order ref) | `{preview_id, items, unavailable_items, fingerprint, expires_at}` | `glovo:read` | `ReadBridge.Preview` plus a `glovo.join_previews` row; `fingerprint` computed by mctl-api over the #1059 approval basket | M1e |
 | `glovo_get_basket` | `GET /basket` | none | `{store_name?, items, totals_label, fingerprint}` | `glovo:read` | `ReadBridge.Basket`; `fingerprint` computed by mctl-api over the #1059 approval basket | M1e / mctl-api#986 / mctl-telegram#1262 |
@@ -442,6 +460,7 @@ only code with two statuses.
 | A `pho_` in `POST /previews`, or a history `cursor`, that no earlier history read returned to this (tenant, principal, connection) (§5a, #1059 consumer duty 10) | `read_ref_not_issued` | `not_found` (zero commands enqueued) |
 | Prepare on a preview with no approval basket (empty basket, every item unavailable) | `basket_empty` | `invalid_request` |
 | The preview's stored approval basket no longer yields its stored fingerprint under the vendored #1059 rules (for example after a contract update between preview and prepare) | `fingerprint_changed` | `fingerprint_changed` |
+| Prepare on a preview that already produced an order under another idempotency key (`consumed_order_ref` set; round 4, F1 P3) | `preview_consumed` | `fingerprint_changed` |
 | Same idempotency key, different body | `idempotency_key_reused` | `idempotency_key_reused` |
 | Schema violation, unknown or duplicate field, header/body key mismatch, an `ordr_` in the preview `order_ref` | `invalid_request` | `invalid_request` |
 | Rate limit | `rate_limited` | `rate_limited` |
@@ -513,7 +532,7 @@ type ReadBridge interface {
 - Previews are persisted in mctl-api so that prepare binds to what the user saw. The
   table is `glovo.join_previews(id 'gpv_'+128-bit, tenant, principal_id, connection_id,
   install_id, install_revision, approval_basket BYTEA NULL, fingerprint TEXT NOT NULL
-  DEFAULT '', payload_hash, created_at, expires_at <= 15m)`, with
+  DEFAULT '', payload_hash, created_at, expires_at <= 15m, consumed_order_ref TEXT NULL)` plus `CREATE UNIQUE INDEX join_previews_consumed ON glovo.join_previews (consumed_order_ref) WHERE consumed_order_ref IS NOT NULL`, with
   `CHECK ((approval_basket IS NULL AND fingerprint = '') OR fingerprint = 'sha256:' ||
   encode(sha256(approval_basket), 'hex'))`. Amended (c), the approval-basket source
   (§6d.3): `approval_basket` holds the JCS bytes of the #1059 approval basket taken from
@@ -522,6 +541,10 @@ type ReadBridge interface {
   read-result TTL; prepare never reads `bridge_read_results` and never calls the
   provider. Amended 2026-11-09: its DDL runs in `glovojoin.ApplySchema` under the
   migration role (joint contract C3), not inline at runtime.
+  Round 4 (F1 P3): a preview is single-use. Prepare claims it with `UPDATE glovo.join_previews
+  SET consumed_order_ref = $ordr WHERE id = $1 AND consumed_order_ref IS NULL` (§6 step 4b); the
+  column is the only one prepare may update on this table (§6d.1), and the claim rolls back
+  with the transaction, so a failed prepare leaves the preview usable.
 - Amended (c): an empty current basket and a preview whose every item is unavailable are
   valid, successful reads (#1059 `empty: true`). `GET /basket` then answers `items: []`
   and `fingerprint: ""`, and `POST /previews` answers `items: []` with the
@@ -544,7 +567,7 @@ validates parameters only against the #1059 schema.
   DELETE`). It holds opaque refs only, never a payload.
 - `POST /orders:list` (history): after the result validates against the #1059 schema, the
   handler inserts every `pho_` order ref and the `next_cursor` it returned
-  (`ON CONFLICT DO NOTHING`, `expires_at = now() + 1 h`, which is longer than the 15 min
+  (`ON CONFLICT DO NOTHING`, `expires_at = clock_timestamp() + 1 h`, which is longer than the 15 min
   preview window and independent of the read-result TTL) in one short transaction on the
   `glovo_runtime` pool, and answers only after that commit. An insert failure is
   `unavailable`; the handler never answers with refs it did not record. A request that
@@ -576,7 +599,8 @@ validates parameters only against the #1059 schema.
    its `aar_` (`GlovoApprovalStatus` on the same transaction), byte for byte, with
    `Idempotent-Replayed: true`. Nothing is written, no `ordr_`, `wi_` or `we_` is minted.
 2. Load the `gpv_` row by (id, tenant, principal). Absent, foreign or expired: 404
-   `not_found` (§4.2). A NULL `approval_basket` (empty preview): 400 `invalid_arguments`
+   `not_found` (§4.2). A row whose `consumed_order_ref` is already set (and that step 1b did
+   not answer as a replay): 409 `fingerprint_changed`, reason `preview_consumed` (§4.2). A NULL `approval_basket` (empty preview): 400 `invalid_arguments`
    (`basket_empty`). The connection and install revision must equal the row's, else the
    §4.2 connection or `stale_install` code.
 3. `basket.Parse(row.approval_basket)` (#988) and `basket.Fingerprint` over the result
@@ -584,6 +608,11 @@ validates parameters only against the #1059 schema.
 4. Mint the `ordr_` with `orders.NewOrderRef()` (#988; not a join ref, §2a) and mint or
    re-read `tnr_`/`prr_` with `MintJoinRefTx`. Compute the deterministic workflow id
    (§6c) from the refs and the `ordr_`.
+4b. (round 4, F1 P3) Claim the preview, level L2c of §6b: `UPDATE glovo.join_previews SET
+   consumed_order_ref = $ordr WHERE id = $gpv AND tenant = $t AND principal_id = $p AND
+   consumed_order_ref IS NULL`. Zero rows means another prepare claimed it after step 2:
+   roll the transaction back and re-run from step 1, which hits 1b when the winner used the
+   same key and otherwise stops at step 2 with `preview_consumed`.
 5. #989 `CreateGlovoExecutionTx` creates the owner's `wi_` and `we_` (§6d.2), with the
    workflow id as the execution's engine ref.
 6. #988 `Create` (snapshot 1 = the preview's approval-basket bytes, `ExecutionID` = the
@@ -598,12 +627,14 @@ validates parameters only against the #1059 schema.
    idempotency key is `"glovo-prepare:" + ordr_`, derived here and never taken from the
    client (the generic `UNIQUE (requested_by, idempotency_key)` is global across tenants,
    `internal/workitems/action_approvals.go:152`).
-8. Insert the `glovo.control_starts` row (§6c). Commit.
+8. Insert the `glovo.control_starts` row (§6c), including the canonical `GlovoControlInput`
+   bytes and their digest (round 4, F2). Commit.
 
 No provider effect row, no bridge command and no dispatch is created. Idempotency is
 the step 1b lookup plus #988's idempotent create on `(tenant, owner, client idempotency_key)` as the concurrency backstop: a replay with the
 same key and body returns the original body byte for byte with the header
-`Idempotent-Replayed: true` (M4), and the body never gains a `replayed` field; the same
+`Idempotent-Replayed: true` (M4; the one exception is `POST /connections`, whose replay
+returns the same `connection_id` and a freshly minted `handoff_url`, #961 §4a), and the body never gains a `replayed` field; the same
 key with a different body is 409 `idempotency_key_reused`. Two owners, or two tenants,
 using the same client key prepare independently. If a dependency does not expose the
 §6d.4 methods, `Readiness` reports `provider_orders: not_ready` and the route returns
@@ -677,6 +708,7 @@ Rewritten 2026-11-09 (b); this replaces the D2 text. Decision A supersedes D2.
 | L2 | advisory key `glovo-owner/v1\|<tenant>\|<principal>` (#959) | shared for prepare, dispatch, cancel and permit; exclusive for #959 connection writes (including revoke) |
 | L2a | #961 tenant mutex row `glovo.glovo_rate_counters(scope='tenant_mutex', tenant)` (round 3; the 50-per-tenant connect limit is counted only after it is held) | `FOR UPDATE`, connect and reconnect only |
 | L2b | #961 handoff-ref row `glovo.glovo_handoff_refs` (round 3) | `FOR UPDATE`, worker activate only |
+| L2c | #957 preview row `glovo.join_previews` (round 4, F1 P3) | `UPDATE ... WHERE consumed_order_ref IS NULL` (row lock), prepare only |
 | L3 | #988 order row | `FOR UPDATE` |
 | L4 | #989 `aar_` row | `FOR UPDATE` |
 | L5 | `bridge_commands` rows | `FOR UPDATE`, `ORDER BY command_id` |
@@ -685,13 +717,13 @@ Rewritten 2026-11-09 (b); this replaces the D2 text. Decision A supersedes D2.
 A path may skip levels but never takes a lower level after a higher one. Amended (c): L6
 is a lock-free read, exempt from that rule, so reading it before L3 is allowed. The only
 other waits a Glovo path may take are the unique-index waits of its own inserts
-(`glovo.orders`, `glovo.join_refs`, `glovo.join_read_refs`, `glovo.approval_bindings`, `bridge_commands`) and
+(`glovo.orders`, `glovo.join_refs`, `glovo.join_read_refs`, `glovo.approval_bindings`, `bridge_commands`, and the partial unique indexes `orders_execution`, `orders_approval`, `orders_command`, `join_previews_consumed`) and
 the `ApplySchema` advisory keys, which run only under the migration role and never in a
 runtime transaction. #989 `CreateGlovoExecutionTx` takes no advisory lock.
 
 | Path | Levels taken, in order |
 |---|---|
-| #957 prepare | L1 sh, L2 sh, L6 read, L3 (new order), L4 (new `aar_`); step 1b is a plain read under L2 |
+| #957 prepare | L1 sh, L2 sh, L6 read, L2c (preview claim, step 4b), L3 (new order), L4 (new `aar_`); step 1b is a plain read under L2 |
 | #961 connect / reconnect (round 3) | L1 sh, L2 ex, L2a (inside #959's `AfterLocks`) |
 | #961 worker activate (round 3) | L1 sh, L2 ex, L2b (inside #959 `ActivateTx`'s `AfterLocks`) |
 | #957 read routes (minting refs, then `ReadBridge`) | L1 sh, L2 sh in a short transaction that only mints join refs; the read itself takes L5 on its own read command only (#986); history then inserts `glovo.join_read_refs` (§5a) in a separate short transaction with no lock level |
@@ -707,12 +739,22 @@ prepare-versus-revoke case (tasks.md T12).
 
 ### 6c. Workflow-start outbox (owner D5, owned by this slice)
 
-- Prepare writes `glovo.control_starts(order_ref, workflow_id, input_digest, state
+- Prepare writes `glovo.control_starts(order_ref, workflow_id, input BYTEA NOT NULL, input_digest, state
   pending|started|failed_terminal, attempts, next_attempt_at, started_run_id)` in the
   prepare transaction (amended (c): keyed by the `ordr_`, never the internal `pord_`). `workflow_id` is deterministic from the opaque refs
   (`asst-glovo-<tnr_>-<prr_>-<gin_>-<ordr_>`, the derivation mctl-agents#1044
   re-checks); the input is `GlovoControlInput` with refs, `approval_ref`, fingerprint
   and digests only, never a read payload.
+- Round 4 (F2): the `input` column holds that canonical JSON itself, written in the
+  prepare transaction from values prepare already holds (`tnr_`/`prr_` from `MintJoinRefTx`,
+  `gin_` from the preview row's `install_id`, `wi_`/`we_` from #989, the `aar_`, the
+  fingerprint, the limits constants). `CHECK (input_digest = 'sha256:' || encode(sha256(input),
+  'hex'))`. The column is INSERT-only: it is not in the `UPDATE` list of §6d.1, so a runtime
+  bug cannot rewrite it. The dispatcher sends the stored bytes verbatim after re-computing
+  the digest (a mismatch is `failed_terminal` plus an audit event, never a rebuilt input) and
+  reads nothing from the order, join-ref or connection stores, so it needs no caller scope.
+  Test (tasks A13, T11): after a crash between commit and start, the dispatcher starts the
+  workflow from the stored row alone, with every other store stubbed to fail.
 - After commit, a separate dispatcher in mctl-api claims due rows (`FOR UPDATE SKIP
   LOCKED`), starts the workflow with that id and the id-reuse policy "reject duplicate",
   and CAS-updates the row to `started` with the run id. "Already started" with the same id
@@ -750,8 +792,10 @@ One transaction is one session and therefore one role. In every Glovo M1 proposa
   `work_items`, `work_item_executions` and `work_item_events`. It applies all DDL and
   all grants, only through the `ApplySchema` entry points, in this order:
   `glovo.ApplySchema` (#959) → `orders.ApplySchema` (#988) →
-  `workitems.ApplyGlovoApprovalSchema` (#989) → `bridge.ApplySchema` (#985, including
-  #986's guarded read-schema changes) → `glovojoin.ApplySchema` (this slice). Each runs
+  `workitems.ApplyGlovoApprovalSchema` (#989) → `bridge.ApplySchema` (#985; it calls #986's
+  `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)` for the read objects, round 4 X-3) →
+  `glovojoin.ApplySchema` (this slice). Every entry point has the shape `ApplySchema(ctx,
+  migrationConnStr, runtimeRole string) error` (round 4, X-2). Each runs
   `CREATE SCHEMA IF NOT EXISTS glovo` and refuses to continue when the schema or an
   object it would create is owned by another role. Its credentials are used only by the
   migration job (#985 task 4); they are never mounted into the mctl-api runtime, the
@@ -770,6 +814,12 @@ One transaction is one session and therefore one role. In every Glovo M1 proposa
 - **R5 startup checks and negative tests**, below. Any mismatch is `not_ready` with zero
   provider writes.
 
+**Merge order (round 4, X-3; no cycle).** mctl-agents#1059, then #988 (it ships
+`internal/jcs`), #959, #960, #961, #989, #986 (it ships `bridge.ApplyReadSchemaTx` and tests it
+standalone on a database built from today's `bridgeSchema`), #985 (`bridge.ApplySchema` calls
+the #986 function), then this slice's read routes. A slice that lists another slice as a
+dependency uses a test double until that slice merges, and answers `not_ready` meanwhile.
+
 **Bridge startup DDL (mandatory AMEND, owned by #985).** At `ceac9ed` (= origin/main)
 `bridge.NewStore` runs `bridgeSchema` on every start (`internal/bridge/store.go:365-379`,
 the `Exec` at `:374`), and `cmd/api/main.go:1027` is its only runtime caller.
@@ -781,7 +831,14 @@ extra right to make the old `NewStore` pass.
 
 *Mode selector (round 3, #985 F2).* One selector, no flag: `bridge.ApplySchema` creates
 `bridge_schema_version` (a single-row table, `SELECT` for `glovo_runtime`) and writes the
-version it applied. `main.go` reads that table with the bridge DSN at startup. Row
+version it applied. `main.go` decides the mode once at startup (round 4, #985 F3): it probes
+`to_regclass('public.bridge_schema_version') IS NOT NULL` on `GLOVO_DB_URL` when that is set,
+else on the legacy bridge DSN (`COMMERCE_DB_URL`, as today). `to_regclass` needs no table
+privilege, so the probe works for the old bridge role that no longer owns the tables; the
+version value is read afterwards by `NewRuntimeStore` through the runtime role (`SELECT` on
+the table, granted by `ApplySchema`). Table present and `GLOVO_DB_URL` unset, or any probe or
+version-read error: the bridge is `not_ready`, and neither case ever falls back to
+`NewStore`. Row
 present: the bridge always runs on `NewRuntimeStore` over the shared `GLOVO_DB_URL` pool,
 whatever `GLOVO_ENABLED`, `GLOVO_JOIN_ENABLED` or `MCTL_GLOVO_CONTROL_ENABLED` say, so
 unsetting a Glovo flag never switches the bridge back to a `NewStore` that would run DDL on
@@ -812,13 +869,18 @@ The only grant table for `glovo_runtime`. Every right not listed is absent.
 | `glovo.approval_bindings` | #989 | `SELECT, INSERT`, `UPDATE (command_id)` |
 | `public.action_approval_requests` | #989 (ownership move, OPEN-989-1) | `SELECT, INSERT`, `UPDATE (state, decided_by, decided_at, reason, decided_by_principal_id, decided_via_principal_id, decided_context_digest, authority_basis, authz_mode, fresh_until, consumed_at, reserved_at)` (round 3, the only copy of the list; it is exactly what `DecideGlovoApprovalTx` (the first ten columns incl. `state`), `ConsumeGlovoApprovalTx` (`state`, `consumed_at`), `ReserveGlovoApprovalTx` (`state`, `reserved_at`), `RevokeGlovoApprovalTx` (`state`, `decided_by`, `decided_at`, `reason`) and `MarkGlovoApprovalUnknownTx` (`state`) write; no `executed_at`, no identity or policy column). #989 design §2 and `ApplyGlovoApprovalSchema` reference this row |
 | `public.work_items`, `public.work_item_executions`, `public.work_item_events` | #989 (ownership move, OPEN-989-1) | `SELECT, INSERT` |
-| `glovo.join_previews`, `glovo.join_scope_refs`, `glovo.join_read_refs` | #957 | `SELECT, INSERT, DELETE` (the bounded expiry sweeps) |
-| `glovo.control_starts` | #957 | `SELECT, INSERT`, `UPDATE (state, attempts, next_attempt_at, started_run_id, updated_at)` |
+| `glovo.join_previews` | #957 | `SELECT, INSERT, DELETE` (the bounded expiry sweeps), `UPDATE (consumed_order_ref)` (round 4, F1 P3) |
+| `glovo.join_scope_refs`, `glovo.join_read_refs` | #957 | `SELECT, INSERT, DELETE` (the bounded expiry sweeps) |
+| `glovo.control_starts` | #957 | `SELECT, INSERT`, `UPDATE (state, attempts, next_attempt_at, started_run_id, updated_at)` (`input` and `input_digest` are INSERT-only, round 4 F2) |
 | `bridge_commands`, `bridge_signal_outbox` | #985 (`bridge.ApplySchema`) | `SELECT, INSERT, UPDATE` |
 | `bridge_command_transitions`, `bridge_write_permits` (+ sequences) | #985 | `SELECT, INSERT` |
-| `bridge_read_results` | #985 (#986 objects) | `SELECT, INSERT, DELETE`, `UPDATE (data, erased_at)` |
+| `bridge_read_results`, the read columns of `bridge_commands` (`wire_version`, `read_request_id`, `install_revision_ref`) | #986 (`bridge.ApplyReadSchemaTx`, called by #985 `bridge.ApplySchema`) | `SELECT, INSERT, DELETE`, `UPDATE (data, erased_at)` on the results table; the `bridge_commands` table-level grant above covers the new columns |
 | `bridge_colocation_probe` | #985 | `SELECT, INSERT, DELETE` |
 | every `*_schema_version` table | its slice | `SELECT` |
+
+Every `glovo.*` row of this table is mirrored by the Go registry `glovo.expectedGrants` (#959,
+round 4); each slice adds its rows in its own PR, and the #959 `Ready` check reports `not_ready`
+for an existing `glovo` table that has no registry row (an unknown table is never "fine").
 
 **Existing consumers** (R3). These are the only grants to other roles, each issued by
 the creating slice's `ApplySchema`:
@@ -913,13 +975,19 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | Provider | Method | Semantics |
 |---|---|---|
 | #959 `glovo.Store` | `NewStore(ctx, pool *pgxpool.Pool, runtimeRole string, opts ...Option) (*Store, error)`, `Pool() *pgxpool.Pool`, `WithExplicitURL(bool) Option` | round 3: the shared `GLOVO_DB_URL` pool, no pool of its own; `Ready` compares `current_user` with `runtimeRole` and fails without `WithExplicitURL(true)` |
-| | `ActivateTx(ctx, tx, in ActivateInput)`, `ConnectInput.AfterLocks`, `ConnectInput.TerminalOnly`, `AppendRefusal(ctx, ev)` | round 3, for #961: tx-scoped activation `pending_handoff -> pending_provider -> active` with `expires_at`; hook after L1/L2; terminal-only reconnect; refusal audit |
+| | `ActivateTx(ctx, tx, in ActivateInput{..., ExpiresIn time.Duration})`, `ConnectInput.AfterLocks`, `ConnectInput.TerminalOnly`, `AppendRefusal(ctx, ev)` | round 3, for #961: tx-scoped activation `pending_handoff -> pending_provider -> active`; SQL sets `expires_at = clock_timestamp() + ExpiresIn` (`<= 0` or `> 24h` is `invalid_request`, round 4); hook after L1/L2; terminal-only reconnect; refusal audit |
 | | `LockOwnerShared(ctx, tx pgx.Tx, tenant, principal string) error` | tx; L1 shared, then L2 shared |
-| | `LiveConnectionTx(ctx, tx pgx.Tx, owner glovo.Owner) (*glovo.Connection, error)` | tx; no row lock; caller holds L2; `expires_at <= now()` (database clock) is `connection_expired` even before any `Transition` |
+| | `LiveConnectionTx(ctx, tx pgx.Tx, owner glovo.Owner) (*glovo.Connection, error)` | tx; no row lock; caller holds L2; `expires_at <= clock_timestamp()` (statement time, round 4; `now()` is the transaction start and would let a long transaction permit after expiry) is `connection_expired` even before any `Transition` |
 | | `WithRevocationHook(h glovo.RevocationHook) Option`, `type RevocationHook func(ctx, tx pgx.Tx, ended []string, actor string) error` | every path that ends a connection calls it on its own transaction |
 | | `WithMembershipRevoker(name string) Option`, `MembershipRevocationWired() bool` | true only when the slice that detects a membership removal registered itself (OPEN-985-2) |
-| | `Ready(ctx) error` | `revocation_hook_missing` when no hook is installed |
-| #988 `orders.Store` | `NewOrderRef() string`, `LookupByIdempotencyKey(ctx, q Querier, sc Scope, key string) (*Order, error)` | round 3: the `ordr_` is minted by prepare and passed in; read-only replay lookup (not_found on a miss) |
+| | `Ready(ctx) error` | `revocation_hook_missing` when no hook is installed; `end_purger_missing` when `WithEndPurgerRequired(true)` and none installed; `not_ready` for an existing `glovo` table with no `glovo.expectedGrants` row (round 4) |
+| | `GetConnectionForWorker(ctx context.Context, connectionID string) (*glovo.Connection, error)` | round 4, for #961: read by id with no owner predicate, worker routes only (source-scan test); the caller then calls the locked primitives with the Owner and `ExpectedVersion` it read |
+| | `type EndPurger func(ctx, tx pgx.Tx, ended []string) error`, `WithEndPurger(p EndPurger) Option`, `WithEndPurgerRequired(bool) Option`, `EndPurgerInstalled() bool` | round 4: the ended-connection purge of #961's `glovo_handoff_refs` is installed by #961; #959 names no #961 table |
+| | `glovo.expectedGrants` (registry), `ApplySchema(ctx, migrationConnStr, runtimeRole string) error` | round 4: Go mirror of the `glovo.*` rows of §6d.1, golden-tested |
+| #961 `connect.Service` | `Connect(ctx, sc JoinScope, idempotencyKey string) (*ConnectOutcome, error)`, `Current(ctx, sc JoinScope) (*glovo.Connection, error)`, `type JoinScope struct{ Tenant, PrincipalID string; InstallRevision int64 }` | round 4, X-1: the only backing calls of `POST /connections` and `GET /connection` (§3); `Current` answers `no_connection` when none; a `Connect` replay returns the same connection and a fresh `handoff_url` |
+| #988 `orders.Store` | `NewStore(ctx, pool *pgxpool.Pool, runtimeRole, migrationRole string, conns Connections, execs Executions) (*Store, error)`, `Ready(ctx) error`, `ApplySchema(ctx, migrationConnStr, runtimeRole string) error` | round 4 (N4): `Ready` compares every owner with exactly `migrationRole`; `orders.Querier` (`Exec`, `Query`, `QueryRow`; a `*pgxpool.Pool` or a `pgx.Tx`), `JoinKind`, `ActorKind` and `Snapshot` are defined in #988 §1 |
+| | `AppendSnapshot(ctx, tx, sc Scope, a Actor, orderRef string, expectedVersion int64, b basket.Approval, expectedFP string) (*Snapshot, error)`, `Get(ctx, q Querier, sc Scope, orderRef string) (*Order, error)`, `LockOrder(ctx, tx, sc Scope, orderRef string) (*Order, error)`, `ScopeFromRefs(ctx, q Querier, tenantRef, principalRef string) (Scope, error)` | `AppendSnapshot`, `Finalize`, `BindApproval` and `Create` re-read the live connection on the caller's tx; `MarkCancelled`, `MarkUnknown` and `MarkDispatched` do not (#988 §6, round 4 N2). `LockOrder` is the owner-path L3 |
+| | `NewOrderRef() string`, `LookupByIdempotencyKey(ctx, q Querier, sc Scope, key string) (*Order, error)` | round 3: the `ordr_` is minted by prepare and passed in; read-only replay lookup (not_found on a miss) |
 | | `Create(ctx, tx, in CreateInput) (*Order, bool, error)` (`CreateInput.OrderRef` required), `Finalize(ctx, tx, sc Scope, a Actor, orderRef string, expectedVersion int64, expectedFP string) (*Order, error)` | tx; owner path |
 | | `BindApproval(ctx, tx, sc Scope, a Actor, orderRef, approvalRef string) error` | tx; called by #989 with `Scope{Tenant, PrincipalID: owner}` and `Actor{Kind: system, ID: "service:glovo-prepare"}` |
 | | `PeekOrderScope(ctx, q Querier, orderRef string, tenants []string) (Scope, error)` | unlocked read of write-once columns |
@@ -929,7 +997,8 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | | `MintJoinRefTx(ctx, tx, kind JoinKind, tenant, principalID, subjectID string) (string, error)` (kinds `tenant`, `principal`, `install_revision`; there is no `order` kind), `LookupJoinRefTx(ctx, q Querier, kind JoinKind, tenant, principalID, subjectID string) (string, error)` | mint is insert-or-read; lookup is read-only, `not_found` if never minted |
 | | `basket.Parse(raw []byte) (Approval, []byte, error)`, `basket.Fingerprint(canonical []byte) string` | the only entry points; `Parse` returns the JCS bytes |
 | #989 `workitems.Store` | `CreateGlovoExecutionTx`, `ExecutionBindingTx` | §6d.2 |
-| | `CreateGlovoApprovalTx(ctx, tx, in GlovoApprovalInput) (*ActionApprovalRequest, bool, error)` | tx; calls #988 `BindApproval` |
+| | `ApplyGlovoApprovalSchema(ctx, migrationConnStr, runtimeRole string) error` | round 4, X-2: the same shape as every other `ApplySchema`; creates the `aar_guard` with `runtimeRole` as a literal and issues the grants of §6d.1 |
+| | `CreateGlovoApprovalTx(ctx, tx, in GlovoApprovalInput) (*ActionApprovalRequest, bool, error)` | tx; calls #988 `BindApproval`. `GlovoApprovalInput{Tenant, OwnerPrincipalID, WorkItemID, ExecutionID, OrderRef, ConnectionRef, InstallID, InstallRevision, BasketFingerprint, Provider, ExpiresIn}` is defined in #989 §4. Prepare passes `ExpiresIn = GlovoApprovalTTL`, a named constant at most `MaxApprovalTTL` (SQL stores `clock_timestamp() + ExpiresIn`), and returns the stored value as `expires_at`; #1044 bounds its approval wait by it. The row's `artifact_hash` is the basket fingerprint (#989 §3) |
 | | `LockGlovoApprovalTx(ctx, tx, id string) (*ActionApprovalRequest, *GlovoBinding, error)` | tx; L4 |
 | | `ReserveGlovoApprovalTx(ctx, tx, id string, cmd ReserveCommand) (replayed bool, err error)` | tx; `ReserveCommand` is defined once in #989 §4 |
 | | `ConsumeGlovoApprovalTx`, `RevokeGlovoApprovalTx`, `MarkGlovoApprovalUnknownTx`, `DecideGlovoApprovalTx` | tx; #989 §4 |
@@ -938,10 +1007,13 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | | `receipt.NewFence(...)`, `receipt.Ready(ctx) error` | #989 §6, §8 |
 | #985 bridge and control | `bridge.CancelOpenForConnections(ctx, tx pgx.Tx, connectionIDs []string, actor string) error` | the `RevocationHook` implementation; L5 `ORDER BY command_id` |
 | | `bridge.WriteFence.PreLock(ctx, tx pgx.Tx, c bridge.Caller, commandID string) error` | called by `permitTx` before `lockOwned`; step 0 applies `lockOwned`'s provider and tenants predicate and answers `ErrCommandNotFound` for absent and foreign ids alike, and refuses non-`place_order_fake` kinds, before any lock (#985 §7.2, #989 §6) |
-| | `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole string) error`, `bridge.NewRuntimeStore(ctx, pool *pgxpool.Pool) (*Store, error)` (the shared `GLOVO_DB_URL` pool; no DDL) | §6d.1 |
+| | `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole string) error`, `bridge.NewRuntimeStore(ctx, pool *pgxpool.Pool) (*Store, error)` (the shared `GLOVO_DB_URL` pool; no DDL) | §6d.1; `ApplySchema` calls #986 `bridge.ApplyReadSchemaTx` (round 4, X-3) |
+| | `Dispatcher.Dispatch` replay | round 4 (#985 F2): on any order state with a non-empty `command_id` whose `approval_ref` and fingerprint match, the same `cmd_` with the current `order_state` and `effect_state` |
 | | `control.ProveOneDatabase(ctx, bridgeStore *bridge.Store, glovoStore *glovo.Store, workItemsPool *pgxpool.Pool) error` | §6d.1 checks; requires `glovoStore.Pool() == bridgeStore.Pool()` (round 3: two stores, one pool, one role) and proves `workItemsPool` is the same database through the colocation probe |
 | #960 (`internal/glovo/scope`, `internal/auth`) | `Resolver.Resolve(ctx, u *auth.User) (Scope, *glovo.Error)`, `User.TeamGrant() (grantID, tenant string, ok bool)`, `teamgrant.Check(ctx, grantID, principalID, clientID, resource)` (only an `active` grant passes) | round 3: sole owner of consent-time selection and of the claims `tgr`/`stn`; the grant's `refresh_family_id` is the `scope_ref` binding key (§2b) |
 | #986 bridge reads | `ReadClient.Read(ctx, ReadRequest) (*ReadResult, error)`, `Store.FetchReadResult(ctx, ReadFetch) (*ReadResult, error)` | own short transactions; the authoritative read binding check |
+| | `bridge.ApplyReadSchemaTx(ctx, tx pgx.Tx, runtimeRole string) error` | round 4, X-3: the one owner of the read DDL (`bridge_read_results`, the three read columns of `bridge_commands`, the read-shape CHECK, the read level table `bridge_read_schema_version`) and `bridge.CheckReadLevel(ctx, q Querier) error`; called by #985 `bridge.ApplySchema`; tested standalone |
+| #988 `internal/jcs` | `Canonicalize(raw []byte) ([]byte, error)`, `Precheck(raw []byte) error` | round 4, X-3/N3: the one RFC 8785 implementation; #986 imports it |
 | #957 (this slice) | `glovojoin.ControlStartTx(ctx, q Querier, orderRef string) (workflowID, runID string, err error)`, `glovojoin.ApplySchema(ctx, migrationConnStr, runtimeRole string) error` | read; DDL |
 
 ### 7. Contract package (shared with mctl-telegram)
@@ -1019,12 +1091,12 @@ code, tenant and request_id.
 
 ## Platform impact
 
-- **Migrations:** the tables `glovo.join_previews`, `glovo.join_scope_refs` and
-  `glovo.control_starts` (the join-ref table is #988's `glovo.join_refs`), created by
-  `glovojoin.ApplySchema` under the migration role, last in the §6d.1 order, with the
-  grants of the §6d.1 table and nothing more (amended 2026-11-09 (c)), and one column on the OAuth authorization-code and
-  refresh-family store for the selected tenant (nullable, ignored for non-Glovo
-  resources). Both are additive.
+- **Migrations:** only the four tables `glovo.join_previews`, `glovo.join_scope_refs`,
+  `glovo.join_read_refs` and `glovo.control_starts` (the join-ref table is #988's
+  `glovo.join_refs`), created by `glovojoin.ApplySchema` under the migration role, last in
+  the §6d.1 order, with the grants of the §6d.1 table and nothing more. They are additive.
+  This slice changes no OAuth table: consent-time team selection, its grant table and its
+  columns are #960's (round 4, F3).
 - **Backward compatibility:** everything is behind `GLOVO_JOIN_ENABLED` (default off), so
   the routes are 404 when off. Consent for non-Glovo resources is unchanged. No existing
   gate's behaviour changes for existing principals. `glovoJoinGate` only refuses on the

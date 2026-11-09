@@ -105,9 +105,14 @@ Dispatch
 - IF the owner principal is no longer a member of the tenant THEN THE SYSTEM SHALL
   refuse with 403 `no_tenant`.
 - WHEN a dispatch repeats for an order already dispatched under the same `aar_` and
-  fingerprint THE SYSTEM SHALL return 200 with the original body and the same `cmd_`,
-  plus the header `Idempotent-Replayed: true`. It SHALL create no second command. The
-  same SHALL hold after a crash between commit and response.
+  fingerprint, or for an order that later became `cancelled`, `unknown` or `closed` and
+  still has its `command_id`, THE SYSTEM SHALL return 200 with the same `cmd_`, the
+  current `order_state` and `effect_state`, and the header `Idempotent-Replayed: true`. It
+  SHALL create no second command. The same SHALL hold after a crash between commit and
+  response. (round 4, F2)
+- WHEN the bridge starts and `bridge_schema_version` exists but `GLOVO_DB_URL` is unset, or the
+  selector probe or version read fails THE SYSTEM SHALL leave the bridge `not_ready` and
+  SHALL NOT fall back to `NewStore`. (round 4, F3)
 - WHEN two dispatches for the same order race THE SYSTEM SHALL serialize them on the
   order row lock. Exactly one command SHALL exist afterwards, and every success SHALL
   return the same `cmd_`.
@@ -196,6 +201,11 @@ Data hygiene
   `no_connection`, `connection_revoked`, `connection_expired`, `stale_install`,
   `invalid_transition`, `not_found`, `unavailable`)? Does it read replay from
   `Idempotent-Replayed`? If not, #1044 is amended in the same wave.
+- OPEN-985-10 (new, round 4; recommendation: probe by `to_regclass`). The startup mode probe
+  reads table existence, not the row, through the legacy bridge DSN when `GLOVO_DB_URL` is
+  unset, because that role has no `SELECT` on `bridge_schema_version` after the ownership
+  move. The owner confirms that this one read-only use of `COMMERCE_DB_URL` by the bridge is
+  acceptable (it is also the answer to what an operator sees after unsetting `GLOVO_DB_URL`).
 - OPEN-985-4. Who owns `revalidate_scope` and `resolve_connection` from #1044's
   `ControlApiPort`?
 - OPEN-985-9 (new, round 3; X-7; recommendation: remove from #1044). mctl-agents#1044

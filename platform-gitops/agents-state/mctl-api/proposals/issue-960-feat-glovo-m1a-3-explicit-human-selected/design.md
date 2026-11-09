@@ -360,7 +360,9 @@ writes), and `GLOVO_NON_SELECTABLE_TENANTS`. Construct `glovo.Gate{Open:
 enabled && ready}` instead of using the build constant `glovo.Default`, and
 pass the same readiness to `ResolveResource`. Startup refuses
 `GLOVO_ENABLED=true` together with `TENANT_AUTHZ_MODE != principal`, an
-in-memory refresh store, or a missing grant store. Docs: `docs/glovo-team-grant.md`
+in-memory refresh store, or a missing grant store. When `GLOVO_ENABLED=true`, an explicit
+`OAUTH_DB_URL` is required, because the legacy fallback DSN has no privilege on the
+`glovo.*` schema and the grant store would then fail at first use. Docs: `docs/glovo-team-grant.md`
 (flow, claims, refusal table, test matrix).
 
 ## Alternatives

@@ -1,5 +1,16 @@
 # Design: issue-989-feat-glovo-m1b-2-single-authoritative-aa
 
+## Amendment 2026-11-09 (c), round 4 of the AMEND PR
+
+Resolves the round-3 findings F1 and F2 and the cross-slice finding X-2. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| F1 (a Glovo `aar_` has an empty `artifact_hash`, so the decision binding gate can never pass) | §3 and §4: `CreateGlovoApprovalTx` sets `artifact_hash` to the basket fingerprint (`sha256:<hex>`), which is also the `ArgsDigest` of `GlovoIntent`, so it is bound to the order. The INSERT guard requires it to match `^sha256:[0-9a-f]{64}$`, the deferred `aar_binding_required` trigger requires it to equal `binding.basket_fingerprint`, and `aar_guard` adds `artifact_hash` to the immutable columns. The `GET` of the `aar_` therefore returns a non-empty `artifact_hash`, and a binding copied from it has `content_digest == artifact_hash`. §5: under `MCTL_APPROVAL_BINDING=enforce`, `missingFields` and `guardDecision` pass for a complete binding and give `context_changed` for a stale `content_digest`. T15 (immutable subtest), T19 (both enforce cases) |
+| F2 (`GlovoApprovalInput` undefined; no source for the expiry or freshness window) | §4: `GlovoApprovalInput{Tenant, OwnerPrincipalID, WorkItemID, ExecutionID, OrderRef, ConnectionRef, InstallID, InstallRevision, BasketFingerprint, Provider string; ExpiresIn time.Duration}` defined once. The TTL is chosen by #957 prepare (the named constant `GlovoApprovalTTL`, at most `MaxApprovalTTL`, OPEN-957-10) and passed as `ExpiresIn`; SQL stores `expires_at = clock_timestamp() + ExpiresIn` and the same stored value is the prepare response `expires_at` and the bound of #1044's approval wait. `ExpiresIn <= 0` or `> MaxApprovalTTL` is `invalid_request`. Freshness: `fresh_until` (set by `decisionCapture` as decision time plus `maxDecisionAge`) is checked in the Reserve CAS with a margin (`ReservePermitMargin`, OPEN-989-7) and again by the fence (§6 step 3); T7b |
+| X-2 (`ApplyGlovoApprovalSchema` signature) | `workitems.ApplyGlovoApprovalSchema(ctx, migrationConnStr, runtimeRole string) error`, the shape of every `ApplySchema` (#957 §6d.4); it needs `runtimeRole` for the `aar_guard` literal and the grants, and runs `workitems.ApplySchema(ctx, migrationConnStr, runtimeRole)` (the generic DDL, task 2b) first |
+| Class sweep (#959 F1) | `expires_at` and `fresh_until` comparisons in Reserve, Consume and the fence use `clock_timestamp()`, not `now()` (the transaction start time) |
+
 ## Amendment 2026-11-09 (c), round 2 of the AMEND PR
 
 Re-review of the AMEND PR head `dc1fe6e5`; code references re-checked at mctl-api
@@ -197,7 +208,7 @@ The authoritative object is the existing `action_approval_requests` row. Glovo a
 
 ### 2. Database enforcement, under the migration role
 
-`workitems.ApplyGlovoApprovalSchema(ctx, migrationPool)` is the only path that creates
+`workitems.ApplyGlovoApprovalSchema(ctx, migrationConnStr, runtimeRole string) error` is the only path that creates
 the objects below. It runs under the migration role, is idempotent (`CREATE … IF NOT
 EXISTS`, `CREATE OR REPLACE FUNCTION`, triggers created only if absent in `pg_trigger`),
 refuses a stored schema version newer than the code, and refuses if an object exists
@@ -234,19 +245,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS approval_bindings_command
     `authority_basis` empty, `consumed_at`/`reserved_at`/`executed_at` null,
     `requested_by='service:glovo-prepare'`, and a complete policy context
     (`intent_source`, `policy_rule_id='glovo.order.owner-approval'`,
-    `policy_version='1'`, `policy_decision`, `policy_reasons` non-empty);
+    `policy_version='1'`, `policy_decision`, `policy_reasons` non-empty) and `artifact_hash` matching
+    `^sha256:[0-9a-f]{64}$` (round 4, F1);
   - `pending→approved` additionally needs `NEW.decided_by_principal_id` equal to the
     binding's `owner_principal_id` and `NEW.authority_basis='resource_owner'`;
   - a row whose `OLD.action_kind` or `NEW.action_kind` is a Glovo kind may not change
     `action_kind`, `intent_hash`, `expires_at`, `execution_id`, `work_item_id`,
-    `subject_principal_id`, `requested_by` or `policy_rule_id`/`policy_version`;
+    `subject_principal_id`, `requested_by`, `artifact_hash` or `policy_rule_id`/`policy_version`;
   - its state may move only `pending→approved`, `pending→denied`, `approved→reserved`,
     `approved→denied` (revoke before dispatch), `reserved→consumed`,
     `reserved→unknown`; `consumed`, `unknown` and `denied` are final;
   - `DELETE` of a Glovo row is refused.
 - `glovo.aar_binding_required()`: a `CONSTRAINT TRIGGER … DEFERRABLE INITIALLY
   DEFERRED` `AFTER INSERT` on `action_approval_requests`. A Glovo-kind row must have its
-  binding row by commit.
+  binding row by commit, and its `artifact_hash` must equal `binding.basket_fingerprint`
+  (round 4, F1).
 - The widened state CHECK and the kind CHECK are added here too (guarded, `NOT VALID`
   then `VALIDATE`), not in the runtime `actionApprovalSchema`.
 - Grants: every Glovo approval write runs on the one Glovo runtime role of #957 §6d.1
@@ -265,7 +278,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS approval_bindings_command
   migration role, and `actionApprovalSchema` must stop running DDL on the runtime pool
   for it (`workitems/store.go:243`). Because that changes the generic work-items
   startup, it is an owner decision (OPEN-989-1). This slice plans it as task 2b: move
-  the generic DDL into `workitems.ApplySchema` under the migration role, and have
+  the generic DDL into `workitems.ApplySchema(ctx, migrationConnStr, runtimeRole string)` under the migration role, and have
   `NewStore` only verify the schema version when the table is not owned by
   `current_user`. Until the move happens, Glovo `Ready` fails and every Glovo approval
   method answers `not_ready`; generic work items are unchanged.
@@ -279,7 +292,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS approval_bindings_command
 `GlovoIntent(b Binding, kind) workitems.ActionIntent` sets:
 - `Target = "glovo:v1:" + len-prefixed(tenant, owner, order_ref, connection_ref,
   install_id, install_revision, provider)`;
-- `ArgsDigest = basket_fingerprint` (the #1059 approval-basket fingerprint);
+- `ArgsDigest = basket_fingerprint` (the #1059 approval-basket fingerprint); `CreateGlovoApprovalTx` also stores the same value as the row's `artifact_hash` (round 4, F1: the decision binding gate compares `content_digest` with `artifact_hash`, and an empty value can never pass it);
 - `ExecutionID = we_`, `WorkItemID = wi_`, `PolicyRuleID = "glovo.order.owner-approval"`,
   `PolicyVersion = "1"`.
 
@@ -308,6 +321,11 @@ func (s *Store) GlovoApprovalForDecision(ctx, q Querier, id string) (*ActionAppr
 
 ```go
 type GlovoExecutionInput struct{ Tenant, OwnerPrincipalID, WorkflowID, Actor string }
+type GlovoApprovalInput struct { // round 4, F2; every field required
+    Tenant, OwnerPrincipalID, WorkItemID, ExecutionID, OrderRef, ConnectionRef string
+    InstallID, InstallRevision, BasketFingerprint, Provider string
+    ExpiresIn time.Duration // chosen by #957 prepare (GlovoApprovalTTL); 0 < ExpiresIn <= MaxApprovalTTL, else invalid_request; SQL: expires_at = clock_timestamp() + ExpiresIn
+}
 type ReserveCommand struct { // every field required; an empty field is ErrReserveIncomplete (intent_mismatch), never a skip
     CommandID, Tenant, OwnerPrincipalID, ExecutionID, OrderRef, ConnectionRef string
     InstallRevision, IntentHash, BasketFingerprint string
@@ -340,10 +358,13 @@ type ReserveCommand struct { // every field required; an empty field is ErrReser
   and must equal the binding (else
   `intent_mismatch`, or `basket_changed` for the fingerprint). If the row is already
   `reserved` with `command_id == cmd.CommandID`, it returns `replayed = true` and
-  changes nothing (crash-retry). Otherwise one CAS `approved → reserved` (unexpired,
-  Glovo kind) and the binding's `command_id` write, in the same transaction.
+  changes nothing (crash-retry). Otherwise one CAS `approved → reserved` (`expires_at > clock_timestamp()` and
+  `fresh_until > clock_timestamp() + ReservePermitMargin`, Glovo kind; round 4, F2: a dispatch
+  that is already too stale to be permitted is refused with `approval_expired` while the
+  `aar_` is still `approved`, so nothing is burned; a `fresh_until` that passes between
+  reserve and permit is refused by the fence and the sweeper marks the row `unknown`) and the binding's `command_id` write, in the same transaction.
 - **Consume** (fence only): CAS `reserved → consumed` guarded by `command_id` and
-  `expires_at > now()`.
+  `expires_at > clock_timestamp()`.
 - **Revoke** (#985 cancel before dispatch): CAS `pending|approved → denied`, recording
   the actor and reason `order_cancelled`. Exposed as `refused`. A row already `denied`
   for this order is success (idempotent retry); any other state is `invalid_transition`.
@@ -386,7 +407,9 @@ Governance:
   records it for Glovo kinds, and `platform_admin` stays for every other kind.
 - `governance.Policies` registers `glovo.order.owner-approval` version `1`, so
   `Admit(…, RequireRegisteredPolicy)` passes in strict mode.
-- `guardDecision` and the binding gate run unchanged. The context is complete from
+- `guardDecision` and the binding gate run unchanged (round 4, F1: with a non-empty
+  `artifact_hash` a complete binding passes under `MCTL_APPROVAL_BINDING=enforce`, and a
+  stale `content_digest` is `context_changed`). The context is complete from
   create, so the start-up backfill does not rewrite Glovo rows.
 
 The decision runs as `DecideGlovoApprovalTx` on a transaction from the bridge pool (one
@@ -423,7 +446,7 @@ signature, round 3), before `lockOwned`:
 2. The `aar_` is a Glovo kind in stored state `reserved` with `binding.command_id ==
    b.CommandID`. Otherwise `approval_invalid`, or `approval_replayed` when it is bound
    to another command.
-3. `expires_at` and `fresh_until` are in the future, else `approval_expired`.
+3. `expires_at` and `fresh_until` are in the future by `clock_timestamp()` (statement time, not the permit transaction's start), else `approval_expired`.
 4. **Recompute from the written content.** Read `bridge_commands.payload` from the
    locked row and run #988 `basket.Parse(payload)` on the **whole** payload (#957
    §6d.3: the payload is exactly the approval basket, no wrapper, no other top-level

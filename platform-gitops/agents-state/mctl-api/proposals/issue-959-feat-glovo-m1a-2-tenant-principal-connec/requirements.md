@@ -117,8 +117,8 @@ Revoke and reinstall atomicity
   `revocation_hook_missing` from `Ready`.
 - WHEN `LockOwnerShared` or `LiveConnectionTx` is called THE SYSTEM SHALL run on the
   caller's transaction and SHALL NOT begin or commit one.
-- WHEN `LiveConnectionTx` or `LiveConnection` finds `expires_at <= now()` (database
-  clock) THE SYSTEM SHALL answer `connection_expired`, whether or not a `Transition`
+- WHEN `LiveConnectionTx` or `LiveConnection` finds `expires_at <= clock_timestamp()` (database
+  clock at statement time, never `now()`, which is the transaction start; round 4) THE SYSTEM SHALL answer `connection_expired`, whether or not a `Transition`
   has run. (amended (c))
 - WHILE `GLOVO_DB_URL` is not set explicitly (the wiring slice passes `WithExplicitURL(false)`) THE SYSTEM SHALL report `not_ready`; it
   SHALL NOT fall back to `AUDIT_DB_URL`. `NewStore` SHALL take the shared pool and open none of its own (round 3).
