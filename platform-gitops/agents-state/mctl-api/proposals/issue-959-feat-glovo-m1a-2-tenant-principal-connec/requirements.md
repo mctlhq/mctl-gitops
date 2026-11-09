@@ -57,7 +57,7 @@ Identity and ownership
   one (`tenant_id`, `principal_id`, `install_id`, `install_revision`).
 - THE SYSTEM SHALL require `tenant_id` and a `prn_`-prefixed `principal_id`
   on every store method that reads or changes a connection, and SHALL
-  refuse (`invalid_input`) an empty tenant or a principal ID without the
+  refuse (`invalid_request`) an empty tenant or a principal ID without the
   `prn_` prefix.
 - WHILE a (`tenant_id`, `principal_id`) pair has a connection in a live
   state (`pending_handoff`, `pending_provider`, `active`) THE SYSTEM SHALL
@@ -170,9 +170,11 @@ Schema safety
   raises `install_revision` by one. Reinstalling after an uninstall also
   raises the revision. The alternative (new `install_id` per reinstall)
   is listed in design.md.
-- Audit retention period is not specified. This proposal defaults to 400
-  days (configurable on the store) and keeps install/connection rows
-  indefinitely. The owner should confirm.
+- Audit retention: the 400-day target is a documented obligation only.
+  Nothing in the store deletes or expires audit rows; deletion needs a
+  separate privileged maintenance design. Install and connection rows are
+  kept indefinitely. (Amended 2026-11-09: the store-configurable option is
+  withdrawn.)
 - Production wiring: the store is not constructed in `cmd/api/main.go` in
   this slice, so no schema reaches production until slice 4 wires it
   behind a feature flag. If the owner wants the schema deployed earlier,

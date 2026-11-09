@@ -1,9 +1,47 @@
 # Design: issue-959-feat-glovo-m1a-2-tenant-principal-connec
 
+## Amendment 2026-11-09 — joint 959/960/961 AMEND
+
+Independent review of digest `sha256:718181577b889372ffec9eb565489b3cf53130b7e9a3b2545f0de65198467651` (mctl-api#959, comment of 2026-11-09) required one joint amendment across #959, #960 and #961. Finding -> change in this slice:
+
+| Finding | Change |
+|---|---|
+| P2 runtime role is not the table owner, but `NewStore` runs DDL with the runtime `connStr` | DDL moves to `ApplySchema(ctx, migrationConnStr)` under a migration role; `NewStore` runs no DDL and checks the schema version; runtime grants are DML only; tests T14 prove the runtime role cannot `ALTER`, `DROP` or `DISABLE TRIGGER` (task 4, A5) |
+| P3 "No Glovo code exists" is stale; #977 ships `internal/glovo` | Current state corrected; this slice extends `internal/glovo` and reuses `glovo.Code`/`glovo.Error` instead of a parallel `RefusalCode`/`Refusal` (task 1) |
+| P3 open question still offers store-configurable retention | Open question replaced: retention is the documented 400-day obligation, enforced only by a future privileged maintenance design |
+| P3 T7 races `Reinstall` but not `RevokeInstall` | T7 now also races `Connect` against `RevokeInstall` |
+| P3 carry-over from mctl-telegram#1258: only revoke/cancel purge state | Per-terminal-state retention and purge table added (section "Terminal-state purge"); T15 drives every terminal path |
+| Cross-slice: #961 needs `expires_at`, audit `actor_kind`; #960 task 0 needs the allowlist DDL and the refusal enum from this slice | `glovo_connections.expires_at`, `glovo_audit_events.actor_kind`, the `glovo_pilot_allowlist` DDL with `IsAllowlisted`, and the full closed refusal enum are added here |
+
+### Joint contract frozen for #959, #960 and #961 (identical text in all three)
+
+Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 bridge (`docs/bridge.md`). Where an earlier section of this document disagrees, this contract wins.
+
+| Item | Frozen value | Owner slice |
+|---|---|---|
+| Go package | extend the existing `internal/glovo` from #977 (`glovo.Code`, `glovo.Error`, `glovo.Gate`, `glovo.WriteError`); no parallel `RefusalCode`/`Refusal` type | #959 adds the codes |
+| Tables | `glovo_installs`, `glovo_connections`, `glovo_connect_requests`, `glovo_audit_events`, `glovo_pilot_allowlist` | #959 (DDL) |
+| | `glovo_handoff_refs`, `glovo_rate_counters` | #961 (DDL) |
+| | `oauth_team_grants`, `oauth_refresh_tokens.team_grant_id` (refresh-store database) | #960 |
+| Columns | reconnect link `supersedes_id`; `glovo_connections.expires_at TIMESTAMPTZ NULL`; `glovo_audit_events.actor_kind` (`user`, `owner`, `admin`, `worker`, `system`) | #959 |
+| Store API | `Install`, `GetInstall`, `RevokeInstall`, `Reinstall`, `Connect`, `Reconnect`, `Transition`, `Revoke`, `GetConnection`, `LiveConnection`, `ListAudit`, `IsAllowlisted` | #959 |
+| Store states | `pending_handoff`, `pending_provider`, `active`, `expired`, `failed`, `revoked`; wire `PublicState`: both `pending_*` -> `pending`, the rest unchanged | #959 states, #961 mapping |
+| Refusal enum (closed, `glovo.Code`) | `not_ready`, `unavailable`, `not_authorized`, `invalid_request`, `not_found`, `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`, `stale_install`, `stale_version`, `no_connection`, `connection_exists`, `connection_revoked`, `connection_expired`, `invalid_transition`, `idempotency_key_reused`, `rate_limited` | #959 |
+| HTTP status | 503: `not_ready`, `unavailable`; 401/403: `not_authorized` (401 only when no valid token); 400: `invalid_request`; 404: `not_found`; 403: `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`; 429: `rate_limited`; 409: every other code. One function, `glovo.Status(code)` | #959 |
+| Membership lost | `no_tenant` everywhere (resolver, facade, worker check); `not_authorized` only for a wrong audience or identity kind | all |
+| Refusal body | #977's `glovo.WriteError` shape `{"error": <code>, "error_description": <fixed text per code>}`. No `schema`/`refusal` envelope on refusals; success bodies keep their `schema` field. This is the shape mctl-api#957 and mctl-telegram#1235 vendor | all |
+| Kill switch | one name, `GLOVO_ENABLED`, default `false`, read once in `cmd/api/main.go`. Open only when `GLOVO_ENABLED=true` **and** every readiness dependency is configured and healthy. `GLOVO_MCP_RESOURCE` alone never opens anything. `GLOVO_OAUTH_ENABLED` and `GLOVO_DISABLED` are withdrawn | #960 introduces, #961 reuses |
+| DDL role | DDL runs only through `glovo.ApplySchema(ctx, migrationConnStr)` with a dedicated migration role that owns the objects. `NewStore(ctx, runtimeConnStr)` runs no DDL: it pings and checks the recorded schema version, failing closed on a mismatch. The runtime role gets only the DML it needs (no UPDATE/DELETE on `glovo_audit_events`, no DELETE on `glovo_connections`), so it cannot `ALTER`, `DROP` or `DISABLE TRIGGER`. A test proves each of the three refusals | #959 builds it, #961 extends it |
+| Worker identity | none exists today: `auth.IsGlovoWorker()` is the reserved stub (`internal/auth/oidc.go`, always false). #961 builds it, default OFF. It is distinct from the #968 bridge provider (`service:bridge-provider:<ref>`, `bridge:provide`): the Glovo worker is refused on `/api/v1/bridge/*` and the bridge provider on `/api/v1/glovo/*`, tested both ways. Its credential is test-only until the issuer decision (mctl-gitops#2506 / #2540) | #961 |
+| Facade routes | `/api/v1/glovo/facade/*` is added to #977's empty `glovoAudienceRoutes` by #961 (the only slice that adds those routes) | #961 |
+| Allowlist routes | `PUT\|DELETE /api/v1/glovo/pilot/{tenant}/principals/{principal_id}` are defined only in #960 | #960 |
+
 ## Current state
 
-- No Glovo code exists in mctl-api today: `grep -ril glovo` over the Go
-  sources and `docs/` returns nothing.
+- mctl-api#977 (merged `a9ca5814`) ships `internal/glovo` with `glovo.Code`
+  (`not_ready`, `not_authorized`), `glovo.Error`, `glovo.WriteError` and the
+  closed `glovo.Gate`. It has no store, table or connection code. This slice
+  extends that package.
 - Every durable store follows one pattern: its own package under
   `internal/<name>/store.go`. A `const <name>Schema` string holds idempotent
   DDL (`CREATE TABLE IF NOT EXISTS`, `CREATE ... INDEX IF NOT EXISTS`,
@@ -72,7 +110,7 @@ These amendments supersede the audit retention GUC bypass, the original `SweepAu
 
 ## Proposed solution
 
-Add a new self-contained package `internal/glovo` (no imports from
+Extend the existing package `internal/glovo` from #977 (still no imports from
 `internal/api`, `internal/mcp` or `internal/principals`). This slice adds
 no route, no MCP tool and no `main.go` wiring.
 
@@ -110,14 +148,14 @@ func CanTransition(from, to ConnectionState) bool
 
 type Owner struct{ TenantID, PrincipalID string } // validate(): non-empty tenant, "prn_" principal
 
-type RefusalCode string // invalid_input, no_install, stale_install, no_connection,
-                        // connection_exists, connection_revoked, connection_expired,
-                        // not_found, invalid_transition, stale_version, idempotency_key_reused
-type Refusal struct{ Code RefusalCode }  // implements error; Error() == string(Code)
-var ErrNotFound = &Refusal{Code: NotFound} // one value for missing AND foreign
+// Codes are added to #977's glovo.Code; the closed enum is the joint
+// contract above. No parallel RefusalCode/Refusal type.
+func refuse(c Code) *Error                 // fixed Description per code, no IDs
+var ErrNotFound = refuse(CodeNotFound)     // one value for missing AND foreign
+func Status(c Code) int                    // the single HTTP mapping (joint contract)
 ```
 
-`Refusal` carries no IDs or owner data in its message. This keeps a
+A refusal (`*glovo.Error`) carries no IDs or owner data in its message. This keeps a
 foreign-ID miss byte-identical to a true miss. The codes match the parent
 #953 vocabulary so slice 4 can map them to HTTP without translation.
 
@@ -145,6 +183,7 @@ CREATE TABLE IF NOT EXISTS glovo_connections (
   end_reason       TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
   ended_at         TIMESTAMPTZ,
+  expires_at       TIMESTAMPTZ,                      -- synthetic expiry, set on activation (#961)
   version          BIGINT NOT NULL DEFAULT 1,
   UNIQUE (tenant_id, principal_id, connection_id, install_revision)
 );
@@ -164,6 +203,7 @@ CREATE TABLE IF NOT EXISTS glovo_audit_events (
   event_id TEXT PRIMARY KEY,                         -- gae_
   tenant_id TEXT NOT NULL, subject_principal_id TEXT NOT NULL DEFAULT '',
   actor_principal_id TEXT NOT NULL,
+  actor_kind TEXT NOT NULL,                          -- user | owner | admin | worker | system
   entity_kind TEXT NOT NULL,                         -- install | connection
   entity_id TEXT NOT NULL, event TEXT NOT NULL,
   from_state TEXT NOT NULL DEFAULT '', to_state TEXT NOT NULL,
@@ -172,11 +212,19 @@ CREATE TABLE IF NOT EXISTS glovo_audit_events (
 );
 CREATE INDEX IF NOT EXISTS glovo_audit_events_entity ON glovo_audit_events (tenant_id, entity_id, recorded_at);
 CREATE INDEX IF NOT EXISTS glovo_audit_events_recorded ON glovo_audit_events (recorded_at);
+CREATE TABLE IF NOT EXISTS glovo_pilot_allowlist (            -- read here, written by #960
+  tenant_id TEXT NOT NULL, principal_id TEXT NOT NULL,
+  added_by TEXT NOT NULL, added_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (tenant_id, principal_id)
+);
+CREATE TABLE IF NOT EXISTS glovo_schema_version (version INT NOT NULL);
 ```
 
 Then comes a `DO $$` block in the commerce style that adds the named
 CHECKs: `glovo_installs_state_check`, `glovo_connections_state_check`,
 `glovo_connections_principal_check` (`principal_id LIKE 'prn\_%'`),
+`glovo_pilot_allowlist_principal_check` (`principal_id LIKE 'prn\_%'`),
+`glovo_audit_events_actor_kind_check`,
 `glovo_connections_secret_ref_check`
 (`secret_ref IS NULL OR secret_ref LIKE 'gsr\_%'`), and
 `glovo_connections_terminal_check`
@@ -194,8 +242,29 @@ reused). Triggers are created with the `pg_trigger` existence test.
 
 The whole schema runs in one transaction under
 `pg_advisory_xact_lock(hashtext('glovo-schema'))`, as
-`principals/store.go:133` does. A failure rolls the whole thing back and
-`NewStore` returns an error.
+`principals/store.go:133` does, but only inside `ApplySchema(ctx,
+migrationConnStr)`, executed by a dedicated migration role that owns every
+`glovo_*` object. It ends by issuing the runtime grants: `SELECT, INSERT,
+UPDATE` on `glovo_installs`, `glovo_connections`, `glovo_connect_requests`;
+`SELECT, INSERT` on `glovo_audit_events`; `SELECT, INSERT, DELETE` on
+`glovo_pilot_allowlist` (the writes are reachable only through #960's admin
+routes; #960 has no DDL role and issues no grant of its own). `NewStore`
+uses the runtime connection, runs **no DDL**, and fails closed when
+`glovo_schema_version` is missing or differs from the compiled version. This
+departs from the DDL-in-`NewStore` convention of other mctl-api stores
+deliberately: a role that creates a table owns it and could disable the audit
+trigger.
+
+### Terminal-state purge
+
+| Terminal event | Purged in the same transaction | Retained |
+|---|---|---|
+| connection `expired`, `failed`, `revoked` (any reason, incl. `superseded`, `install_revoked`, `install_reinstalled`) | `secret_ref` set to NULL and returned for release; every unconsumed `glovo_handoff_refs` row of the connection (#961) | connection row (id never reused), audit events |
+| install `uninstalled` / reinstall | the above for every live connection of the old revision | install row, audit events |
+| idempotency rows | not on terminal transition; removed after 24 h by the #961 cleanup restricted to synthetic tables | none |
+
+Every terminal path goes through one `endConnection` helper, so no path can
+skip the purge (the gap found in the fake worker of mctl-telegram#1258).
 
 ### Locking (revoke-vs-connect safety)
 
@@ -234,7 +303,8 @@ return `*Refusal` for domain refusals and wrapped errors for I/O
 (`fmt.Errorf("glovo: ...: %w", err)`).
 
 ```go
-func NewStore(ctx context.Context, connStr string, opts ...Option) (*Store, error)
+func ApplySchema(ctx context.Context, migrationConnStr string) error // migration role only
+func NewStore(ctx context.Context, runtimeConnStr string, opts ...Option) (*Store, error) // no DDL
 // Option: WithClock(func() time.Time); audit retention is a future privileged maintenance slice
 func (s *Store) Close()
 
@@ -252,6 +322,7 @@ func (s *Store) Revoke(ctx, owner Owner, connectionID, reason string) (*Connecti
 func (s *Store) GetConnection(ctx, owner Owner, connectionID string) (*Connection, error) // ErrNotFound
 func (s *Store) LiveConnection(ctx, owner Owner) (*Connection, error)                    // no_connection
 func (s *Store) ListAudit(ctx, tenantID, entityID string) ([]AuditEvent, error)
+func (s *Store) IsAllowlisted(ctx, tenantID, principalID string) (bool, error) // read only
 // Audit retention deletion is OUT OF SCOPE for M1; no SweepAudit API is exposed.
 ```
 
@@ -333,7 +404,9 @@ info level.
 
 ## Platform impact
 
-- **Migrations:** four new `glovo_*` tables, indexes, CHECKs, and two
+- **Migrations:** six new `glovo_*` tables (incl. `glovo_pilot_allowlist`
+  and `glovo_schema_version`), applied only by `ApplySchema` under the
+  migration role, indexes, CHECKs, and two
   trigger functions. All are additive and idempotent, and nothing existing
   is altered. Because the store is not constructed in `cmd/api/main.go` in
   this slice, nothing is applied to production databases until slice 4

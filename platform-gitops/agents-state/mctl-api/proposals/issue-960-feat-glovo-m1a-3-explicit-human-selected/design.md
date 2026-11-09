@@ -1,5 +1,40 @@
 # Design: issue-960-feat-glovo-m1a-3-explicit-human-selected
 
+## Amendment 2026-11-09 — joint 959/960/961 AMEND
+
+Independent review of digest `sha256:9be361b79d65b262733aa87e077b4b66e0247ac630bda5379d7f1b26751693a6` (mctl-api#960, comment of 2026-11-09) required one joint amendment across #959, #960 and #961. Finding -> change in this slice:
+
+| Finding | Change |
+|---|---|
+| P2 atomic grant/code/refresh write required but not designed; grants on `OAUTH_DB_URL`, allowlist on `GLOVO_DB_URL` | Section "Atomic grant binding" below: `oauth_team_grants` lives in the refresh-store database and pool; grant activation and the refresh-token insert commit in one transaction; revocation updates grant and family in one transaction; the allowlist is a live read, never part of the write. Without a Postgres refresh store the Glovo resource stays `not_ready` |
+| P2 task 0 cannot pass (allowlist DDL and refusal enum absent from #959) | #959 now owns the `glovo_pilot_allowlist` DDL, `IsAllowlisted` and the full closed enum (joint contract); task 0 checks those exact names |
+| P2 kill switch only in AMEND text; name differs from #961 | One switch `GLOVO_ENABLED` (joint contract). New task 10 changes `ResolveResource` and replaces the #977 build-constant `glovo.Default` with a config gate; body, Rollback and tasks updated; `GLOVO_OAUTH_ENABLED`/`GLOVO_DISABLED` withdrawn |
+| P3 "merge is mechanical" contradicts the task 0 STOP | Risk text corrected |
+| P3 no named test for consent-token replay or auth-code reuse | T13 and T14 added |
+
+### Joint contract frozen for #959, #960 and #961 (identical text in all three)
+
+Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 bridge (`docs/bridge.md`). Where an earlier section of this document disagrees, this contract wins.
+
+| Item | Frozen value | Owner slice |
+|---|---|---|
+| Go package | extend the existing `internal/glovo` from #977 (`glovo.Code`, `glovo.Error`, `glovo.Gate`, `glovo.WriteError`); no parallel `RefusalCode`/`Refusal` type | #959 adds the codes |
+| Tables | `glovo_installs`, `glovo_connections`, `glovo_connect_requests`, `glovo_audit_events`, `glovo_pilot_allowlist` | #959 (DDL) |
+| | `glovo_handoff_refs`, `glovo_rate_counters` | #961 (DDL) |
+| | `oauth_team_grants`, `oauth_refresh_tokens.team_grant_id` (refresh-store database) | #960 |
+| Columns | reconnect link `supersedes_id`; `glovo_connections.expires_at TIMESTAMPTZ NULL`; `glovo_audit_events.actor_kind` (`user`, `owner`, `admin`, `worker`, `system`) | #959 |
+| Store API | `Install`, `GetInstall`, `RevokeInstall`, `Reinstall`, `Connect`, `Reconnect`, `Transition`, `Revoke`, `GetConnection`, `LiveConnection`, `ListAudit`, `IsAllowlisted` | #959 |
+| Store states | `pending_handoff`, `pending_provider`, `active`, `expired`, `failed`, `revoked`; wire `PublicState`: both `pending_*` -> `pending`, the rest unchanged | #959 states, #961 mapping |
+| Refusal enum (closed, `glovo.Code`) | `not_ready`, `unavailable`, `not_authorized`, `invalid_request`, `not_found`, `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`, `stale_install`, `stale_version`, `no_connection`, `connection_exists`, `connection_revoked`, `connection_expired`, `invalid_transition`, `idempotency_key_reused`, `rate_limited` | #959 |
+| HTTP status | 503: `not_ready`, `unavailable`; 401/403: `not_authorized` (401 only when no valid token); 400: `invalid_request`; 404: `not_found`; 403: `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`; 429: `rate_limited`; 409: every other code. One function, `glovo.Status(code)` | #959 |
+| Membership lost | `no_tenant` everywhere (resolver, facade, worker check); `not_authorized` only for a wrong audience or identity kind | all |
+| Refusal body | #977's `glovo.WriteError` shape `{"error": <code>, "error_description": <fixed text per code>}`. No `schema`/`refusal` envelope on refusals; success bodies keep their `schema` field. This is the shape mctl-api#957 and mctl-telegram#1235 vendor | all |
+| Kill switch | one name, `GLOVO_ENABLED`, default `false`, read once in `cmd/api/main.go`. Open only when `GLOVO_ENABLED=true` **and** every readiness dependency is configured and healthy. `GLOVO_MCP_RESOURCE` alone never opens anything. `GLOVO_OAUTH_ENABLED` and `GLOVO_DISABLED` are withdrawn | #960 introduces, #961 reuses |
+| DDL role | DDL runs only through `glovo.ApplySchema(ctx, migrationConnStr)` with a dedicated migration role that owns the objects. `NewStore(ctx, runtimeConnStr)` runs no DDL: it pings and checks the recorded schema version, failing closed on a mismatch. The runtime role gets only the DML it needs (no UPDATE/DELETE on `glovo_audit_events`, no DELETE on `glovo_connections`), so it cannot `ALTER`, `DROP` or `DISABLE TRIGGER`. A test proves each of the three refusals | #959 builds it, #961 extends it |
+| Worker identity | none exists today: `auth.IsGlovoWorker()` is the reserved stub (`internal/auth/oidc.go`, always false). #961 builds it, default OFF. It is distinct from the #968 bridge provider (`service:bridge-provider:<ref>`, `bridge:provide`): the Glovo worker is refused on `/api/v1/bridge/*` and the bridge provider on `/api/v1/glovo/*`, tested both ways. Its credential is test-only until the issuer decision (mctl-gitops#2506 / #2540) | #961 |
+| Facade routes | `/api/v1/glovo/facade/*` is added to #977's empty `glovoAudienceRoutes` by #961 (the only slice that adds those routes) | #961 |
+| Allowlist routes | `PUT\|DELETE /api/v1/glovo/pilot/{tenant}/principals/{principal_id}` are defined only in #960 | #960 |
+
 ## Current state
 
 Authorization flow (all read in the clone at `5f60792`):
@@ -44,9 +79,14 @@ Authorization flow (all read in the clone at `5f60792`):
   (`internal/gitops/principal_membership.go`) and used by
   `checkTenantRoleByPrincipal` (`internal/api/tenant_role.go`). A read
   failure is 503 there, never an answer.
-- There is no Glovo code, no `X-Mctl-Selected-Tenant` header, no
-  `ambiguous_tenant` code and no personal-tenant marker anywhere in the clone
-  (grep). The only `X-Mctl-*` headers are `X-Mctl-Surface`,
+- Since mctl-api#977 (merged `a9ca5814`): `internal/glovo` (`glovo.Code`,
+  `glovo.Error`, `glovo.WriteError`, closed `glovo.Default` gate),
+  `OAuthServer.GlovoResource` (`GLOVO_MCP_RESOURCE`), `User.IsGlovoAudience()`,
+  `glovoAudienceGate` with an empty route list, and `ResolveResource`
+  returning `ErrGlovoNotReady` for the Glovo resource unconditionally. There
+  is still no `X-Mctl-Selected-Tenant` header, no `ambiguous_tenant` code and
+  no personal-tenant marker. Authorization codes are held in memory
+  (`OAuthServer.codes`, a `sync.Map`), not in Postgres. The only `X-Mctl-*` headers are `X-Mctl-Surface`,
   `X-Mctl-Agent-Scope-Shadow` and `X-Mctl-Audit-Parent`.
 - The closest precedent for a tenant-bound credential is the `support` agent
   scope (`docs/support-agent-scope.md`, `internal/auth/agent_scope.go`). The
@@ -76,7 +116,7 @@ Deployed state checked:
 
 The default `GLOVO_NON_SELECTABLE_TENANTS=admins,labs` below is superseded by **`admins` only** (or other explicitly reviewed system-only tenants): `labs` as a team can be chosen by an authorized, allowlisted principal after the human consent step; simply hosting the Glovo workload in `labs` never grants membership or silently selects it.
 
-The #958 proposal deliberately installs an **unconditionally closed** Glovo resource gate (`ErrGlovoNotReady`). #960 must add a separate default-FALSE authorization-code admission guard, such as `GLOVO_OAUTH_ENABLED=false`, with a single documented check: only if the operator explicitly enables it **and** grant store, selected-team consent, principal-mode role reader and per-principal pilot allowlist are healthy can `ResolveResource` admit this resource. Configuring `GLOVO_MCP_RESOURCE` alone still refuses `invalid_target`. Any public-facing enablement is a distinct P2 release approval; the code change and isolated tests do not enable pilot by themselves.
+The #958 proposal deliberately installs an **unconditionally closed** Glovo resource gate (`ErrGlovoNotReady`). #960 must add a separate default-FALSE authorization-code admission guard, (amended 2026-11-09: the single name is `GLOVO_ENABLED`, see the joint contract), with a single documented check: only if the operator explicitly enables it **and** grant store, selected-team consent, principal-mode role reader and per-principal pilot allowlist are healthy can `ResolveResource` admit this resource. Configuring `GLOVO_MCP_RESOURCE` alone still refuses `invalid_target`. Any public-facing enablement is a distinct P2 release approval; the code change and isolated tests do not enable pilot by themselves.
 
 All teamgrant/authorization-code/refresh stores must use a demonstrably atomic Postgres transaction covering issue-code, family activation/rotation/revocation and grant records **or** a versioned recoverable saga whose intermediate states are always denied for access-token minting and scope resolution. The project MUST identify the real `refreshstore` transaction hooks/pool topology and test interleavings including crash/restart. Do not emit signed access tokens before durable grant and refresh binding commits; revoked families cannot leave an active authorization grant. If no atomic/saga implementation is proven, expose `not_ready` for Glovo scope and report a separate integration blocker.
 
@@ -84,8 +124,36 @@ Slice #958 and #959 must already be merged and reviewed before this implementati
 
 ## Proposed solution
 
-Everything below is inert unless the Glovo resource is configured (slice 1).
-With it unset, no code path creates a grant or emits the new claims.
+Everything below is inert unless `GLOVO_ENABLED=true` **and** the readiness
+checks pass (Postgres refresh store, team grant store, principal-mode role
+reader, allowlist reader, `GLOVO_MCP_RESOURCE` valid). Otherwise
+`ResolveResource` keeps answering `ErrGlovoNotReady`, no code path creates a
+grant or emits the new claims, and `glovo.Gate` stays closed.
+
+### 0. Atomic grant binding (amended 2026-11-09)
+
+- `oauth_team_grants` is created by the teamgrant package **in the
+  refresh-store database** and used through the same `pgxpool` as
+  `refreshstore.PostgresStore` (`OAUTH_DB_URL`, falling back as today). The
+  allowlist stays on the Glovo database and is only ever *read* live; it is
+  not part of any write below.
+- Consent writes a `pending` grant only. A `pending` grant never passes
+  `Check`. The authorization code is in memory (`OAuthServer.codes`); a crash
+  after code issue loses the code and leaves only a pending grant that
+  expires, which grants nothing.
+- Code exchange: new `refreshstore.PostgresStore.InsertBound(ctx, rawToken,
+  clientID, sess, expiresAt, bind func(pgx.Tx) error)` begins one
+  transaction, inserts the refresh token, and calls `bind`, which runs
+  `teamgrant.ActivateTx(tx, grantID, familyID)` (`pending -> active`, CAS on
+  state, principal, client and resource). Either both commit or neither does.
+  The access token is signed only after the commit returns.
+- Rotation: `RotateIf`'s `accept` runs inside the existing `rotateTx`
+  transaction; grant checks there use the same `tx` (`teamgrant.CheckTx`).
+- Revocation: `RevokeFamily` and `revokePrincipalTx` gain the grant update
+  (`active|pending -> revoked`) in their existing transaction, so no
+  committed state has a revoked family with a live grant or the reverse.
+- With the in-memory refresh store (`OAUTH_DB_URL` unset) the Glovo resource
+  is `not_ready`: there is no transaction to bind to.
 
 ### 1. Team grant store (`internal/auth/teamgrant`)
 
@@ -153,8 +221,9 @@ The grant is server-owned. The client never sees anything but the opaque
   exactly one non-empty `tenant` form value (`len(r.PostForm["tenant"]) == 1`).
   It recomputes eligibility now and requires the value to be a member.
   Otherwise it returns `access_denied` (the token is already spent, so no
-  retry). Then: `teamgrant.Create`, followed by `issueGrant` with the new
-  `authzCompletion.TeamGrantID`/`SelectedTenant`. The audit
+  retry). Then: `teamgrant.Create` (a `pending` row, inert until activated
+  in the exchange transaction of section 0), followed by `issueGrant` with
+  the new `authzCompletion.TeamGrantID`/`SelectedTenant`. The audit
   `oauth.grant_issued` gains `tenant` and `team_grant_id`.
 - No header (`X-Mctl-Selected-Tenant` included), query parameter or
   `/oauth/authorize` parameter can pre-fill or set the choice.
@@ -168,9 +237,10 @@ The grant is server-owned. The client never sees anything but the opaque
   gets a variant that takes them. Existing signatures stay and pass "".
 - `ExchangeCodeForResource`: if the code has a `TeamGrantID`, it calls
   `teamgrant.Check` (principal, client, resource must match) inside the
-  exchange, and fails with `invalid_grant` before minting. It then mints the
-  refresh token (new family), runs `Activate(grantID, familyID)`, and mints
-  the access token with the claims. A code for the Glovo resource **without** a
+  exchange, and fails with `invalid_grant` before minting. It then calls
+  `InsertBound` (section 0), which inserts the refresh token and activates
+  the grant in one transaction, and mints the access token with the claims
+  only after that commit. A code for the Glovo resource **without** a
   grant id is refused, so a non-consent code path can never yield a Glovo
   token.
 - `jwtPayload` gains `TeamGrant string json:"tgr,omitempty"` and
@@ -238,7 +308,9 @@ context, plus a test-only route so the behaviour is testable without slice 4.
 
 ### 5. Pilot allowlist (`internal/glovo/allowlist.go`)
 
-DDL identical to the #953 design, so it converges with slice 2:
+The DDL and `IsAllowlisted` belong to #959 (joint contract). This slice adds
+only `Add`/`Remove` and the admin routes, with an INSERT/DELETE grant for the
+admin path issued by `ApplySchema`. Table shape, for reference:
 `glovo_pilot_allowlist(tenant_id TEXT NOT NULL, principal_id TEXT NOT NULL
 CHECK (principal_id LIKE 'prn\_%'), added_by TEXT NOT NULL, added_at
 TIMESTAMPTZ NOT NULL, UNIQUE (tenant_id, principal_id))`. There is no
@@ -250,11 +322,14 @@ the next resource request (step 6) and on the next refresh.
 
 ### 6. Wiring
 
-`cmd/api/main.go`: build `teamgrant.PostgresStore` on the refresh-store DB
-(`OAUTH_DB_URL`/`AUDIT_DB_URL` as today), the allowlist on `GLOVO_DB_URL`
-(falling back to `AUDIT_DB_URL`), and `GLOVO_NON_SELECTABLE_TENANTS`. Startup
-refuses `GLOVO_MCP_RESOURCE` set together with `TENANT_AUTHZ_MODE !=
-principal`, or without a team grant store. Docs: `docs/glovo-team-grant.md`
+`cmd/api/main.go`: read `GLOVO_ENABLED` (default `false`); build
+`teamgrant.PostgresStore` on the refresh-store pool (`OAUTH_DB_URL` as
+today), the #959 store on `GLOVO_DB_URL` (no `AUDIT_DB_URL` fallback for
+writes), and `GLOVO_NON_SELECTABLE_TENANTS`. Construct `glovo.Gate{Open:
+enabled && ready}` instead of using the build constant `glovo.Default`, and
+pass the same readiness to `ResolveResource`. Startup refuses
+`GLOVO_ENABLED=true` together with `TENANT_AUTHZ_MODE != principal`, an
+in-memory refresh store, or a missing grant store. Docs: `docs/glovo-team-grant.md`
 (flow, claims, refusal table, test matrix).
 
 ## Alternatives
@@ -280,7 +355,7 @@ principal`, or without a team grant store. Docs: `docs/glovo-team-grant.md`
   (`oauth_refresh_tokens.team_grant_id DEFAULT ''`), both idempotent inline
   DDL. Existing rows mean "no team grant". The allowlist table is shared with
   slice 2 under `IF NOT EXISTS`.
-- Backward compatibility: with `GLOVO_MCP_RESOURCE` unset, nothing changes.
+- Backward compatibility: with `GLOVO_ENABLED` unset (or `GLOVO_MCP_RESOURCE` unset), nothing changes.
   The API and support audiences, non-CIMD clients and existing refresh
   sessions follow identical paths. New claim fields use `omitempty`.
   `refreshstore.Store` grows a session field, not a method. `RotateIf` must
@@ -300,6 +375,6 @@ principal`, or without a team grant store. Docs: `docs/glovo-team-grant.md`
     decisions run inside the `RotateIf` `accept` callback.
   - Audience confusion: a Glovo token must carry a single `aud`, and claims
     are honoured only on the Glovo audience.
-  - Dependency on unmerged slices 1 and 2: code against the interfaces above.
-    Slice 1 symbols are behind a small `glovoResource` accessor, so the
-    merge is mechanical.
+  - Dependency on slices 1 and 2: slice 1 (#977) is merged; slice 2 (#959)
+    must be merged first and task 0 stops otherwise. Nothing here is a
+    mechanical merge.
