@@ -1,0 +1,20 @@
+status: proposed
+updated_at: '2026-11-09T01:42:31Z'
+updated_by: mctl-agents[bot]
+execution:
+  context_id: ex-24d5d598820c8cde
+  trace_id: 0fdda38e7411ec85e83a79229bc14a7d
+  agent: issue-investigator
+  version: ''
+source:
+  type: github_issue
+  repo: mctlhq/mctl-design
+  issue: 209
+  url: https://github.com/mctlhq/mctl-design/issues/209
+control:
+  requires_human_approval: true
+context:
+  snapshot_id: cs-16d96c35b61c5b85
+  content_hash: sha256:16d96c35b61c5b859a373ad18b136a7891054b36419d976d66bce61b5291ac5f
+  strategy: deterministic-fixed-order
+  strategy_version: 1.0.0
