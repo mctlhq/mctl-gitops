@@ -58,7 +58,7 @@ separate runtime role.
 - [ ] T3. Control path: `LockOrderForControl` outside `tenants` is `not_found`; inside, it
   returns the owner from the row; `ScopeFromRefs` with refs of two tenants is
   `not_found`.
-- [ ] T4. Connection: absent `no_connection`, revoked `connection_revoked`, expired
+- [ ] T4. Connection (the first three codes are returned by #959 `LiveConnectionTx`, round 8 C-4, its test T24; a live `gcn_` that differs is `connection_revoked`, decided here and tested with a double): absent `no_connection`, revoked `connection_revoked`, expired
   `connection_expired`, moved revision `stale_install`; reads still work after revoke. Round 4 (N2): after a revoke `AppendSnapshot`, `Finalize` and `BindApproval` give `connection_revoked`, while `MarkCancelled` and `MarkUnknown` still succeed and `MarkDispatched` does not re-read the connection (a #959 store double counts `LiveConnectionTx` calls per method and asserts the table of design §6).
 - [ ] T5. Idempotent create: same key and request replays; same key, other basket gives
   `idempotency_key_reused`; 20 concurrent creates give one row, one `ordr_` and (with #957 T5) zero extra `work_items`/`work_item_executions` rows; `LookupByIdempotencyKey` writes nothing; `Create` with a malformed `OrderRef` is `invalid_request`.

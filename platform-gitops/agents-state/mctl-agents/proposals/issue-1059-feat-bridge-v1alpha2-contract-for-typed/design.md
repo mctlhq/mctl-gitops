@@ -1,5 +1,16 @@
 # Design: issue-1059-feat-bridge-v1alpha2-contract-for-typed
 
+## Amendment 2026-11-09 (c), round 7 of the AMEND PR
+
+The Glovo `place_order_fake` is the one v1alpha2 write. Round 6 gave this issue its schema but left it half specified; this round completes the contract side and names who owns the rest. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| R6-1, #985 F1, #986 R6-986-1, CROSS X-A (no emitter, no gate, no provider) | §Write command now ends with an ownership paragraph: this issue owns the schema, the envelope and the result contract; the per-command wire version, projection, Claim gating, `SubmitResult` and vendoring in mctl-api are mctl-api#986 §2a (not #985); the provider is mctl-telegram#1262 task 2b. OPEN-1059-2 is closed and OPEN-1059-3 split (requirements) |
+| R6-2 (no result contract for the write) | §Write command, "Result": the v1alpha1 `result.schema.json`, unchanged. No v1alpha2 write result exists |
+| R6-3 (the closed write envelope is not specified field by field) | §Write command, field table, written as a delta over the v1alpha1 `command.schema.json` with the decisions on `install_revision_ref`, `ttl_seconds`, the timestamp pattern, `cancel_requested` and `lease_token`. Fixtures for a missing and an extra field |
+| CROSS X-A (this proposal contradicts itself) | requirements Context and design Alternative 2: v1alpha1 remains the contract for every other write and for `read_status`; the Glovo `place_order_fake` is v1alpha2 |
+
 ## Amendment 2026-11-09 (c), round 2 of the AMEND PR
 
 Re-review of mctl-gitops#2550 head `dc1fe6e5`. mctl-api references re-checked at
@@ -18,7 +29,7 @@ passages are edited.
 | P3 F6 (stale passages) | The memo and "not observable" passages in Current state now state the verified PROVENANCE match; the `jcs-digest.json` categories are listed inline |
 | P3 F7 (size numbers) | Preview `display` aligned to 0..30 and `unavailable_items` 0..30, disjoint from the basket lines; fees and discount bounded. Re-measured: preview 8,273 B, basket read 7,127 B, approval basket 3,135 B, history 10,673 B. The 12,288-byte payload cap is defense in depth that only a schema bypass can reach; over-cap is `invalid_document` at the mctl-api route and `payload_too_large` in the reference validator |
 | P3 F8 (#986 vendors names this contract does not produce) | `SHA256SUMS` is the exact list a consumer vendors; mctl-api#986 vendors that list and nothing else |
-| OPEN-1059-1 (write payload) | Closed in round 6 (G1): this issue owns the write schema. `command-place-order-fake.schema.json` (below) is the only definition of the Glovo `place_order_fake` command; its `payload` is the approval basket by `$ref`. mctl-api#985 vendors it; no other issue defines it |
+| OPEN-1059-1 (write payload) | Closed in round 6 (G1): this issue owns the write schema. `command-place-order-fake.schema.json` (below) is the only definition of the Glovo `place_order_fake` command; its `payload` is the approval basket by `$ref`. mctl-api#986 §2a vendors it (round 7; not #985, which only enqueues it); no other issue defines it |
 
 ## Amendment 2026-11-09 (b)
 
@@ -142,7 +153,7 @@ docs/contracts/bridge/v1alpha2/
     approval-basket.valid.json
     approval-basket.{unsorted,duplicate-item,total-mismatch,display-field}.json  # invalid
     command-place-order-fake.valid.json
-    command-place-order-fake.{v1alpha1-payload,wrapped-payload}.json  # invalid
+    command-place-order-fake.{v1alpha1-payload,wrapped-payload,missing-field,extra-field,install-revision-ref}.json  # invalid
   vectors/
     jcs-digest.json              # positive JCS vectors
     pattern-parity.json          # accepted/rejected strings per schema pattern (Go RE2 = Python)
@@ -289,17 +300,44 @@ changed (different fingerprint). Its `must_reject` cases are: unsorted lines, a 
 
 ### Write command (`command-place-order-fake.schema.json`)
 
-This issue owns the one definition of the Glovo `place_order_fake` command (round 6,
-G1; the shape is fixed by mctl-api#957 §6d.3). `schema_version` const
-`bridge.mctl.ai/v1alpha2`, `additionalProperties: false`, `kind` const
-`place_order_fake`, the v1alpha1 envelope fields `execution_id`, `work_item_id`,
-`order_ref`, `intent_hash` and a required `approval_ref` (`^aar_`), and `payload`,
-which is `{"$ref": "approval-basket.schema.json"}`: the approval basket exactly, with no
-wrapper object and no other top-level field, so the #989 fence parses it whole. The
-v1alpha1 payload `{item_codes, quantity_total, note}` is invalid under it
-(`command-place-order-fake.v1alpha1-payload.json`). A provider receives it only if it
-declares `bridge.mctl.ai/v1alpha2` (§Claim response). mctl-api#985 vendors the file with
-its fixtures and the pinned `SHA256SUMS` entry; #957, #988 and #989 only reference it.
+This issue owns the one definition of the Glovo `place_order_fake` command (round 6, G1; the
+payload shape is fixed by mctl-api#957 §6d.3), its field-by-field envelope and its result
+contract (round 7). It is the only v1alpha2 write: v1alpha1 stays the contract for every other
+write and for `read_status`.
+
+**Envelope.** A delta over the v1alpha1 `command.schema.json` (`docs/spikes/1043/`, unchanged).
+`additionalProperties: false`; the properties are exactly the v1alpha1 ones, each with its v1alpha1
+pattern, and the required list is the v1alpha1 one plus `approval_ref`:
+
+| Field | v1alpha2 write command |
+|---|---|
+| `schema_version` | const `bridge.mctl.ai/v1alpha2` |
+| `kind` | const `place_order_fake` (not the v1alpha1 enum) |
+| `approval_ref` | required, `^aar_[A-Za-z0-9]{16,40}$` |
+| `payload` | `{"$ref": "approval-basket.schema.json"}`: the approval basket exactly, no wrapper object and no other top-level field, so the #989 fence parses it whole. The closed v1alpha1 payload `{item_codes, quantity_total, note}` is invalid under it |
+| `issued_at`, `expires_at` | date-time and the RFC 3339 UTC pattern of the read command (amendment F5). mctl-api writes `Format(time.RFC3339)` of a UTC time, which matches |
+| `ttl_seconds` | integer 1..900, unchanged (not the read command's 1..300) |
+| `cancel_requested` | required boolean, unchanged |
+| `lease_token` | optional, unchanged pattern |
+| `install_revision_ref` | not present, so any occurrence is rejected: a write is bound server-side (the #989 fence re-checks the install revision against the live connection) and the provider needs no revision ref |
+| `request_id`, `params` | not present (read-command fields) |
+| every other v1alpha1 property | unchanged: `command_id`, `execution_id`, `work_item_id`, `attempt`, `tenant_ref`, `principal_ref`, `order_ref`, `connection_ref`, `intent_hash`, `issuer`, `audience`, `nonce` |
+
+**Result.** A v1alpha2 `place_order_fake` is answered with the v1alpha1 `result.schema.json`,
+unchanged: `schema_version` `bridge.mctl.ai/v1alpha1`, and `outcome`, `provider_effect` and
+`error_code` as today. There is no v1alpha2 write result. `effect_state` is not a provider field:
+mctl-api derives it from `provider_effect` and the permit exactly as for v1alpha1 (mctl-api#986
+§2a). The read result schema rejects a result for this command, and the v1alpha1 result schema
+rejects a v1alpha2-versioned document.
+
+**Who owns what.** This issue: the schema, this table and the result rule. mctl-api#986 §2a: the
+per-command wire version, projection and validation, Claim gating by the versions a provider
+declares, `SubmitResult`, and vendoring (so #985 only enqueues with `WireVersion` v1alpha2).
+mctl-telegram#1262 task 2b: parse and execute it (fake only) and post the result above. The
+fixtures are `command-place-order-fake.valid.json`, the v1alpha1-payload, wrapped-payload,
+missing-field (one required field absent), extra-field (a top-level field not listed) and
+`install_revision_ref` variants as invalid, and the claim envelope fixture holds one. A provider
+receives the command only if it declares `bridge.mctl.ai/v1alpha2` (§Claim response).
 
 ### Crosswalk to mctl-api#957
 
@@ -434,15 +472,16 @@ The claim response envelope has its own version, independent of each command's
 sends the v1alpha1 envelope unchanged, byte for byte what
 `internal/api/handlers_bridge.go:200` writes today, and only v1alpha1 commands in it.
 Fixtures: `claim-response.v1alpha1-only.valid.json`, `claim-response.v1alpha2.valid.json`
-(one v1alpha1 and one v1alpha2 command), an extra field and 11 commands (invalid). Who
-implements the envelope switch in mctl-api stays OPEN-1059-2; its shape is fixed here.
+(one v1alpha1 command, one v1alpha2 read command and one v1alpha2 write command), an extra field and 11
+commands (invalid). The envelope switch in mctl-api is mctl-api#986 §2a (OPEN-1059-2, closed in
+round 7); its shape is fixed here.
 
 ### Versioning
 
 - Each claimed command carries its own `schema_version`. The claim response envelope
   states the claim protocol version (§Claim response), and lists commands of any version
   the provider declared.
-- mctl-api MUST NOT lease a v1alpha2 command to a provider whose server-side config
+- mctl-api MUST NOT lease a v1alpha2 command (a read command or the write command) to a provider whose server-side config
   (`BridgeProviderConfig`) does not declare `bridge.mctl.ai/v1alpha2`. The provider is
   never trusted to filter.
 - A provider that receives an unknown `schema_version` drops it without side effects.
@@ -453,9 +492,21 @@ implements the envelope switch in mctl-api stays OPEN-1059-2; its shape is fixed
 
 ### Vendoring
 
-The README specifies one-way vendoring. Consumers copy `docs/contracts/bridge/v1alpha2/`
-verbatim and pin each file by the sha256 in `SHA256SUMS`. `SHA256SUMS` is the exact
-list of files a consumer vendors (mctl-api#986 vendors that list and nothing else). They never edit the vendored
+The README specifies one-way vendoring. Consumers copy `docs/contracts/bridge/v1alpha2/` files
+verbatim and pin them. One rule (round 8): `SHA256SUMS` lists every published file; each consumer
+vendors the subset the table below names, records the sha256 of `SHA256SUMS` in its `PROVENANCE`,
+and its drift test checks every vendored file against the matching `SHA256SUMS` line. A consumer
+never edits a vendored copy, and any change starts here. An upstream change fails this issue's
+`SHA256SUMS` test first.
+
+| Consumer | Files | Location |
+|---|---|---|
+| mctl-api#986 task 1 | `read-command`, `read-result`, `command-place-order-fake` and `claim-response` schemas and their fixtures | `internal/bridge/schema/v1alpha2/` |
+| mctl-api#988 task 2 and 2a (the one basket copy) | `approval-basket.schema.json`, `basket-fingerprint.json`, `pattern-parity.json`; `jcs-digest.json`, `must-reject.json` | `internal/glovo/basket/contract/`; `internal/jcs/testdata/` |
+| mctl-telegram#1262 task 2b | `command-place-order-fake`, `approval-basket` and `claim-response` schemas | its `schema/` directory |
+
+mctl-api#986 task 1's `TestApprovalBasketRefResolves` is the test that the `$ref` from the schemas
+to #988's basket copy resolves and that the copy equals its `SHA256SUMS` line.
 copy, and any change starts here. A test regenerates `SHA256SUMS` in memory and compares
 it with the committed file.
 
@@ -465,8 +516,10 @@ it with the committed file.
    It changes the bytes mctl-api#968 pinned, it violates "v1alpha1 unchanged", and
    turning required fields into conditional ones weakens the write contract.
 2. **A single v1alpha2 `command.schema.json` covering writes and reads via `oneOf`.**
-   Dropped for now. It duplicates the v1alpha1 write shape under a new version for no
-   consumer benefit, doubles the review surface, and `oneOf` error messages are poor. Reads
+   Dropped for now. It would duplicate the v1alpha1 write shape under a new version for every write kind, with
+   no consumer benefit, doubles the review surface, and `oneOf` error messages are poor. The one
+   write that must change (the Glovo `place_order_fake`, whose payload is the approval basket) has
+   its own schema (§Write command); every other write stays v1alpha1. Reads
    and writes take different paths anyway (reads go through `ReadBridge` in-process with
    no Temporal signal), so separate read-only schemas match the architecture. A later
    version can unify them if needed.

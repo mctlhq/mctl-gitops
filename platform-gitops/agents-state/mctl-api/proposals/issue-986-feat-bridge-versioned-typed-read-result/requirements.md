@@ -38,9 +38,15 @@ Contract
 - THE SYSTEM SHALL own the read DDL as `bridge.ApplyReadSchemaTx(ctx, tx, runtimeRole)`, callable by #985 `bridge.ApplySchema` and testable on a database built only from today's `bridgeSchema`. (round 4, X-3)
 - THE SYSTEM SHALL store the `irv_` wire ref in `bridge_commands.install_revision_ref` (NOT NULL for read kinds, NULL for write kinds) and SHALL emit it in the read-command projection, which SHALL validate against the vendored `read-command.schema.json`. (round 4, R3-1)
 - WHEN a result body exceeds `bridgeMaxBody` THE SYSTEM SHALL answer 400 `invalid_document` at the handler, as the #1059 contract says (round 5, F2); `ErrPayloadTooLarge`, `ErrReadUnavailable` and `ErrReadNotAuthorized` SHALL be registered in `codedErrors` with explicit statuses and SHALL NOT surface as 500. (round 4, R3-2)
-- THE SYSTEM SHALL leave `cmdCols`/`scanCmd` and every write-kind query unchanged, read the new columns only in read-kind paths, and refuse reads (`ErrReadUnavailable`) below the read level of `bridge_read_schema_version`, so a database that never ran the migrator keeps a working v1alpha1 bridge. (round 4, R3-3)
+- THE SYSTEM SHALL leave `cmdCols`/`scanCmd` and every write-kind query unchanged, read the new columns only in read-kind paths and, for `place_order_fake`, only on a store with wire versions enabled (design §2a), and refuse reads (`ErrReadUnavailable`) below the read level of `bridge_read_schema_version`, so a database that never ran the migrator keeps a working v1alpha1 bridge. (round 4, R3-3)
 - THE SYSTEM SHALL import RFC 8785 canonicalization and the raw-bytes pre-check from #988 `internal/jcs` and SHALL NOT implement either itself. (round 4, N3)
-- THE SYSTEM SHALL keep v1alpha1 schemas, kinds, projections and digests unchanged.
+- THE SYSTEM SHALL keep v1alpha1 schemas, kinds, projections and digests unchanged. The only
+  v1alpha2 write is the Glovo `place_order_fake` of mctl-agents#1059 §Write command: THE SYSTEM
+  SHALL store its wire version per command (`EnqueueInput.WireVersion`), project and validate it
+  against the vendored `command-place-order-fake.schema.json` at enqueue and at claim, lease it
+  only to a provider whose server-side config declares `bridge.mctl.ai/v1alpha2`, and accept for
+  it the unchanged v1alpha1 result. Every other write kind and every existing `place_order_fake`
+  row stays v1alpha1. (round 7)
 - THE SYSTEM SHALL support exactly the read kinds `read_history`, `read_preview` and
   `read_basket`. It SHALL NOT add a read kind for prepare; prepare is the #957 write.
 
@@ -56,8 +62,10 @@ Starting and waiting for a read
   Temporal workflow or signal.
 
 Submission
-- WHEN a provider submits a result whose `schema_version` differs from the command's
-  stored `wire_version` THE SYSTEM SHALL refuse with `binding_mismatch`.
+- WHEN a provider submits a result whose `schema_version` differs from the result version of the
+  command's kind THE SYSTEM SHALL refuse with `binding_mismatch`: the stored `wire_version` for a
+  read kind, `bridge.mctl.ai/v1alpha1` for every write kind, including the v1alpha2
+  `place_order_fake` (design §2a, round 7).
 - WHEN a read result succeeds THE SYSTEM SHALL validate the payload against the #1059
   per-kind schema, canonicalize it with RFC 8785, enforce the #1059 size cap (12288 canonical bytes
   inside a body of at most 16384), verify `payload_digest`, take every binding from the
@@ -68,8 +76,9 @@ Submission
 - IF a read result carries `tenant_ref`, `principal_ref`, `connection_ref` or
   `install_revision_ref` THEN THE SYSTEM SHALL refuse it as `invalid_document`.
 - THE SYSTEM SHALL never persist the result's `lease_token`.
-- THE SYSTEM SHALL lease a read-kind command only to a provider whose server-side config
-  declares `bridge.mctl.ai/v1alpha2`, and SHALL version the claim response.
+- THE SYSTEM SHALL lease a v1alpha2 command (a read kind, or the v1alpha2 `place_order_fake`)
+  only to a provider whose server-side config declares `bridge.mctl.ai/v1alpha2`, and SHALL
+  version the claim response.
 - IF a read-kind result carries a provider effect other than `none`, or a non-read kind
   carries a read payload THEN THE SYSTEM SHALL refuse with `invalid_document` (the
   vendored schema fails first; amended (c)).
@@ -122,9 +131,12 @@ Retention and hygiene
   (12288 / 16384 bytes) are set by the #1059 amendment in this PR; this slice follows
   whatever #1059 merges.
 - OPEN-986-2. The mctl-telegram provider must vendor the same #1059 files. That is an
-  extension of mctl-telegram#1262, not tracked here.
+  extension of mctl-telegram#1262, not tracked here. Round 7: the write half is now in #1262 (task 2b,
+  T26 and T27: vendors the write schema and the claim envelope, executes the v1alpha2 `place_order_fake`
+  fake-only); the read half stays open.
 - OPEN-986-3. Closed 2026-11-09 (c): `irv_` is the `install_revision` kind of #988
   `glovo.join_refs`, minted by #957 read routes (#957 design §2a). Round 3: wire-only; the
   decimal revision is what is stored and compared (#957 design §5).
-- OPEN-986-4 (round 6; recommendation: add `claim-response.schema.json` and its four fixtures to task 1 and the PROVENANCE pin). The versioned claim envelope has no vendored schema, no pinned value and no test. Pin in design section 2: `bridge.mctl.ai/v1alpha1` for a provider that declares only v1alpha1, `bridge.mctl.ai/claim/v1alpha2` for one that declares v1alpha2, and extend T7c to validate the Claim handler response against the schema for both provider configurations.
-- OPEN-986-5 (round 6; recommendation: `jcs-digest.json` and `must-reject.json` in `internal/jcs/testdata/` (#988 task 2a); `pattern-parity.json` and `basket-fingerprint.json` in `basket/contract/`). The location of `must-reject.json` and the digest vectors is inconsistent between #986 and #988 (and #988 design section 1 list). Fix the stale sentence in #988, state in #986 the exact read path of each file and add a sha256 pin test as is done for `approval-basket.schema.json`.
+- OPEN-986-6 (round 8; recommendation: the gitops P1 activation issue behind `deploy/staged/glovo-m1` gate.yaml `p1` sets `supported_versions` for the real provider). The key and its validation are code here (design §2); the value in the real `MCTL_BRIDGE_PROVIDERS` entry is deployment configuration owned by that activation issue, and it is an explicit precondition of the first dispatch (referenced from #985 §7.3 and mctl-telegram#1262).
+- OPEN-986-4 (closed, round 8: #986 task 1 vendors `claim-response.schema.json`, the handler picks the envelope from the caller, T4h and T7c validate both; the strings are `bridge.mctl.ai/v1alpha1` and `bridge.mctl.ai/claim/v1alpha2`; original recommendation follows; recommendation: add `claim-response.schema.json` and its four fixtures to task 1 and the PROVENANCE pin). The versioned claim envelope has no vendored schema, no pinned value and no test. Pin in design section 2: `bridge.mctl.ai/v1alpha1` for a provider that declares only v1alpha1, `bridge.mctl.ai/claim/v1alpha2` for one that declares v1alpha2, and extend T7c to validate the Claim handler response against the schema for both provider configurations.
+- OPEN-986-5 (closed, round 8: #1059 §Vendoring table, `TestApprovalBasketRefResolves`, #988 design fixed; round 6; recommendation: `jcs-digest.json` and `must-reject.json` in `internal/jcs/testdata/` (#988 task 2a); `pattern-parity.json` and `basket-fingerprint.json` in `basket/contract/`; round 8: the locations are now the per-consumer table of #1059 §Vendoring and #986 design §1, and the sha256 pin is `TestApprovalBasketRefResolves`). The location of `must-reject.json` and the digest vectors is inconsistent between #986 and #988 (and #988 design section 1 list). Fix the stale sentence in #988, state in #986 the exact read path of each file and add a sha256 pin test as is done for `approval-basket.schema.json`.

@@ -128,21 +128,21 @@ Cancel
   the receipt through #989 (`pending|approved -> refused`) and move the order to
   `cancelled`, in one transaction.
 - WHEN a cancel arrives for a dispatched order THE SYSTEM SHALL call
-  `bridge.Store.Cancel(ctx, tx, cmd, actor)` in the same transaction. Then:
-  - IF the resulting effect is `none` THEN it SHALL mark the reserved receipt `unknown`
-    through #989 (never spendable again) and move the order to `cancelled`;
-  - IF the effect is `unknown` THEN it SHALL move the order to `unknown`, SHALL NOT set
-    `cancelled`, and SHALL leave the already `consumed` receipt untouched.
+  `bridge.Store.Cancel(ctx, tx, cmd, actor)` in the same transaction, then apply design §2a
+  through `reconcileOrder`.
 
   The response SHALL carry `effect_state`.
 - THE SYSTEM SHALL never return an `aar_` to `approved`.
-- WHEN a cancel repeats, or the command is already `completed` or `expired`, THE SYSTEM
-  SHALL return 200 with the current state and change nothing.
+- WHEN a cancel repeats, or the order is already `closed`, `cancelled` or `unknown`, THE SYSTEM SHALL return 200 with the current state and change nothing. WHEN the order is `open` THE SYSTEM SHALL `MarkCancelled` with no `Revoke`. WHEN the order is `dispatched` THE SYSTEM SHALL call `bridge.Store.Cancel` and then apply the design §2a result-to-order table through `reconcileOrder`, whether `Cancel` returned nil or `ErrAlreadyCompleted`. WHEN the pair is outside that table THE SYSTEM SHALL answer 503 `unavailable`, audit it and roll the transaction back.
 
 Read routes
 - WHEN the control worker calls `read_command_result` or `read_approval` THE SYSTEM
   SHALL return only ids, enums, timestamps and digests. It SHALL never return a payload
   or a stored result body.
+- WHEN `read_command_result` sees a terminal command whose order is `dispatched` THE SYSTEM
+  SHALL apply design §2a through `reconcileOrder`. (round 7)
+- THE SYSTEM SHALL enqueue the Glovo `place_order_fake` with wire version `v1alpha2` (#986
+  design §2a) and SHALL NOT vendor, project or validate the command schema itself. (round 7)
 
 Revocation race and the write fence
 - THE SYSTEM SHALL take locks only in the canonical order L1..L6 of #957 design §6b on every
@@ -197,7 +197,7 @@ Data hygiene
 - OPEN-985-2. Who builds the detector that turns a GitOps membership removal into a #959
   `Revoke` with reason `membership_removed` (likely #960)? The owner must also accept
   the residual window explicitly. The fence stays refusing until both are done.
-- OPEN-985-3. Does #1044 already map the #959 codes of design §2b (`no_tenant`,
+- OPEN-985-3 (closed, round 8: #1044 M10b maps all of these codes). Does #1044 already map the #959 codes of design §2b (`no_tenant`,
   `no_connection`, `connection_revoked`, `connection_expired`, `stale_install`,
   `invalid_transition`, `not_found`, `unavailable`)? Does it read replay from
   `Idempotent-Replayed`? If not, #1044 is amended in the same wave.
@@ -217,22 +217,25 @@ Data hygiene
   amend #1044 to drop `release_reservation` (activity, T12 and the requirement line) in
   the same wave as OPEN-985-3. If the owner prefers to keep it, its semantics must equal
   `cancel` and it is added to the §2a route table. #1044 is not edited here.
-- OPEN-985-5 (closed, round 6 G2). The transition from a terminal command result to order
-  `closed` or `unknown` belongs to #985 `read_command_result` (design §2a, "Result to
-  order"), through #988 `MarkClosed` and `MarkUnknown`.
+- OPEN-985-5 (closed, round 6 G2; completed round 7). The transition from a terminal command to
+  the order belongs to #985 (design §2a, "Result to order"): one total table over (command status,
+  `effect_state`), applied by `reconcileOrder` from `read_command_result` and from `Cancel`.
 - OPEN-985-6. How the migration role and the one Glovo runtime role of mctl-api#957
   design §6d.1 are provisioned (CNPG managed roles in mctl-gitops). Until they exist
   with exactly those grants, the §4 proof fails (it checks every grant) and the routes
   stay `not_ready`. (amended (c): no `SECURITY DEFINER` grantee any more)
 - OPEN-985-7. The live pod env of mctl-api was not observed. The startup proof covers it
   either way.
-- OPEN-985-9 (new, round 5; recommendation: accept the mapping of design §2a). #1044's M9 table is keyed on a result triple that cancelled and expired commands never have. This slice returns the triple itself (`cancelled`: `cancelled`/`none`/`none`; `expired`: `failed_terminal`/`none`/`expired`; any other `effect_state`: `provider_effect: unknown`). The #1044 AMEND confirms it and pins the response fields in `ASSISTANTS_API_CONTRACT`; if it prefers a status/effect_state pre-table instead, this route returns `status` and `effect_state` only and the triple stays absent.
+- OPEN-985-15 (new, round 5, renumbered round 8 because OPEN-985-9 was used twice; recommendation: accept the mapping of design §2a). #1044's M9 table is keyed on a result triple that cancelled and expired commands never have. This slice returns the triple itself (`cancelled`: `cancelled`/`none`/`none`; `expired`: `failed_terminal`/`none`/`expired`; any other `effect_state`: `provider_effect: unknown`; `none` and `not_performed` give the first two triples for `expired` and the `cancelled` triple for `cancelled`). The #1044 AMEND confirms it and pins the response fields in `ASSISTANTS_API_CONTRACT`; if it prefers a status/effect_state pre-table instead, this route returns `status` and `effect_state` only and the triple stays absent.
 - OPEN-985-8 (closed, round 6 G1). The command payload of a Glovo `place_order_fake` is
   exactly the order's final approval-basket bytes, with no wrapper (mctl-api#957 design
   §6d.3), so #989's fence recomputes the fingerprint from what is written. The schema is
   owned by mctl-agents#1059 (`command-place-order-fake.schema.json`, `schema_version`
-  `bridge.mctl.ai/v1alpha2`); this slice vendors it with its fixtures and `SHA256SUMS`
-  pin and validates the enqueued command against it. Dispatch is `not_ready` until that
-  vendored copy exists.
+  `bridge.mctl.ai/v1alpha2`). Round 7: mctl-api#986 vendors it and owns the wire version,
+  projection and Claim gating (#986 design §2a); this slice only enqueues with
+  `WireVersion: bridge.WireV1alpha2`. Dispatch is `not_ready` until #986's `Store.WireVersionsEnabled()`
+  is true.
 - OPEN-985-11 (round 6; recommendation: a separate const `MCTL_GLOVO_WRITE_FENCE_ENABLED`, distinct from the route flag, set only by the gitops PR that lifts mctl-gitops#2457). Fence precondition 2 ("hold #2457 lifted") has no machine-checkable signal, so `SetFence` gating and T17 cannot be implemented as written. Order of the two flags: route mount first, fence last; T17 asserts `SetFence` is not called with it false while the route flag is true; docs/glovo-control.md (task 10) names it.
+- OPEN-985-13 (round 8; recommendation: 900 s). `DispatchCommandTTL`, the `ttl_seconds` of the dispatch command: the #1059 maximum and the #1044 `settle_timeout_s` default, always capped at the `aar_` `fresh_until`. Only the owner changes it (design §7.4).
+- OPEN-985-14 (round 8; recommendation: accept). The fixture seam is the `glovojoin_fixture` tag selecting `gate_fixture.go` in `internal/glovo` and `ttl_fixture.go` in `internal/glovo/control` (design §7.4, T29); the tag opens only the const and never skips §7.3 items 2 to 6.
 - OPEN-985-12 (round 6; recommendation: vendored copy with `SHA256SUMS` provenance, pinned commit, checked by a #1044 test). The contract fixture set `internal/glovo/control/contract/*.json` has an owner but no consumer picks it up. Specify the transfer to mctl-agents, list file names per route, and make the matching edits in #1044 (replace the #953/#954 wording, add a pin-and-vendor task and a test that every M10 code and the replay header appear) and #990 (a hop or provenance check for dispatch, cancel, `read_command_result` and `read_approval`).

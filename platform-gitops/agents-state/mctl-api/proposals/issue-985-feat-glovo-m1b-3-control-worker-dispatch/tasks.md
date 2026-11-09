@@ -8,7 +8,7 @@ provides `bridge.ApplyReadSchemaTx`):
   in the same tx (mctl-api#957 design §6d.4);
 - the #988 order index (control-path methods);
 - the amended #989 methods and `receipt.Fence`;
-- the vendored #1059 `command-place-order-fake.schema.json` and approval basket (OPEN-985-8, closed);
+- the #1059 `command-place-order-fake.schema.json` and approval basket as vendored by #986 (write schema, wire version, Claim gating) and #988 (basket) (OPEN-985-8, closed);
 - #987, which drops the bridge's `AUDIT_DB_URL` fallback.
 
 With any of them missing, the code merges with nil collaborators and answers
@@ -53,8 +53,11 @@ With any of them missing, the code merges with nil collaborators and answers
 - [ ] 4. Bridge changes in `internal/bridge` (depends on 2):
   - `WriteFence.PreLock(ctx, tx, c bridge.Caller, commandID)`, called by `permitTx`
     before `lockOwned`, with a no-op on `refusingFence`;
-  - (round 6, G2) `bridge.Store.CommandEffect(ctx, q, tenants, commandID)`: read-only; a
-    foreign tenant, a non-`place_order_fake` kind and an absent id are all `not_found`;
+  - (round 7, F2) `bridge.Store.CommandEffect(ctx, q, tenants, commandID) (status, effectState
+    string, err error)`: read-only; a foreign tenant, a non-`place_order_fake` kind and an absent
+    id are all `not_found`;
+  - (round 7, F1) `NewRuntimeStore` calls #986 `EnableWireVersions` after `CheckReadLevel`; no
+    other versioning code is written here (owner: #986 task 2);
   - (amended (c)) `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole)` under the
     migration role: `bridgeSchema`, the `bridge_commands_mutating_approval` partial
     unique index, the `bridge_colocation_probe` table, `bridge_schema_version` (the mode
@@ -78,14 +81,15 @@ With any of them missing, the code merges with nil collaborators and answers
   becomes `unknown`).
 - [ ] 5. Implement `Dispatcher.Dispatch` exactly as in design §5 (depends on 2, 4),
   including the explicit `Sequence` and the refusal of `created=false`. DoD: every write
-  commits or rolls back together. It vendors #1059 `command-place-order-fake.schema.json`
-  with its fixtures and `SHA256SUMS` pin (OPEN-985-8, closed) and a test validates the
-  enqueued command against it, with the vendored basket schema reached by `$ref`.
+  commits or rolls back together. Round 7 (F1): it passes `WireVersion: bridge.WireV1alpha2` and
+  vendors nothing (#986 task 1 vendors #1059 `command-place-order-fake.schema.json`). A test
+  enqueues the real approval-basket payload through the real `Store.Enqueue` and asserts that the
+  stored row is wire v1alpha2 and that its claim projection validates against #986's vendored
+  schema (red with `WireVersion` omitted: the v1alpha1 schema refuses the basket and dispatch is
+  never green).
 - [ ] 6. Implement `Dispatcher.Cancel` as in design §6 (depends on 2, 4):
-  - `RevokeGlovoApprovalTx` before dispatch;
-  - after `Store.Cancel`, effect `none` gives order `cancelled` and receipt `unknown`;
-    effect `unknown` gives order `unknown` and leaves the `consumed` receipt untouched;
-  - completed returns 200 unchanged;
+  - `MarkCancelled` for an `open` order (no `Revoke`), `RevokeGlovoApprovalTx` then `MarkCancelled` for a `finalized` one;
+  - for a `dispatched` order, `Store.Cancel` (nil or `ErrAlreadyCompleted`) and then `reconcileOrder` (design §2a, the one owner of every row); terminal orders write nothing;
   - no path returns the receipt to `approved`.
 
   DoD: covered by T6-T8.
@@ -94,7 +98,7 @@ With any of them missing, the code merges with nil collaborators and answers
   wiring (task 9). DoD: none here.
 - [ ] 8. Add the HTTP layer in `internal/api/handlers_glovo_control.go` and `router.go`
   (depends on 1, 5, 6):
-  - the four routes of design §2a, including the round 6 result-to-order transition (`MarkClosed` / `MarkUnknown` on a terminal command) and, in task 4, `bridge.Store.CommandEffect` (read-only, for #957 §3a);
+  - the four routes of design §2a, including the round 7 result-to-order table (design §2a, `reconcileOrder`) and, in task 4, `bridge.Store.CommandEffect` (read-only, `(status, effectState)`, for #957 §3a);
   - `glovoControlWorkerGate` and `requireGlovoControlWorker`;
   - strict bodies;
   - `Idempotent-Replayed` on replay;
@@ -106,7 +110,7 @@ With any of them missing, the code merges with nil collaborators and answers
   DoD: no route accepts or returns a payload; a test fails when a route, a status code or a body field drifts from the contract files. The OpenAPI doc is not updated (these are
   internal routes); they are listed in `docs/glovo-control.md` instead.
 - [ ] 9. Wire it in `cmd/api/main.go` (depends on 3, 8 and #989's `receipt.Fence`):
-  - `const controlGateOpen = false` backing `glovo.ControlDefault`;
+  - `const controlGateOpen = false` backing `glovo.ControlDefault`, in `internal/glovo/gate_release.go`, with the `glovojoin_fixture` twin `internal/glovo/gate_fixture.go`; `DispatchCommandTTL` in `internal/glovo/control/ttl_release.go` / `ttl_fixture.go` (design §7.4, round 8);
   - the env `MCTL_GLOVO_CONTROL_ENABLED`;
   - the dispatcher, with #959, #988 and #989 collaborators nil until they land.
 
@@ -152,7 +156,9 @@ advisory keys are used.
   - `pending` gives order `cancelled` and effect `none`;
   - `leased` with a permit (effect `permitted`) gives order **`unknown`** and effect
     `unknown`, never `cancelled`;
-  - `completed` gives 200 and changes nothing.
+  - `completed` gives 200 and applies the §2a row (round 7): effect `succeeded` gives order
+    `closed`; effect `none` gives `closed` and the receipt `unknown`; an `expired` command with
+    effect `none` gives `cancelled` and the receipt `unknown`.
 
   A later `IssueWritePermit` returns `command_cancelled`.
 - [ ] T8. A repeated cancel is a no-op with 200. Amended (c): a cancel after #989
@@ -211,7 +217,7 @@ advisory keys are used.
   `cmd_` with `Idempotent-Replayed: true`, also when the command completed or was cancelled
   in between (round 4, F2). A `read_command_result` after the crash
   returns the command.
-- [ ] T23. Read routes (round 5, X-4: a `cancelled` and an `expired` command return the triples of design §2a over every `effect_state` value): `read_command_result` and `read_approval` return only the
+- [ ] T23. Read routes (round 5, X-4; round 8, B1: a `cancelled` and an `expired` command return the triples of design §2a over every `effect_state` value, with `none` and `not_performed` giving the `cancelled` / `failed_terminal` triple and every other value `provider_effect: unknown`): `read_command_result` and `read_approval` return only the
   fields of §2a. A sentinel placed in the stored result never appears in the response.
   A command of another tenant or a non-Glovo kind returns `not_found`.
 - [ ] T24. End-to-end revocation fence (moved here from #959 T17, amended (c)): with the
@@ -236,9 +242,17 @@ advisory keys are used.
   DDL (pgx tracer); the existing bridge tests (`NewStore`, Glovo disabled) and the
   bridge-scrub test pass unchanged; the fake provider sees zero writes in every case.
 
+- [ ] T27. (Round 7, F2; round 8, B1 to B7) The result-to-order table is total. `TestReconcileOrderTable` calls `reconcileOrder` directly over every command status (`pending`, `leased`, `completed`, `cancelled`, `expired`) times every `effect_state` (`none`, `permitted`, `succeeded`, `failed`, `not_performed`, `unknown`), 30 pairs, and asserts for each the #988 call, the #989 call, the stored order state and, for every pair of the catch-all row, 503 `unavailable` with nothing written, with the order `dispatched`. One more case: a pair of the catch-all row on a `closed`, `cancelled` and on an `unknown` order gives 200, no call and no write (red if the `dispatched` guard is moved after the table lookup). It uses the same cells as T23 and #957 T6. Through the callers it drives only what each can reach: `read_command_result` every pair, `Cancel` the pairs of a `pending`, `leased`, `completed` or `expired` command (a `cancelled` one is the nil path). On the `Cancel` path the pair `reconcileOrder` sees is the pair after `Store.Cancel` (design §2a, §6): a `pending` or `leased` command with effect `none` is then `cancelled`, `none` (order `cancelled`); with `permitted` or `unknown` it is `cancelled`, `unknown` (order `unknown`); `completed` and `expired` pairs are unchanged (`ErrAlreadyCompleted`). On the `ErrAlreadyCompleted` path the test also asserts the lock set: L1 shared, L2 shared, L6 read, L3, L4, L5, in that order (round 8, S-6). Cancel on each order state: `open` gives `cancelled` with no `Revoke`; `finalized` revokes; `closed`, `cancelled` and `unknown` write nothing and answer 200. A `reconcileOrder` on an order that is not `dispatched` makes no call (a second `read_command_result` after the first is a no-op, red if the guard is removed). With the `aar_` already `unknown` or `consumed`, the `MarkGlovoApprovalUnknownTx` entry is a no-op and the order `Mark*` still commits (#989 T16a). Three end-to-end cases that left the order `dispatched` before: (a) a command that expires unclaimed, (b) a provider result `failed_terminal` / `provider_rejected` with no permit, (c) `CancelOpenForConnections` on a reserved command. Each ends with the order `cancelled` or `closed` and the receipt `unknown`, and the #957 §3a wire `state` read before the transition equals the one read after it. Proven red: delete the `none` rows (the order stays `dispatched`), revert `Cancel` to "change nothing" on `ErrAlreadyCompleted` (the `expired` case stays `dispatched`), drop the L6 read or L3 from the `Cancel` path (the lock-set assertion above fails), and make the `cancelled|expired, succeeded` row `MarkCancelled` (the pair case fails).
+- [ ] T28. (Round 7, F1) Dispatch uses the #986 wire-version mechanism: the stored command is wire
+  v1alpha2, a provider whose `supported_versions` lacks v1alpha2 never claims it (so it expires and
+  T27 case (a) applies), and `Enqueue` while `Store.WireVersionsEnabled()` is false answers `not_ready` without a
+  row. These are driven through #986's code; the mechanism's own tests are #986 T4e-T4h.
+
+- [ ] T29. (Round 8, design §7.4) Fixture seam. (a) `TestControlGateClosedInReleaseBuild` (no tag): `glovo.ControlDefault.Open` is false and `DispatchCommandTTL == 900*time.Second`. (b) `TestFixtureFilesAreTagged`: `go list -f '{{.GoFiles}}'` for the release build lists `gate_release.go` for `./internal/glovo` and `ttl_release.go` for `./internal/glovo/control` and neither fixture file, and the repository's Dockerfile and release workflow contain no `glovojoin_fixture`. (c) With the tag, the gate is open but `main.go` still leaves the fence `refusingFence` while any of §7.3 items 2 to 6 fails (one case per item). (d) `SetFixtureDispatchCommandTTL(2*time.Second)` makes the next dispatch enqueue `ttl_seconds` 2, still capped at `fresh_until`. Proven red: with the release file's const flipped to `true`, (a) fails; with the fixture file added to the release build list, (b) fails; with `receipt.Ready` skipped under the tag, (c) fails.
+
 ## Rollback
 
-- Everything is dark by default: the const `controlGateOpen` is false and
+- Everything is dark by default: the const `controlGateOpen` is false (in the release file) and
   `MCTL_GLOVO_CONTROL_ENABLED` is unset. Unsetting the env var removes the routes and
   leaves the fence `refusingFence`. It does not change the bridge's store: once
   `bridge.ApplySchema` has run, the bridge stays on `NewRuntimeStore` and the shared pool,

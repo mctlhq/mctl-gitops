@@ -1,5 +1,13 @@
 # Design: issue-986-feat-bridge-versioned-typed-read-result
 
+## Amendment 2026-11-09 (c), round 7 of the AMEND PR
+
+Fixes the round-6 gap in the versioning mechanism: the Glovo `place_order_fake` is a v1alpha2 write (mctl-agents#1059 §Write command), but this slice pinned every write kind to v1alpha1 and no slice owned the version of that one command. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| R6-986-1, #985 F1, #1059 R6-1, CROSS X-A (no owner for emission, validation, claim gating or result version of the v1alpha2 write) | New §2a with the single ownership table. This slice owns the per-command wire version in `internal/bridge`: `EnqueueInput.WireVersion`, the stored `wire_version`, `projection()` and validation per version, `Claim` gating by `SupportedVersions`, `SubmitResult`, and the vendoring of `command-place-order-fake.schema.json` (task 1). The "a write kind is v1alpha1" statements of §2, §4a, §5, Platform impact, requirements and tasks are replaced; `cancel_order_fake`, `quote`, `read_status` and every existing `place_order_fake` row stay v1alpha1, byte for byte. #985 only enqueues with the new field (#985 §5 step 11) |
+
 ## Amendment 2026-11-09 (c), round 5 of the AMEND PR
 
 Fold-in of the round-4 findings; simplified, no new mechanism beyond the one named per row. Where this section and older text disagree, this section wins.
@@ -114,16 +122,22 @@ Skipped P3s: none.
 ## Proposed solution
 
 ### 1. Contract (vendored from mctl-agents#1059)
-- Task 1 vendors, byte for byte, the #1059 v1alpha2 `read-command.schema.json`,
-  `read-result.schema.json` (the per-kind shapes are definitions inside it), the valid and
-  invalid fixtures and the RFC 8785 digest vectors into `internal/bridge/schema/v1alpha2/`.
-  The basket files (`approval-basket.schema.json`, the basket-fingerprint vectors,
-  `must-reject.json`, `pattern-parity.json`) are vendored once by #988 in
-  `internal/glovo/basket/contract/` (round 4, N3); the read-result schema reaches the
-  approval-basket schema by `$ref`, and a test pins the sha256 of #988's copy. Both have a
-  `PROVENANCE` file (repo, PR, merge commit, sha256 per file). It does not author or edit
-  any of them. If #1059 is not merged, the task stops. It does not vendor the write
-  command schema `command-place-order-fake.schema.json`; #985 does (round 6, G1).
+- One vendoring rule (round 8, A-4; #1059 §Vendoring is the same sentence). `SHA256SUMS` lists every
+  published file. Each consumer vendors the subset that the per-consumer table in #1059 names, records
+  the sha256 of `SHA256SUMS` in its `PROVENANCE`, and its drift test checks every vendored file against
+  the matching `SHA256SUMS` line. Task 1 here vendors, byte for byte, into
+  `internal/bridge/schema/v1alpha2/`: `read-command.schema.json`, `read-result.schema.json` (the
+  per-kind shapes are definitions inside it), `command-place-order-fake.schema.json`,
+  `claim-response.schema.json` (this slice emits the envelope, so it owns that copy; OPEN-986-4,
+  closed) and the valid and invalid fixtures of those four. It does not vendor the basket files or the
+  RFC 8785 vectors: #988 vendors `approval-basket.schema.json`, `basket-fingerprint.json` and
+  `pattern-parity.json` once into `internal/glovo/basket/contract/` and `jcs-digest.json` and
+  `must-reject.json` into `internal/jcs/testdata/` (its task 2a). The schemas here reach the
+  approval-basket schema by `$ref`; `TestApprovalBasketRefResolves` (task 1) registers #988's copy
+  under the `$id` those `$ref`s name before compiling, and fails when its sha256 differs from the
+  `SHA256SUMS` line recorded in this `PROVENANCE`. #986 and #988 each have a `PROVENANCE` (repo, PR,
+  merge commit, sha256 per file). This slice authors or edits none of the files. If #1059 is not
+  merged, the task stops. `pattern-parity.json` has no consumer in this slice; it is #988's.
 - Read kinds: `read_history`, `read_preview`, `read_basket` (final names from #1059).
   Read commands carry the #1059 read binding set (tenant, principal, connection and
   install-revision ref (`irv_`, wire only) and the decimal revision, the read idempotency key `request_id` (`rdq_`) and per-kind
@@ -139,25 +153,95 @@ Skipped P3s: none.
 ### 2. Code changes for versioning (`schema.go`, `store.go`)
 - `compileSchemas()` compiles both URL sets; `ParseResult` reads `schema_version` first
   and validates against the matching schema.
-- `SubmitResult` (`store.go:745`) accepts `v1alpha2` only for a read-kind command, else
-  `binding_mismatch`. Round 4 (R3-3): the wire version is derived from `operation_kind` in
-  the shared paths (a write kind is v1alpha1), so `cmdCols` and `scanCmd` are unchanged; the
-  stored `wire_version` is read only by the read-kind paths (§4a).
+- `SubmitResult` (`store.go:745`) accepts a `v1alpha2` result only for a read-kind command, else
+  `binding_mismatch`; every write kind, including the v1alpha2 `place_order_fake`, takes the
+  unchanged v1alpha1 result (§2a). Round 4 (R3-3), amended round 7: `cmdCols` and `scanCmd` are
+  unchanged; the stored `wire_version` is read only where §4a says (read kinds always, and
+  `place_order_fake` only on a store with wire versions enabled).
 - `validate()` (`store.go:229-256`) gets a read-kind branch: read binding set required,
   order/`we_`/`wi_`/workflow fields forbidden.
-- `projection()` (`store.go:334`) emits `bridge.mctl.ai/v1alpha1` for write kinds, exactly as
-  today, and for read kinds the #1059 read projection, built from the row plus the extras of
-  §4a (`wire_version`, `read_request_id`, `install_revision_ref`; round 4, R3-1).
-- Versioning (#1059 §Versioning):
-  - `BridgeProviderConfig` gains a server-side `SupportedVersions` list, default
-    `[v1alpha1]`;
-  - `Claim` leases a read-kind (v1alpha2) command only to a provider whose list contains
-    `bridge.mctl.ai/v1alpha2`, and never trusts a provider-side filter;
-  - the claim response (`handlers_bridge.go:200`, today a hard-coded v1alpha1 envelope)
-    gets an envelope version, and each command keeps its own `schema_version`;
-  - a read command no capable provider claims before `expires_at` expires as `expired`.
-  Whether this lands here or in a separate slice is OPEN-1059-2; this proposal plans it
-  here (task 2).
+- `projection()` (`store.go:334`) emits `bridge.mctl.ai/v1alpha1` for every row whose wire version
+  is v1alpha1 (all write kinds but the one of §2a), exactly as today; for the v1alpha2
+  `place_order_fake` the document of §2a; and for read kinds the #1059 read projection, built from
+  the row plus the extras of §4a (`wire_version`, `read_request_id`, `install_revision_ref`; round
+  4, R3-1).
+- Versioning (#1059 §Versioning; round 8, A-1: this slice owns the whole path from configuration to
+  the claim envelope):
+  - Configuration. `auth.BridgeProviderConfig` (`internal/auth/bridge_provider.go:63`) gains one
+    optional key, `supported_versions`, a JSON array whose closed value set is
+    `["bridge.mctl.ai/v1alpha1","bridge.mctl.ai/v1alpha2"]`. Absent means `["bridge.mctl.ai/v1alpha1"]`
+    (today's behaviour). The list MUST contain `bridge.mctl.ai/v1alpha1`. An unknown value, a duplicate, an empty array or a list without v1alpha1 is a configuration error from
+    `ParseBridgeProviders` (which already rejects unknown fields). Rolling the code back requires
+    removing the key first, because an older parser rejects it: a rollout note, not a code path.
+  - `bridge.Caller` gains `Versions []string`, filled by `bridgeCaller`
+    (`internal/api/handlers_bridge.go:89-92`) from that configuration. `Store.Claim` treats a nil or empty
+    `Caller.Versions` as `[bridge.mctl.ai/v1alpha1]` and never trusts a provider-side filter.
+  - `Claim` leases a v1alpha2 command (a read kind, or the `place_order_fake` of §2a) only to a caller
+    whose `Versions` contains `bridge.mctl.ai/v1alpha2`. The gate is a predicate of the selection
+    statement, not a filter on its result (§4a).
+  - Claim envelope. `Claim` still returns `[]Claimed` and each command keeps its own
+    `schema_version`. The handler (`handlers_bridge.go:200`, today a hard-coded v1alpha1 envelope)
+    picks the envelope from the caller alone: `bridge.mctl.ai/claim/v1alpha2` when `Versions`
+    contains v1alpha2, else `bridge.mctl.ai/v1alpha1` byte for byte as today. A v1alpha2-capable
+    provider's batch may mix v1alpha1 and v1alpha2 commands (#1059 fixture).
+  - A v1alpha2 command no capable provider claims before `expires_at` expires as `expired` (for the
+    write, with `effect_state` `none`: #985 §2a gives that order `cancelled`).
+  - Declaring v1alpha2 is all-or-nothing: a provider that supports only the write is also leased the
+    read kinds. mctl-telegram#1262 refuses them (T26) and the lease runs to expiry. That is harmless
+    while #957 A12 (the read bridge) is unwired; per-kind gating is not added here.
+  - Readiness signal (A-7): `Store.WireVersionsEnabled() bool` reports the flag set by
+    `EnableWireVersions`; the #985 and #989 `Ready` predicates read it.
+  - Activation precondition (OPEN-986-6): the real provider's `MCTL_BRIDGE_PROVIDERS` entry must
+    carry `supported_versions` with v1alpha2 before the first dispatch is claimed. That is deployment
+    configuration, not proposal scope; until it is set a dispatched command is never claimed and
+    expires (#985 §2a: order `cancelled`). OPEN-1059-2 (closed in round 7): this slice owns it (task 2).
+
+### 2a. The Glovo `place_order_fake` is the one v1alpha2 write (round 7)
+
+Ownership. Each row is stated in exactly one place; every other proposal references it.
+
+| Responsibility | Owner | Stated in |
+|---|---|---|
+| Schema, the field-by-field envelope and the result contract of the v1alpha2 `place_order_fake` | mctl-agents#1059 | #1059 design §Write command |
+| Per-command wire version in `internal/bridge`: storage, projection, validation, `Claim` gating, `SubmitResult`; vendoring of the schema and its drift tests | this slice (#986) | this section, tasks 1 and 2 |
+| Enqueue with `WireVersion: bridge.WireV1alpha2`; calling `EnableWireVersions` from `NewRuntimeStore` | mctl-api#985 | #985 design §5 step 11, task 4 |
+| Parse and execute the command (fake only) and post the result in the version #1059 defines | mctl-telegram#1262 | #1262 design "Wire", task 2b |
+
+Mechanism, written against `internal/bridge` at `ceac9ed`:
+- `EnqueueInput` gains `WireVersion` (`""` or `bridge.WireV1alpha1` is v1alpha1, `bridge.WireV1alpha2` is v1alpha2).
+  `validate()` accepts v1alpha2 only for `place_order_fake` with a non-empty `ApprovalRef` and the
+  usual write binding set (`ExecutionID`, `WorkItemID`, `WorkflowID`, `OrderRef`, `ConnectionRef`);
+  any other kind with v1alpha2 is refused with `invalid_document`. Read kinds are v1alpha2 by
+  `EnqueueRead` and take no `WireVersion`. The value is stored in `wire_version` (§4).
+- `Store.EnableWireVersions(ctx) error` calls `CheckReadLevel` and, on success, sets an unexported
+  flag. `NewStore` never sets it; #985 `NewRuntimeStore` calls it. `Enqueue` with v1alpha2 refuses
+  with `ErrReadUnavailable` while the flag is off. While it is off, `place_order_fake` is wire
+  v1alpha1 and no extras query runs for it (round 4, R3-3 holds). While it is on, the rows of
+  `place_order_fake` and of the read kinds read `wire_version` through the extras query of §4a; every
+  other kind is v1alpha1 without it. An existing `place_order_fake` row has the column default
+  v1alpha1 and projects byte for byte as today.
+- `projection()` emits the `commandDoc` field for field as for v1alpha1 (the #1059 write command is
+  that envelope with `schema_version` v1alpha2 and the approval basket as `payload`) and validates
+  it against the vendored `command-place-order-fake.schema.json`, at `Enqueue` (`row.projection(false)`,
+  `store.go:516-519`) and at `Claim` (`store.go:643`). A v1alpha1 payload under v1alpha2, and the
+  approval basket under v1alpha1, are each refused by the schema in force, so a wrong version
+  never enters the outbox.
+- `Claim` and the claim envelope: as §2 "Versioning" (the key is `supported_versions`, the caller field `Versions`). A v1alpha1-only provider never sees the command;
+  it stays `pending` and `expireTx` expires it with `effect_state` `none` and the usual
+  `bridge_signal_outbox` row (the outbox skip of §4a is for read kinds only).
+- `SubmitResult`: the accepted result `schema_version` follows the command kind, not the command's
+  wire version. A read kind takes its stored `wire_version`. Every write kind, including the
+  v1alpha2 `place_order_fake`, takes `bridge.mctl.ai/v1alpha1` and the unchanged `result.schema.json`
+  (#1059 §Write command, "Result"), so `ParseResult`, `effectFor` and `submitTx` are unchanged for it
+  and `effect_state` follows the same rules as today (`applied` needs `permitted`, and so on).
+  The check order is the real one (`store.go:741` before `746/766`): `ParseResult` runs first and
+  selects the schema by the document's `schema_version`, so a v1alpha2-versioned document that fails the
+  read-result schema is `invalid_document`; a well-formed v1alpha2 read result addressed to the write
+  command passes `ParseResult` and is then `binding_mismatch` at §5 step 1.
+- Vendoring and drift: the one rule of §1. Drift goes red in three places: #1059's own test (its
+  `SHA256SUMS` no longer matches its files), `TestVendoredV1alpha2MatchesProvenance` here (a one-byte
+  change to any vendored file, checked against its `SHA256SUMS` line), and the pinned digest in
+  mctl-telegram#1262 (its copy no longer equals this one).
 
 ### 3. In-process read client (`internal/bridge/readclient.go`)
 
@@ -215,9 +299,11 @@ second and every later boot is a no-op and takes no ACCESS EXCLUSIVE lock (round
     exactly once);
   - `bridge_commands_read_shape_chk`: a read kind has `wire_version` v1alpha2, a
     non-null `read_request_id`, a non-null `install_revision_ref` matching `^irv_[A-Za-z0-9]{16,40}$`
-    and `''` in workflow/order/`we_`/`wi_`; every other kind has a NULL `install_revision_ref` and
-    all of those non-empty (which `validate()` already guarantees for v1alpha1 rows,
-    `store.go:228-256`);
+    and `''` in workflow/order/`we_`/`wi_`; every other kind has a NULL `install_revision_ref`, a
+    NULL `read_request_id` and all of those non-empty (which `validate()` already guarantees for
+    v1alpha1 rows, `store.go:228-256`). Round 7: `wire_version` v1alpha2 is allowed only for the
+    read kinds and for `place_order_fake`, and a v1alpha2 `place_order_fake` also has a non-empty
+    `approval_ref`;
 - (round 3, N1) `bridge_commands_sequence` (origin/main `store.go:115-116`, non-partial
   `UNIQUE (execution_id, sequence)`) is replaced by the same-named partial index
   `... WHERE operation_kind NOT IN ('read_history','read_preview','read_basket')`. The guarded
@@ -242,10 +328,21 @@ second and every later boot is a no-op and takes no ACCESS EXCLUSIVE lock (round
 - `cmdCols`/`scanCmd` do not change. `claimTx`, `Cancel`, `lockOwned`, `permitTx`, `expireTx`
   and `submitTx` for write kinds run the same SQL as today, so a deployment that never ran
   `ApplySchema` (Glovo off, the supported mode) or runs older code keeps its v1alpha1 bridge.
+- Claim gating (round 8, A-2). While wire versions are enabled (`WireVersionsEnabled()`), `claimTx`
+  uses a second statement text whose selection carries the predicate `c.wire_version = ANY($n)` with
+  the caller's `Versions`, before `ORDER BY ... LIMIT $3 FOR UPDATE OF c SKIP LOCKED`
+  (`MaxClaimBatch` = 10). It is a predicate, never a filter on the returned rows, so gated rows cannot
+  fill the batch and starve a claimable v1alpha1 command. The statement text is chosen by the flag:
+  while the flag is off the first statement is the one of today and mentions no new column, as the
+  bullet above says. The existing `NOT EXISTS (... p.sequence < c.sequence AND p.status IN
+  ('pending','leased'))` is unchanged, so a gated, never-claimed write keeps blocking later
+  sequences of the same execution until it expires: ordering is preserved, the block is bounded by
+  `ttl_seconds` <= 900 s, and it is intended (T4h).
 - The read-kind paths (`EnqueueRead`, the read branch of `claimTx` projection, `submitTx` read
   branch, `FetchReadResult`) read the new columns through one extras query keyed by
-  `command_id`, issued only for rows whose `operation_kind` is a read kind. A v1alpha1 row has no
-  extras and is wire v1alpha1.
+  `command_id`, issued only for rows whose `operation_kind` is a read kind, and (round 7, §2a)
+  for `place_order_fake` rows on a store with wire versions enabled. Every other row has no extras
+  and is wire v1alpha1.
 - `bridge.CheckReadLevel(ctx, q Querier) error` reads `bridge_read_schema_version`. `EnqueueRead`
   and `ReadClient.Read` call it and refuse with `ErrReadUnavailable` (#957 maps it to
   `not_ready`) when the table is missing or its level is below the compiled level (1);
@@ -263,8 +360,10 @@ result CAS. Raw data never enters `bridge_commands.result`, which keeps
 
 ### 5. Submission and fetch rules
 Submission (provider, existing `/api/v1/bridge/commands/{id}/result` route), in this
-pipeline order, one code per check (amended (c)):
-1. `schema_version` must equal the command's wire version (the stored `wire_version` of a read-kind command, read in this read-only path; v1alpha1 for a write kind), else `binding_mismatch`.
+pipeline order, one code per check (amended (c)). Round 8: `ParseResult` runs before step 1 (it
+selects the schema from `schema_version`), so a document that fails its own version's schema is
+`invalid_document` before any binding check:
+1. `schema_version` must equal the result version of the command's kind (the stored `wire_version` of a read-kind command, read in this read-only path; `bridge.mctl.ai/v1alpha1` for every write kind, including the v1alpha2 `place_order_fake`, §2a), else `binding_mismatch`.
    `request_id` must equal the stored `read_request_id`, else `binding_mismatch`.
 2. Read kind: a non-`none` `provider_effect`, a provider-chosen `result_ref`, a payload
    on a non-`succeeded` outcome, or a read payload on a non-read kind all fail the
@@ -309,7 +408,8 @@ InstallRevision, Scopes})`, in process only, checks in this order:
 | `sha256(data) != data_digest` (constant-time compare) | `ErrReadUnavailable`, logged as an integrity failure |
 
 `ConnectionChecker` is implemented by the #959 store's `LiveConnection` (same database,
-owner decision A; amended (c)). A command whose outcome is not `succeeded` answers
+owner decision A; amended (c)), whose typed `no_connection`, `connection_revoked` and
+`connection_expired` answers (#959 round 8, C-4) map to the §5 sentinels. A command whose outcome is not `succeeded` answers
 `ErrReadUnavailable`. The install revision stored on the result row is the decimal one;
 the checker compares it with the live #959 revision and the request's `InstallRevision`, never an `irv_`. Default `DenyConnectionChecker` returns
 `ErrReadUnavailable`. #957 maps every sentinel through its §4 table (no bridge code
@@ -339,8 +439,9 @@ tenant labels. `MCTL_BRIDGE_READ_RESULT_TTL`: default 300 s, clamped 1..300 s
   the migration role. Existing v1alpha1 rows satisfy the new CHECKs; no NOT NULL is
   relaxed.
 - Backward compatibility: v1alpha1 unchanged and golden-pinned. Providers receive
-  v1alpha2 commands only for read kinds, which nobody enqueues until #957 wires the
-  client.
+  v1alpha2 commands only if their server-side config declares it: the read kinds, which nobody
+  enqueues until #957 wires the client, and the Glovo `place_order_fake`, which only #985 dispatch
+  enqueues, on a store with wire versions enabled (§2a).
 - Security: no new route or audience; data reachable only in process after #957's checks
   plus this store's re-checks; providers cannot read data back.
 - Resources: ≤ 12 KiB per read row (the #1059 `JCS(payload)` cap of 12288 bytes), erased within 300 s, deleted after

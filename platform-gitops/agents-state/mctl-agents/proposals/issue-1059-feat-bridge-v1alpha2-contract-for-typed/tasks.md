@@ -57,14 +57,18 @@ schema, RFC 3339 patterns and the re-measured sizes.
   lint and a vector red.
 - [ ] 7b. `claim-response.schema.json` (design §Claim response): `schema_version`
   (`bridge.mctl.ai/v1alpha1` or `bridge.mctl.ai/claim/v1alpha2`), `commands` 0..10,
-  `additionalProperties: false`. — DoD: the v1alpha1-only fixture equals the shape
+  `additionalProperties: false`; the `claim/v1alpha2` fixture holds one v1alpha1 command, one read
+  command and one write command (round 7). — DoD: the v1alpha1-only fixture equals the shape
   `internal/api/handlers_bridge.go:200` writes today.
-- [ ] 5b. `command-place-order-fake.schema.json` (depends on 5): the schema of design
-  §Write command, `command-place-order-fake.valid.json` and the two invalid fixtures, and
-  `check_write_command(raw: bytes)` in task 8. — DoD: the valid fixture's `payload`
-  JCS bytes equal a `basket-fingerprint.json` canonical input; the v1alpha1 payload and a
-  wrapped payload are rejected.
-- [ ] 8. `tools/bridge_contract.py` (depends on 2-7): `check_read_command(raw: bytes)`,
+- [ ] 5b. `command-place-order-fake.schema.json` (depends on 5 and 8): the schema of design
+  §Write command (the field table of round 7), `command-place-order-fake.valid.json` and the
+  invalid fixtures (v1alpha1 payload, wrapped payload, one required field missing, an extra top-level
+  field, `install_revision_ref`), and `check_write_command(raw: bytes)` in task 8. — DoD: the
+  valid fixture's `payload` JCS bytes equal a `basket-fingerprint.json` canonical input; each
+  invalid fixture is rejected with its reason; the closed property list equals the v1alpha1 one
+  plus nothing, and the required list the v1alpha1 one plus `approval_ref` (a test reads both
+  from `docs/spikes/1043/command.schema.json`).
+- [ ] 8. `tools/bridge_contract.py` (depends on 2-7 except 5b): `check_read_command(raw: bytes)`,
   `check_read_result(raw: bytes)` and `check_approval_basket(raw: bytes)`. The order is
   precheck, integer tokens, schema, body cap 16384, `JCS(payload)` cap 12288, digest
   recompute, basket sort/uniqueness/arithmetic, display codes present in the basket. CLI
@@ -113,6 +117,14 @@ schema, RFC 3339 patterns and the re-measured sizes.
   commands fail; the v1alpha1-only fixture is byte-identical to today's envelope.
 - [ ] T13. Date-times: the bad-date-time fixture fails in Python with the pattern, not
   only in Go.
+
+- [ ] T14. (Round 7) Write command: the valid fixture passes `check_write_command`; each invalid
+  fixture (v1alpha1 payload, wrapped payload, missing field, extra field, `install_revision_ref`) fails
+  with its reason; the v1alpha1 `command.schema.json` rejects the valid fixture and
+  `check_write_command` rejects every v1alpha1 command fixture; a v1alpha1 `result.schema.json`
+  document validates as the result of the write command, while the read-result schema rejects it and the
+  v1alpha1 result schema rejects a v1alpha2-versioned document. Proven red: widen the schema's property list
+  by one name, or drop `approval_ref` from `required`, and the property-list test fails.
 
 ## Rollback
 

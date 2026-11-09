@@ -132,7 +132,7 @@ Audit and hygiene
 - The approval basket definition and vectors (mctl-agents#1059).
 - The `aar_` state machine (#989), dispatch/cancel (#985), routes and the
   Glovo join handlers (#957), the connection store (#959).
-- Who moves `dispatched` to `closed`: #985 `read_command_result` through `MarkClosed` (OPEN-985-5, closed in round 6, G2).
+- Who moves `dispatched` to `closed`, `cancelled` or `unknown`: #985 `reconcileOrder` through `MarkClosed`, `MarkCancelled` and `MarkUnknown`, applying the one total table of #985 §2a (OPEN-985-5, closed in round 6, G2; round 7 makes the table total). This slice adds no edge: `dispatched -> cancelled`, `closed` and `unknown` all exist.
 
 ## Open questions
 

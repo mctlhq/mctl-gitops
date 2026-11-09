@@ -1,13 +1,26 @@
 # Design: issue-957-feat-glovo-m1e-canonical-facade-to-mctl
 
+## Amendment 2026-11-09 (c), round 7 of the AMEND PR
+
+Two seams that round 6 left open. Where this section and older text disagree, this section wins.
+
+| Finding | Change here |
+|---|---|
+| R6-957-1, CROSS X-C (the §3a mapping was not total over (command status, `effect_state`)) | §3a is rewritten as one table keyed by the order state and the pair (`status`, `effect_state`) that `bridge.Store.CommandEffect` returns. The canonical result-to-order table is mctl-api#985 §2a (one function, `reconcileOrder`); §3a only renders the wire strings of its last column and never redefines a transition. Round 8: a pair outside the table, an absent command and a failed read are 503 `unavailable` with no state, never `dispatched`, `failed` or a rendered `unknown`. §6d.4 gives `CommandEffect` its two-value return |
+| CROSS X-A, #985 F1 (G1 said #985 vendors the write schema; it has no emitter, gate or provider) | G1 below is corrected. One owner per responsibility: schema, envelope and result contract mctl-agents#1059 §Write command; per-command wire version, projection, Claim gating, `SubmitResult` and vendoring mctl-api#986 §2a (not #985); enqueue with `WireVersion` v1alpha2 #985 §5 step 11; parse and execute mctl-telegram#1262 task 2b. §7 pins the write schema digest next to the v1alpha1 ones |
+| #985 read path (new lock row) | §6b: the `read_command_result` path is listed |
+| Round 8, C-3, C-4, C-5, C-6, C-7 (#959 interface) | §6d.4 rows below follow #959's round 8: `ActivateTx` refusal codes, the typed not-live codes of `LiveConnection`/`LiveConnectionTx`, `Actor` sources, and `glovo.WriteError` taking its status from `glovo.Status` |
+
+Open items table (round 6) after round 7: unchanged except OPEN-1059-4, which is closed (as in #1059 requirements: the per-consumer vendoring table and the one rule) (one copy in #1059, vendored once in mctl-api by #986 task 1 and once in the provider by #1262 task 2b, each pinned by sha256).
+
 ## Amendment 2026-11-09 (c), round 6 (final, targeted) of the AMEND PR
 
 Owner decision: only four groups are fixed now; every other round-5 finding is recorded as an OPEN item in its owning proposal. Where this section and older text disagree, this section wins.
 
 | Group | Change |
 |---|---|
-| G1 (X-2, write command schema) | One owner: mctl-agents#1059 `command-place-order-fake.schema.json` (`bridge.mctl.ai/v1alpha2`, payload = the approval basket by `$ref`). #985 vendors it; #957, #986, #988, #989 reference it. OPEN-1059-1, OPEN-985-8 and OPEN-989-6 are closed |
-| G2 (X-1, F1, status bodies) | §3a: this slice owns the `GET /connection` and `GET /orders/{order_id}` bodies and every wire value; `outcome` comes from #985 `bridge.Store.CommandEffect`; #985 `read_command_result` owns `dispatched -> closed\|unknown` through #988 `MarkClosed` / `MarkUnknown` (OPEN-985-5 closed); `handoff_url` and `provider_account_label` are omitted from these bodies |
+| G1 (X-2, write command schema) | One owner: mctl-agents#1059 `command-place-order-fake.schema.json` (`bridge.mctl.ai/v1alpha2`, payload = the approval basket by `$ref`). (Round 7 correction: mctl-api#986 §2a vendors it and owns the wire version, Claim gating and `SubmitResult`; #985 only enqueues with `WireVersion` v1alpha2; mctl-telegram#1262 task 2b is the provider.) #957, #985, #988, #989 reference it. OPEN-1059-1, OPEN-985-8 and OPEN-989-6 are closed |
+| G2 (X-1, F1, status bodies) | §3a: this slice owns the `GET /connection` and `GET /orders/{order_id}` bodies and every wire value; `outcome` comes from #985 `bridge.Store.CommandEffect`; #985 `reconcileOrder` (called from `read_command_result` and from `Cancel`) owns `dispatched -> closed\|cancelled\|unknown` through #988 `MarkClosed` / `MarkCancelled` / `MarkUnknown` (OPEN-985-5 closed; table in #985 §2a; round 7 and 8 supersede this round 6 row); `handoff_url` and `provider_account_label` are omitted from these bodies |
 | G3 (F3, #988 P2-2) | Merge order puts A13/A14 (`glovo.control_starts`, `glovojoin.ApplySchema`, `ControlStartTx`) before #986 and #985; #985 lists A14 as a blocking dependency; package direction `control` imports `glovojoin`, and `Readiness` takes an injected `func`; #988 `Ready` is `not_ready` until #989 task 2b grants the `SELECT`s |
 | G4 (#959 P2-3, P2-1) | `Transition` to `active` is `invalid_request`; CHECK `glovo_connections_active_expiry_check`; `Connection` and `Install` fields listed once in #959 Types (remainder OPEN-959-3). #960 N1 (one line): the allowlist routes use `isHumanAdmin` with T21a-T21d |
 
@@ -20,12 +33,16 @@ Open items recorded in round 6 (one recommendation each, in the owning proposal'
 | OPEN-961-3 | #961 | R5-3 | a #961 wiring task for `WithEndPurger`, `Sweep`, `connect.Service`; name it in #985 task 9 |
 | OPEN-961-4 | #961 | R5-4 | #959 `LiveConnection*` return the lapsed `*Connection` with `connection_expired` |
 | OPEN-985-11 | #985 | F2 | `MCTL_GLOVO_WRITE_FENCE_ENABLED`, set by the gitops PR lifting #2457; route first, fence last |
+| OPEN-985-13 | #985 | R8 | `DispatchCommandTTL` = 900 s, capped at `fresh_until` (#985 §7.4) |
+| OPEN-985-14 | #985 | R8 | fixture seam: `glovojoin_fixture` selects `gate_fixture.go` (package `internal/glovo`) and `ttl_fixture.go` (package `internal/glovo/control`); never skips §7.3 items 2 to 6 (#985 §7.4, T29) |
+| OPEN-985-15 | #985 | R5 (renumbered R8) | accept the §2a result-to-order mapping for the cancelled and expired triples |
 | OPEN-985-12 | #985 | F3 | vendor the control contract files into mctl-agents with `SHA256SUMS`, checked by #1044 and #990 |
-| OPEN-986-4 | #986 | P2-1 | vendor `claim-response.schema.json` and pin the envelope strings; extend T7c |
-| OPEN-986-5 | #986 | P2-2 | one canonical location per vector file, with sha256 pin tests |
+| OPEN-986-4 | #986 | P2-1 | closed (round 8): vendor `claim-response.schema.json` and pin the envelope strings; T4h and T7c |
+| OPEN-986-5 | #986 | P2-2 | one canonical location per vector file, with sha256 pin tests (closed, round 8: #1059 §Vendoring table, `TestApprovalBasketRefResolves`) |
+| OPEN-986-6 | #986 | R8 | the real provider's `supported_versions` entry is a gitops P1 activation precondition |
 | OPEN-988-5 | #988 | P2-4 | requirement, CHECKs and T20 for `join_refs` mint and lookup |
 | OPEN-989-8 | #989 | N2 | Sweeper started from `main.go` by #985 task 9; drop the "no new interface" sentence |
-| OPEN-1059-4 | #1059 | R5-2 | per-consumer vendor table; one basket copy location |
+| OPEN-1059-4 | #1059 | R5-2 | closed (round 8): per-consumer vendor table; one basket copy location |
 | OPEN-1059-5 | #1059 | R5-3 | normative pre-check rule list with a raw-text must-reject entry per rule |
 | OPEN-959-3 | #959 | P2-1 (rest) | declare `AuditEvent`, `ConnectResult`, `ConnectInput`, `RefusalEvent`, `GrantRow`, `Option` once |
 
@@ -442,31 +459,54 @@ omitted.
 - `GET /connection`: `connection_state` = #959 `Connection.State`, `connection_id` =
   `ConnectionID`, `expires_at` = `ExpiresAt` (omitted while NULL). `provider_account_label`
   is omitted in M1: no #959 or #961 field holds one and the pinned tool schema marks it
-  optional. No connection is 404 `no_connection`, a lapsed one `connection_expired`
-  (#961 `Current`); neither has a body.
+  optional. No connection, or a most-recent `failed` one, is 404 `no_connection`; a lapsed one is `connection_expired` and a revoked one is `connection_revoked` (409, #959 `LiveConnection` through #961 `Current`); none has a body.
 - `GET /orders/{order_id}`: `{state, outcome}`. `handoff_url` is never part of this body
   (it belongs to `POST /connections`, #961). Inputs: #988 `Order.State` and `CommandID`;
   #989 `GlovoApprovalStatus(aar)` only while the order is `finalized`; #985
-  `bridge.Store.CommandEffect(commandID)` (its `effect_state`) only when `CommandID` is
-  non-empty. `outcome` is `observed_placed` only for `effect_state = succeeded`, else
-  `OUTCOME_UNKNOWN` (placement not observed).
+  `bridge.Store.CommandEffect(commandID)`, which returns the pair (`status`, `effect_state`) of
+  the command (round 7), only when `CommandID` is non-empty. `outcome` is `observed_placed` only for
+  (`completed`, `succeeded`), else `OUTCOME_UNKNOWN` (placement not observed).
+
+The order state decides the first four rows alone. For an order that has a `CommandID` and is
+`dispatched` or `closed` the wire `state` is the last column of the canonical table in mctl-api#985
+§2a ("Result to order"), keyed by the pair, and is not stored or waited for: it is derived on every
+read, so it is the same before and after `reconcileOrder` has moved the stored order.
 
 | #988 `Order.State` | other input | wire `state` | wire `outcome` |
 |---|---|---|---|
 | `open` | none | `open` | `OUTCOME_UNKNOWN` |
 | `finalized` | aar `pending` / `approved` / `refused` / `expired` | `awaiting_approval` / `approved` / `refused` / `expired` | `OUTCOME_UNKNOWN` |
-| `dispatched`, `closed` | `effect_state` `none` or `permitted` | `dispatched` | `OUTCOME_UNKNOWN` |
-| `dispatched`, `closed` | `succeeded` | `placed` | `observed_placed` |
-| `dispatched`, `closed` | `failed` or `not_performed` | `failed` | `OUTCOME_UNKNOWN` |
-| `dispatched`, `closed`, `unknown` | `unknown`, or order `unknown` | `unknown` | `OUTCOME_UNKNOWN` |
-| `cancelled` | none | `cancelled` | `OUTCOME_UNKNOWN` |
+| `cancelled` | any | `cancelled` | `OUTCOME_UNKNOWN` |
+| `unknown` | any | `unknown` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `pending` or `leased`, `none` or `permitted` | `dispatched` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `pending` or `leased`, `unknown` | `unknown` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `completed`, `succeeded` | `placed` | `observed_placed` |
+| `dispatched`, `closed` | `completed`, `failed` or `not_performed` | `failed` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `completed`, `unknown` | `unknown` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `completed`, `none` | `failed` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `cancelled` or `expired`, `none` or `not_performed` | `cancelled` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `cancelled` or `expired`, `succeeded`, `failed`, `permitted` or `unknown` | `unknown` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | any other pair, or `CommandEffect` finds no command, or its read fails | no state body: 503 `unavailable` (§4) and an audit event; nothing is persisted | none |
+
+The table is total: every #988 state, and for the last rows every pair of the five command
+statuses and six effect states, lands on exactly one row (the last row is the complement). A read
+that failed, a command that is absent and a pair outside the #985 §2a table are not observed
+states: the route answers 503 `unavailable` with no `state` or `outcome`, so a client can never
+mistake them for an order whose state really is `unknown` (that is a stored or derived `unknown`
+row above, a successful 200). Nothing is persisted, and no `Mark*` runs on a read route's behalf in
+this case; the audit event carries the pair or the error class. The mapping to
+#1044 M9 (a workflow vocabulary: `completed`, `cancelled`, `expired`, `failed`, `unknown` with
+`reason_code`) is a different surface and is read by #985's `read_command_result` triple, not by this
+body; the two agree on every pair whose effect is not `none`; for effect `none` the workflow surface may report a workflow-only outcome owned by #1044 M9 (for example `result_inconsistent`), or `unknown` when the stored triple contradicts the pair (#1044 pair guard), while the facade follows §3a; they also differ in that an expired command is
+`cancelled` on this wire and `expired` in the workflow (a wire string that does not exist here,
+by design, because the facade vocabulary has no `expired` for a dispatched order).
 
 A failed effect is surfaced only; it writes nothing to the order or the `aar_` (#989 §7
 already leaves that `aar_` `consumed` or `unknown`). The result-to-order transition
-(`dispatched` to `closed` or `unknown`) is owned by #985 `read_command_result`, and this
-body does not wait for it: it is derived from `effect_state` on every read. The contract
-JSON pins these strings, with one fixture per row and a test over every #988 state and
-every `effect_state` value (T6).
+(`dispatched` to `closed`, `cancelled` or `unknown`) is owned by #985 `reconcileOrder`
+(called from `read_command_result` and from `Cancel`), and this body does not wait for it. The
+contract JSON pins these strings, with one fixture per row and a test over every #988 state and
+every (`status`, `effect_state`) pair (T6).
 
 ### 4. Refusal and status mapping (closed set; amended 2026-11-09 and (c))
 
@@ -495,7 +535,7 @@ row here in the same PR (through D4 when the facade wire changes). `unavailable`
 
 | `glovo.Code` (internal) | HTTP | Facade route wire `error` | Control route wire `error` (#985) | #1044 M10 |
 |---|---|---|---|---|
-| `not_authorized` | 401 when no valid bearer or subject token, else 403 | `not_authorized` | `not_authorized` | terminal |
+| `not_authorized` | 403 | `not_authorized` | `not_authorized` | terminal |
 | `no_tenant` | 403 | `no_tenant` | `no_tenant` | terminal |
 | `ambiguous_tenant`, `not_in_pilot`, `scope_unsupported`, `no_install` | 403 | unchanged | not produced | — |
 | `stale_install` | 403 | `stale_install` | `stale_install` | terminal |
@@ -514,14 +554,14 @@ row here in the same PR (through D4 when the facade wire changes). `unavailable`
 | `unavailable` | 503 | `dependency_unavailable` | `unavailable` | retryable |
 
 The facade maps every 5xx by status to `upstream_unavailable`. `not_authorized` is the
-only code with two statuses.
+only code with two statuses: `glovo.Status` gives the 403 of the table above (the HTTP column) and the 401 rows below, for no valid bearer or subject token, are written by #959 `glovo.WriteUnauthenticated` (task A15), never by `glovo.WriteError`.
 
 #### 4.2 Conditions
 
 | Condition | Internal reason (audit only) | `glovo.Code` |
 |---|---|---|
-| Bearer is not the facade workload identity | `not_facade_identity` | `not_authorized` (401) |
-| Subject token missing, invalid, expired, revoked, wrong `iss`/`aud` | `subject_token_invalid` | `not_authorized` (401, + `WWW-Authenticate`) |
+| Bearer is not the facade workload identity | `not_facade_identity` | `not_authorized` (401 through `glovo.WriteUnauthenticated`, #959 A15) |
+| Subject token missing, invalid, expired, revoked, wrong `iss`/`aud` | `subject_token_invalid` | `not_authorized` (401 through `glovo.WriteUnauthenticated` with the `WWW-Authenticate` value, #959 A15) |
 | `X-Mctl-Scope-Ref` missing, unknown, expired, revoked, or bound to another principal, tenant or grant family (§2b) | `scope_ref_invalid` | `not_authorized` (403) |
 | `scope_ref` bound to an install revision that is no longer current | `scope_ref_stale` | `stale_install` |
 | Subject token lacks the route's scope; #986 `ErrReadNotAuthorized` | `insufficient_scope` | `scope_unsupported` |
@@ -540,7 +580,7 @@ only code with two statuses.
 | Schema violation, unknown or duplicate field, header/body key mismatch, an `ordr_` in the preview `order_ref` | `invalid_request` | `invalid_request` |
 | Rate limit | `rate_limited` | `rate_limited` |
 | Dependency not configured, proof failed, gate closed | `not_ready:<dependency>` | `not_ready` |
-| Store or bridge read failed (never mapped to empty); #986 `ErrReadUnavailable`, `ErrCommandNotFound`, `ErrCommandExpired`, or `ErrBindingMismatch` without an M1a state | `dependency_unavailable:<dependency>`, `read:<sentinel>` | `unavailable` |
+| Store or bridge read failed (never mapped to empty); on `GET /orders/{order_id}` also a `CommandEffect` read that fails or finds no command, and a pair outside the #985 §2a table (§3a); #986 `ErrReadUnavailable`, `ErrCommandNotFound`, `ErrCommandExpired`, or `ErrBindingMismatch` without an M1a state | `dependency_unavailable:<dependency>`, `read:<sentinel>` | `unavailable` |
 | A sibling store refusal that cannot occur on a facade route unless an invariant broke: #988 `invalid_transition` at prepare (a replay is answered by the idempotent replay path before any write), #989 `approval_replayed` at prepare (the order is new) | `invariant:<store>:<code>` | `unavailable` (facade); the store code itself on control routes |
 | `lock_timeout` (SQLSTATE `55P03`) on any lock of the §6b order | `tenant_busy` | `tenant_busy` |
 | Any other I/O error | `dependency_unavailable:<dependency>` | `unavailable` |
@@ -802,7 +842,8 @@ runtime transaction. #989 `CreateGlovoExecutionTx` takes no advisory lock.
 | #961 connect / reconnect (round 3) | L1 sh, L2 ex, L2a (inside #959's `AfterLocks`) |
 | #961 worker activate (round 3) | L1 sh, L2 ex, L2b (inside #959 `ActivateTx`'s `AfterLocks`) |
 | #957 read routes (minting refs, then `ReadBridge`) | L1 sh, L2 sh in a short transaction that only mints join refs; the read itself takes L5 on its own read command only (#986); history then inserts `glovo.join_read_refs` (§5a) in a separate short transaction with no lock level |
-| #985 dispatch / cancel | L1 sh, L2 sh, L6 read, L3, L4, L5 |
+| #985 dispatch / cancel | L1 sh, L2 sh, L6 read, L3, L4, L5; `Cancel` calls `reconcileOrder` after `Store.Cancel` (nil or `ErrAlreadyCompleted`) under these same locks, for every dispatched order (round 8) |
+| #985 `read_command_result` (round 7) | L1 sh, L2 sh, L3 (`LockOrderForControl`); `CommandEffect` is read once there, before L4; then L4 for the rows of the #985 §2a table that name a receipt call; no L5: a terminal command never changes, so the read stays valid. The list is the one in #985 §2a |
 | Bridge permit | `WriteFence.PreLock` (#989): L1 sh, L2 sh, L3, L4; then `lockOwned`: L5; then `Check` |
 | #989 owner decision | L4 only |
 | #959 connection enders (`Revoke`, `RevokeForMembership`, `RevokeInstall`, `Reinstall`, `Reconnect` (`superseded`), terminal `Transition`) | L1 (sh, or ex for install changes), L2 ex, connection rows, then the revocation hook `bridge.CancelOpenForConnections`: L5 `ORDER BY command_id`, same transaction |
@@ -1060,7 +1101,7 @@ log); in every case the fake provider sees zero writes.
   top-level field. The #989 fence runs `basket.Parse` on the payload, so an extra field,
   a missing field or any other shape is `basket_changed`. The schema is owned by
   mctl-agents#1059 (`command-place-order-fake.schema.json`, `bridge.mctl.ai/v1alpha2`),
-  vendored by #985; #1059 OPEN-1059-1 is closed.
+  vendored and gated by mctl-api#986 §2a (round 7; not #985); #1059 OPEN-1059-1 is closed.
 - An empty basket or an all-unavailable preview is a valid read (#1059 `empty: true`)
   with no approval basket. It can be shown, never fingerprinted, prepared or approved.
 
@@ -1074,9 +1115,10 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | #959 `glovo.Store` | `NewStore(ctx, pool *pgxpool.Pool, runtimeRole, migrationRole string, opts ...Option) (*Store, error)`, `Pool() *pgxpool.Pool`, `WithExplicitURL(bool) Option` | round 3: the shared `GLOVO_DB_URL` pool, no pool of its own; `Ready` compares `current_user` with `runtimeRole`, every owner with exactly `migrationRole` (round 5, as #988), and fails without `WithExplicitURL(true)` |
 | | `type Querier` in package `internal/glovo/dbq` (`Exec`, `Query`, `QueryRow`; satisfied by `*pgxpool.Pool` and `pgx.Tx`) | round 5 (#988 F3): the one definition, created by #959 task 1. Every bare `Querier` in these proposals means `dbq.Querier`; #988's own `orders.Querier` is deleted. `glovo.Owner`, `glovo.Connection` and the `glovo.Code` constants are created by #959 task 1 and only used elsewhere |
 | | `GetInstall(ctx, tenantID string) (*Install, error)` | round 5 (R4-1): the one source of install id (`gin_`) and install revision. No lock, one statement; absent or `uninstalled` is `no_install`. The #957 resolver calls it once per request after #960 `Resolve`; a `scope_ref` whose revision differs is `stale_install` |
-| | `ActivateTx(ctx, tx, in ActivateInput{..., ExpiresIn time.Duration})`, `ConnectInput.AfterLocks`, `ConnectInput.TerminalOnly`, `AppendRefusal(ctx, ev)` | round 3, for #961: tx-scoped activation `pending_handoff -> pending_provider -> active`; SQL sets `expires_at = clock_timestamp() + ExpiresIn` (`<= 0` or `> 24h` is `invalid_request`, round 4); hook after L1/L2; terminal-only reconnect; refusal audit |
+| | `ActivateTx(ctx, tx, in ActivateInput{..., ExpiresIn time.Duration})`, `ConnectInput.AfterLocks`, `ConnectInput.TerminalOnly`, `AppendRefusal(ctx, ev RefusalEvent)` | round 3, for #961: tx-scoped activation `pending_handoff -> pending_provider -> active`, starting only from `pending_handoff` and checking `ExpectedInstallRevision` and `ExpectedVersion` after the state (round 8, C-3, C-7); any other state writes nothing and answers `invalid_transition` (`pending_provider`, unexpired `active`), `connection_revoked`, `connection_expired` (`expired`, or `active` past `expires_at`), `no_connection` (`failed`) or `not_found`; SQL sets `expires_at = clock_timestamp() + ExpiresIn` (`<= 0` or `> 24h` is `invalid_request`, round 4); hook after L1/L2; terminal-only reconnect; refusal audit |
 | | `LockOwnerShared(ctx, tx pgx.Tx, tenant, principal string) error` | tx; L1 shared, then L2 shared |
-| | `LiveConnectionTx(ctx, tx pgx.Tx, owner glovo.Owner) (*glovo.Connection, error)` | tx; no row lock; caller holds L2; `expires_at <= clock_timestamp()` (statement time, round 4; `now()` is the transaction start and would let a long transaction permit after expiry) is `connection_expired` even before any `Transition` |
+| | `type Actor struct{ PrincipalID string; Kind ActorKind }`, `ActorKind` (`user\|owner\|admin\|worker\|system`), `WithActor(ctx, Actor)`, `ActorFrom(ctx)`, `RefusalEvent`; `glovo.WriteError` and `glovo.Status` | round 8, C-5, C-6: created by #959 task 1 and tasks A14, A15. Every mutating method takes an `Actor` (parameter, input struct, or, for `Transition` whose call shape #961 fixes, the context, with no default and no `system` fallback: a ctx with no `Actor` and no authenticated worker principal is `invalid_request`; #959 design Actor sources); `WriteError` takes its status only from `Status(code)` and writes an unregistered code as 503 `unavailable` |
+| | `LiveConnectionTx(ctx, tx pgx.Tx, owner glovo.Owner) (*glovo.Connection, error)` | tx; no row lock; caller holds L2; one statement over the owner's most recent row (round 8, C-4): the live row, or with the row `connection_revoked` (`revoked`), `connection_expired` (`expired`, or `expires_at <= clock_timestamp()`: statement time, round 4; `now()` is the transaction start and would let a long transaction permit after expiry; even before any `Transition`), `no_connection` (`failed`, or none). `LiveConnection` on the pool has the same contract; a consumer whose `gcn_` differs from the live row's answers `connection_revoked` itself |
 | | `WithRevocationHook(h glovo.RevocationHook) Option`, `type RevocationHook func(ctx, tx pgx.Tx, ended []string, actor string) error` | every path that ends a connection calls it on its own transaction |
 | | `WithMembershipRevoker(name string) Option`, `MembershipRevocationWired() bool` | true only when the slice that detects a membership removal registered itself (OPEN-985-2) |
 | | `Ready(ctx) error` | `revocation_hook_missing` when no hook is installed; `end_purger_missing` when `WithEndPurgerRequired(true)` and none installed; `not_ready` for an existing `glovo` table with no `glovo.expectedGrants` row (round 4) |
@@ -1091,7 +1133,7 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | | `BindApproval(ctx, tx, sc Scope, a Actor, orderRef, approvalRef string) error` | tx; called by #989 with `Scope{Tenant, PrincipalID: owner}` and `Actor{Kind: system, ID: "service:glovo-prepare"}` |
 | | `PeekOrderScope(ctx, q Querier, orderRef string, tenants []string) (Scope, error)` | unlocked read of write-once columns |
 | | `LockOrderForControl(ctx, tx, orderRef string, tenants []string) (*Order, error)` | tx; L3. #985 passes its credential's `Tenants`; the #989 fence passes `[]string{command.tenant}` |
-| | `MarkDispatched(ctx, tx, o *Order, commandID string, a Actor) error`, `MarkCancelled(...)`, `MarkUnknown(...)`, `MarkClosed(...)` | tx; `MarkDispatched` also writes the effect row; `MarkClosed` is `dispatched -> closed` only, called by #985 `read_command_result` (round 6, G2) |
+| | `MarkDispatched(ctx, tx, o *Order, commandID string, a Actor) error`, `MarkCancelled(...)`, `MarkUnknown(...)`, `MarkClosed(...)` | tx; `MarkDispatched` also writes the effect row; `MarkClosed` is `dispatched -> closed` only, called by #985 `reconcileOrder` (round 6, G2) |
 | | `Snapshot(ctx, q Querier, sc Scope, orderRef string, seq int) (*Snapshot, error)` | `Snapshot.Canonical` holds the JCS bytes |
 | | `MintJoinRefTx(ctx, tx, kind JoinKind, tenant, principalID, subjectID string) (string, error)` (kinds `tenant`, `principal`, `install_revision`; there is no `order` kind), `LookupJoinRefTx(ctx, q Querier, kind JoinKind, tenant, principalID, subjectID string) (string, error)` | mint is insert-or-read; lookup is read-only, `not_found` if never minted |
 | | `basket.Parse(raw []byte) (Approval, []byte, error)`, `basket.Fingerprint(canonical []byte) string` | the only entry points; `Parse` returns the JCS bytes |
@@ -1107,7 +1149,7 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | #985 bridge and control | `bridge.CancelOpenForConnections(ctx, tx pgx.Tx, connectionIDs []string, actor string) error` | the `RevocationHook` implementation; L5 `ORDER BY command_id` |
 | | `bridge.WriteFence.PreLock(ctx, tx pgx.Tx, c bridge.Caller, commandID string) error` | called by `permitTx` before `lockOwned`; step 0 applies `lockOwned`'s provider and tenants predicate and answers `ErrCommandNotFound` for absent and foreign ids alike, and refuses non-`place_order_fake` kinds, before any lock (#985 §7.2, #989 §6) |
 | | `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole string) error`, `bridge.NewRuntimeStore(ctx, pool *pgxpool.Pool) (*Store, error)` (the shared `GLOVO_DB_URL` pool; no DDL) | §6d.1; `ApplySchema` calls #986 `bridge.ApplyReadSchemaTx` (round 4, X-3) |
-| | `bridge.Store.CommandEffect(ctx, q dbq.Querier, tenants []string, commandID string) (effectState string, err error)` | round 6, G2: read-only; Glovo `place_order_fake` commands inside `tenants` only, anything else `not_found`; the source of `outcome` in §3a |
+| | `bridge.Store.CommandEffect(ctx, q dbq.Querier, tenants []string, commandID string) (status, effectState string, err error)` | round 6, G2, round 7: read-only; Glovo `place_order_fake` commands inside `tenants` only, anything else `not_found`; returns the pair that keys the #985 §2a table and §3a |
 | | `Dispatcher.Dispatch` replay | round 4 (#985 F2): on any order state with a non-empty `command_id` whose `approval_ref` and fingerprint match, the same `cmd_` with the current `order_state` and `effect_state` |
 | | `control.ProveOneDatabase(ctx, bridgeStore *bridge.Store, glovoStore *glovo.Store, workItemsPool *pgxpool.Pool) error` | §6d.1 checks; requires `glovoStore.Pool() == bridgeStore.Pool()` (round 3: two stores, one pool, one role) and proves `workItemsPool` is the same database through the colocation probe |
 | #960 (`internal/glovo/scope`, `internal/auth`) | `Resolver.Resolve(ctx, u *auth.User) (Scope, *glovo.Error)`, `User.TeamGrant() (grantID, tenant string, ok bool)`, `teamgrant.Check(ctx, grantID, principalID, clientID, resource) (teamgrant.Grant, error)` (only an `active` grant passes) | round 3: sole owner of consent-time selection and of the claims `tgr`/`stn`. Round 5 (R4-1): #960 defines `teamgrant.Grant{ID, PrincipalID, Tenant, ClientID, Resource, RefreshFamilyID, State}`; `Grant.RefreshFamilyID` is the `scope_ref` binding key (§2b) and is the only place #957 reads it |
@@ -1124,7 +1166,11 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
   limits, the timeouts (5 s), the OAuth resource metadata expectations (`resource`,
   `scopes_supported`, `bearer_methods_supported: ["header"]`) and `dependencies` version
   gates (minimum M1a and M1b schema versions, bridge `bridge.mctl.ai/v1alpha1` schema
-  digests as vendored at `a9ca5814`; amended 2026-11-09).
+  digests as vendored at `a9ca5814`, and (round 7) the digest of `command-place-order-fake.schema.json`
+  as vendored by #986; amended 2026-11-09). That pin is owned by task 1 and test T1 of this
+  slice: T1 asserts the recorded digest equals the `sha256` in #986's PROVENANCE for the vendored
+  file, which #986 `TestVendoredV1alpha2MatchesProvenance` keeps equal to the #1059 original;
+  neither slice alone can drift it.
 - `contract.go` (`//go:embed`) and `contract_test.go`, which pins `Digest` (sha256 of
   the file). Changing the file without bumping the digest fails the test, and so does
   bumping the digest without bumping the version.
@@ -1152,6 +1198,12 @@ local-OAuth Glovo tokens, and `FixtureBridge`. It then replays every golden fixt
 the negative matrix (tasks.md T6). An exported `cmd/glovo-join-harness` (fixture tag)
 serves the same stack on a local port so the mctl-telegram facade's integration test can
 target real mctl-api handlers instead of `fakeapi`.
+
+Round 8: the same tag also selects #985's `gate_fixture.go` in `internal/glovo` (opens the const-closed control
+gate only) and the TTL overrides: #985 owns `SetFixtureDispatchCommandTTL`, this slice owns
+`internal/glovojoin/ttl_release.go` / `ttl_fixture.go` with `SetFixtureGlovoApprovalTTL(d)`
+(release: `const GlovoApprovalTTL = 15 * time.Minute`; fixture: a `var`). Connection expiry
+needs no override variable (#985 §7.4). The tag never skips a precondition of #985 §7.3.
 
 ### 9. Readiness and launch matrix
 
