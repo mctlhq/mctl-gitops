@@ -18,3 +18,28 @@ path "secret/data/platform/*" {
 path "secret/metadata/platform/*" {
   capabilities = ["read", "list"]
 }
+
+# Explicit deny, so a broad platform/* grant never reaches the GitHub App
+# signing key. Nothing reads it through this store: the rotation CronWorkflow
+# reads it under its own Vault role. A deny wins over any read grant above.
+# The glob also covers the throwaway canary path used to prove the rule.
+# Keep this narrow: `platform/github-app` (no suffix) is a different secret and
+# stays readable here.
+path "secret/data/platform/github-app-agents*" {
+  capabilities = ["deny"]
+}
+
+path "secret/metadata/platform/github-app-agents*" {
+  capabilities = ["deny"]
+}
+
+# Explicit deny on the dedicated writer prefix. A deny wins over any grant, so
+# a later broadening of a neighbouring glob cannot reach it. Served only by the
+# gitops-writer-read policy.
+path "secret/data/writers/*" {
+  capabilities = ["deny"]
+}
+
+path "secret/metadata/writers/*" {
+  capabilities = ["deny"]
+}

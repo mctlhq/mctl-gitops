@@ -399,14 +399,9 @@ spec:
           VALUES="platform-gitops/services/${TEAM}/${COMPONENT}/values.yaml"
 
           # Binding through env removes SHELL parsing, and nothing else.
-          # These three values are still expanded into a `sed` PROGRAM and
-          # printf'd into a YAML DOCUMENT below, each of which is its own
-          # interpreter:
-          #   - a value containing `|` closes sed's s||| delimiters and the
-          #     rest is read as further sed commands (`w` writes files);
-          #   - a value containing a newline appends arbitrary YAML keys to
-          #     values.yaml — `image:\n  repository: ...` replaces the
-          #     deployed image, and ArgoCD applies it.
+          # These three values still reach values.yaml, and a value holding a
+          # newline would add arbitrary YAML keys there: `image:\n  repository:
+          # ...` replaces the deployed image, and ArgoCD applies it.
           # min_replicas, max_replicas and cpu_threshold carry no Pattern in
           # the operations registry, so nothing upstream stops either.
           # They are integers by definition; assert that here rather than
@@ -423,22 +418,43 @@ spec:
           git clone --depth=1 "${REPO}" /tmp/mctl-gitops
           cd /tmp/mctl-gitops
 
-          # Append or update autoscaling block
-          if grep -q "^autoscaling:" "${VALUES}"; then
-            sed -i "s|^\( *enabled: *\).*|\1true|" "${VALUES}"
-            sed -i "s|^\( *minReplicas: *\).*|\1${MIN}|" "${VALUES}"
-            sed -i "s|^\( *maxReplicas: *\).*|\1${MAX}|" "${VALUES}"
-            sed -i "s|^\( *targetCPUUtilizationPercentage: *\).*|\1${CPU}|" "${VALUES}"
-          else
-            printf '\nautoscaling:\n  enabled: true\n  minReplicas: %s\n  maxReplicas: %s\n  targetCPUUtilizationPercentage: %s\n' \
-              "${MIN}" "${MAX}" "${CPU}" >> "${VALUES}"
-          fi
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh target "$TEAM" "$COMPONENT" || exit 1
+
+          # Update the autoscaling block with yq, confined to .autoscaling.
+          # This used to be four `sed -i` substitutions anchored only on the
+          # key name, so they rewrote EVERY `enabled`, `minReplicas`,
+          # `maxReplicas` and `targetCPUUtilizationPercentage` in the file —
+          # an unrelated `enabled: false` (ingress, serviceMonitor, ...) was
+          # switched on and any other block's replica bounds overwritten
+          # (gitops#2413). yq creates the block when it is missing and
+          # leaves the rest of the document alone.
+          #
+          # The values are validated integers, passed through the
+          # environment and tagged !!int so they stay numbers in the YAML.
+          # Leading zeros are dropped first: `08` is not a YAML integer and
+          # would be written back as a float-looking scalar.
+          strip_zeros() {
+            v="$1"
+            while [ "${#v}" -gt 1 ] && [ "${v#0}" != "$v" ]; do v="${v#0}"; done
+            printf '%s' "$v"
+          }
+          MIN="$(strip_zeros "$MIN")"
+          MAX="$(strip_zeros "$MAX")"
+          CPU="$(strip_zeros "$CPU")"
+          export MIN MAX CPU
+          yq eval -i '
+            .autoscaling.enabled = true |
+            .autoscaling.minReplicas = (strenv(MIN) | . tag = "!!int") |
+            .autoscaling.maxReplicas = (strenv(MAX) | . tag = "!!int") |
+            .autoscaling.targetCPUUtilizationPercentage = (strenv(CPU) | . tag = "!!int")
+          ' "${VALUES}"
 
           git config user.email "ci@mctl.ai"
           git config user.name "mctl-deploy"
           git add "${VALUES}"
           git diff --staged --quiet && echo "Autoscaling already configured" && exit 0
           git commit -m "chore: enable autoscaling for ${TEAM}/${COMPONENT} (min=${MIN} max=${MAX} cpu=${CPU}%)"
+          sh platform-gitops/argo-workflows/scripts/release-gate-guard.sh outgoing origin/main || exit 1
           git push
       volumes:
         - name: deploy-key
@@ -462,7 +478,7 @@ spec:
       activeDeadlineSeconds: 300
       script:
         # helm, yq, jq, curl and git: what check-image-user.sh needs.
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         envFrom:
           - configMapRef:
@@ -521,7 +537,7 @@ spec:
           - name: team_name
           - name: component_name
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: PARAM_TEAM_NAME
@@ -573,7 +589,7 @@ spec:
           - name: team_name
           - name: component_name
       script:
-        image: python:3.12-alpine
+        image: python:3.12-alpine@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 # python:3.12-alpine
         command: [python3]
         envFrom:
           - configMapRef:

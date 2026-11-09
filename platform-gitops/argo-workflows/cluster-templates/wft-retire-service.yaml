@@ -90,9 +90,10 @@ spec:
                 - name: mode
                   value: "check"
 
-          # Step 1: delete Vault secrets (parallel with git delete)
+          # Step 1: delete Vault secrets, only after the git step accepted the
+          # retire. Run in parallel, a refusal there would still lose the secrets.
           - name: delete-vault-secrets
-            dependencies: [preflight]
+            dependencies: [delete-from-git]
             when: "\"{{workflow.parameters.delete_vault_secrets}}\" == \"true\""
             templateRef:
               name: tpl-vault-write
@@ -158,7 +159,7 @@ spec:
           - name: component_name
           - name: mode
       script:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: [sh]
         env:
           - name: PARAM_TEAM_NAME

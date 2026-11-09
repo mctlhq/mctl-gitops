@@ -35,7 +35,8 @@ jobs:
       # A bot approval is enough to merge an ordinary `claude/*` PR, but not
       # one that decides which agent exists or what it may do
       # (mctl-agents#470), nor one that flips a proposal's approval state
-      # (gitops#986). Those wait for a person to merge them.
+      # (gitops#986), nor one that changes the release-gate files (gitops#1033).
+      # Those wait for a person to merge them.
       #
       # Fail closed: a file list that cannot be read in full is treated as
       # touching a protected path. "Could not list" is never "nothing
@@ -65,13 +66,27 @@ jobs:
             echo "::error::#${PR} reports ${expected} changed files but ${listed} were listed; not merging."
             exit 1
           fi
-          protected=$(printf '%s\n' "$files" | tr '\t' '\n' | grep -E \
-            '^platform-gitops/agent-platform/|^platform-gitops/agents-state/[^/]+/proposals/[^/]+/\.status\.yaml$' || true)
+          # tests/test_auto_merge_protected_paths.py reads this assignment, so
+          # keep it a single line of the form protected_re='...'.
+          protected_re='^platform-gitops/agent-platform/|^platform-gitops/agents-state/[^/]+/proposals/[^/]+/\.status\.yaml$|^scripts/release-gate\.py$|^platform-gitops/release-gates\.yaml$|^platform-gitops/argo-workflows/scripts/release-gate-guard\.sh$|^platform-gitops/argo-workflows/cluster-templates/(tpl-git-commit|tpl-validate-tenant|wft-add-custom-domain|wft-deploy-service|wft-provision-database|wft-remove-custom-domain|wft-rollback-service)\.yaml$|^\.github/workflows/(auto-merge\.yml|gitops-bump\.yaml|release-deploy\.yaml|release-gate-watch\.yml|validate-manifests\.yml)$|^tests/test_(release_gate|auto_merge_protected_paths|release_deploy_bump|gitops_bump_inputs|wft_deploy_service_autoscaling_values)[a-z_]*\.py$'
+          # grep exits 1 for "no match" (an empty set) and 2 or more for an
+          # error such as an invalid pattern. Only 1 may read as empty.
+          rc=0
+          protected=$(printf '%s\n' "$files" | tr '\t' '\n' | grep -E "$protected_re") || rc=$?
+          if [ "$rc" -ge 2 ]; then
+            echo "::error::Path check failed (grep exit ${rc}); not merging."
+            exit 1
+          fi
           # portal-allowlist/* PRs may only auto-merge if they do not widen exposure.
           # A widening touches baseline.json and requires an explicit human merge.
           if [[ "$HEAD_REF" =~ ^portal-allowlist/ ]]; then
+            rc=0
             portal_widening=$(printf '%s\n' "$files" | tr '\t' '\n' | grep -E \
-              '^infrastructure/cloudflare/portal/allowlists/baseline\.json$' || true)
+              '^infrastructure/cloudflare/portal/allowlists/baseline\.json$') || rc=$?
+            if [ "$rc" -ge 2 ]; then
+              echo "::error::Portal path check failed (grep exit ${rc}); not merging."
+              exit 1
+            fi
             if [ -n "$portal_widening" ]; then
               protected=$(printf '%s\n%s\n' "$protected" "$portal_widening" | grep -v '^$' || true)
             fi

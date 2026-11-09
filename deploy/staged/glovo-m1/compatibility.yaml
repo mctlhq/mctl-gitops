@@ -1,0 +1,14 @@
+# Versions that may run together. Pending until the images exist.
+# The facade env key names in facade/values.yaml are placeholders; the facade
+# version pinned here defines them and P1 must refuse a mismatch.
+matrix:
+  - facade: "<version-pending>"
+    provider: "<version-pending>"
+    control: "<version-pending>"
+    mctlApi: "<version-pending>"
+    envKeys:
+      - OAUTH_ISSUER_URL
+      - OAUTH_RESOURCE
+      - GLOVO_ENABLED
+      - GLOVO_ALLOWLIST
+      - GLOVO_TEAM_FALLBACK

@@ -1,0 +1,356 @@
+# Design: issue-959-feat-glovo-m1a-2-tenant-principal-connec
+
+## Current state
+
+- No Glovo code exists in mctl-api today: `grep -ril glovo` over the Go
+  sources and `docs/` returns nothing.
+- Every durable store follows one pattern: its own package under
+  `internal/<name>/store.go`. A `const <name>Schema` string holds idempotent
+  DDL (`CREATE TABLE IF NOT EXISTS`, `CREATE ... INDEX IF NOT EXISTS`,
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). `NewStore(ctx, connStr)`
+  opens a pool with `pgshared.Open` (`internal/pgshared/pool.go`), pings,
+  executes the schema, and returns the store. See
+  `internal/commerce/store.go` (`commerceSchema`, `NewStore`, `withTx`)
+  and `internal/lifecycle/store.go` (`lifecycleSchema`). There is no
+  migration framework and no `.sql` files. "Migrations" are additive DDL
+  applied on start.
+- Named CHECK constraints are added outside `CREATE TABLE` in a `DO $$`
+  loop that tests `pg_constraint` and handles `duplicate_object`. This
+  covers tables created by earlier builds and two pods cold-starting at
+  once. See `internal/commerce/store.go` around the
+  `commerce_invocations_phase_check` block.
+- Write serialization uses `pg_advisory_xact_lock(hashtext($1))` inside
+  the transaction: `commerce.Store.withTx`, `workitems/store.go:272`,
+  `principals/link.go:98`, `lifecycle/store.go:1468`. Schema application
+  is serialized the same way in `principals/store.go:133` and
+  `auth/clientstore/postgres.go:86`.
+- Immutable rows are enforced with a `BEFORE UPDATE` trigger that raises.
+  See `decision_records_immutable()` in `internal/decisions/store.go`
+  (lines ~114-131), and `internal/evidence/store.go` and
+  `internal/deployplan/store.go`.
+- IDs: canonical principals are `prn_<ULID>` (`principals.PrincipalIDPrefix`
+  in `internal/principals/ulid.go`). `commerce.newULID` is a local copy of
+  the ULID minting, kept local "so this package does not depend on the
+  principals store". Tenants are referenced by their name as `TEXT`
+  (`work_items.tenant`, `commerce_*.tenant_id`).
+- Scoped reads return a package `ErrNotFound` (e.g.
+  `principals.ErrNotFound`). Commerce scopes every read by `tenant_id`, so a
+  foreign ID is a plain miss (`GetQuote(ctx, tenantID, quoteID)`).
+- Audit-shaped tables are append-only event tables keyed by `BIGSERIAL`:
+  `lifecycle_events`, `commerce_invocation_transitions`,
+  `work_item_events`. Retention that drops content but keeps the row exists
+  for `work_item_intents.text`.
+- `internal/secretscan.Scan(content []byte) (pattern string, found bool)`
+  detects secret-shaped values. It is reusable for a "no secrets in
+  fixtures/audit" test.
+- DB tests use `TEST_DATABASE_URL` and `t.Skip` when it is unset
+  (`internal/commerce/store_test.go:newTestStore`). CI provides
+  `postgres:16` in `.github/workflows/validate.yml`. Concurrency tests
+  exist (`TestConcurrentAcceptsOfOneKeyYieldOneRow`).
+- Stores are wired in `cmd/api/main.go` through `initStore(...)` with an
+  env DB URL that falls back to `AUDIT_DB_URL` (commerce at ~line 556).
+
+Deployed state checked:
+- `mctl_get_service_config(team=admins, service=mctl-api)` returned
+  `service not found: admins/mctl-api`. mctl-api is not a catalogue
+  tenant service, so its deployed env (DB URLs) could not be observed.
+- `$MCTL_GITOPS_ROOT/services/*/`: no `mctl-api/values.yaml` exists under
+  `admins`, `karabu`, `labs` or `namax66`. Grepping `services/` for
+  `glovo` returned nothing. Not observed, so this design assumes nothing
+  about the deployed DB URL and does not wire production startup (see
+  Open questions in requirements.md).
+- Sibling issues read with `gh`: #953 (parent), #958, #960, #961, #954
+  exist and are OPEN. This slice's scope was cut against them.
+
+## AMEND 2026-11-08 — mandatory corrections to original schema/test draft
+
+The previously proposed `glovo_audit_immutable()` exception based on `current_setting('glovo.retention_sweep', true)` is **REJECTED** because caller-controlled custom settings do not prove privileged maintenance identity. The M1 trigger must always `RAISE EXCEPTION` for UPDATE or DELETE against audit events under the API role; no `SET LOCAL` flag or callable `SweepAudit` may bypass it. Retention is a documented obligation and a future **separately approved** maintenance service/DB-role design, not a runtime task in this slice. A dedicated migration role owns the schema; deny UPDATE/DELETE for runtime DB roles and verify GRANTs explicitly.
+
+The old cleanup helper's `session_replication_role = replica` is also **REJECTED**. Build DB tests with a disposable per-test schema/database and set search_path only on test-owned connections, using an actual limited non-superuser role; after a test, drop the isolated schema/database through the CI test-owner connection. Never disable triggers or mutate shared production fixtures. All lock concurrency tests must operate on an isolated owned test schema and still execute the real triggers.
+
+These amendments supersede the audit retention GUC bypass, the original `SweepAudit` design and the session_replication_role cleanup in subsequent sections. No live migration/production deploy is allowed by proposal approval.
+
+## Proposed solution
+
+Add a new self-contained package `internal/glovo` (no imports from
+`internal/api`, `internal/mcp` or `internal/principals`). This slice adds
+no route, no MCP tool and no `main.go` wiring.
+
+### Files
+
+- `internal/glovo/types.go`: states, transitions, IDs, refusal codes,
+  inputs/outputs.
+- `internal/glovo/ids.go`: `newPrefixedID(prefix, now)`, a copy of the
+  ULID minting (same reason as `commerce.newULID`). Prefixes: `gin_`
+  install, `gcn_` connection, `gae_` audit event, `gsr_` secret reference.
+- `internal/glovo/schema.go`: `const glovoSchema` (DDL below).
+- `internal/glovo/store.go`: `Store`, `NewStore`, `withTx`, and the
+  methods below.
+- `internal/glovo/secretref.go`: the `SecretRefs` interface and
+  `RefusingSecretRefs`.
+- `internal/glovo/*_test.go`: unit tests (no DB) and DB tests
+  (`TEST_DATABASE_URL`).
+- `internal/glovo/fixtures_test.go`: synthetic fixtures.
+- `docs/glovo-connections.md`: data model, state machine, lock order,
+  refusal codes, retention, manual down-migration.
+
+### Types (`types.go`)
+
+```go
+type InstallState string    // "installed", "uninstalled"
+type ConnectionState string // "pending_handoff","pending_provider","active","expired","failed","revoked"
+
+var transitions = map[ConnectionState][]ConnectionState{
+    PendingHandoff:  {PendingProvider, Failed, Expired, Revoked},
+    PendingProvider: {Active, Failed, Expired, Revoked},
+    Active:          {Expired, Failed, Revoked},
+}
+func (s ConnectionState) Live() bool
+func CanTransition(from, to ConnectionState) bool
+
+type Owner struct{ TenantID, PrincipalID string } // validate(): non-empty tenant, "prn_" principal
+
+type RefusalCode string // invalid_input, no_install, stale_install, no_connection,
+                        // connection_exists, connection_revoked, connection_expired,
+                        // not_found, invalid_transition, stale_version, idempotency_key_reused
+type Refusal struct{ Code RefusalCode }  // implements error; Error() == string(Code)
+var ErrNotFound = &Refusal{Code: NotFound} // one value for missing AND foreign
+```
+
+`Refusal` carries no IDs or owner data in its message. This keeps a
+foreign-ID miss byte-identical to a true miss. The codes match the parent
+#953 vocabulary so slice 4 can map them to HTTP without translation.
+
+### Schema (`glovoSchema`)
+
+```sql
+CREATE TABLE IF NOT EXISTS glovo_installs (
+  install_id       TEXT PRIMARY KEY,                 -- gin_
+  tenant_id        TEXT NOT NULL UNIQUE,             -- one install per tenant
+  install_revision BIGINT NOT NULL CHECK (install_revision >= 1),
+  state            TEXT NOT NULL,
+  installed_by     TEXT NOT NULL,                    -- prn_
+  created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+  version          BIGINT NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS glovo_connections (
+  connection_id    TEXT PRIMARY KEY,                 -- gcn_
+  tenant_id        TEXT NOT NULL,
+  principal_id     TEXT NOT NULL,
+  install_id       TEXT NOT NULL REFERENCES glovo_installs (install_id),
+  install_revision BIGINT NOT NULL,
+  state            TEXT NOT NULL,
+  secret_ref       TEXT,                             -- gsr_ or NULL
+  supersedes_id    TEXT NOT NULL DEFAULT '',         -- prior gcn_ on reconnect
+  end_reason       TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+  ended_at         TIMESTAMPTZ,
+  version          BIGINT NOT NULL DEFAULT 1,
+  UNIQUE (tenant_id, principal_id, connection_id, install_revision)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS glovo_connections_one_live
+  ON glovo_connections (tenant_id, principal_id)
+  WHERE state IN ('pending_handoff','pending_provider','active');
+CREATE INDEX IF NOT EXISTS glovo_connections_tenant_live
+  ON glovo_connections (tenant_id, install_revision)
+  WHERE state IN ('pending_handoff','pending_provider','active');
+CREATE TABLE IF NOT EXISTS glovo_connect_requests (
+  tenant_id TEXT NOT NULL, principal_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+  request_hash TEXT NOT NULL, connection_id TEXT NOT NULL REFERENCES glovo_connections,
+  created_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (tenant_id, principal_id, idempotency_key)
+);
+CREATE TABLE IF NOT EXISTS glovo_audit_events (
+  event_id TEXT PRIMARY KEY,                         -- gae_
+  tenant_id TEXT NOT NULL, subject_principal_id TEXT NOT NULL DEFAULT '',
+  actor_principal_id TEXT NOT NULL,
+  entity_kind TEXT NOT NULL,                         -- install | connection
+  entity_id TEXT NOT NULL, event TEXT NOT NULL,
+  from_state TEXT NOT NULL DEFAULT '', to_state TEXT NOT NULL,
+  install_revision BIGINT NOT NULL, reason_code TEXT NOT NULL DEFAULT '',
+  recorded_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS glovo_audit_events_entity ON glovo_audit_events (tenant_id, entity_id, recorded_at);
+CREATE INDEX IF NOT EXISTS glovo_audit_events_recorded ON glovo_audit_events (recorded_at);
+```
+
+Then comes a `DO $$` block in the commerce style that adds the named
+CHECKs: `glovo_installs_state_check`, `glovo_connections_state_check`,
+`glovo_connections_principal_check` (`principal_id LIKE 'prn\_%'`),
+`glovo_connections_secret_ref_check`
+(`secret_ref IS NULL OR secret_ref LIKE 'gsr\_%'`), and
+`glovo_connections_terminal_check`
+(`state IN (live) OR ended_at IS NOT NULL`). A connection's
+`install_revision` must equal the install's current revision at creation.
+A cross-table CHECK cannot express that, so Go enforces it under the
+locks below.
+
+Immutability uses the `internal/decisions` pattern:
+`glovo_audit_immutable()` unconditionally refuses `BEFORE UPDATE` and
+`BEFORE DELETE` to the runtime role. It has **no** `glovo.retention_sweep` custom-GUC exception or application-exposed sweep. A separate, privileged and reviewed retention-maintenance design is required before any deletion of audit records. Installs and connections have no DELETE path
+in Go. A `BEFORE DELETE` trigger on `glovo_connections` refuses
+unconditionally, because connection IDs must stay unique forever (never
+reused). Triggers are created with the `pg_trigger` existence test.
+
+The whole schema runs in one transaction under
+`pg_advisory_xact_lock(hashtext('glovo-schema'))`, as
+`principals/store.go:133` does. A failure rolls the whole thing back and
+`NewStore` returns an error.
+
+### Locking (revoke-vs-connect safety)
+
+Two advisory keys, always taken in this order inside one transaction:
+
+1. Tenant install key `glovo-install/v1|<tenant>`. Taken **shared**
+   (`pg_advisory_xact_lock_shared`) by `Connect`, `Reconnect` and
+   connection `Transition`. Taken **exclusive** by `Install`,
+   `RevokeInstall` and `Reinstall`.
+2. Owner key `glovo-owner/v1|<tenant>|<principal>`. Taken exclusive by
+   every connection write for that owner.
+
+Keys are length-prefixed (as `commerce.lengthPrefixed`) so a tenant name
+containing `|` cannot collide. Under the shared install lock, `Connect`
+re-reads the install row with `SELECT ... FOR SHARE` and checks
+`state='installed'` and `install_revision = expected`. This gives the
+following:
+
+- A connect racing a reinstall/uninstall either commits first, and its new
+  connection is then revoked by the reinstall's sweep because the sweep
+  runs after the exclusive lock is granted. Or it commits second, and it
+  then sees the new revision/state and refuses with `stale_install` or
+  `no_install`. No interleaving leaves a live connection on an old
+  revision.
+- A connect racing a revoke of the same owner's connection is serialized
+  by the owner key. A `Reconnect` that observes the connection already
+  revoked refuses `no_connection` rather than creating a second chain.
+- The partial unique index `glovo_connections_one_live` is the last line
+  of defense. A unique violation on it maps to `connection_exists` and
+  never to a 500.
+
+### Store API (`store.go`)
+
+All methods take an `Owner` or a tenant plus an actor `prn_`, and they
+return `*Refusal` for domain refusals and wrapped errors for I/O
+(`fmt.Errorf("glovo: ...: %w", err)`).
+
+```go
+func NewStore(ctx context.Context, connStr string, opts ...Option) (*Store, error)
+// Option: WithClock(func() time.Time); audit retention is a future privileged maintenance slice
+func (s *Store) Close()
+
+func (s *Store) Install(ctx, tenantID, actor string) (*Install, error)          // idempotent if already installed
+func (s *Store) RevokeInstall(ctx, tenantID, actor, reason string, expectedRevision int64) (*Install, []Connection, error)
+func (s *Store) Reinstall(ctx, tenantID, actor string, expectedRevision int64) (*Install, []Connection, error)
+func (s *Store) GetInstall(ctx, tenantID string) (*Install, error)               // no_install
+
+type ConnectInput struct{ Owner Owner; ExpectedInstallRevision int64; IdempotencyKey string }
+func (s *Store) Connect(ctx, in ConnectInput) (*ConnectResult, error)           // {Connection, Replayed}
+func (s *Store) Reconnect(ctx, in ConnectInput, priorConnectionID string) (*ConnectResult, error)
+func (s *Store) Transition(ctx, owner Owner, connectionID string, to ConnectionState,
+                           expectedVersion int64, reason string, ref *SecretRef) (*Connection, error)
+func (s *Store) Revoke(ctx, owner Owner, connectionID, reason string) (*Connection, error)
+func (s *Store) GetConnection(ctx, owner Owner, connectionID string) (*Connection, error) // ErrNotFound
+func (s *Store) LiveConnection(ctx, owner Owner) (*Connection, error)                    // no_connection
+func (s *Store) ListAudit(ctx, tenantID, entityID string) ([]AuditEvent, error)
+// Audit retention deletion is OUT OF SCOPE for M1; no SweepAudit API is exposed.
+```
+
+The returned `[]Connection` from revoke/reinstall are the connections the
+call ended, so a later slice can propagate revocation (Temporal signal) and
+release secret references after commit.
+
+Every connection query has the form
+`WHERE connection_id=$1 AND tenant_id=$2 AND principal_id=$3`, issued as
+one statement. A miss returns `ErrNotFound` with no second probe to tell
+"foreign" from "missing", so the response and query count are identical.
+`Revoke` of an already-revoked own connection is idempotent (returns it,
+no new event). `Revoke` of a foreign or missing one returns `ErrNotFound`.
+
+Idempotency: `request_hash` is `sha256` over a length-prefixed encoding of
+(tenant, principal, expected revision, prior connection ID). A replay
+returns the stored connection in whatever state it is now. Reconnect uses
+the same table, so retrying a reconnect never mints a third ID.
+
+### Secret reference (`secretref.go`)
+
+```go
+type SecretRef struct{ ID string } // "gsr_<ULID>", opaque; no bytes
+type SecretRefs interface {
+    Reserve(ctx context.Context, owner Owner, connectionID string) (SecretRef, error)
+    Release(ctx context.Context, ref SecretRef) error
+}
+type RefusingSecretRefs struct{} // returns ErrSecretBackendUnavailable from both
+```
+
+The store records only `secret_ref`. On any terminal transition it sets
+`secret_ref = NULL` in the same transaction and returns the old ref to the
+caller. No secret material is ever passed to the store. The doc comment and
+`docs/glovo-connections.md` describe a possible future envelope (random
+per-connection DEK, independent KEK) as a design note only. It is
+explicitly not called crypto-shredding, because no evidence for erasure
+guarantees exists yet.
+
+### Logging
+
+The store logs no row content. Errors carry codes and wrapped pgx errors
+only. `slog` is not called with tenant, principal or connection IDs at
+info level.
+
+### Synthetic fixtures (`fixtures_test.go`)
+
+- Tenants `tg959-alpha-<rand>` and `tg959-beta-<rand>`. Principals are
+  minted `prn_` IDs: `alpha` gets two principals (A1, A2) and `beta` gets
+  one (B1). This gives 2 tenants, and 2 principals in one team.
+- Negative inputs: A2 using A1's `gcn_`, B1 using A1's `gcn_`, a random
+  well-formed `gcn_` that never existed, a stale `install_revision`
+  (current-1), and a stale `expected_version`.
+- No emails, names, addresses, tokens or cookies. A test runs
+  `secretscan.Scan` over every audit row and connection row serialized as
+  JSON, and over captured `slog` output.
+
+## Alternatives
+
+1. **Row locks only (`SELECT ... FOR UPDATE`) without advisory locks.**
+   This was dropped. `Connect` for an owner with no existing row has
+   nothing to lock, so two first-connects could both pass the check. The
+   repo convention (`commerce`, `workitems`, `principals`) is an advisory
+   xact lock on a deterministic key. The unique index remains as a
+   backstop.
+2. **New `install_id` per reinstall instead of a revision counter.** This
+   was dropped. The issue and parent ask explicitly for "install
+   identity/revision" and a "revision bump". A stable `install_id` also
+   keeps audit history for one tenant install in one chain. It is
+   recorded as an open question.
+3. **A versioned migration framework (golang-migrate, goose) with
+   up/down `.sql` files.** This was dropped for consistency. Every
+   existing store applies idempotent additive DDL on start, and adding a
+   framework for one package would split conventions. Down-migration is
+   documented as a manual `DROP` script in `docs/glovo-connections.md`.
+4. **Putting connections in the existing `principals` or `workitems`
+   packages.** This was dropped. Parent #953 wants a distinct Glovo
+   authority, and a separate package keeps the blast radius and the review
+   surface small.
+
+## Platform impact
+
+- **Migrations:** four new `glovo_*` tables, indexes, CHECKs, and two
+  trigger functions. All are additive and idempotent, and nothing existing
+  is altered. Because the store is not constructed in `cmd/api/main.go` in
+  this slice, nothing is applied to production databases until slice 4
+  wires it. The only database touched is the CI `TEST_DATABASE_URL`.
+- **Backward compatibility:** there is no API, MCP or route change. The
+  MCP tool count is unchanged. Existing packages are not modified.
+- **Resources:** none at runtime in this slice.
+- **Risks and mitigations:**
+  - *Lock-order deadlock.* The order is install key, then owner key,
+    everywhere, and it is enforced by a single `withLocks(tenant,
+    principal, installMode)` helper. A test runs 50 interleaved
+    connect/reinstall goroutines.
+  - *Foreign-ID oracle.* There is one query shape and one sentinel. A
+    test asserts `errors.Is(err, ErrNotFound)`, an identical `err.Error()`,
+    and an identical returned value (nil) for all three miss cases.
+  - *Audit tamper protection.* No caller-writable GUC or runtime sweep exists. With the restricted runtime DB role, both raw UPDATE and DELETE of audit rows always fail, including after forged custom-GUC changes.
+  - *Shared database with other stores.* All objects carry the `glovo_`
+    prefix, and the trigger function names are unique.
+  - *Secret leakage.* No column can hold secret bytes (CHECK on the
+    `gsr_` shape), and the secretscan test covers fixtures and logs.

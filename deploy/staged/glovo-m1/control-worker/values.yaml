@@ -1,0 +1,40 @@
+# Staged, NOT reconciled. Target decided in P1 (assumed admins).
+# Chart: base-service. Trusted control worker; no Ingress.
+image:
+  repository: ghcr.io/mctlhq/glovo-control-worker
+  tag: "0.0.0"
+imagePullSecrets:
+  - name: ghcr-credentials
+service:
+  type: ClusterIP
+  port: 8080
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+containerSecurityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+ingress:
+  enabled: false
+env:
+  APP_ENV: production
+  # Control identity: mctl-assistants:write. No DevLoop namespace role.
+  TEMPORAL_NAMESPACE: mctl-assistants
+envFrom:
+  - secretRef:
+      name: glovo-control-temporal
+extraExternalSecrets:
+  glovo-control-temporal:
+    refreshInterval: 1h
+    targetSecret: glovo-control-temporal
+    data:
+      - secretKey: TEMPORAL_CLIENT_CREDENTIAL
+        remoteKey: teams/admins/assistants-control/temporal
+        property: credential

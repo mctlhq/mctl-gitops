@@ -30,6 +30,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Main-only environment (mctlhq/mctl-gitops#1033, Stage 3). It holds
+    # ORG_READ_APP_PRIVATE_KEY and its deployment-branch policy allows only
+    # main, so a branch or an old-ref dispatch gets no key and the job is
+    # refused before any step runs. No fallback to another key.
+    environment: app-org-read
     steps:
       - uses: actions/checkout@v7
 
@@ -38,14 +43,14 @@ jobs:
 
       # Reads across every mctlhq source repository (releases, tags, compare,
       # release-please runs). GITHUB_TOKEN is scoped to this repo, so mint a
-      # read-only token from the mctl-agents App, which is installed on all
+      # read-only token from the mctl-org-read App, which is installed on all
       # of them.
       - name: Generate read token
         id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ vars.AGENTS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AGENTS_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.ORG_READ_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ORG_READ_APP_PRIVATE_KEY }}
           owner: mctlhq
           permission-contents: read
           permission-actions: read

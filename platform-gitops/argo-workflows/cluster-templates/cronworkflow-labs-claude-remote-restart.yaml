@@ -62,7 +62,7 @@ spec:
       # alpine/k8s publishes full-semver tags matching k8s patch releases.
       # Pinned within ±1 minor of cluster (currently k3s 1.33.x).
       container:
-        image: alpine/k8s:1.33.12
+        image: alpine/k8s:1.33.12@sha256:7aa52956f4bfa7e95bd9a6ee59674748033e2f192df3ccf8487086b1c390974b # alpine/k8s:1.33.12
         command: ["sh", "-c"]
         args:
           - |

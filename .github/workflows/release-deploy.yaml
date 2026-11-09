@@ -109,8 +109,37 @@ jobs:
             done
           fi
 
-  build:
+  # Decided from main before anything is built or published: the source
+  # repository must be the one bound to this image, the ref must fit the tag, and
+  # the release gate must accept the bump. No secrets and no build.
+  preflight:
     needs: validate-inputs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+
+      - name: Release preflight
+        env:
+          REPO: ${{ inputs.repo }}
+          GIT_REF: ${{ inputs.git_ref }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          TEAM: ${{ inputs.team_name }}
+          SERVICE: ${{ inputs.component_name }}
+          VALUES_PATH: ${{ inputs.values_path }}
+          VALUES_GLOB: ${{ inputs.values_glob }}
+        run: python3 scripts/release-preflight.py preflight
+
+  build:
+    needs: preflight
     # A called workflow can never hold more than the job that calls it, and
     # the default GITHUB_TOKEN permission for this org is read. build-image
     # asks for packages: write (push to GHCR) and id-token: write (the OIDC
@@ -132,6 +161,8 @@ jobs:
       team_name: ${{ inputs.team_name }}
       component_name: ${{ inputs.component_name }}
       build_id: rd-${{ github.run_id }}
+      values_path: ${{ inputs.values_path }}
+      values_glob: ${{ inputs.values_glob }}
     # Not `inherit`. This job checks out whichever repository `repo` names and
     # builds that repository's own Dockerfile, so it is the job in this
     # workflow that handles third-party content - and `inherit` gave it all
@@ -148,8 +179,8 @@ jobs:
     # workflow or the runner, and the standing cost of holding credentials a
     # build has no use for.
     #
-    # These three are every inheritable secret build-image references, and it
-    # declares them under `on: workflow_call:`. GITHUB_TOKEN is its fourth and
+    # These two are every inheritable secret build-image references, and it
+    # declares them under `on: workflow_call:`. GITHUB_TOKEN is its third and
     # is provided automatically - it is neither inheritable nor declarable.
     #
     # A name missing from this list does not fail loudly: build-image falls
@@ -158,7 +189,6 @@ jobs:
     # green run - see the PR that introduced this block.
     secrets:
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
-      GHCR_PAT: ${{ secrets.GHCR_PAT }}
       GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
 
   bump:
@@ -195,7 +225,7 @@ jobs:
       # on the runner image; if this step or the import fails the bump is
       # refused (the gate fails closed), never skipped.
       - name: Install PyYAML for the release gate
-        run: python3 -m pip install --quiet pyyaml==6.0.2
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
 
       - name: Bump image tag(s)
         env:

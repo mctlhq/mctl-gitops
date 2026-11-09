@@ -40,7 +40,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Before the environment releases the key: every dispatch input is shape-checked
+  # here with no checkout, no secrets and no permissions. The bump script repeats
+  # the checks that protect what it writes, as a second layer.
+  validate-inputs:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Validate dispatch inputs
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+          INPUT_VALUES_PATH: ${{ inputs.values_path }}
+          INPUT_VALUES_GLOB: ${{ inputs.values_glob }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::invalid $1"; exit 1; }
+          nl=$'\n'
+          for name in IMAGE_NAME IMAGE_TAG VALUES_PATH VALUES_GLOB; do
+            v="INPUT_${name}"
+            [[ "${!v}" != *"$nl"* && "${!v}" != *$'\r'* ]] || fail "$name: contains a newline"
+          done
+          [[ "$INPUT_IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] || fail "image_tag"
+          [[ "$INPUT_IMAGE_NAME" =~ ^ghcr\.io/mctlhq/[a-z0-9][a-z0-9._-]*$ ]] || fail "image_name"
+          # Mirrors ALLOWED_PREFIXES in the bump script below;
+          # tests/test_gitops_bump_inputs.py asserts they match.
+          ALLOWED_PREFIXES=(
+            "platform-gitops/services/"
+            "platform-gitops/argo-workflows/cluster-templates/"
+            "platform-gitops/bootstrap/templates/mctl-platform/"
+          )
+          check_path() { # name value charset-regex
+            local name=$1 p=$2 re=$3 ok=1 pre
+            [[ "$p" =~ $re ]] || fail "$name"
+            [[ "$p" != /* && "/$p/" != *"/../"* ]] || fail "$name"
+            for pre in "${ALLOWED_PREFIXES[@]}"; do
+              [[ "$p" == "$pre"* ]] && ok=0
+            done
+            [[ $ok -eq 0 ]] || fail "$name"
+          }
+          if [[ -z "$INPUT_VALUES_PATH" && -z "$INPUT_VALUES_GLOB" ]] \
+            || [[ -n "$INPUT_VALUES_PATH" && -n "$INPUT_VALUES_GLOB" ]]; then
+            fail "values_path/values_glob: provide exactly one"
+          fi
+          if [[ -n "$INPUT_VALUES_PATH" ]]; then
+            check_path values_path "$INPUT_VALUES_PATH" '^[A-Za-z0-9._/-]+$'
+          else
+            check_path values_glob "$INPUT_VALUES_GLOB" '^[A-Za-z0-9._/*?-]+$'
+          fi
+
   bump:
+    needs: validate-inputs
     runs-on: ubuntu-latest
     environment: gitops-bump
     permissions:
@@ -73,7 +123,7 @@ jobs:
       # on the runner image; if this step or the import fails the bump is
       # refused (the gate fails closed), never skipped.
       - name: Install PyYAML for the release gate
-        run: python3 -m pip install --quiet pyyaml==6.0.2
+        run: python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
 
       - name: Bump image tags
         env:
@@ -90,6 +140,17 @@ jobs:
           new_tag    = os.environ['NEW_TAG']
           vpath      = os.environ.get('VALUES_PATH', '').strip()
           vglob      = os.environ.get('VALUES_GLOB', '').strip()
+
+          # The tag ends up inside manifests that this job pushes past main's
+          # protection, so nothing downstream reviews the result. Anchored, and
+          # the shape of a real image tag or image name. Same rule as
+          # release-deploy.
+          if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,127}', new_tag):
+              print(f"ERROR: refusing tag {new_tag!r}: not a valid image tag", file=sys.stderr)
+              sys.exit(5)
+          if not re.fullmatch(r'ghcr\.io/mctlhq/[a-z0-9][a-z0-9._-]*', image_name):
+              print(f"ERROR: refusing image {image_name!r}: not a ghcr.io/mctlhq image", file=sys.stderr)
+              sys.exit(5)
 
           # The deploy key used to push this commit is on the
           # main-protection ruleset's bypass list on the understanding (see
@@ -125,6 +186,11 @@ jobs:
                   print(f"ERROR: path must not contain '..' segments: {path}", file=sys.stderr)
                   sys.exit(4)
               normalized = os.path.normpath(path)
+              # A symlink could name an allowed path and write somewhere else.
+              # Globs have no real path yet; their matches come through here too.
+              if os.path.realpath(path) != os.path.join(os.path.realpath(os.curdir), normalized):
+                  print(f"ERROR: path goes through a symlink: {path}", file=sys.stderr)
+                  sys.exit(4)
               if not normalized.startswith(ALLOWED_PREFIXES):
                   print(
                       f"ERROR: path '{path}' is not under an allowed prefix. "
@@ -143,7 +209,9 @@ jobs:
 
           # Point 4: no-op guard — fail loudly if glob resolves to nothing
           if vglob:
-              validate_allowed(vglob)
+              if ".." in vglob.split("/") or os.path.isabs(vglob) or not vglob.startswith(ALLOWED_PREFIXES):
+                  print(f"ERROR: glob is not under an allowed prefix: {vglob}", file=sys.stderr)
+                  sys.exit(4)
               files = sorted(globmod.glob(vglob))
               if not files:
                   print(f"ERROR: no files matched glob: {vglob}", file=sys.stderr)
@@ -174,6 +242,35 @@ jobs:
           for f in files:
               print(f"  {f}")
 
+          import yaml
+
+          def same_but_tags(a, b):
+              """The parsed documents differ only in strings that are new_tag or end in :new_tag."""
+              if isinstance(a, dict) and isinstance(b, dict):
+                  return a.keys() == b.keys() and all(same_but_tags(a[k], b[k]) for k in a)
+              if isinstance(a, list) and isinstance(b, list):
+                  return len(a) == len(b) and all(same_but_tags(x, y) for x, y in zip(a, b))
+              return a == b or (isinstance(b, str) and (b == new_tag or b.endswith(":" + new_tag)))
+
+          def only_tags_changed(before, after):
+              """Refuse anything but a tag edit, whatever produced it. Text first, because
+              Helm templates under bootstrap do not parse as YAML; parsed as well where
+              the file did parse before."""
+              old, new = before.split("\n"), after.split("\n")
+              if len(old) != len(new):
+                  return False
+              for o, n in zip(old, new):
+                  if o != n and (o.split(":", 1)[0] != n.split(":", 1)[0] or new_tag not in n):
+                      return False
+              try:
+                  parsed = list(yaml.safe_load_all(before))
+              except yaml.YAMLError:
+                  return True
+              try:
+                  return same_but_tags(parsed, list(yaml.safe_load_all(after)))
+              except yaml.YAMLError:
+                  return False
+
           total_replaced = 0
           total_already  = 0
           changed_files  = []
@@ -184,7 +281,9 @@ jobs:
 
               # Pattern 1: repository: <image>\n  tag: <old>  (standard Helm values.yaml)
               p1 = re.compile(r'(repository:\s*' + re.escape(image_name) + r'\n\s+tag:)[^\n]+')
-              out, n1 = p1.subn(r'\1 "' + new_tag + '"', content)
+              # Functions, not replacement strings: a value is never read as a
+              # group reference.
+              out, n1 = p1.subn(lambda m: m.group(1) + ' "' + new_tag + '"', content)
 
               # Pattern 2: split registry/repository/tag (Backstage Helm chart style)
               if '/' in image_name:
@@ -194,11 +293,12 @@ jobs:
                       r'\n\s+repository:\s*' + re.escape(repo) +
                       r'\n\s+tag:)[^\n]+'
                   )
-                  out, n3 = p_split.subn(r'\1 ' + new_tag, out)
+                  # Quoted like pattern 1: a tag such as 1042 must stay a string.
+                  out, n3 = p_split.subn(lambda m: m.group(1) + ' "' + new_tag + '"', out)
 
               # Pattern 3: inline image: <image>:<tag>  (CWFT style, quoted or unquoted)
               p3 = re.compile(r'(image:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
-              out, n2 = p3.subn(r'\1:' + new_tag, out)
+              out, n2 = p3.subn(lambda m: m.group(1) + ':' + new_tag, out)
 
               # Pattern 4: workflow-parameter default value: <image>:<tag>
               # (Argo CWFT parameterization style — arguments.parameters[].value,
@@ -207,11 +307,20 @@ jobs:
               # field is a {{workflow.parameters.*}} template reference instead
               # of a literal image:tag string.)
               p4 = re.compile(r'(value:\s*["\']?' + re.escape(image_name) + r')["\']?:[\w.\-]+')
-              out, n4 = p4.subn(r'\1:' + new_tag, out)
+              out, n4 = p4.subn(lambda m: m.group(1) + ':' + new_tag, out)
 
               n = n1 + n2 + n3 + n4
               if n == 0:
+                  # A named file that does not carry the image is an error: a bump
+                  # that silently skips it leaves that service behind. A glob may
+                  # legitimately cover files without it.
+                  if vpath:
+                      print(f"ERROR: {path} does not carry {image_name}", file=sys.stderr)
+                      sys.exit(3)
                   print(f"  {path}: WARN — no image pattern matched (skipped)")
+              elif not only_tags_changed(content, out):
+                  print(f"ERROR: refusing to write {path}: the edit is not limited to image tags", file=sys.stderr)
+                  sys.exit(7)
               else:
                   # Point 5: distinguish "changed" vs "already at new_tag"
                   if out == content:

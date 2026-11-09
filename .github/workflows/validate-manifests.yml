@@ -124,6 +124,21 @@ jobs:
           scripts/validate-argocd-project-scope.py --strict default \
             "$tmpdir/bootstrap-eval.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
 
+      # Validate project scope for generated applications: expand the `apps`
+      # and `tenants` ApplicationSets over the real directories, render
+      # base-service per service and check each object against the resolved
+      # project, check directory and reserved-name consistency and the
+      # inventory of places that spell the project name `apps`. The unit tests
+      # prove each check green on this tree and red on a mutation.
+      - name: Validate project scope for generated applications
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_generated_app_scope.py
+          scripts/validate-generated-app-scope.py --bootstrap "$tmpdir/bootstrap.yaml"
+
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
       # templates and a multi-backend fan-out ever render in CI. Proves the
@@ -549,6 +564,17 @@ jobs:
       - name: Pre-pull PreSync verifier
         run: python3 tests/test_prepull_verify.py
 
+      - name: CI pip installs are hash-pinned
+        # mctlhq/mctl-gitops#1033: workflows that run beside credentials may
+        # only install with --require-hashes from the pinned requirements file.
+        run: python3 tests/test_pip_installs_hashed.py
+
+      - name: Submit contract fixtures match the repository
+        # mctlhq/mctl-gitops#1033: the workflow-namespace and portal-submit
+        # fixtures, the shipped templates and the per-tenant write mode must
+        # agree. Red on each named mutation, exit 2 when a file cannot be read.
+        run: python3 -I tests/test_submit_contract_fixtures.py
+
       - name: Release gate (selftest, tree, mutation tests)
         # mctlhq/mctl-agents#1007: the worker group may not be bumped
         # partially, below its image floor, or without Recreate on the control
@@ -559,6 +585,34 @@ jobs:
           python3 scripts/release-gate.py --selftest
           python3 scripts/release-gate.py verify
           python3 tests/test_release_gate.py
+
+      - name: Release gate watch alerts on a violation
+        run: python3 tests/test_release_gate_watch.py
+      - name: Release gate in the shared workflow templates
+        # The templates' own scripts run against a local bare repository: every
+        # refusal must leave it untouched, other services must still deploy and
+        # retire, and each guard layer is removed in turn to prove a test fails.
+        run: python3 tests/test_release_gate_guard.py
+
+      - name: Auto-merge protected paths
+        run: python3 tests/test_auto_merge_protected_paths.py
+      - name: Unit-test the release preflight
+        run: python3 tests/test_release_preflight.py
+      - name: Read-only workflow steps hold no write credential
+        run: python3 tests/test_read_steps_no_credential.py
+      - name: Ledger of references to the gitops write credentials
+        # Shrink-only: a new reference, or a ledger row whose reference is
+        # gone, fails (tracker: mctlhq/mctl-gitops#1033). Renders the tenant
+        # chart, so it needs the Helm install above.
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_gitops_write_credential_holders.py
+      - name: Tenant-class templates and Secret readers, by credential name
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_gitops_tenant_template_write_set.py
+      - name: Unit-test gitops-bump inputs and its edit check
+        run: python3 tests/test_gitops_bump_inputs.py
 
       - name: Unit-test the release-deploy input validation
         # validate-inputs gates build and bump; this runs its bash against
@@ -602,6 +656,11 @@ jobs:
         # extracted loop against a fixture with real yq.
         run: python3 tests/test_tpl_git_commit_yq.py
 
+      - name: Unit-test patch-autoscaling-values against a values file
+        # The step edits only .autoscaling (#2413). Its own script runs against
+        # fixtures with real yq, with git, ssh, kubectl and argo shimmed to fail.
+        run: python3 tests/test_wft_deploy_service_autoscaling_values.py
+
       - name: Test workflow parameters cannot inject shell
         run: python3 tests/test_shell_param_injection.py
 
@@ -622,6 +681,11 @@ jobs:
         # absent; a denied or unreachable Vault fails the step instead of
         # being reported as "not found, skipping".
         run: python3 tests/test_wft_delete_tenant_vault.py
+
+      - name: Vault policy files parse and carry the writer-prefix rules
+        # Repo text only: structure of every vault-policy-*.hcl, the read-only
+        # writer policy, and the deny on the writer prefix in two policies.
+        run: python3 tests/test_vault_policy_files.py
 
       - name: Tenant workflows log in to Vault with their own tenant role
         # A template reachable from a tenant namespace picks its Vault role
@@ -682,6 +746,11 @@ jobs:
         run: |
           python3 tests/test_cwft_mctl_agents_approve_digest_binding.py
           python3 scripts/proposal-content-digest.py --selftest
+
+      - name: Unit-test the portal catalogue PR guard
+        # It writes to PRs with an App token, so what it refuses is the point:
+        # an enabled tool, a widening, or anything it could not read (#2416).
+        run: python3 tests/test_portal_catalogue_land.py
 
       - name: Unit-test the portal OAuth registration drift detector
         # The MCP server's `auth_credentials` is write-only: the API accepts it
@@ -1028,6 +1097,36 @@ jobs:
         run: |
           set -euo pipefail
           scripts/test-tenant-workflow-sa-argocd-policy.sh
+
+  # Glovo M1 P0 (#2470): the staged package under deploy/staged/glovo-m1 must
+  # render and keep its fail-closed defaults, and no Glovo host, workload,
+  # image or assistant namespace may reach a reconciled path. The leak guard
+  # ignores deploy/staged/glovo-m1/gate.yaml on purpose. --selftest first: a
+  # detector never seen to fire is not known to work.
+  glovo-m1:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.0
+        with:
+          version: "v3.16.4"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate the staged Glovo M1 package
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          scripts/validate-glovo-m1-staging.py --selftest
+          scripts/validate-glovo-m1-staging.py
 
   # The declarative ZITADEL root (#1520). The in-cluster Job applies it after
   # merge, so formatting, provider schema errors and a lock file that does not

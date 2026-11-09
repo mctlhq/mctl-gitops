@@ -100,7 +100,7 @@ job red right away (tested by `tests/test_k3s_plan_guard.py`). It refuses:
 
 | Input | Where | Notes |
 | --- | --- | --- |
-| `HCLOUD_TOKEN`, `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | repository secrets | Hetzner API and the state backend. Still repository-level (#1118). |
+| `HCLOUD_TOKEN`, `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | environment secrets on **both** `k3s-plan` and `k3s-apply` (the R2 pair also on `state-backup`) | Hetzner API and the state backend. Moved off repository scope on 2026-11-07 (#1118); must not reappear in `gh secret list`. Sources: Keychain `mctl-hcloud-token`, Vault `secret/platform/terraform/r2-state`. |
 | `HCLOUD_CSI_TOKEN` | environment secret on **both** `k3s-plan` and `k3s-apply` | A second Hetzner token, used only for the in-cluster CCM and CSI driver (kube-system secrets `hcloud`, `hcloud-csi`; #1140). Must differ from `HCLOUD_TOKEN`; both preflights refuse otherwise. Same value as Keychain `mctl-hcloud-csi-token`. Changing it replaces `terraform_data.kube_system_secrets`: dispatch with `allow_reprovision`, then restart `hcloud-cloud-controller-manager` and `hcloud-csi-controller`, which read it from env at start. |
 | `ETCD_S3_ACCESS_KEY_ID` / `ETCD_S3_SECRET_ACCESS_KEY` | environment secrets on **both** `k3s-plan` and `k3s-apply` | The snapshots-bucket token, *not* the state token. It is part of the k3s config, so a plan without it proposes rewriting the control plane. Same values as Keychain `mctl-r2-etcd-snapshots`. |
 | `SSH_PRIVATE_KEY` | environment secret on `k3s-apply` only | The dedicated deploy key `k3s-preview-ci-deploy`, not an operator's key. Its public half is in `kube.tf` (`ssh_additional_public_keys`) and in `/root/.ssh/authorized_keys` on every node. |

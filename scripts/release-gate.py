@@ -3,9 +3,10 @@
 
   release-gate.py check  --files F... --new-tag T   before a bump writes
   release-gate.py verify                            whole tree (CI, post-rebase)
+  release-gate.py diff --base B --head H            what a push changed, judged by content
   release-gate.py --selftest
 
-Exit 0 = pass, 6 = refused. Anything that cannot be observed (gate missing or
+Exit 0 = pass, 6 = refused, 7 = could not observe (diff only). Anything that cannot be observed (gate missing or
 malformed, a file or key absent, a tag that is not X.Y.Z) is a refusal:
 "could not observe" is never "observed fine".
 """
@@ -13,7 +14,9 @@ malformed, a file or key absent, a tag that is not X.Y.Z) is a refusal:
 from __future__ import annotations
 
 import argparse
+import copy
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -24,6 +27,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 GATE = "platform-gitops/release-gates.yaml"
 REFUSED = 6
+UNKNOWN = 7
 # ASCII digits only, no leading zeros: `\d` accepts Unicode digits and "01".
 _N = r"(0|[1-9][0-9]*)"
 SEMVER = re.compile(rf"{_N}\.{_N}\.{_N}", re.ASCII)
@@ -155,6 +159,135 @@ def run(root: Path, files: list[str] | None, new_tag: str | None) -> int:
     return 0
 
 
+# -- diff: judge a pushed commit by the content it changed ---------------------
+#
+# The policy is read from the parent commit (the side that was reviewed), never
+# from the commit being judged. Files are compared by parsed content, not by
+# tag string. A failed read of either side is UNKNOWN, which outranks a
+# reported divergence and is never clean.
+
+
+class GitReadError(Exception):
+    """A read that failed, as opposed to a path that is absent."""
+
+
+def _blob(repo: Path, rev: str, rel: str) -> bytes | None:
+    """File bytes at rev, None only when git says the path does not exist."""
+    def git(*args: str) -> bytes:
+        try:
+            r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise GitReadError(f"git {args[0]} failed: {type(exc).__name__}") from exc
+        if r.returncode != 0:
+            raise GitReadError(f"git {args[0]} {rev[:12]} exited {r.returncode}")
+        return r.stdout
+
+    listing = git("ls-tree", "-z", rev, "--", rel)
+    if not listing:
+        return None
+    meta, _, name = listing.rstrip(b"\0").partition(b"\t")
+    fields = meta.split()
+    if len(fields) != 3 or fields[1] != b"blob" or name.decode(errors="replace") != rel:
+        raise GitReadError(f"{rel} at {rev[:12]} is not a regular file")
+    return git("cat-file", "blob", fields[2].decode())
+
+
+def _parse(raw: bytes) -> Any:
+    return yaml.safe_load(raw.decode())
+
+
+def _without_tag(doc: Any) -> Any:
+    doc = copy.deepcopy(doc)
+    if isinstance(doc, dict) and isinstance(doc.get("image"), dict):
+        doc["image"].pop("tag", None)
+    return doc
+
+
+def diff_problems(repo: Path, base: str, head: str) -> tuple[list[str], list[str]]:
+    """(violations, unknowns) for the change from base to head."""
+    viol: list[str] = []
+    unk: list[str] = []
+    try:
+        pol_base = _blob(repo, base, GATE)
+        pol_head = _blob(repo, head, GATE)
+    except GitReadError as exc:
+        return [], [f"gate policy unreadable: {exc}"]
+    if pol_base is None:
+        return [], [f"gate policy absent in parent {base[:12]}: nothing to judge against"]
+    with tempfile.TemporaryDirectory() as t:
+        tmp = Path(t)
+        (tmp / GATE).parent.mkdir(parents=True)
+        (tmp / GATE).write_bytes(pol_base)  # trusted side
+        try:
+            gates = _gates(tmp)
+            base_policy = _parse(pol_base)
+        except Exception as exc:  # noqa: BLE001
+            return [], [f"parent gate policy unreadable: {type(exc).__name__}: {exc}"]
+        if pol_head is None:
+            viol.append(f"{GATE} was removed")
+        elif pol_head != pol_base:
+            try:
+                if _parse(pol_head) != base_policy:
+                    viol.append(f"{GATE} content changed")
+            except Exception as exc:  # noqa: BLE001
+                viol.append(f"{GATE} no longer parses: {type(exc).__name__}")
+        for g in gates:
+            for p in g["paths"]:
+                try:
+                    b, h = _blob(repo, base, p), _blob(repo, head, p)
+                except GitReadError as exc:
+                    unk.append(f"{p}: {exc}")
+                    continue
+                if b is None:
+                    unk.append(f"{p}: absent in parent {base[:12]}")
+                    continue
+                if h is None:
+                    viol.append(f"{p}: gated file was removed")
+                    continue
+                (tmp / p).parent.mkdir(parents=True, exist_ok=True)
+                (tmp / p).write_bytes(h)
+                if b == h:
+                    continue
+                try:
+                    old = _parse(b)
+                except Exception as exc:  # noqa: BLE001
+                    unk.append(f"{p}: parent content unreadable: {type(exc).__name__}")
+                    continue
+                try:
+                    new = _parse(h)
+                except Exception as exc:  # noqa: BLE001
+                    viol.append(f"{p}: new content does not parse: {type(exc).__name__}")
+                    continue
+                if _without_tag(old) != _without_tag(new):
+                    viol.append(f"{p}: content other than image.tag changed")
+        # The pushed tree must satisfy the parent's policy.
+        # A file already reported as a violation (removed, unparsable) is not
+        # also an unknown: the read worked, the content is what is wrong.
+        flagged = [v.split(":")[0] for v in viol]
+        for line in problems(tmp, None, None):
+            if line.startswith("UNKNOWN: "):
+                if any(line.startswith(f"UNKNOWN: {f} ") for f in flagged):
+                    continue
+                unk.append(line[len("UNKNOWN: "):])
+            else:
+                viol.append(line)
+    return viol, unk
+
+
+def run_diff(repo: Path, base: str, head: str) -> int:
+    viol, unk = diff_problems(repo, base, head)
+    for line in unk:
+        print(f"::error::release gate diff: UNKNOWN: {line}", file=sys.stderr)
+    for line in viol:
+        print(f"::error::release gate diff: {line}", file=sys.stderr)
+    if unk:
+        return UNKNOWN
+    if viol:
+        return REFUSED
+    print("release gate diff: pass")
+    return 0
+
+
 # -- selftest: green on a converged tree, red on every deliberate mutation ----
 
 _P = [
@@ -278,6 +411,9 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--files", nargs="+", required=True)
     c.add_argument("--new-tag", required=True)
     sub.add_parser("verify")
+    d = sub.add_parser("diff")
+    d.add_argument("--base", required=True)
+    d.add_argument("--head", required=True)
     a = ap.parse_args(argv)
     if a.selftest:
         return selftest()
@@ -285,6 +421,8 @@ def main(argv: list[str] | None = None) -> int:
         return run(Path(a.root), a.files, a.new_tag)
     if a.cmd == "verify":
         return run(Path(a.root), None, None)
+    if a.cmd == "diff":
+        return run_diff(Path(a.root), a.base, a.head)
     ap.error("a command or --selftest is required")
     return 2
 

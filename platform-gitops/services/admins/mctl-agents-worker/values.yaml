@@ -93,10 +93,10 @@ resources:
   # accurate again — which is why 256Mi stays.
   requests:
     cpu: 50m
-    memory: 320Mi
+    memory: 512Mi
   limits:
     cpu: 500m
-    memory: 576Mi
+    memory: 896Mi
 automountServiceAccountToken: false
 # 1.28.0 is the first tag with USER app (uid 1000) in the image.
 podSecurityContext:
@@ -124,6 +124,12 @@ env:
   # root Python would try and fail to write a .pyc for every module it imports.
   PYTHONDONTWRITEBYTECODE: "1"
   MCTL_TRACE_ARGO_PARAM: "true"
+  # Experiment for mctlhq/mctl-agents#1047: the control worker runs ~518 threads
+  # (max_concurrent_workflow_tasks is unset) and its anonymous RSS grows
+  # ~15-30 MiB/h with no plateau. glibc keeps one malloc arena per busy thread
+  # and rarely returns them; two arenas test the fragmentation hypothesis.
+  # Revert if the post-ramp working-set slope does not drop.
+  MALLOC_ARENA_MAX: "2"
   TEMPORAL_ADDRESS: temporal-frontend.temporal.svc.cluster.local:7233
   TEMPORAL_NAMESPACE: mctl-agents
   LOG_LEVEL: info

@@ -74,6 +74,7 @@ import json
 import os
 import pathlib
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -117,8 +118,8 @@ OWNERS = {
 PRIVATE_OWNERS = {"projects"}
 
 # Read by the fetch below. `ALLOWLIST_TOKEN` is set by cloudflare-drift.yml
-# from a mctl-agents App token with contents:read, the way release-drift.yml
-# mints one; GITHUB_TOKEN would not do, being scoped to this repository.
+# from a mctl-org-read App token (environment app-org-read) with contents:read;
+# GITHUB_TOKEN would not do, being scoped to this repository.
 TOKEN_ENV = "ALLOWLIST_TOKEN"
 GITHUB_API = "https://api.github.com"
 PORTAL = "mcp"
@@ -640,6 +641,15 @@ def apply_catalogue_fix(cat_doc: dict, updates: dict[str, list[str]]) -> dict:
     return cat_doc
 
 
+def write_lag(path: str, updates: dict[str, list[str]]) -> str | None:
+    """The --lag-out file, or why it could not be written."""
+    try:
+        pathlib.Path(path).write_text(json.dumps(updates), encoding="utf-8")
+    except OSError as e:
+        return f"{path}: could not write --lag-out: {e!r}"
+    return None
+
+
 def selftest() -> int:
     """A detector never seen to fire is not known to work."""
     def snap(names, closed=False, extra=None, closed_input=False):
@@ -1035,6 +1045,17 @@ def selftest() -> int:
     if not ok:
         failures.append("apply_catalogue_fix")
 
+    with tempfile.TemporaryDirectory() as d:
+        lag_file = pathlib.Path(d) / "lag.json"
+        ok = write_lag(str(lag_file), {"a": ["t"]}) is None and json.loads(lag_file.read_text()) == {"a": ["t"]}
+        print(f"{'ok  ' if ok else 'FAIL'} --lag-out writes the lagging servers")
+        if not ok:
+            failures.append("lag-out write")
+        ok = bool(write_lag(str(pathlib.Path(d) / "missing" / "lag.json"), {}))
+        print(f"{'ok  ' if ok else 'FAIL'} an unwritable --lag-out is reported, not swallowed")
+        if not ok:
+            failures.append("lag-out failure")
+
     if failures:
         print(f"\n{len(failures)} failing: {', '.join(map(str, failures))}")
         return 1
@@ -1046,6 +1067,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--account", help="Cloudflare account id (default: $CLOUDFLARE_ACCOUNT_ID)")
     ap.add_argument("--fix", action="store_true", help="update allowlists/catalogue.json when committed catalogue lags the live portal")
+    ap.add_argument("--lag-out", help="write {server: [live tool names]} of the lagging servers here, for portal-catalogue-land.py")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -1144,6 +1166,11 @@ def main() -> int:
             undetermined.append(str(e))
         except Exception as e:  # noqa: BLE001 - the exit code is the point
             undetermined.append(f"{server}: the check failed before it could compare: {e!r}")
+
+    if args.lag_out:
+        problem = write_lag(args.lag_out, fix_updates)
+        if problem:
+            undetermined.append(problem)
 
     if args.fix and fix_updates and committed_doc is not None:
         try:

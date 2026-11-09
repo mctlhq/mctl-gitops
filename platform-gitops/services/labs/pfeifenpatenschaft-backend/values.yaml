@@ -38,6 +38,7 @@ resources:
     cpu: 150m
     memory: 256Mi
 env:
+  NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000"
   APP_ENV: production
   NODE_ENV: production
   RESERVATION_TTL_MINUTES: "15"

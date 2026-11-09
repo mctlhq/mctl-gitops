@@ -64,11 +64,21 @@ on:
       build_id:
         required: true
         type: string
+      # The files release-deploy will bump, so the check right before the push
+      # judges the same release its preflight did.
+      values_path:
+        required: false
+        default: ""
+        type: string
+      values_glob:
+        required: false
+        default: ""
+        type: string
     # Declared so the caller can pass exactly what this workflow uses instead
     # of `secrets: inherit`. This job checks out whichever repository
     # `inputs.repo` names and builds its Dockerfile, so every secret in the
     # caller's environment is a secret handed to a build of third-party
-    # source. These three are the complete set this file references
+    # source. These two are the complete set this file references
     # (mctlhq/mctl-gitops#1010).
     #
     # All optional: each has a documented fallback tier below, and making any
@@ -79,8 +89,6 @@ on:
     # GitHub rejects a `secrets:` entry whose name starts with GITHUB_.
     secrets:
       APP_PRIVATE_KEY:
-        required: false
-      GHCR_PAT:
         required: false
       GH_PACKAGES_TOKEN:
         required: false
@@ -472,52 +480,20 @@ jobs:
           persist-credentials: false
 
       # --- Resolve GHCR push token ---
-      # GITHUB_TOKEN canary. GHCR_PAT is a classic PAT with write:packages; it
-      # expired silently on 2026-10-12 and every release-deploy failed at GHCR
-      # login from 07:24Z until it was re-minted. The job's own GITHUB_TOKEN
-      # (packages: write) lives one run and cannot expire that way, but it can
-      # push to an existing package only after the package grants mctl-gitops
-      # Write under "Manage Actions access". Images listed here use it instead
-      # of GHCR_PAT; the list grows as packages are granted, and GHCR_PAT is
-      # deleted once every package is on it. A Vault PAT still wins: tenant
-      # builds push with their own credential.
+      # A Vault PAT wins: tenant builds push with their own credential.
+      # Everything else pushes with the job's own GITHUB_TOKEN
+      # (packages: write). It lives one run and cannot expire silently the way
+      # the classic GHCR_PAT did on 2026-10-12, but it can push to an existing
+      # package only after that package grants mctl-gitops Write under
+      # "Manage Actions access". A package without the grant fails here at
+      # GHCR login with a 403; grant it, do not bring back a PAT.
       - name: Resolve GHCR token
         id: ghcr_token
-        env:
-          IMAGE_NAME: ${{ inputs.image_name }}
-          GITHUB_TOKEN_IMAGES: |
-            ghcr.io/mctlhq/grafana-iac
-            ghcr.io/mctlhq/mc
-            ghcr.io/mctlhq/mctl-academy
-            ghcr.io/mctlhq/mctl-agent
-            ghcr.io/mctlhq/mctl-agents
-            ghcr.io/mctlhq/mctl-alice
-            ghcr.io/mctlhq/mctl-api
-            ghcr.io/mctlhq/mctl-design
-            ghcr.io/mctlhq/mctl-docs
-            ghcr.io/mctlhq/mctl-portal
-            ghcr.io/mctlhq/mctl-telegram
-            ghcr.io/mctlhq/mctl-web
-            ghcr.io/mctlhq/mctl-workflow-tools
-            ghcr.io/mctlhq/pfeifenpatenschaft-backend
-            ghcr.io/mctlhq/portfolio
-            ghcr.io/mctlhq/projects-mcp
-            ghcr.io/mctlhq/seerrsense
-            ghcr.io/mctlhq/vault-iac
-            ghcr.io/mctlhq/zitadel-iac
         run: |
           if [[ "${{ steps.vault_pat.outputs.has_pat }}" == "true" ]]; then
             echo "token=${{ steps.vault_pat.outputs.pat }}" >> $GITHUB_OUTPUT
             echo "username=x-access-token" >> $GITHUB_OUTPUT
             echo "🔑 Using Vault PAT for GHCR push"
-          elif [[ -n "$IMAGE_NAME" ]] && grep -qxF -- "$IMAGE_NAME" <<< "$GITHUB_TOKEN_IMAGES"; then
-            echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
-            echo "username=${{ github.actor }}" >> $GITHUB_OUTPUT
-            echo "🌐 Using GITHUB_TOKEN for GHCR push (package granted to mctl-gitops)"
-          elif [[ -n "${{ secrets.GHCR_PAT }}" ]]; then
-            echo "token=${{ secrets.GHCR_PAT }}" >> $GITHUB_OUTPUT
-            echo "username=x-access-token" >> $GITHUB_OUTPUT
-            echo "🔐 Using GHCR_PAT for GHCR push"
           else
             echo "token=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_OUTPUT
             echo "username=${{ github.actor }}" >> $GITHUB_OUTPUT
@@ -573,6 +549,48 @@ jobs:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
+
+      # The publication boundary. Policy and gate are read again from main, since
+      # both can have changed during the run. A build then takes minutes, so this
+      # narrows the race with another run for the same tag rather than closing it.
+      # The source tree is already checked out here and could hold this path, as
+      # a symlink pointing anywhere.
+      - name: Refuse a release policy path from the source
+        run: |
+          if [ -e .release-policy ] || [ -L .release-policy ]; then
+            echo "::error::the source tree contains .release-policy; refusing to build"
+            exit 1
+          fi
+
+      - name: Check out release policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: mctlhq/mctl-gitops
+          ref: main
+          path: .release-policy
+          persist-credentials: false
+
+      - name: Check the release before publishing
+        env:
+          DIRECT: ${{ steps.caller.outputs.direct }}
+          REPO: ${{ inputs.repo }}
+          GIT_REF: ${{ inputs.git_ref }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          TEAM: ${{ inputs.team_name }}
+          SERVICE: ${{ inputs.component_name }}
+          VALUES_PATH: ${{ inputs.values_path }}
+          VALUES_GLOB: ${{ inputs.values_glob }}
+        # Runs from inside the policy checkout: the directory above it is the
+        # source being built, and nothing there may be imported or read.
+        run: |
+          set -euo pipefail
+          cd .release-policy
+          python3 -m pip install --quiet pyyaml==6.0.2
+          if [ "$DIRECT" = "true" ]; then stage=publish-direct; else stage=publish; fi
+          python3 scripts/release-preflight.py "$stage"
+          cd ..
+          rm -rf .release-policy
 
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
