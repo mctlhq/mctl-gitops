@@ -22,7 +22,9 @@ set -u
 stop() { echo "prepull-verify: STOP: $*" >&2; exit 1; }
 
 waited=0
-until deploy=$(kubectl get deployment "$DEPLOYMENT" -n "$NAMESPACE" -o json); do
+# --ignore-not-found makes an absent Deployment a successful, EMPTY read, so
+# absence is told apart from every failure by structure, not by error prose.
+until deploy=$(kubectl get deployment "$DEPLOYMENT" -n "$NAMESPACE" -o json --ignore-not-found); do
   [ "$waited" -lt "${RBAC_WAIT_SECONDS:-0}" ] || stop "cannot read Deployment $DEPLOYMENT"
   err=$(kubectl get deployment "$DEPLOYMENT" -n "$NAMESPACE" -o name 2>&1 >/dev/null)
   case $err in
@@ -33,6 +35,15 @@ until deploy=$(kubectl get deployment "$DEPLOYMENT" -n "$NAMESPACE" -o json); do
   sleep "${RBAC_POLL_SECONDS:-3}"
   waited=$((waited + ${RBAC_POLL_SECONDS:-3}))
 done
+# A first install (DR, cluster rebuild, recreated Application) has no Deployment
+# yet: it is created in the Sync phase, after this hook. With no old pod there is
+# nothing to protect and nothing to wait out, so this PASSes (and says so). Only
+# the successful empty read of the Deployment gets here: every failed read
+# above, and every other object read below, is still a STOP.
+if [ -z "$deploy" ]; then
+  echo "prepull-verify: PASS: Deployment $DEPLOYMENT does not exist yet (first install), no old pod to protect"
+  exit 0
+fi
 live=$(printf '%s' "$deploy" | jq -er --arg c "$CONTAINER" '.spec.template.spec.containers[] | select(.name == $c) | .image') \
   || stop "Deployment $DEPLOYMENT has no container $CONTAINER"
 if [ "$live" = "$TARGET_REF" ]; then

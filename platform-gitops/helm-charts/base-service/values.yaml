@@ -15,12 +15,18 @@ prepull:
   enabled: false
   ref: ""             # repository:tag@sha256:<64 hex>
   verifierImage: ""   # needs sh, kubectl and jq
-  verifierServiceAccount: prepull-verifier
+  # The verifier ServiceAccount is always `prepull-verifier`: not a value, because the
+  # tenant chart's RoleBinding names it and an override would leave the Job unbound.
   verifyDeadlineSeconds: 120
   rbacWaitSeconds: 60  # wait for the tenant app's Role; + 30 must stay below the deadline
   resources:
     requests: {cpu: 5m, memory: 16Mi}
-    limits: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 50m, memory: 64Mi}   # the `sleep` holder only
+  # The verifier Job runs kubectl and jq: more than the holder, because an
+  # OOMKill there is indistinguishable from a real cache miss.
+  verifierResources:
+    requests: {cpu: 10m, memory: 64Mi}
+    limits: {memory: 128Mi}
 
 # -- Required: service port
 service:

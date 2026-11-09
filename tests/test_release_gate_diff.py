@@ -101,6 +101,15 @@ def digest_only(tmp, paths):
     v.write_text(v.read_text().replace('  tag: "1.117.0"\n', f'  tag: "1.117.0"\n  digest: "{NEW_DIGEST}"\n', 1))
 
 
+def pin_in_place(tmp, paths):
+    """Legacy shape (tag, no digest) -> settled shape for the SAME image: image.digest := the digest of prepull.ref."""
+    v = tmp / paths[0]
+    ref_digest = yaml.safe_load(v.read_text())["prepull"]["ref"].split("@", 1)[1]
+    txt = v.read_text().replace('  tag: "1.117.0"\n', f'  tag: "1.117.0"\n  digest: "{ref_digest}"\n', 1)
+    assert ref_digest in txt.split("prepull:")[0]
+    v.write_text(txt)
+
+
 def step2_wrong_digest(tmp, paths):
     set_image(tmp, paths, digest="sha256:" + "d" * 64)
 
@@ -156,6 +165,9 @@ d, b, h = repo_with(set_ref)
 check("deploy step 1 (only prepull.ref moves) is green", diff(d, b, h)[0] == 0, str(diff(d, b, h)))
 d, b, h = repo_with(set_image, pre=set_ref)
 check("deploy step 2 (tag + digest settle on the staged ref) is green", diff(d, b, h)[0] == 0, str(diff(d, b, h)))
+d, b, h = repo_with(pin_in_place)
+check("pinning the current tag to its staged digest (digest alone, equal to prepull.ref) is green",
+      diff(d, b, h)[0] == 0, str(diff(d, b, h)))
 d, b, h = repo_with(comment_only_policy)
 check("a comment-only policy edit is green (compared by content)", diff(d, b, h)[0] == 0, str(diff(d, b, h)))
 
@@ -171,7 +183,7 @@ for name, m in [("a non-tag key changed", other_key), ("the policy content chang
 d, b, h = repo_with(lambda t, p: retag(t, p, "99.0.0"))
 rc, err = diff(d, b, h)
 check("red: a tag-only bump of the pre-pulled file", rc == 6 and "not one step" in err, f"{rc} {err}")
-for name, m, pre in [("both halves in one commit", collapsed, None), ("a digest alone", digest_only, None),
+for name, m, pre in [("both halves in one commit", collapsed, None), ("a digest alone that is not the staged digest", digest_only, None),
                      ("step 2 with a digest other than the staged one", step2_wrong_digest, set_ref),
                      ("step 2 to an image other than the staged one", step2_to_another_image, set_ref),
                      ("step 2 that also moves prepull.ref", step2_and_ref, set_ref),
@@ -187,7 +199,8 @@ STEP_MUTANTS = {
     # name: (old, new, scenario that must flip, wanted rc under the mutant for a "caught" verdict is the opposite)
     "classifier accepts every change": ("    if not (ct or cd or cr):\n        return None", "    return None", collapsed, None, 6),
     "step 1 not understood (strips only image.tag)": ("if _without_deploy_keys(old) != _without_deploy_keys(new):", "if _without_tag(old) != _without_tag(new):", set_ref, None, 0),
-    "step 2 not understood": ("    if ct and cd and not cr:", "    if False:", set_image, set_ref, 0),
+    "step 2 not understood": ("    if cd and not cr:", "    if False:", set_image, set_ref, 0),
+    "pin in place not understood (needs the tag to move too)": ("    if cd and not cr:", "    if ct and cd and not cr:", pin_in_place, None, 0),
     "step 2 need not settle on the staged ref": ("        if m and m.group(1) == str(nt) and m.group(2) == str(nd):\n            return None", "        if m:\n            return None", step2_to_another_image, set_ref, 6),
 }
 for name, (old, new, scen, pre, want_green_rc) in STEP_MUTANTS.items():

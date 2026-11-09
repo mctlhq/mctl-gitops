@@ -47,10 +47,16 @@ def of_kind(items, kind):
     return [d for d in items if d.get("kind") == kind]
 
 
-def problems(base_chart, tenant_chart):
+def mem(q):
+    """Bytes of a Mi/Gi/Ki quantity; anything else is a test failure, not a guess."""
+    m = re.fullmatch(r"(\d+)(Ki|Mi|Gi)", str(q))
+    return int(m.group(1)) * {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3}[m.group(2)] if m else None
+
+
+def problems(base_chart, tenant_chart, *helm_extra):
     """Every way the SA/Role/Job wiring is wrong; empty means wired."""
     out = []
-    rc, text, err = helm(base_chart, "admins-mctl-agents-worker", SVC)
+    rc, text, err = helm(base_chart, "admins-mctl-agents-worker", SVC, *helm_extra)
     if rc:
         return [f"base-service render failed: {err[:200]}"]
     base = docs(text)
@@ -109,6 +115,27 @@ def problems(base_chart, tenant_chart):
     if roles[0]["metadata"]["namespace"] != "admins" or binds[0]["metadata"]["namespace"] != "admins":
         out.append("Role or RoleBinding is not in the service's namespace")
 
+    # The Job runs kubectl + jq: its memory limit must exceed the `sleep` holder's (an OOMKill there reads as a
+    # cache miss), and it keeps the restricted PodSecurity settings.
+    holders = [d for d in of_kind(base, "DaemonSet") if d["metadata"]["name"].endswith("-prepull")]
+    if len(holders) != 1:
+        out.append(f"expected one pre-pull DaemonSet, found {len(holders)}")
+    else:
+        hl = mem(holders[0]["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"].get("memory"))
+        c = job["spec"]["template"]["spec"]["containers"][0]
+        jl = mem((c.get("resources", {}).get("limits") or {}).get("memory"))
+        jr = mem((c.get("resources", {}).get("requests") or {}).get("memory"))
+        if hl is None or jl is None or jr is None:
+            out.append("the holder's or the Job's memory request/limit is missing or not Ki/Mi/Gi")
+        elif jl <= hl:
+            out.append("the verifier Job's memory limit is not above the sleep holder's")
+        elif jr > jl:
+            out.append("the verifier Job requests more memory than its limit")
+        sc = c.get("securityContext", {})
+        if not (sc.get("readOnlyRootFilesystem") is True and sc.get("allowPrivilegeEscalation") is False
+                and sc.get("capabilities", {}).get("drop") == ["ALL"]):
+            out.append("the verifier Job lost its restricted container securityContext")
+
     env = {e["name"]: e.get("value") for e in job["spec"]["template"]["spec"]["containers"][0]["env"]}
     if not env.get("RBAC_WAIT_SECONDS", "").isdigit():
         out.append("the Job has no numeric RBAC_WAIT_SECONDS")
@@ -136,6 +163,12 @@ for v in sorted((ROOT / "platform-gitops/services").glob("*/*/values.yaml")):
         ten = yaml.safe_load((ROOT / f"platform-gitops/tenants/{team}/values.yaml").read_text())
         flag(f"{v.parent.name}: tenant {team} enables prepullVerifier", (ten.get("tenant", {}).get("prepullVerifier") or {}).get("enabled") is True)
 
+# 2b. The ServiceAccount name is a constant on both sides: no value can move one side only.
+rc, text, err = helm(BASE, "admins-mctl-agents-worker", SVC, "--set", "prepull.verifierServiceAccount=someone-else")
+job_sa = [j["spec"]["template"]["spec"]["serviceAccountName"] for j in of_kind(docs(text), "Job")] if rc == 0 else []
+flag("the Job's ServiceAccount ignores a prepull.verifierServiceAccount override", rc == 0 and job_sa == ["prepull-verifier"], f"{rc} {job_sa} {err[:200]}")
+flag("no verifierServiceAccount knob is left in the chart", "verifierServiceAccount" not in (BASE / "values.yaml").read_text())
+
 # 3. The wait must stay inside the deadline: the chart refuses otherwise.
 rc, _, err = helm(BASE, "x", SVC, "--set", "prepull.rbacWaitSeconds=100")
 flag("chart refuses a wait that leaves no time before the deadline", rc != 0 and "rbacWaitSeconds" in err, err[:200])
@@ -153,6 +186,10 @@ MUTANTS = [
     ("RoleBinding names another ServiceAccount", "tenant", "templates/prepull-verifier.yaml", "    name: prepull-verifier\n    namespace", "    name: someone-else\n    namespace"),
     ("Role loses the pods list", "tenant", "templates/prepull-verifier.yaml", 'verbs: ["list"]', 'verbs: ["get"]'),
     ("Role grants more than the script reads", "tenant", "templates/prepull-verifier.yaml", 'verbs: ["get"]\n  - apiGroups: [""]', 'verbs: ["get", "delete"]\n  - apiGroups: [""]'),
+    ("base side renames the ServiceAccount (the two sides disagree)", "base", "templates/prepull.yaml", '$verifierSA := "prepull-verifier"', '$verifierSA := "prepull-verifier-v2"'),
+    ("Job reuses the holder's resources", "base", "templates/prepull.yaml", "toYaml .Values.prepull.verifierResources", "toYaml .Values.prepull.resources"),
+    ("Job limit equal to the holder's", "base", "values.yaml", "limits: {memory: 128Mi}", "limits: {memory: 64Mi}"),
+    ("Job loses its memory request", "base", "values.yaml", "requests: {cpu: 10m, memory: 64Mi}\n    limits: {memory: 128Mi}", "requests: {cpu: 10m}\n    limits: {memory: 128Mi}"),
     ("RBAC wait env dropped", "base", "templates/prepull.yaml", "            - name: RBAC_WAIT_SECONDS\n              value: {{ .Values.prepull.rbacWaitSeconds | quote }}\n", ""),
 ]
 for name, which, rel, old, new in MUTANTS:

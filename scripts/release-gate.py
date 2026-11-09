@@ -267,8 +267,12 @@ def _step_problem(old: Any, new: Any) -> str | None:
     step 1: only prepull.ref moves (image.tag and image.digest untouched).
     step 2: image.tag and image.digest move together, prepull.ref untouched,
             and the result is settled: both equal the staged reference.
-    Anything else (a tag-only change, both halves in one commit, a digest alone)
-    is not a deploy step the PreSync gate was designed for.
+    pin:    image.digest alone moves (the tag already is the staged tag), prepull.ref
+            untouched, and the result is settled. This is the legacy shape
+            (tag, no digest) becoming the settled one for the SAME image.
+    Anything else (a tag-only change, both halves in one commit, a digest alone
+    that is not the staged one) is not a deploy step the PreSync gate was
+    designed for.
     """
     (bt, bd, br), (nt, nd, nr) = _deploy_state(old), _deploy_state(new)
     ct, cd, cr = bt != nt, bd != nd, br != nr
@@ -276,10 +280,12 @@ def _step_problem(old: Any, new: Any) -> str | None:
         return None
     if cr and not ct and not cd:
         return None
-    if ct and cd and not cr:
+    if cd and not cr:
         m = re.fullmatch(r"[^@]+:([^@: ]+)@(sha256:[0-9a-f]{64})", str(nr))
         if m and m.group(1) == str(nt) and m.group(2) == str(nd):
             return None
+        if not ct:
+            return "image.digest moved but the result does not equal prepull.ref"
         return "image.tag and image.digest moved but do not both equal prepull.ref"
     parts = [n for n, c in (("image.tag", ct), ("image.digest", cd), ("prepull.ref", cr)) if c]
     return "not one step of the two-commit deploy (changed together: " + ", ".join(parts) + ")"

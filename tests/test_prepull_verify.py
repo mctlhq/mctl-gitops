@@ -46,7 +46,11 @@ def pod(node, **kw):
 PODS = {"items": [pod("n1"), pod("n2"), pod("n3")]}
 
 
-def run(deploy=DEPLOY, ds=DS, pods=PODS, target=TARGET, fail=(), forbidden=0, wait="0", script=SCRIPT):
+def run(deploy=DEPLOY, ds=DS, pods=PODS, target=TARGET, fail=(), forbidden=0, wait="0", script=SCRIPT,
+        absent=False, errors=None):
+    """absent: the Deployment does not exist (honours --ignore-not-found like kubectl: empty, rc 0; without it a
+    NotFound error, rc 1). errors: {resource: stderr text} for a read that fails with that text."""
+    errors = errors or {}
     with tempfile.TemporaryDirectory() as t:
         tmp = pathlib.Path(t)
         for name, doc in (("deployment", deploy), ("daemonset", ds), ("pods", pods)):
@@ -55,10 +59,17 @@ def run(deploy=DEPLOY, ds=DS, pods=PODS, target=TARGET, fail=(), forbidden=0, wa
         kubectl.write_text(
             "#!/bin/sh\n"
             f'case " {" ".join(fail)} " in *" $2 "*) echo denied >&2; exit 1;; esac\n'
+            + "".join(f'[ "$2" = {k} ] && {{ echo {json.dumps(v)} >&2; exit 1; }}\n' for k, v in errors.items())
+            +
             # the first N reads of the Deployment answer Forbidden, as before the tenant Role exists
             f'if [ "$2" = deployment ]; then n=$(cat "{tmp}/calls" 2>/dev/null || echo 0); echo $((n+1)) > "{tmp}/calls"; '
             f'[ "$n" -lt {forbidden} ] && {{ echo "Error from server (Forbidden): deployments.apps is forbidden" >&2; exit 1; }}; fi\n'
-            f'cat "{tmp}/$2.json"\n'
+            + (
+                'if [ "$2" = deployment ]; then case " $* " in *" --ignore-not-found "*) exit 0;; esac; '
+                'echo "Error from server (NotFound): deployments.apps \\"d\\" not found" >&2; exit 1; fi\n'
+                if absent else ""
+            )
+            + f'cat "{tmp}/$2.json"\n'
         )
         kubectl.chmod(kubectl.stat().st_mode | stat.S_IEXEC)
         env = {**os.environ, "PATH": f"{tmp}:{os.environ['PATH']}", "NAMESPACE": "ns", "DEPLOYMENT": "d",
@@ -176,6 +187,49 @@ for name, (old, new) in WAIT_MUTANTS.items():
         m = pathlib.Path(t) / "prepull-verify.sh"
         m.write_text(SRC.replace(old, new))
         flag(f"mutant killed: {name}", not wait_cases(m))
+
+# F-P2: a first install has no Deployment yet (it is created in Sync, after this hook), so there is no old pod to
+# protect. Only the successful EMPTY read of the Deployment is that absence; every failed read stays a STOP.
+r = run(absent=True, fail=("daemonset", "pods"))
+check("no Deployment yet (first install) passes", r, True)
+flag("... and says why in the log", "does not exist yet" in r.stdout and "first install" in r.stdout, r.stdout)
+NS_NOT_FOUND = 'Error from server (NotFound): namespaces "ns" not found'
+check("NotFound of the namespace on the Deployment read is a STOP", run(errors={"deployment": NS_NOT_FOUND}), False)
+check("a transient API error on the Deployment read is a STOP",
+      run(errors={"deployment": "Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout"}), False)
+check("a whitespace-only Deployment body is not absence", run(deploy="  "), False)
+check("NotFound of the DaemonSet is still a STOP",
+      run(errors={"daemonset": 'Error from server (NotFound): daemonsets.apps "d-prepull" not found'}), False)
+check("NotFound of the pre-pull pods list namespace is still a STOP", run(errors={"pods": NS_NOT_FOUND}), False)
+t0 = time.monotonic()
+r = run(errors={"deployment": "Unable to connect to the server: i/o timeout"}, wait="4")
+check("a transient error does not wait for RBAC", r, False)
+flag("... and returns at once", time.monotonic() - t0 < 3, f"{time.monotonic() - t0:.1f}s")
+r = run(absent=True, forbidden=2, wait="5")
+check("Forbidden first, then absent: the RBAC wait is kept, then PASS", r, True)
+flag("... after waiting", "waiting for the tenant RBAC" in r.stderr, r.stderr)
+
+ABSENT_MUTANTS = {
+    "absence not understood": ('if [ -z "$deploy" ]; then', "if false; then"),
+    "no --ignore-not-found: NotFound is a failed read": (" -o json --ignore-not-found); do", " -o json); do"),
+    "a failed read counts as absence": (" --ignore-not-found); do", " --ignore-not-found || true); do"),
+}
+
+
+def absent_cases(script):
+    return (run(absent=True, fail=("daemonset", "pods"), script=script).returncode == 0
+            and run(errors={"deployment": NS_NOT_FOUND}, script=script).returncode != 0
+            and run(errors={"deployment": "Unable to connect to the server: i/o timeout"}, script=script).returncode != 0
+            and run(deploy="  ", script=script).returncode != 0)
+
+
+flag("absence cases are green on the real script", absent_cases(SCRIPT))
+for name, (old, new) in ABSENT_MUTANTS.items():
+    flag(f"mutant anchor exists: {name}", SRC.count(old) == 1, f"count={SRC.count(old)}")
+    with tempfile.TemporaryDirectory() as t:
+        m = pathlib.Path(t) / "prepull-verify.sh"
+        m.write_text(SRC.replace(old, new))
+        flag(f"mutant killed: {name}", not absent_cases(m))
 
 print()
 if failures:
