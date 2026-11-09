@@ -321,6 +321,22 @@ jobs:
       - name: Pin required-check job ids
         run: python3 tests/test_required_check_job_ids.py
 
+      # mctl-agents#1007 B4 (S-A): no Git-visible Reflector enabler or mirror
+      # marker may appear anywhere in the tree (all text file types, tests and
+      # fixtures included). GREEN is "no enabler in Git", never "no S-A": live
+      # Secret state is out of reach of CI (scripts/check-live-reflector-drift.py
+      # is a manual tool, only its offline tests run here). Both test files
+      # prove the detectors green on converged input, red on deliberate
+      # mutations, rc 2 (UNKNOWN) on unreadable or partial input, and each rule
+      # load-bearing. Advisory: not a separate required check, it fails the
+      # existing `validate` job.
+      - name: Reflector source guard and detector proofs
+        run: |
+          set -euo pipefail
+          python3 scripts/validate-reflector-sources.py
+          python3 tests/test_validate_reflector_sources.py
+          python3 tests/test_live_reflector_drift.py
+
       - name: Validate agent credential delivery
         run: |
           set -euo pipefail

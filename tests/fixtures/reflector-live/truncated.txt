@@ -1,0 +1,7 @@
+argocd|argocd-secret||||||
+argocd|repo-creds-example||||||
+argo-workflows|workflow-token||||||
+database|object-storage-credentials|false|false||||
+database|postgres-credentials|false|false||||
+database|tenant-bootstrap-secret|false|false||||
+kube-system|cluster-ca||||||
