@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-11-09T11:55:25Z'
+updated_at: '2026-11-09T12:10:27Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-de9b75ee95c4f774
@@ -51,12 +51,11 @@ github:
   state: open
   head_sha: 9c67a1dd5a24c77a92f5e1d90053361295e0ade6
   observed_at: '2026-11-09T11:39:27Z'
-refusals: 1
+refusals: 2
 refusals_head: 9c67a1dd5a24c77a92f5e1d90053361295e0ade6
-notes: 'implementer declined to act: Reviewer text 1 is an approval, not a defect:
-  it states ''Verdict: approved (0 P1, 0 P2, 0 P3)'' bound to commit 9c67a1dd and
-  reports all previous findings as fixed. Its only remarks are two items marked ''Minor,
-  not blocking'' (glovo.WriteError lacks a nil guard but has no callers yet; refusal
-  metric label reuses supportAudienceRouteClass), which the reviewer says can wait
-  for the slice that adds Glovo routes. Nothing to fix; changing code would exceed
-  scope.'
+notes: 'implementer declined to act: Reviewer text 1 is a top-level approval comment
+  (Verdict: approved, 0 P1, 0 P2, 0 P3) for commit 9c67a1d. It says previous P2/P3
+  findings are already fixed and lists only two non-blocking minor notes (glovo.WriteError
+  has no nil guard but has no callers yet; refusal metric label uses supportAudienceRouteClass),
+  which the reviewer explicitly defers to the later slice that adds Glovo routes.
+  No actionable defect is described, so no change is made.'
