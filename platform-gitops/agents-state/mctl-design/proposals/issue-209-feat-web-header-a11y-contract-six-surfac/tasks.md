@@ -15,7 +15,9 @@
       ownership split "site.css owns visuals, consumer owns behavior" stated with a `[CODE]` cite.
 - [ ] 3. Write the states section and requirements HDR-1..HDR-16, each with statement, observable
       outcome, states, and optional `site.css` hook. (depends on 2) — DoD: every requirement is
-      testable by one observable check; none mandates a component, ID, class, attribute or script.
+      testable; no runtime-specific component, ID, class or script is mandated. Mere DOM adjacency
+      is not a programmatic/AT association without evidence, and newly mandatory behavior for
+      existing consumers triggers a MAJOR contract revision.
 - [ ] 4. Write the breakpoints table: academy and alice 981px (drawer-wide, <= 980px), seerrsense and
       default `site.css` 768px (<= 767px), others `unknown (not observed)`, each value tagged with its
       source; state that no common breakpoint is mandated. (depends on 3) — DoD: 981px and 768px both
@@ -62,6 +64,8 @@
       `[LIVE]`, `[PREVIEW]`, and a subsection for each of the six consumers.
 - [ ] T7. Full CI (`ci.yml`) is green, including `check:token-version` and the browser story tests,
       which must be unchanged because no story or package changed.
+- [ ] T8. The resulting contract never treats sibling DOM adjacency as proof of a programmatic
+      navigation association; it requires an AT-observable native equivalent or a pending exception.
 
 ## Rollback
 

@@ -75,7 +75,7 @@ Add one file, `docs/contracts/web-header-a11y.md`. No other file changes. Its st
    `draft, not adopted`, written against mctl-design `7340576f6dccbf5da47049d64a5bef216277bb7a`
    (`0.20.2`), epic mctlhq/.github#330, work item `web-header-a11y-contract`, depends on
    `web-contract-evidence` (#207/#208). Versioning rule: independent semver (MAJOR removes or tightens
-   a requirement, MINOR adds one or adds a consumer, PATCH clarifies). States plainly: docs-only, no
+   a requirement, MINOR adds only backward-compatible optional guidance or a consumer, PATCH clarifies). States plainly: docs-only, no
    application or design-system change, approval of this document authorizes nothing else.
 2. **Terms and provenance.** Reuse the evidence legend verbatim by reference (`[CODE]`, `[CONFIG]`,
    `[LIVE]`, `[PREVIEW]`, `unknown (not observed)`, `not-run`, `not-applicable`); add `exception
@@ -93,7 +93,9 @@ Add one file, `docs/contracts/web-header-a11y.md`. No other file changes. Its st
    - HDR-5 toggle exposes expanded/collapsed to assistive technology (`aria-expanded`, or a
      documented native equivalent);
    - HDR-6 toggle is programmatically associated with the panel (`aria-controls` to an existing id,
-     or DOM adjacency documented as the equivalent);
+     or a source-verified native semantic relationship that assistive technology recognizes).
+     Simple DOM sibling adjacency is NOT equivalent; if no such relationship can be proven,
+     record a pending consumer exception instead of asserting compliance;
    - HDR-7 Tab order: narrow-closed skips panel links; narrow-open reaches toggle then panel links
      in DOM order; no focus trap while closed;
    - HDR-8 Escape in narrow-open closes and returns focus to the toggle;
