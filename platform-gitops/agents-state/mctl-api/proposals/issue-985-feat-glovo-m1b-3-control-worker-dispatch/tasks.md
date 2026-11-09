@@ -113,7 +113,7 @@ With any of them missing, the code merges with nil collaborators and answers
   DoD: no route accepts or returns a payload; a test fails when a route, a status code or a body field drifts from the contract files. The OpenAPI doc is not updated (these are
   internal routes); they are listed in `docs/glovo-control.md` instead.
 - [ ] 9. Wire it in `cmd/api/main.go` (depends on 3, 8 and #989's `receipt.Fence`):
-  - `const controlGateOpen = false` backing `glovo.ControlDefault`;
+  - `const controlGateOpen = false` backing `glovo.ControlDefault`, in `gate_release.go`, with the `glovojoin_fixture` twin `gate_fixture.go`; `DispatchCommandTTL` in `ttl_release.go` / `ttl_fixture.go` (design §7.4, round 8);
   - the env `MCTL_GLOVO_CONTROL_ENABLED`;
   - the dispatcher, with #959, #988 and #989 collaborators nil until they land.
 
@@ -262,9 +262,11 @@ advisory keys are used.
   T27 case (a) applies), and `Enqueue` below the wire-version level answers `not_ready` without a
   row. These are driven through #986's code; the mechanism's own tests are #986 T4e-T4g.
 
+- [ ] T29. (Round 8, design §7.4) Fixture seam. (a) `TestControlGateClosedInReleaseBuild` (no tag): `glovo.ControlDefault.Open` is false and `DispatchCommandTTL == 900*time.Second`. (b) `TestFixtureFilesAreTagged`: `go list -f '{{.GoFiles}}'` for the release build lists `gate_release.go` and `ttl_release.go` and neither fixture file, and the repository's Dockerfile and release workflow contain no `glovojoin_fixture`. (c) With the tag, the gate is open but `main.go` still leaves the fence `refusingFence` while any of §7.3 items 2 to 6 fails (one case per item). (d) `SetFixtureDispatchCommandTTL(2*time.Second)` makes the next dispatch enqueue `ttl_seconds` 2, still capped at `fresh_until`. Proven red: with the release file's const flipped to `true`, (a) fails; with the fixture file added to the release build list, (b) fails; with `receipt.Ready` skipped under the tag, (c) fails.
+
 ## Rollback
 
-- Everything is dark by default: the const `controlGateOpen` is false and
+- Everything is dark by default: the const `controlGateOpen` is false (in the release file) and
   `MCTL_GLOVO_CONTROL_ENABLED` is unset. Unsetting the env var removes the routes and
   leaves the fence `refusingFence`. It does not change the bridge's store: once
   `bridge.ApplySchema` has run, the bridge stays on `NewRuntimeStore` and the shared pool,

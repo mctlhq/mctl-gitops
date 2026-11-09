@@ -32,6 +32,8 @@ Open items recorded in round 6 (one recommendation each, in the owning proposal'
 | OPEN-961-3 | #961 | R5-3 | a #961 wiring task for `WithEndPurger`, `Sweep`, `connect.Service`; name it in #985 task 9 |
 | OPEN-961-4 | #961 | R5-4 | #959 `LiveConnection*` return the lapsed `*Connection` with `connection_expired` |
 | OPEN-985-11 | #985 | F2 | `MCTL_GLOVO_WRITE_FENCE_ENABLED`, set by the gitops PR lifting #2457; route first, fence last |
+| OPEN-985-13 | #985 | R8 | `DispatchCommandTTL` = 900 s, capped at `fresh_until` (#985 §7.4) |
+| OPEN-985-14 | #985 | R8 | fixture seam: `glovojoin_fixture` selects `gate_fixture.go` and `ttl_fixture.go`; never skips §7.3 items 2 to 6 (#985 §7.4, T29) |
 | OPEN-985-12 | #985 | F3 | vendor the control contract files into mctl-agents with `SHA256SUMS`, checked by #1044 and #990 |
 | OPEN-986-4 | #986 | P2-1 | vendor `claim-response.schema.json` and pin the envelope strings; extend T7c |
 | OPEN-986-5 | #986 | P2-2 | one canonical location per vector file, with sha256 pin tests |
@@ -1188,6 +1190,12 @@ local-OAuth Glovo tokens, and `FixtureBridge`. It then replays every golden fixt
 the negative matrix (tasks.md T6). An exported `cmd/glovo-join-harness` (fixture tag)
 serves the same stack on a local port so the mctl-telegram facade's integration test can
 target real mctl-api handlers instead of `fakeapi`.
+
+Round 8: the same tag also selects #985's `gate_fixture.go` (opens the const-closed control
+gate only) and the TTL overrides: #985 owns `SetFixtureDispatchCommandTTL`, this slice owns
+`internal/glovojoin/ttl_release.go` / `ttl_fixture.go` with `SetFixtureGlovoApprovalTTL(d)`
+(release: `const GlovoApprovalTTL = 15 * time.Minute`; fixture: a `var`). Connection expiry
+needs no override variable (#985 §7.4). The tag never skips a precondition of #985 §7.3.
 
 ### 9. Readiness and launch matrix
 

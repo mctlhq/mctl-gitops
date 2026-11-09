@@ -97,7 +97,7 @@ disagree, this section wins. Every older passage that contradicted it has been r
 | P3 `ProveColocated` gaps (physical standbys share `system_identifier`; EXECUTE on `pg_control_system`) | Replaced by a nonce written in one transaction and read back through every pool, plus privilege and `to_regclass` checks (§4). `pg_control_system` is no longer used |
 | P3 The partial unique index is applied on every boot | Withdrawn by (c): all bridge DDL moves to `bridge.ApplySchema` under the migration role (§ Platform impact) |
 | P3 Crash after commit but before the response | T22: the retry returns the same `cmd_` |
-| P3 `glovo.Default` is a `var` (`gate.go:24`) | `ControlDefault` is backed by an unexported `const controlGateOpen = false` |
+| P3 `glovo.Default` is a `var` (`gate.go:24`) | `ControlDefault` is backed by an unexported `const controlGateOpen = false` (release file; the fixture twin is §7.4) |
 | P3 `in_flight` is called an effective state | Corrected: it is a stored state (`action_approvals.go:215-232`) |
 
 Skipped P3s: none.
@@ -443,7 +443,7 @@ This is the only step order. Task 5 implements exactly this.
     remaining `EnqueueInput` fields, each also checked by `Enqueue.validate`: `ProviderRef` =
     `binding.provider` from `LockGlovoApprovalTx` (the value #989's fence compares with
     `command.provider_ref`); `Tenant` and `OwnerPrincipalID` from the locked order;
-    `InstallRevision` from the binding; `TTL` = the named constant `DispatchCommandTTL`,
+    `InstallRevision` from the binding; `TTL` = the named constant `DispatchCommandTTL` (900 s, §7.4, OPEN-985-13),
     capped at the time left until the `aar_` row's `fresh_until` (none left: `approval_expired`,
     nothing enqueued). Every field comes from the locked rows
     (amended (c), #957 §6d.2): `ExecutionID` and `WorkItemID`/`WorkflowID` from
@@ -553,6 +553,36 @@ hold. This is the only copy of the list (amended (c)); the requirements mirror i
 
 A residual window remains between the GitOps membership removal and the hook's
 revocation. The owner must accept it explicitly; this is an OPEN item.
+
+#### 7.4 Fixture build: the gate and the TTL seams (round 8; owner of both seams: this slice)
+#990 must drive the real control routes, so a test build needs a way to open the const-closed
+gate and to shorten the dispatch TTL. There is one mechanism, the `glovojoin_fixture` build tag
+that #957 §8 already uses for `FixtureBridge` (referenced, not duplicated), and it selects
+exactly two files in `internal/glovo/control`, each with a release twin:
+- `gate_release.go` (`//go:build !glovojoin_fixture`): `const controlGateOpen = false`;
+  `gate_fixture.go` (`//go:build glovojoin_fixture`): `const controlGateOpen = true`.
+  `glovo.ControlDefault` stays backed by that const.
+- `ttl_release.go` (`!glovojoin_fixture`): `const DispatchCommandTTL = 900 * time.Second`;
+  `ttl_fixture.go` (`glovojoin_fixture`): `var DispatchCommandTTL = 900 * time.Second` and
+  `func SetFixtureDispatchCommandTTL(d time.Duration)`, which a test calls before it starts
+  the router. #957 owns the matching pair `internal/glovojoin/ttl_release.go` /
+  `ttl_fixture.go` for `GlovoApprovalTTL` and `SetFixtureGlovoApprovalTTL(d)`.
+- Opening the const is the only thing the tag does to §7.3. The fixture build still has to
+  satisfy items 2 to 6 for real: the `MCTL_GLOVO_CONTROL_ENABLED` route flag, the §4 proof,
+  #959 `Ready()`, `MembershipRevocationWired()` and `receipt.Ready`. It must not skip the
+  verifier, the revocation hook or `receipt.Ready`; a fixture run that stubs any of them is
+  not a #990 pass.
+- No injected Go clock is used, so none is the seam. Every expiry decision is made by the
+  database (`clock_timestamp()`, #959 F1 and #989 T7b), which a Go clock cannot move. A
+  timeout row is therefore driven with a short real duration: the two TTL setters above, and
+  for the connection the #959 `ActivateInput.ExpiresIn` (a duration, SQL computes
+  `clock_timestamp() + ExpiresIn`) passed by the test with a few seconds, or a direct
+  `UPDATE glovo_connections SET expires_at = clock_timestamp() + interval '2 seconds'` in the
+  harness database, then a wait. No release-build code path reads a variable.
+- DispatchCommandTTL (OPEN-985-13, recommendation 900 s): it is the #1059 `ttl_seconds`
+  maximum (1..900) and equals #1044's `settle_timeout_s` default, so the workflow never gives
+  up on a command that is still live; the effective value is always capped at the time left
+  until the `aar_` `fresh_until` (step 11), so a command can never outlive its approval.
 
 ### 8. Logging and audit
 - `h.logAudit` records:
