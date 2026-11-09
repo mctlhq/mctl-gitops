@@ -1,5 +1,5 @@
 status: implemented
-updated_at: '2026-11-09T12:42:42Z'
+updated_at: '2026-11-09T14:30:39Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-f2b952421d6e5412
@@ -47,3 +47,14 @@ completion:
       required_total: 4
       optional_total: 2
   primary_observed: true
+ci_blockers_head: e69e5e6b808cde04e916a6665ec5735981e3a92e
+ci_blockers:
+- PR validation / tests
+refusals: 1
+refusals_head: e69e5e6b808cde04e916a6665ec5735981e3a92e
+notes: 'implementer declined to act: Only failure is tests/test_b4_update_outage_e2e.py::test_late_update_after_outage_is_deferred_then_executes_exactly_once
+  (AssertionError: 1 not reached within 30s), a wall-clock-bounded Temporal e2e wait.
+  The PR touches only dev_loop.py and merge-watch tests, not the dispatcher or this
+  test; 8039 other tests passed. The log shows a ~35s stall at the F (14:20:02 ->
+  14:20:37) and Temporal dev-server WARN context canceled, i.e. runner load/timing
+  flake, not a code defect.'
