@@ -24,20 +24,23 @@ Slice 1d-2b-ii of #1021. Tests, fixtures and one tool only, with no change under
   the vacuity and manifest tests pass.
 - [ ] 6. D16 (depends on 2), parametrized `nocache` and `restart`. — DoD: green, with one `terminal`, one
   `resolve_deploy_target`, and clean replay.
-- [ ] 7. Carry-over D7, D9 window, D12, D14 (depends on 1). — DoD: green.
+- [ ] 7. Carry-over D7 (T8a, T8b), D9 window, D12, D14 (depends on 1). — DoD: green. Size guard: if the slice does not
+  fit one pass, the implementer stops and reports; it cuts the carry-over (D7, D9 window, D12, D14) back to the tracking
+  issue #1061 and never cuts the D15/D16 core.
 - [ ] 8. Evidence (depends on 5-7). For each mutation below, run the named tests on a scratch tree, confirm they are
   red, and revert. Paste the table in the PR. No mutation is committed. — DoD: every row red.
 
   | id | mutation (scratch only, `dev_loop.py`) | must turn red |
   |---|---|---|
-  | f1 | drop the `_terminal_claim` call in `_decide_watch_end` | D15b vacuity, D16 |
-  | f2 | add one extra `_final_pr_read` call before the MERGED/CLOSED branch | D15b replay, D16 replay |
-  | f3 | evaluate `workflow.patched(MERGE_WATCH_RECONCILE_PATCH)` also in the resume arm | D15 marker 0, D15b hop replay |
-  | f4 | swap the settle and the first read | D7 |
+  | f1 | drop the `_terminal_claim` call in `_decide_watch_end` | D15b vacuity, D16, D3 |
+  | f2 | add one extra `_final_pr_read` call before the MERGED/CLOSED branch | D15b replay (committed fixture vs mutated code), D3 `len(reads)`. NOT D16 replay: a live run records and replays under the same mutated code |
+  | f3 | evaluate `workflow.patched(MERGE_WATCH_RECONCILE_PATCH)` also in the resume arm | T4 (marker count 1 on the in-test hop recording, expected 0); the committed hop fixture then also fails replay because the carried flag no longer matches the recorded commands |
+  | f4 | swap the settle and the first read | T8b (in-flight gate scenario; D3-D6 cannot see it because nothing is in flight there) |
   | f5 | remove the abandon check after `_settle_watch_work` | D14 |
+  | f6 | in `_final_pr_read`, skip the `get_pr_state` activity when `workflow.unsafe.is_replaying()` (a replay-only divergence, exact text recorded in the PR) | T7 `nocache` and `restart` (nondeterminism on replay); D3 stays green, so D16 is proven independent of D3 |
 
 - [ ] 9. PR. State that this is 1d-2b-ii, tests and fixtures only, no release, B4 (#1007) FAIL, and the hold ON. List the
-  deferred D13b-e for 1d-3. — DoD: PR opened with `Refs #1021`.
+  deferred D13b-e (tracked on #1061, to be taken into the 1d-3 proposal). — DoD: PR opened with `Refs #1021`.
 
 ## Tests
 
@@ -52,8 +55,11 @@ Slice 1d-2b-ii of #1021. Tests, fixtures and one tool only, with no change under
 - [ ] T6 (D15a). `test_in_test_recordings_replay_clean`: every run of the fresh and hop chains, nothing written.
 - [ ] T7 (D16). `test_duplicate_delivery_of_the_final_read_task[nocache|restart]`: one `terminal`, one deploy
   observation, Completed MERGED, replay adds no command.
-- [ ] T8 (D7). `test_final_read_ordering_from_history` over D3-D6: settle, then read, then relinquishing write; none
-  for D6.
+- [ ] T8a (D7). `test_final_read_ordering_from_history` over D3-D6: first post-deadline read, then relinquishing write;
+  none for D6. With nothing in flight the settle issues no command, so this test does not assert the settle position.
+- [ ] T8b (D7, settle position). `test_settle_commands_precede_the_first_read`: `_released_gate_run` with `_StubbornWait`
+  holding the gate in flight at the deadline. In history the cancel of the gate and the wait for it come BEFORE the first
+  post-deadline `get_pr_state`, which comes before any relinquishing write. This is the only test that can turn f4 red.
 - [ ] T9 (D9 window). Abandon during the gate window: one read, `abandoned-unverified`, `release`.
 - [ ] T10 (D12). Final-read OPEN bookkeeping. MERGED first seen by the final read gives `acquire` then `terminal`.
 - [ ] T11 (D14). Abandon while the settle waits on `_StubbornWait`: no read after the settle, `abandoned-unverified`,

@@ -139,10 +139,13 @@ issued an extra command would raise a nondeterminism error, because Replayer com
 
 ### 6. Carry-over coverage
 
-- D7 `test_final_read_ordering_from_history`: parametrized over D3-D6 outcomes via `_ride_to_deadline`. It finds the
-  index of the settle (where the run has nothing in flight, the absence of a cancel/wait), the first post-deadline
-  `get_pr_state`, and the `terminal`/`release` ownership activity, and asserts the order. For D6 it asserts no
-  relinquishing write after the read.
+- D7, two tests. (a) `test_final_read_ordering_from_history`: parametrized over D3-D6 outcomes via `_ride_to_deadline`.
+  It finds the first post-deadline `get_pr_state` and the `terminal`/`release` ownership activity, and asserts the
+  order. For D6 it asserts no relinquishing write after the read. With nothing in flight the settle issues no command,
+  so (a) cannot see the settle and does not claim to. (b) `test_settle_commands_precede_the_first_read`: the in-flight
+  gate scenario (`_released_gate_run` with `_StubbornWait`, as D14). The cancel of the gate and the wait for it appear
+  in history before the first post-deadline `get_pr_state`, which appears before any relinquishing write. Only (b) can
+  turn the swap-settle-and-read mutation (f4) red.
 - D9 window variant: `_released_gate_run` with an `on_read`/timer hook that signals abandon after the first read opened
   the window. It asserts one read, `abandoned-unverified`, and `release`.
 - D12 bookkeeping: two tests. (a) A final-read OPEN, via queries or the resume record of a following hop, gives
