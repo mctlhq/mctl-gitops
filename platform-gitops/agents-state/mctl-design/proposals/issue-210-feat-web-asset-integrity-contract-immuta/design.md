@@ -96,9 +96,11 @@ pass. It uses RFC 2119 keywords (MUST, SHOULD, MAY) for specified requirements. 
    the CDN equals `@mctlhq/css/theme.css`.
 4. **Delivery modes.**
    - Mode A, exact-version CDN: `<link rel="stylesheet" href="https://ui.mctl.ai/<v>/mctl.css">`,
-     with `integrity` + `crossorigin="anonymous"` allowed only after gate G3 (below). It states
-     that `curl` is not evidence for browser SRI or CORS, and that the floating URL MUST NOT be
-     used for anything shipped to users.
+     with `integrity` + `crossorigin="anonymous"` allowed only after gate G3 (below). Source
+     permission is evaluated against the route's effective `style-src` (or `default-src` fallback),
+     NOT inferred from its `script-src`; Academy public is an example of stricter script policy
+     with CDN-allowed styles. It states that `curl` is not evidence for browser SRI or CORS,
+     and that the floating URL MUST NOT be used for anything shipped to users.
    - Mode B, locally vendored: the CSS is copied byte for byte from a manifest version and served
      from `'self'`. A `--check` CI step compares the SHA-256 against the manifest. The line-1
      version banner is the human-readable cross-check. Mode B is required for `style-src 'self'`
