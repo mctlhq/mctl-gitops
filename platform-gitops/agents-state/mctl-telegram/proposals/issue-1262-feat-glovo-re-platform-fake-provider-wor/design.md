@@ -1,5 +1,20 @@
 # Design: issue-1262-feat-glovo-re-platform-fake-provider-wor
 
+## Amendment 2026-11-09
+
+Resolves the independent pre-approval review on mctlhq/mctl-telegram#1262 (comment 6740949177).
+Every cited server line was re-read on mctl-api `a9ca5814`.
+
+| Finding | Change |
+|---|---|
+| P1: after a reclaim, `applied` is always refused (`store.go:637` reclaim and `store.go:830-831` cancel turn `permitted` into `unknown`; `store.go:783-784` accepts `applied` only from `permitted`) | State machine step 4.1 and the map: a `command_id` with any local effect record reports `failed_terminal`/`internal`/`unknown`, `error_detail=applied_prior_lease`, no permit. `bridgefake` models reclaim/cancel `permitted -> unknown`, 422 for `applied` without `permitted`, and `permit_already_issued` for `effect_state != none`. T13 rewritten; T21 mutation check |
+| P2: 429 and code-less error bodies undefined (`router.go:881`, `bridgeClaimPerMin=120` at `handlers_bridge.go:43`; 401 via `writeError` `{"error"}` at `handlers_bridge.go:75`, `handlers_read.go:1002`) | Client: `APIError` keeps `Code=""` for a code-less body; map rows for claim/permit/result 429 and 401; any unmapped status/code or unparseable body fails closed. Rate budget documented. T22, T23 |
+| P2: `permit_already_issued` reported as `none` (`permit.go:103-104`) | Owner decision 2026-11-09: `failed_terminal`/`internal`/`unknown`, `error_detail=permit_already_issued`. T11 updated |
+| P3: result-retry bound contradicts itself | Two deadlines: lease deadline for permit + effect, `expires_at` for result retries only (`store.go:768-776` accepts a same-token replay after lease expiry); stop on `lease_stale` |
+| P3: claim response fail-closed | Malformed claim body (missing/null/wrong-typed `commands`, extra field, trailing data, 64 KiB cap) is a claim error, never an empty batch; a command without `lease_token` is dropped + metric. T24 |
+| P3: unreachable branches | `already_completed` on result and `cancel_requested=true` on a claimed command are kept as defence and labelled unreachable on `a9ca5814` (`store.go:827` is the only `ErrAlreadyCompleted`, in control-side `Cancel`; claim selects only `pending`/expired-`leased`, `store.go:595-597`) |
+| P3: soft mctl-api#957 gate | The map is declared final within the frozen `result.schema.json` enums and posted to #957; task 11 DoD changed accordingly |
+
 ## Current state
 
 `main` (HEAD `27c671d`, the merge of #1259) has **no `provider/glovo/` module**. What `main` does have:
@@ -165,13 +180,28 @@ limits churn; its contents are replaced.
   - `Claim(ctx, max) ([]json.RawMessage, error)`;
   - `WritePermit(ctx, commandID, leaseToken) (Permit, error)`;
   - `SubmitResult(ctx, commandID, body []byte) (SubmitAck, error)`.
-  A non-2xx response decodes `{"code"}` into `*APIError{Status, Code}` and never keeps the body. A
-  claim response must have `schema_version == "bridge.mctl.ai/v1alpha1"`.
-- Poller: on a claim error, back off exponentially with jitter (cap 60s). A claim 404 (bridge
-  disabled) or 401/403 (`bridge_provider_required`/`bridge_provider_gate`) keeps the readiness probe
-  failing and backs off at the cap. Each claimed command runs in its own goroutine, bounded by
-  `fairness.Limiter` per `tenant_ref` and by the claim batch. Every command runs under a context
-  ending at `min(expires_at, claim time + lease TTL 60s - 5s margin)`.
+  A non-2xx response decodes `{"code"}` into `*APIError{Status, Code}` and never keeps the body.
+  A body without a parseable `code` (httprate's 429, the `writeError` 401 `{"error"}`, a proxy page)
+  gives `Code=""`; the caller maps by status only for the rows below and fails closed otherwise.
+  `Retry-After` (seconds) is kept on the error for 429.
+- Claim response: strict decode of exactly `{"schema_version","commands"}` with
+  `DisallowUnknownFields` and no trailing data; `schema_version == "bridge.mctl.ai/v1alpha1"`;
+  `commands` present and an array (`null` is an error). A body reaching the 64 KiB cap is an error.
+  Any failure is a claim error (`claim_errors_total{code="malformed"}`), never an empty batch. A
+  command without `lease_token` is dropped with `commands_dropped_total{reason="no_lease_token"}`.
+- Poller: on a claim error, back off exponentially with jitter (cap 60s). A claim 429 waits at
+  least `Retry-After`. A claim 404 (bridge disabled) or 401/403 (`bridge_provider_required`/
+  `bridge_provider_gate`) keeps the readiness probe failing and backs off at the cap. Each claimed
+  command runs in its own goroutine, bounded by `fairness.Limiter` per `tenant_ref` and by the claim
+  batch.
+- Deadlines: the permit request and the effect run under a context ending at the **lease deadline**
+  `min(expires_at, claim time + lease TTL 60s - 5s margin)`. Result submission (including retries of
+  the same bytes) runs under a separate context ending at `expires_at`, since mctl-api accepts a
+  same-token replay after the lease ran out (`store.go:768-776`). `lease_stale` stops both.
+- Rate budget: the bridge allows 120 requests/min per principal across all three routes
+  (`router.go:881`). Defaults (poll 2s = 30 claims/min, batch 4, at most one permit and one result per
+  command) stay under it at a steady 10 commands/min; above that the claim interval is stretched
+  by the observed 429s. The runbook states the budget.
 
 ### Per-command state machine (`poller.go` + `internal/executor`)
 
@@ -191,8 +221,12 @@ limits churn; its contents are replaced.
    `read_status` reads the fake order of `order_ref`. Success is `succeeded`/`none`/`none`, with
    `result_ref` set to a deterministic `res_` id derived from `command_id`.
 4. Mutating kinds (`place_order_fake`, `cancel_order_fake`):
-   1. Read back `fakestore.EffectOf(command_id)`. If an effect is already confirmed, report
-      `succeeded`/`applied`; there is no second permit and no second effect.
+   1. Read back `fakestore.EffectOf(command_id)`. If any local effect record exists (confirmed or
+      ambiguous), the command came back after a reclaim, and the server has already turned
+      `effect_state` `permitted` into `unknown` (`store.go:637`; cancel at `store.go:830-831`).
+      Report `failed_terminal`/`internal`/`unknown` with `error_detail=applied_prior_lease`; no
+      permit, no second effect. Never report `applied` here: `SubmitResult` refuses it unless
+      `effect_state == permitted` (`store.go:783-784`).
    2. Otherwise call `WritePermit`. Any error means no effect, mapped as in the table below.
    3. With a permit, call `fakestore.PlaceOrderFake` / `CancelOrderFake(sessionKey, commandID,
       orderRef, lines)`, then read back `EffectOf(command_id)`.
@@ -219,7 +253,8 @@ one revoked; a revoked session gives `failed_terminal`/`provider_rejected`. Ther
 | Situation | outcome | error_code | provider_effect | Next step |
 |---|---|---|---|---|
 | quote / read_status ok | succeeded | none | none | submit |
-| mutation applied (or deduped by command_id) | succeeded | none | applied | submit |
+| mutation applied under this lease's permit | succeeded | none | applied | submit |
+| mutation re-delivered after reclaim, local effect record exists | failed_terminal | internal (`error_detail=applied_prior_lease`) | unknown | submit, no permit |
 | schema-invalid / audience mismatch | failed_terminal | provider_rejected | none | submit if envelope valid, else drop |
 | cancel_requested=true | cancelled | none | none | submit |
 | kill switch / breaker open / tenant busy | failed_retryable | provider_unavailable | none | submit |
@@ -228,14 +263,24 @@ one revoked; a revoked session gives `failed_terminal`/`provider_rejected`. Ther
 | ambiguous write | failed_terminal | provider_unavailable | unknown | submit, never retry |
 | permit `write_fence_refused` (403) | approval_refused | approval_refused | none | submit |
 | permit `write_fence_unavailable` (503) | failed_retryable | internal (`error_detail=write_fence_unavailable`) | none | submit |
-| permit `permit_already_issued` / `not_mutating` (409) | failed_terminal | internal (`error_detail`=code) | none | submit |
+| permit `permit_already_issued` (409) | failed_terminal | internal (`error_detail=permit_already_issued`) | unknown | submit (owner decision 2026-11-09) |
+| permit `not_mutating` (409) | failed_terminal | internal (`error_detail=not_mutating`) | none | submit |
+| permit 429 | failed_retryable | provider_unavailable | none | submit (no effect attempted) |
 | any call `lease_stale` / `command_expired` / `command_cancelled` | - | - | - | stop, no result |
 | any call `command_not_found` (404) | - | - | - | stop, metric |
-| result `already_completed` or `replayed:true` | - | - | - | done |
+| result `replayed:true` | - | - | - | done |
+| result `already_completed` (unreachable on `a9ca5814`; defence only) | - | - | - | done |
 | result `result_conflict` | - | - | - | log code + metric, no resend |
 | result `invalid_document` / `binding_mismatch` / `result_inconsistent` | - | - | - | log code + metric (bug), no resend |
-| result 5xx / transport | - | - | - | resend the same bytes, backoff 250ms..8s, until `expires_at` |
+| result 5xx / 429 / transport | - | - | - | resend the same bytes, backoff 250ms..8s (429: at least `Retry-After`), until `expires_at` |
+| claim 429 | - | - | - | back off at least `Retry-After` |
+| any call 401 (`{"error"}`, no code) | - | - | - | stop the command, readiness fails, claim backs off at cap |
+| any other status/code, or unparseable body | - | - | - | fail closed: no effect, no new body, metric `unmapped_responses_total{route}` |
 | permit 5xx (not 503 fence) / transport | failed_retryable | provider_unavailable | none | submit (no effect was attempted) |
+
+The `cancel_requested=true` pre-flight row and the result `already_completed` row are unreachable on
+mctl-api `a9ca5814`; the runbook labels them "unreachable (defence)" so nobody reads them as
+tested server behaviour.
 
 Every mapping is unit-tested from a single table in `executor`. The runbook table is generated
 from, or tested against, that same table, so the two cannot drift.
@@ -310,7 +355,7 @@ while the bridge answers 404/401/403 or is unreachable. Liveness stays process-l
     never retried, and the result retry resends the same bytes and never re-executes.
   - Egress beyond mctl-api: the origin-pinned RoundTripper, no proxy and no redirects, tested with a
     second `httptest` server that must receive zero requests.
-  - Lost in-process dedupe on restart (open question): documented as a fake-only limit. A real
-    adapter needs durable dedupe; this is out of scope here.
-  - Mapping mismatch with mctl-api#957: the open question blocks merge until aligned. The table lives
-    in a single place in code.
+  - Lost in-process dedupe on restart: covered by reporting `unknown` on `permit_already_issued`
+    (owner decision 2026-11-09). A real adapter still needs durable dedupe; out of scope here.
+  - Mapping mismatch with mctl-api#957: the map is final within the frozen `result.schema.json`
+    enums and is posted to #957; the table lives in a single place in code.

@@ -26,16 +26,21 @@ or rebase that branch: its tree deletes `main`'s `internal/glovo/**`.
   `Revoke(key)`. Existing write-fault knobs apply to the new writes. There is still no `Pay`.
   — DoD: unit tests cover dedupe, timeout-after-apply, lost write and revoked session.
 - [ ] 4. Add `internal/bridgeclient`: `credential.go`, `transport.go` and `client.go` with
-  `Claim` / `WritePermit` / `SubmitResult` and `*APIError{Status, Code}` (depends on 2). — DoD:
+  `Claim` / `WritePermit` / `SubmitResult` and `*APIError{Status, Code, RetryAfter}` (depends on 2).
+  A code-less error body gives `Code=""`; the claim response is strictly decoded (exact fields, no
+  trailing data, `commands` a non-null array, 64 KiB cap = error). — DoD:
   an `httptest` test passes for each route; a request to another origin is refused before dialing;
-  redirects and proxy env are ignored; the credential is re-read per request and never formatted.
+  redirects and proxy env are ignored; the credential is re-read per request and never formatted;
+  each malformed claim body is an error, never an empty batch.
 - [ ] 5. Add `internal/executor` (depends on 2, 3). It holds the single outcome-map table from
   design.md and turns a parsed command plus a permit result into a `Result`. It enforces read-back
-  before `applied` and returns `unknown` on an ambiguous write. — DoD: a table-driven test covers
-  every row of the map.
+  before `applied`, returns `unknown` on an ambiguous write, on `permit_already_issued` and on any
+  pre-existing local effect record (`applied_prior_lease`), and fails closed on any unmapped
+  status/code. — DoD: a table-driven test covers every row of the map.
 - [ ] 6. Add `bridgeclient/poller.go` (depends on 4, 5). It implements the claim loop with jittered
-  backoff, the per-command state machine (parse, pre-flight, optional permit, execute, encode once,
-  submit with retry of the same bytes until `expires_at`), the per-tenant `fairness.Limiter`, and
+  backoff honouring `Retry-After`, the per-command state machine (parse, pre-flight, optional
+  permit, execute, encode once, submit with retry of the same bytes), two deadlines (lease deadline
+  for permit + effect, `expires_at` for result retries), the per-tenant `fairness.Limiter`, and
   stop-on-`lease_stale`/`command_expired`/`command_cancelled`/`command_not_found`. — DoD: poller
   tests against `bridgefake` pass with `-race`.
 - [ ] 7. Add `bridgeclient/bridgefake` (depends on 2). This is an `httptest` bridge with claim,
@@ -43,8 +48,12 @@ or rebase that branch: its tree deletes `main`'s `internal/glovo/**`.
   new token, `expires_at`, cancel, the permit fence modes (allow / refuse / unavailable /
   already-issued), result schema validation with the vendored schema, the
   `worker_identity`/`execution_id`/`attempt` binding check, a replay digest returning
-  `replayed:true`, `result_conflict`, injectable 5xx, and a request recorder. — DoD: the fake's own
-  tests assert each server rule listed in design.md "Current state".
+  `replayed:true` (also after lease expiry with the same token), `result_conflict`, injectable 5xx,
+  injectable code-less 429 (with `Retry-After`) and 401 bodies, malformed claim bodies, and a
+  request recorder. It MUST model mctl-api's effect rules: reclaim and cancel turn `permitted` into
+  `unknown`; `applied` without `permitted` returns 422 `result_inconsistent`; a permit when
+  `effect_state != none` returns 409 `permit_already_issued`. — DoD: the fake's own tests assert
+  each server rule listed in design.md "Current state" and these three effect rules.
 - [ ] 8. Rewrite `cmd/glovo-provider-worker` (depends on 6). `config.go` reads the bridge settings and
   refuses any `TEMPORAL_*` variable; `main.go` runs gates, health and the poller, with graceful stop
   bounded by `WORKER_STOP_TIMEOUT`. — DoD: `main_test.go` covers each startup refusal; the worker
@@ -63,8 +72,8 @@ or rebase that branch: its tree deletes `main`'s `internal/glovo/**`.
   `TEMPORAL_HOSTPORT`. — DoD: CI is green; no release/publish job was added.
 - [ ] 11. Open the PR from `main`, referencing #1262, #1236, mctl-api#968, mctl-agents#1044,
   mctl-api#957 and mctl-gitops#2457, with a note to close #1258 as superseded on merge. Use the merge
-  strategy `--merge`. — DoD: the PR body lists the outcome-map open question for mctl-api#957
-  alignment.
+  strategy `--merge`. — DoD: the PR body states that the outcome map is final within the frozen
+  `result.schema.json` enums, and the map is posted as a comment on mctl-api#957 before merge.
 
 ## Tests
 
@@ -93,14 +102,18 @@ or rebase that branch: its tree deletes `main`'s `internal/glovo/**`.
   carries the code only.
 - [ ] T11. Permit refused, one subtest each for `write_fence_refused`, `write_fence_unavailable`,
   `permit_already_issued` and `not_mutating`. Each has zero effects and the mapped
-  outcome/error_code with `provider_effect=none`.
+  outcome/error_code. `provider_effect` is `none`, except `permit_already_issued`, which is
+  `unknown` (owner decision 2026-11-09).
 - [ ] T12. Ambiguous write: `SetWriteLostOnce`, and separately `SetWriteTimeoutOnce`. The lost write
   gives `failed_terminal`/`unknown` with no second effect attempt and the ambiguous metric
   incremented. Timeout-after-apply is confirmed by read-back, giving `applied`.
-- [ ] T13. Dedupe: re-delivering a mutating command whose `command_id` already has an effect gives
-  `applied` with no permit call and no second write.
-- [ ] T14. `cancel_requested=true`, an expired command, `command_cancelled` and `command_expired`
-  all produce no effect, with the expected result or no result.
+- [ ] T13. Re-delivery after reclaim: the fake grants a permit, the worker applies the effect, the
+  lease expires and the fake reclaims (server `effect_state` `permitted -> unknown`). The re-claimed
+  command gives `failed_terminal`/`internal`/`unknown` with `error_detail=applied_prior_lease`, no
+  permit call, no second write, and the fake accepts the result (no 422).
+- [ ] T14. `cancel_requested=true` (defensive, injected by the fake only), an expired command,
+  `command_cancelled` and `command_expired` all produce no effect, with the expected result or no
+  result.
 - [ ] T15. Kill switch and breaker: no permit, no effect, `failed_retryable`/`provider_unavailable`.
 - [ ] T16. Credential canary: the credential file holds a `leakcheck` canary. Captured logs, errors,
   metric output and every recorded request body contain no canary. The fake asserts it saw the
@@ -113,6 +126,21 @@ or rebase that branch: its tree deletes `main`'s `internal/glovo/**`.
   link the provider; the planted-import detector works.
 - [ ] T20. Retained gates: the `fakeonly` build-tag and runtime tests, and the CI negative image
   runs (no `FAKE_ONLY`, `GLOVO_SESSION_TOKEN`, `TEMPORAL_HOSTPORT`).
+- [ ] T21. Mutation check for T13 and the fake's effect rules: with step 4.1 reverted to "report
+  `applied`", T13 fails on the fake's 422; with the fake's reclaim rule removed, the fake's own test
+  fails. Record both in the PR body.
+- [ ] T22. 429 per route: claim waits at least `Retry-After`; permit 429 gives no effect and
+  `failed_retryable`/`provider_unavailable`/`none`; result 429 resends identical bytes. The steady
+  request rate at defaults stays under 120/min.
+- [ ] T23. Fail closed: a code-less 401, an unmapped status/code and an unparseable error body each
+  give no effect and no result with a different body, and increment `unmapped_responses_total` or
+  stop as mapped.
+- [ ] T24. Malformed claim: missing `commands`, `"commands": null`, a non-array `commands`, an extra
+  top-level field, trailing data and a body at the 64 KiB cap are each a claim error, not an empty
+  batch; a command without `lease_token` is dropped with the metric and not executed.
+- [ ] T25. Deadlines: a result retry continues past the lease deadline and succeeds as a same-token
+  replay before `expires_at`; a permit is never requested after the lease deadline; `lease_stale`
+  stops result retries.
 
 ## Rollback
 
