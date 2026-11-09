@@ -1,0 +1,8 @@
+# Contract fixture: whether the portal submits tenant-class workflows through
+# mctl-api (`on`) or directly (`off`). Updated by the owner after the matching
+# portal release; the live value is checked by the owner, not by CI.
+#
+# While this says `off`, tests/test_submit_contract_fixtures.py requires every
+# tenant to be in write mode `legacy` (or to leave the mode unset, which means
+# `legacy`).
+submitViaMctlApi: "off"

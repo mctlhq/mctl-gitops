@@ -1,0 +1,19 @@
+{
+  "note": "Every expectation below records the policy state that is deployed today, read from the committed HCL. A row is an observation of existing access, not an authority introduced by the change that adds this file, and recording a row is not a statement that its breadth is intended or a change to it. Narrowing a policy is a separate change that edits the HCL and the matching row together.",
+  "base_dir": "infrastructure/k3s-preview/cluster-bootstrap/vault-config",
+  "identities": {
+    "external-secrets": {"policies": ["vault-policy-external-secrets-read.hcl"]},
+    "argo-workflow": {"policies": ["vault-policy-argo-workflow-teams-rw.hcl"]}
+  },
+  "expectations": [
+    {"identity": "external-secrets", "path": "secret/data/platform/backstage/ghcr-credentials", "effective": ["read"]},
+    {"identity": "external-secrets", "path": "secret/data/platform/r2-loki-argo", "effective": ["read"]},
+    {"identity": "external-secrets", "path": "secret/data/platform/github-app", "effective": ["read"]},
+    {"identity": "external-secrets", "path": "secret/data/platform/github-app-agents", "effective": ["deny"]},
+    {"identity": "external-secrets", "path": "secret/metadata/platform/github-app-agents", "effective": ["deny"]},
+    {"identity": "external-secrets", "path": "secret/data/teams/example/service", "effective": []},
+    {"identity": "external-secrets", "path": "secret/metadata/platform/backstage", "effective": ["list", "read"]},
+    {"identity": "argo-workflow", "path": "secret/data/teams/example/service", "effective": ["create", "delete", "list", "read", "update"]},
+    {"identity": "argo-workflow", "path": "secret/data/platform/example", "effective": ["create", "delete", "list", "read", "update"]}
+  ]
+}

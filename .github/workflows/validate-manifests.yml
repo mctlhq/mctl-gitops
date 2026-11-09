@@ -124,6 +124,21 @@ jobs:
           scripts/validate-argocd-project-scope.py --strict default \
             "$tmpdir/bootstrap-eval.yaml:root-app" "$tmpdir/argocd.yaml:argocd-self-managed"
 
+      # Validate project scope for generated applications: expand the `apps`
+      # and `tenants` ApplicationSets over the real directories, render
+      # base-service per service and check each object against the resolved
+      # project, check directory and reserved-name consistency and the
+      # inventory of places that spell the project name `apps`. The unit tests
+      # prove each check green on this tree and red on a mutation.
+      - name: Validate project scope for generated applications
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          helm template root platform-gitops/bootstrap -f platform-gitops/bootstrap/values.yaml > "$tmpdir/bootstrap.yaml"
+          python3 -m pip install --quiet pyyaml
+          python3 tests/test_generated_app_scope.py
+          scripts/validate-generated-app-scope.py --bootstrap "$tmpdir/bootstrap.yaml"
+
       # issue-903: otelCollector.eval.enabled is false by default, so this
       # overlay is the only place the eval-namespace/eval-candidates
       # templates and a multi-backend fan-out ever render in CI. Proves the
@@ -560,6 +575,12 @@ jobs:
         # only install with --require-hashes from the pinned requirements file.
         run: python3 tests/test_pip_installs_hashed.py
 
+      - name: Submit contract fixtures match the repository
+        # mctlhq/mctl-gitops#1033: the workflow-namespace and portal-submit
+        # fixtures, the shipped templates and the per-tenant write mode must
+        # agree. Red on each named mutation, exit 2 when a file cannot be read.
+        run: python3 -I tests/test_submit_contract_fixtures.py
+
       - name: Release gate (selftest, tree, mutation tests)
         # mctlhq/mctl-agents#1007: the worker group may not be bumped
         # partially, below its image floor, or without Recreate on the control
@@ -585,6 +606,17 @@ jobs:
         run: python3 tests/test_release_preflight.py
       - name: Read-only workflow steps hold no write credential
         run: python3 tests/test_read_steps_no_credential.py
+      - name: Ledger of references to the gitops write credentials
+        # Shrink-only: a new reference, or a ledger row whose reference is
+        # gone, fails (tracker: mctlhq/mctl-gitops#1033). Renders the tenant
+        # chart, so it needs the Helm install above.
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_gitops_write_credential_holders.py
+      - name: Tenant-class templates and Secret readers, by credential name
+        run: |
+          python3 -m pip install --quiet --require-hashes -r scripts/requirements-ci-hashed.txt
+          python3 tests/test_gitops_tenant_template_write_set.py
       - name: Unit-test gitops-bump inputs and its edit check
         run: python3 tests/test_gitops_bump_inputs.py
 
@@ -655,6 +687,11 @@ jobs:
         # absent; a denied or unreachable Vault fails the step instead of
         # being reported as "not found, skipping".
         run: python3 tests/test_wft_delete_tenant_vault.py
+
+      - name: Vault policy files parse and carry the writer-prefix rules
+        # Repo text only: structure of every vault-policy-*.hcl, the read-only
+        # writer policy, and the deny on the writer prefix in two policies.
+        run: python3 tests/test_vault_policy_files.py
 
       - name: Tenant workflows log in to Vault with their own tenant role
         # A template reachable from a tenant namespace picks its Vault role
