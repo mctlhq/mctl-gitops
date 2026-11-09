@@ -217,8 +217,9 @@ Data hygiene
   amend #1044 to drop `release_reservation` (activity, T12 and the requirement line) in
   the same wave as OPEN-985-3. If the owner prefers to keep it, its semantics must equal
   `cancel` and it is added to the §2a route table. #1044 is not edited here.
-- OPEN-985-5. Who owns the transition from a completed command result to order `closed`
-  (or `unknown` after a timeout)?
+- OPEN-985-5 (closed, round 6 G2). The transition from a terminal command result to order
+  `closed` or `unknown` belongs to #985 `read_command_result` (design §2a, "Result to
+  order"), through #988 `MarkClosed` and `MarkUnknown`.
 - OPEN-985-6. How the migration role and the one Glovo runtime role of mctl-api#957
   design §6d.1 are provisioned (CNPG managed roles in mctl-gitops). Until they exist
   with exactly those grants, the §4 proof fails (it checks every grant) and the routes
@@ -226,10 +227,12 @@ Data hygiene
 - OPEN-985-7. The live pod env of mctl-api was not observed. The startup proof covers it
   either way.
 - OPEN-985-9 (new, round 5; recommendation: accept the mapping of design §2a). #1044's M9 table is keyed on a result triple that cancelled and expired commands never have. This slice returns the triple itself (`cancelled`: `cancelled`/`none`/`none`; `expired`: `failed_terminal`/`none`/`expired`; any other `effect_state`: `provider_effect: unknown`). The #1044 AMEND confirms it and pins the response fields in `ASSISTANTS_API_CONTRACT`; if it prefers a status/effect_state pre-table instead, this route returns `status` and `effect_state` only and the triple stays absent.
-- OPEN-985-8. The command payload of a Glovo `place_order_fake` is exactly the order's
-  final approval-basket bytes, with no wrapper (fixed by mctl-api#957 design §6d.3,
-  amended (c)), so #989's fence recomputes the fingerprint from what is written.
-  v1alpha1 fixes the payload to `{item_codes, quantity_total, note}` without prices, and
-  #1059 covers reads only. Still open: whether #1059 or a separate contract issue adds
-  this write schema and version (= mctl-agents OPEN-1059-1). Until then dispatch is
-  `not_ready`.
+- OPEN-985-8 (closed, round 6 G1). The command payload of a Glovo `place_order_fake` is
+  exactly the order's final approval-basket bytes, with no wrapper (mctl-api#957 design
+  §6d.3), so #989's fence recomputes the fingerprint from what is written. The schema is
+  owned by mctl-agents#1059 (`command-place-order-fake.schema.json`, `schema_version`
+  `bridge.mctl.ai/v1alpha2`); this slice vendors it with its fixtures and `SHA256SUMS`
+  pin and validates the enqueued command against it. Dispatch is `not_ready` until that
+  vendored copy exists.
+- OPEN-985-11 (round 6; recommendation: a separate const `MCTL_GLOVO_WRITE_FENCE_ENABLED`, distinct from the route flag, set only by the gitops PR that lifts mctl-gitops#2457). Fence precondition 2 ("hold #2457 lifted") has no machine-checkable signal, so `SetFence` gating and T17 cannot be implemented as written. Order of the two flags: route mount first, fence last; T17 asserts `SetFence` is not called with it false while the route flag is true; docs/glovo-control.md (task 10) names it.
+- OPEN-985-12 (round 6; recommendation: vendored copy with `SHA256SUMS` provenance, pinned commit, checked by a #1044 test). The contract fixture set `internal/glovo/control/contract/*.json` has an owner but no consumer picks it up. Specify the transfer to mctl-agents, list file names per route, and make the matching edits in #1044 (replace the #953/#954 wording, add a pin-and-vendor task and a test that every M10 code and the replay header appear) and #990 (a hop or provenance check for dispatch, cancel, `read_command_result` and `read_approval`).

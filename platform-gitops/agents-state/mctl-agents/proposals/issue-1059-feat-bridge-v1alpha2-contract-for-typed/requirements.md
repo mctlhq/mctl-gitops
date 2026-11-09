@@ -141,8 +141,9 @@ Hygiene
   Temporal signal.
 - `prepare`: it stays a write in mctl-api (mctlhq/mctl-api#957 D5) and is not a read kind.
 - Changing v1alpha1, or moving `read_status` to v1alpha2.
-- A v1alpha2 write command (OPEN-1059-1; its shape, the approval basket exactly, is
-  fixed by mctl-api#957 §6d.3).
+- Any write command other than the Glovo `place_order_fake` command of
+  `command-place-order-fake.schema.json` (round 6, G1; `cancel_order_fake` and `prepare`
+  are not defined here).
 - Real provider access of any kind.
 - Changing `orchestrator/context_snapshot.canonical_json`, which is a different, non-JCS
   canonical form used by context snapshots.
@@ -153,11 +154,10 @@ Closed by the amendment: the `workflow_id`/#1045 question (P3-3), the ref prefix
 (P3-7), the per-kind fields (P1-3, §Crosswalk), the size cap (P1-1), and `lease_token`
 (kept on the result, never persisted by a consumer).
 
-- OPEN-1059-1 (narrowed (c)). The shape is fixed: the `place_order_fake` command
-  payload is exactly an approval basket, with no wrapper (mctl-api#957 §6d.3), and the
-  #989 fence parses it whole. The v1alpha1 payload is `{item_codes, quantity_total,
-  note}`. Still open: whether this issue adds that v1alpha2 write command schema or a
-  separate contract issue does (mctl-api OPEN-985-8).
+- OPEN-1059-1 (closed, round 6 G1). This issue owns the write schema:
+  `command-place-order-fake.schema.json`, whose `payload` is the approval basket by
+  `$ref` (mctl-api#957 §6d.3), with two fixtures and one invalid fixture per wrong
+  payload shape. mctl-api#985 vendors it (mctl-api OPEN-985-8, OPEN-989-6 point here).
 - OPEN-1059-2. Who implements the versioned claim envelope in mctl-api and the declared
   versions in `BridgeProviderConfig`: #986 (proposed there) or a separate slice. The
   envelope's shape is fixed here (design §Claim response).
@@ -168,3 +168,5 @@ Closed by the amendment: the `workflow_id`/#1045 question (P3-3), the ref prefix
   foreign-`pho_` and a foreign-cursor test against its read path. Consumer duty 10 is
   implemented and tested in mctl-api#957 (T7a), not here; this item is the provider half and
   stays open until #1262 lands it.
+- OPEN-1059-4 (round 6; recommendation: replace the "exact list a consumer vendors" sentence with a per-consumer vendor table: consumer, files, location, who owns the single basket copy). The vendoring rule contradicts what #986 and #988 vendor; nobody vendors `claim-response.schema.json` (OPEN-986-4) and `pattern-parity.json` has no vendor. State the canonical basket location once (mctl-api#988 `internal/glovo/basket/contract/`), name who consumes the `claim/v1alpha2` string, and fix the matching sentences in #986 and #988.
+- OPEN-1059-5 (round 6; recommendation: a normative README precheck rule list with one raw-text must-reject entry per rule). The raw-bytes pre-check lacks UTF-8 strictness, BOM, exactly one object root, no trailing bytes, no raw control characters in strings, a depth cap and `-0` handling, and `integer positions` is not defined (recommendation: schema-path based). Add the rules and entries to T6 and task 4.

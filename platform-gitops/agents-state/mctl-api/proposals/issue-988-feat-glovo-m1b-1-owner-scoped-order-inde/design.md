@@ -153,6 +153,7 @@ func (s *Store) ScopeFromRefs(ctx, q Querier, tenantRef, principalRef string) (S
 func (s *Store) MarkDispatched(ctx, tx, o *Order, commandID string, a Actor) error // also writes the place_order_fake effect row
 func (s *Store) MarkCancelled(ctx, tx, o *Order, a Actor) error
 func (s *Store) MarkUnknown(ctx, tx, o *Order, a Actor) error
+func (s *Store) MarkClosed(ctx, tx, o *Order, a Actor) error // dispatched -> closed only (round 6, G2)
 
 // join refs (owned here; #957 calls it)
 func (s *Store) MintJoinRefTx(ctx, tx, kind JoinKind, tenant, principalID, subjectID string) (string, error)   // insert-or-read
@@ -268,7 +269,10 @@ That is eight triggers and five functions.
   non-empty and resolves, through the same join as #989 `ExecutionBindingTx`
   (`work_item_executions` to `work_items`), to the order's `tenant` and
   `owner_principal_id`. It runs as the invoker and needs only the `SELECT` on those
-  tables that #957 §6d.1 already grants. Without it the runtime role, which holds
+  tables that #957 §6d.1 grants through #989 task 2b. Until #989 lands, `Ready` reports
+  `not_ready` (it checks `has_table_privilege(runtimeRole, 'public.work_items' and
+  'public.work_item_executions', 'SELECT')`), so `Create` is never reachable without
+  the guard's inputs (round 6, G3). Without it the runtime role, which holds
   `INSERT`, could create an order already `dispatched`, with a fingerprint that matches
   no snapshot or an execution of another owner, and the update guards would never run.
 - `glovo.order_snapshots_guard()` (`BEFORE INSERT` on `glovo.order_snapshots`, amended
@@ -316,11 +320,13 @@ That is eight triggers and five functions.
   The read payload (`payload_digest`) is never a fingerprint input.
 - Amended (c): the only entry points are `basket.Parse(raw []byte) (Approval, []byte,
   error)` and `basket.Fingerprint(canonical []byte) string`. `Parse` runs the #1059
-  raw-bytes pre-check (shared with #986, `internal/bridge/rawcheck.go`), validates
+  raw-bytes pre-check (shared with #986 through `internal/jcs.Precheck`), validates
   against the vendored `approval-basket.schema.json` with `additionalProperties: false`
   (so an extra field such as `item_name`, or `quantity: 1.0`, is refused), runs
-  `Validate`, and returns the RFC 8785 bytes of the validated input. The #1059 files are
-  vendored once, in #986's `internal/bridge/schema/v1alpha2`, and referenced here.
+  `Validate`, and returns the RFC 8785 bytes of the validated input. The #1059 basket files are
+  vendored once, here, in `internal/glovo/basket/contract/` (#986 and #985 pin the same
+  sha256 and do not copy them). The write command schema that wraps this basket by `$ref`
+  is #1059's `command-place-order-fake.schema.json`, vendored by #985.
 - `basket.Fingerprint(canonical) = "sha256:" + hex(sha256(canonical))`, with RFC 8785 from the
   `internal/jcs.Canonicalize` of this slice (round 4, N3; #986 imports it). Prices and amounts are part of `t`, so
   a price change changes the fingerprint.
@@ -357,7 +363,7 @@ That is eight triggers and five functions.
 | `finalized` | `dispatched` | `MarkDispatched(cmd_)` (writes the effect row) | #985 |
 | `dispatched` | `cancelled` | `MarkCancelled` (bridge effect `none`) | #985 |
 | `dispatched` | `unknown` | `MarkUnknown` | #985 |
-| `dispatched`, `unknown` | `closed` | owner named in OPEN-985-5 | — |
+| `dispatched` | `closed` | `MarkClosed` | #985 `read_command_result` on a terminal effect (round 6, G2; the `unknown -> closed` edge stays in the trigger matrix but has no caller) |
 
 Every write CASes on `version` and `state`; the trigger enforces the same matrix for raw
 SQL. Approval state is never stored on the order.
@@ -371,7 +377,7 @@ revoke.
 |---|---|---|
 | `Create`, `AppendSnapshot`, `Finalize`, `BindApproval` | yes (L2 held by the caller; revoked, expired, no connection and a moved install revision are refused) | each commits the owner to a basket or an approval |
 | `MarkDispatched` | no | #985 re-reads the connection itself in dispatch step 8, before `Enqueue`; this method only records the command id and the effect row |
-| `MarkCancelled`, `MarkUnknown` | no, and must not | a revoked connection is exactly when these run (the revoker cancels open commands); refusing them would strand the order |
+| `MarkCancelled`, `MarkUnknown`, `MarkClosed` | no, and must not | a revoked connection is exactly when these run (the revoker cancels open commands); refusing them would strand the order |
 | `Get`, `Snapshot`, `LockOrder`, control-path reads | no | reads work after revoke (T4) |
 
 ### 7. Refusal map (extends `glovo.Code`)

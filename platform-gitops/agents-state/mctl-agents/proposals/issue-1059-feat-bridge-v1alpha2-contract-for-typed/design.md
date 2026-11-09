@@ -18,7 +18,7 @@ passages are edited.
 | P3 F6 (stale passages) | The memo and "not observable" passages in Current state now state the verified PROVENANCE match; the `jcs-digest.json` categories are listed inline |
 | P3 F7 (size numbers) | Preview `display` aligned to 0..30 and `unavailable_items` 0..30, disjoint from the basket lines; fees and discount bounded. Re-measured: preview 8,273 B, basket read 7,127 B, approval basket 3,135 B, history 10,673 B. The 12,288-byte payload cap is defense in depth that only a schema bypass can reach; over-cap is `invalid_document` at the mctl-api route and `payload_too_large` in the reference validator |
 | P3 F8 (#986 vendors names this contract does not produce) | `SHA256SUMS` is the exact list a consumer vendors; mctl-api#986 vendors that list and nothing else |
-| OPEN-1059-1 (write payload) | Narrowed: the shape is fixed by mctl-api#957 §6d.3 (the `place_order_fake` payload is exactly an approval basket, no wrapper). Still open: which issue and version adds the write-command schema |
+| OPEN-1059-1 (write payload) | Closed in round 6 (G1): this issue owns the write schema. `command-place-order-fake.schema.json` (below) is the only definition of the Glovo `place_order_fake` command; its `payload` is the approval basket by `$ref`. mctl-api#985 vendors it; no other issue defines it |
 
 ## Amendment 2026-11-09 (b)
 
@@ -118,6 +118,7 @@ docs/contracts/bridge/v1alpha2/
   read-command.schema.json       # $id https://mctl.ai/schemas/bridge/v1alpha2/read-command.schema.json
   read-result.schema.json        # $id https://mctl.ai/schemas/bridge/v1alpha2/read-result.schema.json
   approval-basket.schema.json    # $id https://mctl.ai/schemas/bridge/v1alpha2/approval-basket.schema.json
+  command-place-order-fake.schema.json  # $id https://mctl.ai/schemas/bridge/v1alpha2/command-place-order-fake.schema.json
   fixtures/
     read-command.{history,preview,basket}.valid.json
     read-command.with-{order-ref,execution-id,workflow-id}.json      # invalid
@@ -140,6 +141,8 @@ docs/contracts/bridge/v1alpha2/
     claim-response.{extra-field,too-many}.json                 # invalid
     approval-basket.valid.json
     approval-basket.{unsorted,duplicate-item,total-mismatch,display-field}.json  # invalid
+    command-place-order-fake.valid.json
+    command-place-order-fake.{v1alpha1-payload,wrapped-payload}.json  # invalid
   vectors/
     jcs-digest.json              # positive JCS vectors
     pattern-parity.json          # accepted/rejected strings per schema pattern (Go RE2 = Python)
@@ -284,11 +287,19 @@ changed (different fingerprint). Its `must_reject` cases are: unsorted lines, a 
 `item_code`, a wrong subtotal, a wrong total, an extra `item_name` field, and
 `quantity: 1.0`, and a lowercase and a non-ASCII `item_code`.
 
-The command payload of a Glovo `place_order_fake` write is not part of this read
-contract, but its shape is fixed (mctl-api#957 §6d.3, amended (c)): the payload **is**
-an approval basket, exactly this schema, with no wrapper object and no other top-level
-field, so the #989 fence parses it whole. Which issue and version adds that write
-command schema is OPEN-1059-1.
+### Write command (`command-place-order-fake.schema.json`)
+
+This issue owns the one definition of the Glovo `place_order_fake` command (round 6,
+G1; the shape is fixed by mctl-api#957 §6d.3). `schema_version` const
+`bridge.mctl.ai/v1alpha2`, `additionalProperties: false`, `kind` const
+`place_order_fake`, the v1alpha1 envelope fields `execution_id`, `work_item_id`,
+`order_ref`, `intent_hash` and a required `approval_ref` (`^aar_`), and `payload`,
+which is `{"$ref": "approval-basket.schema.json"}`: the approval basket exactly, with no
+wrapper object and no other top-level field, so the #989 fence parses it whole. The
+v1alpha1 payload `{item_codes, quantity_total, note}` is invalid under it
+(`command-place-order-fake.v1alpha1-payload.json`). A provider receives it only if it
+declares `bridge.mctl.ai/v1alpha2` (§Claim response). mctl-api#985 vendors the file with
+its fixtures and the pinned `SHA256SUMS` entry; #957, #988 and #989 only reference it.
 
 ### Crosswalk to mctl-api#957
 

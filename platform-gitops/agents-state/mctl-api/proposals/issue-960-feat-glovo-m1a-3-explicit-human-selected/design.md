@@ -365,7 +365,7 @@ admin path issued by `ApplySchema`. Table shape, for reference:
 `glovo_pilot_allowlist(tenant_id TEXT NOT NULL, principal_id TEXT NOT NULL
 CHECK (principal_id LIKE 'prn\_%'), added_by TEXT NOT NULL, added_at
 TIMESTAMPTZ NOT NULL, UNIQUE (tenant_id, principal_id))`. There is no
-wildcard and no tenant-only row. Admin-only routes (`requireAdmin`):
+wildcard and no tenant-only row. Human-admin-only routes (guard `isHumanAdmin`, `handlers_action_approvals.go:97-101`: admin and not service user, not relay or surface identity, not agent-run token; no `requireXAdmin` helper that tests only `IsAdmin()`):
 `PUT|DELETE /api/v1/glovo/pilot/{tenant}/principals/{prn}`. No route
 operates on a tenant without a principal. The tenant must exist (404 on a
 definite miss, 503 on a gitops read failure). Removing a row takes effect on

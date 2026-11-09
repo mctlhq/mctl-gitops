@@ -215,3 +215,4 @@ Schema safety
   the only guard.
 - OPEN-959-2. Provisioning of the migration and runtime roles (shared with
   OPEN-985-6, OPEN-988-3, OPEN-989-2).
+- OPEN-959-3 (round 6; recommendation: add Go declarations once in design Types and task 1). Only `Connection` and `Install` have a field list (round 6 G4). `AuditEvent`, `ConnectResult`, `ConnectInput`, `RefusalEvent`, `GrantRow` and `Option` still need declarations, and the place where a released `gsr_` ref is returned (a field on the ended `Connection` or a separate `[]SecretRef`) must be stated, so that #957 section 6d.4 "created by #959 task 1" is true.

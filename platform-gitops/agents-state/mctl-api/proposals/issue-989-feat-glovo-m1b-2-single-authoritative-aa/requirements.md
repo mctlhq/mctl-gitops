@@ -200,5 +200,7 @@ and refused stored as `denied` (kept).
   owner accepts this for fake-only M1, or asks for a keyed digest before real data.
 - OPEN-989-7 (new, round 4; recommendation: 120 s). `ReservePermitMargin`, the minimum remaining `fresh_until` that Reserve requires so that a reserved approval is not stranded by a freshness window that closes before the permit. A longer margin refuses more late dispatches; a shorter one leaves more rows to the sweeper.
 - OPEN-989-6. The `place_order_fake` command payload is exactly the approval basket
-  (#957 §6d.3, fixed in (c)); which contract issue and version adds that write schema is
-  OPEN-985-8 = mctl-agents OPEN-1059-1.
+  (#957 §6d.3, fixed in (c)); the schema is owned by mctl-agents#1059
+  (`command-place-order-fake.schema.json`, round 6 G1) and vendored by #985 (closed;
+  OPEN-985-8 = OPEN-1059-1).
+- OPEN-989-8 (round 6; recommendation: a Sweeper started from `main.go` by #985 task 9, as a second collaborator, not a change to `bridge.Expirer`). `receipt.Sweeper` has no bridge-side hook and no owner, and design section 5 says "no new interface beyond PreLock" while saying it runs in the Expirer tick. Name the hook and its owner, add it to #985 tasks and #957 section 6d.4, and remove the contradicting sentence.

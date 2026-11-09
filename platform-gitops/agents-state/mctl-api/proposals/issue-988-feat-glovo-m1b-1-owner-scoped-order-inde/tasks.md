@@ -1,7 +1,7 @@
 # Tasks: issue-988-feat-glovo-m1b-1-owner-scoped-order-inde
 
 Blocking dependencies (amended 2026-11-09 (b); round 4: this slice provides `internal/jcs` and depends on neither #986 nor #985): mctl-agents#1059 merged with the approval
-basket and fingerprint vectors (OPEN-988-1). #959 merged first (round 5, F1): it provides `glovo.Owner`, `glovo.Connection`,
+basket and fingerprint vectors (OPEN-988-1). Round 6 (G3): until #989 task 2b grants `SELECT` on `public.work_items` and `public.work_item_executions`, `Ready` is `not_ready` and the `Create` tests (T9, T13, T17) use raw-SQL `wi_`/`we_` fixtures with explicit test grants; the real-store T13 case runs in #989. #959 merged first (round 5, F1): it provides `glovo.Owner`, `glovo.Connection`,
 `dbq.Querier` and the grant registry, so this slice uses no fake `Connections` and no local `Querier`.
 
 - [ ] 1. Round 5 (F1): no new `glovo.Code` constants; #959 task 1 is the single owner of the enum. DoD: one table test pins that every code of design §7 is in that enum and its code -> HTTP status -> wire string.
@@ -40,7 +40,7 @@ basket and fingerprint vectors (OPEN-988-1). #959 merged first (round 5, F1): it
 - [ ] 6. `BindApproval` (amended (c): `RecordEffect` withdrawn; the effect row is written
   by `MarkDispatched`, task 7).
 - [ ] 7. Control path: `PeekOrderScope`, `LockOrderForControl`, `ScopeFromRefs`,
-  `MarkDispatched`, `MarkCancelled`, `MarkUnknown`, all with `Actor`.
+  `MarkDispatched`, `MarkCancelled`, `MarkUnknown`, `MarkClosed` (`dispatched -> closed` only, round 6), all with `Actor`.
 - [ ] 8. `MintJoinRefTx` and `LookupJoinRefTx` for `tnr_`, `prr_` and `irv_` (no `ordr_` kind: the ref is the order's own column)
   (single owner of `glovo.join_refs`; amended (c)).
 - [ ] 9. Docs in package comments: the lifecycle table, the refusal map, and a pointer to

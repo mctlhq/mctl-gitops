@@ -2,12 +2,13 @@
 
 Blocking dependencies (amended 2026-11-09 (b); round 4, X-3: #986 merges before this slice and
 provides `bridge.ApplyReadSchemaTx`):
+- #957 task A14, `glovojoin.ControlStartTx` (merge order #957 §6d.1; `control` imports `glovojoin`, never the reverse; round 6, G3);
 - the amended #959 store, with tx-scoped `LockOwnerShared` and `LiveConnectionTx`,
   `Ready`, `MembershipRevocationWired`, and connection-ending paths that call the hook
   in the same tx (mctl-api#957 design §6d.4);
 - the #988 order index (control-path methods);
 - the amended #989 methods and `receipt.Fence`;
-- the #1059 approval-basket payload for Glovo `place_order_fake` (OPEN-985-8);
+- the vendored #1059 `command-place-order-fake.schema.json` and approval basket (OPEN-985-8, closed);
 - #987, which drops the bridge's `AUDIT_DB_URL` fallback.
 
 With any of them missing, the code merges with nil collaborators and answers
@@ -52,6 +53,8 @@ With any of them missing, the code merges with nil collaborators and answers
 - [ ] 4. Bridge changes in `internal/bridge` (depends on 2):
   - `WriteFence.PreLock(ctx, tx, c bridge.Caller, commandID)`, called by `permitTx`
     before `lockOwned`, with a no-op on `refusingFence`;
+  - (round 6, G2) `bridge.Store.CommandEffect(ctx, q, tenants, commandID)`: read-only; a
+    foreign tenant, a non-`place_order_fake` kind and an absent id are all `not_found`;
   - (amended (c)) `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole)` under the
     migration role: `bridgeSchema`, the `bridge_commands_mutating_approval` partial
     unique index, the `bridge_colocation_probe` table, `bridge_schema_version` (the mode
@@ -75,7 +78,9 @@ With any of them missing, the code merges with nil collaborators and answers
   becomes `unknown`).
 - [ ] 5. Implement `Dispatcher.Dispatch` exactly as in design §5 (depends on 2, 4),
   including the explicit `Sequence` and the refusal of `created=false`. DoD: every write
-  commits or rolls back together.
+  commits or rolls back together. It vendors #1059 `command-place-order-fake.schema.json`
+  with its fixtures and `SHA256SUMS` pin (OPEN-985-8, closed) and a test validates the
+  enqueued command against it, with the vendored basket schema reached by `$ref`.
 - [ ] 6. Implement `Dispatcher.Cancel` as in design §6 (depends on 2, 4):
   - `RevokeGlovoApprovalTx` before dispatch;
   - after `Store.Cancel`, effect `none` gives order `cancelled` and receipt `unknown`;
@@ -89,7 +94,7 @@ With any of them missing, the code merges with nil collaborators and answers
   wiring (task 9). DoD: none here.
 - [ ] 8. Add the HTTP layer in `internal/api/handlers_glovo_control.go` and `router.go`
   (depends on 1, 5, 6):
-  - the four routes of design §2a;
+  - the four routes of design §2a, including the round 6 result-to-order transition (`MarkClosed` / `MarkUnknown` on a terminal command) and, in task 4, `bridge.Store.CommandEffect` (read-only, for #957 §3a);
   - `glovoControlWorkerGate` and `requireGlovoControlWorker`;
   - strict bodies;
   - `Idempotent-Replayed` on replay;

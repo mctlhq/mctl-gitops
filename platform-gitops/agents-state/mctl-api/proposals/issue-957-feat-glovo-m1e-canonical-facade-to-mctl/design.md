@@ -1,5 +1,34 @@
 # Design: issue-957-feat-glovo-m1e-canonical-facade-to-mctl
 
+## Amendment 2026-11-09 (c), round 6 (final, targeted) of the AMEND PR
+
+Owner decision: only four groups are fixed now; every other round-5 finding is recorded as an OPEN item in its owning proposal. Where this section and older text disagree, this section wins.
+
+| Group | Change |
+|---|---|
+| G1 (X-2, write command schema) | One owner: mctl-agents#1059 `command-place-order-fake.schema.json` (`bridge.mctl.ai/v1alpha2`, payload = the approval basket by `$ref`). #985 vendors it; #957, #986, #988, #989 reference it. OPEN-1059-1, OPEN-985-8 and OPEN-989-6 are closed |
+| G2 (X-1, F1, status bodies) | §3a: this slice owns the `GET /connection` and `GET /orders/{order_id}` bodies and every wire value; `outcome` comes from #985 `bridge.Store.CommandEffect`; #985 `read_command_result` owns `dispatched -> closed\|unknown` through #988 `MarkClosed` / `MarkUnknown` (OPEN-985-5 closed); `handoff_url` and `provider_account_label` are omitted from these bodies |
+| G3 (F3, #988 P2-2) | Merge order puts A13/A14 (`glovo.control_starts`, `glovojoin.ApplySchema`, `ControlStartTx`) before #986 and #985; #985 lists A14 as a blocking dependency; package direction `control` imports `glovojoin`, and `Readiness` takes an injected `func`; #988 `Ready` is `not_ready` until #989 task 2b grants the `SELECT`s |
+| G4 (#959 P2-3, P2-1) | `Transition` to `active` is `invalid_request`; CHECK `glovo_connections_active_expiry_check`; `Connection` and `Install` fields listed once in #959 Types (remainder OPEN-959-3). #960 N1 (one line): the allowlist routes use `isHumanAdmin` with T21a-T21d |
+
+Open items recorded in round 6 (one recommendation each, in the owning proposal's requirements.md):
+
+| Id | Proposal | Round-5 finding | Recommendation in one line |
+|---|---|---|---|
+| OPEN-961-1 | #961 | R5-1 | Connect resolves key K through a #959 read-only replay lookup before branching; fix the hash text |
+| OPEN-961-2 | #961 | R5-2 | own `connect.ApplySchema` entry point, registered in the §6d.1 chain |
+| OPEN-961-3 | #961 | R5-3 | a #961 wiring task for `WithEndPurger`, `Sweep`, `connect.Service`; name it in #985 task 9 |
+| OPEN-961-4 | #961 | R5-4 | #959 `LiveConnection*` return the lapsed `*Connection` with `connection_expired` |
+| OPEN-985-11 | #985 | F2 | `MCTL_GLOVO_WRITE_FENCE_ENABLED`, set by the gitops PR lifting #2457; route first, fence last |
+| OPEN-985-12 | #985 | F3 | vendor the control contract files into mctl-agents with `SHA256SUMS`, checked by #1044 and #990 |
+| OPEN-986-4 | #986 | P2-1 | vendor `claim-response.schema.json` and pin the envelope strings; extend T7c |
+| OPEN-986-5 | #986 | P2-2 | one canonical location per vector file, with sha256 pin tests |
+| OPEN-988-5 | #988 | P2-4 | requirement, CHECKs and T20 for `join_refs` mint and lookup |
+| OPEN-989-8 | #989 | N2 | Sweeper started from `main.go` by #985 task 9; drop the "no new interface" sentence |
+| OPEN-1059-4 | #1059 | R5-2 | per-consumer vendor table; one basket copy location |
+| OPEN-1059-5 | #1059 | R5-3 | normative pre-check rule list with a raw-text must-reject entry per rule |
+| OPEN-959-3 | #959 | P2-1 (rest) | declare `AuditEvent`, `ConnectResult`, `ConnectInput`, `RefusalEvent`, `GrantRow`, `Option` once |
+
 ## Amendment 2026-11-09 (c), round 5 of the AMEND PR
 
 Fold-in of the round-4 findings; simplified, no new mechanism beyond the one named per row. Where this section and older text disagree, this section wins.
@@ -390,19 +419,54 @@ Scopes are checked against the subject token.
 | MCP tool | Verb + path | Request body | 200 body (= tool output) | Scope | Backing call | Source owner |
 |---|---|---|---|---|---|---|
 | (preflight) | `POST /resolve` | `{}` | exactly `{scope_ref, tenant, expires_at}` (amended 2026-11-09; the facade decodes with `DisallowUnknownFields`) | any Glovo scope | `glovo.Resolver.Resolve`, then mint a `gsc_` (§2b) | M1a #953 / M1e |
-| `glovo_auth_status` | `GET /connection` | none | `{connection_state, connection_id?, provider_account_label?, expires_at?}` | `glovo:read` | `connect.Service.Current(ctx, JoinScope)` (#961 §4a; `no_connection` when there is none) | #961 |
+| `glovo_auth_status` | `GET /connection` | none | `{connection_state, connection_id?, provider_account_label?, expires_at?}` | `glovo:read` | `connect.Service.Current(ctx, JoinScope)` (#961 §4a; `no_connection` when there is none); body fields §3a | #961 (call), #957 (body) |
 | `glovo_connect_account` | `POST /connections` | `{idempotency_key}` | `{connection_id, state:"pending_handoff", handoff_url, expires_at}` | `glovo:basket:prepare` | `connect.Service.Connect(ctx, JoinScope, idempotency_key)` (#961 §4a: #959 `Connect` under L1/L2/L2a, then the `ghr_` row; `handoff_url` = `GLOVO_SYNTHETIC_HANDOFF_BASE_URL` + `/` + the raw reference) | #961 |
 | `glovo_get_order_history` | `POST /orders:list` | `{limit<=20, cursor?}` | `{orders:[...], next_cursor?}` | `glovo:read` | `ReadBridge.History` | M1e (seam), mctl-api#986 (transport), mctl-telegram#1262 (fake data) |
 | `glovo_preview_reorder` | `POST /previews` | `{order_ref}` (wire name unchanged; value is the #1059 `pho_` history-order ref) | `{preview_id, items, unavailable_items, fingerprint, expires_at}` | `glovo:read` | `ReadBridge.Preview` plus a `glovo.join_previews` row; `fingerprint` computed by mctl-api over the #1059 approval basket | M1e |
 | `glovo_get_basket` | `GET /basket` | none | `{store_name?, items, totals_label, fingerprint}` | `glovo:read` | `ReadBridge.Basket`; `fingerprint` computed by mctl-api over the #1059 approval basket | M1e / mctl-api#986 / mctl-telegram#1262 |
 | `glovo_prepare_order` | `POST /orders:prepare` | `{preview_id, idempotency_key}` | `{order_id, fingerprint, consent_request_id, expires_at}` | `glovo:basket:prepare` | #988 order (`ordr_`) + `we_` + #989 `CreateGlovoApprovalTx` pending `aar_`, zero provider writes; `order_id` is the `ordr_` | #988, #989 |
-| `glovo_order_status` | `GET /orders/{order_id}` | none | `{state, outcome, handoff_url?}` | `glovo:read` | #988 owner-path `Get` plus #989 `GlovoApprovalStatus`, both on the `glovo_runtime` pool (never the work-items pool, §6d.4) | #988, #989 |
+| `glovo_order_status` | `GET /orders/{order_id}` | none | `{state, outcome}` (§3a; no `handoff_url`) | `glovo:read` | #988 owner-path `Get`, #989 `GlovoApprovalStatus` and #985 `bridge.Store.CommandEffect`, all on the `glovo_runtime` pool (never the work-items pool, §6d.4); body and mapping §3a | #957 (body, mapping), #988, #989, #985 (reads) |
 | (launch) | `GET /compatibility` | none | `{contract_version, contract_digest, api_version, dependencies:{connection_registry, provider_orders, read_bridge, control_worker, provider_worker}, deploy_ready}` | facade identity, no subject needed | `glovojoin.Readiness` | M1e |
 
 `consent_request_id` is the `aar_` id. The human decides it only through the existing
 owner decision route (`POST /api/v1/action-approvals/{id}/decision`), which the facade
 cannot reach. No join route decides, consumes, reserves or settles an `aar_`, and none
 accepts an `hir_`.
+
+### 3a. Status bodies (round 6, G2; the one owner is this slice)
+
+This slice owns the two wire bodies and every wire value in them; the sources below are
+the only inputs, and the handler adds no other field. A wire field with no source is
+omitted.
+
+- `GET /connection`: `connection_state` = #959 `Connection.State`, `connection_id` =
+  `ConnectionID`, `expires_at` = `ExpiresAt` (omitted while NULL). `provider_account_label`
+  is omitted in M1: no #959 or #961 field holds one and the pinned tool schema marks it
+  optional. No connection is 404 `no_connection`, a lapsed one `connection_expired`
+  (#961 `Current`); neither has a body.
+- `GET /orders/{order_id}`: `{state, outcome}`. `handoff_url` is never part of this body
+  (it belongs to `POST /connections`, #961). Inputs: #988 `Order.State` and `CommandID`;
+  #989 `GlovoApprovalStatus(aar)` only while the order is `finalized`; #985
+  `bridge.Store.CommandEffect(commandID)` (its `effect_state`) only when `CommandID` is
+  non-empty. `outcome` is `observed_placed` only for `effect_state = succeeded`, else
+  `OUTCOME_UNKNOWN` (placement not observed).
+
+| #988 `Order.State` | other input | wire `state` | wire `outcome` |
+|---|---|---|---|
+| `open` | none | `open` | `OUTCOME_UNKNOWN` |
+| `finalized` | aar `pending` / `approved` / `refused` / `expired` | `awaiting_approval` / `approved` / `refused` / `expired` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `effect_state` `none` or `permitted` | `dispatched` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed` | `succeeded` | `placed` | `observed_placed` |
+| `dispatched`, `closed` | `failed` or `not_performed` | `failed` | `OUTCOME_UNKNOWN` |
+| `dispatched`, `closed`, `unknown` | `unknown`, or order `unknown` | `unknown` | `OUTCOME_UNKNOWN` |
+| `cancelled` | none | `cancelled` | `OUTCOME_UNKNOWN` |
+
+A failed effect is surfaced only; it writes nothing to the order or the `aar_` (#989 §7
+already leaves that `aar_` `consumed` or `unknown`). The result-to-order transition
+(`dispatched` to `closed` or `unknown`) is owned by #985 `read_command_result`, and this
+body does not wait for it: it is derived from `effect_state` on every read. The contract
+JSON pins these strings, with one fixture per row and a test over every #988 state and
+every `effect_state` value (T6).
 
 ### 4. Refusal and status mapping (closed set; amended 2026-11-09 and (c))
 
@@ -842,9 +906,9 @@ One transaction is one session and therefore one role. In every Glovo M1 proposa
 mctl-agents#1059, then #959 (it ships `glovo.Owner`, `glovo.Connection`, the `glovo.Code`
 enum, `dbq.Querier` and `glovo.expectedGrants` with `glovo.RegisterGrants`), then #988 (it
 ships `internal/jcs`; it vendors the #1059 vectors from a pinned #1059 commit, so there is
-no cycle), #960, #961, #989, #986 (it ships `bridge.ApplyReadSchemaTx` and tests it
+no cycle), #960, #961, #989, this slice's non-read PRs (A13 `glovo.control_starts`, A14 `glovojoin.ApplySchema` and `glovojoin.ControlStartTx`; they need only #959, #988 and #989, round 6, G3), #986 (it ships `bridge.ApplyReadSchemaTx` and tests it
 standalone on a database built from today's `bridgeSchema`), #985 (`bridge.ApplySchema` calls
-the #986 function), then this slice's read routes. A slice that lists another slice as a
+the #986 function; it consumes `glovojoin.ControlStartTx`), then this slice's read routes. Package direction: `internal/glovo/control` imports `glovojoin`, never the reverse; `glovojoin.Readiness` takes the `control.ProveOneDatabase` result as a `func(context.Context) error` that `main.go` injects, so `glovojoin` does not import `control`. A slice that lists another slice as a
 dependency uses a test double until that slice merges, and answers `not_ready` meanwhile.
 
 **Bridge startup DDL (mandatory AMEND, owned by #985).** At `ceac9ed` (= origin/main)
@@ -994,8 +1058,9 @@ log); in every case the fake provider sees zero writes.
 - **The write payload is exactly the approval basket.** `JCS(bridge_commands.payload)`
   must equal the order's final snapshot bytes. There is no wrapper object and no other
   top-level field. The #989 fence runs `basket.Parse` on the payload, so an extra field,
-  a missing field or any other shape is `basket_changed`. Which contract version carries
-  this command shape is OPEN-1059-1; the shape itself is fixed here.
+  a missing field or any other shape is `basket_changed`. The schema is owned by
+  mctl-agents#1059 (`command-place-order-fake.schema.json`, `bridge.mctl.ai/v1alpha2`),
+  vendored by #985; #1059 OPEN-1059-1 is closed.
 - An empty basket or an all-unavailable preview is a valid read (#1059 `empty: true`)
   with no approval basket. It can be shown, never fingerprinted, prepared or approved.
 
@@ -1026,7 +1091,7 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | | `BindApproval(ctx, tx, sc Scope, a Actor, orderRef, approvalRef string) error` | tx; called by #989 with `Scope{Tenant, PrincipalID: owner}` and `Actor{Kind: system, ID: "service:glovo-prepare"}` |
 | | `PeekOrderScope(ctx, q Querier, orderRef string, tenants []string) (Scope, error)` | unlocked read of write-once columns |
 | | `LockOrderForControl(ctx, tx, orderRef string, tenants []string) (*Order, error)` | tx; L3. #985 passes its credential's `Tenants`; the #989 fence passes `[]string{command.tenant}` |
-| | `MarkDispatched(ctx, tx, o *Order, commandID string, a Actor) error`, `MarkCancelled(...)`, `MarkUnknown(...)` | tx; `MarkDispatched` also writes the effect row |
+| | `MarkDispatched(ctx, tx, o *Order, commandID string, a Actor) error`, `MarkCancelled(...)`, `MarkUnknown(...)`, `MarkClosed(...)` | tx; `MarkDispatched` also writes the effect row; `MarkClosed` is `dispatched -> closed` only, called by #985 `read_command_result` (round 6, G2) |
 | | `Snapshot(ctx, q Querier, sc Scope, orderRef string, seq int) (*Snapshot, error)` | `Snapshot.Canonical` holds the JCS bytes |
 | | `MintJoinRefTx(ctx, tx, kind JoinKind, tenant, principalID, subjectID string) (string, error)` (kinds `tenant`, `principal`, `install_revision`; there is no `order` kind), `LookupJoinRefTx(ctx, q Querier, kind JoinKind, tenant, principalID, subjectID string) (string, error)` | mint is insert-or-read; lookup is read-only, `not_found` if never minted |
 | | `basket.Parse(raw []byte) (Approval, []byte, error)`, `basket.Fingerprint(canonical []byte) string` | the only entry points; `Parse` returns the JCS bytes |
@@ -1042,6 +1107,7 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | #985 bridge and control | `bridge.CancelOpenForConnections(ctx, tx pgx.Tx, connectionIDs []string, actor string) error` | the `RevocationHook` implementation; L5 `ORDER BY command_id` |
 | | `bridge.WriteFence.PreLock(ctx, tx pgx.Tx, c bridge.Caller, commandID string) error` | called by `permitTx` before `lockOwned`; step 0 applies `lockOwned`'s provider and tenants predicate and answers `ErrCommandNotFound` for absent and foreign ids alike, and refuses non-`place_order_fake` kinds, before any lock (#985 §7.2, #989 §6) |
 | | `bridge.ApplySchema(ctx, migrationConnStr, runtimeRole string) error`, `bridge.NewRuntimeStore(ctx, pool *pgxpool.Pool) (*Store, error)` (the shared `GLOVO_DB_URL` pool; no DDL) | §6d.1; `ApplySchema` calls #986 `bridge.ApplyReadSchemaTx` (round 4, X-3) |
+| | `bridge.Store.CommandEffect(ctx, q dbq.Querier, tenants []string, commandID string) (effectState string, err error)` | round 6, G2: read-only; Glovo `place_order_fake` commands inside `tenants` only, anything else `not_found`; the source of `outcome` in §3a |
 | | `Dispatcher.Dispatch` replay | round 4 (#985 F2): on any order state with a non-empty `command_id` whose `approval_ref` and fingerprint match, the same `cmd_` with the current `order_state` and `effect_state` |
 | | `control.ProveOneDatabase(ctx, bridgeStore *bridge.Store, glovoStore *glovo.Store, workItemsPool *pgxpool.Pool) error` | §6d.1 checks; requires `glovoStore.Pool() == bridgeStore.Pool()` (round 3: two stores, one pool, one role) and proves `workItemsPool` is the same database through the colocation probe |
 | #960 (`internal/glovo/scope`, `internal/auth`) | `Resolver.Resolve(ctx, u *auth.User) (Scope, *glovo.Error)`, `User.TeamGrant() (grantID, tenant string, ok bool)`, `teamgrant.Check(ctx, grantID, principalID, clientID, resource) (teamgrant.Grant, error)` (only an `active` grant passes) | round 3: sole owner of consent-time selection and of the claims `tgr`/`stn`. Round 5 (R4-1): #960 defines `teamgrant.Grant{ID, PrincipalID, Tenant, ClientID, Resource, RefreshFamilyID, State}`; `Grant.RefreshFamilyID` is the `scope_ref` binding key (§2b) and is the only place #957 reads it |

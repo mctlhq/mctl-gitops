@@ -132,7 +132,7 @@ Audit and hygiene
 - The approval basket definition and vectors (mctl-agents#1059).
 - The `aar_` state machine (#989), dispatch/cancel (#985), routes and the
   Glovo join handlers (#957), the connection store (#959).
-- Who moves `dispatched`/`unknown` to `closed` (OPEN-985-5).
+- Who moves `dispatched` to `closed`: #985 `read_command_result` through `MarkClosed` (OPEN-985-5, closed in round 6, G2).
 
 ## Open questions
 
@@ -146,3 +146,4 @@ Audit and hygiene
   OPEN-985-6).
 - OPEN-988-4. Retention of `basket_canonical` per terminal state is a precondition
   before any G3 or real-data use.
+- OPEN-988-5 (round 6; recommendation: add a requirement, a task 8 DoD and T20). `MintJoinRefTx` and `LookupJoinRefTx` have no acceptance criterion and no test. Add CHECKs (kind and ref prefix match `tnr_`/`prr_`/`irv_` with `[A-Za-z0-9]{16,40}`; `principal_id = subject_id` when kind is `principal`) and T20: concurrent mint returns one ref, a replay returns the same ref, a missing ref is `not_found`, a malformed ref is rejected by the CHECK under the runtime role, UPDATE and DELETE are refused.

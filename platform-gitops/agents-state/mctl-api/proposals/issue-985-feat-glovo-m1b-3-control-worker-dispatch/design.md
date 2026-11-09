@@ -41,7 +41,7 @@ text disagree, this section wins; the older passages are edited.
 | P3 F7 (cancel vs concurrent receipt transitions) | Cancel treats a receipt already `denied` (for this order) or `unknown` (for this `cmd_`) as success; T7 adds refused-then-cancel and sweeper-then-cancel |
 | P3 F8 (test gaps) | T16 adds the surface principal and `PinClaims` negatives (wrong aud, iss, sub; expired; nbf) and a production-build check that no verifier is wired; the revokers list includes `Reconnect` and terminal `Transition` |
 | X-1, #957 F5 (workflow id, run id, refs) | `EnqueueInput.WorkflowID` comes from #989 `ExecutionBindingTx`, `RunID` from #957 `glovojoin.ControlStartTx` (may be `''`), `TenantRef`/`PrincipalRef` from #988 `LookupJoinRefTx` (§5 step 11) |
-| X-2, X-8 (payload shape) | The `place_order_fake` payload is exactly the order's final approval-basket bytes, no wrapper (#957 §6d.3); OPEN-985-8 is narrowed to which contract version carries the command shape |
+| X-2, X-8 (payload shape) | The `place_order_fake` payload is exactly the order's final approval-basket bytes, no wrapper (#957 §6d.3); the schema is owned by #1059 (`command-place-order-fake.schema.json`, round 6 G1) and vendored here (OPEN-985-8 closed) |
 | #959 F7 (end-to-end revocation proof) | New T24 here: with the real hook and fence, revoke-then-permit and `expires_at`-passed-then-permit give no permit |
 | #989 F3 (`cancel_order_fake`) | `read_command_result` answers only for `place_order_fake`; Glovo M1 never enqueues `cancel_order_fake` |
 
@@ -231,6 +231,14 @@ Deployed state:
   commands whose order is inside the `tenants` bound. Anything else is `not_found`.
   (Amended (c): `place_order_fake` only. Glovo M1 never enqueues `cancel_order_fake`;
   cancellation is `bridge.Store.Cancel` on the existing command.)
+- **Result to order (round 6, G2; closes OPEN-985-5; the one owner is this route).** When
+  `read_command_result` sees a terminal command whose order is still `dispatched`, it takes
+  L3 (`LockOrderForControl`) and calls #988 `MarkClosed` for `effect_state` `succeeded`,
+  `failed` or `not_performed`, or `MarkUnknown` for `unknown`. Both are CAS and idempotent.
+  A missed call only delays the stored state: #957 §3a derives the wire `state` and
+  `outcome` from `effect_state` on every read, through the read-only
+  `bridge.Store.CommandEffect(ctx, q dbq.Querier, tenants []string, commandID string)
+  (effectState string, err error)` that this slice adds in task 4.
 - `revalidate_scope` and `resolve_connection` from #1044's `ControlApiPort` are not
   added here. Their owner is an OPEN item.
 
@@ -410,8 +418,9 @@ This is the only step order. Task 5 implements exactly this.
     `glovojoin.ControlStartTx` (empty is valid, `bridge_commands.run_id` defaults to
     `''`, `internal/bridge/store.go:74`); `TenantRef`/`PrincipalRef` from #988
     `LookupJoinRefTx`; `OrderRef` the `ordr_`; `ConnectionRef` the `gcn_`. The payload
-    shape is fixed in #957 §6d.3; which contract version carries the command is
-    OPEN-985-8, and until it exists dispatch is `not_ready`. `created=false` at this
+    shape is fixed in #957 §6d.3 and defined once by #1059
+    `command-place-order-fake.schema.json` (`bridge.mctl.ai/v1alpha2`), vendored here
+    (OPEN-985-8, closed); until that copy exists dispatch is `not_ready`. `created=false` at this
     point (the order is still `finalized`) is an invariant violation: roll back, audit
     it, and answer `unavailable`.
 12. `Receipts.ReserveGlovoApprovalTx(aar, workitems.ReserveCommand{CommandID, Tenant,
@@ -439,8 +448,8 @@ Locks are taken in the same order as §5: L1/L2 shared, L3, L4, L5.
     `effect_state`, #989). Call `MarkUnknown`. The order is **never** `cancelled` in this
     case.
   - `ErrAlreadyCompleted`: change nothing and answer 200 with the command's current
-    `effect_state`. The result path reconciles the order. Who owns the transition from a
-    result to order `closed` is an OPEN item.
+    `effect_state`. The result path reconciles the order
+    (§2a, "Result to order").
 - `cancelled` or `unknown`: no-op, 200 with the current state.
 - No path ever returns an `aar_` to `approved`.
 
@@ -574,11 +583,12 @@ revocation. The owner must accept it explicitly; this is an OPEN item.
 - **Dependencies (blocking).** If any of these is missing, the routes answer
   `not_ready`:
   - #986, for `bridge.ApplyReadSchemaTx` (round 4, X-3: merge order #986 before #985);
+  - #957 task A14 (`glovojoin.ControlStartTx`; merge order #957 §6d.1, package direction `control` imports `glovojoin`; round 6, G3);
   - the amended #959 store (one database, tx-scoped reads, revokers that cancel
     commands);
   - the #988 order index;
   - the #989 methods of §3 and its `receipt.Fence`;
-  - the #1059 approval-basket payload for Glovo `place_order_fake` (OPEN-985-8);
+  - the vendored #1059 `command-place-order-fake.schema.json` and approval basket (OPEN-985-8, closed: #1059 owns the schema);
   - #987, the fallback removal;
   - mctl-gitops#2506, for a production verifier.
 

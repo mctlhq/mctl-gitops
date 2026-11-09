@@ -122,7 +122,8 @@ Skipped P3s: none.
   `internal/glovo/basket/contract/` (round 4, N3); the read-result schema reaches the
   approval-basket schema by `$ref`, and a test pins the sha256 of #988's copy. Both have a
   `PROVENANCE` file (repo, PR, merge commit, sha256 per file). It does not author or edit
-  any of them. If #1059 is not merged, the task stops.
+  any of them. If #1059 is not merged, the task stops. It does not vendor the write
+  command schema `command-place-order-fake.schema.json`; #985 does (round 6, G1).
 - Read kinds: `read_history`, `read_preview`, `read_basket` (final names from #1059).
   Read commands carry the #1059 read binding set (tenant, principal, connection and
   install-revision ref (`irv_`, wire only) and the decimal revision, the read idempotency key `request_id` (`rdq_`) and per-kind

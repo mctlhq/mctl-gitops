@@ -277,6 +277,13 @@ func CanTransition(from, to ConnectionState) bool
 
 type Owner struct{ TenantID, PrincipalID string } // validate(): non-empty tenant, "prn_" principal
 
+// Round 6 (G4): the one field list. Connection mirrors glovo_connections column for column:
+// ConnectionID, Owner, InstallID, InstallRevision int64, State, SecretRef (gsr_ or empty),
+// SupersedesID, EndReason, Version int64, CreatedAt, UpdatedAt, EndedAt *time.Time,
+// ExpiresAt *time.Time. Install mirrors glovo_installs. The fields of AuditEvent
+// (glovo_audit_events), ConnectResult ({Connection, Replayed}) and ConnectInput are the
+// ones named where they are used; RefusalEvent, GrantRow and Option are OPEN-959-3.
+
 // Codes are added to #977's glovo.Code; the closed enum is the joint
 // contract above. No parallel RefusalCode/Refusal type.
 func refuse(c Code) *Error                 // fixed Description per code, no IDs
@@ -354,7 +361,8 @@ CHECKs: `glovo_installs_state_check`, `glovo_connections_state_check`,
 `glovo_connections_principal_check` (`principal_id LIKE 'prn\_%'`),
 `glovo_pilot_allowlist_principal_check` (`principal_id LIKE 'prn\_%'`),
 `glovo_audit_events_actor_kind_check`,
-`glovo_connections_secret_ref_check`
+`glovo_connections_active_expiry_check`
+(`state <> 'active' OR expires_at IS NOT NULL`, round 6, G4), `glovo_connections_secret_ref_check`
 (`secret_ref IS NULL OR secret_ref LIKE 'gsr\_%'`), and
 `glovo_connections_terminal_check`
 (`state IN (live) OR ended_at IS NOT NULL`). A connection's
@@ -485,6 +493,8 @@ func (s *Store) ActivateTx(ctx context.Context, tx pgx.Tx, in ActivateInput) (*C
 // refusal that names an existing install or connection. Pre-scope refusals have no entity
 // and are not audited here (slog and metrics only).
 func (s *Store) AppendRefusal(ctx context.Context, ev RefusalEvent) error
+// Transition refuses to=Active with invalid_request (round 6, G4): activation is only
+// ActivateTx, which sets expires_at in the same UPDATE, so no active row has NULL expiry.
 func (s *Store) Transition(ctx, owner Owner, connectionID string, to ConnectionState,
                            expectedVersion int64, reason string, ref *SecretRef) (*Connection, error)
 func (s *Store) Revoke(ctx, owner Owner, connectionID, reason string) (*Connection, error)

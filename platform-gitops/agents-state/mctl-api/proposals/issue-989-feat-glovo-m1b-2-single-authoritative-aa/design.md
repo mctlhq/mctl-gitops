@@ -480,8 +480,9 @@ RFC 8785 canonicalizes the parsed value, so recomputing from JSONB is determinis
 #1059 number rules (integers only, within ±(2^53-1)) are checked by `basket.Validate`.
 
 The command payload must carry the approval basket. The v1alpha1 `place_order_fake`
-payload is `{item_codes, quantity_total, note}`, so this depends on OPEN-985-8
-(= mctl-agents OPEN-1059-1). Until that contract exists, `Ready` fails.
+payload is `{item_codes, quantity_total, note}`, so this depends on the
+#1059 `command-place-order-fake.schema.json` that #985 vendors (OPEN-985-8, closed).
+Until that vendored copy exists, `Ready` fails.
 
 ### 7. Recording an outcome without a permit
 
@@ -525,8 +526,8 @@ reports violations as a readiness failure.
   role is not a member of the table owners, and its grants equal #957 §6d.1 (§2);
 - `glovo.order.owner-approval` v1 is registered;
 - the work-items, bridge, #988 order and #959 connection stores are non-nil;
-- the #1059 approval basket is vendored and the write payload contract exists
-  (OPEN-985-8, OPEN-1059-1).
+- the #1059 approval basket and `command-place-order-fake.schema.json` are vendored
+  (OPEN-985-8, closed).
 
 Only #985 task 9 calls `bridgeStore.SetFence(receipt.NewFence(...))`, and only when
 all six #985 §7.3 preconditions hold, among them `glovo.ControlDefault.Open` and
