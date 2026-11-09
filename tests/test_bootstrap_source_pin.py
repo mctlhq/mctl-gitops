@@ -96,9 +96,15 @@ WHAT IS PINNED
   hashing them would be ambiguous:
     * a literal "<bump-managed>" anywhere in a file under that prefix (it
       would hash exactly like a masked real tag);
-    * forms 1/2 written by a human the way the bots would rewrite them away:
-      a single-quoted tag (tag: 'x') or a valid tag followed by a trailing
-      comment (tag: "x" # c). Write tag: "x". The selftest checks
+    * ANY `tag:` line that follows a form 1/2 repository line (the line the
+      bots rewrite with `tag:)[^\\n]+`) and that the masks do not match
+      exactly: non-canonical spacing, a tab, two spaces, trailing
+      whitespace, !!str, single quotes, a trailing comment, an invalid or
+      empty value, a Helm action. The bots would rewrite such a line to
+      `tag: "<v>"` on the first bump, so hashing it would pass now and go red
+      on main later. Write tag: "x" or tag: x. (A trailing CR is matched by
+      the masks and kept, so it is covered as a byte change, not rejected.)
+    The selftest checks
   the regexes in both workflows still read as recorded here.
 
 SCOPE LIMITS (not pinned at all)
@@ -112,6 +118,14 @@ CASE-VARIANT PATHS
   Two tree paths (or directories) that differ only in case or Unicode
   normalisation check out differently on case-insensitive and
   case-sensitive platforms. That is exit 2, explicitly.
+
+Coupling exceptions (PR runs): a fixture-only change on a base that is itself in
+drift, and a source-only change that brings a drifted base back to the
+unchanged fixture ("repair by revert"), are exit 0 when the head matches the
+fixture. If the BASE tree cannot be built (for example main holds a rejected
+tag form) but the head builds clean and matches the fixture, the result is
+exit 0 with "base unobservable, head converged"; if the head is not clean or
+not converged it is exit 2.
 
 Exit codes: 0 pin matches; 1 drift (or one-sided pin update); 2 input could
 not be observed (git unavailable, bad revision, missing object or directory,
@@ -162,13 +176,14 @@ MASKS = [
     (re.compile(rb"(value:\s*[\"']?ghcr\.io/mctlhq/" + _NAME + rb")[\"']?:" + _TAG),
      rb"\1:" + PLACEHOLDER),
 ]
-# Forms 1/2 a human may commit but the bots would rewrite to ` "<tag>"`
-# (their regex is `tag:)[^\\n]+`, which eats quotes and comments): single-quoted
-# tag, or a valid tag followed by a trailing comment. Rejected, never masked.
-_HUMAN_TAG = (rb"(?:repository:\s*ghcr\.io/mctlhq/" + _NAME + rb"|registry:\s*ghcr\.io\n\s+repository:\s*mctlhq/"
-              + _NAME + rb")\n\s+tag:[ \t]*(?:'" + _TAG + rb"'|(?:\"" + _TAG + rb"\"|" + _TAG
-              + rb")[ \t]*\#)")
-HUMAN_TAG_RE = re.compile(_HUMAN_TAG)
+# Every `tag:` line the bots would rewrite (their regex is `tag:)[^\n]+` after
+# a form 1/2 repository line). After masking, such a line must read exactly
+# ` <bump-managed>` (plus an optional kept CR); anything else is a form the
+# masks did not match exactly and is rejected, never hashed.
+_CTX_TAG = re.compile(rb"(?:repository:\s*ghcr\.io/mctlhq/" + _NAME
+                      + rb"|registry:\s*ghcr\.io\n\s+repository:\s*mctlhq/" + _NAME
+                      + rb")\n\s+tag:([^\n]*)")
+_MASKED_TAIL = re.compile(rb" " + PLACEHOLDER + rb"\r?")
 GLOB_RE = re.compile(rb"^\s*-\s*path:\s*(\S+)\s*$")
 # Regex-defining lines the selftest requires verbatim (whitespace-stripped)
 # in the bump workflows, so a changed bot pattern fails the selftest instead
@@ -294,11 +309,13 @@ def digest(rel, data):
             raise Unobservable(
                 "literal %s in a bump-managed file would hash like a masked tag: %s"
                 % (show(PLACEHOLDER), show(rel)))
-        if HUMAN_TAG_RE.search(data):
-            raise Unobservable(
-                "bump-managed tag line in a form the bots rewrite (single quotes or a "
-                "trailing comment); write it as tag: \"<tag>\": %s" % show(rel))
         data = mask(data)
+        for m in _CTX_TAG.finditer(data):
+            if not _MASKED_TAIL.fullmatch(m.group(1)):
+                raise Unobservable(
+                    "bump-managed tag line that the masks do not match exactly (spacing, tab, "
+                    "!!str, quotes, comment, invalid value); the bots would rewrite it. "
+                    "Write it as tag: \"<tag>\" or tag: <tag>: %s" % show(rel))
     return hashlib.sha256(data).hexdigest()
 
 
@@ -439,9 +456,21 @@ def coupling(root, head, explicit_base):
     if fix_b is None:
         return 0, ["coupling: not applicable (the fixture does not exist at the base: introduction)"]
     fix_h = load_fixture(root, head)
-    src_b, src_h = build(root, base), build(root, head)
     if fix_h is None:
         raise Unobservable("fixture missing at head")
+    src_h = build(root, head)        # an unobservable head is exit 2
+    try:
+        src_b = build(root, base)
+    except Unobservable as e:
+        # The base tree cannot be read (for example main already holds a form
+        # that is rejected). The fix PR must not be blocked for that, but only
+        # a head that builds clean AND matches its own fixture is let through.
+        if drift_of(src_h, fix_h):
+            raise Unobservable("base unobservable (%s) and the head is not converged "
+                               "with the fixture" % show(str(e)))
+        return 0, ["coupling: base unobservable, head converged (base %s: %s); "
+                   "the base cannot be compared, the head matches the fixture"
+                   % (base[:12], show(str(e)))]
     fix_changed = fix_b != fix_h
     src_changed = (src_b["sources"], src_b["excluded_unpinned_glob_inputs"]) != \
                   (src_h["sources"], src_h["excluded_unpinned_glob_inputs"])
@@ -459,6 +488,12 @@ def coupling(root, head, explicit_base):
         return 0, ["coupling: repair ok (base %s was in drift; the fixture now matches the head tree)"
                    % base[:12]]
     if src_changed and not fix_changed:
+        # Repair by revert: the base is in drift (a source reached it without a
+        # pin update), the sources changed back and the head matches the
+        # unchanged fixture.
+        if drift_of(src_b, fix_b) and not drift_of(src_h, fix_h):
+            return 0, ["coupling: repair by revert ok (base %s was in drift; the sources "
+                       "changed and the head matches the unchanged fixture)" % base[:12]]
         return 1, ["COUPLING: pinned bootstrap sources changed since the merge base (%s) "
                    "but the pin fixture did not" % base[:12]]
     return 0, ["coupling: ok (base %s; fixture changed: %s, pinned sources changed: %s)"
@@ -687,14 +722,14 @@ def selftest():
         ("repository edit in mctl-platform", lambda r: wr(b(r, mp), rd(b(r, mp)).replace(b"ghcr.io/mctlhq/mctl-api", b"ghcr.io/evil/mctl-api", 1)), None, 1, {}),
 
         # P2: tag value shape
-        ("tag is a Helm action", set_tag_line(mp, api_tag, rb'\1 {{ .Values.evil }}'), None, 1, {}),
+        ("tag is a Helm action is rejected (unmatched tag line)", set_tag_line(mp, api_tag, rb'\1 {{ .Values.evil }}'), None, 2, {}),
         # Forms a human may commit but the bots would rewrite: rejected with a
         # clear message (exit 2), never silently left unmasked.
         ("tag with trailing comment is rejected", set_tag_line(mp, api_tag, rb'\1 "1.0.0" # x'), None, 2, {}),
         ("tag unquoted with trailing comment is rejected", set_tag_line(mp, api_tag, rb'\1 1.0.0 # x'), None, 2, {}),
         ("split form (portal) single-quoted tag is rejected",
          set_tag_line(pt, rb'(?m)^(\s*tag:) [^\n]*$', rb"\1 '1.0.0'"), None, 2, {}),
-        ("tag with comment but invalid value stays plain drift", set_tag_line(mp, api_tag, rb'\1 "a b" # x'), None, 1, {}),
+        ("tag with comment and invalid value is rejected", set_tag_line(mp, api_tag, rb'\1 "a b" # x'), None, 2, {}),
         # P3: masked line keeps its line ending; placeholder text cannot collide
         ("LF to CRLF on a masked tag line is a byte change", set_tag_line(mp, rb'(?m)^(\s*tag: "[^"]*")$', rb'\1\r'), None, 1, {}),
         ("bot bump of a CRLF tag line is visible drift (bot strips the CR)",
@@ -703,10 +738,31 @@ def selftest():
         ("literal placeholder as tag value", set_tag_line(mp, api_tag, rb'\1 <bump-managed>'), None, 2, {}),
         ("literal placeholder in a comment", lambda r: append(b(r, mp), b"# <bump-managed>\n"), None, 2, {}),
         ("placeholder text outside the bump prefix is plain content", lambda r: append(b(r, "values.yaml"), b"# <bump-managed>\n"), None, 1, {}),
-        ("tag longer than 128", set_tag_line(mp, api_tag, rb'\1 "' + b"a" * 129 + b'"'), None, 1, {}),
-        ("tag with a space", set_tag_line(mp, api_tag, rb'\1 "1.0 0"'), None, 1, {}),
-        ("tag empty", set_tag_line(mp, api_tag, rb'\1 '), None, 1, {}),
-        ("tag leading dash", set_tag_line(mp, api_tag, rb'\1 "-1.0"'), None, 1, {}),
+        ("tag longer than 128 is rejected", set_tag_line(mp, api_tag, rb'\1 "' + b"a" * 129 + b'"'), None, 2, {}),
+        ("tag with a space is rejected", set_tag_line(mp, api_tag, rb'\1 "1.0 0"'), None, 2, {}),
+        ("tag empty is rejected", set_tag_line(mp, api_tag, rb'\1 '), None, 2, {}),
+        ("tag leading dash is rejected", set_tag_line(mp, api_tag, rb'\1 "-1.0"'), None, 2, {}),
+        # Finding 1: every tag line shape the masks do not match exactly (the
+        # bots would rewrite it to `tag: "<v>"`) is rejected, split form included.
+        ("tag no space after colon is rejected", set_tag_line(mp, api_tag, rb'\1"1.0.0"'), None, 2, {}),
+        ("tag two spaces is rejected", set_tag_line(mp, api_tag, rb'\1  "1.0.0"'), None, 2, {}),
+        ("tag tab after colon is rejected", set_tag_line(mp, api_tag, rb'\1\t"1.0.0"'), None, 2, {}),
+        ("tag trailing space after quotes is rejected", set_tag_line(mp, api_tag, rb'\1 "1.0.0" '), None, 2, {}),
+        ("tag trailing tab after quotes is rejected", set_tag_line(mp, api_tag, rb'\1 "1.0.0"\t'), None, 2, {}),
+        ("tag !!str is rejected", set_tag_line(mp, api_tag, rb'\1 !!str "1.0.0"'), None, 2, {}),
+        ("split form: two spaces is rejected",
+         set_tag_line(pt, rb'(?m)^(\s*tag:) [^\n]*$', rb'\1  1.0.0'), None, 2, {}),
+        ("split form: unquoted with trailing space is rejected",
+         set_tag_line(pt, rb'(?m)^(\s*tag:) [^\n]*$', rb'\1 1.0.0 '), None, 2, {}),
+        ("split form: !!str is rejected",
+         set_tag_line(pt, rb'(?m)^(\s*tag:) [^\n]*$', rb'\1 !!str 1.0.0'), None, 2, {}),
+        ("split form: tab is rejected",
+         set_tag_line(pt, rb'(?m)^(\s*tag:) [^\n]*$', rb'\1\t1.0.0'), None, 2, {}),
+        # EOL mask (finding 6): the CR of a masked line is kept. A value change
+        # that keeps the CR is masked (green); LF<->CRLF (above) is drift.
+        ("EOL mask: CRLF tag line, value change keeps the CR, is masked",
+         lambda r: (set_tag_line(mp, rb'(?m)^(\s*tag: "[^"]*")$', rb'\1\r')(r), repin(r),
+                    set_tag_line(mp, rb'(?m)^(\s*tag: )"[^"]*"\r$', rb'\1"8.8.8"\r')(r))[-1], None, 0, {}),
         ("tag single-quoted is rejected", set_tag_line(mp, api_tag, rb"\1 '1.0.0'"), None, 2, {}),
         ("tag valid shape 128 chars stays green", set_tag_line(mp, api_tag, rb'\1 "' + b"a" * 128 + b'"'), None, 0, {}),
 
@@ -749,8 +805,11 @@ def selftest():
                 with contextlib.redirect_stdout(buf):
                     if direct:       # coupling() alone, bypassing verify()'s own drift check
                         try:
-                            got = coupling(root, resolve(root, "HEAD"), base_arg)[0]
-                        except Unobservable:
+                            got, lines = coupling(root, resolve(root, "HEAD"), base_arg)
+                            for line in lines:
+                                print(show(line))
+                        except Unobservable as e:
+                            print("UNOBSERVABLE: %s" % show(str(e)))
                             got = 2
                     else:
                         got = verify(root, base=base_arg)
@@ -853,6 +912,48 @@ def selftest():
         def intro(root):
             pass
 
+        st = {}
+
+        def break_tag(root):             # main holds a rejected single-quoted tag
+            st["orig"] = rd(b(root, mp))
+            set_tag_line(mp, api_tag, rb"\1 '1.0.0'")(root)
+            g(root, "add", "-A")
+            commit(root, "base with a rejected tag form")
+
+        def fix_tag(root):
+            wr(b(root, mp), st["orig"])
+            g(root, "add", "-A")
+            commit(root, "tag form fixed")
+
+        def fix_tag_but_drift(root):
+            wr(b(root, mp), st["orig"])
+            append(b(root, "values.yaml"))
+            g(root, "add", "-A")
+            commit(root, "tag form fixed, other source changed, no pin")
+
+        def other_change_only(root):
+            append(b(root, "values.yaml"))
+            g(root, "add", "-A")
+            commit(root, "other change")
+
+        def revert_values(root):         # undo drifted_base's appended line, fixture untouched
+            p = b(root, "values.yaml")
+            d = rd(p)
+            assert d.endswith(b"# m\n")
+            wr(p, d[:-len(b"# m\n")])
+            g(root, "add", "-A")
+            commit(root, "revert the drift")
+
+        def pr_branch_with_refs(root):
+            """Base tip as origin/main (no local main) and a pr branch."""
+            g(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+            g(root, "checkout", "-q", "-b", "pr")
+
+        def pr_branch_with_local_main(root):
+            """Base tip only as a LOCAL main branch: the GITHUB_BASE_REF fallback."""
+            g(root, "checkout", "-q", "-b", "pr")
+            g(root, "update-ref", "refs/heads/main", "HEAD")
+
         PR = {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_BASE_REF": "main"}
 
         run("coupling: source change with pin update", lambda r: None, src_and_pin, 0)
@@ -863,7 +964,24 @@ def selftest():
         run("repair: fixture that does not match head is red (verify)", drifted_base, wrong_repair, 1)
         run("repair: fixture that does not match head is red (coupling alone)", drifted_base, wrong_repair, 1, direct=True)
         run("repair: drifted base, source change without pin stays red", drifted_base, src_only, 1)
-        run("repair: base tree without the chart is unobservable", base_without_chart, restore_chart, 2)
+        # Finding 2: repair by revert (sources back to the pinned state, fixture untouched)
+        run("repair by revert: base in drift, head converged, fixture untouched is green",
+            drifted_base, revert_values, 0, say="repair by revert ok")
+        run("repair by revert: same, coupling alone", drifted_base, revert_values, 0, direct=True, say="repair by revert ok")
+        run("repair by revert: head still in drift is red", drifted_base, other_change_only, 1)
+        run("repair by revert: head still in drift is red (coupling alone)", drifted_base, other_change_only, 1, direct=True)
+        run("repair by revert: converged base, source change without pin is red", lambda r: None, other_change_only, 1)
+        # Finding 3: base unobservable. Head converged -> exit 0 with its own message;
+        # head not clean or not converged -> exit 2.
+        run("base unobservable, head converged: fix PR is green and says so", break_tag, fix_tag, 0,
+            say="base unobservable, head converged")
+        run("base unobservable, head converged: coupling alone", break_tag, fix_tag, 0, direct=True,
+            say="base unobservable, head converged")
+        run("base unobservable, head converged: base without the chart", base_without_chart, restore_chart, 0,
+            say="base unobservable, head converged")
+        run("base unobservable, head still rejected is exit 2", break_tag, other_change_only, 2)
+        run("base unobservable, head builds but drifts is exit 2", break_tag, fix_tag_but_drift, 2)
+        run("base unobservable, head drifts: coupling alone is exit 2", break_tag, fix_tag_but_drift, 2, direct=True)
         run("repair: base with malformed fixture is unobservable", base_bad_fixture, fix_fixture_only, 2)
         run("coupling: stale base fixture fixed by fixture-only PR is a repair", stale_fixture, fix_fixture_only, 0)
         run("coupling: bump-only change, no pin change", lambda r: None, bump_only, 0)
@@ -881,6 +999,19 @@ def selftest():
             env={"GITHUB_EVENT_NAME": "pull_request"})
         run("pr run: shallow checkout without the base", lambda r: (g(r, "checkout", "-q", "-b", "pr"), None)[1],
             lambda r: (src_and_pin(r), shallow_pr(r))[1], 2, base_arg="NONE", env=PR)
+        # pull_request path simulated through the environment (real CI is not run here)
+        run("pr path: origin/<GITHUB_BASE_REF> + event, source change without pin is red",
+            pr_branch_with_refs, src_only, 1, base_arg="NONE", env=PR)
+        run("pr path: origin/<GITHUB_BASE_REF> + event, source change with pin is green",
+            pr_branch_with_refs, src_and_pin, 0, base_arg="NONE", env=PR, say="coupling: ok")
+        run("pr path: GITHUB_BASE_REF resolved through the local-branch fallback, red",
+            pr_branch_with_local_main, src_only, 1, base_arg="NONE", env=PR)
+        run("pr path: GITHUB_BASE_REF resolved through the local-branch fallback, green",
+            pr_branch_with_local_main, src_and_pin, 0, base_arg="NONE", env=PR, say="coupling: ok")
+        run("pr path: --base fallback when the event has no GITHUB_BASE_REF, red",
+            lambda r: None, src_only, 1, env={"GITHUB_EVENT_NAME": "pull_request"})
+        run("pr path: --base wins over an unresolvable GITHUB_BASE_REF, red",
+            lambda r: None, src_only, 1, env={"GITHUB_EVENT_NAME": "pull_request", "GITHUB_BASE_REF": "no-such-branch"})
         # outside a PR the coupling is explicitly not applicable
         run("non-pr run: coupling not applicable, says so", lambda r: None, src_only, 1, base_arg="NONE",
             say="coupling: not applicable (not a pull request)")
