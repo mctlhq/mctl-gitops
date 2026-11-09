@@ -19,7 +19,9 @@
   and B (locally vendored, manifest `--check`) (depends on 2).
   - DoD: It states that `curl` is not proof of browser SRI or CORS.
   - DoD: It forbids the floating URL for shipped pages.
-  - DoD: It makes Mode B mandatory for `style-src 'self'` and sensitive routes.
+  - DoD: It makes Mode B mandatory for effective own-origin-only `style-src` (or restrictive
+    `default-src` fallback) and sensitive routes; it does not incorrectly infer a CSS restriction
+    from strict `script-src` alone.
 - [ ] 4. Write the six-site route-class supply matrix (depends on 3).
   - DoD: There are 8 rows: mctl.ai, docs, tg public, tg lite/auth, academy, alice, seerrsense
     public, seerrsense consent.
@@ -66,6 +68,9 @@
   hashes were invented.
 - [ ] T6. Read the matrix as a reviewer. Every unknown cell is `unknown (not observed)` or
   `not-run`, and no row adds `https://ui.mctl.ai` to a `style-src 'self'` policy.
+- [ ] T7. Confirm Academy public remains eligible for the CDN mode under its reported `style-src`
+  even though its script policy forbids inline scripts; verify that the contract never equates
+  `script-src` with permission or denial of CSS loading.
 
 ## Rollback
 
