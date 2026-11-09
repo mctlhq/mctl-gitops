@@ -24,6 +24,63 @@ disagree, this section wins; the passages it contradicts have been edited.
 | Reads | **(owner, D1)** History, preview and basket are read by mctl-api through the bridge read extension mctl-api#986 | The workflow never receives a read payload. Its input, activity results, signals and logs carry refs and digests only; a test scans recorded histories for any payload field |
 | M1 (consumer side) | Ref families | `tnr_`, `prr_`, `ordr_` come from mctl-api's mapping (mctl-api#957 §2a); `connection_ref` is the M1a `gcn_` id and `install_ref` the M1a `gin_` id, both passed through unchanged. The `ins_` prefix is dropped |
 
+## Amendment 2026-11-09 (round 7): alignment with the merged M1 seams
+
+Resolves what the nine amended mctl-api and mctl-agents proposals of mctl-gitops#2550 (the
+mctl-api#957, #959, #960, #961, #985, #986, #988 and #989 slices, and mctl-agents#1059)
+assign to this slice, and the stale references that remained. Sources: mctl-api#957 design
+§3a, §4.1, §6c and OPEN-957-11; #985 design §2a (the total result-to-order table and `reconcileOrder`), §2b, §5, §6, §7.3, §7.4 and OPEN-985-3/4/9/12/13/15; #986 design §2 and OPEN-986-6; #989 design
+§10; #988 OPEN-988-2; the merged bridge (mctl-api `docs/bridge.md`, `internal/bridge`,
+`internal/temporalclient` at `ceac9ed`); mctl-agents `docs/spikes/1043/*.schema.json`.
+Where this section and older text disagree, this section wins; the passages it contradicts
+have been edited. Values owned by a sibling are cited by section, not restated.
+
+| Item | Finding | Change |
+|---|---|---|
+| X-11, OPEN-985-9 (round 3) | `release_reservation` has no route; no `aar_` ever returns to `approved` | Removed (activity, cancellation step, T12 and the requirement line). Cancellation is `cancel_order(order_ref)` only; its semantics are #985 §6: it revokes a pending or approved `aar_`, marks a reserved one `unknown`, and moves a dispatched order to `cancelled` only when the command effect is `none`, else to `unknown` |
+| OPEN-985-15 (the round-5 triple rule; it was the second OPEN-985-9 before the renumbering), OPEN-957-11 (d) | The M9 table is keyed on a triple that cancelled and expired commands never have | Confirmed: `read_command_result` returns the triple itself for them (#985 §2a). Rows 7 and 8 of M9 are those triples; any other `effect_state` than `none` or `not_performed` arrives with `provider_effect: unknown` and lands in row 1. Re-checked, see "Result mapping (M9)". The response fields are pinned in `ASSISTANTS_API_CONTRACT` |
+| Round 8 reconcile (#985 §2a, #957 §3a: the result-to-order table is now total over (command `status`, `effect_state`)) | Two M9 rows contradicted the order state that #985 writes: `succeeded`/`none` was `unknown` where the order is closed as wire `failed`, and the workflow `refused` was not tied to the wire `failed`. Cancelled and expired are one wire state, `cancelled`, but two workflow outcomes | M9 gets a wire column (one correspondence per row), a pair guard that runs before the table, and row 4 becomes `failed`/`result_inconsistent`. No new state and no new wire string. See "Result mapping (M9)" |
+| #985 §2b `unavailable` (503, no state body, on both control routes) | A failed or absent read, or a pair outside the #985 table, is no state at all | The workflow treats it as retryable and never as a state (M10b). A `cancel_order` 503 rolled back its `Store.Cancel`, so nothing was cancelled |
+| #957 §4.1 closed code set | Some `reason_code` values exist only in this workflow | Declared workflow-only in M10b: they never appear on the facade wire |
+| OPEN-986-6 (activation precondition; owner: the gitops P1 activation issue) | Until the real provider's `supported_versions` in `MCTL_BRIDGE_PROVIDERS` names v1alpha2, a dispatched command is never claimed and expires (#985 §7.3) | Not a workflow concern and not a gate here. The workflow sees it as an expired command with effect `none`: M9 row 8, `expired`/`command_expired`, wire `cancelled` |
+| OPEN-985-3 | The #959 refusal codes of #985 §2b are not mapped | New table "Control refusal mapping (M10b)". `Idempotent-Replayed` is read as a replay, not an error |
+| OPEN-985-4 | `revalidate_scope` and `resolve_connection` have no route and no owner | Removed from `ControlApiPort`. mctl-api re-checks membership, connection and install revision itself inside dispatch and again inside the write permit (#985 §5, §7.2), and answers with the codes of the M10b table; the workflow decides nothing from Temporal state. The state `resolving` is removed with them (no owner to resolve), and so is `revalidate_interval_s`. If the owner wants a liveness route, #985 adds it to §2a first and this slice then re-adds the call |
+| OPEN-957-11 (a) | `limits` is named but not enumerated | "Contracts" below: `approval_poll_interval_s`, `settle_poll_interval_s`, `settle_timeout_s`, each with default and bounds; #957 §6c copies them verbatim |
+| OPEN-957-11 (b), (c), OPEN-985-12 | Route constants mirror #953/#954; the control contract files and the Go-produced golden have no consumer | New vendored sets with provenance, and tests, see "Vendored contracts" and tasks 12 and 13. This slice vendors no bridge schema: it has no bridge port, and the only enum source is the in-repo result schema |
+| OPEN-988-2 | `GlovoControlInput` must name the one basket fingerprint | `fingerprint` is `"sha256:" + hex(sha256(JCS(approval_basket)))` as defined by mctl-agents#1059 and #988; the workflow carries and compares it and never parses a basket |
+| `handoff_ref` | No source: the control routes return ids, enums and digests only, and `handoff_url` belongs to `POST /connections` (#961), not to an order (#957 §3a) | Removed from `GlovoControlResult` |
+| `tenant_cap_reached` | Not in the closed code set of #957 §4.1 or #985 §2b | Removed. Admission pressure arrives as `rate_limited` (retryable) or `tenant_busy` (refusal) (M10b) |
+| #954 references | #954 is decomposed into #988 (orders), #989 (`aar_` and fence), #985 (dispatch, cancel, permit wiring), #957 (prepare, facade) and #986 (reads) | Citations updated; `CheckpointSideEffect` and `ReserveActionApproval` wording replaced by the #985 transaction |
+| M6 (race) | A `bridge-result` signal can arrive before the dispatch activity has stored `cmd_` | A signal for an unknown `command_id` is ignored; the poll of `read_command_result` recovers it, so no result is lost |
+
+### Control refusal mapping (M10b)
+
+Source of the code set: mctl-api#957 design §4.1, column "#985 control route", and #985 §2b
+(closed set; #989 §10 for the approval codes). The column "#1044 M10" of §4.1 says
+`retryable`, `terminal` or a name; this table is the consumer side of it. Applies to every
+control call. A code outside the closed set, or a body that does not parse, is
+`failed`/`control_unmapped_code` with no retry.
+
+| Code(s) | Disposition | `order_status` | `reason_code` |
+|---|---|---|---|
+| `unavailable`, `rate_limited` | retryable (#957 §4.1 and #985 §2b: 429 `rate_limited` is admission pressure with nothing written, and the code is not a terminal refusal): bounded backoff (honour `Retry-After`); on exhaustion in `dispatching`, attempt `cancel_order` once and end as shown. `rate_limited` is never a `reason_code`: the exhausted outcome is `dispatch_unconfirmed` | `unknown` | `dispatch_unconfirmed` |
+| `approval_invalid`, `approval_expired`, `approval_replayed`, `intent_mismatch`, `basket_changed`, `tenant_busy` | refusal, no retry | `refused` | the code |
+| `not_ready` | refusal, no retry | `refused` | `provider_disabled` |
+| `no_tenant`, `no_connection`, `connection_revoked`, `connection_expired`, `stale_install` | refusal (scope not live), no retry | `refused` | the code |
+| `not_authorized`, `invalid_request`, `not_found`, `invalid_transition` | terminal | `failed` | the code |
+
+- A dispatch answered 200 with the header `Idempotent-Replayed: true` is a success and returns the same `cmd_` (#985 §2a). The workflow never treats the header as an error.
+- 503 `unavailable` on `read_command_result`, `cancel_order` or `read_approval` carries no state body (#985 §2b: a failed or absent read, or a pair outside the §2a table). It is retryable and no information: the workflow keeps its state, retries with bounded backoff and never maps it to an `order_status`. A `cancel_order` that never gets a 200 is not a cancellation (it rolled back its `Store.Cancel`): the workflow reports `cancelled` only for a 200 whose `order_state` says so, and otherwise ends `unknown` with `dispatch_unconfirmed` while no `cmd_` is stored and `settle_timeout` after one.
+- After a `cmd_` is stored, a terminal refusal from `read_command_result` ends `unknown`/`result_inconsistent`, never `failed` (the effect may exist). `read_approval` in a state other than pending or approved ends `refused` with the #989 §10 reason for that state; an unrecognised state value is treated as not approved (`approval_invalid`).
+- The `reason_code` enum is the union of the M9 reasons, the M10 names, the scope and terminal codes of this table, and `settle_timeout`, `dispatch_unconfirmed`, `control_unmapped_code`, `contract_version_unsupported` and `workflow_id_scope_mismatch`. A test asserts that every code of the vendored #985 refusal bodies has a row here.
+- Workflow-only reason codes. The `reason_code` enum is this workflow's vocabulary. A value that is also a `glovo.Code` of mctl-api#957 §4.1 (the approval, scope and terminal codes of the table above, and `provider_disabled`, which is the M10 name §4.1 gives to `not_ready`) is carried through. Every other value is owned here, is not a row of #957 §4.1, and never appears on the facade wire (the facade renders only the #957 §3a states and the §4.1 codes): `dispatch_unconfirmed`, `control_unmapped_code`, `settle_timeout`, `contract_version_unsupported`, `workflow_id_scope_mismatch`, and the M9 reasons `provider_effect_unknown`, `result_inconsistent`, `approval_refused`, `cancel_requested`, `command_expired`, `provider_rejected`, `stale_lease`, `provider_unavailable`, `internal`. A change to #957 §4.1 never needs an edit here unless it renames a carried code.
+
+### Vendored contracts (OPEN-985-12, OPEN-957-11)
+
+- `orchestrator/assistants/api_contract/` is a verbatim copy of mctl-api#985's `internal/glovo/control/contract/*.json` with its `SHA256SUMS`, plus a `PROVENANCE` naming the mctl-api commit. `ASSISTANTS_API_CONTRACT` is `<commit>:<sha256 of that SHA256SUMS file>`; the worker compares it with the `PROVENANCE`, and a missing or different pin keeps `BLOCKED_FOR_INTEGRATION`. Route constants in `api_client.py` are generated from these files, never typed by hand. The directory is not created until #985 is merged.
+- `tests/fixtures/mctl-api/control-input.golden.json` is a verbatim copy of mctl-api#957's `internal/glovojoin/contract/testdata/control-input.golden.json`, with provenance. It is added in a follow-up PR after #957 A13 has merged, because #957 vendors this slice's schema first.
+- No bridge schema is vendored here (no bridge port). The v1alpha1 and v1alpha2 bridge files stay owned by mctl-agents#1043/#1045 history and mctl-agents#1059 in this repository: this repository is the origin of #1059's published set, not one of its consumers (#1059 §Vendoring lists mctl-api#986, #988 and mctl-telegram#1262 as the consumers), so there is no vendored copy of it here to drift.
+
 ### Decided 2026-11-09 (owner; formerly open items)
 
 - **Workflow start (D5).** mctl-api#957 writes a workflow-start record in the prepare
@@ -36,34 +93,81 @@ disagree, this section wins; the passages it contradicts have been edited.
 
 ### Result mapping (M9)
 
-Applies to the command the workflow dispatched (`place_order_fake`) or cancelled
-(`cancel_order_fake`). Rows are evaluated top to bottom and the first match wins; the rows
+Applies to the `place_order_fake` command the workflow dispatched. M1 never enqueues
+`cancel_order_fake` (mctl-api#989, #985): cancelling is `cancel_order` on the existing
+command, and `read_command_result` answers only for `place_order_fake` (#985 §2a). Rows are evaluated top to bottom and the first match wins; the rows
 are also pairwise disjoint, so every triple matches exactly one row and the order changes
 nothing. Amended 2026-11-09 (agy P2 on mctl-gitops#2547): the third row covers the six
 `succeeded`/`applied` triples with an `error_code` other than `none`.
 
-| `outcome` | `provider_effect` | `error_code` | `order_status` | `reason_code` |
-|---|---|---|---|---|
-| any | `unknown` | any | `unknown` | `provider_effect_unknown` |
-| `succeeded` | `applied` | `none` | `completed` (`place_order_fake`) / `cancelled` (`cancel_order_fake`) | `none` |
-| `succeeded` | `applied` | `stale_lease`, `expired`, `approval_refused`, `provider_unavailable`, `provider_rejected`, `internal` | `unknown` | `result_inconsistent` |
-| `succeeded` | `none` | any | `unknown` | `result_inconsistent` |
-| `failed_retryable`, `failed_terminal`, `cancelled`, `approval_refused` | `applied` | any | `unknown` | `result_inconsistent` |
-| `approval_refused` | `none` | any | `refused` | `approval_refused` |
-| `cancelled` | `none` | any | `cancelled` | `cancel_requested` |
-| `failed_terminal` | `none` | `expired` | `expired` | `command_expired` |
-| `failed_terminal` | `none` | `provider_rejected` | `failed` | `provider_rejected` |
-| `failed_terminal` | `none` | `none`, `stale_lease`, `approval_refused`, `provider_unavailable`, `internal` | `failed` | the `error_code` (`none` becomes `internal`) |
-| `failed_retryable` | `none` | any | `failed` | the `error_code` (`none` becomes `provider_unavailable`) |
+| `outcome` | `provider_effect` | `error_code` | `order_status` | `reason_code` | order wire state (#957 §3a) it corresponds to |
+|---|---|---|---|---|---|
+| any | `unknown` | any | `unknown` | `provider_effect_unknown` | `unknown` (a possible effect is never shown as cancelled or failed) |
+| `succeeded` | `applied` | `none` | `completed` | `none` | `placed` |
+| `succeeded` | `applied` | `stale_lease`, `expired`, `approval_refused`, `provider_unavailable`, `provider_rejected`, `internal` | `unknown` | `result_inconsistent` | decided by the pair (guard below): `placed` for a pair with an observed effect; the workflow is the more conservative and never claims more than the wire |
+| `succeeded` | `none` | any | `failed` | `result_inconsistent` | `failed` (the pair says no effect; round 8, was `unknown`) |
+| `failed_retryable`, `failed_terminal`, `cancelled`, `approval_refused` | `applied` | any | `unknown` | `result_inconsistent` | decided by the pair (guard below); the triple says an effect, so the workflow never says it did not happen |
+| `approval_refused` | `none` | any | `refused` | `approval_refused` | `failed`: workflow `refused` is the order wire `failed` (no effect) |
+| `cancelled` | `none` | any | `cancelled` | `cancel_requested` | `cancelled` |
+| `failed_terminal` | `none` | `expired` | `expired` | `command_expired` | `cancelled`: wire has no `expired` (#957 §3a, no order state in #988); `expired` is this workflow's own outcome |
+| `failed_terminal` | `none` | `provider_rejected` | `failed` | `provider_rejected` | `failed` |
+| `failed_terminal` | `none` | `none`, `stale_lease`, `approval_refused`, `provider_unavailable`, `internal` | `failed` | the `error_code` (`none` becomes `internal`) | `failed` |
+| `failed_retryable` | `none` | any | `failed` | the `error_code` (`none` becomes `provider_unavailable`) | `failed` |
+
+Pair guard (round 8). `read_command_result` returns `status`, `effect_state` and the triple, and the
+order wire state of the same command is a function of the pair alone (#985 §2a, applied by
+`reconcileOrder`, and rendered by #957 §3a). The workflow classifies the pair by that wire state
+and never reads an effect differently from it. The class of a terminal pair is `observed` when
+the wire state is `placed`, `possible` when it is `unknown`, and `none` when it is `failed` or
+`cancelled`; a `pending` or `leased` command is not terminal and is waited for (a reclaim turned
+`permitted` into `unknown` there, wire `unknown`, and the wait then ends at `settle_timeout_s`
+as `unknown`). The class function is a small table keyed by the pair, and a pair it does not list is class `possible`, labelled in code with its owner (#985 §2a),
+and checked in the task 12 contract test against #985's `TestReconcileOrderTable` rows once the
+vendored contract set carries them; #985 §2a does not list the pair rows among the contract files
+today, so this proposal asks #985 to add them (an open item, see requirements). The guard runs before the
+table above:
+
+- class `possible`: `unknown`/`provider_effect_unknown`, whatever the triple says.
+- class `observed`: the table decides, but only row 2 may produce `completed`; any other result is `unknown`/`result_inconsistent`.
+- class `none`: the table decides only when `provider_effect` is `none`; `applied` or `unknown` is `unknown`/`result_inconsistent`.
+
+For effect `none` the workflow surface is allowed to differ from the #957 §3a wire state, because the
+workflow outcome is a workflow-only vocabulary owned by M9. Exactly one cell does, and the wire column
+names it: `approval_refused` with `provider_effect` `none` is workflow `refused` while the wire says `failed`.
+Provider result `succeeded` with `provider_effect` `none` is workflow `failed`/`result_inconsistent` and the wire
+says `failed` too (#985 closes the order): the same state, with a reason that records the contradiction.
+Every pair whose effect is not `none` agrees on both surfaces.
+
+So the workflow outcome never says "no effect" against an observed or possible pair, and never
+says "completed" against anything but an observed one. Where the triple and the pair disagree
+(a stored result that contradicts `effect_state`) the workflow says `unknown`, which is more
+conservative than the order wire state, and says so in `reason_code`; #985 derives the order from the
+pair alone and does not read the triple (#985 §2a states this itself).
 
 - M1 never re-dispatches. A retry after `failed` is a new execution with a new `aar_`.
 - Settle timeout (`settle_timeout_s`, no accepted result): `cancel_order(order_ref)`, then
-  `read_command_result`. A terminal `expired` or `cancelled` command with effect `none`
-  maps by the table; anything else, including a read failure, is `unknown`/`settle_timeout`.
+  `read_command_result`. A terminal `cancelled` or `expired` command whose `effect_state` is
+  `none` or `not_performed` maps by rows 7 and 8 (`cancelled` or `expired`; the order wire
+  state is `cancelled` for both); a terminal one with any other effect is `unknown` (row 1,
+  the same rule as #985 §2a: a possible effect is never shown as cancelled); a non-terminal
+  command, an unreadable result and a 503 `unavailable` are `unknown`/`settle_timeout`.
+- Domain. The triple is the body of mctl-api#985 `read_command_result` (§2a), whose members are the result enums of the Glovo write command plus the two synthesised triples for terminal `cancelled` and `expired` commands (`cancelled`/`none`/`none` is row 7, `failed_terminal`/`none`/`expired` is row 8; a terminal command whose `effect_state` is anything but `none` or `not_performed` arrives with `provider_effect: unknown`, row 1). The workflow reads `status`, `effect_state` and the triple; a `completed` status without a triple or without `result_digest`, or a triple that contradicts `effect_state` (for example `succeeded` with an `effect_state` other than `succeeded`), is `unknown`/`result_inconsistent`. A terminal `cancelled` or `expired` status has no `result_digest` and needs none. A pair outside the #985 §2a table arrives as a 503 `unavailable` with no state body (no information, retried) when the order is `dispatched`; on an order that is not `dispatched` (after the workflow's own `cancel_order`, say) the route answers 200 from the stored order state, and the pair it carries is then classed `possible`: `unknown`/`result_inconsistent`, never `none`.
+- Seam (the result contract of `place_order_fake`, owned by mctl-agents#1059 `command-place-order-fake`, and the total mapping of `(status, effect_state)` to an order state, owned by mctl-api#985 §2a and #957 §3a): the table above depends on them only through the enum domain, the triples and the wire column; the wire column states a correspondence and owns nothing. If either owner changes an enum or a synthesised triple, the test below fails on the count and the per-row counts must be recomputed in the same wave.
 - A test enumerates every (`outcome`, `provider_effect`, `error_code`) triple of the
-  vendored enums (5 × 3 × 7 = 105) and asserts exactly one row matches and that no triple
+  enums read from the in-repo result schema that owns the `place_order_fake` result (today `docs/spikes/1043/result.schema.json`; mctl-agents#1059 once it defines the write result) (5 × 3 × 7 = 105) and asserts exactly one row matches and that no triple
   with `provider_effect=unknown` yields anything but `unknown`. Per-row counts, top to
-  bottom: 35, 1, 6, 7, 28, 7, 7, 1, 1, 5, 7 (total 105, none unmatched).
+  bottom: 35, 1, 6, 7, 28, 7, 7, 1, 1, 5, 7 (total 105, none unmatched). Re-checked
+  2026-11-09 (round 7) by enumerating the three enums of `docs/spikes/1043/result.schema.json`
+  at mctl-agents `0ef0e04` against the eleven row predicates: 105 triples, every one matched
+  exactly once, per-row counts as listed, and the three synthesised triples above land in
+  rows 7, 8 and 1. Re-checked again after the round 8 reconcile (the only change is the output
+  of row 4, no predicate moved, so the counts are the same): the enumeration was re-run on the
+  amended table and gave the same 105 and the same counts. Guarded outcomes were enumerated
+  over the three pair classes (105 x 3 = 315): class `possible` gives 105 `unknown`; class
+  `observed` gives 1 `completed` and 104 `unknown`; class `none` gives 35 outcomes without an
+  effect (`refused`, `failed`, `cancelled`, `expired`) and 70 `unknown`. In none of the 315
+  does a no-effect outcome meet an observed or possible class, and `completed` meets only an
+  observed one. The test below repeats the 315-case enumeration.
 
 ## Current state
 
@@ -118,12 +222,12 @@ Related proposals (read from the gitops checkout):
   hypothesis `API_BRIDGE_SELECTED` (mctl-api command outbox with lease,
   `command_id`, `aar_` consume, result post; mctl-api is the only party that
   signals control). Its schemas are `v1alpha1` proposals, not approved APIs.
-- mctl-api#953 (status `proposed`): `gcn_` connection registry, install
-  revision, facade/worker route gates (`/api/v1/glovo/facade/*`,
-  `/api/v1/glovo/worker/*`), fail-closed refusals.
-- mctl-api#954 (status `proposed`): owner-scoped order index, immutable basket
-  snapshots, `ConnectionAuthority` checkpoints, `Boundary.Dispatch/Report/ReadBack`
-  with `ReserveActionApproval` single-use fence, `hir_` has no route in.
+- mctl-api#953 and #954 are parent issues. Their contracts are carried by the slices
+  this workflow consumes (amended 2026-11-09, round 7): the M1a connection registry
+  (#959, #960, #961), the owner-scoped order index (#988), the single-use `aar_`
+  receipt and write fence (#989), the control routes, dispatch, cancel and refusal table
+  (#985), the facade, prepare and the workflow-start outbox (#957) and the read
+  extension (#986). `hir_` has no route in.
 - mctl-gitops#2456 (status `merged`, ADR-only): JWT claim mapper + default
   authorizer by namespace role; no task-queue dimension; tasks 3-10 are future
   issues, enforcement is not live.
@@ -162,13 +266,31 @@ Files:
   validators: `GlovoControlInput` (`schema_version`, `tenant_ref`,
   `principal_ref`, `install_ref` (`gin_`), `install_revision`, `connection_ref` (`gcn_`),
   `order_ref`, `execution_id` (`we_`), `work_item_id` (`wi_`), `approval_ref` (`aar_`),
-  `fingerprint`, `limits`; amended 2026-11-09),
+  `fingerprint`, `limits`; amended 2026-11-09; these twelve members are exactly the ones
+  mctl-api#957 §6c writes),
   `GlovoControlResult` (`schema_version`, `order_status` enum
-  `completed|refused|cancelled|expired|unknown|failed`, `reason_code` enum,
-  `handoff_ref` opaque, `approval_ref`, `fingerprint`, `command_id`), plus
-  activity I/O types. Refs use the opaque-handle patterns from #1043
+  `completed|refused|cancelled|expired|unknown|failed`, `reason_code` enum (design
+  "Control refusal mapping (M10b)"), `approval_ref`, `fingerprint`, `command_id`; round 7:
+  no `handoff_ref`), plus activity I/O types. Refs use the opaque-handle patterns from #1043
   (`^(tnr|prr|ordr|gcn|gin)_[A-Za-z0-9]{16,40}$`, amended 2026-11-09), lengths <= 64, no free text
-  > 256. `SCHEMA_VERSION = "assistants.mctl.ai/glovo-control/v1alpha1"`.
+  > 256. `SCHEMA_VERSION = "assistants.mctl.ai/glovo-control/v1alpha1"`. Member formats
+  (round 7): `execution_id` `^we_[A-Za-z0-9]{16,40}$`, `work_item_id`
+  `^wi_[A-Za-z0-9]{16,40}$`, `approval_ref` `^aar_[A-Za-z0-9]{16,40}$`,
+  `install_revision` an integer from 1 to 9007199254740991 (the `int64` of mctl-api#959, kept
+  inside the exact range of RFC 8785 numbers), `fingerprint` `^sha256:[0-9a-f]{64}$` (the
+  one basket fingerprint of mctl-agents#1059 and #988, `"sha256:" + hex(sha256(JCS(approval_basket)))`;
+  the workflow carries and compares it and never receives a basket). `limits` is an object with
+  `additionalProperties: false` and exactly these required integer members, each published
+  with its default and bounds in the schema, and copied verbatim by mctl-api#957 §6c:
+  `approval_poll_interval_s` (default 15, 5-60), `settle_poll_interval_s` (default 15, 5-60)
+  and `settle_timeout_s` (default 900, 60-900; 900 is the `ttl_seconds` maximum of the bridge
+  command schema, and the real command TTL, the named constant `DispatchCommandTTL`, is
+  owned by mctl-api#985). There is no member for an overall timeout: the lifetime is bounded
+  by the approval wait (the `aar_` expiry, `GlovoApprovalTTL`, mctl-api#957 OPEN-957-10) plus
+  `settle_timeout_s`. The input arrives as RFC 8785 canonical JSON (mctl-api#957 §6c); the
+  validator rejects duplicate keys and any non-integer number in an integer position, using
+  the raw-text pre-check of mctl-agents#1059 once it exists and an equivalent local one with
+  the same must-reject cases until then.
 - `orchestrator/assistants/schemas/glovo-control-{input,result}.v1alpha1.json`
   plus `SHA256SUMS` — generated by `tools/assistants_schema.py`; a test
   regenerates and compares (source-pinned contract).
@@ -178,16 +300,19 @@ Files:
   2026-11-09, M8): `cmd_` ids come from mctl-api. mctl-api is the only caller that
   starts the workflow; the workflow re-derives and compares its own id as defense in depth.
 - `orchestrator/assistants/workflow.py` — `GlovoControlWorkflow`.
-- `orchestrator/assistants/activities.py` — activities over two ports.
+- `orchestrator/assistants/activities.py` — activities over the one port.
 - `orchestrator/assistants/ports.py` — `ControlApiPort` (mctl-api) only. Amended
-  2026-11-09 (M7): it carries `dispatch_order`, `cancel_order` and
-  `read_command_result`; there is no `ProviderBridgePort`.
+  2026-11-09 (M7): it carries `dispatch_order`, `cancel_order`, `read_command_result` and
+  `read_approval` (round 7: exactly the four routes of mctl-api#985 §2a); there is no
+  `ProviderBridgePort`, and no `revalidate_scope`, `resolve_connection` or
+  `release_reservation`.
 - `orchestrator/assistants/api_client.py` — HTTP `ControlApiPort` using
   `MCTL_ASSISTANTS_TOKEN` (distinct from `MCTL_TOKEN`), base URL from env,
   no redirects (same pattern as `action_approvals._no_redirect_opener`).
-  Route paths are constants mirroring #953/#954 proposals and gated by
-  `ASSISTANTS_API_CONTRACT` pin; until those mctl-api routes are merged the
-  client is exercised only against a fake.
+  Route paths and body shapes are generated from the vendored mctl-api#985 contract
+  files and gated by the `ASSISTANTS_API_CONTRACT` pin (design "Vendored contracts");
+  until #985 is merged the client is exercised only against a fake that is itself
+  validated against those files.
 - ~~`orchestrator/assistants/bridge.py`~~ — removed by the 2026-11-09 amendment (M7).
   The bridge is mctl-api#968 and the workflow reaches it only through mctl-api APIs.
   The integration gate moves to `api_client.py`: a real `ControlApiPort` refuses to
@@ -207,43 +332,53 @@ Files:
 ```
 mctl-api --start(id derived from server scope, GlovoControlInput incl. aar_ + fingerprint)--> [mctl-assistants / mctl-assistants-control]
 GlovoControlWorkflow   (amended 2026-11-09)
-  check schema_version, re-derive workflow id
-  resolving:  revalidate_scope -> resolve_connection(gcn_, owner)       (ControlApiPort)
-  awaiting_approval: poll read_approval(aar_) every approval_poll_interval_s
-              every revalidate_interval_s: revalidate_scope; bounded by aar_ expiry
-  dispatching: revalidate_scope -> dispatch_order(order_ref, aar_, fingerprint) -> cmd_
-              (mctl-api#985: order transition + aar_/revocation re-check + bridge Enqueue in one tx)
+  check schema_version, re-derive workflow id          (no activity yet)
+  awaiting_approval: poll read_approval(aar_) every approval_poll_interval_s, bounded by aar_ expiry
+  dispatching: dispatch_order(order_ref, aar_, fingerprint) -> cmd_
+              (mctl-api#985: order transition + aar_/revocation re-check + bridge Enqueue in one tx;
+               refusals by "Control refusal mapping (M10b)")
   settling:   wait signal bridge-result{command_id, result_digest} | poll read_command_result
-              accept only the stored cmd_ and a matching digest; duplicates are no-ops
-  completed:  return GlovoControlResult(order_status, reason_code, handoff_ref)  (map: "Result mapping (M9)")
+              every settle_poll_interval_s, up to settle_timeout_s; accept only the stored cmd_
+              and, for a completed command, a matching digest; duplicates are no-ops
+  completed:  return GlovoControlResult(order_status, reason_code)  (map: "Result mapping (M9)")
 ```
 
 Rules:
 
 - Temporal state never authorizes. Each step that mutates calls mctl-api, which
-  re-runs its own checkpoints (#954 `CheckpointSideEffect`). The workflow only
-  decides whether to ask.
+  re-runs its own checks in the same transaction (mctl-api#985 §5: membership, connection,
+  install revision, `aar_` state and binding, fingerprint) and once more inside the write
+  permit (#985 §7.2, #989 fence). The workflow only decides whether to ask.
 - `hir_` is not a field of any input type; a test asserts the dataclass
   rejects it.
 - Fingerprint and `approval_ref` arrive in the input and never change; mctl-api
   compares them with the `aar_` intent at dispatch and a mismatch ends in
   `refused/basket_changed` (amended 2026-11-09, M10). A retry with a different
-  basket requires a new execution (`we_`) and a new `aar_`, matching #954.
-- `revalidate_scope` answers `live|revoked|stale_install|not_member|
-  tenant_cap_reached`. An activity failure after bounded retries is treated as
-  not live; the workflow never proceeds on an unknown answer.
+  basket requires a new execution (`we_`) and a new `aar_` (mctl-api#989, #985 §2b).
+- A control call that cannot be answered after bounded retries never lets the workflow
+  proceed: `read_approval` unanswered keeps it waiting until the `aar_` expiry; an
+  unconfirmed dispatch ends `unknown`/`dispatch_unconfirmed` (M10b); M1 never re-dispatches.
 - Cancellation: a `CancelledError` handler runs in a
-  `workflow.shield`-equivalent (non-cancellable) scope only
-  `cancel_order(order_ref)` if a command exists and
-  `release_reservation`. It never calls resolve/activate/approve and never
-  reopens a revoked connection.
+  `workflow.shield`-equivalent (non-cancellable) scope only `cancel_order(order_ref)`,
+  whether or not a command exists (mctl-api#985 §6: before dispatch it revokes the
+  pending or approved `aar_` and cancels the order; after dispatch it cancels the command
+  and the order becomes `cancelled` only when the effect is `none`, else `unknown`). It is
+  idempotent, so a repeat or a cancel after completion is a 200 that changes nothing. It
+  never approves, never re-activates a revoked connection and never returns an `aar_` to
+  `approved`.
 - Provider `unknown` -> no re-dispatch; result `order_status=unknown`. The full
   mapping is "Result mapping (M9)".
+- The signal arrives as one object argument `{command_id, result_digest}` (mctl-api
+  `internal/temporalclient`, `BridgeResultSignalName`), at least once. A signal whose
+  `command_id` is not the stored `cmd_`, including one that arrives before the dispatch
+  activity has stored it, is ignored; the poll of `read_command_result` recovers it.
 - The only signal is `bridge-result` (`command_id`, `result_digest`), never a payload, so no provider
   data or token enters history. Activities return ids, enums and bounded refs.
 - Bounded wait: workflow `execution_timeout` (default 2 h), approval wait capped
   by `aar_` expiry, settle wait capped at `settle_timeout_s` (default 15 min, the
-  bridge `MaxTTL` of 900 s in the vendored command schema).
+  `ttl_seconds` maximum of 900 s in the bridge command schema). The values come from the
+  input `limits`; there is no separate workflow execution timeout, because the two waits
+  and the bounded activity retries already bound the lifetime.
 
 ### 3. Worker
 
@@ -262,10 +397,10 @@ Rules:
   (default 20, range 1-100), `ASSISTANTS_MAX_CONCURRENT_WORKFLOW_TASKS`
   (default 20), activity start-to-close <= 30 s, schedule-to-close <= 5 min.
 - At startup logs the `ASSISTANTS_API_CONTRACT` pin; if `ASSISTANTS_API=real` while
-  no merged control route contract is pinned, exits with status
-  `BLOCKED_FOR_INTEGRATION` (amended 2026-11-09).
-- Noisy-tenant caps are enforced by mctl-api admission (it is the only
-  starter); the worker's slot limits cap total parallelism.
+  the pin is missing or differs from the `PROVENANCE` of the vendored mctl-api#985
+  contract set, exits with status `BLOCKED_FOR_INTEGRATION` (amended 2026-11-09, round 7).
+- Noisy-tenant pressure reaches the workflow only as `rate_limited` (retried) or `tenant_busy` (refused)
+  (mctl-api#985 §2b); the worker's slot limits cap total parallelism.
 
 ### 4. Test harness
 
@@ -273,9 +408,12 @@ Rules:
 (disposable dev server) with namespaces `mctl-assistants` and a decoy
 `mctl-agents`, a fake `ControlApiPort` holding two tenants and two principals
 in one tenant; the fake's `dispatch_order` mints server-style `cmd_` ids, keeps a
-write counter per `cmd_` and can emit `bridge-result` signals with digests (amended
-2026-11-09; there is no `LocalFakeBridge`). Time-skipping env is used for
-timers/revalidation.
+write counter per `cmd_`, answers replays with `Idempotent-Replayed`, can emit
+`bridge-result` signals with digests, and returns the refusal codes and the
+`read_command_result` triples of the vendored mctl-api#985 contract files; every fake
+response is validated against those files so the fake cannot drift (amended
+2026-11-09, round 7; there is no `LocalFakeBridge`). Time-skipping env is used for
+poll and wait timers.
 
 ### 5. CI
 
@@ -317,9 +455,10 @@ timers/revalidation.
 - Resource impact: CI only (one extra image build, a few minutes). Runtime cost
   is zero until #2457 activates a deployment.
 - Risks and mitigations:
-  - Contracts drift from mctl-api#953/#954 or #1043, which are unmerged.
-    Mitigation: ports plus `v1alpha1` schema pin; integration stays
-    `BLOCKED_FOR_INTEGRATION` until those land.
+  - Contracts drift from the mctl-api#985 control routes, which are unmerged.
+    Mitigation: the vendored contract set with its pinned `SHA256SUMS`, the generated route
+    constants and the fake validated against them; integration stays
+    `BLOCKED_FOR_INTEGRATION` until #985 is merged and pinned.
   - Local tests overstate isolation (dev server has no authorizer). Mitigation:
     tests are labelled structural; the live denial matrix (#1043 D1-D6) is a
     precondition of #2457 activation.
