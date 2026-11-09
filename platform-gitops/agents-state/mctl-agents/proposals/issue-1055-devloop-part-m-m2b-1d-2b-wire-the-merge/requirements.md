@@ -1,4 +1,17 @@
-# DevLoop Part M, slice M2b-1d-2b: wire the merge watch's deadline decision and guard the two Failed-end paths
+# DevLoop Part M, slice M2b-1d-2b-i: wire the merge watch's deadline decision and guard the two Failed-end paths
+
+## Amendment: split into 1d-2b-i and 1d-2b-ii (owner decision 2026-11-09)
+
+The owner accepted Q-A to Q-D as written and asked for the pre-declared split (design section 7). This issue (#1055)
+now carries **1d-2b-i only**. 1d-2b-ii gets its own issue, investigation, digest and approval after 1d-2b-i is merged.
+
+- **1d-2b-i (this issue):** wiring (R1-R8), `finally` guards (R9-R10), `_deliver` guard (R11-R12), `gate_ran_head`
+  carry (R13), marker reuse (R14), E1-E3, the gap-harness conversion, the activation pin (D17), tests D1-D14, D15a, D17 and
+  D18, and every mutation in the table. Nothing is recorded as a committed fixture in this slice.
+- **1d-2b-ii (later issue, not started):** the two committed `tests/fixtures/histories/merge_watch/` fixtures, the
+  recorder, `tools/record_merge_watch_final_read.py`, D15b (the committed fixtures replay clean) and D16.
+- 1d-2b-i is not released and is not offered for release on its own: the release hold stays ON, and #1022 still blocks
+  any release carrying this line. The implementer does not start 1d-2b-ii.
 
 ## Context
 
@@ -89,7 +102,8 @@ Marker (R14-R15)
 - R14. THE SYSTEM SHALL add no `workflow.patched` call. The AST count stays at 37, and the decision reuses
   `MERGE_WATCH_RECONCILE_PATCH = "merge-watch-terminal-reconcile"` (owner ruling 2026-11-08).
 - R15. WHEN any committed history fixture is replayed THE SYSTEM SHALL replay it unchanged, because no committed fixture
-  carries the marker. The two new `tests/fixtures/histories/merge_watch/` fixtures SHALL replay clean.
+  carries the marker. In 1d-2b-i a history recorded in-test by the new code SHALL replay clean through the Replayer
+  (D15a). The two committed `tests/fixtures/histories/merge_watch/` fixtures are 1d-2b-ii (D15b).
 
 Scope and STOP conditions (R16-R18)
 
