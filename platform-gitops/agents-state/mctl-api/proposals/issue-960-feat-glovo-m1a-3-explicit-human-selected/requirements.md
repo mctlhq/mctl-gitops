@@ -56,6 +56,13 @@ team is never chosen on the human's behalf.
 - WHILE the Glovo resource is not configured THE SYSTEM SHALL behave exactly as today for every OAuth flow, and SHALL NOT create team grants.
 - WHEN an admin adds a pilot allowlist entry THE SYSTEM SHALL require both a tenant and a non-empty principal id. A tenant-wide or wildcard entry SHALL NOT be possible.
 
+## Acceptance criteria added by the 2026-11-09 joint AMEND
+
+- WHILE `GLOVO_ENABLED` is not `true`, or any readiness dependency (Postgres refresh store, team grant store, principal-mode role reader, allowlist reader, valid `GLOVO_MCP_RESOURCE`) is missing or unhealthy, THE SYSTEM SHALL keep refusing the Glovo resource as not ready and SHALL keep `glovo.Gate` closed.
+- WHEN a Glovo authorization code is exchanged THE SYSTEM SHALL insert the refresh token and activate the team grant in one database transaction, and SHALL sign the access token only after that transaction commits.
+- WHEN a refresh family or a principal's sessions are revoked THE SYSTEM SHALL revoke the bound team grants in the same transaction.
+- THE SYSTEM SHALL use the joint contract's names, refusal enum, status mapping and `{"error","error_description"}` refusal body (design.md).
+
 ## Out of scope
 - Real Glovo login, provider basket or order mutation, provider secrets.
 - Deploying the public MCP facade, or the facade routes themselves (slice 4). Defining the Glovo audience and its route gate (slice 1). Connection and installation domain tables (slice 2).
