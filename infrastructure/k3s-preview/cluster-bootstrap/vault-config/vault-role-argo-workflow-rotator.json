@@ -1,0 +1,8 @@
+{
+  "bound_service_account_names": ["argo-workflow-rotator-sa"],
+  "bound_service_account_namespaces": ["argo-workflows"],
+  "alias_name_source": "serviceaccount_uid",
+  "token_policies": ["argo-workflow-rotator"],
+  "token_ttl": "30m",
+  "token_max_ttl": "30m"
+}
