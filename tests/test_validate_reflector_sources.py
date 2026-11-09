@@ -544,6 +544,9 @@ for key_ in ("reflected-version", "reflected-at"):
     rc, out = run(mk("x19" + key_[-2:], {"platform-gitops/m.yaml": secret([f"{KEY}/{key_}: 1"])}))
     report(f"X19 committed {key_} is named a mirror marker (not just an unknown key)", rc == 1 and "mirror marker" in out, out[-300:])
 
+expect("X20 selector keys with flags provably false are known keys and GREEN", mk("x20", {"platform-gitops/sel.yaml": secret([f'{KEY}/{R}allowed: "false"', f'{KEY}/{R}auto-enabled: "false"', f'{KEY}/{R}allowed-namespaces-selector: "team=a"', f'{KEY}/{R}auto-namespaces-selector: "team=a"'])}), 0)
+red("X21", "empty selector, flags absent: match-all semantics", "platform-gitops/sel2.yaml", secret([f'{KEY}/{R}auto-namespaces-selector: ""']))
+
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\nchecks={counter[0]} failures={len(failures)}")
 for f in failures:
