@@ -122,10 +122,24 @@ New file: `tools/rollback_compat_check.py`. It is stdlib-only and offline, in th
   `VERSION = "MS-5"`. The check treats an MS-4 report (no `scanned_at`) as UNKNOWN
   (`report_undated`).
 
-Why compare the code's patch ids rather than tags: the hazard is "a recorded id the target
+Why compare the code's patch ids rather than tags: a *necessary* hazard is "a recorded id the target
 does not call". Tags only encode it indirectly, and the next marker after M1 would need another
-hand-maintained floor. Comparing ids also covers a target above `min_tag` that removed or
+hand-maintained floor. An AST match is not a complete replay proof; identical patch IDs with
+changed workflow command order can still produce non-determinism, and scans can race live writes. Comparing ids also covers a target above `min_tag` that removed or
 renamed a patch.
+
+### Release-enforcement boundary and verdict meaning
+
+`COMPATIBLE` is renamed `PATCH_COMPATIBLE` in the tool output; exit 0 means only
+"no discovered patch-ID incompatibility against the supplied snapshot". It is **not**
+permission to roll back or a claim that workflow replay is compatible. For a complete
+rollback authorization, the operator must establish at the point of effect the pinned
+image digests, full Temporal history/type coverage including continue-as-new chains, no
+new marker-producing writes between scan and effect (or revalidation under an appropriate
+fence), actual worker compatibility, and fail-closed enforcement for *every* deploy and
+rollback pathway. The GitOps/Argo enforcement is a **future separately approved change**;
+this offline tool alone leaves B4 FAIL. No automated system may treat exit 0 as a release
+GO without the independent gates and their owner decision.
 
 ### 3. Reproducible local experiment
 
