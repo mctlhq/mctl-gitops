@@ -113,3 +113,90 @@ no security gap. Parent mctlhq/.github#325 stays `RESEARCH_ONLY_DEFER`.
   because a CI summary artifact is part of acceptance item 4.
 - The approval reference for this slice must be a fresh grant. It is filled in after human approval
   and never reuses the #1244 grant (`aar_5dc0456105f442829583adaa101516c6`).
+
+## AMEND: fail-closed aggregation and evidence integrity (normative)
+
+This AMEND is part of the same **docs-only** #1251 proposal. Its criteria supersede conflicting
+statements above; they are not an implementation approval. All new work stays in the test-only,
+runner, optional manual-workflow and report scope already specified.
+
+### A1 — Every failure must visibly block finance authorization (P1)
+
+- BEFORE starting any test, the runner SHALL initialize a conservative machine-readable result:
+  `harness_status=INVALID`, `FINANCE_SECURITY_GATE=BLOCKED`, and
+  `issue_outcome=CANNOT_OBSERVE_BLOCKED`. This result SHALL be retained on preflight failure,
+  interrupted or empty output, build failure, tagged test failure, vet failure, untagged comparison
+  failure, manifest failure, or aggregator crash; no failing command may skip publishing it.
+- The runner SHALL preserve exit codes from `go test`, `go vet`, comparison and the aggregator
+  (including failures hidden by pipes) and use an EXIT trap/finalizer to write a failure summary
+  and artifact. The workflow SHALL additionally run its summary/artifact publication with
+  `if: always()`, publishing a minimal BLOCKED fallback when the runner produced none.
+- `COMPLETE_WITH_GAPS_BLOCKED` is allowed to exit 0 **only** when the full test/vet/comparison
+  pipeline succeeded, the manifest is valid, and the recorded non-PASS cases are intentional
+  rubric observations. Infrastructure, test, or validation errors SHALL exit non-zero. A
+  normal CI success or exit 0 SHALL never imply `FINANCE_SECURITY_GATE=PASS`.
+- Distinguish a complete stream with failed assertions (`INCOMPLETE_BLOCKED`) from one that
+  never produced trustworthy test evidence (`CANNOT_OBSERVE_BLOCKED`). Both SHALL set the
+  security gate BLOCKED; an empty stream may never be classified COMPLETE.
+
+### A2 — Test-time network scope must be explicit (P1)
+
+- `go mod download` may run only as a named **preflight** before any L2 case; test execution,
+  including the second run, vet and aggregator, SHALL use `GOPROXY=off`,
+  `GOSUMDB=off`, `GOFLAGS=-mod=readonly` and cached dependencies. No runner step may
+  silently re-enable module downloads. Missing dependencies SHALL fail closed with BLOCKED.
+- Credential environment variables (`TG_API_ID`, `TG_API_HASH`, `DATABASE_URL` and
+  other reachable integration credentials) SHALL be removed before executing tests.
+  The five packages SHALL each have an `OFFLINE.default_paths` control validating refusal
+  of non-loopback/default-resolution paths, while allowing loopback.
+- Such default-path guards **do not prove a whole-process network firewall**. The runner and
+  report SHALL preserve `OFFLINE.whole_process=CANNOT-OBSERVE` unless a separately verified
+  sandbox actually denies all outbound network. Do not describe the suite as fully isolated
+  or fully hermetic solely because those guards pass. No real credentials, customer data,
+  live Telegram accounts or external finance endpoints may be introduced.
+
+### A3 — Freeze the complete mandatory manifest before judging results (P2)
+
+- Freeze a reviewed crosswalk from **each** mandatory #1244 T1–T10 subcase and M1–M4 to
+  canonical `<package>:<case-id>` rows; distinguish different layers even when local IDs
+  match. Record required cases without a current emitter as **MISSING**, not silently omit
+  them or infer success. The crosswalk and list of missing emitters SHALL be independently
+  reviewed before the manifest can yield COMPLETE.
+- An unrecognized package, extra row, duplicate, malformed row, missing mandatory row,
+  mismatched revision, non-PASS negative control or offline self-check SHALL make the
+  harness INVALID, with BLOCKED gate. The three call sites of T1 wire must not emit
+  duplicate canonical IDs in a run.
+- Every one of the five packages (policy, listener, control, agentapi, telegram) SHALL
+  emit its own passing `OFFLINE.default_paths`; this is **not** a substitution for
+  `OFFLINE.whole_process`.
+
+### A4 — Reproducibility and meaningful redaction evidence (P2)
+
+- The two independent tagged runs SHALL compare the exact sorted canonical
+  `(package,id,outcome,fixture_id)` tuples **and** pinned source revision. Required cases
+  SHALL carry a stable, synthetic fixture identifier in structured evidence (or
+  `fixture_id=none` where genuinely not applicable). The committed manifest SHALL define
+  expected fixture-ID requirements; absence, unstable IDs or mismatch SHALL block COMPLETE.
+  Test fixtures SHALL contain no actual personal/financial data.
+- A redaction case cannot be called PASS merely because the log handler emitted **zero bytes**.
+  Separate the existing durable-record check from the observable slog redaction check:
+  require a non-empty synthetic log event that exercises the production redacting handler
+  before a slog PASS; otherwise report `CANNOT-OBSERVE` with `slog_bytes=0`. Preserve the
+  existing durable `agent_actions.intent` plaintext `FAIL/GAP`; do not hide it or silently
+  change the slice-C report's historical outcome.
+- The consolidated report SHALL expose the actual source/test revision, both statuses, every
+  mandatory result, limitations, missing emitters and blocking gap IDs. Any change to the
+  observed rubric (including a previously zero-byte redaction check) must be reviewed rather
+  than promoting it silently.
+
+### A5 — CI cadence and governance
+
+- The optional `workflow_dispatch` is a manually triggered **evidence** job, not a
+  production/security approval. If tagged vet/race checks remain absent from the normal
+  `build.yml`, the report and issue SHALL explicitly record the residual regression
+  exposure and a separately gated follow-up. Do not claim continuous CI coverage.
+- Retain `status: proposed` until this AMEND merges, independent Claude/Agy review,
+  canonical digest calculation, and a **separate** owner approval through the live
+  Temporal DevLoop. No implementer, security fix, product enablement, deployment or pilot
+  is authorized by this AMEND. `FINANCE_SECURITY_GATE=BLOCKED` and
+  `RESEARCH_ONLY_DEFER` remain unchanged.
