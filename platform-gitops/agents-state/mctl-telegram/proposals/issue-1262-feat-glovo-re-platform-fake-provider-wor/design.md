@@ -163,7 +163,11 @@ limits churn; its contents are replaced.
   `cancel_order_fake`, a v1alpha1 `place_order_fake` carrying an approval basket) is `ErrInvalid`.
   The v1alpha2 `payload` is the approval basket; the fake stores its `item_codes` and quantities and
   nothing else. The result is the unchanged v1alpha1 `result.schema.json` (#1059 §Write command,
-  "Result"): `EncodeResult` is not versioned. `cancel_order_fake` stays v1alpha1.
+  "Result"): `EncodeResult` is not versioned. `cancel_order_fake` stays v1alpha1. Round 8: the
+  provider's `schema/PROVENANCE` pins the vendored write files to the #1059 merge commit (named when #1059 merges;
+  the older two files keep the pin above). The server side of "never handed" is mctl-api#986 (the
+  `supported_versions` key, T4f, T4h, T7c); that the real provider's entry declares v1alpha2 is OPEN-986-6, an
+  activation precondition of the first dispatch.
 - `wire_test.go` checks:
   - `sha256(schema/*.json)` equals the pinned digests (the two v1alpha1 ones and, round 7, the three
     vendored from #1059);

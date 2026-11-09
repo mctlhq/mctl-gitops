@@ -136,10 +136,7 @@ Cancel
 
   The response SHALL carry `effect_state`.
 - THE SYSTEM SHALL never return an `aar_` to `approved`.
-- WHEN a cancel repeats THE SYSTEM SHALL return 200 with the current state and change
-  nothing. WHEN the command is already `completed` or `expired` THE SYSTEM SHALL return 200,
-  leave the bridge command unchanged and apply the design §2a result-to-order table under the
-  locks it already holds.
+- WHEN a cancel repeats, or the order is already `closed`, `cancelled` or `unknown`, THE SYSTEM SHALL return 200 with the current state and change nothing. WHEN the order is `open` THE SYSTEM SHALL `MarkCancelled` with no `Revoke`. WHEN the order is `dispatched` THE SYSTEM SHALL call `bridge.Store.Cancel` and then apply the design §2a result-to-order table through `reconcileOrder`, whether `Cancel` returned nil or `ErrAlreadyCompleted`. WHEN the pair is outside that table THE SYSTEM SHALL answer 503 `unavailable`, audit it and roll the transaction back.
 
 Read routes
 - WHEN the control worker calls `read_command_result` or `read_approval` THE SYSTEM
@@ -235,15 +232,15 @@ Data hygiene
   stay `not_ready`. (amended (c): no `SECURITY DEFINER` grantee any more)
 - OPEN-985-7. The live pod env of mctl-api was not observed. The startup proof covers it
   either way.
-- OPEN-985-9 (new, round 5; recommendation: accept the mapping of design §2a). #1044's M9 table is keyed on a result triple that cancelled and expired commands never have. This slice returns the triple itself (`cancelled`: `cancelled`/`none`/`none`; `expired`: `failed_terminal`/`none`/`expired`; any other `effect_state`: `provider_effect: unknown`). The #1044 AMEND confirms it and pins the response fields in `ASSISTANTS_API_CONTRACT`; if it prefers a status/effect_state pre-table instead, this route returns `status` and `effect_state` only and the triple stays absent.
+- OPEN-985-15 (new, round 5, renumbered round 8 because OPEN-985-9 was used twice; recommendation: accept the mapping of design §2a). #1044's M9 table is keyed on a result triple that cancelled and expired commands never have. This slice returns the triple itself (`cancelled`: `cancelled`/`none`/`none`; `expired`: `failed_terminal`/`none`/`expired`; any other `effect_state`: `provider_effect: unknown`; `none` and `not_performed` give the first two triples for `expired` and the `cancelled` triple for `cancelled`). The #1044 AMEND confirms it and pins the response fields in `ASSISTANTS_API_CONTRACT`; if it prefers a status/effect_state pre-table instead, this route returns `status` and `effect_state` only and the triple stays absent.
 - OPEN-985-8 (closed, round 6 G1). The command payload of a Glovo `place_order_fake` is
   exactly the order's final approval-basket bytes, with no wrapper (mctl-api#957 design
   §6d.3), so #989's fence recomputes the fingerprint from what is written. The schema is
   owned by mctl-agents#1059 (`command-place-order-fake.schema.json`, `schema_version`
   `bridge.mctl.ai/v1alpha2`). Round 7: mctl-api#986 vendors it and owns the wire version,
   projection and Claim gating (#986 design §2a); this slice only enqueues with
-  `WireVersion: bridge.WireV1alpha2`. Dispatch is `not_ready` until #986's wire-version level
-  is present.
+  `WireVersion: bridge.WireV1alpha2`. Dispatch is `not_ready` until #986's `Store.WireVersionsEnabled()`
+  is true.
 - OPEN-985-11 (round 6; recommendation: a separate const `MCTL_GLOVO_WRITE_FENCE_ENABLED`, distinct from the route flag, set only by the gitops PR that lifts mctl-gitops#2457). Fence precondition 2 ("hold #2457 lifted") has no machine-checkable signal, so `SetFence` gating and T17 cannot be implemented as written. Order of the two flags: route mount first, fence last; T17 asserts `SetFence` is not called with it false while the route flag is true; docs/glovo-control.md (task 10) names it.
 - OPEN-985-13 (round 8; recommendation: 900 s). `DispatchCommandTTL`, the `ttl_seconds` of the dispatch command: the #1059 maximum and the #1044 `settle_timeout_s` default, always capped at the `aar_` `fresh_until`. Only the owner changes it (design §7.4).
 - OPEN-985-14 (round 8; recommendation: accept). The fixture seam is the `glovojoin_fixture` tag selecting `gate_fixture.go` and `ttl_fixture.go` (design §7.4, T29); the tag opens only the const and never skips §7.3 items 2 to 6.

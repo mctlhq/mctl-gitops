@@ -60,7 +60,7 @@ schema, RFC 3339 patterns and the re-measured sizes.
   `additionalProperties: false`; the `claim/v1alpha2` fixture holds one v1alpha1 command, one read
   command and one write command (round 7). — DoD: the v1alpha1-only fixture equals the shape
   `internal/api/handlers_bridge.go:200` writes today.
-- [ ] 5b. `command-place-order-fake.schema.json` (depends on 5): the schema of design
+- [ ] 5b. `command-place-order-fake.schema.json` (depends on 5 and 8): the schema of design
   §Write command (the field table of round 7), `command-place-order-fake.valid.json` and the
   invalid fixtures (v1alpha1 payload, wrapped payload, one required field missing, an extra top-level
   field, `install_revision_ref`), and `check_write_command(raw: bytes)` in task 8. — DoD: the

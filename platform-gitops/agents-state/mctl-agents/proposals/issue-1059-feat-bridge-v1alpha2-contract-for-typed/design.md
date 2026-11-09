@@ -492,13 +492,21 @@ round 7); its shape is fixed here.
 
 ### Vendoring
 
-The README specifies one-way vendoring. Consumers copy `docs/contracts/bridge/v1alpha2/`
-verbatim and pin each file by the sha256 in `SHA256SUMS`. `SHA256SUMS` is the exact
-list of files a consumer vendors (mctl-api#986 vendors that list and nothing else). For the write command
-(round 7): mctl-api#986 task 1 vendors `command-place-order-fake.schema.json` and its fixtures into
-`internal/bridge/schema/v1alpha2/` and mctl-telegram#1262 task 2b into its provider module; each pins
-the sha256 from `SHA256SUMS` in its own test, so a one-byte change fails the consumer's test, and an upstream
-change fails this issue's `SHA256SUMS` test first. They never edit the vendored
+The README specifies one-way vendoring. Consumers copy `docs/contracts/bridge/v1alpha2/` files
+verbatim and pin them. One rule (round 8): `SHA256SUMS` lists every published file; each consumer
+vendors the subset the table below names, records the sha256 of `SHA256SUMS` in its `PROVENANCE`,
+and its drift test checks every vendored file against the matching `SHA256SUMS` line. A consumer
+never edits a vendored copy, and any change starts here. An upstream change fails this issue's
+`SHA256SUMS` test first.
+
+| Consumer | Files | Location |
+|---|---|---|
+| mctl-api#986 task 1 | `read-command`, `read-result`, `command-place-order-fake` and `claim-response` schemas and their fixtures | `internal/bridge/schema/v1alpha2/` |
+| mctl-api#988 task 2 and 2a (the one basket copy) | `approval-basket.schema.json`, `basket-fingerprint.json`, `pattern-parity.json`; `jcs-digest.json`, `must-reject.json` | `internal/glovo/basket/contract/`; `internal/jcs/testdata/` |
+| mctl-telegram#1262 task 2b | `command-place-order-fake`, `approval-basket` and `claim-response` schemas | its `schema/` directory |
+
+mctl-api#986 task 1's `TestApprovalBasketRefResolves` is the test that the `$ref` from the schemas
+to #988's basket copy resolves and that the copy equals its `SHA256SUMS` line.
 copy, and any change starts here. A test regenerates `SHA256SUMS` in memory and compares
 it with the committed file.
 

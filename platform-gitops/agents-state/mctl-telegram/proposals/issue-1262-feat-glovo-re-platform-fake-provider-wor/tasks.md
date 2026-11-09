@@ -153,10 +153,7 @@ or rebase that branch: its tree deletes `main`'s `internal/glovo/**`.
   v1alpha2 command with a missing or extra field are each refused locally with zero permit calls and zero
   effects; the claim response with `claim/v1alpha2` is accepted and an unknown claim version is a failed
   claim. Proven red: make `ParseCommand` accept v1alpha2 for every kind, and the refusal subtests fail.
-- [ ] T27. (Round 7) Gating: with the fake bridge configured with a provider that declares only v1alpha1,
-  a claim never returns the enqueued v1alpha2 `place_order_fake`, and the command stays pending until the
-  provider declares v1alpha2. Proven red: drop the Claim gating in the fake and the test fails. The real
-  server side of this gate is mctl-api#986 T4c; this test pins the provider's expectation of it.
+- [ ] T27. (Round 7; round 8, A-5) The provider's own code refuses what it does not support, and executes the one v1alpha2 command fake only. Against the real `ParseCommand` and claim client (not the fake bridge's gate): a claim envelope with an unknown `schema_version` is a failed claim, no command from it is parsed, zero permit calls and zero effects; a v1alpha2 command of any kind but `place_order_fake`, and a `schema_version` the build does not know, are refused locally with the same zero counts; a valid v1alpha2 `place_order_fake` from a `claim/v1alpha2` envelope runs permit, one fake effect and a v1alpha1 result. Proven red: make `ParseCommand` or the envelope check accept any version and the refusals fail. The server side of "a provider that does not advertise v1alpha2 is never handed the command" is mctl-api#986 T4f (write), T4h (predicate, envelope) and T7c (reads), not this test.
 
 ## Rollback
 

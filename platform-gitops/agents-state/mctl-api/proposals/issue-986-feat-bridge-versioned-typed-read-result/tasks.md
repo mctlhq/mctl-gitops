@@ -3,11 +3,14 @@
 Blocking dependency (amended 2026-11-09 (b)): mctlhq/mctl-agents#1059 approved and
 merged. Without it no task starts.
 
-- [ ] 1. Vendor the #1059 v1alpha2 read files into `internal/bridge/schema/v1alpha2/`
-  (`read-command.schema.json`, `read-result.schema.json`, fixtures, digest vectors; the basket
-  files are #988's, `internal/glovo/basket/contract/`, round 4 N3) and, round 7, the #1059
-  `command-place-order-fake.schema.json` with its fixtures, with a `PROVENANCE` file (repo, PR, merge commit,
-  sha256 per file) and a `TestVendoredV1alpha2MatchesProvenance`. DoD: no file differs
+- [ ] 1. Vendor, byte for byte, the files of the design §1 vendoring rule into
+  `internal/bridge/schema/v1alpha2/`: `read-command.schema.json`, `read-result.schema.json`,
+  `command-place-order-fake.schema.json`, `claim-response.schema.json` and the fixtures of those four
+  (the basket files and the RFC 8785 vectors are #988's, `internal/glovo/basket/contract/` and
+  `internal/jcs/testdata/`), with a `PROVENANCE` file (repo, PR, merge commit, sha256 of `SHA256SUMS`,
+  sha256 per file), `TestVendoredV1alpha2MatchesProvenance` (every file against its `SHA256SUMS` line)
+  and `TestApprovalBasketRefResolves` (registers #988's `approval-basket.schema.json` under the `$id` the
+  `$ref`s name, fails if its sha256 differs from the pinned line, and compiles all four schemas). DoD: no file differs
   from #1059; v1alpha1 files and their pin test are unchanged.
 - [ ] 2. Versioning in `schema.go` and `store.go` (depends on 1):
   - `compileSchemas()` compiles both versions; `ParseResult` selects by `schema_version`;
@@ -23,9 +26,12 @@ merged. Without it no task starts.
     §2a (round 7; #985 `NewRuntimeStore` is the only caller);
   - `cmdCols`/`scanCmd` are NOT changed; the new columns are read only in read-kind paths
     through the extras query of design §4a (round 4, R3-3);
-  - `BridgeProviderConfig.SupportedVersions` (default `[v1alpha1]`), `Claim` leases v1alpha2
-    commands (read kinds and the v1alpha2 `place_order_fake`) only to v1alpha2-capable providers, versioned claim envelope
-    (`handlers_bridge.go:200`) (OPEN-1059-2, closed in round 7: this slice owns it).
+  - `supported_versions` in `auth.BridgeProviderConfig` (closed value set, default `[v1alpha1]`,
+    unknown value is a config error), `bridge.Caller.Versions` filled by `bridgeCaller`, `Claim` leasing
+    v1alpha2 commands (read kinds and the v1alpha2 `place_order_fake`) only to a caller whose
+    `Versions` contains v1alpha2 as a selection predicate (design §4a), the claim envelope picked by
+    the handler from the caller (`handlers_bridge.go:200`) and `Store.WireVersionsEnabled()` (design §2)
+    (OPEN-1059-2, closed in round 7: this slice owns it).
   DoD: all v1alpha1 tests pass unchanged.
 - [ ] 3. Idempotent schema (depends on 2): `bridge.ApplyReadSchemaTx(ctx, tx pgx.Tx,
   runtimeRole string) error` (round 4, X-3), the one owner of the read DDL: the guarded `DO` block
@@ -84,10 +90,8 @@ merged. Without it no task starts.
   the `bridge.mctl.ai/claim/v1alpha2` envelope; a legacy v1alpha1 `place_order_fake` queued beside it
   is still leased to the `[v1alpha1]` provider with the T4 golden projection. Proven red: remove the
   gate for write kinds.
-- [ ] T4g. (Round 7) Result version: a v1alpha1 result for the v1alpha2 `place_order_fake` is accepted
-  and `effect_state` follows today's `effectFor` (`applied` after a permit gives `succeeded`; `applied`
-  without a permit is refused as today); a v1alpha2-versioned result for it is `binding_mismatch`; a
-  v1alpha1 result for a read kind is `binding_mismatch`.
+- [ ] T4h. (Round 8, A-2) Gating is a predicate: with wire versions enabled and 11 queued v1alpha2 `place_order_fake` commands (more than `MaxClaimBatch`) created before one claimable v1alpha1 `quote`, a `[v1alpha1]` provider's `Claim` returns the `quote` in the first call (red if the gate is a filter after `LIMIT`). A gated, unclaimed write at sequence 1 keeps a later sequence 2 of the same execution unclaimable by any provider until `ExpireDue` expires it (and then sequence 2 is claimable); with the flag off the pgx tracer sees no `wire_version` (T4c). Unknown `supported_versions` values, duplicates and an empty array fail `ParseBridgeProviders`; a config without the key claims as `[v1alpha1]`; `bridgeCaller` copies the list into `Caller.Versions`; a `[v1alpha1]` provider's response is the v1alpha1 envelope byte for byte and a `[v1alpha1,v1alpha2]` provider's is `claim/v1alpha2`, each validated against the vendored `claim-response.schema.json` (closes OPEN-986-4).
+- [ ] T4g. (Round 7; round 8, A-3) Result version. `ParseResult` runs first, so the documents are concrete: (a) a v1alpha1 result for the v1alpha2 `place_order_fake` is accepted and `effect_state` follows today's `effectFor` (`applied` after a permit gives `succeeded`; `applied` without a permit is refused as today); (b) a well-formed v1alpha2 read result (the vendored valid `read_history` fixture) posted to the write command is `binding_mismatch`; (c) the same document with one required field removed is `invalid_document`; (d) a v1alpha1 result for a read kind is `binding_mismatch`. Proven red: swap the order of `ParseResult` and the step 1 check and (c) changes code; make the write take the stored `wire_version` and (a) fails.
 - [ ] T5. A read command has `''` as `workflow_id`, `order_ref`, `execution_id` and
   `work_item_id`, and its completion writes no `bridge_signal_outbox` row.
 - [ ] T5c. Round 3 (N1): two concurrent reads from two tenants, and two reads from one principal, all enqueue and are claimable together (no `unique_violation`, no read waits on another); after `ApplySchema` the index definition carries the read-kind predicate, a second run is a no-op, and a v1alpha1 execution's `sequence` ordering and duplicate-`sequence` refusal are unchanged.
@@ -106,7 +110,7 @@ merged. Without it no task starts.
   round trip (amended (c): `bridge_commands.lease_token` stores it by design).
 - [ ] T7c. Versioning: a provider configured `[v1alpha1]` never receives a read-kind
   command from `Claim`; one configured with v1alpha2 does; an unclaimed read command
-  expires.
+  expires. Round 8: the claim response of each configuration validates against the vendored `claim-response.schema.json` (T4h).
 - [ ] T7d. A provider queue with mixed read, v1alpha1 write and (round 7) v1alpha2 write commands: `Claim`,
   `Cancel`, `IssueWritePermit` (refused for the read) and `ExpireDue` all succeed on both
   kinds; nothing fails to scan.

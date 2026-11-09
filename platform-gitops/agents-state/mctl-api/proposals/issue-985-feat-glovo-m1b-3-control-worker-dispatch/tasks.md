@@ -88,11 +88,8 @@ With any of them missing, the code merges with nil collaborators and answers
   schema (red with `WireVersion` omitted: the v1alpha1 schema refuses the basket and dispatch is
   never green).
 - [ ] 6. Implement `Dispatcher.Cancel` as in design §6 (depends on 2, 4):
-  - `RevokeGlovoApprovalTx` before dispatch;
-  - after `Store.Cancel`, effect `none` gives order `cancelled` and receipt `unknown`;
-    effect `unknown` gives order `unknown` and leaves the `consumed` receipt untouched;
-  - `completed` or `expired` (`ErrAlreadyCompleted`) calls `reconcileOrder` (design §2a) under the
-    locks already held and returns 200;
+  - `MarkCancelled` for an `open` order (no `Revoke`), `RevokeGlovoApprovalTx` then `MarkCancelled` for a `finalized` one;
+  - for a `dispatched` order, `Store.Cancel` (nil or `ErrAlreadyCompleted`) and then `reconcileOrder` (design §2a, the one owner of every row); terminal orders write nothing;
   - no path returns the receipt to `approved`.
 
   DoD: covered by T6-T8.
@@ -220,7 +217,7 @@ advisory keys are used.
   `cmd_` with `Idempotent-Replayed: true`, also when the command completed or was cancelled
   in between (round 4, F2). A `read_command_result` after the crash
   returns the command.
-- [ ] T23. Read routes (round 5, X-4: a `cancelled` and an `expired` command return the triples of design §2a over every `effect_state` value): `read_command_result` and `read_approval` return only the
+- [ ] T23. Read routes (round 5, X-4; round 8, B1: a `cancelled` and an `expired` command return the triples of design §2a over every `effect_state` value, with `none` and `not_performed` giving the `cancelled` / `failed_terminal` triple and every other value `provider_effect: unknown`): `read_command_result` and `read_approval` return only the
   fields of §2a. A sentinel placed in the stored result never appears in the response.
   A command of another tenant or a non-Glovo kind returns `not_found`.
 - [ ] T24. End-to-end revocation fence (moved here from #959 T17, amended (c)): with the
@@ -245,21 +242,10 @@ advisory keys are used.
   DDL (pgx tracer); the existing bridge tests (`NewStore`, Glovo disabled) and the
   bridge-scrub test pass unchanged; the fake provider sees zero writes in every case.
 
-- [ ] T27. (Round 7, F2) The result-to-order table is total. Over every command status
-  (`pending`, `leased`, `completed`, `cancelled`, `expired`) and every `effect_state` (`none`,
-  `permitted`, `succeeded`, `failed`, `not_performed`, `unknown`), through both callers
-  (`read_command_result`, and `Cancel` on `ErrAlreadyCompleted`), assert the #988 call, the #989
-  call, the stored order state and that every pair outside the §2a table gives 503
-  `unavailable` and no change. Three end-to-end cases that left the order `dispatched` before:
-  (a) a command that expires unclaimed, (b) a provider result `failed_terminal` /
-  `provider_rejected` with no permit, (c) `CancelOpenForConnections` on a reserved command. Each
-  ends with the order `cancelled` or `closed` and the receipt `unknown`, and the #957 §3a wire
-  `state` read before the transition equals the one read after it. Proven red: delete the two
-  `none` rows (the order stays `dispatched`), and revert the `ErrAlreadyCompleted` branch of
-  `Cancel` to "change nothing" (the `expired` case stays `dispatched`).
+- [ ] T27. (Round 7, F2; round 8, B1 to B7) The result-to-order table is total. `TestReconcileOrderTable` calls `reconcileOrder` directly over every command status (`pending`, `leased`, `completed`, `cancelled`, `expired`) times every `effect_state` (`none`, `permitted`, `succeeded`, `failed`, `not_performed`, `unknown`), 30 pairs, and asserts for each the #988 call, the #989 call, the stored order state and, for every pair of the catch-all row, 503 `unavailable` with nothing written. It uses the same cells as T23 and #957 T6. Through the callers it drives only what each can reach: `read_command_result` every pair, `Cancel` the pairs of a `pending`, `leased`, `completed` or `expired` command (a `cancelled` one is the nil path). On the `Cancel` path where `Store.Cancel` returns `ErrAlreadyCompleted` the test also asserts the lock set: L1 shared, L2 shared, L6 read, L3, L4, L5, in that order (round 8, S-6). Cancel on each order state: `open` gives `cancelled` with no `Revoke`; `finalized` revokes; `closed`, `cancelled` and `unknown` write nothing and answer 200. A `reconcileOrder` on an order that is not `dispatched` makes no call (a second `read_command_result` after the first is a no-op, red if the guard is removed). With the `aar_` already `unknown` or `consumed`, the `MarkGlovoApprovalUnknownTx` entry is a no-op and the order `Mark*` still commits (#989 T16a). Three end-to-end cases that left the order `dispatched` before: (a) a command that expires unclaimed, (b) a provider result `failed_terminal` / `provider_rejected` with no permit, (c) `CancelOpenForConnections` on a reserved command. Each ends with the order `cancelled` or `closed` and the receipt `unknown`, and the #957 §3a wire `state` read before the transition equals the one read after it. Proven red: delete the `none` rows (the order stays `dispatched`), revert `Cancel` to "change nothing" on `ErrAlreadyCompleted` (the `expired` case stays `dispatched`), drop the L6 read or L3 from the `Cancel` path (the lock-set assertion below fails), and make the `cancelled|expired, succeeded` row `MarkCancelled` (the pair case fails).
 - [ ] T28. (Round 7, F1) Dispatch uses the #986 wire-version mechanism: the stored command is wire
-  v1alpha2, a provider whose `SupportedVersions` lacks v1alpha2 never claims it (so it expires and
-  T27 case (a) applies), and `Enqueue` below the wire-version level answers `not_ready` without a
+  v1alpha2, a provider whose `supported_versions` lacks v1alpha2 never claims it (so it expires and
+  T27 case (a) applies), and `Enqueue` while `Store.WireVersionsEnabled()` is false answers `not_ready` without a
   row. These are driven through #986's code; the mechanism's own tests are #986 T4e-T4g.
 
 - [ ] T29. (Round 8, design §7.4) Fixture seam. (a) `TestControlGateClosedInReleaseBuild` (no tag): `glovo.ControlDefault.Open` is false and `DispatchCommandTTL == 900*time.Second`. (b) `TestFixtureFilesAreTagged`: `go list -f '{{.GoFiles}}'` for the release build lists `gate_release.go` and `ttl_release.go` and neither fixture file, and the repository's Dockerfile and release workflow contain no `glovojoin_fixture`. (c) With the tag, the gate is open but `main.go` still leaves the fence `refusingFence` while any of §7.3 items 2 to 6 fails (one case per item). (d) `SetFixtureDispatchCommandTTL(2*time.Second)` makes the next dispatch enqueue `ttl_seconds` 2, still capped at `fresh_until`. Proven red: with the release file's const flipped to `true`, (a) fails; with the fixture file added to the release build list, (b) fails; with `receipt.Ready` skipped under the tag, (c) fails.
