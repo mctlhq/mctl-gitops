@@ -12,7 +12,7 @@ task.
   `executionRequestColumns`, `scanExecutionRequest` and `ExecutionRequest`, with `row_version` serialized and
   `claim_token` still `json:"-"` (depends on nothing). DoD: `EnsureSchema` is idempotent on a fresh database and
   on an existing one; existing tests pass.
-- [ ] 3. Bump `row_version` in the claim, fulfil and dispatcher-reject UPDATEs. The dispatcher reject also sets
+- [ ] 3. Bump `row_version` in every claim, lease-renewal, fulfil and dispatcher-reject UPDATE. The dispatcher reject also sets
   `rejection_kind='claimant'`. In the `ExecutionRequestRejected` branch of `RejectExecutionRequest`, return
   `ClosedRequestError` when `rejection_kind='operator'` (depends on 2). DoD: the existing
   `execution_requests_test.go` tests pass, and new assertions check the row_version increments.
@@ -21,9 +21,9 @@ task.
   visibility and owner (depends on 2). DoD: one bounded query; `EXPLAIN` uses
   `work_item_execution_requests_claimable`.
 - [ ] 5. Add `OperatorRejectExecutionRequest` to the store, using `lockedRequest`, `replayed`/`remember`, the
-  ordered checks (replay, closed, row_version, live claim) and the guarded UPDATE that clears `claim_token` and consumes the independent approval grant in the **same transaction**. Append
+  ordered checks (grant binding/consumption availability, closed, expected_state, row_version, live claim) and the guarded UPDATE that clears `claim_token` and consumes the independent approval grant in the **same transaction**. Append
   the `execution_request_operator_rejected` event without reason text or token, and add the typed errors
-  `RowVersionMovedError` and `ClaimLiveError` (depends on 2, 3). DoD: no write to executions, approvals or item
+  `RowVersionMovedError` and `ClaimLiveError` (depends on 2, 3). DoD: no write to executions, unrelated approvals or item
   state, verified by test.
 - [ ] 6. Add the `operatorDrain` gate (`isHumanAdmin`, failed audit on refusal) and the handlers for
   `GET /api/v1/execution-requests/open` and `POST /api/v1/operator/execution-requests/{request_id}/reject` in a
@@ -76,7 +76,7 @@ Real PostgreSQL (`TEST_DATABASE_URL`, as in `internal/workitems/execution_reques
   reject are both refused, and no execution is created. The operator route never accepts `claim_token` (400).
 - [ ] T5. RowVersion moved: discovery reads row_version N, a service claim re-claims the lapsed request (N+1), and
   operator-reject with N returns 412 with the current row_version and lease state.
-- [ ] T6. Retries: the same actor, key and body replays with `replayed: true` and writes no second event; the
+- [ ] T6. Retries: the same actor, key and body with an already-consumed grant returns 403 without a second event; the
   same key with a different reason returns 409 `idempotency_key_reused`; a different key on a rejected request
   returns 409 closed.
 - [ ] T7. Two dispatchers plus an operator: two goroutines loop claim and lease-lapse against the same request
@@ -108,5 +108,6 @@ E2E (`e2e/`):
 - To roll back the code, revert the change. The added columns are additive and defaulted, and older binaries
   ignore them, so no down-migration is required. Rows already rejected by an operator stay `rejected`. That is
   intended: a rejected request is terminal, and the requester can create a new one.
-- If the row_version bump in the existing paths causes an issue, do NOT partially revert task 3. The operator UPDATE still
-  re-checks state and lease under the item lock. Disable the drain until task 3 is restored.
+- If the row_version bump in the existing paths causes an issue, do NOT partially revert task 3. Keep
+  the operator-drain switch OFF until all replicas and writers consistently increment it. A stale CAS
+  value from a legacy replica is not made safe by simply checking state and lease.
