@@ -895,7 +895,7 @@ red2("N10l", "a standard tag on a false value is not trusted: the line scan cann
      annos(f'    {AK}: !!str "false"\n'))
 not_detected("N10a !!binary key", RED_R2["N10a"], 1, "structural")
 rc, out = run(RED_R2["N10a"])
-report("N10n the finding names the decoded key", rc == 1 and "reflection-allowed" in out, out[-300:])
+report("N10n the finding names the decoded key", rc == 1 and (R + "allowed") in out, out[-300:])
 def func_unknown(text): return d1.scan_text("x.yaml", text, ".yaml")[2]
 CUSTOM_TAG_DOC = annos(f'    {AK}: !custom "false"\n')
 d1.REVERT.add("tags")
