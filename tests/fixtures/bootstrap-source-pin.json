@@ -1,5 +1,5 @@
 {
-  "_comment": "Structural pin, not a semantic check. Regenerate with python3 tests/test_bootstrap_source_pin.py --print-pin",
+  "_comment": "Structural pin, not a semantic check. Regenerate (after committing the source change) with python3 tests/test_bootstrap_source_pin.py --print-pin",
   "chart": "platform-gitops/bootstrap",
   "excluded_unpinned_glob_inputs": [
     "platform-gitops/services/*/*",
@@ -66,7 +66,7 @@
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api-usage-writer.yaml": "9cf2d0c04fe25a080b6a818da38bdc81099dcb792367f1d49fdd366c4a690636",
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-api.yaml": "3219eb7df826f8d1688a528d721b5c829383f813d3cfdd01cdba42487047d012",
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-portal-oidc-zitadel.yaml": "ba6c0c71e53dd67e00fc2228b34418bcb9c5f5e7346b3f8d1b8c228f1d6e99a6",
-    "platform-gitops/bootstrap/templates/mctl-platform/mctl-portal.yaml": "a1639b8ae0e9a89b008341bf676c1bb1498d6b44bf4e265891c0f54db9117459",
+    "platform-gitops/bootstrap/templates/mctl-platform/mctl-portal.yaml": "4c42ae80de09ee3e003dd81b5deaf79d52fe850e20464fcee507d569915ac989",
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-support-monitor.yaml": "a9b86e4d3cf0d3bb42cd7d4c32d5b27a635607ef828688a7d8b65b8887e42e99",
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-telegram-agent-preview-monitor.yaml": "47bc587522123f50a94ce70610239359c38d1957d37dd575ffe7bf92492fd328",
     "platform-gitops/bootstrap/templates/mctl-platform/mctl-telegram-bot-start-netpol.yaml": "22d387ddd26b97c9374a562e8a05b251ce9f2e8bb1592f29b55b9d5b6e4cf525",
