@@ -25,18 +25,23 @@ It is not its own required check. Two structural limits:
     `always` mode) is not gated; on push the same step runs after the fact and
     can only report.
 
-How it reads: line by line (so .tf, scripts, templates and JSON patches are covered
-too), after decoding \\xNN / \\uNNNN / \\UNNNNNNNN escapes in the line. A flag value
-is "provably false" only when the literal value is false (case-insensitive,
-quoted or not); anything else, a templated value included, is an enabler. A
-value that is not in the same line is bound to the same YAML list item or
-mapping block (never to a neighbouring operation); zero or several candidates
-leave it unreadable, which is an enabler. The single allow-listed source is
-decided from the PARSED document (PyYAML, duplicate keys refused): kind,
-namespace and name must match, and every Reflector key in that document must
-sit in its own metadata.annotations. Documents are split on `^---(\\s|$)`.
-A document that mentions an allow-listed name but cannot be parsed, or has
-duplicate keys, is UNKNOWN.
+How it reads, in two layers whose findings are added together:
+  1. A line scan of every text file (so .tf, scripts, templates and JSON patches are covered too), after decoding
+     \\xNN / \\uNNNN / \\UNNNNNNNN escapes. A flag value is "provably false" only when the literal value is false
+     (case-insensitive, quoted or not); anything else, a templated value included, is an enabler. In YAML/JSON files a
+     trailing comment is cut off before a value is read.
+  2. For every .yaml/.yml/.json document that can spell a Reflector key (the word `emberstack` survives escape and
+     line-join decoding), a parse with PyYAML's composer (no object construction, so alias bombs stay linear). The
+     RESOLVED keys are read: aliases, merge keys, explicit `? key` entries, multi-line and escaped scalars, and the
+     path/value of each JSON-patch operation (also inside a string value such as a kustomize `patch:`). A key defined
+     twice in one mapping (duplicate, merge conflict) is UNKNOWN, never read as the first or the last one. A document
+     over MAX_DOC_BYTES, more than MAX_NODES nodes or deeper than MAX_YAML_DEPTH is UNKNOWN.
+  A document that mentions a key but does not parse (a Helm template) is read by the line scan only, plus a syntax
+  tripwire: an anchor, alias, merge key, explicit key or a trailing backslash in it is UNKNOWN.
+The single allow-listed source is decided from the parsed document: kind, namespace and name must match, and every
+Reflector key in it must sit in its own metadata.annotations, spelled directly (no alias, no multi-line or folded
+key). Documents are split on `^---(\\s|$)`. A document that names an allow-listed source but cannot be read as one
+YAML document is UNKNOWN.
 
 Archives (.tgz .tar.gz .tar .zip .jar .whl .gz) are opened in memory (never
 extracted) with caps on depth, member count, member size and total size, and
@@ -80,6 +85,14 @@ MAX_DEPTH = 2                    # archive inside archive inside archive: deeper
 MAX_MEMBERS = 20000
 MAX_MEMBER_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
+MAX_DOC_BYTES = 1024 * 1024      # a YAML document that mentions a Reflector key is parsed; a larger one is UNKNOWN
+MAX_NODES = 100000               # nodes visited per document (alias bombs share nodes, the walk visits each container once)
+MAX_YAML_DEPTH = 100
+MAX_LINE_BYTES = 64 * 1024       # a line that mentions a key is read only up to this length; a longer one is UNKNOWN
+MAX_LINE_KEYS = 200              # ... and only with this many key mentions on it (value lookup is per mention)
+MAX_KEY_LINES = 200               # lines mentioning a key per document (each costs a scan of its block)
+MAX_DOC_LINES = 20000            # lines of a document that mentions a key (block-scoped value lookup is per mention)
+MAX_FINDINGS_PER_FILE = 1000     # more findings than this in one file: UNKNOWN (the file is plainly hostile or generated)
 _R = "reflection" + "-"      # spelled in pieces so this file never contains a literal key
 FLAG_KEYS = {_R + "allowed", _R + "auto-enabled"}
 NS_KEYS = {_R + "allowed-namespaces", _R + "auto-namespaces",
@@ -88,13 +101,22 @@ MIRROR_KEYS = {"reflects", "auto-reflects", "reflected-version", "reflected-at"}
 KNOWN = FLAG_KEYS | NS_KEYS | MIRROR_KEYS
 REVERT = set()      # test seam only, see module docstring
 
-COVERAGE = """COVERAGE: D1 reads the text files of the scanned Git tree (all extensions, all kinds, tests/fixtures included) and the members of archives it can open.\n  Prose-only mentions in .md are not flagged unless they spell a full key with a value.
-NOT SEEN by D1: .git internals; files of a recognised binary type; client-side applies (kubectl annotate/apply/patch run by a person or script), Secrets that never
-  were in Git (the three S-A database/* sources), objects created by Terraform apply from outside this tree or from
-  state only, charts rendered from remote repositories, values pulled at runtime (Vault, ExternalSecret remote data),
-  generated indirection (range over annotation maps, printf-built keys, YAML anchors/merges or folded scalars that
-  assemble a key across lines in a file that is not parseable YAML), Reflector's own Helm values.
-D1 runs from the pull request's own head: a PR that edits this guard, its allow-list, its tests or the workflow step is checked by the edited guard.
+COVERAGE = """COVERAGE: D1 reads the text files of the scanned Git tree (all extensions and kinds, tests/fixtures included)
+  and the members of archives it can open.
+  Prose-only mentions in .md are not flagged unless they spell a full key with a value.
+  In .yaml/.yml/.json documents that parse, the RESOLVED keys are read: aliases, merge keys, explicit keys, multi-line and
+  escaped scalars, JSON-patch path/value (also inside kustomize patch strings); duplicate keys, merge conflicts, oversized
+  or too deeply nested documents are UNKNOWN.
+NOT SEEN by D1: .git internals; files of a recognised binary type; client-side applies (kubectl annotate/apply/patch run by
+  a person or script), Secrets that never were in Git (the three S-A database/* sources), objects created by Terraform apply
+  from outside this tree or from state only, charts rendered from remote repositories, values pulled at runtime (Vault,
+  ExternalSecret remote data), Reflector's own Helm values, generated indirection (range over annotation maps, printf-built
+  keys, keys assembled by a template engine or a script at run time), and, in a document that does NOT parse as YAML (Helm
+  templates) or in a file that is not .yaml/.yml/.json, anchors, merge keys, explicit keys and folded or multi-line scalars:
+  there only the line scan and a syntax tripwire run (the tripwire makes a document that mentions a key and uses such syntax
+  UNKNOWN, but a script or .tf that assembles a key across lines is not seen).
+D1 runs from the pull request's own head: a PR that edits this guard, its allow-list, its tests or the workflow step is
+  checked by the edited guard.
 D1 GREEN = "no Git-visible enabler". It is NEVER "no S-A". The live state is D2's job (metadata listing)."""
 
 PFX = r'reflector\\?\.v1\\?\.k8s\\?\.emberstack\\?\.com'
@@ -108,13 +130,15 @@ VALUE_ANY = re.compile(r'''["']?\bvalue["']?\s*[:=]\s*''' + _V)
 ESCAPE = re.compile(r'\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))')
 DOC_SPLIT = re.compile(r"^---(?:\s|$)")
 MATCH_ALL = {"", ".*", ".+", ".*?", "[\\s\\S]*", "[^]*"}
+PROBES = ("a", "default", "database", "kube-system", "x1-y2", "0", "zzzzzzzzzz")   # realistic namespace names
+BROAD = 5                        # a regex that fully matches at least this many probes is treated as match-all
 
 def rev(name): return name in REVERT
 
 def esc(s):
     """Printable form of a path or label: control characters and line separators escaped, so a hostile file
     name cannot start a workflow command (`::error::`) or forge a log line."""
-    return "".join(c if (c.isprintable() and c not in "  ") else "\\u%04x" % ord(c) for c in str(s))
+    return "".join(c if (c.isprintable() and c not in "\u2028\u2029") else "\\u%04x" % ord(c) for c in str(s))
 
 class Unreadable(Exception):
     pass
@@ -138,13 +162,6 @@ def enabling(raw):
     if rev("flag_not_provable_false"):          # old behaviour: literal "true" only
         return raw == '"true"'
     return not provably_false(raw)
-
-def match_all(raw):
-    for el in unq(raw).split(","):
-        e = el.strip().lstrip("^").rstrip("$").strip()
-        while e.startswith("(") and e.endswith(")"): e = e[1:-1].strip()
-        if e in MATCH_ALL: return True
-    return False
 
 def normalise(line):
     """Decode the escapes a YAML/JSON/Go string may use to spell a key, so r\\x65flector matches like reflector."""
@@ -196,49 +213,265 @@ def find_value(dl, j, line_c, rest):
     vals = block_values(dl, j)
     return vals[0] if len(vals) == 1 else None
 
-class DupKeyLoader(yaml.SafeLoader if yaml else object):
-    pass
-if yaml:
-    def _construct_mapping(self, node, deep=False):
-        self.flatten_mapping(node)
-        seen = set()
-        for knode, _v in node.value:
-            k = self.construct_object(knode, deep=True)
-            try: dup = k in seen
-            except TypeError: raise yaml.constructor.ConstructorError(None, None, "unhashable key", knode.start_mark)
-            if dup: raise yaml.constructor.ConstructorError(None, None, "duplicate key %r" % (k,), knode.start_mark)
-            seen.add(k)
-        return yaml.SafeLoader.construct_mapping(self, node, deep=deep)
-    DupKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping)
+def broad_regex(raw):
+    """True when a namespace-list entry would match (nearly) every namespace, or cannot be read as a regex."""
+    whole = unq(raw)
+    for el in [whole] + whole.split(","):       # the whole value too: a quantifier such as {0,} holds a comma
+        e = el.strip().lstrip("^").rstrip("$").strip()
+        while e.startswith("(") and e.endswith(")"): e = e[1:-1].strip()
+        if e in MATCH_ALL: return True
+        for cand in (el.strip(), e):
+            if len(cand) > 200: return True               # not worth interpreting: refuse
+            try:
+                rx = re.compile(cand)
+            except (re.error, RecursionError, OverflowError):
+                return True                               # unreadable regex is never "narrow"
+            if sum(1 for p in PROBES if rx.fullmatch(p)) >= BROAD: return True
+    return False
 
-def identity(doc_text):
-    """(kind, namespace, name) and whether every Reflector key sits in the object's own metadata.annotations.
-    Raises Unreadable on a parse failure, several documents, a non-mapping root or duplicate keys."""
+def match_all(raw):
+    return broad_regex(raw)
+
+_JOIN = re.compile(r"\\\r?\n[ \t]*")
+
+def mentions(dtext):
+    """Whether a document can spell a Reflector key at all. Every key contains the whole word `emberstack` once the
+    transformations a YAML scalar may apply (escapes, `\\`-newline joins) are undone; case-insensitive on purpose.
+    A miss here would skip the structural parse."""
+    t = normalise(_JOIN.sub("", dtext)).lower()
+    return "emberstack" in t
+
+def strip_comment(line):
+    """Drops a YAML comment (a `#` at the start or after whitespace, outside quotes) from one line."""
+    q = None
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if q == '"':
+            if c == "\\": i += 2; continue
+            if c == '"': q = None
+        elif q == "'":
+            if c == "'": q = None
+        elif c in "\"'" and (i == 0 or line[i - 1] in " \t[{,:-"): q = c
+        elif c == "#" and (i == 0 or line[i - 1] in " \t"): return line[:i]
+        i += 1
+    return line
+
+TRICKS = [re.compile(p) for p in (r"(?m)(?:^|[\s\[{,:-])&[\w-]", r"(?m)(?:^|[\s\[{,:-])\*[\w-]", r"<<\s*:",
+                                  r"(?m)^\s*\?(?:\s|$)", r"(?m)\\[ \t]*$")]
+
+def has_tricks(dtext):
+    t = "\n".join(strip_comment(l) for l in dtext.split("\n"))      # a comment may say anything
+    return not rev("tricks") and any(p.search(t) for p in TRICKS)
+
+SCALAR, MAPPING, SEQUENCE = (yaml.ScalarNode, yaml.MappingNode, yaml.SequenceNode) if yaml else (None, None, None)
+MERGE_TAG = "tag:yaml.org,2002:merge"
+
+def structural(dtext, start, level=0, strict=False):
+    """Parses one document part with PyYAML's composer (no object construction, so an alias bomb stays linear) and
+    walks the RESOLVED keys and values. Returns None when the text is not parseable YAML, otherwise
+    (occurrences, reasons, roots, own_only). Occurrences are (line, suffix, raw value or None, False) like the line scan's.
+    `reasons` are UNKNOWN reasons: duplicate keys, merge conflicts, caps, keys the walk cannot interpret."""
     try:
-        objs = [o for o in yaml.load_all(doc_text, Loader=DupKeyLoader) if o is not None]
-    except Exception as e:
-        raise Unreadable(str(e).replace("\n", " ")[:120])
-    if len(objs) != 1 or not isinstance(objs[0], dict):
-        raise Unreadable("expected exactly one mapping document, got %d" % len(objs))
-    o = objs[0]
-    md = o.get("metadata") if isinstance(o.get("metadata"), dict) else {}
-    s = lambda x: x if isinstance(x, str) else None
-    ident = (s(o.get("kind")), s(md.get("namespace")), s(md.get("name")))
-    hits = []
-    def walk(x, path):
-        if isinstance(x, dict):
-            for k, v in x.items():
-                if isinstance(k, str) and PFX_ANY.search(k): hits.append(path)
-                walk(v, path + (k,))
-        elif isinstance(x, list):
-            for v in x: walk(v, path + ("[]",))
-        elif isinstance(x, str) and PFX_ANY.search(x): hits.append(path + ("<value>",))
-    walk(o, ())
-    return ident, all(h == ("metadata", "annotations") for h in hits)
+        roots = [n for n in yaml.compose_all(dtext, Loader=yaml.SafeLoader) if n is not None]
+    except Exception:
+        return None
+    occ, reasons, hits = [], [], []
+    seen = {}                    # id(container node) -> subtree hit count, so an alias bomb is walked once
+    scal = set()                 # id of scalar nodes already used once: a second use is an alias
+    consumed = set()             # scalar nodes read as a key or an operation path
+    val_hits = []                # (scalar node, hidden) for string values that carry key text
+    nodes = [0]
+    state = {"reuse": False, "hidden": False}
+
+    def ln_of(n): return start + n.start_mark.line + 1
+
+    def literal(n):
+        """True when the scalar's own source text, as the line scan reads it, spells the same key text."""
+        src = dtext[n.start_mark.index:n.end_mark.index]
+        if "\n" in src and n.style != "|": return False
+        return len(PFX_ANY.findall(normalise(src.replace('\\"', '"')))) == len(PFX_ANY.findall(n.value))
+
+    def pairs(m, depth):
+        """The mapping's resolved (key node, value node) pairs; merge keys flattened. Duplicates are reasons."""
+        explicit, merged = [], []
+        for kn, vn in m.value:
+            if isinstance(kn, SCALAR) and kn.tag == MERGE_TAG:
+                srcs = vn.value if isinstance(vn, SEQUENCE) else [vn]
+                for sm in srcs:
+                    if not isinstance(sm, MAPPING):
+                        reasons.append(f"line {ln_of(kn)}: merge key `<<` with a value that is not a mapping"); continue
+                    merged.extend(pairs(sm, depth + 1))
+            else:
+                explicit.append((kn, vn))
+        out, keys = [], {}
+        for kn, vn in explicit + merged:
+            if not isinstance(kn, SCALAR) and strict:
+                reasons.append(f"line {ln_of(kn)}: mapping key that is not a scalar "
+                               "(a templated placeholder?): not interpretable")
+            kid = ("s", kn.value) if isinstance(kn, SCALAR) else ("c", id(kn))
+            if kid in keys:
+                shown = esc(kn.value) if isinstance(kn, SCALAR) else "<complex>"
+                reasons.append(f"line {ln_of(kn)}: key {shown!r} defined more than once in one mapping "
+                               "(duplicate or merge conflict: parsers disagree on which wins)")
+                continue
+            keys[kid] = (kn, vn)
+            out.append((kn, vn))
+        return out
+
+    def judge_pair(kn, vn):
+        if not isinstance(kn, SCALAR): return
+        hits_in_key = len(PFX_ANY.findall(kn.value))
+        if not hits_in_key: return
+        consumed.add(id(kn))
+        if literal(kn) and id(kn) not in scal and not rev("hidden_keys_all"):
+            return                      # the line scan reads this key exactly as written; do not count it twice
+        state["hidden"] = True
+        m = OCC.search(kn.value)
+        if hits_in_key != 1 or not m or m.end() != len(kn.value) or kn.value[:m.start()]:
+            occ.append((ln_of(kn), "<unparsed key " + esc(kn.value)[:60] + ">", None, False)); return
+        raw = vn.value if isinstance(vn, SCALAR) else None
+        occ.append((ln_of(kn), m.group("suf"), raw, False))
+
+    def judge_op(items):
+        d = {kn.value: vn for kn, vn in items if isinstance(kn, SCALAR)}
+        pn = d.get("path")
+        if not isinstance(pn, SCALAR) or not PFX_ANY.search(pn.value): return
+        consumed.add(id(pn))
+        if id(pn) in scal: state["hidden"] = True
+        ms = list(OCC.finditer(pn.value))
+        vn = d.get("value")
+        raw = vn.value if isinstance(vn, SCALAR) else None
+        if len(PFX_ANY.findall(pn.value)) != len(ms):
+            occ.append((ln_of(pn), "<unparsed path " + esc(pn.value)[:60] + ">", None, False)); return
+        for m in ms: occ.append((ln_of(pn), m.group("suf"), raw, False))
+
+    def walk(n, path, depth):
+        nodes[0] += 1
+        if nodes[0] > MAX_NODES: raise Unreadable(f"more than {MAX_NODES} YAML nodes")
+        if depth > MAX_YAML_DEPTH: raise Unreadable(f"YAML nested deeper than {MAX_YAML_DEPTH}")
+        if isinstance(n, SCALAR):
+            c = len(PFX_ANY.findall(n.value))
+            if c:
+                hits.append(path + ("<value>",))
+                val_hits.append((n, id(n) in scal or not literal(n)))
+            scal.add(id(n))
+            return c
+        if id(n) in seen:
+            if seen[id(n)]: state["reuse"] = True
+            return seen[id(n)]
+        seen[id(n)] = 0
+        total = 0
+        if isinstance(n, MAPPING):
+            ps = pairs(n, depth)
+            for kn, vn in ps:
+                if isinstance(kn, SCALAR):
+                    if PFX_ANY.search(kn.value):
+                        hits.append(path)
+                        judge_pair(kn, vn)
+                        total += 1
+                    kp = path + (kn.value,)
+                    scal.add(id(kn))
+                else:
+                    total += walk(kn, path + ("<complex-key>",), depth + 1)
+                    kp = path + ("<complex-key>",)
+                total += walk(vn, kp, depth + 1)
+            judge_op(ps)
+        else:
+            for v in n.value: total += walk(v, path + ("[]",), depth + 1)
+        seen[id(n)] = total
+        return total
+
+    try:
+        for r in roots: walk(r, (), 0)
+    except Unreadable as e:
+        reasons.append(str(e))
+    except RecursionError:
+        reasons.append("YAML nested too deeply to walk")
+    sub_own = True
+    for n, hid in val_hits:
+        if id(n) in consumed: continue
+        t = n.value.strip()
+        if not (hid or "\n" in t or t[:1] in "[{" or t.startswith("- ")): continue
+        # a string value that itself holds YAML/JSON (a kustomize `patch:` string, a JSON patch in a ConfigMap):
+        # read it with the same rules, one level down
+        if level >= 3:
+            reasons.append(f"line {ln_of(n)}: Reflector key text inside strings nested more than 3 levels deep"); continue
+        base = ln_of(n) if n.style in ("|", ">") else ln_of(n) - 1     # block scalars start on the line AFTER their header
+        sub = structural(n.value, base, level + 1) if len(n.value) <= MAX_DOC_BYTES else None
+        if sub is None or all(isinstance(r, SCALAR) for r in sub[2]):
+            if hid:
+                reasons.append(f"line {ln_of(n)}: Reflector key text reaches a value by alias, escape or folded scalar "
+                               "and the value is not YAML or JSON the guard can read")
+            continue
+        occ += sub[0]; reasons += sub[1]; sub_own = False
+    if not sub_own: state["hidden"] = True
+    own_only = all(h == ("metadata", "annotations") for h in hits) and not state["reuse"] and not state["hidden"]
+    return occ, reasons, roots, own_only
+
+def root_identity(roots):
+    """(kind, namespace, name) of the single mapping root, or raises Unreadable."""
+    if len(roots) != 1 or not isinstance(roots[0], MAPPING):
+        raise Unreadable("expected exactly one mapping document, got %d" % len(roots))
+    def get(m, k):
+        for kn, vn in m.value:
+            if isinstance(kn, SCALAR) and kn.value == k: return vn
+        return None
+    s = lambda n: n.value if isinstance(n, SCALAR) else None
+    md = get(roots[0], "metadata")
+    md = md if isinstance(md, MAPPING) else None
+    return (s(get(roots[0], "kind")), s(get(md, "namespace")) if md else None, s(get(md, "name")) if md else None)
+
+def line_occurrences(dl, start, ext, label, is_md, bad, unk):
+    occ = []   # (lineno, suf, raw or None, removal)
+    yaml_ext = ext in YAML_EXT
+    dln = [normalise(l) for l in dl]
+    if not rev("line_cap"):
+        mentioning = sum(1 for l in dl if "emberstack" in l.lower() or "reflect" in l)
+        if mentioning > MAX_KEY_LINES or (mentioning and len(dl) > MAX_DOC_LINES):
+            unk.append(f"{label}:{start + 1}: document mentions a Reflector key on more than {MAX_KEY_LINES} lines or has more "
+                       f"than {MAX_DOC_LINES} lines: not read")
+            return occ
+    for j, line in enumerate(dl):
+        line_c = normalise(line.replace('\\"', '"'))
+        if "reflect" not in line_c and "emberstack" not in line_c: continue
+        ln = start + j + 1
+        if not rev("line_cap") and (len(line_c) > MAX_LINE_BYTES or line_c.count("emberstack") > MAX_LINE_KEYS):
+            unk.append(f"{label}:{ln}: a line that mentions a Reflector key is longer than {MAX_LINE_BYTES} bytes or "
+                       f"repeats it more than {MAX_LINE_KEYS} times: not read")
+            continue
+        line_v = strip_comment(line_c) if yaml_ext and not rev("comments") else line_c
+        ms = list(OCC.finditer(line_c))
+        if not rev("prefix_unrecognised_suffix"):
+            covered = {m.start() for m in ms}
+            for pm in PFX_ANY.finditer(line_c):
+                if pm.start() in covered: continue
+                tail = line_c[pm.end():pm.end() + 24]
+                if is_md and not re.match(r'^(?:/|~1|%2[Ff]|\\/)(?![A-Za-z])', tail):
+                    continue            # prose naming the bare domain; a key-shaped templated tail is still flagged
+                bad.append(f"{label}:{ln}: Reflector annotation prefix followed by an unrecognised/templated suffix "
+                           f"{tail!r} (key not statically readable)")
+        for k, m in enumerate(ms):
+            suf = m.group("suf")
+            end = ms[k + 1].start() if k + 1 < len(ms) else len(line_c)
+            rest = line_v[m.end():end]
+            removal = False
+            if suf.endswith("-") and suf.rstrip("-") in KNOWN:   # kubectl annotate key-  (removal)
+                suf, removal = suf.rstrip("-"), True
+            if rev("formats") and not re.match(r'^\s*' + PFX, line_c):
+                continue                    # old behaviour: only "key: value" yaml lines
+            raw = None
+            if not removal:
+                raw = find_value(dln, j, line_v, rest)
+            occ.append((ln, suf, raw, removal))
+        if not rev("unqualified") and not is_md:   # prose in .md may name the keys
+            if len(TOKEN.findall(line_c)) > len(ms):
+                bad.append(f"{label}:{ln}: unqualified reflection-* token (key built indirectly?)")
+    return occ
 
 def scan_text(label, text, ext):
-    """Returns (findings, allow-listed enabling docs [(kind, ns, name)], unreadable reasons)."""
-    bad, allowed_seen, unreadable = [], [], []
+    """Returns (findings, allow-listed enabling docs [(kind, ns, name)], unreadable reasons, notes)."""
+    bad, allowed_seen, unreadable, notes = [], [], [], []
     is_md = ext == ".md"
     lines = text.split("\n")
     docs, cur, start = [], [], 0
@@ -248,74 +481,78 @@ def scan_text(label, text, ext):
         else: cur.append(l)
     docs.append((start, cur))
     for start, dl in docs:
-        occ = []   # (lineno, suf, raw or None, removal)
-        for j, line in enumerate(dl):
-            line_c = normalise(line.replace('\\"', '"'))
-            if "reflect" not in line_c and "emberstack" not in line_c: continue
-            ln = start + j + 1
-            ms = list(OCC.finditer(line_c))
-            if not rev("prefix_unrecognised_suffix"):
-                covered = {m.start() for m in ms}
-                for pm in PFX_ANY.finditer(line_c):
-                    if pm.start() in covered: continue
-                    tail = line_c[pm.end():pm.end() + 24]
-                    if is_md and not re.match(r'^(?:/|~1|%2[Ff]|\\/)(?![A-Za-z])', tail):
-                        continue            # prose naming the bare domain; a key-shaped templated tail is still flagged
-                    bad.append(f"{label}:{ln}: Reflector annotation prefix followed by an unrecognised/templated suffix {tail!r} (key not statically readable)")
-            for k, m in enumerate(ms):
-                suf = m.group("suf")
-                end = ms[k + 1].start() if k + 1 < len(ms) else len(line_c)
-                rest = line_c[m.end():end]
-                removal = False
-                if suf.endswith("-") and suf.rstrip("-") in KNOWN:   # kubectl annotate key-  (removal)
-                    suf, removal = suf.rstrip("-"), True
-                if rev("formats") and not re.match(r'^\s*' + PFX, line_c):
-                    continue                    # old behaviour: only "key: value" yaml lines
-                raw = None
-                if not removal:
-                    raw = find_value(dl, j, line_c, rest)
-                occ.append((ln, suf, raw, removal))
-            if not rev("unqualified") and not is_md:   # prose in .md may name the keys
-                if len(TOKEN.findall(line_c)) > len(ms):
-                    bad.append(f"{label}:{ln}: unqualified reflection-* token (key built indirectly?)")
-        if not occ: continue
+        occ = line_occurrences(dl, start, ext, label, is_md, bad, unreadable)
         dtext = "\n".join(dl)
         ident, allow = (None, None, None), False
-        if ext in YAML_EXT and any(n in dtext for (_k, _ns, n) in ALLOW):
-            try:
-                ident, own_only = identity(dtext)
-                allow = ident in ALLOW and own_only
-            except Unreadable as e:
-                unreadable.append(f"{label}: document near line {start + 1} names an allow-listed source but cannot be read as one YAML document ({e})")
+        names = any(n in dtext for (_k, _ns, n) in ALLOW)
+        if ext in YAML_EXT and (occ or mentions(dtext)):
+            if len(dtext) > MAX_DOC_BYTES and not rev("doc_cap"):
+                unreadable.append(f"{label}: document near line {start + 1} mentions a Reflector key and is larger than "
+                                  f"{MAX_DOC_BYTES} bytes: not parsed")
+            else:
+                sres = None if rev("structural") else structural(dtext, start, strict=bool(occ and names))
+                if sres is None:
+                    if mentions(dtext):
+                        notes.append(f"{label}:{start + 1}")
+                        if has_tricks(dtext):
+                            unreadable.append(f"{label}: document near line {start + 1} mentions a Reflector key, is not "
+                                              "parseable YAML and uses anchors, aliases, merge or explicit keys, or a "
+                                              "trailing backslash: cannot be read")
+                    if occ and names:
+                        unreadable.append(f"{label}: document near line {start + 1} names an allow-listed source but "
+                                          "cannot be read as one YAML document (parse error)")
+                else:
+                    s_occ, reasons, roots, own_only = sres
+                    unreadable += [f"{label}: {r}" for r in reasons]
+                    occ = occ + s_occ
+                    if occ and names:
+                        try:
+                            ident = root_identity(roots)
+                            allow = ident in ALLOW and own_only and not reasons
+                        except Unreadable as e:
+                            unreadable.append(f"{label}: document near line {start + 1} names an allow-listed source but "
+                                              f"cannot be read as one YAML document ({e})")
+        if not occ: continue
         kind, ns, name = ident
-        flags = {}
-        en_lines = []
+        judge(label, occ, ident, allow, bad, allowed_seen)
+    if len(unreadable) > 100 and not rev("finding_cap"):
+        unreadable[100:] = [f"{label}: {len(unreadable) - 100} further reasons not listed"]
+    if len(bad) > MAX_FINDINGS_PER_FILE and not rev("finding_cap"):
+        unreadable.append(f"{label}: more than {MAX_FINDINGS_PER_FILE} findings in one file: not listed, not read further")
+        del bad[MAX_FINDINGS_PER_FILE:]
+    return bad, allowed_seen, unreadable, notes
+
+def judge(label, occ, ident, allow, bad, allowed_seen):
+    kind, ns, name = ident
+    flags = {}
+    en_lines = []
+    for ln, suf, raw, removal in occ:
+        if removal: continue
+        if suf in FLAG_KEYS:
+            if raw is None or enabling(raw):
+                en_lines.append((ln, suf, raw))
+            else: flags[suf] = True
+        elif suf not in KNOWN:
+            bad.append(f"{label}:{ln}: unknown reflector.v1 annotation '{suf}' (not interpretable)")
+    for ln, suf, raw in en_lines:
+        if allow:
+            allowed_seen.append(ident); continue
+        why = "Secret must never be a reflector source; " if kind == "Secret" else ""
+        bad.append(f"{label}:{ln}: {suf}={raw!r} not provably \"false\" in {kind}/{ns}/{name} "
+                   f"(not allow-listed). {why}")
+    both_false = all(flags.get(k) for k in FLAG_KEYS)
+    if not rev("ns_matchall") and not allow and not both_false:
         for ln, suf, raw, removal in occ:
-            if removal: continue
-            if suf in FLAG_KEYS:
-                if raw is None or enabling(raw):
-                    en_lines.append((ln, suf, raw))
-                else: flags[suf] = True
-            elif suf not in KNOWN:
-                bad.append(f"{label}:{ln}: unknown reflector.v1 annotation '{suf}' (not interpretable)")
-        for ln, suf, raw in en_lines:
-            if allow:
-                allowed_seen.append(ident); continue
-            why = "Secret must never be a reflector source; " if kind == "Secret" else ""
-            bad.append(f"{label}:{ln}: {suf}={raw!r} not provably \"false\" in {kind}/{ns}/{name} "
-                       f"(not allow-listed). {why}")
-        both_false = all(flags.get(k) for k in FLAG_KEYS)
-        if not rev("ns_matchall") and not allow and not both_false:
-            for ln, suf, raw, removal in occ:
-                if suf in NS_KEYS and not removal and (raw is None or match_all(raw)):
-                    bad.append(f"{label}:{ln}: {suf}={raw!r} empty/match-all/unreadable and flags not provably false in {kind}/{name}")
-        if not rev("reflects_marker"):
-            for ln, suf, raw, removal in occ:
-                if suf in MIRROR_KEYS and not removal:
-                    src = unq(raw) if raw is not None else None
-                    if suf == "reflects" and src in ALLOW_REFLECTS: continue
-                    bad.append(f"{label}:{ln}: mirror marker {suf}={raw!r} committed in {kind}/{name} (mirror or pull-reflection from non-allow-listed source)")
-    return bad, allowed_seen, unreadable
+            if suf in NS_KEYS and not removal and (raw is None or match_all(raw)):
+                bad.append(f"{label}:{ln}: {suf}={raw!r} empty/match-all/unreadable and flags not provably false "
+                           f"in {kind}/{name}")
+    if not rev("reflects_marker"):
+        for ln, suf, raw, removal in occ:
+            if suf in MIRROR_KEYS and not removal:
+                src = unq(raw) if raw is not None else None
+                if suf == "reflects" and src in ALLOW_REFLECTS: continue
+                bad.append(f"{label}:{ln}: mirror marker {suf}={raw!r} committed in {kind}/{name} "
+                           "(mirror or pull-reflection from non-allow-listed source)")
 
 def inside(real_root, real_path):
     return real_path == real_root or real_path.startswith(real_root.rstrip(os.sep) + os.sep)
@@ -328,7 +565,7 @@ def is_known_binary(name, b):
 class Ctx:
     def __init__(self):
         self.seen, self.bad, self.allowed, self.errs = 0, [], [], []
-        self.archives, self.total = [], 0
+        self.archives, self.total, self.notes = [], 0, []
 
 def process(ctx, label, name, b, depth=0):
     """Scans one file (or archive member): bytes b under the display label and member/file name."""
@@ -342,14 +579,25 @@ def process(ctx, label, name, b, depth=0):
             text = decode(b)
         elif b"\0" in b:
             if is_known_binary(name, b): return          # a recognised binary type
-            ctx.errs.append(f"NUL byte in {esc(label)} (not a recognised binary type, undecodable without BOM): not skipped"); return
+            ctx.errs.append(f"NUL byte in {esc(label)} (not a recognised binary type, undecodable without BOM): "
+                            "not skipped"); return
         else:
             text = decode(b)
     except UnicodeError as e:
         if is_known_binary(name, b): return
         ctx.errs.append(f"undecodable {esc(label)}: {e}"); return
-    b2, a2, u2 = scan_text(esc(label), text, os.path.splitext(ln)[1])
-    ctx.bad += b2; ctx.allowed += a2; ctx.errs += u2
+    b2, a2, u2, n2 = scan_text(esc(label), text, os.path.splitext(ln)[1])
+    ctx.bad += b2; ctx.allowed += a2; ctx.errs += u2; ctx.notes += n2
+
+def zip_entry_cap(b):
+    """Refuses a zip whose end-of-central-directory record announces more than MAX_MEMBERS entries, BEFORE
+    zipfile reads (and allocates) the whole central directory."""
+    if rev("archive_caps"): return
+    i = b.rfind(b"PK\x05\x06", max(0, len(b) - 65557))
+    if i < 0 or len(b) < i + 22: return              # no EOCD: zipfile reports it as corrupt (UNKNOWN)
+    total = int.from_bytes(b[i + 10:i + 12], "little")
+    if total == 0xFFFF or total > MAX_MEMBERS:       # 0xFFFF: zip64 or at least that many
+        raise Unreadable(f"zip central directory announces {total if total != 0xFFFF else 'zip64 / 65535 or more'} entries")
 
 def open_archive(ctx, label, ln, b, depth):
     L = esc(label)
@@ -371,12 +619,17 @@ def open_archive(ctx, label, ln, b, depth):
     try:
         if ln.endswith(ARCHIVE_TAR):
             with tarfile.open(fileobj=io.BytesIO(b), mode="r:*") as tf:
+                listed = 0
                 for m in tf:
+                    listed += 1
+                    if listed > MAX_MEMBERS and not rev("archive_caps"):
+                        raise Unreadable(f"more than {MAX_MEMBERS} entries")
                     if not m.isreg(): continue
                     if m.size > MAX_MEMBER_BYTES and not rev("archive_caps"):
                         raise Unreadable(f"member {esc(m.name)} declares {m.size} bytes")
                     take(m.name, tf.extractfile(m).read)
         elif ln.endswith(ARCHIVE_ZIP):
+            zip_entry_cap(b)
             with zipfile.ZipFile(io.BytesIO(b)) as zf:
                 for zi in zf.infolist():
                     if zi.is_dir(): continue
@@ -391,9 +644,9 @@ def open_archive(ctx, label, ln, b, depth):
     ctx.archives.append(f"{L} ({members} members)")
 
 def scan(root, anchors):
-    """Returns (seen, bad, allowed, archives, dirlinks). seen is None when the tree could not be observed
+    """Returns (seen, bad, allowed, archives, dirlinks, notes). seen is None when the tree could not be observed
     (bad then holds the UNKNOWN reasons). archives/dirlinks are returned on every path, early returns included."""
-    if not os.path.isdir(root): return None, [f"UNKNOWN: root not a directory: {esc(root)}"], [], [], []
+    if not os.path.isdir(root): return None, [f"UNKNOWN: root not a directory: {esc(root)}"], [], [], [], []
     ctx = Ctx()
     dirlinks = []
     real_root = os.path.realpath(root)
@@ -424,13 +677,15 @@ def scan(root, anchors):
             except Exception as e:
                 ctx.errs.append(f"unreadable {esc(rel)}: {e}"); continue
             process(ctx, rel, f, b)
-    if ctx.errs: return None, ctx.errs, [], ctx.archives, dirlinks
+    if ctx.errs: return None, ctx.errs, [], ctx.archives, dirlinks, ctx.notes
     for a in anchors:
         ap = os.path.join(root, a)
-        if not os.path.isfile(ap) and not rev("anchor_file"): return None, [f"UNKNOWN: anchor missing (partial tree?): {esc(a)}"], [], ctx.archives, dirlinks
+        if not os.path.isfile(ap) and not rev("anchor_file"):
+            return None, [f"UNKNOWN: anchor missing (partial tree?): {esc(a)}"], [], ctx.archives, dirlinks, ctx.notes
     if not rev("anchor") and ctx.seen and ANCHOR_ALLOWED not in ctx.allowed and anchors:
-        return None, ["UNKNOWN: anchor file present but its allow-listed enabler was not parsed (parser blind?)"], [], ctx.archives, dirlinks
-    return ctx.seen, ctx.bad, ctx.allowed, ctx.archives, dirlinks
+        return (None, ["UNKNOWN: anchor file present but its allow-listed enabler was not parsed (parser blind?)"], [],
+                ctx.archives, dirlinks, ctx.notes)
+    return ctx.seen, ctx.bad, ctx.allowed, ctx.archives, dirlinks, ctx.notes
 
 def main(argv):
     if yaml is None:
@@ -441,12 +696,16 @@ def main(argv):
         if argv[i] == "--anchor" and i + 1 < len(argv): anchors.append(argv[i + 1]); i += 2
         else: print("UNKNOWN: bad arg", esc(argv[i])); return 2
     if not anchors: anchors = DEFAULT_ANCHORS
-    seen, bad, allowed, arch, links = scan(root, anchors)
+    seen, bad, allowed, arch, links, notes = scan(root, anchors)
     print(COVERAGE)
     if not rev("archive_coverage"):
-        print(f"COVERAGE archives opened in memory and scanned: {len(arch)}" + (": " + ", ".join(arch[:20]) if arch else ": none"))
+        print(f"COVERAGE archives opened in memory and scanned: {len(arch)}"
+              + (": " + ", ".join(arch[:20]) if arch else ": none"))
     if not rev("dir_symlinks"):
-        print(f"COVERAGE directory symlinks: {len(links)} with a target inside the root (not followed; the target is scanned at its real path): " + (", ".join(links[:20]) if links else "none"))
+        print(f"COVERAGE directory symlinks: {len(links)} with a target inside the root (not followed; the target is "
+              "scanned at its real path): " + (", ".join(links[:20]) if links else "none"))
+    print(f"COVERAGE documents that mention a key but do not parse as YAML (line scan + syntax tripwire only): {len(notes)}"
+          + (": " + ", ".join(notes[:10]) if notes else ""))
     if seen is None:
         print("UNKNOWN (exit 2):"); [print("  ", b) for b in bad[:10]]; return 2
     if seen == 0: print("UNKNOWN (exit 2): no files scanned"); return 2

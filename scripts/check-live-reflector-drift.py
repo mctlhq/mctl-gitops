@@ -48,8 +48,10 @@ def evaluate(lines, rc=0, anchors=(), allow=None, sources=None, expect=None):
     if rc != 0: return 2, [f"UNKNOWN: listing command failed rc={rc}"]
     if rev("crlf"): lines = [l.rstrip("\n") for l in lines]
     else: lines = [l.rstrip("\r\n") for l in lines]       # CRLF listings (a file saved on Windows, a CRLF pipe)
+    # Defence for callers that hand evaluate() raw lines. The CLI cannot reach this branch: readlines(newline="")
+    # already splits a lone CR into two lines, so a CR inside a row shows up there as a malformed row instead.
     if not rev("crlf") and any("\r" in l for l in lines):
-        return 2, ["UNKNOWN: stray carriage return inside a line (corrupt or mixed line endings)"]
+        return 2, ["UNKNOWN: carriage return inside a line (corrupt or mixed line endings)"]
     # An empty listing needs no line of its own: it has no header (UNKNOWN below), no trailer (UNKNOWN below) and, with
     # both of those reverted, no rows (UNKNOWN below). Each of the three is proven on its own in the tests.
     heads = [l for l in lines if l.startswith("#CLUSTER")]
