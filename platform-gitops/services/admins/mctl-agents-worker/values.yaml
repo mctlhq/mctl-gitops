@@ -34,9 +34,12 @@ replicaCount: 1
 # nothing fails (mctlhq/mctl-agents#1007, B4).
 strategy:
   type: Recreate
-  # Explicit null removes the Deployment's default RollingUpdate settings
-  # when ArgoCD applies this with server-side apply.
-  rollingUpdate: null
+  # The chart drops any rollingUpdate key under Recreate. A null here does NOT clear
+  # the live block: it is a default nobody owns, so server-side apply keeps it and the
+  # API server rejects the pair (2026-11-09, reproduced on kind).
+# One-shot: `kubectl replace` writes the whole object, so the defaulted block goes.
+# Remove this line in a follow-up PR once the Deployment is live as Recreate.
+replaceOnSync: true
 image:
   repository: ghcr.io/mctlhq/mctl-agents
   tag: "1.117.0"
