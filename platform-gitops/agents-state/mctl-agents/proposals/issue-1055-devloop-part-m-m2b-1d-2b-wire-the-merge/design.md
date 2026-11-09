@@ -99,7 +99,7 @@ All paths and lines below were read on main `0536caf` (merge of PR #1053, slice 
   `_MergeWatchRun` fields. This slice adds none.
 - **Delivery helper.** `_deliver_with` (`tests/test_merge_watch_typed_result.py`, line 297) is not reused: per the
   1d-2a design section 8, it hard-codes a 2099 deadline and one OPEN state. D18 gets its own helper.
-- **Fixtures.**
+- **Fixtures (1d-2b-ii).**
   - No file under `tests/fixtures/histories/` contains `merge-watch-terminal-reconcile` (grep, empty).
   - `test_execution_request_replay.py:376` globs only `HISTORY_DIR.glob("dev_loop_*.json")`, a flat glob, so a
     `merge_watch/` subdirectory is invisible to it.
@@ -241,7 +241,7 @@ Replay safety rests on three facts:
 1. Every committed fixture lacks the marker, so on replay `patched` returns False and the `else:` arm issues nothing.
 2. Every deployed worker is 1.117.0, which never recorded the marker, so no production history recorded the marker
    under the inert code.
-3. Two new fixtures recorded by this code replay clean.
+3. A history recorded in-test by this code replays clean (D15a); the two committed fixtures follow in 1d-2b-ii (D15b).
 
 **Old-worker consequence.** A history recorded after this slice that contains deadline-decision commands fails with
 nondeterminism on any worker below it. Rollback below this slice is therefore unsafe for runs that recorded the marker
@@ -249,13 +249,16 @@ and reached the decision. That is B4's (#1007) concern, and the release hold sta
 
 ### 6. Tests and fixtures
 
+Split (owner, 2026-11-09): 1d-2b-i is this issue; items marked **(ii)** below belong to 1d-2b-ii and are NOT built here.
+
 - **New module.** `tests/test_merge_watch_final_read.py` holds:
-  - D3-D18 (see tasks.md);
-  - a recorder `record_final_read(env, *, hop)`, with `MERGE_WATCH_DEADLINE` monkeypatched to 40 min and, for the hop
-    variant, `MERGE_WATCH_HISTORY_FLOOR = 1`, under `UnsandboxedWorkflowRunner`, following the pattern of
-    `test_deadline_is_carried_not_recomputed_across_hops`;
-  - a thin `tools/record_merge_watch_final_read.py` in the style of `tools/record_pre_m1_histories.py`.
-- **Fixtures.** `tests/fixtures/histories/merge_watch/dev_loop_final_read.json` and `.../dev_loop_final_read_hop.json`.
+  - D3-D14, D15a, D17 and D18 (see tasks.md);
+  - **(ii)** D15b and D16, and a recorder `record_final_read(env, *, hop)`, with `MERGE_WATCH_DEADLINE` monkeypatched to
+    40 min and, for the hop variant, `MERGE_WATCH_HISTORY_FLOOR = 1`, under `UnsandboxedWorkflowRunner`, following the
+    pattern of `test_deadline_is_carried_not_recomputed_across_hops`;
+  - **(ii)** a thin `tools/record_merge_watch_final_read.py` in the style of `tools/record_pre_m1_histories.py`.
+- **Fixtures (ii).** `tests/fixtures/histories/merge_watch/dev_loop_final_read.json` and `.../dev_loop_final_read_hop.json`.
+  D15a records a history in-test and replays it through the Replayer without committing it.
 - **Test-only gate double.** An `ActionApprovalWaitWorkflow` double that ignores the first cancel and is released in
   teardown, for D13. It proves the parent's `workflow.wait` and the flag, not real child cancellation.
 - **Gap harness.** `tests/test_merge_watch_worker_gap.py` is converted as in section 5 of the #1051 design:
@@ -274,19 +277,19 @@ and reached the decision. That is B4's (#1007) concern, and the release hold sta
 | Production: resume field, carry and rehydrate | about 6 lines |
 | Production: docstrings | about 15 lines |
 | Production total | about 60-80 lines, below the issue's 80-110 because the 1d-2a helpers already exist |
-| Tests | about 650-750 lines |
-| Fixtures and recorder | 2 fixtures, 1 recorder |
+| Tests (1d-2b-i) | about 450-550 lines |
+| Fixtures and recorder | none in 1d-2b-i (2 fixtures, 1 recorder, D15b, D16 move to 1d-2b-ii, about 150-200 lines) |
 | Existing-test edits | E1-E3, the gap-harness pin, D17a |
 | Mutation runs | 13 |
 
-This is judged to fit one bounded pass. The production side is small, and every helper it calls is already tested.
-The risk is test volume, and the implementer does not trim tests. If the pass cannot finish, the pre-declared split
-point is:
+The owner applied the pre-declared split on 2026-11-09, so this issue is 1d-2b-i:
 
-- 1d-2b-i: wiring, guards, `_deliver`, `gate_ran_head`, E1-E3, gap conversion, D3-D14, D17, D18 and their mutations;
-- 1d-2b-ii: fixtures, recorder, D15, D16.
+- 1d-2b-i (#1055): wiring, guards, `_deliver`, `gate_ran_head`, E1-E3, gap conversion, D3-D14, D15a, D17, D18 and every
+  mutation in the table;
+- 1d-2b-ii (new issue, after 1d-2b-i is merged): fixtures, recorder, D15b, D16.
 
-The implementer stops and reports that split. It does not ship 1d-2b-i alone without approval.
+The implementer does not trim tests and does not start 1d-2b-ii. If 1d-2b-i still cannot finish in one pass, it stops
+and reports on #1055 where it stopped. Nothing from 1d-2b-i is released on its own.
 
 ## Alternatives
 

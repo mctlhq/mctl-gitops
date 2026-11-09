@@ -1,5 +1,8 @@
 # Tasks: issue-1055-devloop-part-m-m2b-1d-2b-wire-the-merge
 
+Slice: **1d-2b-i** (owner split, 2026-11-09). Tasks marked **(ii)** and tests D15b and D16 belong to 1d-2b-ii, which gets
+its own issue after this one is merged. The implementer does not build them.
+
 Base: main `0536caf`. Production file: `orchestrator/temporal/workflows/dev_loop.py`. The only allowed edits to existing
 tests are:
 
@@ -56,16 +59,14 @@ Anything else is a STOP: report on #1055 and use no workaround.
     keep the `_reconcile_required` half, and update its docstring.
 
   — DoD: both are green, and the diff touches only those lines.
-- [ ] 8. New tests (depends on 2-5). Write D3-D18 in `tests/test_merge_watch_final_read.py`. Replace D17a with the
-  activation pin (D17). — DoD: all are green.
-- [ ] 9. Fixtures (depends on 8). Add the recorder in `tests/test_merge_watch_final_read.py` and
-  `tools/record_merge_watch_final_read.py`. Record `tests/fixtures/histories/merge_watch/dev_loop_final_read.json` and
-  `.../merge_watch/dev_loop_final_read_hop.json`. — DoD:
-  - D15 is green;
-  - `git diff --stat tests/fixtures/histories/*.json tests/fixtures/histories/pre_m1` is empty;
-  - the flat-directory guards are green unedited.
-- [ ] 10. Full suite (depends on 9). Run `uv run --locked pytest -q` and `uv run ruff check`. — DoD: both are green.
-  If the pass cannot finish, STOP and report the split from design section 7.
+- [ ] 8. New tests (depends on 2-5). Write D3-D14, D15a and D18 in `tests/test_merge_watch_final_read.py`. Replace D17a
+  with the activation pin (D17). D15b and D16 are 1d-2b-ii and are not written. — DoD: all are green.
+- [ ] 9. **(ii) NOT in this slice.** Fixtures: add the recorder in `tests/test_merge_watch_final_read.py` and
+  `tools/record_merge_watch_final_read.py`, and record `tests/fixtures/histories/merge_watch/dev_loop_final_read.json`
+  and `.../merge_watch/dev_loop_final_read_hop.json`. Deferred to 1d-2b-ii with D15b and D16. In 1d-2b-i, assert only
+  that `git diff --stat tests/fixtures` is empty.
+- [ ] 10. Full suite (depends on 8; task 9 is not part of this slice). Run `uv run --locked pytest -q` and `uv run ruff check`. — DoD: both are green.
+  If the pass cannot finish, STOP and report on #1055 where it stopped (the split into i and ii is already applied).
 - [ ] 11. Mutation proof (depends on 10). Apply each mutation below by exact-text substitution on a committed worktree,
   run only the named tests, record the red output, revert, and confirm `git diff` is clean. — DoD: every row is red
   with output, or (finally-2 only, Q-C) reported equivalent with reasoning and output. None is in the diff.
@@ -73,7 +74,7 @@ Anything else is a STOP: report on #1055 and use no workaround.
   | Mutation | Change | Expected red |
   |---|---|---|
   | (v) | drop `and not self._abandoned` from the `else:` guard | D8 |
-  | (tr) | drop `watch.terminal_reconcile` from the `else:` guard | D2, D15 (unpatched replay) |
+  | (tr) | drop `watch.terminal_reconcile` from the `else:` guard | D2, D15a (unpatched record across the deadline) |
   | (fe) | drop the `final` early return (fall into `finally`, `watch_end` stays `""`) | D3, D1 |
   | (e) | recompute `deadline = workflow.now() + MERGE_WATCH_DEADLINE` in the resume arm | D10 |
   | (g) | issue the `release` write in the `else:` arm before calling the decision | D3, D7 |
@@ -88,7 +89,8 @@ Anything else is a STOP: report on #1055 and use no workaround.
 
 - [ ] 12. PR (depends on 11). The description:
   - links #1021 (provenance only), #1029, #1046, #1049, #1052, #1053, #1055 and this proposal's approved digest;
-  - pastes the task 0 red-on-base evidence, the E1-E3 list, the mutation table output and the replay evidence;
+  - pastes the task 0 red-on-base evidence, the E1-E3 list, the mutation table output and the replay evidence (D15a);
+  - states that this is 1d-2b-i and that the fixtures, recorder, D15b and D16 are 1d-2b-ii, not started;
   - states the platform impact from design.md;
   - states that B4 (#1007) stays FAIL, the release hold stays ON, #1022 blocks any release carrying this line, and 1d-3
     and 1d-4 are not started;
@@ -169,14 +171,15 @@ are counted from `ACTIVITY_TASK_SCHEDULED` history events.
     interim-limit pin.
 - [ ] D14. Abandon while the settle waits.
   - Expect: no read after the settle; `abandoned-unverified`; `release`.
-- [ ] D15. Marker and replay.
+- [ ] D15a. Marker and replay (1d-2b-i, in-test recording, nothing committed).
   - The marker is recorded once on a fresh run and zero times on a continued run.
   - An unpatched record across the deadline makes no final read and replays.
-  - The two `merge_watch/` fixtures replay clean.
+  - A history recorded in-test by this code replays clean through the Replayer.
   - Today's code replays its own fresh recording.
   - `test_workflow_replay.py`, `test_execution_request_replay.py`, `test_pre_m1_compat.py` (E2 only) and
     `test_patch_memoization.py` stay green.
-- [ ] D16. Duplicate delivery of the final-read task.
+- [ ] D15b. **(ii) NOT in this slice.** The two committed `merge_watch/` fixtures replay clean.
+- [ ] D16. **(ii) NOT in this slice.** Duplicate delivery of the final-read task.
   - Expect: one landed `terminal` and one deploy observation; replay adds no command.
 - [ ] D17. Activation pin, replacing D17a in `test_merge_watch_decision.py`:
   - `_watch_pr` has exactly one `While` with `orelse`, which calls `_decide_watch_end`;
@@ -195,7 +198,7 @@ are counted from `ACTIVITY_TASK_SCHEDULED` history events.
 ## Rollback
 
 - **Before release** (the expected state: hold ON, workers on 1.117.0): revert the merge commit. No deployed worker
-  ran this code, so no history carries decision commands. The two new fixtures and the recorder go with the revert.
+  ran this code, so no history carries decision commands. (The fixtures and the recorder arrive only with 1d-2b-ii and go with its own revert.)
 - **After any release carrying this slice:** do not roll back below it with a plain image downgrade. Histories that
   recorded the marker and reached the decision fail with nondeterminism on an older worker. Rollback safety is
   governed by B4 (#1007). Drain or terminate those runs first, or roll forward.
