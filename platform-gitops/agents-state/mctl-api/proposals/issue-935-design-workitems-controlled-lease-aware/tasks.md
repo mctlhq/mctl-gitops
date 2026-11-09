@@ -59,7 +59,8 @@ task.
   tenant/reason, expired, consumed, self-approved, previously used, valid, DB-fault rollback,
   concurrent operators and competing dispatcher. Test same-key replay with a consumed grant
   returns 403 and never a second effect. Evidence must fail on removal of grant validation,
-  consumption, row-version CAS or the live-lease guard.
+  consumption, row-version CAS or the live-lease guard. Include API replica clock skew
+  to prove the guarded lease predicate uses PostgreSQL `now()`.
 - [ ] G4. No approval of the executable implementer or feature activation before owner
   accepts the completed dependency analysis. These are not changes to production flags.
 
