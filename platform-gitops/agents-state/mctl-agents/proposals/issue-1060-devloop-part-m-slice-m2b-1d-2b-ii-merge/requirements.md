@@ -76,8 +76,10 @@ Duplicate delivery (D16)
 
 Carry-over coverage
 
-- WHEN D3, D4, D5 and D6 runs end THE SYSTEM SHALL show in history: the settle commands, then the first post-deadline
-  read, then the relinquishing write where one exists (D7).
+- WHEN D3, D4, D5 and D6 runs end THE SYSTEM SHALL show in history the first post-deadline read, then the relinquishing
+  write where one exists (D7a). WHEN a merge gate is in flight at the deadline THE SYSTEM SHALL show in history the
+  cancel of the gate and the wait for it, then the first post-deadline read, then the relinquishing write (D7b); the
+  settle is only observable in that scenario.
 - WHEN the final read answers OPEN THE SYSTEM SHALL set `_last_pr` and `saw_open_pr`, reset the poll counters and hold
   the claim; WHEN a MERGED is first seen by the final read with no claim THE SYSTEM SHALL write `acquire` then
   `terminal` (D12).
@@ -99,8 +101,11 @@ Carry-over coverage
 
 ## Open questions
 
-- Carry-over split: this proposal takes D7, D9 window, D12, D14 and D15a, and defers D13b-e to 1d-3. The owner may
-  move D13b-e back in, or move all carry-over to 1d-3, without changing the D15/D16 core.
+- Carry-over split: this proposal takes D7, D9 window, D12, D14 and D15a, and defers D13b-e to 1d-3. The deferred
+  D13b-e are a mandatory input to the future 1d-3 proposal (issue #1061 is closed as not planned and is only a historical
+  reference, not a tracking issue). The owner may move D13b-e back in, or move all carry-over to 1d-3, without changing
+  the D15/D16 core. If the slice exceeds its budget, the implementer STOPS and reports, keeps the D15/D16 core, and
+  proposes a separate coverage issue that needs an owner GO. No test is deleted silently.
 - "Duplicate delivery of the final-read task" is read as a workflow task redelivered or reprocessed by a worker that lost
   its cache. The read is a read-only activity, and the server deduplicates activity completions. Both forms
   (cache-disabled worker, worker restart) are proposed. If the owner meant a different form, only T7 changes.
