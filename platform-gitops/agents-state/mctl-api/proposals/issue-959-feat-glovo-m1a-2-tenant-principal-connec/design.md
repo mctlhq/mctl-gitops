@@ -10,6 +10,7 @@
 | C-3 (`ActivateTx` refusal codes disagreed with frozen #961 §Activate) | `ActivateTx` returns what #961's single call expects, with no write: `pending_provider` or an unexpired `active` `invalid_transition`, `revoked` `connection_revoked`, `expired` (state, or `active` with `expires_at <= clock_timestamp()`) `connection_expired`, `failed` `no_connection`, absent or foreign `not_found`. State is checked before version. #957 §6d.4, T9, T20 |
 | C-4 (consumers expect `connection_revoked` from `LiveConnectionTx`) | `LiveConnection` and `LiveConnectionTx` read the owner's most recent row and return the live one or a typed not-live code: `revoked` `connection_revoked`, `expired` (state or clock) `connection_expired`, `failed` or none `no_connection`; the row accompanies the code (OPEN-961-4 adopted). A consumer holding a `gcn_` that differs from the live row's keeps answering `connection_revoked` itself (#985 §5 step 8, #988 §6, #989 §6). New index `glovo_connections_owner_recent`, T24 |
 | C-5 (no source for `actor_principal_id` / `actor_kind`) | New `Actor{PrincipalID, Kind}` and `ActorKind`; one source per mutating method (table under Store API); `RefusalEvent` declared; OPEN-959-3 narrowed. T23 |
+| C-N1 to C-N6 (round 8 delta) | `Status(not_authorized)` is 403 and the 401 is `glovo.WriteUnauthenticated` (A15, T25); `created_at` is `clock_timestamp()` in SQL and the recent index is `(tenant_id, principal_id, created_at DESC, connection_id DESC)` (T24 two-writer case); `Transition` has no default actor and no `system` fallback, the worker principal in ctx is the only derived actor (T23); `ActivateTx` check order pinned |
 | C-6 (`glovo.Status` existed only as text; `WriteError` hard-codes 403) | Task A15 rewrites `WriteError` to take its status from `glovo.Status(code)`; an unregistered code is 503 with the body code `unavailable`. T25 pins it with the existing `not_ready` 503 and `not_authorized` 403 |
 
 ## Amendment 2026-11-09 (c), round 5 of the AMEND PR
@@ -100,7 +101,7 @@ func (s *Store) EndPurgerInstalled() bool
 // LockOwnerShared takes L1 (install key) shared, then L2 (owner key) shared, on tx.
 func (s *Store) LockOwnerShared(ctx context.Context, tx pgx.Tx, tenant, principal string) error
 // LiveConnectionTx reads the owner's most recent connection row on tx in one statement
-// (WHERE tenant_id AND principal_id ORDER BY created_at DESC, connection_id DESC LIMIT 1, no
+// (WHERE tenant_id AND principal_id ORDER BY created_at DESC, connection_id DESC LIMIT 1; created_at is set by the INSERT of Connect and Reconnect as clock_timestamp() in SQL after L2 exclusive is held, never now() and never a Go clock, so it is ordered by lock order as long as the server clock does not step backwards: clock_timestamp() is wall time, and a backwards step of the server clock between two connects of one owner is outside this slice (connection_id breaks only exact ties) (round 8, C-N3); no
 // live predicate, no row lock) and returns it when it is live and not lapsed. The caller must
 // hold L2 (shared or exclusive). Round 8 (C-4), the typed not-live codes, each returned together
 // with the row (OPEN-961-4), nil row when none exists: state revoked is connection_revoked;
@@ -171,7 +172,7 @@ Verified against mctl-api main `a9ca5814` (#977 merged) and the merged #968 brid
 | Store API | `Install`, `GetInstall`, `RevokeInstall`, `Reinstall`, `Connect`, `Reconnect`, `Transition`, `Revoke`, `GetConnection`, `LiveConnection`, `ListAudit`, `IsAllowlisted` | #959 |
 | Store states | `pending_handoff`, `pending_provider`, `active`, `expired`, `failed`, `revoked`; wire `PublicState`: both `pending_*` -> `pending`, the rest unchanged | #959 states, #961 mapping |
 | Refusal enum (closed, `glovo.Code`) | `not_ready`, `unavailable`, `not_authorized`, `invalid_request`, `not_found`, `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`, `stale_install`, `stale_version`, `no_connection`, `connection_exists`, `connection_revoked`, `connection_expired`, `invalid_transition`, `idempotency_key_reused`, `rate_limited`; since 2026-11-09 (c) also `fingerprint_changed`, `approval_invalid`, `approval_expired`, `approval_replayed`, `intent_mismatch`, `basket_changed`, `tenant_busy`. The one closed set, with every status and wire value, is mctl-api#957 design §4.1 | #959 adds the M1a codes; #985, #988 and #989 add theirs through #957 §4.1 |
-| HTTP status | Amended 2026-11-09 (c) to equal mctl-api#957 design §4.1: 503: `not_ready`, `unavailable`; 401/403: `not_authorized` (401 only when no valid token); 400: `invalid_request`; 404: `not_found`, `no_connection`; 403: `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`, `stale_install`; 429: `rate_limited`; 409: every other registered code (the enum is closed; a code outside the registry is 503, fail closed). One function, `glovo.Status(code)`, and `glovo.WriteError` takes its status only from it (round 8, C-6: `internal/glovo/errors.go` on main hard-codes 403 except `not_ready` 503 and defines only those two codes; task A15 rewrites it, keeping both of today's answers); an unregistered code is written as 503 with the body code `unavailable`, never as a 403 or 409 that could read as a decision; the #957 A6 golden test checks it against §4.1 for every code | #959 |
+| HTTP status | Amended 2026-11-09 (c) to equal mctl-api#957 design §4.1: 503: `not_ready`, `unavailable`; 403: `not_authorized` (`Status(not_authorized)` is 403 and nothing else: the 401 for a missing or invalid bearer or subject token is never written by `glovo.WriteError`, it is written by the authentication layer through `glovo.WriteUnauthenticated`, task A15); 400: `invalid_request`; 404: `not_found`, `no_connection`; 403: `no_install`, `ambiguous_tenant`, `no_tenant`, `scope_unsupported`, `not_in_pilot`, `stale_install`; 429: `rate_limited`; 409: every other registered code (the enum is closed; a code outside the registry is 503, fail closed). One function, `glovo.Status(code)`, and `glovo.WriteError` takes its status only from it (round 8, C-6: `internal/glovo/errors.go` on main hard-codes 403 except `not_ready` 503 and defines only those two codes; task A15 rewrites it, keeping both of today's answers); `glovo.WriteUnauthenticated(w http.ResponseWriter, wwwAuthenticate string)` in the same file writes the same body shape with the body code `not_authorized` and status 401, and sets `WWW-Authenticate` when the argument is non-empty; an unregistered code is written as 503 with the body code `unavailable`, never as a 403 or 409 that could read as a decision; the #957 A6 golden test checks it against §4.1 for every code | #959 |
 | Membership lost | `no_tenant` everywhere (resolver, facade, worker check); `not_authorized` only for a wrong audience or identity kind | all |
 | Refusal body | #977's `glovo.WriteError` shape `{"error": <code>, "error_description": <fixed text per code>}`. No `schema`/`refusal` envelope on refusals; success bodies keep their `schema` field. This is the shape mctl-api#957 and mctl-telegram#1235 vendor | all |
 | Kill switch | one name, `GLOVO_ENABLED`, default `false`, read once in `cmd/api/main.go`. Open only when `GLOVO_ENABLED=true` **and** every readiness dependency is configured and healthy. `GLOVO_MCP_RESOURCE` alone never opens anything. `GLOVO_OAUTH_ENABLED` and `GLOVO_DISABLED` are withdrawn | #960 introduces, #961 reuses |
@@ -365,7 +366,7 @@ CREATE INDEX IF NOT EXISTS glovo_connections_tenant_live
   ON glovo_connections (tenant_id, install_revision)
   WHERE state IN ('pending_handoff','pending_provider','active');
 CREATE INDEX IF NOT EXISTS glovo_connections_owner_recent      -- round 8 (C-4): the most-recent-row read
-  ON glovo_connections (tenant_id, principal_id, created_at DESC);
+  ON glovo_connections (tenant_id, principal_id, created_at DESC, connection_id DESC);
 CREATE TABLE IF NOT EXISTS glovo_connect_requests (
   tenant_id TEXT NOT NULL, principal_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
   request_hash TEXT NOT NULL, connection_id TEXT NOT NULL REFERENCES glovo_connections,
@@ -513,7 +514,7 @@ type ConnectInput struct {
     TerminalOnly bool                                // Reconnect only (round 3): a live prior is refused connection_exists under L2, no supersede; a prior terminal by state or by expires_at <= clock_timestamp() (database clock) takes the terminal branch
     AfterLocks func(ctx context.Context, tx pgx.Tx) error // round 3, for #961: runs on the mutation's own tx after L1/L2 and before the insert; an error aborts and is returned as is (e.g. rate_limited). Round 5 (#961 F4): the replay lookup (key + request_hash under L2) runs first; on a replay AfterLocks does not run, so a replay never moves a counter
 }
-func (s *Store) Connect(ctx, in ConnectInput) (*ConnectResult, error)           // {Connection, Replayed}
+func (s *Store) Connect(ctx, in ConnectInput) (*ConnectResult, error)           // {Connection, Replayed}; the INSERT sets created_at = clock_timestamp() in SQL after L2 exclusive (Reconnect too)
 func (s *Store) Reconnect(ctx, in ConnectInput, priorConnectionID string) (*ConnectResult, error)
 // ActivateTx (round 3, for #961): on the caller's tx it takes L1 shared then L2 exclusive,
 // runs in.AfterLocks (the handoff-ref consume, level L2b of #957 §6b), then steps
@@ -529,7 +530,11 @@ func (s *Store) Reconnect(ctx, in ConnectInput, priorConnectionID string) (*Conn
 // pending_provider is reached only through Transition and never activated in M1)
 // (round 4: no Go time.Time crosses the boundary, so it cannot be in the past or drift
 // from the database clock; ExpiresIn <= 0 or above MaxConnectionTTL (24 h) is invalid_request).
-// It checks ExpectedVersion and ExpectedInstallRevision (stale_version / stale_install).
+// Check order (round 8, C-N6, as #961 §Activate describes it): Actor.validate and the ExpiresIn range
+// (invalid_request, before any lock), L1 shared and L2 exclusive, AfterLocks, the owner-scoped row
+// lookup (not_found), the state (the codes above), the install revision (stale_install), the version
+// (stale_version), then the two audited writes. A refusal after AfterLocks rolls back the caller's
+// transaction, the handoff-ref consume included.
 // It begins and commits nothing. LiveConnectionTx then reports connection_expired once
 // expires_at has passed.
 type ActivateInput struct { Owner Owner; ConnectionID string; ExpectedVersion, ExpectedInstallRevision int64; ExpiresIn time.Duration; Actor Actor; AfterLocks func(ctx context.Context, tx pgx.Tx) error }
@@ -545,7 +550,10 @@ func (s *Store) AppendRefusal(ctx context.Context, ev RefusalEvent) error
 // from-state (revoked included) and, being argument validation, is no existence oracle; then
 // the owner-scoped lookup (not_found), CanTransition (invalid_transition), then the version
 // (stale_version). The actor comes from ActorFrom(ctx), not an argument: the 7-argument call
-// shape is written in #961 §Activate (the synthetic expire route) and is not edited.
+// shape is written in #961 §Activate (the synthetic expire route) and is not edited. There is no
+// default actor and no system fallback: a ctx with neither an Actor (WithActor) nor an authenticated
+// worker principal (ActorFrom, see the Actor source table) is invalid_request, checked first,
+// before any lock, with no write (round 8, C-N5).
 func (s *Store) Transition(ctx, owner Owner, connectionID string, to ConnectionState,
                            expectedVersion int64, reason string, ref *SecretRef) (*Connection, error)
 func (s *Store) Revoke(ctx, owner Owner, actor Actor, connectionID, reason string) (*Connection, error)
@@ -574,7 +582,8 @@ one is `invalid_request`, nothing written); the `actor_kind` CHECK is the second
 | `Install`, `RevokeInstall`, `Reinstall`, `Revoke`, `RevokeForMembership` | the explicit `actor Actor` parameter |
 | `Connect`, `Reconnect` | `ConnectInput.Actor` (not part of `request_hash`, so a replay by another actor is still a replay) |
 | `ActivateTx` | `ActivateInput.Actor` |
-| `Transition` | `ActorFrom(ctx)`; when none was set, the fixed `Actor{PrincipalID: "system", Kind: system}`. Its call shape is written in #961 (the synthetic expire route passes a plain context), so #961 audits that route as `system` until it sets `WithActor`; #961 is not edited |
+| `Transition` | `ActorFrom(ctx)` only, no default and no `system` fallback: a ctx with no `Actor` and no authenticated worker principal is `invalid_request` before any lock and nothing is written. The call shape written in #961 is unchanged and needs no `WithActor`: its ctx carries the authenticated worker principal (see the next row) |
+| the ctx of `Transition` and of the worker and facade routes | `ActorFrom(ctx)` returns an `Actor` set by `WithActor`; when none is set, it derives `Actor{PrincipalID: "worker", Kind: worker}` (the fixed label of `validate()`; the principal's own id is not copied) from the authenticated principal that `glovoWorkerGate` (#961 §4) leaves in the request ctx, read with the existing `auth.UserFromContext(ctx)` (`internal/auth/oidc.go`) and accepted only when `IsGlovoWorker()` is true (#959 imports `internal/auth` for this; the implementer confirms there is no import cycle, otherwise #961 task 5a exposes the worker flag through a ctx accessor in auth), and `ActivateTx` uses the same derivation when `ActivateInput.Actor` is the zero value, so the #961 worker and synthetic expire routes need no `WithActor`; any other principal without `WithActor` is not an actor; facade routes use the resolved principal with kind `user`, `owner` or `admin`; internal sweepers set kind `system` explicitly |
 | `AppendRefusal` | `RefusalEvent.Actor` |
 | every secondary event of `endConnection` (the connections a revoker ends) | the `Actor` of the call that ended them |
 

@@ -313,8 +313,7 @@ That is eight triggers and five functions.
 ### 4. One basket fingerprint (`internal/glovo/basket`)
 
 - `basket.Approval` is the Go mirror of the #1059 `approval-basket.schema.json`. This
-  slice does not define its fields; it vendors the #1059 schema, `basket-fingerprint.json`
-  and `must-reject.json` by sha256 (as #986 task 1 does) and fails to build without them.
+  slice does not define its fields; it vendors `approval-basket.schema.json`, `basket-fingerprint.json` and `pattern-parity.json` into `internal/glovo/basket/contract/`, and `jcs-digest.json` and `must-reject.json` into `internal/jcs/testdata/`, per the #1059 §Vendoring per-consumer table, and fails to build without them.
   `basket.Validate` enforces what the schema cannot: lines sorted by unique `item_code`
   (unsorted input is rejected, never re-sorted) and the subtotal and total arithmetic.
   The read payload (`payload_digest`) is never a fingerprint input.
@@ -324,8 +323,7 @@ That is eight triggers and five functions.
   against the vendored `approval-basket.schema.json` with `additionalProperties: false`
   (so an extra field such as `item_name`, or `quantity: 1.0`, is refused), runs
   `Validate`, and returns the RFC 8785 bytes of the validated input. The #1059 basket files are
-  vendored once, here, in `internal/glovo/basket/contract/` (#986 and #985 pin the same
-  sha256 and do not copy them). The write command schema that wraps this basket by `$ref`
+  vendored once, here, in `internal/glovo/basket/contract/` (#986 pins the basket schema only through `TestApprovalBasketRefResolves`; #985 vendors nothing; see the #1059 §Vendoring table). The write command schema that wraps this basket by `$ref`
   is #1059's `command-place-order-fake.schema.json`, vendored and gated by #986 §2a (round 7; #985 only enqueues it).
 - `basket.Fingerprint(canonical) = "sha256:" + hex(sha256(canonical))`, with RFC 8785 from the
   `internal/jcs.Canonicalize` of this slice (round 4, N3; #986 imports it). Prices and amounts are part of `t`, so
@@ -361,8 +359,8 @@ That is eight triggers and five functions.
 | `finalized` | `finalized` | `BindApproval` (write-once `approval_ref`) | #989 `CreateGlovoApprovalTx` |
 | `open`, `finalized` | `cancelled` | `MarkCancelled` | #985 |
 | `finalized` | `dispatched` | `MarkDispatched(cmd_)` (writes the effect row) | #985 |
-| `dispatched` | `cancelled` | `MarkCancelled` (a `cancelled` or `expired` command with effect `none`) | #985 `reconcileOrder` |
-| `dispatched` | `unknown` | `MarkUnknown` (a terminal command, `completed`, `cancelled` or `expired`, whose effect is `unknown`) | #985 `reconcileOrder` |
+| `dispatched` | `cancelled` | `MarkCancelled` (per the #985 §2a table) | #985 `reconcileOrder` |
+| `dispatched` | `unknown` | `MarkUnknown` (per the #985 §2a table) | #985 `reconcileOrder` |
 | `dispatched` | `closed` | `MarkClosed` (a `completed` command with effect `succeeded`, `failed`, `not_performed` or `none`) | #985 `reconcileOrder`, one function with the total table of #985 §2a (rounds 6 and 7; this slice needs no new edge; the `unknown -> closed` edge stays in the trigger matrix but has no caller) |
 
 Every write CASes on `version` and `state`; the trigger enforces the same matrix for raw

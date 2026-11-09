@@ -34,10 +34,12 @@ Open items recorded in round 6 (one recommendation each, in the owning proposal'
 | OPEN-961-4 | #961 | R5-4 | #959 `LiveConnection*` return the lapsed `*Connection` with `connection_expired` |
 | OPEN-985-11 | #985 | F2 | `MCTL_GLOVO_WRITE_FENCE_ENABLED`, set by the gitops PR lifting #2457; route first, fence last |
 | OPEN-985-13 | #985 | R8 | `DispatchCommandTTL` = 900 s, capped at `fresh_until` (#985 §7.4) |
-| OPEN-985-14 | #985 | R8 | fixture seam: `glovojoin_fixture` selects `gate_fixture.go` and `ttl_fixture.go`; never skips §7.3 items 2 to 6 (#985 §7.4, T29) |
+| OPEN-985-14 | #985 | R8 | fixture seam: `glovojoin_fixture` selects `gate_fixture.go` (package `internal/glovo`) and `ttl_fixture.go` (package `internal/glovo/control`); never skips §7.3 items 2 to 6 (#985 §7.4, T29) |
+| OPEN-985-15 | #985 | R5 (renumbered R8) | accept the §2a result-to-order mapping for the cancelled and expired triples |
 | OPEN-985-12 | #985 | F3 | vendor the control contract files into mctl-agents with `SHA256SUMS`, checked by #1044 and #990 |
-| OPEN-986-4 | #986 | P2-1 | vendor `claim-response.schema.json` and pin the envelope strings; extend T7c |
-| OPEN-986-5 | #986 | P2-2 | one canonical location per vector file, with sha256 pin tests |
+| OPEN-986-4 | #986 | P2-1 | closed (round 8): vendor `claim-response.schema.json` and pin the envelope strings; T4h and T7c |
+| OPEN-986-5 | #986 | P2-2 | one canonical location per vector file, with sha256 pin tests (closed, round 8: #1059 §Vendoring table, `TestApprovalBasketRefResolves`) |
+| OPEN-986-6 | #986 | R8 | the real provider's `supported_versions` entry is a gitops P1 activation precondition |
 | OPEN-988-5 | #988 | P2-4 | requirement, CHECKs and T20 for `join_refs` mint and lookup |
 | OPEN-989-8 | #989 | N2 | Sweeper started from `main.go` by #985 task 9; drop the "no new interface" sentence |
 | OPEN-1059-4 | #1059 | R5-2 | closed (round 8): per-consumer vendor table; one basket copy location |
@@ -457,8 +459,7 @@ omitted.
 - `GET /connection`: `connection_state` = #959 `Connection.State`, `connection_id` =
   `ConnectionID`, `expires_at` = `ExpiresAt` (omitted while NULL). `provider_account_label`
   is omitted in M1: no #959 or #961 field holds one and the pinned tool schema marks it
-  optional. No connection is 404 `no_connection`, a lapsed one `connection_expired`
-  (#961 `Current`); neither has a body.
+  optional. No connection, or a most-recent `failed` one, is 404 `no_connection`; a lapsed one is `connection_expired` and a revoked one is `connection_revoked` (409, #959 `LiveConnection` through #961 `Current`); none has a body.
 - `GET /orders/{order_id}`: `{state, outcome}`. `handoff_url` is never part of this body
   (it belongs to `POST /connections`, #961). Inputs: #988 `Order.State` and `CommandID`;
   #989 `GlovoApprovalStatus(aar)` only while the order is `finalized`; #985
@@ -496,7 +497,7 @@ row above, a successful 200). Nothing is persisted, and no `Mark*` runs on a rea
 this case; the audit event carries the pair or the error class. The mapping to
 #1044 M9 (a workflow vocabulary: `completed`, `cancelled`, `expired`, `failed`, `unknown` with
 `reason_code`) is a different surface and is read by #985's `read_command_result` triple, not by this
-body; the two agree on every pair that has an effect, and differ only in that an expired command is
+body; the two agree on every pair whose effect is not `none`; for effect `none` the workflow surface may report a workflow-only outcome owned by #1044 M9 (for example `result_inconsistent`), or `unknown` when the stored triple contradicts the pair (#1044 pair guard), while the facade follows §3a; they also differ in that an expired command is
 `cancelled` on this wire and `expired` in the workflow (a wire string that does not exist here,
 by design, because the facade vocabulary has no `expired` for a dispatched order).
 
@@ -534,7 +535,7 @@ row here in the same PR (through D4 when the facade wire changes). `unavailable`
 
 | `glovo.Code` (internal) | HTTP | Facade route wire `error` | Control route wire `error` (#985) | #1044 M10 |
 |---|---|---|---|---|
-| `not_authorized` | 401 when no valid bearer or subject token, else 403 | `not_authorized` | `not_authorized` | terminal |
+| `not_authorized` | 403 | `not_authorized` | `not_authorized` | terminal |
 | `no_tenant` | 403 | `no_tenant` | `no_tenant` | terminal |
 | `ambiguous_tenant`, `not_in_pilot`, `scope_unsupported`, `no_install` | 403 | unchanged | not produced | — |
 | `stale_install` | 403 | `stale_install` | `stale_install` | terminal |
@@ -553,14 +554,14 @@ row here in the same PR (through D4 when the facade wire changes). `unavailable`
 | `unavailable` | 503 | `dependency_unavailable` | `unavailable` | retryable |
 
 The facade maps every 5xx by status to `upstream_unavailable`. `not_authorized` is the
-only code with two statuses.
+only code with two statuses: `glovo.Status` gives the 403 of the table above (the HTTP column) and the 401 rows below, for no valid bearer or subject token, are written by #959 `glovo.WriteUnauthenticated` (task A15), never by `glovo.WriteError`.
 
 #### 4.2 Conditions
 
 | Condition | Internal reason (audit only) | `glovo.Code` |
 |---|---|---|
-| Bearer is not the facade workload identity | `not_facade_identity` | `not_authorized` (401) |
-| Subject token missing, invalid, expired, revoked, wrong `iss`/`aud` | `subject_token_invalid` | `not_authorized` (401, + `WWW-Authenticate`) |
+| Bearer is not the facade workload identity | `not_facade_identity` | `not_authorized` (401 through `glovo.WriteUnauthenticated`, #959 A15) |
+| Subject token missing, invalid, expired, revoked, wrong `iss`/`aud` | `subject_token_invalid` | `not_authorized` (401 through `glovo.WriteUnauthenticated` with the `WWW-Authenticate` value, #959 A15) |
 | `X-Mctl-Scope-Ref` missing, unknown, expired, revoked, or bound to another principal, tenant or grant family (§2b) | `scope_ref_invalid` | `not_authorized` (403) |
 | `scope_ref` bound to an install revision that is no longer current | `scope_ref_stale` | `stale_install` |
 | Subject token lacks the route's scope; #986 `ErrReadNotAuthorized` | `insufficient_scope` | `scope_unsupported` |
@@ -1116,7 +1117,7 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | | `GetInstall(ctx, tenantID string) (*Install, error)` | round 5 (R4-1): the one source of install id (`gin_`) and install revision. No lock, one statement; absent or `uninstalled` is `no_install`. The #957 resolver calls it once per request after #960 `Resolve`; a `scope_ref` whose revision differs is `stale_install` |
 | | `ActivateTx(ctx, tx, in ActivateInput{..., ExpiresIn time.Duration})`, `ConnectInput.AfterLocks`, `ConnectInput.TerminalOnly`, `AppendRefusal(ctx, ev RefusalEvent)` | round 3, for #961: tx-scoped activation `pending_handoff -> pending_provider -> active`, starting only from `pending_handoff` and checking `ExpectedInstallRevision` and `ExpectedVersion` after the state (round 8, C-3, C-7); any other state writes nothing and answers `invalid_transition` (`pending_provider`, unexpired `active`), `connection_revoked`, `connection_expired` (`expired`, or `active` past `expires_at`), `no_connection` (`failed`) or `not_found`; SQL sets `expires_at = clock_timestamp() + ExpiresIn` (`<= 0` or `> 24h` is `invalid_request`, round 4); hook after L1/L2; terminal-only reconnect; refusal audit |
 | | `LockOwnerShared(ctx, tx pgx.Tx, tenant, principal string) error` | tx; L1 shared, then L2 shared |
-| | `type Actor struct{ PrincipalID string; Kind ActorKind }`, `ActorKind` (`user\|owner\|admin\|worker\|system`), `WithActor(ctx, Actor)`, `ActorFrom(ctx)`, `RefusalEvent`; `glovo.WriteError` and `glovo.Status` | round 8, C-5, C-6: created by #959 task 1 and tasks A14, A15. Every mutating method takes an `Actor` (parameter, input struct, or, for `Transition` whose call shape #961 fixes, the context with a `system` default); `WriteError` takes its status only from `Status(code)` and writes an unregistered code as 503 `unavailable` |
+| | `type Actor struct{ PrincipalID string; Kind ActorKind }`, `ActorKind` (`user\|owner\|admin\|worker\|system`), `WithActor(ctx, Actor)`, `ActorFrom(ctx)`, `RefusalEvent`; `glovo.WriteError` and `glovo.Status` | round 8, C-5, C-6: created by #959 task 1 and tasks A14, A15. Every mutating method takes an `Actor` (parameter, input struct, or, for `Transition` whose call shape #961 fixes, the context, with no default and no `system` fallback: a ctx with no `Actor` and no authenticated worker principal is `invalid_request`; #959 design Actor sources); `WriteError` takes its status only from `Status(code)` and writes an unregistered code as 503 `unavailable` |
 | | `LiveConnectionTx(ctx, tx pgx.Tx, owner glovo.Owner) (*glovo.Connection, error)` | tx; no row lock; caller holds L2; one statement over the owner's most recent row (round 8, C-4): the live row, or with the row `connection_revoked` (`revoked`), `connection_expired` (`expired`, or `expires_at <= clock_timestamp()`: statement time, round 4; `now()` is the transaction start and would let a long transaction permit after expiry; even before any `Transition`), `no_connection` (`failed`, or none). `LiveConnection` on the pool has the same contract; a consumer whose `gcn_` differs from the live row's answers `connection_revoked` itself |
 | | `WithRevocationHook(h glovo.RevocationHook) Option`, `type RevocationHook func(ctx, tx pgx.Tx, ended []string, actor string) error` | every path that ends a connection calls it on its own transaction |
 | | `WithMembershipRevoker(name string) Option`, `MembershipRevocationWired() bool` | true only when the slice that detects a membership removal registered itself (OPEN-985-2) |
@@ -1132,7 +1133,7 @@ method runs on the caller's `pgx.Tx` and never begins, commits or rolls back.
 | | `BindApproval(ctx, tx, sc Scope, a Actor, orderRef, approvalRef string) error` | tx; called by #989 with `Scope{Tenant, PrincipalID: owner}` and `Actor{Kind: system, ID: "service:glovo-prepare"}` |
 | | `PeekOrderScope(ctx, q Querier, orderRef string, tenants []string) (Scope, error)` | unlocked read of write-once columns |
 | | `LockOrderForControl(ctx, tx, orderRef string, tenants []string) (*Order, error)` | tx; L3. #985 passes its credential's `Tenants`; the #989 fence passes `[]string{command.tenant}` |
-| | `MarkDispatched(ctx, tx, o *Order, commandID string, a Actor) error`, `MarkCancelled(...)`, `MarkUnknown(...)`, `MarkClosed(...)` | tx; `MarkDispatched` also writes the effect row; `MarkClosed` is `dispatched -> closed` only, called by #985 `read_command_result` (round 6, G2) |
+| | `MarkDispatched(ctx, tx, o *Order, commandID string, a Actor) error`, `MarkCancelled(...)`, `MarkUnknown(...)`, `MarkClosed(...)` | tx; `MarkDispatched` also writes the effect row; `MarkClosed` is `dispatched -> closed` only, called by #985 `reconcileOrder` (round 6, G2) |
 | | `Snapshot(ctx, q Querier, sc Scope, orderRef string, seq int) (*Snapshot, error)` | `Snapshot.Canonical` holds the JCS bytes |
 | | `MintJoinRefTx(ctx, tx, kind JoinKind, tenant, principalID, subjectID string) (string, error)` (kinds `tenant`, `principal`, `install_revision`; there is no `order` kind), `LookupJoinRefTx(ctx, q Querier, kind JoinKind, tenant, principalID, subjectID string) (string, error)` | mint is insert-or-read; lookup is read-only, `not_found` if never minted |
 | | `basket.Parse(raw []byte) (Approval, []byte, error)`, `basket.Fingerprint(canonical []byte) string` | the only entry points; `Parse` returns the JCS bytes |
@@ -1198,7 +1199,7 @@ the negative matrix (tasks.md T6). An exported `cmd/glovo-join-harness` (fixture
 serves the same stack on a local port so the mctl-telegram facade's integration test can
 target real mctl-api handlers instead of `fakeapi`.
 
-Round 8: the same tag also selects #985's `gate_fixture.go` (opens the const-closed control
+Round 8: the same tag also selects #985's `gate_fixture.go` in `internal/glovo` (opens the const-closed control
 gate only) and the TTL overrides: #985 owns `SetFixtureDispatchCommandTTL`, this slice owns
 `internal/glovojoin/ttl_release.go` / `ttl_fixture.go` with `SetFixtureGlovoApprovalTTL(d)`
 (release: `const GlovoApprovalTTL = 15 * time.Minute`; fixture: a `var`). Connection expiry

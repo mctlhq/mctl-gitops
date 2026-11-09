@@ -135,10 +135,10 @@ Revoke and reinstall atomicity
 - WHEN `Transition` is called with `to = active` THE SYSTEM SHALL answer `invalid_request`
   from every from-state (round 8).
 - THE SYSTEM SHALL take the audit actor of every mutating method from one defined source
-  (`Actor{PrincipalID, Kind}`, kinds `user|owner|admin|worker|system`); an invalid actor is
-  `invalid_request` with nothing written (round 8).
+  (`Actor{PrincipalID, Kind}`, kinds `user|owner|admin|worker|system`); a `Transition` with no `Actor` and no authenticated worker principal in ctx (the principal `glovoWorkerGate` of #961 leaves there, from which `ActorFrom` derives kind `worker`), like any invalid actor, is
+  `invalid_request` with nothing written (round 8); there is no `system` fallback.
 - THE SYSTEM SHALL derive the HTTP status of every refusal written by `glovo.WriteError` from
-  `glovo.Status(code)`, and SHALL write an unregistered code as 503 `unavailable` (round 8).
+  `glovo.Status(code)`, and SHALL write an unregistered code as 503 `unavailable`; `Status(not_authorized)` is 403 and the 401 is written only by `glovo.WriteUnauthenticated` (round 8).
 - WHILE `GLOVO_DB_URL` is not set explicitly (the wiring slice passes `WithExplicitURL(false)`) THE SYSTEM SHALL report `not_ready`; it
   SHALL NOT fall back to `AUDIT_DB_URL`. `NewStore` SHALL take the shared pool and open none of its own (round 3).
 - WHILE `current_user` differs from the configured runtime role, or has `rolsuper`, `rolcreaterole`, `rolcreatedb` or `rolbypassrls`, THE SYSTEM SHALL report `not_ready` from `Ready` (round 3).
@@ -235,4 +235,4 @@ Schema safety
   the only guard.
 - OPEN-959-2. Provisioning of the migration and runtime roles (shared with
   OPEN-985-6, OPEN-988-3, OPEN-989-2).
-- OPEN-959-3 (round 6; recommendation: add Go declarations once in design Types and task 1). Only `Connection` and `Install` have a field list (round 6 G4). `AuditEvent`, `ConnectResult`, `ConnectInput`, `GrantRow` and `Option` still need declarations (round 8: `Actor`, `ActorKind` and `RefusalEvent` are declared in design Types), and the place where a released `gsr_` ref is returned (a field on the ended `Connection` or a separate `[]SecretRef`) must be stated, so that #957 section 6d.4 "created by #959 task 1" is true.
+- OPEN-959-3 (round 6; recommendation: add Go declarations once in design Types and task 1). Only `Connection` and `Install` have a field list (round 6 G4). `AuditEvent`, `ConnectResult`, `ConnectInput`, `GrantRow` and `Option` still need declarations (round 8: `Actor`, `ActorKind` and `RefusalEvent` are declared in design Types, and `Transition` has no default actor), and the place where a released `gsr_` ref is returned (a field on the ended `Connection` or a separate `[]SecretRef`) must be stated, so that #957 section 6d.4 "created by #959 task 1" is true.

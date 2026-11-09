@@ -97,7 +97,7 @@ disagree, this section wins. Every older passage that contradicted it has been r
 | P3 `ProveColocated` gaps (physical standbys share `system_identifier`; EXECUTE on `pg_control_system`) | Replaced by a nonce written in one transaction and read back through every pool, plus privilege and `to_regclass` checks (§4). `pg_control_system` is no longer used |
 | P3 The partial unique index is applied on every boot | Withdrawn by (c): all bridge DDL moves to `bridge.ApplySchema` under the migration role (§ Platform impact) |
 | P3 Crash after commit but before the response | T22: the retry returns the same `cmd_` |
-| P3 `glovo.Default` is a `var` (`gate.go:24`) | `ControlDefault` is backed by an unexported `const controlGateOpen = false` (release file; the fixture twin is §7.4) |
+| P3 `glovo.Default` is a `var` (`gate.go:24`) | `ControlDefault` is backed by an unexported `const controlGateOpen = false` in package `internal/glovo` (release file; the fixture twin is §7.4) |
 | P3 `in_flight` is called an effective state | Corrected: it is a stored state (`action_approvals.go:215-232`) |
 
 Skipped P3s: none.
@@ -251,7 +251,7 @@ Deployed state:
   before L4 stays valid, and a non-terminal command changes nothing, so a stale read only delays
   the transition. The order calls are not idempotent: each is a CAS on `version` and `state`, so a
   repeat fails, which is why the `dispatched` guard comes first. Only
-  `MarkGlovoApprovalUnknownTx` is safe to repeat (#989 §4).
+  `MarkGlovoApprovalUnknownTx` is safe to repeat (#989 §4). The pair is read before `reconcileOrder` is called, so on `read_command_result` a failed or absent `CommandEffect` read is 503 `unavailable` on every order state (a non-`dispatched` order reaches `reconcileOrder` only on that route, because `Cancel` reads a command only on a `dispatched` order, §6, so no `Store.Cancel` commit or rollback question exists on that path); the table lookup is inside `reconcileOrder`, after the `dispatched` guard, so on an order that is not `dispatched` an out-of-table pair makes no call and no write and the control route answers 200 from the stored order state, while the facade (#957 §3a) answers 503 for the same pair on a `dispatched` or `closed` order, because it derives the state from the pair on every such read (for a `cancelled` or `unknown` order the facade state comes from the order alone). `reconcileOrder` derives the order from the (status, `effect_state`) pair alone and never consults the stored result triple: a triple that contradicts `effect_state` does not change the order state.
 
   | Command `status` | `effect_state` | #988 call on the `dispatched` order | #989 call on the `aar_` | #957 §3a wire `state` |
   |---|---|---|---|---|
@@ -264,9 +264,9 @@ Deployed state:
   | `completed` | `none` (the provider ended the command before any permit) | `MarkClosed` | `MarkGlovoApprovalUnknownTx` | `failed` |
   | `cancelled`, `expired` | `none`, `not_performed` | `MarkCancelled` | `MarkGlovoApprovalUnknownTx` | `cancelled` |
   | `cancelled`, `expired` | `succeeded`, `failed`, `permitted`, `unknown` (a possible effect is never shown as cancelled) | `MarkUnknown` | none | `unknown` |
-  | every other pair: `pending` or `leased` with `succeeded`, `failed` or `not_performed`; `completed` with `permitted` (no read of a command, or a failed read, is in this row too) | | none. An invariant violation, or an unobserved state, never read as "nothing happened". Route: 503 `unavailable`, audit, the transaction rolls back (nothing is written, `Store.Cancel` included). The facade never renders a state for it (#957 §3a) | none | no state: 503 |
+  | every other pair: `pending` or `leased` with `succeeded`, `failed` or `not_performed`; `completed` with `permitted` (no read of a command, or a failed read, is in this row too) | | none. An invariant violation, or an unobserved state, never read as "nothing happened". Route, on a `dispatched` order (on any other order state the control route answers 200 from the stored order state, §2a, `reconcileOrder` guard): 503 `unavailable`, audit, the transaction rolls back (nothing is written, `Store.Cancel` included). The facade never renders a state for it (#957 §3a) | none | no state: 503 |
 
-  Every row with a `MarkGlovoApprovalUnknownTx` entry is a command that ended with no permit row:
+  Every row with a `MarkGlovoApprovalUnknownTx` entry is a command that may have ended with no permit row (the call is a no-op when the receipt is already `consumed`):
   a reserved receipt of it can never be spent, so the order call and the receipt call share the
   transaction, as #989 §7 requires. `MarkGlovoApprovalUnknownTx` is a no-op returning nil when the
   `aar_` is not `reserved` for that command (already `unknown`, or `consumed` because a permit did
@@ -292,7 +292,7 @@ reason goes to audit only.
 |---|---|---|---|
 | The caller is not the control worker, or a control worker calls another route | 403 | `not_authorized` | terminal |
 | Gate closed after mount, missing config, failed proof, or a missing collaborator | 503 | `not_ready` | `provider_disabled` (mapped on the #1044 side) |
-| Store I/O error, a failed or absent `CommandEffect` read, or a pair outside the §2a table (the transaction rolls back) | 503 | `unavailable` | retryable |
+| Store I/O error, a failed or absent `CommandEffect` read, or a pair outside the §2a table on a `dispatched` order (the transaction rolls back; on any other order state the control route answers 200 from the stored order state, §2a, `reconcileOrder` guard) | 503 | `unavailable` | retryable |
 | `lock_timeout` (SQLSTATE `55P03`) on any lock of the #957 §6b order | 409 | `tenant_busy` | `tenant_busy` |
 | Malformed ref, unknown or duplicate field | 400 | `invalid_request` | terminal |
 | Order, command or approval is absent, foreign, or outside `tenants` | 404 | `not_found` | terminal |
@@ -311,10 +311,9 @@ Cancelling a command that is already `completed` or `expired` is **not** a refus
 answers 200 with the current `order_state` and `effect_state`; the bridge command is unchanged,
 and the order moves only through `reconcileOrder` (§2a).
 
-It is an OPEN item whether #1044 already maps the #959 codes in this table: `no_tenant`,
-`no_connection`, `connection_revoked`, `connection_expired`, `stale_install`,
-`invalid_transition`, `not_found` and `unavailable`. If it does not, #1044 is amended in
-the same wave.
+Whether #1044 maps the #959 codes in this table (`no_tenant`, `no_connection`,
+`connection_revoked`, `connection_expired`, `stale_install`, `invalid_transition`, `not_found`
+and `unavailable`) is closed (round 8): #1044 M10b maps them.
 
 ### 3. Store seam (`internal/glovo/control/`)
 
@@ -569,11 +568,10 @@ revocation. The owner must accept it explicitly; this is an OPEN item.
 #990 must drive the real control routes, so a test build needs a way to open the const-closed
 gate and to shorten the dispatch TTL. There is one mechanism, the `glovojoin_fixture` build tag
 that #957 §8 already uses for `FixtureBridge` (referenced, not duplicated), and it selects
-exactly two files in `internal/glovo/control`, each with a release twin:
+exactly two file pairs, each with a release twin: the gate pair in `internal/glovo` (the package of `glovo.ControlDefault`, so the unexported const is visible to it) and the TTL pair in `internal/glovo/control`:
 - `gate_release.go` (`//go:build !glovojoin_fixture`): `const controlGateOpen = false`;
-  `gate_fixture.go` (`//go:build glovojoin_fixture`): `const controlGateOpen = true`.
-  `glovo.ControlDefault` stays backed by that const.
-- `ttl_release.go` (`!glovojoin_fixture`): `const DispatchCommandTTL = 900 * time.Second`;
+  `gate_fixture.go` (`//go:build glovojoin_fixture`): `const controlGateOpen = true`; both in `internal/glovo`. `glovo.ControlDefault` stays backed by that const.
+- in `internal/glovo/control`: `ttl_release.go` (`!glovojoin_fixture`): `const DispatchCommandTTL = 900 * time.Second`;
   `ttl_fixture.go` (`glovojoin_fixture`): `var DispatchCommandTTL = 900 * time.Second` and
   `func SetFixtureDispatchCommandTTL(d time.Duration)`, which a test calls before it starts
   the router. #957 owns the matching pair `internal/glovojoin/ttl_release.go` /

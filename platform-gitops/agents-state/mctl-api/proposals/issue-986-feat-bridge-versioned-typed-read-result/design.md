@@ -170,12 +170,12 @@ Skipped P3s: none.
   - Configuration. `auth.BridgeProviderConfig` (`internal/auth/bridge_provider.go:63`) gains one
     optional key, `supported_versions`, a JSON array whose closed value set is
     `["bridge.mctl.ai/v1alpha1","bridge.mctl.ai/v1alpha2"]`. Absent means `["bridge.mctl.ai/v1alpha1"]`
-    (today's behaviour). An unknown value, a duplicate or an empty array is a configuration error from
+    (today's behaviour). The list MUST contain `bridge.mctl.ai/v1alpha1`. An unknown value, a duplicate, an empty array or a list without v1alpha1 is a configuration error from
     `ParseBridgeProviders` (which already rejects unknown fields). Rolling the code back requires
     removing the key first, because an older parser rejects it: a rollout note, not a code path.
   - `bridge.Caller` gains `Versions []string`, filled by `bridgeCaller`
-    (`internal/api/handlers_bridge.go:89-92`) from that configuration. `Store.Claim` never trusts a
-    provider-side filter.
+    (`internal/api/handlers_bridge.go:89-92`) from that configuration. `Store.Claim` treats a nil or empty
+    `Caller.Versions` as `[bridge.mctl.ai/v1alpha1]` and never trusts a provider-side filter.
   - `Claim` leases a v1alpha2 command (a read kind, or the `place_order_fake` of §2a) only to a caller
     whose `Versions` contains `bridge.mctl.ai/v1alpha2`. The gate is a predicate of the selection
     statement, not a filter on its result (§4a).

@@ -68,7 +68,7 @@ schema, RFC 3339 patterns and the re-measured sizes.
   invalid fixture is rejected with its reason; the closed property list equals the v1alpha1 one
   plus nothing, and the required list the v1alpha1 one plus `approval_ref` (a test reads both
   from `docs/spikes/1043/command.schema.json`).
-- [ ] 8. `tools/bridge_contract.py` (depends on 2-7): `check_read_command(raw: bytes)`,
+- [ ] 8. `tools/bridge_contract.py` (depends on 2-7 except 5b): `check_read_command(raw: bytes)`,
   `check_read_result(raw: bytes)` and `check_approval_basket(raw: bytes)`. The order is
   precheck, integer tokens, schema, body cap 16384, `JCS(payload)` cap 12288, digest
   recompute, basket sort/uniqueness/arithmetic, display codes present in the basket. CLI

@@ -128,11 +128,8 @@ Cancel
   the receipt through #989 (`pending|approved -> refused`) and move the order to
   `cancelled`, in one transaction.
 - WHEN a cancel arrives for a dispatched order THE SYSTEM SHALL call
-  `bridge.Store.Cancel(ctx, tx, cmd, actor)` in the same transaction. Then:
-  - IF the resulting effect is `none` THEN it SHALL mark the reserved receipt `unknown`
-    through #989 (never spendable again) and move the order to `cancelled`;
-  - IF the effect is `unknown` THEN it SHALL move the order to `unknown`, SHALL NOT set
-    `cancelled`, and SHALL leave the already `consumed` receipt untouched.
+  `bridge.Store.Cancel(ctx, tx, cmd, actor)` in the same transaction, then apply design §2a
+  through `reconcileOrder`.
 
   The response SHALL carry `effect_state`.
 - THE SYSTEM SHALL never return an `aar_` to `approved`.
@@ -143,10 +140,7 @@ Read routes
   SHALL return only ids, enums, timestamps and digests. It SHALL never return a payload
   or a stored result body.
 - WHEN `read_command_result` sees a terminal command whose order is `dispatched` THE SYSTEM
-  SHALL apply the design §2a table, which covers every (command status, `effect_state`) pair:
-  a terminal command with `effect_state` `none` SHALL move the order to `closed` (`completed`)
-  or `cancelled` (`cancelled`, `expired`) and the reserved receipt to `unknown`; a pair outside
-  the table SHALL change nothing and answer 503 `unavailable`. (round 7)
+  SHALL apply design §2a through `reconcileOrder`. (round 7)
 - THE SYSTEM SHALL enqueue the Glovo `place_order_fake` with wire version `v1alpha2` (#986
   design §2a) and SHALL NOT vendor, project or validate the command schema itself. (round 7)
 
@@ -203,7 +197,7 @@ Data hygiene
 - OPEN-985-2. Who builds the detector that turns a GitOps membership removal into a #959
   `Revoke` with reason `membership_removed` (likely #960)? The owner must also accept
   the residual window explicitly. The fence stays refusing until both are done.
-- OPEN-985-3. Does #1044 already map the #959 codes of design §2b (`no_tenant`,
+- OPEN-985-3 (closed, round 8: #1044 M10b maps all of these codes). Does #1044 already map the #959 codes of design §2b (`no_tenant`,
   `no_connection`, `connection_revoked`, `connection_expired`, `stale_install`,
   `invalid_transition`, `not_found`, `unavailable`)? Does it read replay from
   `Idempotent-Replayed`? If not, #1044 is amended in the same wave.
@@ -243,5 +237,5 @@ Data hygiene
   is true.
 - OPEN-985-11 (round 6; recommendation: a separate const `MCTL_GLOVO_WRITE_FENCE_ENABLED`, distinct from the route flag, set only by the gitops PR that lifts mctl-gitops#2457). Fence precondition 2 ("hold #2457 lifted") has no machine-checkable signal, so `SetFence` gating and T17 cannot be implemented as written. Order of the two flags: route mount first, fence last; T17 asserts `SetFence` is not called with it false while the route flag is true; docs/glovo-control.md (task 10) names it.
 - OPEN-985-13 (round 8; recommendation: 900 s). `DispatchCommandTTL`, the `ttl_seconds` of the dispatch command: the #1059 maximum and the #1044 `settle_timeout_s` default, always capped at the `aar_` `fresh_until`. Only the owner changes it (design §7.4).
-- OPEN-985-14 (round 8; recommendation: accept). The fixture seam is the `glovojoin_fixture` tag selecting `gate_fixture.go` and `ttl_fixture.go` (design §7.4, T29); the tag opens only the const and never skips §7.3 items 2 to 6.
+- OPEN-985-14 (round 8; recommendation: accept). The fixture seam is the `glovojoin_fixture` tag selecting `gate_fixture.go` in `internal/glovo` and `ttl_fixture.go` in `internal/glovo/control` (design §7.4, T29); the tag opens only the const and never skips §7.3 items 2 to 6.
 - OPEN-985-12 (round 6; recommendation: vendored copy with `SHA256SUMS` provenance, pinned commit, checked by a #1044 test). The contract fixture set `internal/glovo/control/contract/*.json` has an owner but no consumer picks it up. Specify the transfer to mctl-agents, list file names per route, and make the matching edits in #1044 (replace the #953/#954 wording, add a pin-and-vendor task and a test that every M10 code and the replay header appear) and #990 (a hop or provenance check for dispatch, cancel, `read_command_result` and `read_approval`).
