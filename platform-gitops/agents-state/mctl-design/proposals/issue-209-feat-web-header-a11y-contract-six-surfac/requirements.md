@@ -61,7 +61,7 @@ Contract identity
   investigation).
 - THE SYSTEM SHALL state that the contract version is independent of the design-system lockstep
   version, and that a contract change bumps the contract version: MAJOR for a removed or tightened
-  requirement, MINOR for an added requirement or consumer, PATCH for clarifications.
+  requirement or a newly mandatory behavior for an existing consumer, MINOR only for backward-compatible additions (such as optional guidance or a new consumer), PATCH for clarifications.
 
 Normative behavior
 
@@ -79,7 +79,9 @@ Normative behavior
   navigation link.
 - WHERE a requirement is stated in terms of an attribute THE SYSTEM SHALL also state the observable
   outcome it protects (for example "assistive technology reports expanded/collapsed"), so that a
-  framework-native or CSS-only runtime can meet it with an equivalent mechanism.
+  framework-native or CSS-only runtime can meet it with an equivalent mechanism. Mere DOM adjacency
+  of a toggle and a panel SHALL NOT be claimed as a programmatic/assistive-technology association:
+  a native equivalent needs source-backed semantic evidence or a separately pending exception.
 - THE SYSTEM SHALL NOT require a common component, element ID, class name, state attribute or
   script for any consumer; `data-nav-open` and `.mctl-site-burger` SHALL be described as the
   `site.css` hook for consumers that opt into the shared drawer visuals, not as a mandate.
