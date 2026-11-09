@@ -12,6 +12,11 @@
 #
 # Apply (needs a separate owner GO, not done by merging this file):
 #   vault policy write argo-workflow-rotator vault-policy-argo-workflow-rotator.hcl
+#   vault write auth/kubernetes/role/argo-workflow-rotator @vault-role-argo-workflow-rotator.json
+#
+# Roll back (nothing uses the role until the template is switched):
+#   vault delete auth/kubernetes/role/argo-workflow-rotator
+#   vault policy delete argo-workflow-rotator
 
 # Source credentials: read only. Never writable from this role.
 path "secret/data/platform/github-app-agents" {

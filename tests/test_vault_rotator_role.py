@@ -91,11 +91,33 @@ def allowed(rules, path, cap):
     return cap in best
 
 
-def template_targets():
+def template_code():
     doc = next(d for d in yaml.safe_load_all(CWFT.read_text()) if d["kind"] == "ClusterWorkflowTemplate")
     src = doc["spec"]["templates"][0]["script"]["source"]
     start = src.index("<< 'PYEOF'")
-    code = src[src.index("\n", start) + 1:src.rindex("PYEOF")]
+    return src[src.index("\n", start) + 1:src.rindex("PYEOF")]
+
+
+def vault_call_args(code):
+    """Argument source of every vault_get/vault_write call, plus any /v1/ URL literal."""
+    calls, urls = [], []
+    tree = ast.parse(code)
+    inner = {id(c) for n in ast.walk(tree) if isinstance(n, ast.JoinedStr) for c in n.values}
+    for node in ast.walk(tree):
+        if id(node) in inner:
+            continue
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in ("vault_get", "vault_write") and node.args):
+            calls.append((node.func.id, ast.unparse(node.args[0])))
+        if isinstance(node, ast.JoinedStr) or (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            text = ast.unparse(node)
+            if "/v1/" in text:
+                urls.append(text)
+    return calls, urls
+
+
+def template_targets():
+    code = template_code()
     creds, dests = set(), set()
     for node in ast.walk(ast.parse(code)):
         if isinstance(node, ast.Dict):
@@ -124,12 +146,20 @@ def run():
         check(f"read destination {d}", can("read", KV_PREFIX + d))
         check(f"update destination {d}", can("update", KV_PREFIX + d))
 
+    # every Vault call the template makes uses only the derived targets, and the only
+    # /v1/ URLs are the definitions of the two helpers plus the login
+    calls, urls = vault_call_args(template_code())
+    stray = [(f, a) for f, a in calls if a.replace("'", '"') not in ('t["creds_path"]', 't["dest_path"]')]
+    check("vault_get/vault_write use only creds_path/dest_path", not stray and bool(calls), str(stray))
+    odd = [u for u in urls if "/v1/secret/data/{path}" not in u and "auth/kubernetes/login" not in u]
+    check("no other Vault URL in the template", not odd, str(odd))
+
     # exact reach: the policy grants nothing the job does not name
     want = {KV_PREFIX + p for p in creds | dests}
     have = {p for p, _ in rules}
     check("policy paths == template paths", have == want, f"extra={sorted(have - want)} missing={sorted(want - have)}")
     check("no glob in any policy path", not any("*" in p or "+" in p for p in have))
-    check("no sudo/deny-less surprises: capabilities are read/update only",
+    check("capabilities are only read/update",
           all(set(c) <= {"read", "update"} for _, c in rules), str(rules))
 
     # negative
