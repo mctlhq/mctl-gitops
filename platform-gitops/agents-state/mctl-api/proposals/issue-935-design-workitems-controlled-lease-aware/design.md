@@ -243,7 +243,7 @@ purpose: the dispatcher must never call this path.
    not closed, and the lease semantics then govern a human. The single-transaction CAS reject gives the same
    fencing guarantees with less surface. Dropped. The approach could return if an inspect-while-holding step
    turns out to be needed.
-2. **Require a second-admin action approval per reject (mctl-api#366).** The operator would create an
+2. **Selected owner-v2 requirement: second-admin action approval per reject (mctl-api#366 or a verified stored operation grant).** The operator would create an
    `ActionApprovalRequest`, with `action_kind=execution-request-operator-reject`,
    `target=<xr id>@<row_version>` and `artifact_hash=sha256(reason)`. Another human admin decides it, and
    operator-reject consumes it with `ConsumeActionApproval` plus `MarkActionApprovalExecuted` in the same call.
@@ -257,9 +257,12 @@ purpose: the dispatcher must never call this path.
 
 ## Platform impact
 - **Migration:** four additive `ADD COLUMN IF NOT EXISTS` statements with constant defaults. On PostgreSQL 11+
-  this is metadata-only, with no table rewrite. Existing rows get `row_version=1`. Older API pods run during a
-  rolling deploy and ignore the new columns. An older pod's claim does not bump `row_version`. The operator reject
-  is still safe in that case, because its UPDATE also re-checks state and lease under the lock. The row_version CAS
+  this is metadata-only, with no table rewrite. Existing rows get `row_version=0`. Older API pods may run during a
+  rolling deploy and do not increment `row_version`; therefore the operator reject route
+  **MUST STAY OFF until every API replica has upgraded** and all state-changing writers,
+  including lease renewal, have been verified to increment the counter. A mixed-version
+  writer could change ownership without changing the CAS value, so state/lease predicates
+  alone are not a substitute for this activation gate. The row_version CAS
   is then only weaker for a claim made by an old pod, and the live-claim check still covers it. Document that
   the drain should be used only after the rollout has completed.
 - **Backward compatibility:** the dispatcher's claim, fulfil and reject contracts are unchanged, apart from new
