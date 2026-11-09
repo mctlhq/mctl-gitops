@@ -653,6 +653,11 @@ jobs:
         # being reported as "not found, skipping".
         run: python3 tests/test_wft_delete_tenant_vault.py
 
+      - name: Vault policy files parse and carry the writer-prefix rules
+        # Repo text only: structure of every vault-policy-*.hcl, the read-only
+        # writer policy, and the deny on the writer prefix in two policies.
+        run: python3 tests/test_vault_policy_files.py
+
       - name: Tenant workflows log in to Vault with their own tenant role
         # A template reachable from a tenant namespace picks its Vault role
         # from the pod's namespace and never asks for the platform role
