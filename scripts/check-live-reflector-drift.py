@@ -35,7 +35,10 @@ def evaluate(lines, rc=0, anchors=(), allow=None, sources=None):
     allow = ALLOW_SOURCES if allow is None else allow
     sources = set(SOURCES if sources is None else sources) | set(allow)
     if rc != 0: return 2, [f"UNKNOWN: listing command failed rc={rc}"]
-    lines = [l.rstrip("\n") for l in lines]
+    if rev("crlf"): lines = [l.rstrip("\n") for l in lines]
+    else: lines = [l.rstrip("\r\n") for l in lines]       # CRLF listings (a file saved on Windows, a CRLF pipe)
+    if not rev("crlf") and any("\r" in l for l in lines):
+        return 2, ["UNKNOWN: stray carriage return inside a line (corrupt or mixed line endings)"]
     if not lines: return 2, ["UNKNOWN: empty listing (never read as 0 found)"]
     trailer = [l for l in lines if l.startswith("#")]
     rows = [l for l in lines if l and not l.startswith("#")]
@@ -100,7 +103,7 @@ def main(argv):
         print(f"UNKNOWN: bad argument ({e})"); return 2
     if no_anchor and anchors: print("UNKNOWN: --anchor and --no-anchor are mutually exclusive"); return 2
     if not no_anchor and not anchors and not rev("default_anchor"): anchors = [DEFAULT_ANCHOR]
-    try: lines = open(path).readlines()
+    try: lines = open(path, newline="").readlines()    # newline="": keep \r\n so evaluate() sees and handles it
     except Exception as e: print("UNKNOWN:", e); return 2
     code, out = evaluate(lines, rc, anchors, sources=SOURCES + extra)
     print(["GREEN", "RED", "UNKNOWN"][code], f"(exit {code})", f"findings={len(out)}")

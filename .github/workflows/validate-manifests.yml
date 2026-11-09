@@ -323,13 +323,18 @@ jobs:
 
       # mctl-agents#1007 B4 (S-A): no Git-visible Reflector enabler or mirror
       # marker may appear anywhere in the tree (all text file types, tests and
-      # fixtures included). GREEN is "no enabler in Git", never "no S-A": live
+      # fixtures included). A RED or UNKNOWN result FAILS this step and so the
+      # job `validate`, which is a required check: it BLOCKS merging a pull
+      # request. It is not a check of its own and nothing here is advisory.
+      # Limit: it only gates what reaches a pull request. A push to main that
+      # skips PR checks (the gitops-bump DeployKey, the only bypass actor of
+      # main-protection, mode `always`) is not stopped; on push the step runs
+      # after the fact. GREEN is "no enabler in Git", never "no S-A": live
       # Secret state is out of reach of CI (scripts/check-live-reflector-drift.py
-      # is a manual tool, only its offline tests run here). Both test files
+      # is a manual tool, only its offline tests run here). The test files
       # prove the detectors green on converged input, red on deliberate
       # mutations, rc 2 (UNKNOWN) on unreadable or partial input, and each rule
-      # load-bearing. Advisory: not a separate required check, it fails the
-      # existing `validate` job.
+      # load-bearing.
       - name: Reflector source guard and detector proofs
         run: |
           set -euo pipefail

@@ -13,6 +13,18 @@ GREEN means only: no Git-visible enabler or mirror marker in the scanned tree.
 It NEVER means "no S-A"; the COVERAGE block printed on every run says what is
 not seen. Anything the scan could not read or parse is UNKNOWN, never green.
 
+Enforcement: CI runs this in the `validate` job of validate-manifests.yml, which
+is a required check, so a RED or UNKNOWN result BLOCKS merging a pull request.
+It is not its own required check. Limit: it only sees what reaches a pull
+request. A push to main that skips PR checks (the gitops-bump DeployKey, a
+bypass actor of ruleset main-protection in `always` mode) is not gated; on push
+to main the same step runs after the fact and reports, it cannot stop it.
+
+Symlinks: a directory symlink whose target is inside the root is listed in
+COVERAGE and not followed (its target is scanned at the real path, so a link
+loop cannot recurse). A symlink that points outside the root, or a dangling or
+looping one, is UNKNOWN.
+
 Test seam: the module-level REVERT set disables one rule at a time. Only the
 tests set it (to prove each rule is load-bearing); there is deliberately no
 environment variable or flag that can weaken the guard from outside.
@@ -167,14 +179,31 @@ def scan_text(path, text):
                     bad.append(f"{path}:{ln}: mirror marker {suf}={raw!r} committed in {kind}/{name} (mirror or pull-reflection from non-allow-listed source)")
     return bad, allowed_seen
 
+def inside(real_root, real_path):
+    return real_path == real_root or real_path.startswith(real_root.rstrip(os.sep) + os.sep)
+
 def scan(root, anchors):
-    if not os.path.isdir(root): return None, [f"UNKNOWN: root not a directory: {root}"], []
+    """Returns (seen, bad, allowed, archives, dirlinks). seen is None when the tree could not be observed
+    (bad then holds the UNKNOWN reasons). archives/dirlinks are returned on every path, early returns included."""
+    if not os.path.isdir(root): return None, [f"UNKNOWN: root not a directory: {root}"], [], [], []
     errs = []
     bad, seen, allowed_all = [], 0, []
-    archives = []
+    archives, dirlinks = [], []
+    real_root = os.path.realpath(root)
     def onerr(e): errs.append(f"walk error {e.filename}: {e.strerror}")
     for dp, dn, fn in os.walk(root, onerror=onerr):
         dn[:] = sorted(d for d in dn if d not in SKIP_DIRS)
+        if not rev("dir_symlinks"):
+            # os.walk never descends into directory symlinks. One whose target is inside the root is scanned at
+            # its real path (listed, not followed: so a loop cannot recurse); one that leaves the root hides
+            # content from the scan, which is UNKNOWN, never "clean".
+            for d in dn:
+                lp = os.path.join(dp, d)
+                if not os.path.islink(lp): continue
+                rel = os.path.relpath(lp, root)
+                real = os.path.realpath(lp)
+                if inside(real_root, real): dirlinks.append(rel)
+                else: errs.append(f"directory symlink {rel} points outside the root (contents unseen)")
         for f in sorted(fn):
             p = os.path.join(dp, f)
             rel = os.path.relpath(p, root)
@@ -182,6 +211,8 @@ def scan(root, anchors):
                 if not f.endswith((".yaml", ".yml", ".tpl")) or "/tests/" in p or "/fixtures/" in p: continue
             if os.path.islink(p) and not os.path.exists(p):
                 errs.append(f"dangling symlink {rel}"); continue
+            if not rev("dir_symlinks") and os.path.islink(p) and not inside(real_root, os.path.realpath(p)):
+                errs.append(f"symlink {rel} points outside the root"); continue
             try:
                 b = open(p, "rb").read()
             except Exception as e:
@@ -202,14 +233,13 @@ def scan(root, anchors):
                 errs.append(f"undecodable {rel}: {e}"); continue
             b2, a2 = scan_text(rel, text)
             bad += b2; allowed_all += a2
-    scan.archives = archives
-    if errs: return None, errs, []
+    if errs: return None, errs, [], archives, dirlinks
     for a in anchors:
         ap = os.path.join(root, a)
-        if not os.path.isfile(ap): return None, [f"UNKNOWN: anchor missing (partial tree?): {a}"], []
+        if not os.path.isfile(ap): return None, [f"UNKNOWN: anchor missing (partial tree?): {a}"], [], archives, dirlinks
     if not rev("anchor") and seen and ANCHOR_ALLOWED not in allowed_all and anchors:
-        return None, ["UNKNOWN: anchor file present but its allow-listed enabler was not parsed (parser blind?)"], []
-    return seen, bad, allowed_all
+        return None, ["UNKNOWN: anchor file present but its allow-listed enabler was not parsed (parser blind?)"], [], archives, dirlinks
+    return seen, bad, allowed_all, archives, dirlinks
 
 def main(argv):
     root, anchors, i = REPO, [], 0
@@ -218,11 +248,12 @@ def main(argv):
         if argv[i] == "--anchor" and i + 1 < len(argv): anchors.append(argv[i + 1]); i += 2
         else: print("UNKNOWN: bad arg", argv[i]); return 2
     if not anchors: anchors = DEFAULT_ANCHORS
-    seen, bad, allowed = scan(root, anchors)
+    seen, bad, allowed, arch, links = scan(root, anchors)
     print(COVERAGE)
-    arch = getattr(scan, "archives", [])
     if not rev("archive_coverage"):
         print(f"COVERAGE archives: {len(arch)} packaged archive(s) in the tree, NOT opened (contents unseen): " + (", ".join(arch[:20]) if arch else "none"))
+    if not rev("dir_symlinks"):
+        print(f"COVERAGE directory symlinks: {len(links)} with a target inside the root (not followed; the target is scanned at its real path): " + (", ".join(links[:20]) if links else "none"))
     if seen is None:
         print("UNKNOWN (exit 2):"); [print("  ", b) for b in bad[:10]]; return 2
     if seen == 0: print("UNKNOWN (exit 2): no files scanned"); return 2
