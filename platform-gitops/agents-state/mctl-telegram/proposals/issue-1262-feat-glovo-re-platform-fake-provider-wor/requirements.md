@@ -65,6 +65,22 @@ Wire contract
 Bridge client
 - WHEN polling, THE SYSTEM SHALL `POST {base}/api/v1/bridge/commands/claim` with body `{"max": n}`,
   where 1 <= n <= 10, and SHALL accept only a response `{"schema_version":"bridge.mctl.ai/v1alpha1","commands":[...]}`.
+- IF a claim response has a missing, null or non-array `commands`, a wrong `schema_version`, any
+  extra top-level field, trailing data after the JSON value, or a body that reaches the 64 KiB cap,
+  THEN THE SYSTEM SHALL treat it as a failed claim (error + `claim_errors_total{code="malformed"}`),
+  never as an empty batch.
+- IF a claimed command carries no `lease_token` (the field is optional in `command.schema.json`),
+  THEN THE SYSTEM SHALL drop it without executing it and increment
+  `commands_dropped_total{reason="no_lease_token"}`.
+- IF any bridge response is a status/code pair not listed in the runbook outcome map, has no
+  parseable `{"code"}` body, or is otherwise unparseable, THEN THE SYSTEM SHALL fail closed: no
+  effect, no result with a different body, and the response SHALL count as a failed read, never as
+  success or an empty result.
+- WHEN any bridge route answers 429 (httprate, 120 requests/min per principal, no `code` body),
+  THE SYSTEM SHALL handle it per route: claim backs off honouring `Retry-After`; permit performs no
+  effect and reports `failed_retryable`/`provider_unavailable`/`none`; result resends the same bytes.
+  The default poll interval, claim batch and retry backoff SHALL keep one worker below 120
+  requests/min in steady state.
 - WHEN a claimed command has kind `place_order_fake` or `cancel_order_fake`, THE SYSTEM SHALL
   `POST {base}/api/v1/bridge/commands/{command_id}/write-permit` with `{"lease_token": ...}`, and
   SHALL run the effect only after a 200 permit response.
@@ -83,25 +99,42 @@ Execution semantics
   row and the server write fence are authoritative.
 - WHEN a mutating command is executed, THE SYSTEM SHALL apply it only to the in-process `fakestore`,
   keyed by `command_id`, and SHALL read the effect back before reporting `provider_effect=applied`.
-- WHEN a mutating command's `command_id` already has a confirmed effect in the `fakestore`, THE
-  SYSTEM SHALL report `succeeded`/`applied` without a second permit request or a second effect.
+- WHEN a mutating command's `command_id` already has a local effect record in the `fakestore`
+  (confirmed or ambiguous; this happens only after a reclaim, which turns server `effect_state`
+  `permitted` into `unknown`), THE SYSTEM SHALL request no permit, perform no second effect, and
+  report `outcome=failed_terminal`, `error_code=internal`, `provider_effect=unknown`,
+  `error_detail=applied_prior_lease`. It SHALL NOT report `applied`, which mctl-api refuses with 422
+  `result_inconsistent` unless `effect_state == permitted`.
 - IF a fakestore write is ambiguous (timeout or error and the read-back does not confirm it applied),
   THEN THE SYSTEM SHALL report `provider_effect=unknown` with `outcome=failed_terminal`, and SHALL
   never retry that effect.
-- IF the permit request returns `write_fence_refused` (403), `write_fence_unavailable` (503),
-  `permit_already_issued` (409) or `not_mutating` (409), THEN THE SYSTEM SHALL perform no effect and
-  SHALL report the outcome mapped in the runbook table with `provider_effect=none`.
+- IF the permit request returns `write_fence_refused` (403), `write_fence_unavailable` (503) or
+  `not_mutating` (409), THEN THE SYSTEM SHALL perform no effect and SHALL report the outcome mapped
+  in the runbook table with `provider_effect=none`.
+- IF the permit request returns `permit_already_issued` (409), THEN THE SYSTEM SHALL perform no
+  effect and SHALL report `outcome=failed_terminal`, `error_code=internal`,
+  `provider_effect=unknown`, `error_detail=permit_already_issued`. The server returns this code only
+  when `effect_state != none`, i.e. a previous lease already held a permit, so an effect may exist
+  that this process cannot observe. (Owner decision 2026-11-09, overriding the issue text
+  `provider_effect=none`.)
 - IF any bridge call returns `lease_stale`, `command_expired` or `command_cancelled`, THEN THE SYSTEM
   SHALL stop work on that command, perform no effect, and send no further request for it.
 - WHEN a claimed command has `cancel_requested=true`, THE SYSTEM SHALL NOT execute it and SHALL
-  report `outcome=cancelled`, `provider_effect=none`.
-- WHEN the result call returns `already_completed` or a 200 with `replayed:true`, THE SYSTEM SHALL
-  treat the command as done.
+  report `outcome=cancelled`, `provider_effect=none`. (Defensive: unreachable on mctl-api
+  `a9ca5814`, because `Cancel` sets `status=cancelled` and claim selects only `pending` or expired
+  `leased` rows. The runbook SHALL label it unreachable.)
+- WHEN the result call returns a 200 with `replayed:true`, THE SYSTEM SHALL treat the command as
+  done. An `already_completed` code on the result route is handled the same way defensively; it is
+  unreachable on mctl-api `a9ca5814` (only control-side `Cancel` returns it) and SHALL be labelled
+  unreachable in the runbook.
 - IF the result call returns `result_conflict`, THEN THE SYSTEM SHALL log the code (never the body),
   increment `mctl_glovo_provider_result_conflicts_total`, and SHALL NOT resend with a different body.
-- IF the result call fails with 5xx or a transport error, THEN THE SYSTEM SHALL retry the same bytes
-  with bounded exponential backoff until success, a terminal code, or `expires_at`. It SHALL never
-  re-execute the command.
+- IF the result call fails with 5xx, 429 or a transport error, THEN THE SYSTEM SHALL retry the same
+  bytes with bounded exponential backoff until success, a terminal code, `lease_stale`, or the
+  command's `expires_at`. It SHALL never re-execute the command. The permit request and the effect
+  are bounded by the lease deadline (claim time + lease TTL - margin); result retries alone are
+  bounded by `expires_at`, because mctl-api accepts a replay with the same lease token after the
+  lease ran out (completed check precedes `leaseLive`, `store.go:768-776`).
 - WHILE the kill switch `GLOVO_PROVIDER_DISABLED=true` is set, THE SYSTEM SHALL request no permit
   and perform no effect, and SHALL report claimed commands as `failed_retryable` /
   `provider_unavailable` / `none`.
@@ -127,15 +160,15 @@ Retained gates
 
 ## Open questions
 
-- Outcome mapping for `write_fence_unavailable` and `permit_already_issued`. The v1alpha1
-  `error_code` enum has no fence-specific value. This proposal maps `write_fence_unavailable` to
-  `failed_retryable`/`internal` and `permit_already_issued` and `not_mutating` to
-  `failed_terminal`/`internal`, and puts the bridge code in `error_detail`. This must be aligned with
-  the refusal map of mctlhq/mctl-api#957 before merge.
-- `permit_already_issued` after a process restart. The `fakestore` is in-process, so a restarted
-  worker has no local record of an effect a previous lease holder may have applied. The issue says to
-  report `provider_effect=none`; this proposal follows the issue and flags it as a known limit of the
-  fake. A real adapter would need durable dedupe and would report `unknown`.
+- Resolved (amendment 2026-11-09): the provider outcome map is **final within the frozen
+  `result.schema.json` enums**. It needs no new wire value: bridge codes without an enum go to
+  `error_code=internal` with the code in `error_detail`. The map is posted to mctlhq/mctl-api#957
+  for its refusal table; it is not a merge gate of this PR, because #957 governs the facade↔API
+  refusal set, not the v1alpha1 result enums. A wire change still requires #1044, this issue and
+  #957 together.
+- Resolved (owner decision 2026-11-09): `permit_already_issued` reports `provider_effect=unknown`,
+  not `none` as the issue text said. A restarted worker has no local record of an effect a previous
+  lease holder may have applied, so `none` would assert an absence it cannot observe.
 - Fake connection sessions. `fakestore` refuses an unknown session. To keep the fake exercisable,
   this proposal auto-provisions a synthetic session per (`tenant_ref`, `connection_ref`) on first
   use, and lets tests revoke one. The reviewer should confirm that is acceptable, rather than
