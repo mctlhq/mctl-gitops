@@ -12,7 +12,8 @@ mctl-api#953, order index and the `aar_` write boundary in mctl-api#954), and
 `mctl-telegram` owns the public facade and the private fake worker. The
 cross-namespace transport between the control namespace `mctl-assistants` and
 the provider is the subject of spike mctl-agents#1043, whose proposal is still
-`proposed` (no verified decision exists yet).
+`proposed` (no verified decision exists yet). *Superseded 2026-11-09: the owner made
+the merged mctl-api#968 bridge canonical; see the AMEND section below.*
 
 This proposal adds a new, self-contained `orchestrator/assistants/` package in
 `mctl-agents`: versioned input/output contracts, a `GlovoControlWorkflow`, its
@@ -23,6 +24,19 @@ changes nothing in the existing DevLoop worker, queues, namespace or rollout,
 and deploys nothing. Until #1043 produces a source-verified, independently
 approved transport, the bridge compiles and is tested against a local fake
 only, and the worker reports `BLOCKED_FOR_INTEGRATION` for the real transport.
+
+## AMEND 2026-11-09 — alignment with the merged bridge (mctl-api#968)
+
+Crosswalk M6-M10 and M1 (consumer side); design.md "Amendment 2026-11-09" has the table. These criteria replace the ones they name below.
+
+- THE SYSTEM SHALL wait for provider results on the signal `bridge-result` with payload `{command_id, result_digest}`, dedupe on `command_id`, and accept a result only after reading it back from mctl-api with a matching digest.
+- THE SYSTEM SHALL wait for approval by polling `read_approval` only; it SHALL register no approval signal.
+- THE SYSTEM SHALL orchestrate only through mctl-api APIs (`dispatch_order`, `cancel_order`, `read_command_result` and the existing read/revalidate calls). It SHALL contain no bridge port, SHALL never compute a command id, and SHALL store the `cmd_` returned by mctl-api. (owner decision, option b)
+- THE SYSTEM SHALL map every (`outcome`, `provider_effect`, `error_code`) triple of the vendored v1alpha1 enums by the the design "Result mapping (M9)" table, and IF `provider_effect` is `unknown` THEN `order_status` SHALL be `unknown` with no re-dispatch.
+- THE SYSTEM SHALL take `approval_ref` and `fingerprint` from `GlovoControlInput` and SHALL NOT create an `aar_`. IF mctl-api reports a fingerprint mismatch at dispatch THEN THE SYSTEM SHALL end `refused`/`basket_changed`. Approval refusals SHALL be reported distinctly as `approval_invalid`, `approval_expired`, `approval_replayed`, `intent_mismatch`, `provider_disabled` or `tenant_busy`.
+- THE SYSTEM SHALL call dispatch and cancel only through the routes of mctl-api#985, and SHALL expect to be started only by mctl-api#957's post-commit start dispatcher under the id `control_workflow_id` derives. (owner decisions D3, D5)
+- THE SYSTEM SHALL carry refs and digests only: no read payload (history, preview, basket; mctl-api#986) SHALL appear in its input, activity results, signals or logs. (owner decision D1)
+- THE SYSTEM SHALL accept `install_ref` as an M1a `gin_` id and `connection_ref` as an M1a `gcn_` id, and `tenant_ref`, `principal_ref`, `order_ref` only in the `tnr_`/`prr_`/`ordr_` forms minted by mctl-api.
 
 ## User stories
 
@@ -81,8 +95,8 @@ Namespace and caller fencing:
 
 Lifecycle and revalidation:
 - WHEN the workflow runs THE SYSTEM SHALL progress only through
-  `resolving -> quoting -> awaiting_approval -> dispatching -> settling ->
-  completed`, or terminate in `refused`, `cancelled`, `expired` or `failed`.
+  `resolving -> awaiting_approval -> dispatching -> settling -> completed`
+  (`quoting` removed 2026-11-09, M10), or terminate in `refused`, `cancelled`, `expired` or `failed`.
 - WHEN any state transition is about to happen, and at least every
   `revalidate_interval_s` (default 300) while waiting, THE SYSTEM SHALL call
   `revalidate_scope` (tenant membership, install id and revision, connection
@@ -97,35 +111,33 @@ Lifecycle and revalidation:
   `aar_`.
 
 Approval and dispatch:
-- THE SYSTEM SHALL bind the basket fingerprint and the consent reference to the
-  execution at the first successful quote and IF a later quote, approval or
-  dispatch presents a different fingerprint THEN THE SYSTEM SHALL stop with
-  `refused` (`fingerprint_mismatch`).
-- WHEN the workflow requests approval THE SYSTEM SHALL ask mctl-api to create
-  an `aar_` whose intent hash is computed with
-  `orchestrator.action_approvals.intent_hash` over the order binding, and wait
-  for the `assistants_approval_decided` signal (payload: the `aar_` id only) or
-  a poll tick, bounded by the receipt's expiry.
+- (Amended 2026-11-09) THE SYSTEM SHALL use the fingerprint and `approval_ref`
+  bound by mctl-api at prepare, received in `GlovoControlInput`, and IF
+  mctl-api reports a different fingerprint at dispatch THEN THE SYSTEM SHALL
+  stop with `refused` (`basket_changed`).
+- (Amended 2026-11-09) WHILE the input `aar_` is pending THE SYSTEM SHALL poll
+  `read_approval` every `approval_poll_interval_s`, bounded by the receipt's
+  expiry. It SHALL NOT create an `aar_`.
 - IF the only evidence of consent is a `hir_` answer THEN THE SYSTEM SHALL NOT
   dispatch; the `hir_` id SHALL NOT be an accepted field of any dispatch input.
-- WHEN the approval is `approved` and the scope revalidates as `live` THE
-  SYSTEM SHALL request exactly one provider effect through the bridge port with
-  a `command_id` derived deterministically from workflow id, step and attempt.
-- WHEN a provider result arrives THE SYSTEM SHALL accept it only if its
-  `command_id`, `execution_id` and fingerprint match the pending command, and
-  SHALL treat a duplicate result as a no-op.
-- IF the provider outcome is `unknown` THEN THE SYSTEM SHALL NOT re-dispatch and
+- (Amended 2026-11-09) WHEN the approval is `approved` and the scope
+  revalidates as `live` THE SYSTEM SHALL call `dispatch_order` once (activity
+  retries reuse the same call and get the same `cmd_`) and SHALL store the
+  returned `cmd_`.
+- WHEN a `bridge-result` signal arrives THE SYSTEM SHALL accept it only if its
+  `command_id` equals the stored `cmd_` and the read-back digest matches, and
+  SHALL treat a duplicate signal as a no-op.
+- IF the provider effect is `unknown` THEN THE SYSTEM SHALL NOT re-dispatch and
   SHALL return `order_status=unknown`, leaving reconciliation to mctl-api's
-  read-back.
+  read-back (full map: the design "Result mapping (M9)").
 - WHEN the workflow completes THE SYSTEM SHALL return a bounded
   `GlovoControlResult` with `order_status` and an opaque fake `handoff_ref`,
   and no provider payload, cookie, token or free text over 256 characters.
 
-Bridge integration gate:
-- WHILE no verified decision memo from #1043 with an independently approved
-  dependency is pinned in `orchestrator/assistants/bridge_decision.json` THE
-  SYSTEM SHALL refuse to construct any real transport and SHALL report
-  `BLOCKED_FOR_INTEGRATION` at worker startup when a real transport is
+Integration gate (amended 2026-11-09):
+- WHILE `ASSISTANTS_API_CONTRACT` pins no merged mctl-api control route
+  contract THE SYSTEM SHALL refuse to construct a real `ControlApiPort` and
+  SHALL report `BLOCKED_FOR_INTEGRATION` at worker startup when one is
   requested.
 - THE SYSTEM SHALL NOT implement or register a cross-namespace Temporal
   Activity, a raw Nexus endpoint, or any direct provider-to-control signal.
@@ -148,19 +160,18 @@ Safety:
   credentials, no Vault/ESO change (mctl-gitops#2457 and #2456 follow-ups).
 - Changes to the DevLoop worker (`orchestrator/temporal/`), its queues,
   namespace `mctl-agents`, schedules, release-deploy paths or kuptsi.
-- mctl-api routes, stores and authorization (mctl-api#953, #954) and the bridge
-  routes proposed by #1043; this proposal codes against ports for them.
+- mctl-api routes, stores and authorization (mctl-api#953, #954, #957) and the
+  merged bridge (mctl-api#968); this proposal codes against `ControlApiPort`.
 - The public facade and the fake provider worker (mctl-telegram).
-- Choosing the cross-namespace transport (that is #1043).
+- Choosing the cross-namespace transport (decided 2026-11-09: mctl-api#968).
 - Real Glovo access, payments, any LLM call from the control worker.
 - A new scheduler or a second AutomationDefinition authority.
 
 ## Open questions
 
-- #1043 is still `proposed`; its likely outcome is `API_BRIDGE_SELECTED`. This
-  proposal codes the bridge as a port and ships `BLOCKED_FOR_INTEGRATION` until
-  a verified decision is pinned. Who records the "independently approved
-  dependency" (owner name and PR) that unblocks integration?
+- Resolved 2026-11-09 (owner): mctl-api#968 is the canonical bridge; the
+  workflow reaches it through mctl-api APIs only. The remaining gate is the
+  dispatch/cancel route contract of mctl-api#985 (owner decision D3, 2026-11-09).
 - mctl-api#953/#954 route names and payloads are proposals, not merged APIs.
   The activity ports mirror them; any change there means a contract update here.
 - Image publishing: should CI push `ghcr.io/mctlhq/mctl-agents-assistants-control`
