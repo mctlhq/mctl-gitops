@@ -87,7 +87,7 @@ platform:
   # Repository of the platform build; the recorded digest arrives with item 5.
   image:
     write: [repository, tag]
-    deny: [pullPolicy]
+    deny: [pullPolicy, digest]
   imagePullSecrets:
     opaque: true
     writes: [the platform registry pull secret]
@@ -119,6 +119,7 @@ denied:
   - otel
   - blueGreen
   - strategy
+  - prepull
   - autoscaling
   - nodeSelector
   - tolerations

@@ -31,6 +31,7 @@ UNKNOWN = 7
 # ASCII digits only, no leading zeros: `\d` accepts Unicode digits and "01".
 _N = r"(0|[1-9][0-9]*)"
 SEMVER = re.compile(rf"{_N}\.{_N}\.{_N}", re.ASCII)
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
 
 
 def _semver(tag: Any) -> tuple[int, int, int] | None:
@@ -63,6 +64,9 @@ def _gates(root: Path) -> list[dict]:
         for r in g.get("requires") or []:
             if not (isinstance(r, dict) and {"path", "key", "equals"} <= set(r) and r["path"] in g["paths"]):
                 raise ValueError(f"gate {g['name']}: malformed requires {r!r}")
+        for p in g.get("prepull_paths") or []:
+            if p not in g["paths"]:
+                raise ValueError(f"gate {g['name']}: prepull_paths entry {p!r} is not in paths")
     return gates
 
 
@@ -119,6 +123,66 @@ def problems(root: Path, files: list[str] | None, new_tag: str | None) -> list[s
                 continue
             if got != r["equals"]:
                 out.append(f"{r['path']}: {r['key']} is {got!r}, requires {r['equals']!r}")
+        for p in g.get("prepull_paths") or []:
+            if p in touched:
+                out.extend(_prepull_problems(root, p, files is not None))
+    return out
+
+
+def _shape_problems(path: str, tag: str, digest: str, ref_tag: str, ref_digest: str) -> list[str]:
+    """The two-commit deploy leaves exactly three shapes in the tree.
+
+    image = (tag, digest) is what the Deployment runs, ref = (ref_tag, ref_digest)
+    is what the DaemonSet holds. The Deployment and DaemonSet must use the same
+    repo:tag@digest string, or the pull is not a cache hit.
+      settled:  digest == ref digest and tag == ref tag        (after step 2)
+      legacy:   no image.digest and tag == ref tag             (before the first digest deploy)
+      staged:   ref differs from the image                     (after step 1)
+    Everything else is an inconsistent tag / digest / prepull.ref combination.
+    """
+    if digest:
+        if digest == ref_digest:
+            if tag != ref_tag:
+                return [f"{path}: image.digest equals the prepull.ref digest but image.tag {tag!r} is not its tag "
+                        f"{ref_tag!r}: the Deployment would not match the pre-pulled reference"]
+        elif tag == ref_tag:
+            return [f"{path}: image.tag {tag!r} equals the prepull.ref tag but image.digest differs from its digest: "
+                    "one tag, two digests (step 2 without the new digest?)"]
+        return []
+    if tag == ref_tag:
+        return []
+    t, rt = _semver(tag), _semver(ref_tag)
+    if t is None or rt is None:
+        return [f"{path}: image.tag {tag!r} or prepull.ref tag {ref_tag!r} is not X.Y.Z, and image.digest is unset: "
+                "cannot tell a staged pre-pull from a tag-only bump"]
+    if rt < t:
+        return [f"{path}: image.tag {tag!r} is ahead of prepull.ref tag {ref_tag!r} and image.digest is unset: "
+                "a tag-only bump; stage prepull.ref first, then set image.tag and image.digest together"]
+    return []
+
+
+def _prepull_problems(root: Path, path: str, is_bump: bool) -> list[str]:
+    """A pre-pulled worker moves through two reviewed commits, never one bump."""
+    if is_bump:
+        return [f"{path}: pre-pull rollout, an automated tag bump would be stopped by PreSync: use the reviewed PRs"]
+    try:
+        doc = _load(root, path)
+        repo = _dig(doc, "image.repository")
+        tag = _dig(doc, "image.tag")
+        ref = _dig(doc, "prepull.ref")
+        digest = (doc["image"].get("digest") or "")
+    except Exception as exc:  # noqa: BLE001
+        return [f"UNKNOWN: {path} pre-pull settings unreadable: {type(exc).__name__}"]
+    out = []
+    m = re.fullmatch(re.escape(str(repo)) + r":([^@: ]+)@(.+)", str(ref))
+    ref_ok = bool(m and DIGEST.fullmatch(m.group(2)))
+    if not ref_ok:
+        out.append(f"{path}: prepull.ref {ref!r} is not {repo}:tag@sha256:<64 hex>")
+    digest_ok = not digest or bool(DIGEST.fullmatch(str(digest)))
+    if not digest_ok:
+        out.append(f"{path}: image.digest {digest!r} is not sha256:<64 hex>")
+    if ref_ok and digest_ok:
+        out.extend(_shape_problems(path, str(tag), str(digest), m.group(1), m.group(2)))  # type: ignore[union-attr]
     return out
 
 
@@ -176,6 +240,57 @@ def _without_tag(doc: Any) -> Any:
     return doc
 
 
+def _deploy_state(doc: Any) -> tuple[Any, Any, Any]:
+    img = doc.get("image") if isinstance(doc, dict) else None
+    pre = doc.get("prepull") if isinstance(doc, dict) else None
+    return (
+        img.get("tag") if isinstance(img, dict) else None,
+        (img.get("digest") or None) if isinstance(img, dict) else None,
+        pre.get("ref") if isinstance(pre, dict) else None,
+    )
+
+
+def _without_deploy_keys(doc: Any) -> Any:
+    """Like _without_tag, plus image.digest and prepull.ref (a pre-pulled file)."""
+    doc = _without_tag(doc)
+    if isinstance(doc, dict):
+        if isinstance(doc.get("image"), dict):
+            doc["image"].pop("digest", None)
+        if isinstance(doc.get("prepull"), dict):
+            doc["prepull"].pop("ref", None)
+    return doc
+
+
+def _step_problem(old: Any, new: Any) -> str | None:
+    """None when old -> new is one sanctioned step of the two-commit deploy.
+
+    step 1: only prepull.ref moves (image.tag and image.digest untouched).
+    step 2: image.tag and image.digest move together, prepull.ref untouched,
+            and the result is settled: both equal the staged reference.
+    pin:    image.digest alone moves (the tag already is the staged tag), prepull.ref
+            untouched, and the result is settled. This is the legacy shape
+            (tag, no digest) becoming the settled one for the SAME image.
+    Anything else (a tag-only change, both halves in one commit, a digest alone
+    that is not the staged one) is not a deploy step the PreSync gate was
+    designed for.
+    """
+    (bt, bd, br), (nt, nd, nr) = _deploy_state(old), _deploy_state(new)
+    ct, cd, cr = bt != nt, bd != nd, br != nr
+    if not (ct or cd or cr):
+        return None
+    if cr and not ct and not cd:
+        return None
+    if cd and not cr:
+        m = re.fullmatch(r"[^@]+:([^@: ]+)@(sha256:[0-9a-f]{64})", str(nr))
+        if m and m.group(1) == str(nt) and m.group(2) == str(nd):
+            return None
+        if not ct:
+            return "image.digest moved but the result does not equal prepull.ref"
+        return "image.tag and image.digest moved but do not both equal prepull.ref"
+    parts = [n for n, c in (("image.tag", ct), ("image.digest", cd), ("prepull.ref", cr)) if c]
+    return "not one step of the two-commit deploy (changed together: " + ", ".join(parts) + ")"
+
+
 def diff_problems(repo: Path, base: str, head: str) -> tuple[list[str], list[str]]:
     """(violations, unknowns) for the change from base to head."""
     viol: list[str] = []
@@ -231,7 +346,14 @@ def diff_problems(repo: Path, base: str, head: str) -> tuple[list[str], list[str
                 except Exception as exc:  # noqa: BLE001
                     viol.append(f"{p}: new content does not parse: {type(exc).__name__}")
                     continue
-                if _without_tag(old) != _without_tag(new):
+                if p in (g.get("prepull_paths") or []):
+                    if _without_deploy_keys(old) != _without_deploy_keys(new):
+                        viol.append(f"{p}: content other than image.tag, image.digest and prepull.ref changed")
+                    else:
+                        why = _step_problem(old, new)
+                        if why:
+                            viol.append(f"{p}: {why}")
+                elif _without_tag(old) != _without_tag(new):
                     viol.append(f"{p}: content other than image.tag changed")
         # The pushed tree must satisfy the parent's policy.
         # A file already reported as a violation (removed, unparsable) is not
@@ -293,6 +415,45 @@ def _tree(d: Path, *, tags=("1.117.0",) * 3, strategy: str | None = "Recreate", 
     )
 
 
+def _prepull_selftest() -> list[str]:
+    good = "ghcr.io/x/y:1.118.0@sha256:" + "a" * 64
+    cases: list[tuple[str, dict, list[str] | None, bool]] = [
+        ("pre-pull verify", {"prepull": {"ref": good}}, None, True),
+        ("pre-pull digest pinned", {"prepull": {"ref": good}, "digest": "sha256:" + "b" * 64}, None, True),
+        ("pre-pull refuses a bump", {"prepull": {"ref": good}}, _P, False),
+        ("pre-pull ref missing", {}, None, False),
+        ("pre-pull ref is a tag", {"prepull": {"ref": "ghcr.io/x/y:1.118.0"}}, None, False),
+        ("pre-pull ref short digest", {"prepull": {"ref": "ghcr.io/x/y:1.118.0@sha256:abc"}}, None, False),
+        ("pre-pull other repository", {"prepull": {"ref": "ghcr.io/x/z:1.118.0@sha256:" + "a" * 64}}, None, False),
+        ("image digest malformed", {"prepull": {"ref": good}, "digest": "sha256:zz"}, None, False),
+        # The three shapes the two-commit deploy leaves behind, and the ways to get them wrong.
+        ("shape settled (step 2 done)", {"tag": "1.118.0", "prepull": {"ref": good}, "digest": "sha256:" + "a" * 64}, None, True),
+        ("shape legacy (tag, no digest)", {"tag": "1.118.0", "prepull": {"ref": good}}, None, True),
+        ("shape staged over a digest (step 1)", {"prepull": {"ref": good}, "digest": "sha256:" + "b" * 64}, None, True),
+        ("tag-only bump over a stale ref", {"tag": "1.119.0", "prepull": {"ref": good}}, None, False),
+        ("tag-only bump over a settled tree", {"tag": "1.119.0", "prepull": {"ref": good}, "digest": "sha256:" + "a" * 64}, None, False),
+        ("step 2 with the old digest", {"tag": "1.118.0", "prepull": {"ref": good}, "digest": "sha256:" + "b" * 64}, None, False),
+        ("ref tag is not X.Y.Z without a digest", {"tag": "1.118.0", "prepull": {"ref": "ghcr.io/x/y:1.118.0-rc1@sha256:" + "a" * 64}}, None, False),
+    ]
+    bad = []
+    for name, kw, files, ok in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            gate = yaml.safe_dump({"gates": [{"name": "g", "paths": _P, "min_tag": "1.117.0", "repository": "ghcr.io/x/y",
+                                              "prepull_paths": [_P[0]]}]})
+            _tree(d, gate=gate, tags=(kw.get("tag", "1.117.0"),) * 3)
+            doc = yaml.safe_load((d / _P[0]).read_text())
+            if "prepull" in kw:
+                doc["prepull"] = kw["prepull"]
+            if "digest" in kw:
+                doc["image"]["digest"] = kw["digest"]
+            (d / _P[0]).write_text(yaml.safe_dump(doc))
+            found = problems(d, files, "1.118.0" if files else None)
+            if bool(found) == ok:
+                bad.append(f"{name}: {found}")
+    return bad
+
+
 def selftest() -> int:
     cases: list[tuple[str, dict, list[str] | None, str | None, bool]] = [
         ("converged bump", {}, _P, "1.118.0", True),
@@ -336,6 +497,7 @@ def selftest() -> int:
         (d / GATE).unlink()
         if not problems(d, _P, "1.118.0"):
             bad.append("gate file missing")
+    bad.extend(_prepull_selftest())
     if bad:
         print(f"selftest FAILED: {bad}", file=sys.stderr)
         return 1
