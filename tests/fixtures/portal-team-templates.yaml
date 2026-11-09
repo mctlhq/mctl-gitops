@@ -1,0 +1,22 @@
+# Contract fixture: the team-namespace workflow templates the Backstage portal
+# submits. Mirrors TEAM_WORKFLOW_TEMPLATES in mctl-portal
+# (plugins/argo-workflows-backend/src/workflowAuthorization.ts).
+#
+# For each entry:
+#   legacy: the template name that exists today (ClusterWorkflowTemplate in
+#           platform-gitops/argo-workflows/cluster-templates/).
+#   w2:     the variant name used for a tenant whose per-tenant write mode is
+#           `on`. The `-w2` templates are introduced by later changes, so a
+#           missing definition is allowed for now; a definition that exists
+#           must be a ClusterWorkflowTemplate.
+#
+# tests/test_submit_contract_fixtures.py checks this file against the repo.
+# The mctl-portal and mctl-api tests that compare their own sets with this file
+# are separate follow-ups in those repositories.
+templates:
+  - legacy: deploy-service
+    w2: deploy-service-w2
+  - legacy: retire-service
+    w2: retire-service-w2
+  - legacy: provision-database
+    w2: provision-database-w2

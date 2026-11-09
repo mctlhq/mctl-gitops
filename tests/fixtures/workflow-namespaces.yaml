@@ -1,0 +1,54 @@
+# Contract fixture: which workflow templates run in the shared
+# `argo-workflows` namespace and which run in the team namespace.
+#
+# Mirrors the namespace selection in mctl-api (operations.WorkflowNamespace).
+# tests/test_submit_contract_fixtures.py reads this file together with
+# platform-gitops/argo-workflows/cluster-templates/ so the two lists cannot
+# drift silently. A mctl-api test that compares its own list with this file is
+# a separate follow-up in that repository.
+#
+# Any template name not listed under argo_workflows_namespace resolves to the
+# team namespace.
+argo_workflows_namespace:
+  # Names that have a ClusterWorkflowTemplate in this repository.
+  - create-tenant
+  - delete-tenant-safe
+  - add-custom-domain
+  - remove-custom-domain
+  - platform-skill-publish
+  - platform-skill-deprecate
+  - platform-skill-enable
+  - platform-skill-disable
+  - mctl-agents-run
+  - mctl-agents-implement
+  - mctl-agents-shepherd
+  - mctl-agents-investigate
+  - mctl-agents-approve
+  - mctl-agents-reconcile
+# Names accepted by the selection but without a template in this repository.
+argo_workflows_namespace_no_template:
+  - delete-tenant
+# Every other ClusterWorkflowTemplate defined in the repository. These
+# resolve to the team namespace if they are ever submitted by name.
+other_repo_templates:
+  - labs-claude-remote-restart
+  - argo-local-workdir-canary
+  - global-workflow-completion-hook
+  - mctl-agents-scout
+  - mctl-agents-usage-collector
+  - rotate-github-app-tokens
+  - zitadel-login-consolidation
+  - tpl-git-commit
+  - tpl-validate-tenant
+  - tpl-vault-write
+  - bootstrap-platform
+  - deploy-service
+  - lifecycle-bootstrap
+  - otel-trace-fixture
+  - preview-delete
+  - preview-deploy
+  - preview-reaper
+  - provision-database
+  - retire-service
+  - rollback-service
+  - smoke-test
