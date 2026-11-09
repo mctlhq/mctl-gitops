@@ -16,9 +16,12 @@ state only, not to the running cluster.
 
 Why it follows from the table below:
 
-- Running server image, rendered config, registered namespaces and connected
-  clients are `BLOCKED_NO_ACCESS`: no read-only path from this run reaches
-  the `temporal` namespace.
+- Live read-only evidence (2026-11-09) confirms the running server is 1.31.0
+  with plaintext gRPC and **no authorizer**, and the NetworkPolicy is the only
+  boundary. Any workload admitted on 7233 has full rights in every Temporal
+  namespace, so a lower-trust provider worker must not be admitted until node
+  G (authorizer) and node H (negative proof) are complete. Registered Temporal
+  namespaces and connected clients remain unobserved.
 - Source at `v1.31.0` shows the stock claim mapper does **not** validate
   `iss`. ADR 0003 decision 5 (pinned issuer) cannot be enforced by the
   server; the signing key and JWKS source are the only issuer control.
@@ -34,13 +37,15 @@ Why it follows from the table below:
 
 Unresolved unknowns (explicit):
 
-1. Live server image, `temporal-config` content, namespaces, clients.
+1. Registered Temporal namespaces and connected clients (server image and
+   rendered config verified live 2026-11-09).
 2. kuptsi-app SDK version (`BLOCKED_NO_ACCESS`, repo/tag not readable).
 3. Vault identity OIDC role template, `aud` handling, TTL,
    `verification_ttl`, and ESO `VaultDynamicSecret` GET/refresh behaviour.
 4. How a pinned-key or HTTPS-with-CA JWKS source is delivered given the stock
    provider's limits.
-5. Whether `enableCrossNamespaceCommands` is on in the running dynamic config
+5. The v1.31.0 default of `enableCrossNamespaceCommands`. The running dynamic
+   config has no overrides (verified live 2026-11-09), so the default applies
    (affects child workflow/signal across namespaces).
 6. Client-side token reload behaviour in Go SDK 1.50.0 and Python 1.34.0.
 7. Temporal-web identity needs `temporal-system:read` (read in every
@@ -88,12 +93,13 @@ supplies dated command output. Pinned gitops commit: `c50deaf29700e625906d6f6887
 |---|---|---|---|---|
 | Server chart and appVersion | `platform-gitops/bootstrap/templates/data/temporal.yaml`@mctl-gitops@c50deaf | chart 1.2.0, app 1.31.0 | 2026-11-08, agent | VERIFIED_SOURCE |
 | No `global.tls`, `server.config.tls`, `global.authorization`, `internalFrontend` in desired values | same file@mctl-gitops@c50deaf | n/a | 2026-11-08, agent | VERIFIED_SOURCE (desired state only) |
-| Running server image | `kubectl -n temporal get deploy -o wide` | unknown | not run: no cluster access | BLOCKED_NO_ACCESS |
-| Rendered frontend config | `kubectl -n temporal get cm temporal-config -o yaml` | unknown | not run: no cluster access | BLOCKED_NO_ACCESS |
-| Registered namespaces | `temporal operator namespace list` (read-only) | unknown | not run: no cluster access | BLOCKED_NO_ACCESS |
+| Running server image | `kubectl -n temporal get deploy` (context `mctl-preprod`): frontend, history, matching and worker run `temporalio/server:1.31.0`, admin-tools `temporalio/admin-tools:1.31.0`, UI `temporalio/ui:2.49.1`, all 1/1 ready | 1.31.0 | 2026-11-09T12:35Z, operator session (read-only) | VERIFIED_LIVE (matches desired state) |
+| Rendered frontend config | `kubectl -n temporal get cm temporal-config` (`config_template.yaml`, 99 lines, resourceVersion 122659026; credential lines redacted at read time): no `tls:` block, no `authorization:` block anywhere; frontend `grpcPort: 7233`, `bindOnIP: "0.0.0.0"` | 1.31.0 | 2026-11-09T12:35Z, operator session (read-only) | VERIFIED_LIVE: plaintext gRPC, no authorizer or claim mapper configured, so the server falls back to its default no-op (allow-all) authorization |
+| Registered namespaces | `temporal operator namespace list` (read-only) | unknown | 2026-11-09: not run, because it needs `kubectl exec` or a port-forward, which is outside the read-only `get` scope used | NOT_OBSERVED. Kubernetes namespaces `mctl-assistants` and `mctl-assistants-provider-glovo` do not exist (`kubectl get ns`: NotFound), which is a different object from a Temporal namespace |
 | Namespaces intended by bootstrap Job | `platform-gitops/infra-components/data/temporal/tenant-namespace-job.yaml`@mctl-gitops@c50deaf | admin-tools 1.31.0 | 2026-11-08, agent | VERIFIED_SOURCE (kuptsi, mctl-agents) |
 | Connected clients | frontend logs / `temporal_request` metrics (no scrape exists today) | unknown | not run: no cluster access | BLOCKED_NO_ACCESS |
-| Network boundary | `platform-gitops/infra-components/data/temporal/networkpolicy.yaml`@mctl-gitops@c50deaf: port 7233 from `mctl-api` ns, `admins-mctl-agents-worker{,-exec,-implement}`, `labs-kuptsi-app`; intra-namespace open | n/a | 2026-11-08, agent | VERIFIED_SOURCE |
+| Network boundary | `platform-gitops/infra-components/data/temporal/networkpolicy.yaml`@mctl-gitops@c50deaf: port 7233 from `mctl-api` ns, `admins-mctl-agents-worker{,-exec,-implement}`, `labs-kuptsi-app`; intra-namespace open. Live `allow-temporal-ingress` (the only NetworkPolicy in `temporal`, Ingress-only) admits exactly: same namespace on all ports, `traefik` :8080, `monitoring` :9090, `mctl-api` :7233, `admins` pods `admins-mctl-agents-worker{,-exec,-implement}` :7233, `labs` pod `labs-kuptsi-app` :7233 | n/a | 2026-11-08 agent; live 2026-11-09T12:35Z operator session | VERIFIED_LIVE (matches desired state). With no authorizer, every admitted 7233 caller can act on every Temporal namespace: today the NetworkPolicy is the only isolation |
+| Dynamic config overrides (`enableCrossNamespaceCommands` etc.) | `kubectl -n temporal get cm temporal-dynamic-config`: `dynamic_config.yaml` is empty (0 lines) | 1.31.0 | 2026-11-09T12:35Z, operator session (read-only) | VERIFIED_LIVE: no overrides, so every key runs at the v1.31.0 server default; the default of `system.enableCrossNamespaceCommands` still has to be read from source |
 | Client tags | mctl-api 4.154.0 (`bootstrap/templates/mctl-platform/mctl-api.yaml`), mctl-agents 1.117.0 and kuptsi-app 0.2.27 (`services/{admins,labs}/.../values.yaml`), temporalio/ui 2.49.1 (`bootstrap/templates/data/temporal-web.yaml`), all @mctl-gitops@c50deaf; `mctl_get_service_config` agrees for the two services | as listed | 2026-11-08, agent | VERIFIED_SOURCE |
 | Clients send no token or TLS env | the same values files@mctl-gitops@c50deaf | n/a | 2026-11-08, agent | VERIFIED_SOURCE (desired state only) |
 | SDK: mctl-api | `go.mod` at `mctlhq/mctl-api@4.154.0` | go.temporal.io/sdk v1.50.0, api v1.63.5 | 2026-11-08, agent | VERIFIED_SOURCE |
