@@ -31,7 +31,9 @@ How it reads, in two layers whose findings are added together:
      (case-insensitive, quoted or not); anything else, a templated value included, is an enabler. In YAML/JSON files a
      trailing comment is cut off before a value is read.
   2. For every .yaml/.yml/.json document that can spell a Reflector key (the word `emberstack` survives escape and
-     line-join decoding), a parse with PyYAML's composer (no object construction, so alias bombs stay linear). The
+     line-join decoding, or the document spells a YAML tag: `!!x`, `!<...>`, `!h!x`, `%TAG`, any of which may resolve to
+     !!binary and so hide the key in base64; the same applies to a string value that spells tags, and to a file of any
+     other extension that parses as YAML), a parse with PyYAML's composer (no object construction, so alias bombs stay linear). The
      RESOLVED keys are read: aliases, merge keys, explicit `? key` entries, multi-line and escaped scalars, and the
      path/value of each JSON-patch operation (also inside a string value such as a kustomize `patch:`). A key defined
      twice in one mapping (duplicate, merge conflict) is UNKNOWN, never read as the first or the last one. A document
@@ -236,13 +238,35 @@ _JOIN = re.compile(r"\\\r?\n[ \t]*")
 
 # A `!!binary` scalar spells its text in base64, so a key can be hidden from every textual check.
 BINARY_TAG = re.compile(r"!!binary|yaml\.org,2002:binary", re.I)
+# Any way a tag can be written: `!!x` (also percent-escaped, `!!bin%61ry`), a verbatim `!<...>`, a named handle `!e!x`,
+# or a `%TAG` directive that redefines a handle. A scalar tagged !!binary spells its text in base64, and PyYAML resolves
+# all of these spellings to the same tag, so the text `emberstack` need not appear anywhere in the file.
+TAGHINT = re.compile(r"%TAG|!!|!<|![\w-]*![\w%]")
+
+_B64RUN = re.compile(r"[A-Za-z0-9+/]{16,}")
+
+def b64_hides_key(text):
+    """Whether any base64 run in text (whitespace removed, any of the four alignments) decodes to something that
+    contains the word `emberstack`. Used for text the YAML parser cannot read, where a tag cannot be resolved but a
+    base64 key can still be recognised."""
+    flat = re.sub(r"\s+", "", text)
+    for m in _B64RUN.finditer(flat):
+        run = m.group(0)
+        for o in range(4):
+            part = run[o:]; part = part[:len(part) // 4 * 4]
+            if not part: continue
+            try:
+                if "emberstack" in base64.b64decode(part).decode("latin-1").lower(): return True
+            except (binascii.Error, ValueError):
+                continue
+    return False
 
 def mentions(dtext):
     """Whether a document can spell a Reflector key at all. Every key contains the whole word `emberstack` once the
     transformations a YAML scalar may apply (escapes, `\\`-newline joins) are undone; case-insensitive on purpose.
     A miss here would skip the structural parse."""
     t = normalise(_JOIN.sub("", dtext)).lower()
-    return "emberstack" in t or bool(BINARY_TAG.search(t))
+    return "emberstack" in t
 
 def strip_comment(line):
     """Drops a YAML comment (a `#` at the start or after whitespace, outside quotes) from one line."""
@@ -271,7 +295,7 @@ def has_tricks(dtext):
 SCALAR, MAPPING, SEQUENCE = (yaml.ScalarNode, yaml.MappingNode, yaml.SequenceNode) if yaml else (None, None, None)
 MERGE_TAG = "tag:yaml.org,2002:merge"
 
-def structural(dtext, start, level=0, strict=False):
+def structural(dtext, start, level=0, strict=False, textual=True):
     """Parses one document part with PyYAML's composer (no object construction, so an alias bomb stays linear) and
     walks the RESOLVED keys and values. Returns None when the text is not parseable YAML, otherwise
     (occurrences, reasons, roots, own_only). Occurrences are (line, suffix, raw value or None, False) like the line scan's.
@@ -286,23 +310,50 @@ def structural(dtext, start, level=0, strict=False):
     # text (judged as written: a value that is not provably "false" is RED anyway); any other tag (custom, local)
     # may be rewritten by a constructor we cannot see, so it is UNKNOWN.
     stack, vis = list(roots), set()
+    tag_reasons, binary_hit, tag_strs = [], False, []
     while stack:
         n = stack.pop()
         if id(n) in vis: continue
         vis.add(id(n))
-        if len(vis) > MAX_NODES: reasons.append(f"more than {MAX_NODES} YAML nodes"); break
+        if len(vis) > MAX_NODES: tag_reasons.append(f"more than {MAX_NODES} YAML nodes"); break
         tag = n.tag or ""
         if tag == "tag:yaml.org,2002:binary" and isinstance(n, SCALAR):
             try:
                 n.value = base64.b64decode("".join(n.value.split()), validate=True).decode("utf-8", "replace")
                 binary_ids.add(id(n))
+                if "emberstack" in normalise(n.value).lower(): binary_hit = True
             except (binascii.Error, ValueError):
-                reasons.append(f"line {start + n.start_mark.line + 1}: !!binary scalar that is not valid base64: cannot be read")
+                tag_reasons.append(f"line {start + n.start_mark.line + 1}: !!binary scalar that is not valid base64: cannot be read")
         elif not tag.startswith("tag:yaml.org,2002:") and not rev("tags"):
-            reasons.append(f"line {start + n.start_mark.line + 1}: non-standard YAML tag {esc(tag)[:40]!r}: "
-                           "the resolved value cannot be known")
+            tag_reasons.append(f"line {start + n.start_mark.line + 1}: non-standard YAML tag {esc(tag)[:40]!r}: "
+                               "the resolved value cannot be known")
+        if isinstance(n, SCALAR) and tag == "tag:yaml.org,2002:str" and TAGHINT.search(n.value):
+            t_ = n.value.strip()
+            if "\n" in t_ or t_[:1] in "[{" or t_.startswith("- "): tag_strs.append(n)     # a YAML/JSON string that spells tags
         if isinstance(n, MAPPING): stack.extend(x for kv in n.value for x in kv)
         elif isinstance(n, SEQUENCE): stack.extend(n.value)
+
+    def read_tag_strings(known_hidden):
+        """Reads every string value that spells YAML tags one level down: its text may resolve to a key although the
+        outer string never contains the word `emberstack` (a kustomize patch whose path is !!binary)."""
+        o, r = [], []
+        for n in tag_strs:
+            if level >= 3:
+                r.append(f"line {start + n.start_mark.line + 1}: tagged YAML text inside strings nested more than 3 levels deep"); continue
+            sub = structural(n.value, start + n.start_mark.line + (0 if n.style in ("|", ">") else -1) + 1, level + 1,
+                             textual=mentions(n.value)) if len(n.value) <= MAX_DOC_BYTES else None
+            if sub is None:
+                if b64_hides_key(n.value):
+                    r.append(f"line {start + n.start_mark.line + 1}: a string value spells YAML tags, holds base64 of the Reflector key "
+                             "and is not YAML the guard can read")
+            else:
+                o += sub[0]; r += sub[1]
+        return o, r
+    if not textual and not binary_hit and not rev("tag_gate"):
+        # nothing here spells the key and no binary scalar decodes to it: the tag findings above are not about this guard
+        o, r = read_tag_strings(False)
+        return o, r, roots, False
+    reasons += tag_reasons
     seen = {}                    # id(container node) -> subtree hit count, so an alias bomb is walked once
     scal = set()                 # id of scalar nodes already used once: a second use is an alias
     consumed = set()             # scalar nodes read as a key or an operation path
@@ -431,6 +482,10 @@ def structural(dtext, start, level=0, strict=False):
                                "and the value is not YAML or JSON the guard can read")
             continue
         occ += sub[0]; reasons += sub[1]; sub_own = False
+    if tag_strs:
+        o, r = read_tag_strings(True)
+        occ += o; reasons += r
+        if o or r: sub_own = False
     if not sub_own: state["hidden"] = True
     own_only = all(h == ("metadata", "annotations") for h in hits) and not state["reuse"] and not state["hidden"]
     return occ, reasons, roots, own_only
@@ -506,21 +561,32 @@ def scan_text(label, text, ext):
             docs.append((start, cur)); cur, start = [l[3:]], i
         else: cur.append(l)
     docs.append((start, cur))
-    for start, dl in docs:
+    for di, (start, dl) in enumerate(docs):
         occ = line_occurrences(dl, start, ext, label, is_md, bad, unreadable)
         dtext = "\n".join(dl)
+        if di > 0 and not is_md:
+            # `%TAG` / `%YAML` directives sit BEFORE the `---` that starts the document they govern, so the split above
+            # left them at the tail of the previous part. Carry them over, or `!binary` under a redefined handle is
+            # read as an unknown local tag (the line numbers of such a document shift by the directive lines).
+            tail = []
+            for l in reversed(docs[di - 1][1]):
+                if l.startswith("%"): tail.append(l)
+                elif l.strip() and not l.lstrip().startswith("#"): break
+            if tail: dtext = "\n".join(reversed(tail)) + "\n---\n" + dtext
         ident, allow = (None, None, None), False
         names = any(n in dtext for (_k, _ns, n) in ALLOW)
-        if ext in YAML_EXT and (occ or mentions(dtext)):
+        textual = mentions(dtext)
+        tg = bool(TAGHINT.search(dtext)) and not is_md and not rev("tag_gate")
+        if (ext in YAML_EXT and (occ or textual or tg)) or (tg and ext not in YAML_EXT):
             if len(dtext) > MAX_DOC_BYTES and not rev("doc_cap"):
                 unreadable.append(f"{label}: document near line {start + 1} mentions a Reflector key and is larger than "
                                   f"{MAX_DOC_BYTES} bytes: not parsed")
             else:
-                sres = None if rev("structural") else structural(dtext, start, strict=bool(occ and names))
+                sres = None if rev("structural") else structural(dtext, start, strict=bool(occ and names), textual=textual)
                 if sres is None:
-                    if mentions(dtext):
+                    if ext in YAML_EXT and (textual or (tg and b64_hides_key(dtext))):
                         notes.append(f"{label}:{start + 1}")
-                        if has_tricks(dtext):
+                        if has_tricks(dtext) or not textual:
                             unreadable.append(f"{label}: document near line {start + 1} mentions a Reflector key, is not "
                                               "parseable YAML and uses anchors, aliases, merge or explicit keys, or a "
                                               "trailing backslash: cannot be read")
@@ -585,6 +651,7 @@ def inside(real_root, real_path):
 
 def is_known_binary(name, b):
     n = name
+    if n.lower().endswith(YAML_EXT) and not rev("yaml_never_binary"): return False    # named as text: a magic number does not make it a picture
     if any(b.startswith(m) for m in BINARY_MAGIC): return True
     return n.endswith(BINARY_EXT)
 

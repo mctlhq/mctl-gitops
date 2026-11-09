@@ -1066,6 +1066,103 @@ buf = io.StringIO()
 with contextlib.redirect_stdout(buf): rc = d1.main([str(mk("cli1")), "--anchor", ANCHOR, "--anchor", "no/such.yaml"])
 report("B57 the second --anchor is read and reported missing", rc == 2 and "anchor missing" in buf.getvalue() and "no/such.yaml" in buf.getvalue(), buf.getvalue()[-200:])
 
+# ---------------------------------------------------------------- round 5: tag spellings, tagged strings, other extensions
+print("== round 5 N11: every spelling of a tag that resolves to !!binary ==")
+AKB = B64(AK)
+SECRET_HEAD = "kind: Secret\nmetadata:\n  name: x\n  annotations:\n"
+SPELL = {
+    "N11a %TAG handle plus split tag name": "%TAG !e! tag:yaml.org,2002:b\n---\n" + SECRET_HEAD + f'    !e!inary {AKB}: "true"\n',
+    "N11b %TAG handle for the whole prefix": "%TAG !e! tag:yaml.org,2002:\n---\n" + SECRET_HEAD + f'    !e!binary {AKB}: "true"\n',
+    "N11c percent-escaped !!bin%61ry": SECRET_HEAD + f'    !!bin%61ry {AKB}: "true"\n',
+    "N11d verbatim tag with an escaped letter": SECRET_HEAD + f'    !<tag:yaml.org,2002:b%69nary> {AKB}: "true"\n',
+    "N11e primary handle redefined": "%TAG ! tag:yaml.org,2002:\n---\n" + SECRET_HEAD + f'    !binary {AKB}: "true"\n',
+}
+for i, (nm, doc) in enumerate(SPELL.items()):
+    r_ = mk(f"n11_{i}", {"platform-gitops/n11.yaml": doc})
+    rc, out = run(r_)
+    report(nm + ": not GREEN", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+    rc2, out2 = run(r_, {"tag_gate"})
+    report(nm + ": reverting the `tag_gate` rule makes it GREEN again (load-bearing)", rc2 == 0, f"rc={rc2}")
+print("== round 5 N12: the tag sits in a patch string and the outer string never says emberstack ==")
+KZ = "patches:\n  - target:\n      kind: Secret\n    patch: |\n      - op: add\n        path: !!binary " + B64(PATHK) + "\n        value: \"true\"\n"
+r_ = mk("n12a", {"platform-gitops/kustomization.yaml": KZ})
+rc, out = run(r_); report("N12a kustomize patch string with a !!binary path is not GREEN", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+rc, out = run(r_, {"tag_gate"}); report("N12b ... and reverting `tag_gate` makes it GREEN", rc == 0, f"rc={rc}")
+KZ2 = KZ.replace("!!binary " + B64(PATHK), "!!binary " + B64("/metadata/annotations/other"))
+expect("N12c the same patch with an unrelated !!binary path is GREEN", mk("n12c", {"platform-gitops/kustomization.yaml": KZ2}), 0)
+print("== round 5 N13: files without a yaml extension that parse as YAML ==")
+SEC_BIN = SECRET_HEAD + f'    !!binary {AKB}: "true"\n'
+for nm, rel in (("N13a .txt", "k/secret.txt"), ("N13b no extension", "k/secret"), ("N13c .tpl", "k/secret.yaml.tpl"), ("N13d .j2", "k/s.yaml.j2")):
+    rc, out = run(mk("n13" + nm[3], {rel: SEC_BIN}))
+    report(f"{nm} Secret with a !!binary key is RED", rc == 1, f"rc={rc}\n{out[-300:]}")
+print("== round 5 N14: no new false positives ==")
+expect("N14a unrelated !!int / !!str tags are GREEN", mk("n14a", {"k/a.yaml": "a: !!int '3'\nb: !!str x\n"}), 0)
+expect("N14b a shell script string that contains `tag = \"!!int\"` is GREEN",
+       mk("n14b", {"k/b.yaml": "script: |\n  yq '. tag = \"!!int\"'\n  if [ -f x ]; then echo !!; fi\n"}), 0)
+expect("N14c a !!binary value that decodes to something unrelated is GREEN", mk("n14c", {"k/c.yaml": "data:\n  blob: !!binary " + B64("hello world") + "\n"}), 0)
+expect("N14d a custom tag in a document that never spells the key is GREEN (it cannot hide one)", mk("n14d", {"k/d.yaml": "a: !Ref Foo\nb: !Sub x\n"}), 0)
+rc, out = run(mk("n14e", {"k/e.yaml": "%TAG !e! tag:yaml.org,2002:\n---\nblob: !e!binary " + B64("hello") + "\n"}))
+report("N14e %TAG with an unrelated binary scalar is GREEN", rc == 0, f"rc={rc}\n{out[-200:]}")
+rc, out = run(mk("n14f", {"k/f.yaml": "{{- if .Values.x }}\n!!binary " + B64(AK) + ": true\n{{- end }}\n"}))
+report("N14f an unparseable template whose text carries base64 of the key is UNKNOWN", rc == 2, f"rc={rc}\n{out[-300:]}")
+rc, out = run(mk("n14g", {"k/g.yaml": "{{- if .Values.x }}\nplain: text !!int\n{{- end }}\n"}))
+report("N14g an unparseable template with a tag and no key material is GREEN", rc == 0, f"rc={rc}\n{out[-300:]}")
+
+print("== round 5 N15: a .yaml file is never skipped as a binary because of its first bytes ==")
+MZ = b"MZ: 1\n# \xff\nkind: Secret\nmetadata:\n  annotations:\n    " + AK.encode() + b": 'true'\n"
+r_ = mk("n15", {"k/mz.yaml": MZ})
+rc, out = run(r_); report("N15a an MZ-prefixed, undecodable .yaml is UNKNOWN, not skipped", rc == 2, f"rc={rc}\n{out[-300:]}")
+rc, out = run(r_, {"yaml_never_binary"}); report("N15b reverting the rule skips it (GREEN): load-bearing", rc == 0, f"rc={rc}")
+print("== round 5 N16: closing the survivors of the final matrix (new code paths) ==")
+TPL = lambda body: "{{- if .Values.x }}\n" + body + "\n{{- end }}\n"
+rc, out = run(mk("n16a", {"k/a.yaml": TPL("!!binary " + B64(AK.upper()) + ": true")}))
+report("N16a base64 of the key in UPPER case in an unparseable template is UNKNOWN (the match is case-insensitive)", rc == 2, f"rc={rc}\n{out[-200:]}")
+rc, out = run(mk("n16b", {"k/b.yaml": TPL("!!int x\nnote: " + B64("a perfectly ordinary sentence that holds no key at all, just text") )}))
+report("N16b a long base64 run that does not decode to the key does not make a template UNKNOWN", rc == 0, f"rc={rc}\n{out[-200:]}")
+for off in range(4):
+    rc, out = run(mk(f"n16c{off}", {"k/c.yaml": TPL("!!x " + "A" * off + B64("x" * off + AK)[0:0] + B64(("x" * off) + AK))}))
+    report(f"N16c{off} base64 of the key at alignment {off} in an unparseable template is UNKNOWN", rc == 2, f"rc={rc}\n{out[-200:]}")
+# a strategic-merge patch string (mapping text, starts with a letter, has newlines) with a !!binary annotation key
+SM = "patch: |\n  apiVersion: v1\n  kind: Secret\n  metadata:\n    name: x\n    annotations:\n      !!binary " + AKB + ": \"true\"\n"
+rc, out = run(mk("n16d", {"k/kustomization.yaml": SM}))
+report("N16d a multi-line mapping patch string with a !!binary annotation key is not GREEN", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+FLOWP = "patch: ' [{op: add, path: !!binary " + B64(PATHK) + ", value: \"true\"}]'\n"
+rc, out = run(mk("n16e", {"k/kustomization.yaml": FLOWP}))
+report("N16e a single-line flow patch string with leading space and a !!binary path is not GREEN", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+FLOWQ = "patch: '[{op: add, path: !!binary " + B64(PATHK) + ", value: \"true\"}]'\n"
+rc, out = run(mk("n16f", {"k/kustomization.yaml": FLOWQ}))
+report("N16f the same without the leading space is not GREEN", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+def nest_tag(body, n):
+    for _ in range(n): body = "x: |\n" + "".join("  " + l + "\n" for l in body.split("\n"))
+    return body
+OPD = "- op: add\n  path: !!binary " + B64(PATHK) + "\n  value: \"true\"\n"
+for n in range(1, 6):
+    rc, out = run(mk(f"n16g{n}", {"k/n.yaml": nest_tag(OPD, n)}))
+    report(f"N16g{n} a !!binary path nested {n} string level(s) deep is not GREEN", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+# an allow-listed ConfigMap that holds the hidden enabler in a string must not be waved through as 'its own annotation'
+CM = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: mctl-platform-config\n  namespace: argo-workflows\ndata:\n  patch: |\n    - op: add\n      path: !!binary " + B64(PATHK) + "\n      value: \"true\"\n"
+rc, out = run(mk("n16h", {"k/cm.yaml": CM}))
+report("N16h the allow-listed ConfigMap with a tag-hidden enabler inside a data string is not GREEN", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+CM2 = CM.replace("data:\n", "  annotations:\n    " + KEY + "/" + R + "allowed: \"true\"\ndata:\n", 1)
+rc, out = run(mk("n16i", {"k/cm2.yaml": CM2}))
+report("N16i the same ConfigMap that also spells the key in its annotations is not GREEN", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+for nm, pre in (("blank line", "\n"), ("comment", "# a comment\n"), ("whitespace-only line", "   \n")):
+    doc = "%TAG !e! tag:yaml.org,2002:b\n" + pre + "---\n" + SECRET_HEAD + f'    !e!inary {AKB}: "true"\n'
+    rc, out = run(mk("n16j" + nm[0], {"k/d.yaml": doc}))
+    report(f"N16j a {nm} between the %TAG directive and the --- keeps the directive: not GREEN", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+rc, out = run(mk("n16k", {"k/MZ.YAML": MZ}))
+report("N16k the binary-magic rule is case-insensitive on the extension (.YAML is text too)", rc == 2, f"rc={rc}\n{out[-300:]}")
+rc, out = run(mk("n16l", {"k/ok.yaml": "a: 1\n"}))
+report("N16l the run prints the COVERAGE text", d1.COVERAGE.splitlines()[0] in out, out[-300:])
+# the anchor document itself (the one allow-listed enabler) must not be waved through when ANOTHER enabler hides in a data string
+ANCH = base_files()[ANCHOR]
+HID_OP = "  patch: |\n    - op: add\n      path: !!binary " + B64(PATHK) + "\n      value: \"true\"\n"
+rc, out = run(mk("n16m", {ANCHOR: ANCH.replace("data:\n  A: b\n", "data:\n  A: b\n" + HID_OP)}))
+report("N16m the allow-listed anchor with a tag-hidden enabler in a data string is not GREEN (not 'its own annotation')", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+rc, out = run(mk("n16n", {ANCHOR: ANCH.replace("data:\n  A: b\n", "data:\n  A: b\n" + HID_OP.replace("!!binary " + B64(PATHK), PATHK))}))
+report("N16n control: the same hidden op spelled in plain text is not GREEN either", rc in (1, 2), f"rc={rc}\n{out[-300:]}")
+rc, out = run(mk("n16o", {ANCHOR: ANCH}))
+report("N16o control: the anchor alone is GREEN", rc == 0, f"rc={rc}\n{out[-300:]}")
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\nchecks={counter[0]} failures={len(failures)}")
 for f in failures:
