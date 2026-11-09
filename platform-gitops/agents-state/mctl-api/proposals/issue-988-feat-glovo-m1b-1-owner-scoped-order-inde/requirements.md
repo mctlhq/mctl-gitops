@@ -117,7 +117,7 @@ Audit and hygiene
 
 - The approval basket definition and vectors (mctl-agents#1059).
 - The `aar_` state machine (#989), dispatch/cancel (#985), routes and the
-  `providerorders` adapter (#957), the connection store (#959).
+  Glovo join handlers (#957), the connection store (#959).
 - Who moves `dispatched`/`unknown` to `closed` (OPEN-985-5).
 
 ## Open questions

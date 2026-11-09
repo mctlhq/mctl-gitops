@@ -20,7 +20,7 @@ was rewritten; no older passage survives that contradicts this section.
 | P2-8 fingerprint not pinned | Pinned by the #1059 golden vectors, vendored by sha256; T7 asserts them byte for byte, including a permuted-input vector and a single-price change |
 | P3 duplicate error vocabulary | Extends `glovo.Code` (`internal/glovo/errors.go:24-44`) |
 | P3 T10 too broad; `search_path` shadowing | Tables live in the Postgres schema `glovo`, owned by the migration role, and every statement is schema-qualified. T10 is scoped to the order tables |
-| P3 naming gap with #957 `providerorders.Service`; `pord_` on the wire | #957 writes the `providerorders` adapter over this store (named in #957 tasks 8). #957 is amended so `order_id` on the wire carries the `ordr_`, and its T6 uses `ordr_` |
+| P3 naming gap with #957 `providerorders.Service`; `pord_` on the wire | #957 drops `providerorders` and calls this store and #989 directly (#957 task 8). #957 is amended so `order_id` on the wire carries the `ordr_`, and its T6 uses `ordr_` |
 | P3 idempotent create needs READ COMMITTED | `Create` refuses a caller transaction that is not READ COMMITTED (`dependency_unavailable`, logged) |
 | P3 retention before G3 | Recorded as a precondition before any G3 or real-data use (OPEN-988-4) |
 
