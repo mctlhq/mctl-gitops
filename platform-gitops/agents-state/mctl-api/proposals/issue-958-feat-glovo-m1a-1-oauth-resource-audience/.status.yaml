@@ -1,5 +1,5 @@
-status: implemented
-updated_at: '2026-11-09T12:10:27Z'
+status: review-stuck
+updated_at: '2026-11-09T12:25:27Z'
 updated_by: mctl-agents[bot]
 execution:
   context_id: ex-de9b75ee95c4f774
@@ -51,11 +51,13 @@ github:
   state: open
   head_sha: 9c67a1dd5a24c77a92f5e1d90053361295e0ade6
   observed_at: '2026-11-09T11:39:27Z'
-refusals: 2
+refusals: 3
 refusals_head: 9c67a1dd5a24c77a92f5e1d90053361295e0ade6
-notes: 'implementer declined to act: Reviewer text 1 is a top-level approval comment
-  (Verdict: approved, 0 P1, 0 P2, 0 P3) for commit 9c67a1d. It says previous P2/P3
-  findings are already fixed and lists only two non-blocking minor notes (glovo.WriteError
-  has no nil guard but has no callers yet; refusal metric label uses supportAudienceRouteClass),
-  which the reviewer explicitly defers to the later slice that adds Glovo routes.
-  No actionable defect is described, so no change is made.'
+notes: 'The implementer declined to act 3 time(s) and the findings still stand. review_attempts
+  was never charged — the proposal is not at fault; a human must reconcile the review
+  with the operator decision. Last reason: Reviewer text 1 is an approval, not a defect:
+  it says "Verdict: approved (0 P1, 0 P2, 0 P3)" and lists all previous findings as
+  fixed. The two minor notes (glovo.WriteError has no nil guard but has no callers
+  yet; refusal metric label uses supportAudienceRouteClass) are explicitly marked
+  "not blocking" and deferrable to the slice that adds Glovo routes, so out of scope
+  here.'
