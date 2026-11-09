@@ -247,6 +247,14 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
   # to boot unless it equals ZITADEL_HOOK_CUSTOMERS_ORG_ID (customers.tf),
   # which is the same org. Read at container start: bump ROLLOUT_MARKER in
   # bootstrap/templates/mctl-platform/mctl-api.yaml after the Job writes it.
+  #
+  # subject_audiences (mctl-api#973, needs a release with it: an older
+  # mctl-api refuses the unknown field at boot): the orchestrator machine
+  # user (orchestrator-devloop.tf) signs in with its own key, and ZITADEL then
+  # puts only this project's id into `aud`, never the API app's client id.
+  # Listing the project id in `audiences` would accept it from every client
+  # that asks for the project-audience scope, so it is accepted for that one
+  # subject only.
   data = {
     MCTL_OIDC_PROVIDERS = jsonencode([
       {
@@ -254,6 +262,9 @@ resource "kubernetes_secret_v1_data" "mctl_api_oidc" {
         issuer           = "https://auth.mctl.ai"
         audiences        = [zitadel_application_api.mctl_api.client_id]
         customers_org_id = zitadel_org.customers.id
+        subject_audiences = {
+          (zitadel_machine_user.orchestrator_devloop.id) = [zitadel_project.mctl_api.id]
+        }
       },
     ])
     # Not read by mctl-api (the chart references MCTL_OIDC_PROVIDERS only).
