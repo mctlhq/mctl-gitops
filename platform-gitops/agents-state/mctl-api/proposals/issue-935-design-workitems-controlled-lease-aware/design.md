@@ -121,8 +121,10 @@ claimed[live]          --operator-reject--> REFUSED 409 execution_request_claim_
 any, row_version moved    --operator-reject--> REFUSED 412 execution_request_row_version_moved
 fulfilled|rejected     --operator-reject--> REFUSED 409 execution_request_closed (consumed grant -> 403)
 ```
-`lease_state` is computed at read time and never stored: `pending`, `claimed_live` (`claim_expires_at > now`) or
-`claimed_lapsed`.
+`lease_state` is computed using the **database clock** and never stored:
+`pending`, `claimed_live` (`claim_expires_at > now()`), or `claimed_lapsed`.
+The operator-reject lease predicate must use PostgreSQL `now()` in the UPDATE,
+not an API replica's local clock; a skewed replica cannot override a live lease.
 
 ### 3. Store (`internal/workitems/execution_requests.go`, new file `operator_drain.go`)
 
@@ -153,7 +155,7 @@ fulfilled|rejected     --operator-reject--> REFUSED 409 execution_request_closed
      UPDATE ... SET state='rejected', reason=$2, rejected_by=$3, rejected_by_principal_id=$4,
             rejection_kind='operator', claim_token='', row_version=row_version+1, updated_at=$5, closed_at=$5
      WHERE id=$1 AND row_version=$6 AND state IN ('pending','claimed')
-       AND (state='pending' OR claim_expires_at <= $5)
+       AND (state='pending' OR claim_expires_at <= now())
      ```
      It then appends `execution_request_operator_rejected`, with detail `{execution_request_id, prior_state,
      prior_claimed_by, prior_claim_expires_at, row_version, requested_by}`. The detail has no reason text and no token.
@@ -247,9 +249,9 @@ purpose: the dispatcher must never call this path.
    `ActionApprovalRequest`, with `action_kind=execution-request-operator-reject`,
    `target=<xr id>@<row_version>` and `artifact_hash=sha256(reason)`. Another human admin decides it, and
    operator-reject consumes it with `ConsumeActionApproval` plus `MarkActionApprovalExecuted` in the same call.
-   This is the strongest form of explicit authorization, but it makes a drain of N requests need N second-person
-   decisions. Not chosen as the default. Kept as an additive extension behind an option, and recorded as an open
-   question.
+   This is the **selected mandatory owner-v2 control**. A drain of N requests requires N
+   independently approved grants, each individually scope-bound and consumed once. It is
+   not an optional fallback; no implementation may replace it with one-admin CAS-only.
 3. **Batch or filter reject ("reject all claimed_lapsed in tenant X").** Faster, but this is exactly the
    automated mass rejection the issue forbids, and it loses per-request row_version fencing. Dropped.
 4. **Expose `claim_token` to admins on reads so the existing reject works.** This would break the invariant that
@@ -262,9 +264,8 @@ purpose: the dispatcher must never call this path.
   **MUST STAY OFF until every API replica has upgraded** and all state-changing writers,
   including lease renewal, have been verified to increment the counter. A mixed-version
   writer could change ownership without changing the CAS value, so state/lease predicates
-  alone are not a substitute for this activation gate. The row_version CAS
-  is then only weaker for a claim made by an old pod, and the live-claim check still covers it. Document that
-  the drain should be used only after the rollout has completed.
+  alone are not a substitute for this activation gate. Old mixed-version writes can silently defeat a stale row-version comparison, so keep
+  the route disabled until all writers are verified and the rollout is complete.
 - **Backward compatibility:** the dispatcher's claim, fulfil and reject contracts are unchanged, apart from new
   fields (`row_version`, `rejection_kind`) in their JSON. The one behaviour change: after an operator reject, a
   former holder's reject gets 409 `execution_request_closed` instead of 409 `execution_request_not_claimed`.
